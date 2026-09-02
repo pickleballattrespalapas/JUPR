@@ -14,6 +14,7 @@ export type AdminLeagueManagerStatusResponse = {
   league_live_sessions_endpoint?: string | null;
   league_awards_endpoint?: string | null;
   awards_write_enabled?: boolean;
+  league_manager_writes_enabled?: boolean;
   league_count?: number | null;
   active_count?: number | null;
   warnings: string[];
@@ -27,6 +28,8 @@ export type AdminLeagueLiveStatusResponse = {
   round_plan_endpoint?: string | null;
   submit_enabled?: boolean;
   round_submit_endpoint?: string | null;
+  round_movement_endpoint?: string | null;
+  round_retry_endpoint?: string | null;
   round_reconcile_endpoint?: string | null;
   round_compensate_endpoint?: string | null;
   guest_endpoint?: string | null;
@@ -40,6 +43,7 @@ export type AdminLeagueLiveStatusResponse = {
 };
 
 export type AdminLeagueManagerLeague = {
+  league_id?: string | null;
   league_name: string;
   league_type?: string | null;
   match_format?: "doubles" | "singles" | string | null;
@@ -87,6 +91,8 @@ export type AdminLeagueManagerRosterRow = {
   league_name: string;
   rating?: number | null;
   rating_jupr?: number | null;
+  overall_rating?: number | null;
+  overall_rating_jupr?: number | null;
   wins?: number | null;
   losses?: number | null;
   matches_played?: number | null;
@@ -144,8 +150,12 @@ export type AdminLeaguePrintLeader = {
 export type AdminLeagueTopPerformer = {
   category_key: string;
   category_label: string;
-  player_id: number;
-  player_name: string;
+  recipient_type?: "player" | "team";
+  player_id?: number | null;
+  team_id?: string | null;
+  player_name?: string | null;
+  team_name?: string | null;
+  recipient_name?: string | null;
   metric_value?: number | null;
   metric_display: string;
   rank: number;
@@ -163,6 +173,48 @@ export type AdminLeaguePrintoutResponse = {
   weekly_win_leaders: AdminLeaguePrintLeader[];
   season_top_performers: AdminLeagueTopPerformer[];
   season_top_performer_count: number;
+  team_print: {
+    standings: Array<{
+      rank: number;
+      team_id: string;
+      team_name: string;
+      games_played: number;
+      wins: number;
+      losses: number;
+      points_for: number;
+      points_against: number;
+      point_differential: number;
+    }>;
+    teams: Array<{
+      team_id: string;
+      team_name: string;
+      status: string;
+      roster_complete: boolean;
+      members: Array<{
+        player_id: number;
+        player_name: string;
+        role: string;
+        status: string;
+      }>;
+    }>;
+    substitute_pool: Array<{
+      player_id: number;
+      player_name: string;
+      status: string;
+      note: string;
+    }>;
+  };
+  has_printable_data: boolean;
+  printable_sections: {
+    schedule: boolean;
+    weekly_leaders: boolean;
+    season_leaders: boolean;
+    standings: boolean;
+    roster: boolean;
+    team_standings: boolean;
+    team_rosters: boolean;
+    substitute_pool: boolean;
+  };
   rating_source: "stored_snapshots" | "stored_snapshots_with_python_replay";
   warnings: string[];
 };

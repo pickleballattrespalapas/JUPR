@@ -1,0 +1,222 @@
+.dialog {
+  width: min(36rem, calc(100vw - 2rem));
+  max-width: 100%;
+  max-height: calc(100vh - 2rem);
+  max-height: calc(100dvh - 2rem);
+  margin: auto;
+  padding: 0;
+  overflow: auto;
+  border: 1px solid #cbd5e1;
+  border-radius: 16px;
+  background: #ffffff;
+  color: #0f172a;
+  box-shadow: 0 24px 70px rgb(15 23 42 / 28%);
+}
+
+.dialog::backdrop {
+  background: rgb(15 23 42 / 58%);
+}
+
+.dialog[data-size="wide"] {
+  width: min(58rem, calc(100vw - 2rem));
+}
+
+.dialog[data-size="xwide"] {
+  width: min(70rem, calc(100vw - 2rem));
+}
+
+.content {
+  display: grid;
+  gap: 1rem;
+  padding: 1.25rem;
+}
+
+.heading {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.title,
+.description,
+.feedbackTitle,
+.feedbackDescription,
+.operationReference,
+.fieldErrorList {
+  margin: 0;
+}
+
+.title {
+  font-size: 1.35rem;
+  line-height: 1.25;
+}
+
+.description {
+  color: #475569;
+}
+
+.body {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+}
+
+.button {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0.65rem 1rem;
+  border-radius: 999px;
+  border: 1px solid #0f172a;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.primaryButton {
+  background: #0f172a;
+  color: #ffffff;
+}
+
+.secondaryButton {
+  background: #ffffff;
+  color: #0f172a;
+}
+
+.dangerButton {
+  border-color: #991b1b;
+  background: #991b1b;
+  color: #ffffff;
+}
+
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.button:focus-visible {
+  outline: 3px solid #60a5fa;
+  outline-offset: 2px;
+}
+
+.feedback {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.85rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+}
+
+.feedbackWorking {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #1e3a8a;
+}
+
+.feedbackSuccess {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.feedbackError {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.feedbackUncertain {
+  border-color: #fde68a;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.feedbackTitle {
+  font-size: 1rem;
+  line-height: 1.35;
+}
+
+.feedbackDescription {
+  color: inherit;
+}
+
+.feedback:focus {
+  outline: 3px solid #60a5fa;
+  outline-offset: 2px;
+}
+
+.operationReference {
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.fieldErrorList {
+  padding-left: 1.25rem;
+}
+
+.reviewWrap {
+  overflow-x: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+}
+
+.reviewTable {
+  width: 100%;
+  min-width: 28rem;
+  border-collapse: collapse;
+}
+
+.reviewCaption {
+  padding: 0.75rem;
+  color: #334155;
+  font-weight: 800;
+  text-align: left;
+}
+
+.reviewTable th,
+.reviewTable td {
+  padding: 0.65rem 0.75rem;
+  border-top: 1px solid #e2e8f0;
+  text-align: left;
+  vertical-align: top;
+}
+
+.reviewTable th {
+  color: #334155;
+  font-size: 0.9rem;
+}
+
+.reviewNoChange {
+  color: #64748b;
+}
+
+@media (max-width: 480px) {
+  .dialog {
+    width: calc(100vw - 1rem);
+    max-height: calc(100vh - 1rem);
+    max-height: calc(100dvh - 1rem);
+  }
+
+  .content {
+    padding: 1rem;
+  }
+
+  .actions {
+    flex-direction: column;
+  }
+
+  .button {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dialog {
+    scroll-behavior: auto;
+  }
+}

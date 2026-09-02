@@ -74,11 +74,21 @@ def render(ctx):
     with st.expander("➕ Add New Player", expanded=False):
         with st.form("add_player_form"):
             name = st.text_input("Name")
-            rating = st.number_input("Starting JUPR", 1.0, 7.0, 3.5, step=0.1)
+            rating = st.number_input(
+                "Starting JUPR",
+                min_value=1.0,
+                max_value=7.0,
+                value=None,
+                step=0.1,
+                placeholder="Required",
+            )
             if st.form_submit_button("Add Player"):
                 name_clean = name.strip()
                 if not name_clean:
                     st.error("Name required.")
+                    st.stop()
+                if rating is None:
+                    st.error("Starting JUPR required.")
                     st.stop()
                 existing = (
                     supabase.table("players")

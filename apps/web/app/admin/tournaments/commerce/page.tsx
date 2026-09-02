@@ -1,32 +1,28 @@
 import { redirect } from "next/navigation";
 import TournamentPhaseNav from "@/components/TournamentPhaseNav";
 import TournamentCommercePanel from "./TournamentCommercePanel";
+import { readTournamentRouteContext } from "@/lib/tournamentRouteContext";
 
 type Props = { searchParams?: Record<string, string | string[] | undefined> };
 
-function first(value: string | string[] | undefined): string {
-  return Array.isArray(value) ? String(value[0] || "") : String(value || "");
-}
-
 export default function AdminTournamentCommercePage({ searchParams }: Props) {
-  const tournamentId = first(searchParams?.tournament).trim();
-  const tournamentName = first(searchParams?.name).trim();
-  if (!tournamentId) redirect("/admin/tournaments");
+  const context = readTournamentRouteContext(searchParams);
+  if (!context.tournamentId) redirect("/admin/tournaments");
 
   return (
     <section>
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
         Tournament Manager / Registration
       </p>
-      <h1 style={{ marginTop: 0 }}>{tournamentName || "Tournament"} payments, extras, and fulfillment</h1>
+      <h1 style={{ marginTop: 0 }}>{context.tournamentName || "Tournament"} payments, extras, and fulfillment</h1>
       <TournamentPhaseNav phase="registration" />
       <p style={{ color: "#334155", maxWidth: "860px" }}>
         Configure extras and bundles, then track offline payment, pickup, fulfillment, and recovery without rewriting prior orders.
       </p>
       <TournamentCommercePanel
         clubId="tres_palapas"
-        tournamentId={tournamentId}
-        tournamentName={tournamentName || tournamentId}
+        tournamentId={context.tournamentId}
+        tournamentName={context.tournamentName || context.tournamentId}
       />
     </section>
   );

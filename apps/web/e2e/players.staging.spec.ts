@@ -33,7 +33,7 @@ test("player directory defaults active and keeps search plus stable links determ
   await expect(page.getByTestId("player-public-identity")).toContainText(/public display name/i);
 });
 
-test("player profile renders ratings, formats, awards, relationships, social, and full history controls", async ({ page }) => {
+test("player profile keeps positions, trophies, badges, relationships, and history in player scope", async ({ page }) => {
   await page.goto(`/clubs/${clubSlug}/players`, { waitUntil: "domcontentloaded" });
   const profileLink = page.getByTestId("players-row").first().locator("td").first().getByRole("link");
   const profileHref = await profileLink.getAttribute("href");
@@ -42,12 +42,32 @@ test("player profile renders ratings, formats, awards, relationships, social, an
 
   await expect(page.getByTestId("player-summary-cards")).toContainText("Doubles / overall");
   await expect(page.getByTestId("player-summary-cards")).toContainText("Singles");
+  await expect(page.getByTestId("player-overview")).toBeVisible();
+
+  await page.getByTestId("player-section-ratings").click();
+  await expect(page).toHaveURL(/section=ratings/);
   await expect(page.getByTestId("player-ratings")).toBeVisible();
   await expect(page.getByTestId("player-format-row")).toHaveCount(2);
-  await expect(page.getByTestId("player-awards")).toBeVisible();
+
+  await page.getByTestId("player-section-positions").click();
+  await expect(page).toHaveURL(/\/players\/[^/?#]+\?section=positions/);
+  await expect(page.getByTestId("player-league-positions")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Leaderboard snapshot" })).toHaveCount(0);
+
+  await page.getByTestId("player-section-trophies").click();
+  await expect(page.getByTestId("player-trophies")).toBeVisible();
+  await expect(page.getByTestId("player-trophies")).toContainText(/major honors|tournament podium/i);
+
+  await page.getByTestId("player-section-badges").click();
+  await expect(page.getByTestId("player-badges")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Badge codex" })).toHaveCount(0);
+
+  await page.getByTestId("player-section-social").click();
   await expect(page.getByTestId("player-best-partner")).toBeVisible();
   await expect(page.getByTestId("player-rival")).toBeVisible();
   await expect(page.getByTestId("player-social")).toBeVisible();
+
+  await page.getByTestId("player-section-matches").click();
   await expect(page.getByTestId("player-match-history")).toBeVisible();
   const publicIdentity = page.getByTestId("player-public-identity");
   await expect(publicIdentity).toContainText(/verified updates (available|enabled|pending)/i);

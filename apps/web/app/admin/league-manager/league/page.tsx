@@ -1,19 +1,16 @@
 import { redirect } from "next/navigation";
 import { getAdminLeagueManagerApiBaseUrl, getAdminLeagueManagerStatus } from "@/lib/adminLeagueManagerApi";
+import { readLeagueRouteContext } from "@/lib/leagueRouteContext";
 import LeagueHomePanel from "./LeagueHomePanel";
 
 type Props = {
   searchParams?: Record<string, string | string[] | undefined>;
 };
 
-function first(value: string | string[] | undefined): string {
-  return Array.isArray(value) ? String(value[0] || "") : String(value || "");
-}
-
 export default async function AdminSelectedLeaguePage({ searchParams }: Props) {
-  const leagueName = first(searchParams?.league).trim();
-  const leagueType = first(searchParams?.mode).trim();
-  if (!leagueName) redirect("/admin/league-manager");
+  const context = readLeagueRouteContext(searchParams);
+  if (!context.leagueId) redirect("/admin/league-manager");
+  const leagueName = context.leagueName || context.leagueId;
 
   const clubId = "tres_palapas";
   const { data: status, error } = await getAdminLeagueManagerStatus(clubId);
@@ -30,8 +27,9 @@ export default async function AdminSelectedLeaguePage({ searchParams }: Props) {
           apiBase={getAdminLeagueManagerApiBaseUrl()}
           clubId={clubId}
           status={status}
+          initialLeagueId={context.leagueId}
           initialLeague={leagueName}
-          initialLeagueType={leagueType || null}
+          initialLeagueType={context.leagueType || null}
         />
       ) : null}
     </section>

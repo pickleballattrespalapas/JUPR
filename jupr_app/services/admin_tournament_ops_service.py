@@ -262,6 +262,7 @@ def build_admin_tournament_ops_runtime_status() -> dict[str, Any]:
     hosted = environment == "staging" or production_tournament_writes_enabled()
     return {
         "environment": environment,
+        "tournament_mutations_enabled": tournament_admin_guarded_runtime_enabled("tournament"),
         "operations_mutations_enabled": tournament_admin_guarded_runtime_enabled("operations"),
         "official_publish_enabled": hosted and _truthy_env("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_OFFICIAL_PUBLISH"),
         "email_handoff_enabled": hosted and _truthy_env("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_EMAIL_HANDOFF"),
@@ -344,6 +345,11 @@ def get_admin_tournament_ops_snapshot(
         players, player_warnings = _player_options(supabase, club_id=str(club_id))
         warnings.extend([*draw_warnings, *team_warnings, *game_warnings, *podium_warnings, *day_warnings, *event_warnings, *child_warnings, *published_warnings, *player_warnings])
 
+    # Keep every authoritative game row available for CAS/version evidence and
+    # team-child classification.  SERIES_GAME rows are rating leaves for a
+    # best-of-three matchup, not independently scheduled operator games.
+    all_games = list(games)
+
     protected_rating_child_draws = [
         row
         for row in draws
@@ -366,7 +372,7 @@ def get_admin_tournament_ops_snapshot(
         if bool(row.get("hidden_from_primary_ops"))
     }
     protected_team_draw_ids = rating_child_ids | team_parent_ids | hidden_draw_ids
-    games_by_id = {str(row.get("id") or ""): row for row in games}
+    games_by_id = {str(row.get("id") or ""): row for row in all_games}
     canonical_by_game: dict[str, list[dict[str, Any]]] = {}
     for row in published_matches:
         tournament_game_id = str(row.get("tournament_game_id") or "")
@@ -420,10 +426,16 @@ def get_admin_tournament_ops_snapshot(
         for row in teams
         if str(row.get("draw_id") or "") not in protected_team_draw_ids
     ]
+    source_games = [
+        row
+        for row in all_games
+        if str(row.get("draw_id") or "") not in protected_team_draw_ids
+    ]
     games = [
         row
-        for row in games
-        if str(row.get("draw_id") or "") not in protected_team_draw_ids
+        for row in source_games
+        if not row.get("series_parent_game_id")
+        and str(row.get("stage") or "").upper() != "SERIES_GAME"
     ]
     podium = [
         row
@@ -435,6 +447,11 @@ def get_admin_tournament_ops_snapshot(
     if clean_draw_id:
         teams = [row for row in teams if str(row.get("draw_id") or "") == clean_draw_id]
         games = [row for row in games if str(row.get("draw_id") or "") == clean_draw_id]
+        source_games = [
+            row
+            for row in source_games
+            if str(row.get("draw_id") or "") == clean_draw_id
+        ]
         podium = [row for row in podium if str(row.get("draw_id") or "") == clean_draw_id]
         draws = [row for row in draws if str(row.get("id") or "") == clean_draw_id]
         rating_child_publish_queue = [
@@ -446,6 +463,16 @@ def get_admin_tournament_ops_snapshot(
     draws = _sort_rows(draws, "registration_day_id", "event_option_id", "name", "id")
     teams = _sort_rows(teams, "draw_id", "team_number", "id")
     games = _sort_rows(games, "draw_id", "stage", "rr_round_number", "rr_slot_number", "game_number", "id")
+    source_games = _sort_rows(
+        source_games,
+        "draw_id",
+        "stage",
+        "rr_round_number",
+        "rr_slot_number",
+        "series_game_number",
+        "game_number",
+        "id",
+    )
     podium = _sort_rows(podium, "draw_id", "placement", "id")
     registration_days = _sort_rows(registration_days, "event_date", "sort_order", "id")
     event_options = _sort_rows(event_options, "registration_day_id", "sort_order", "id")
@@ -466,6 +493,15 @@ def get_admin_tournament_ops_snapshot(
         "draws": draws,
         "teams": teams,
         "games": games,
+        "source_game_versions": [
+            {
+                "id": str(row.get("id") or ""),
+                "draw_id": str(row.get("draw_id") or ""),
+                "updated_at": str(row.get("updated_at") or ""),
+            }
+            for row in source_games
+            if row.get("id")
+        ],
         "podium": podium,
         "registration_days": registration_days,
         "event_options": event_options,

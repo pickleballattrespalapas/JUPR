@@ -74,7 +74,7 @@ def delete_rated_matches_with_replay(
         rows_resp = (
             supabase.table("matches")
             .select(
-                "id,match_type,match_format,rating_scope,"
+                "id,context_type,tournament_game_id,match_type,match_format,rating_scope,"
                 "t1_p1,t1_p2,t2_p1,t2_p2,singles_replay_managed"
             )
             .eq("club_id", str(club_id))
@@ -87,6 +87,22 @@ def delete_rated_matches_with_replay(
         ) from exc
     before_rows = rows_resp.data or []
     existing_ids = sorted({int(r.get("id")) for r in before_rows if r.get("id") is not None})
+    tournament_linked_ids = sorted(
+        int(row["id"])
+        for row in before_rows
+        if row.get("id") is not None
+        and (
+            row.get("tournament_game_id") not in (None, "")
+            or str(row.get("context_type") or "").strip().casefold()
+            == "tournament_game"
+        )
+    )
+    if tournament_linked_ids:
+        raise ValueError(
+            "Official tournament matches cannot be excluded from the generic "
+            "Match Log. Use Tournament Manager correction and recovery tools "
+            f"for match IDs {tournament_linked_ids[:10]}."
+        )
 
     singles_rows = [
         row

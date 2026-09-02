@@ -1584,7 +1584,7 @@ def mutate_generator_roster(
     if clean_action == "reorder":
         order = [str(pid) for pid in roster_order or []]
         known = {str(row["id"]) for row in next_event.get("participants") or []}
-        if set(order) != known:
+        if len(order) != len(known) or len(set(order)) != len(order) or set(order) != known:
             raise ValueError("Roster order must include every participant exactly once.")
         for idx, pid in enumerate(order, 1):
             participants[pid]["roster_order"] = idx

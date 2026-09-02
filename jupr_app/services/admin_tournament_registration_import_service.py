@@ -15,6 +15,12 @@ from jupr_app.services.admin_tournament_team_service import _team_payload, write
 from jupr_app.services.admin_tournament_service import TOURNAMENT_SELECT, _clean_text, _first_row, is_admin_tournament_admin_enabled
 
 CONFIRM_IMPORT_REGISTRATIONS = "IMPORT REGISTRATIONS"
+STANDARD_DOUBLES_EVENT_TYPES = {
+    "GENDER_DOUBLES",
+    "MIXED_DOUBLES",
+    "DOUBLES",
+    "MIXED",
+}
 
 
 def _now_iso() -> str:
@@ -196,6 +202,86 @@ def _selections_for_draw(supabase: Any, *, tournament_id: str, draw: dict[str, A
     return rows
 
 
+def _confirmed_partner_team_links(
+    supabase: Any,
+    *,
+    tournament_id: str,
+    event_option_id: str,
+) -> list[dict[str, Any]]:
+    try:
+        rows = _safe_rows(
+            supabase.table("tournament_registration_team_links")
+            .select("*")
+            .eq("tournament_id", str(tournament_id))
+            .eq("event_option_id", str(event_option_id))
+            .execute()
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "Could not load confirmed registration teams; registration "
+            "import was refused."
+        ) from exc
+    return [
+        row
+        for row in rows
+        if _clean_text(row.get("status"), limit=40).upper()
+        in {"CONFIRMED", "ADMIN_CONFIRMED"}
+    ]
+
+
+def _active_partner_team_members(
+    supabase: Any,
+    *,
+    tournament_id: str,
+    event_option_id: str,
+) -> list[dict[str, Any]]:
+    try:
+        rows = _safe_rows(
+            supabase.table("tournament_registration_team_members")
+            .select("*")
+            .eq("tournament_id", str(tournament_id))
+            .eq("event_option_id", str(event_option_id))
+            .execute()
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "Could not load confirmed registration team members; "
+            "registration import was refused."
+        ) from exc
+    return [
+        row
+        for row in rows
+        if _clean_text(row.get("status"), limit=40).upper() == "ACTIVE"
+    ]
+
+
+def _is_standard_doubles_event(event_option: dict[str, Any]) -> bool:
+    competition_format = _clean_text(
+        event_option.get("competition_format") or "STANDARD", limit=60
+    ).upper()
+    if competition_format != "STANDARD":
+        return False
+    event_type = _clean_text(
+        event_option.get("event_type")
+        or event_option.get("participant_type"),
+        limit=60,
+    ).upper()
+    if event_type in STANDARD_DOUBLES_EVENT_TYPES:
+        return True
+    return bool(event_option.get("partner_required"))
+
+
+def _is_singles_event(event_option: dict[str, Any]) -> bool:
+    return (
+        _clean_text(
+            event_option.get("event_type")
+            or event_option.get("participant_type"),
+            limit=60,
+        ).upper()
+        == "SINGLES"
+    )
+
+
 def _finalized_combined_rating_reviews(
     supabase: Any,
     *,
@@ -347,9 +433,184 @@ def import_admin_tournament_registrations_to_draw(
     unresolved: list[str] = []
     incomplete_combined_reviews: list[str] = []
     rows: list[dict[str, Any]] = []
+    import_warnings: list[str] = []
     now = _now_iso()
 
-    for selection in selections:
+    standard_doubles_import = (
+        not combined_rating_import and _is_standard_doubles_event(event_option)
+    )
+
+    if standard_doubles_import:
+        event_option_id = _clean_text(event_option.get("id"), limit=120)
+        selections_by_id = {
+            _clean_text(row.get("id"), limit=120): row
+            for row in selections
+            if _clean_text(row.get("id"), limit=120)
+        }
+        links = _confirmed_partner_team_links(
+            supabase,
+            tournament_id=clean_tournament_id,
+            event_option_id=event_option_id,
+        )
+        members = _active_partner_team_members(
+            supabase,
+            tournament_id=clean_tournament_id,
+            event_option_id=event_option_id,
+        )
+        members_by_link: dict[str, list[dict[str, Any]]] = {}
+        consumed_selection_ids: set[str] = set()
+        for member in members:
+            link_id = _clean_text(member.get("team_link_id"), limit=120)
+            if link_id:
+                members_by_link.setdefault(link_id, []).append(member)
+
+        for link in sorted(
+            links,
+            key=lambda row: _clean_text(row.get("id"), limit=120),
+        ):
+            link_id = _clean_text(link.get("id"), limit=120)
+            link_selection_ids = {
+                selection_id
+                for selection_id in (
+                    _clean_text(link.get("selection1_id"), limit=120),
+                    _clean_text(link.get("selection2_id"), limit=120),
+                )
+                if selection_id
+            }
+            if not link_selection_ids.intersection(selections_by_id):
+                continue
+
+            active_members = sorted(
+                members_by_link.get(link_id, []),
+                key=lambda row: (
+                    _safe_int(row.get("player_order")) or 0,
+                    _clean_text(row.get("id"), limit=120),
+                ),
+            )
+            member_selection_ids = {
+                _clean_text(member.get("selection_id"), limit=120)
+                for member in active_members
+                if _clean_text(member.get("selection_id"), limit=120)
+            }
+            member_orders = {
+                _safe_int(member.get("player_order")) for member in active_members
+            }
+            if (
+                not link_id
+                or len(link_selection_ids) != 2
+                or len(active_members) != 2
+                or member_selection_ids != link_selection_ids
+                or member_orders != {1, 2}
+                or not link_selection_ids.issubset(selections_by_id)
+            ):
+                unresolved.append(link_id or "invalid confirmed partner team")
+                continue
+
+            team_player_ids: list[int] = []
+            team_registration_ids: list[str] = []
+            valid_team = True
+            for member in active_members:
+                selection_id = _clean_text(member.get("selection_id"), limit=120)
+                selection = selections_by_id.get(selection_id) or {}
+                registration_id = _clean_text(
+                    selection.get("registration_id"), limit=120
+                )
+                registration = registrations_by_id.get(registration_id)
+                player_id = _safe_int(member.get("player_id"))
+                if (
+                    not registration
+                    or not _is_confirmed_registration(registration)
+                    or _clean_text(member.get("registration_id"), limit=120)
+                    != registration_id
+                    or player_id is None
+                    or _safe_int(registration.get("player_id")) != player_id
+                ):
+                    valid_team = False
+                    break
+                team_player_ids.append(player_id)
+                team_registration_ids.append(registration_id)
+
+            if (
+                not valid_team
+                or len(team_player_ids) != 2
+                or team_player_ids[0] == team_player_ids[1]
+            ):
+                unresolved.append(link_id or "invalid confirmed partner team")
+                continue
+            link_player_ids = {
+                _safe_int(link.get("player1_id")),
+                _safe_int(link.get("player2_id")),
+            }
+            link_registration_ids = {
+                registration_id
+                for registration_id in (
+                    _clean_text(link.get("registration1_id"), limit=120),
+                    _clean_text(link.get("registration2_id"), limit=120),
+                )
+                if registration_id
+            }
+            if (
+                link_player_ids != set(team_player_ids)
+                or link_registration_ids != set(team_registration_ids)
+            ):
+                unresolved.append(link_id)
+                continue
+
+            selected_player_ids.extend(team_player_ids)
+            consumed_selection_ids.update(link_selection_ids)
+            rows.append(
+                {
+                    "id": str(uuid.uuid4()),
+                    "tournament_id": clean_tournament_id,
+                    "draw_id": clean_draw_id,
+                    "registration_day_id": _clean_text(
+                        draw.get("registration_day_id"), limit=120
+                    )
+                    or None,
+                    "event_option_id": event_option_id or None,
+                    "team_number": start_slot + len(rows),
+                    "player1_id": team_player_ids[0],
+                    "player2_id": team_player_ids[1],
+                    "source": "REGISTRATION",
+                    "notes": (
+                        "Imported from confirmed registration team "
+                        f"{link_id} ({', '.join(team_registration_ids)})"
+                    ),
+                    "created_at": now,
+                }
+            )
+
+        excluded_needs_partner = 0
+        for selection_id, selection in selections_by_id.items():
+            if selection_id in consumed_selection_ids:
+                continue
+            registration = registrations_by_id.get(
+                _clean_text(selection.get("registration_id"), limit=120)
+            )
+            if not registration or not _is_confirmed_registration(registration):
+                continue
+            if (
+                _clean_text(selection.get("partner_mode"), limit=40).upper()
+                == "NEEDS_PARTNER"
+            ):
+                excluded_needs_partner += 1
+                continue
+            unresolved.append(
+                _clean_text(
+                    registration.get("display_name")
+                    or registration.get("email")
+                    or registration.get("id"),
+                    limit=180,
+                )
+            )
+        if excluded_needs_partner:
+            suffix = "entry" if excluded_needs_partner == 1 else "entries"
+            import_warnings.append(
+                f"Excluded {excluded_needs_partner} confirmed {suffix} still "
+                "marked NEEDS_PARTNER."
+            )
+
+    for selection in ([] if standard_doubles_import else selections):
         registration = registrations_by_id.get(_clean_text(selection.get("registration_id"), limit=120))
         if not registration:
             continue
@@ -446,7 +707,11 @@ def import_admin_tournament_registrations_to_draw(
             if player1_id is None:
                 unresolved.append(_clean_text(registration.get("display_name") or registration.get("email") or registration.get("id"), limit=180))
                 continue
-            partner_email = _email(selection.get("partner_email"))
+            partner_email = (
+                ""
+                if _is_singles_event(event_option)
+                else _email(selection.get("partner_email"))
+            )
             if partner_email:
                 partner = registrations_by_email.get(partner_email)
                 player2_id = _safe_int((partner or {}).get("player_id"))
@@ -495,6 +760,22 @@ def import_admin_tournament_registrations_to_draw(
         )
     if unresolved:
         raise ValueError("Some confirmed registrations could not be resolved to JUPR players: " + ", ".join(sorted(set(filter(None, unresolved)))))
+    if mode == "APPEND" and not combined_rating_import:
+        current_player_ids = {
+            player_id
+            for team in current_teams
+            for player_id in (
+                _safe_int(team.get("player1_id")),
+                _safe_int(team.get("player2_id")),
+            )
+            if player_id is not None
+        }
+        overlaps = sorted(current_player_ids.intersection(selected_player_ids))
+        if overlaps:
+            raise ValueError(
+                "Player IDs already exist in the current draw and cannot be "
+                "appended: " + ", ".join(str(player_id) for player_id in overlaps)
+            )
     if not rows:
         if combined_rating_import:
             raise ValueError(
@@ -526,7 +807,7 @@ def import_admin_tournament_registrations_to_draw(
             "import_mode": mode,
             "updated_count": len(teams),
             "teams": teams,
-            "warnings": [],
+            "warnings": import_warnings,
         }
     if combined_rating_import:
         inserted = _write_combined_rating_teams_atomic(
@@ -579,7 +860,7 @@ def import_admin_tournament_registrations_to_draw(
         flagged_for_review=True,
     )
     audit_write = write_admin_activity_log(supabase, audit_payload)
-    warnings: list[str] = []
+    warnings: list[str] = list(import_warnings)
     if audit_write.warning:
         warnings.append(audit_write.warning)
     if not audit_write.ok and _truthy_env("JUPR_REQUIRE_API_AUDIT_LOG"):

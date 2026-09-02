@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pandas as pd
@@ -8,7 +9,9 @@ import pytest
 from jupr_app.data.load import load_data
 from jupr_app.domain.bulk_match_editor import apply_bulk_match_edits, compute_recompute_scope
 from jupr_app.domain.match_delete import delete_rated_matches_with_replay
+from jupr_app.domain.match_processing import process_matches
 from jupr_app.domain.replay_history import FULL_RESET_LABEL, replay_history
+from jupr_app.domain.ratings import calculate_hybrid_elo
 from jupr_app.domain.singles_match_processing import process_singles_matches
 
 
@@ -33,6 +36,12 @@ class _Query:
     def insert(self, payload, returning=None):
         self._op = "insert"
         self._payload = payload
+        return self
+
+    def upsert(self, payload, on_conflict=None, returning=None):
+        self._op = "upsert"
+        self._payload = payload
+        self._on_conflict = on_conflict
         return self
 
     def update(self, payload):
@@ -183,6 +192,26 @@ class _Supabase:
                         table.append(dict(patch))
                     else:
                         existing.update(dict(patch))
+            elif name == "apply_replay_league_rating_rows_atomic":
+                table = self.tables["league_ratings"]
+                for patch in rows:
+                    existing = next(
+                        (
+                            row
+                            for row in table
+                            if str(row.get("club_id"))
+                            == str(patch.get("club_id"))
+                            and int(row.get("player_id"))
+                            == int(patch.get("player_id"))
+                            and str(row.get("league_name"))
+                            == str(patch.get("league_name"))
+                        ),
+                        None,
+                    )
+                    if existing is None:
+                        table.append(dict(patch))
+                    else:
+                        existing.update(dict(patch))
             return SimpleNamespace(data=len(rows))
 
         return SimpleNamespace(execute=_execute)
@@ -237,6 +266,31 @@ class _Supabase:
             payload = q._payload if isinstance(q._payload, list) else [q._payload]
             for row in payload:
                 rows.append(dict(row))
+            return SimpleNamespace(data=payload)
+        if q._op == "upsert":
+            payload = q._payload if isinstance(q._payload, list) else [q._payload]
+            conflict_columns = [
+                value.strip()
+                for value in str(getattr(q, "_on_conflict", "") or "").split(",")
+                if value.strip()
+            ]
+            for patch in payload:
+                existing = next(
+                    (
+                        row
+                        for row in rows
+                        if conflict_columns
+                        and all(
+                            str(row.get(column)) == str(patch.get(column))
+                            for column in conflict_columns
+                        )
+                    ),
+                    None,
+                )
+                if existing is None:
+                    rows.append(dict(patch))
+                else:
+                    existing.update(dict(patch))
             return SimpleNamespace(data=payload)
         if q._op == "update":
             for row in data:
@@ -315,9 +369,101 @@ def test_replay_history_ignores_soft_deleted_matches():
     assert result["matches_rewritten"] == 1
 
 
+def test_doubles_replay_preserves_clinching_game_rating_bonus_and_order():
+    sb = _Supabase()
+    sb.tables["players"] = _seed_players()
+    sb.tables["matches"] = [
+        {
+            "id": 20,
+            "club_id": "club",
+            "date": "2026-08-31T20:00:00.000001Z",
+            "league": "Tournament · Summer Classic · Open",
+            "match_type": "Tournament",
+            "match_format": "doubles",
+            "t1_p1": 1,
+            "t1_p2": 2,
+            "t2_p1": 3,
+            "t2_p2": 4,
+            "score_t1": 11,
+            "score_t2": 9,
+            "rating_bonus_elo": 25,
+            "deleted_at": None,
+            "rating_scope": None,
+            "tournament_game_id": "series-child-2",
+        },
+        {
+            "id": 30,
+            "club_id": "club",
+            "date": "2026-08-31T20:00:00.000000Z",
+            "league": "Tournament · Summer Classic · Open",
+            "match_type": "Tournament",
+            "match_format": "doubles",
+            "t1_p1": 1,
+            "t1_p2": 2,
+            "t2_p1": 3,
+            "t2_p2": 4,
+            "score_t1": 11,
+            "score_t2": 8,
+            "rating_bonus_elo": None,
+            "deleted_at": None,
+            "rating_scope": None,
+            "tournament_game_id": "series-child-1",
+        },
+    ]
+
+    first_delta, _ = calculate_hybrid_elo(1200, 1200, 11, 8)
+    second_delta, _ = calculate_hybrid_elo(
+        1200 + first_delta,
+        1200 + calculate_hybrid_elo(1200, 1200, 11, 8)[1],
+        11,
+        9,
+    )
+
+    result = replay_history(
+        supabase=sb,
+        club_id="club",
+        df_meta=pd.DataFrame(),
+        target_reset=FULL_RESET_LABEL,
+    )
+
+    winner = next(row for row in sb.tables["players"] if row["id"] == 1)
+    clincher = next(row for row in sb.tables["matches"] if row["id"] == 20)
+    opener = next(row for row in sb.tables["matches"] if row["id"] == 30)
+    assert result["matches_rewritten"] == 2
+    assert winner["rating"] == pytest.approx(
+        1200 + first_delta + second_delta + 25
+    )
+    assert (winner["wins"], winner["losses"], winner["matches_played"]) == (
+        2,
+        0,
+        2,
+    )
+    assert opener["t1_p1_r"] == pytest.approx(1200)
+    assert clincher["t1_p1_r"] == pytest.approx(1200 + first_delta)
+    assert clincher["t1_p1_r_end"] == pytest.approx(
+        1200 + first_delta + second_delta + 25
+    )
+    assert clincher["elo_delta"] == pytest.approx(abs(second_delta) + 25)
+
+
 def test_tracked_replay_fences_every_projection_write_batch():
     sb = _Supabase()
     sb.tables["players"] = _seed_players()
+    sb.tables["league_ratings"] = [
+        {
+            "club_id": "club",
+            "player_id": player_id,
+            "league_name": "Main",
+            "rating": 1200.123456,
+            "starting_rating": 1200.123456,
+            "wins": 0,
+            "losses": 0,
+            "matches_played": 0,
+            "is_active": True,
+            "inactive_at": None,
+        }
+        for player_id in range(1, 5)
+    ]
     sb.tables["matches"] = [
         {
             "id": 1,
@@ -353,17 +499,20 @@ def test_tracked_replay_fences_every_projection_write_batch():
 
     assert sb.rpc_calls
     assert {
-        payload["p_write_kind"] for _name, payload in sb.rpc_calls
+        payload["p_write_kind"]
+        for name, payload in sb.rpc_calls
+        if name == "apply_replay_write_batch_atomic"
     } == {
         "players_stats",
         "player_singles_stats",
-        "delete_league_ratings",
-        "insert_league_ratings",
         "match_snapshots",
     }
     assert {
         name for name, _payload in sb.rpc_calls
-    } == {"apply_replay_write_batch_atomic"}
+    } == {
+        "apply_replay_write_batch_atomic",
+        "apply_replay_league_rating_rows_atomic",
+    }
     assert len(heartbeats) == len(sb.rpc_calls)
     for _name, payload in sb.rpc_calls:
         assert payload["p_job_id"] == fence["job_id"]
@@ -379,6 +528,20 @@ def test_tracked_replay_fences_every_projection_write_batch():
     assert {
         row["last_game_at"] for row in players_batch["p_rows"]
     } == {"2024-01-01T00:00:00+00:00"}
+    league_batch = next(
+        payload
+        for name, payload in sb.rpc_calls
+        if name == "apply_replay_league_rating_rows_atomic"
+    )
+    assert league_batch["p_rows"]
+    assert {
+        Decimal(str(row["starting_rating"]))
+        for row in league_batch["p_rows"]
+    } == {Decimal("1200.1235")}
+    for row in league_batch["p_rows"]:
+        for field in ("rating", "starting_rating"):
+            value = Decimal(str(row[field]))
+            assert value == value.quantize(Decimal("0.0001"))
 
 
 def test_stale_replay_fence_stops_before_first_projection_mutation():
@@ -596,6 +759,158 @@ def test_replay_history_includes_null_rating_scope_but_skips_unrated():
     } == {"2024-01-02T00:00:00+00:00"}
 
 
+def test_full_replay_preserves_doubles_league_start_and_roster_lifecycle():
+    sb = _Supabase()
+    sb.tables["players"] = _seed_players()
+    sb.tables["matches"] = [
+        {
+            "id": 1,
+            "club_id": "club",
+            "date": "2024-01-01T00:00:00Z",
+            "league": "Main",
+            "match_type": "League",
+            "match_format": "doubles",
+            "t1_p1": 1,
+            "t1_p2": 2,
+            "t2_p1": 3,
+            "t2_p2": 4,
+            "score_t1": 11,
+            "score_t2": 8,
+            "deleted_at": None,
+            "rating_scope": None,
+        }
+    ]
+    sb.tables["league_ratings"] = [
+        {
+            "club_id": "club",
+            "player_id": player_id,
+            "league_name": "Main",
+            "rating": 999,
+            "wins": 9,
+            "losses": 8,
+            "matches_played": 17,
+            "starting_rating": starting_rating,
+            "is_active": False,
+            "inactive_at": "2026-07-01T00:00:00Z",
+        }
+        for player_id, starting_rating in enumerate(
+            (1300, 1250, 1150, 1100),
+            start=1,
+        )
+    ]
+
+    replay_history(
+        supabase=sb,
+        club_id="club",
+        df_meta=_active_league_metadata(
+            "Main",
+            match_format="doubles",
+        ),
+        target_reset=FULL_RESET_LABEL,
+    )
+
+    ratings = {
+        row["player_id"]: row for row in sb.tables["league_ratings"]
+    }
+    assert {
+        player_id: row["starting_rating"]
+        for player_id, row in ratings.items()
+    } == {1: 1300.0, 2: 1250.0, 3: 1150.0, 4: 1100.0}
+    assert all(row["matches_played"] == 1 for row in ratings.values())
+    assert all(row["is_active"] is False for row in ratings.values())
+    assert {
+        row["inactive_at"] for row in ratings.values()
+    } == {"2026-07-01T00:00:00Z"}
+
+
+def test_replay_rejects_duplicate_normalized_roster_rows_before_writes():
+    sb = _Supabase()
+    sb.tables["players"] = _seed_players()
+    sb.tables["league_ratings"] = [
+        {
+            "club_id": "club",
+            "player_id": 1,
+            "league_name": league_name,
+            "rating": 1200,
+            "wins": 0,
+            "losses": 0,
+            "matches_played": 0,
+            "starting_rating": 1200,
+            "is_active": True,
+            "inactive_at": None,
+        }
+        for league_name in ("Main", " main ")
+    ]
+
+    with pytest.raises(RuntimeError, match="duplicate normalized"):
+        replay_history(
+            supabase=sb,
+            club_id="club",
+            df_meta=pd.DataFrame(),
+            target_reset=FULL_RESET_LABEL,
+        )
+
+    assert sb.rpc_calls == []
+
+
+def test_doubles_replay_normalizes_popup_before_league_updates():
+    sb = _Supabase()
+    sb.tables["players"] = _seed_players()
+    sb.tables["matches"] = [
+        {
+            "id": 1,
+            "club_id": "club",
+            "date": "2024-01-01T00:00:00Z",
+            "league": "Main",
+            "match_type": " popup ",
+            "match_format": "doubles",
+            "t1_p1": 1,
+            "t1_p2": 2,
+            "t2_p1": 3,
+            "t2_p2": 4,
+            "score_t1": 11,
+            "score_t2": 8,
+            "deleted_at": None,
+            "rating_scope": None,
+        }
+    ]
+    sb.tables["league_ratings"] = [
+        {
+            "club_id": "club",
+            "player_id": player_id,
+            "league_name": "Main",
+            "rating": 1200,
+            "wins": 0,
+            "losses": 0,
+            "matches_played": 0,
+            "starting_rating": 1200,
+            "is_active": True,
+            "inactive_at": None,
+        }
+        for player_id in range(1, 5)
+    ]
+
+    replay_history(
+        supabase=sb,
+        club_id="club",
+        df_meta=_active_league_metadata(
+            "Main",
+            match_format="doubles",
+        ),
+        target_reset=FULL_RESET_LABEL,
+    )
+
+    assert {
+        (
+            row["rating"],
+            row["wins"],
+            row["losses"],
+            row["matches_played"],
+        )
+        for row in sb.tables["league_ratings"]
+    } == {(1200, 0, 0, 0)}
+
+
 def test_full_replay_restores_last_game_at_to_prior_active_scored_match():
     sb = _Supabase()
     sb.tables["players"] = _seed_players()
@@ -728,10 +1043,34 @@ def _singles_replay_players():
     ]
 
 
+def _active_league_metadata(
+    league_name: str,
+    *,
+    match_format: str,
+    k_factor: int = 32,
+) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "id": "league-id",
+                "club_id": "club",
+                "league_name": league_name,
+                "k_factor": int(k_factor),
+                "status": "active",
+                "is_active": True,
+                "ended_at": None,
+                "match_format": match_format,
+            }
+        ]
+    )
+
+
 def _managed_singles_match(
     match_id: int,
     *,
     date: str,
+    league: str = "Singles",
+    match_type: str = "Singles",
     score_t1: int = 11,
     score_t2: int = 7,
     deleted_at=None,
@@ -741,8 +1080,8 @@ def _managed_singles_match(
         "id": match_id,
         "club_id": "club",
         "date": date,
-        "league": "Singles",
-        "match_type": "Singles",
+        "league": league,
+        "match_type": match_type,
         "match_format": "singles",
         "rating_scope": rating_scope,
         "singles_replay_managed": True,
@@ -800,6 +1139,318 @@ def test_full_replay_rebuilds_only_managed_active_singles_from_baseline():
     assert sb.tables["matches"][0]["t1_p1_r"] == 1240
     assert sb.tables["matches"][0]["t2_p1_r"] == 1210
     assert sb.tables["matches"][2]["elo_delta"] == 0
+
+
+def test_full_replay_backfills_historic_managed_singles_league_ratings():
+    league_name = "Acceptance Singles League 0731"
+    sb = _Supabase()
+    players = _singles_replay_players()
+    for player in players:
+        player["singles_replay_baseline"] = {
+            "rating": 1200,
+            "wins": 0,
+            "losses": 0,
+            "matches_played": 0,
+            "last_game_at": None,
+        }
+    sb.tables["players"] = players
+    sb.tables["matches"] = [
+        _managed_singles_match(
+            49,
+            date="2026-07-31T18:00:00Z",
+            league=league_name,
+            match_type="League",
+            score_t1=11,
+            score_t2=8,
+        )
+    ]
+
+    result = replay_history(
+        supabase=sb,
+        club_id="club",
+        df_meta=_active_league_metadata(
+            league_name,
+            match_format="singles",
+        ),
+        target_reset=FULL_RESET_LABEL,
+    )
+
+    ratings = {
+        row["player_id"]: row for row in sb.tables["league_ratings"]
+    }
+    assert set(ratings) == {1, 2}
+    assert ratings[1] == {
+        "club_id": "club",
+        "player_id": 1,
+        "league_name": league_name,
+        "rating": pytest.approx(1205.0526315789473),
+        "wins": 1,
+        "losses": 0,
+        "matches_played": 1,
+        "starting_rating": 1200.0,
+        "is_active": True,
+        "inactive_at": None,
+    }
+    assert ratings[2] == {
+        "club_id": "club",
+        "player_id": 2,
+        "league_name": league_name,
+        "rating": pytest.approx(1194.9473684210527),
+        "wins": 0,
+        "losses": 1,
+        "matches_played": 1,
+        "starting_rating": 1200.0,
+        "is_active": True,
+        "inactive_at": None,
+    }
+    assert result["league_ratings_rows"] == 2
+    assert result["skipped_incomplete"] == 0
+
+
+def test_scoped_singles_replay_uses_existing_league_specific_start():
+    league_name = "Acceptance Singles League 0731"
+    sb = _Supabase()
+    sb.tables["players"] = _singles_replay_players()
+    sb.tables["matches"] = [
+        _managed_singles_match(
+            49,
+            date="2026-07-31T18:00:00Z",
+            league=league_name,
+            match_type="League",
+            score_t1=11,
+            score_t2=8,
+        )
+    ]
+    sb.tables["league_ratings"] = [
+        {
+            "club_id": "club",
+            "player_id": player_id,
+            "league_name": league_name,
+            "rating": current_rating,
+            "wins": 9,
+            "losses": 8,
+            "matches_played": 17,
+            "starting_rating": starting_rating,
+            "is_active": False,
+            "inactive_at": "2026-07-01T00:00:00Z",
+        }
+        for player_id, current_rating, starting_rating in (
+            (1, 1600, 1180),
+            (2, 900, 1220),
+        )
+    ]
+
+    result = replay_history(
+        supabase=sb,
+        club_id="club",
+        df_meta=_active_league_metadata(
+            league_name,
+            match_format="singles",
+        ),
+        target_reset=league_name,
+    )
+
+    ratings = {
+        row["player_id"]: row for row in sb.tables["league_ratings"]
+    }
+    assert ratings[1]["starting_rating"] == 1180
+    assert ratings[2]["starting_rating"] == 1220
+    assert ratings[1]["rating"] > 1180
+    assert ratings[2]["rating"] < 1220
+    assert (
+        ratings[1]["wins"],
+        ratings[1]["losses"],
+        ratings[1]["matches_played"],
+    ) == (1, 0, 1)
+    assert (
+        ratings[2]["wins"],
+        ratings[2]["losses"],
+        ratings[2]["matches_played"],
+    ) == (0, 1, 1)
+    assert all(row["is_active"] is False for row in ratings.values())
+    assert {
+        row["inactive_at"] for row in ratings.values()
+    } == {"2026-07-01T00:00:00Z"}
+    assert result["singles_replay_supported"] is True
+    assert result["singles_players_updated"] == 0
+    assert result["singles_matches_rewritten"] == 1
+    assert {row["singles_rating"] for row in sb.tables["players"]} == {9999}
+
+    replay_history(
+        supabase=sb,
+        club_id="club",
+        df_meta=_active_league_metadata(
+            league_name,
+            match_format="singles",
+        ),
+        target_reset=league_name,
+    )
+    assert len(sb.tables["league_ratings"]) == 2
+    assert {
+        (row["player_id"], row["matches_played"], row["is_active"])
+        for row in sb.tables["league_ratings"]
+    } == {(1, 1, False), (2, 1, False)}
+
+
+def test_managed_singles_replay_normalizes_popup_before_league_updates():
+    league_name = "Acceptance Singles League 0731"
+    sb = _Supabase()
+    players = _singles_replay_players()
+    for player in players:
+        player["singles_replay_baseline"] = {
+            "rating": 1200,
+            "wins": 0,
+            "losses": 0,
+            "matches_played": 0,
+            "last_game_at": None,
+        }
+    sb.tables["players"] = players
+    sb.tables["matches"] = [
+        _managed_singles_match(
+            49,
+            date="2026-07-31T18:00:00Z",
+            league=league_name,
+            match_type=" popup ",
+            score_t1=11,
+            score_t2=8,
+        )
+    ]
+
+    replay_history(
+        supabase=sb,
+        club_id="club",
+        df_meta=_active_league_metadata(
+            league_name,
+            match_format="singles",
+        ),
+        target_reset=FULL_RESET_LABEL,
+    )
+
+    assert sb.tables["league_ratings"] == []
+    assert {
+        row["singles_rating"] for row in sb.tables["players"]
+    } != {1200.0}
+
+
+@pytest.mark.parametrize("rating_scope", ["unrated", "overall_only"])
+def test_managed_singles_replay_does_not_invent_nonleague_scoped_membership(
+    rating_scope,
+):
+    league_name = "Acceptance Singles League 0731"
+    sb = _Supabase()
+    sb.tables["players"] = _singles_replay_players()
+    sb.tables["matches"] = [
+        _managed_singles_match(
+            49,
+            date="2026-07-31T18:00:00Z",
+            league=league_name,
+            match_type="League",
+            score_t1=11,
+            score_t2=8,
+            rating_scope=rating_scope,
+        )
+    ]
+
+    replay_history(
+        supabase=sb,
+        club_id="club",
+        df_meta=_active_league_metadata(
+            league_name,
+            match_format="singles",
+        ),
+        target_reset=FULL_RESET_LABEL,
+    )
+
+    assert sb.tables["league_ratings"] == []
+
+
+@pytest.mark.parametrize("target_reset", [FULL_RESET_LABEL, "Roster Only"])
+def test_replay_preserves_zero_counter_roster_only_membership(target_reset):
+    sb = _Supabase()
+    sb.tables["players"] = _seed_players()
+    roster_row = {
+        "club_id": "club",
+        "player_id": 1,
+        "league_name": "Roster Only",
+        "rating": 1337,
+        "wins": 0,
+        "losses": 0,
+        "matches_played": 0,
+        "starting_rating": 1310,
+        "is_active": False,
+        "inactive_at": "2026-07-01T00:00:00Z",
+    }
+    sb.tables["league_ratings"] = [dict(roster_row)]
+
+    result = replay_history(
+        supabase=sb,
+        club_id="club",
+        df_meta=_active_league_metadata(
+            "Roster Only",
+            match_format="doubles",
+        ),
+        target_reset=target_reset,
+    )
+
+    assert sb.tables["league_ratings"] == [roster_row]
+    assert result["league_ratings_rows"] == 0
+    assert result["league_ratings_reset_without_active_evidence"] == 0
+
+
+def test_full_replay_resets_stale_stats_after_last_match_is_deleted():
+    league_name = "Acceptance Singles League 0731"
+    sb = _Supabase()
+    sb.tables["players"] = _singles_replay_players()
+    sb.tables["matches"] = [
+        _managed_singles_match(
+            49,
+            date="2026-07-31T18:00:00Z",
+            league=league_name,
+            match_type="League",
+            score_t1=11,
+            score_t2=8,
+            deleted_at="2026-08-01T00:00:00Z",
+        )
+    ]
+    sb.tables["league_ratings"] = [
+        {
+            "club_id": "club",
+            "player_id": player_id,
+            "league_name": league_name,
+            "rating": rating,
+            "wins": wins,
+            "losses": losses,
+            "matches_played": 1,
+            "starting_rating": 1200,
+            "is_active": False,
+            "inactive_at": "2026-08-02T00:00:00Z",
+        }
+        for player_id, rating, wins, losses in (
+            (1, 1205.0526, 1, 0),
+            (2, 1194.9474, 0, 1),
+        )
+    ]
+
+    result = replay_history(
+        supabase=sb,
+        club_id="club",
+        df_meta=_active_league_metadata(
+            league_name,
+            match_format="singles",
+        ),
+        target_reset=FULL_RESET_LABEL,
+    )
+
+    assert result["league_ratings_reset_without_active_evidence"] == 2
+    for row in sb.tables["league_ratings"]:
+        assert (
+            row["rating"],
+            row["wins"],
+            row["losses"],
+            row["matches_played"],
+        ) == (1200.0, 0, 0, 0)
+        assert row["is_active"] is False
+        assert row["inactive_at"] == "2026-08-02T00:00:00Z"
 
 
 def test_full_replay_fails_closed_on_invalid_active_managed_singles():
@@ -998,6 +1649,397 @@ def test_singles_write_plan_uses_chronological_order_within_one_batch():
     ]
 
 
+def test_acceptance_singles_match_atomically_adds_both_players_to_roster():
+    league_name = "Acceptance Singles League 0731"
+    players = _singles_replay_players()
+    players[0].update(
+        singles_rating=1300,
+        singles_wins=0,
+        singles_losses=0,
+        singles_matches_played=0,
+    )
+    players[1].update(
+        singles_rating=1100,
+        singles_wins=0,
+        singles_losses=0,
+        singles_matches_played=0,
+    )
+    sb = _Supabase()
+    sb.tables["players"] = players
+
+    result = process_singles_matches(
+        [
+            {
+                "date": "2026-07-31T18:00:00Z",
+                "league": league_name,
+                "match_type": "League",
+                "match_format": "singles",
+                "t1_p1": 1,
+                "t2_p1": 2,
+                "score_t1": 11,
+                "score_t2": 8,
+            }
+        ],
+        supabase=sb,
+        club_id="club",
+        name_to_id={},
+        df_leagues=pd.DataFrame(),
+        df_meta=_active_league_metadata(
+            league_name,
+            match_format="singles",
+        ),
+        build_write_plan_only=True,
+    )
+
+    plan = result["write_plan"]
+    league_updates = {
+        row["player_id"]: row
+        for row in plan["league_rating_updates"]
+    }
+    assert set(league_updates) == {1, 2}
+    assert all(row["expected"] is None for row in league_updates.values())
+    assert league_updates[1]["after"]["starting_rating"] == 1300
+    assert league_updates[2]["after"]["starting_rating"] == 1100
+    assert league_updates[1]["after"]["rating"] > 1300
+    assert league_updates[2]["after"]["rating"] != 1100
+    assert (
+        league_updates[1]["after"]["wins"],
+        league_updates[1]["after"]["losses"],
+        league_updates[1]["after"]["matches_played"],
+    ) == (1, 0, 1)
+    assert (
+        league_updates[2]["after"]["wins"],
+        league_updates[2]["after"]["losses"],
+        league_updates[2]["after"]["matches_played"],
+    ) == (0, 1, 1)
+    assert all(row["after"]["is_active"] for row in league_updates.values())
+    assert {row["rating_mode"] for row in plan["player_updates"]} == {
+        "singles"
+    }
+    assert plan["league_metadata_expectations"][0]["expected"][
+        "match_format"
+    ] == "singles"
+
+
+@pytest.mark.parametrize(
+    ("rating_scope", "expected_player_update_count", "skipped_unrated"),
+    [
+        ("unrated", 0, 1),
+        ("overall_only", 2, 0),
+    ],
+)
+def test_official_singles_match_membership_is_independent_of_rating_scope(
+    rating_scope,
+    expected_player_update_count,
+    skipped_unrated,
+):
+    league_name = "Acceptance Singles League 0731"
+    players = _singles_replay_players()
+    players[0].update(
+        singles_rating=1300,
+        singles_wins=0,
+        singles_losses=0,
+        singles_matches_played=0,
+    )
+    players[1].update(
+        singles_rating=1100,
+        singles_wins=0,
+        singles_losses=0,
+        singles_matches_played=0,
+    )
+    sb = _Supabase()
+    sb.tables["players"] = players
+
+    result = process_singles_matches(
+        [
+            {
+                "date": "2026-07-31T18:00:00Z",
+                "league": league_name,
+                "match_type": "League",
+                "match_format": "singles",
+                "rating_scope": rating_scope,
+                "t1_p1": 1,
+                "t2_p1": 2,
+                "score_t1": 11,
+                "score_t2": 8,
+            }
+        ],
+        supabase=sb,
+        club_id="club",
+        name_to_id={},
+        df_leagues=pd.DataFrame(),
+        df_meta=_active_league_metadata(
+            league_name,
+            match_format="singles",
+        ),
+        build_write_plan_only=True,
+    )
+
+    plan = result["write_plan"]
+    league_updates = {
+        row["player_id"]: row["after"]
+        for row in plan["league_rating_updates"]
+    }
+    assert set(league_updates) == {1, 2}
+    assert len(plan["player_updates"]) == expected_player_update_count
+    assert result["skipped_unrated"] == skipped_unrated
+    assert (
+        league_updates[1]["rating"],
+        league_updates[1]["wins"],
+        league_updates[1]["losses"],
+        league_updates[1]["matches_played"],
+    ) == (1300, 0, 0, 0)
+    assert (
+        league_updates[2]["rating"],
+        league_updates[2]["wins"],
+        league_updates[2]["losses"],
+        league_updates[2]["matches_played"],
+    ) == (1100, 0, 0, 0)
+
+
+def test_singles_match_reactivates_existing_roster_row_without_nan_plan():
+    league_name = "Acceptance Singles League 0731"
+    players = _singles_replay_players()
+    players[0].update(
+        singles_rating=1300,
+        singles_wins=0,
+        singles_losses=0,
+        singles_matches_played=0,
+    )
+    players[1].update(
+        singles_rating=1100,
+        singles_wins=0,
+        singles_losses=0,
+        singles_matches_played=0,
+    )
+    existing_roster = pd.DataFrame(
+        [
+            {
+                "id": 101,
+                "club_id": "club",
+                "player_id": 1,
+                "league_name": league_name,
+                "rating": 1250,
+                "starting_rating": float("nan"),
+                "wins": 2,
+                "losses": 3,
+                "matches_played": 5,
+                "is_active": False,
+                "inactive_at": "2026-07-01T00:00:00Z",
+            }
+        ]
+    )
+    sb = _Supabase()
+    sb.tables["players"] = players
+
+    result = process_singles_matches(
+        [
+            {
+                "date": "2026-07-31T18:00:00Z",
+                "league": league_name,
+                "match_type": "League",
+                "match_format": "singles",
+                "t1_p1": 1,
+                "t2_p1": 2,
+                "score_t1": 11,
+                "score_t2": 8,
+            }
+        ],
+        supabase=sb,
+        club_id="club",
+        name_to_id={},
+        df_leagues=existing_roster,
+        df_meta=_active_league_metadata(
+            league_name,
+            match_format="singles",
+        ),
+        build_write_plan_only=True,
+    )
+
+    league_updates = {
+        row["player_id"]: row
+        for row in result["write_plan"]["league_rating_updates"]
+    }
+    existing = league_updates[1]
+    assert existing["expected"] == {
+        "id": 101,
+        "rating": 1250,
+        "wins": 2,
+        "losses": 3,
+        "matches_played": 5,
+        "starting_rating": None,
+        "is_active": False,
+        "inactive_at": "2026-07-01T00:00:00Z",
+    }
+    assert existing["after"]["starting_rating"] == 1250
+    assert existing["after"]["wins"] == 3
+    assert existing["after"]["losses"] == 3
+    assert existing["after"]["matches_played"] == 6
+    assert existing["after"]["is_active"] is True
+    assert existing["after"]["inactive_at"] is None
+
+
+def test_legacy_singles_writer_fails_closed_before_match_or_roster_mutation():
+    league_name = "Acceptance Singles League 0731"
+    players = _singles_replay_players()
+    players[0].update(
+        singles_rating=1300,
+        singles_wins=0,
+        singles_losses=0,
+        singles_matches_played=0,
+    )
+    players[1].update(
+        singles_rating=1100,
+        singles_wins=0,
+        singles_losses=0,
+        singles_matches_played=0,
+    )
+    sb = _Supabase()
+    sb.tables["players"] = players
+    sb.tables["league_ratings"] = [
+        {
+            "id": 101,
+            "club_id": "club",
+            "player_id": 1,
+            "league_name": league_name,
+            "rating": 1250,
+            "starting_rating": 1240,
+            "wins": 2,
+            "losses": 3,
+            "matches_played": 5,
+            "is_active": False,
+            "inactive_at": "2026-07-01T00:00:00Z",
+        }
+    ]
+    roster_before = [dict(row) for row in sb.tables["league_ratings"]]
+    players_before = [dict(row) for row in sb.tables["players"]]
+
+    with pytest.raises(RuntimeError, match="atomic match-entry path"):
+        process_singles_matches(
+            [
+                {
+                    "date": "2026-07-31T18:00:00Z",
+                    "league": league_name,
+                    "match_type": "League",
+                    "match_format": "singles",
+                    "t1_p1": 1,
+                    "t2_p1": 2,
+                    "score_t1": 11,
+                    "score_t2": 8,
+                }
+            ],
+            supabase=sb,
+            club_id="club",
+            name_to_id={},
+            df_meta=_active_league_metadata(
+                league_name,
+                match_format="singles",
+            ),
+        )
+
+    assert sb.tables["matches"] == []
+    assert sb.tables["league_ratings"] == roster_before
+    assert sb.tables["players"] == players_before
+
+
+def test_unrated_official_doubles_match_adds_all_participants_to_roster():
+    league_name = "Acceptance Doubles League 0731"
+    players = _seed_players()
+    for player, rating in zip(players, (1350, 1250, 1150, 1050)):
+        player["rating"] = rating
+        player["starting_rating"] = rating
+    sb = _Supabase()
+    sb.tables["players"] = players
+
+    result = process_matches(
+        [
+            {
+                "date": "2026-07-31T18:00:00Z",
+                "league": league_name,
+                "match_type": "League",
+                "match_format": "doubles",
+                "rating_scope": "unrated",
+                "t1_p1": 1,
+                "t1_p2": 2,
+                "t2_p1": 3,
+                "t2_p2": 4,
+                "score_t1": 11,
+                "score_t2": 8,
+            }
+        ],
+        supabase=sb,
+        club_id="club",
+        name_to_id={},
+        df_players_all=pd.DataFrame(players),
+        df_leagues=pd.DataFrame(),
+        df_meta=_active_league_metadata(
+            league_name,
+            match_format="doubles",
+        ),
+        build_write_plan_only=True,
+    )
+
+    plan = result["write_plan"]
+    league_updates = {
+        row["player_id"]: row["after"]
+        for row in plan["league_rating_updates"]
+    }
+    assert set(league_updates) == {1, 2, 3, 4}
+    assert plan["player_updates"] == []
+    for player_id, baseline in enumerate((1350, 1250, 1150, 1050), start=1):
+        assert league_updates[player_id] == {
+            "rating": baseline,
+            "wins": 0,
+            "losses": 0,
+            "matches_played": 0,
+            "starting_rating": baseline,
+            "is_active": True,
+            "inactive_at": None,
+        }
+
+
+def test_legacy_doubles_writer_fails_closed_before_match_or_roster_mutation():
+    league_name = "Acceptance Doubles League 0731"
+    players = _seed_players()
+    for player, rating in zip(players, (1350, 1250, 1150, 1050)):
+        player["rating"] = rating
+        player["starting_rating"] = rating
+    sb = _Supabase()
+    sb.tables["players"] = players
+    players_before = [dict(row) for row in sb.tables["players"]]
+
+    with pytest.raises(RuntimeError, match="atomic match-entry path"):
+        process_matches(
+            [
+                {
+                    "date": "2026-07-31T18:00:00Z",
+                    "league": league_name,
+                    "match_type": "League",
+                    "match_format": "doubles",
+                    "t1_p1": 1,
+                    "t1_p2": 2,
+                    "t2_p1": 3,
+                    "t2_p2": 4,
+                    "score_t1": 11,
+                    "score_t2": 8,
+                }
+            ],
+            supabase=sb,
+            club_id="club",
+            name_to_id={},
+            df_players_all=pd.DataFrame(players),
+            df_leagues=pd.DataFrame(),
+            df_meta=_active_league_metadata(
+                league_name,
+                match_format="doubles",
+            ),
+        )
+
+    assert sb.tables["matches"] == []
+    assert sb.tables["league_ratings"] == []
+    assert sb.tables["players"] == players_before
+
+
 def test_singles_writer_fails_before_insert_when_player_snapshot_is_missing():
     sb = _Supabase()
     sb.tables["players"] = [_singles_replay_players()[0]]
@@ -1090,6 +2132,35 @@ def test_legacy_singles_exclusion_fails_before_mutation():
     ]
 
     with pytest.raises(ValueError, match="Legacy singles rows"):
+        delete_rated_matches_with_replay(
+            supabase=sb,
+            club_id="club",
+            match_ids=[10],
+            df_meta=pd.DataFrame(),
+        )
+
+    assert sb.tables["matches"][0]["deleted_at"] is None
+
+
+def test_legacy_match_log_cannot_exclude_official_tournament_game():
+    sb = _Supabase()
+    sb.tables["matches"] = [
+        {
+            "id": 10,
+            "club_id": "club",
+            "context_type": "tournament_game",
+            "tournament_game_id": "series-child-1",
+            "match_type": "Tournament",
+            "match_format": "doubles",
+            "t1_p1": 1,
+            "t1_p2": 2,
+            "t2_p1": 3,
+            "t2_p2": 4,
+            "deleted_at": None,
+        }
+    ]
+
+    with pytest.raises(ValueError, match="Official tournament matches"):
         delete_rated_matches_with_replay(
             supabase=sb,
             club_id="club",
@@ -1300,6 +2371,47 @@ def test_bulk_editor_validates_duplicate_players_and_negative_scores(monkeypatch
         apply_bulk_match_edits(sb, "club", [{"id": 1, "t2_p2": 999}], actor="admin")
 
 
+def test_legacy_match_log_cannot_edit_official_tournament_game(monkeypatch):
+    sb = _Supabase()
+    sb.tables["players"] = _seed_players()
+    sb.tables["matches"] = [
+        {
+            "id": 1,
+            "club_id": "club",
+            "context_type": "tournament_game",
+            "tournament_game_id": "series-child-1",
+            "league": "Tournament · Summer Classic · Open",
+            "date": "2026-08-31T20:00:00Z",
+            "week_tag": "Open draw",
+            "match_type": "Tournament",
+            "t1_p1": 1,
+            "t1_p2": 2,
+            "t2_p1": 3,
+            "t2_p2": 4,
+            "score_t1": 11,
+            "score_t2": 8,
+        }
+    ]
+    monkeypatch.setattr(
+        "jupr_app.domain.bulk_match_editor.enqueue_badge_eval",
+        lambda *a, **k: {"queued": False},
+    )
+    monkeypatch.setattr(
+        "jupr_app.domain.bulk_match_editor.run_live_badge_awards",
+        lambda *a, **k: {"mode": "inline"},
+    )
+
+    with pytest.raises(ValueError, match="Official tournament matches"):
+        apply_bulk_match_edits(
+            sb,
+            "club",
+            [{"id": 1, "score_t1": 15}],
+            actor="admin",
+        )
+
+    assert sb.tables["matches"][0]["score_t1"] == 11
+
+
 def test_bulk_editor_recomputes_last_game_for_removed_and_added_players(monkeypatch):
     sb = _Supabase()
     sb.tables["players"] = _seed_players() + [
@@ -1347,11 +2459,16 @@ class _LoadSpyQuery(_Query):
             self.sb.called_matches_soft_filter = True
         return super().is_(col, val)
 
+    def select(self, cols, *, count=None):
+        self.sb.selected_columns[self.table] = str(cols)
+        return super().select(cols, count=count)
+
 
 class _LoadSpySupabase(_Supabase):
     def __init__(self):
         super().__init__()
         self.called_matches_soft_filter = False
+        self.selected_columns: dict[str, str] = {}
 
     def table(self, name):
         return _LoadSpyQuery(self, name)
@@ -1362,3 +2479,4 @@ def test_load_data_excludes_deleted_matches(monkeypatch):
     sb = _LoadSpySupabase()
     load_data(sb, "club", match_limit=5)
     assert sb.called_matches_soft_filter is True
+    assert "inactive_at" in sb.selected_columns["league_ratings"].split(",")

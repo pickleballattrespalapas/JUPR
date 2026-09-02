@@ -256,6 +256,24 @@ def test_roster_order_can_be_changed_during_preview():
     assert [row["name"] for row in ordered] == ["D", "C", "B", "A"]
 
 
+def test_roster_order_rejects_duplicate_participants():
+    event = create_generator_preview(
+        generator_kind="round_robin",
+        play_format="singles",
+        title="Invalid Ordered Preview",
+        participant_names=["A", "B", "C", "D"],
+        total_rounds=3,
+        court_count=2,
+    )
+
+    with pytest.raises(ValueError, match="exactly once"):
+        mutate_generator_roster(
+            event,
+            action="reorder",
+            roster_order=["p-1", "p-2", "p-3", "p-4", "p-4"],
+        )
+
+
 def test_schedule_export_has_score_columns_and_byes():
     event = create_generator_preview(
         generator_kind="round_robin",

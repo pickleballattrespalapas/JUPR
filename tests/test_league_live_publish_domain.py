@@ -11,6 +11,7 @@ from jupr_app.domain.league_live_publish import (
     build_league_live_publish_request,
     build_rating_review,
     league_live_match_context_id,
+    league_live_unusual_score_reason,
     normalize_league_live_publish_matches,
     rows_to_safe_csv,
 )
@@ -61,6 +62,29 @@ def test_publish_contexts_and_fingerprint_are_deterministic() -> None:
         session_id="session-1", round_number=2, match_index=1
     )
     assert first["matches"][0]["context_type"] == "league_live_session"
+
+
+def test_unusual_score_requires_explicit_operator_acknowledgement() -> None:
+    unusual = {**MATCH, "score_t1": 11, "score_t2": 76}
+    kwargs = {
+        "session_id": "session-1",
+        "round_number": 2,
+        "league_name": "Tuesday",
+        "week_tag": "Week 1",
+        "match_date": "2026-07-19",
+        "matches": [unusual],
+        "expected_match_count": 1,
+        "expected_updated_at": "2026-07-19T12:00:00+00:00",
+        "expected_operation_key": "a" * 64,
+    }
+
+    assert league_live_unusual_score_reason(11, 76)
+    with pytest.raises(LeagueLivePublishError, match="unusual score 11-76"):
+        build_league_live_publish_request(**kwargs)
+
+    request = build_league_live_publish_request(**kwargs, unusual_score_acknowledgement=True)
+    assert request["unusual_score_acknowledgement"] is True
+    assert request["unusual_score_findings"][0]["score_t2"] == 76
 
 
 def test_movement_operation_key_ignores_publish_only_metadata() -> None:

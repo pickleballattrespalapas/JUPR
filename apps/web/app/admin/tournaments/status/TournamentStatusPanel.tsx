@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess } from "@/components/interaction";
 import type { AdminTournament, AdminTournamentListResponse, AdminTournamentStatusResponse, AdminTournamentWriteResponse } from "@/lib/adminTournamentApi";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
@@ -86,7 +87,7 @@ export default function TournamentStatusPanel({ apiBase, clubId, status }: Props
   async function submitAction(confirmationText: string) {
     if (!selectedTournamentId) {
       setMessage("Select a tournament first.");
-      return;
+      throw new Error("Select a tournament first.");
     }
     const generation = actionRequest.begin();
     const requestedTournamentId = selectedTournamentId;
@@ -105,11 +106,15 @@ export default function TournamentStatusPanel({ apiBase, clubId, status }: Props
           })
         }
       );
-      if (!actionRequest.isCurrent(generation)) return;
+      const completedAction = payload.action || action;
+      const completion = actionSuccess("Tournament status updated", `Tournament ${completedAction} completed and was recorded in the audit log.`);
+      if (!actionRequest.isCurrent(generation)) return completion;
       setTournaments((current) => current.map((row) => row.id === requestedTournamentId && payload.tournament ? { ...row, ...payload.tournament } : row));
       setMessage(payload.idempotent_replay ? "Tournament status response reconciled from the durable operation." : `Tournament ${payload.action || action} completed and audit-completed.`);
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to update tournament status.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }

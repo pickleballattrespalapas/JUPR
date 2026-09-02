@@ -59,6 +59,7 @@ export default async function EditTournamentRegistrationPage({ params, searchPar
 
       {data && tournament && data.registration_open ? (
         <EditTournamentRegistrationForm
+          key={`${editToken}:${data.registration.id}:${data.registration.updated_at}`}
           clubSlug={clubSlug}
           tournamentId={tournament.id}
           registrationSlug={settings?.registration_slug ?? searchParams?.tournament ?? null}

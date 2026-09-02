@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import math
 import os
+import re
+from datetime import datetime, timezone
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
+from jupr_app.domain.tournament_age_policy import (
+    build_age_split_preview,
+    normalize_age_policy,
+)
 from jupr_app.domain.tournament_admin_operations import stable_tournament_admin_fingerprint
 from jupr_app.domain.tournament_registration_repo import (
     REGISTRATION_STATUS_OPTIONS,
@@ -13,9 +20,13 @@ from jupr_app.domain.tournament_registration_repo import (
     get_builder_draft,
     get_registration_settings,
     get_tournament_record,
+    linked_partner_registration_lookup,
     list_event_options,
     list_existing_tournaments,
+    list_partner_team_links,
     list_registration_days,
+    list_registrations,
+    list_registration_selections,
     publish_registration_configuration,
     save_builder_draft,
     upsert_registration_settings,
@@ -26,6 +37,25 @@ TRUTHY = {"1", "true", "yes", "y", "on"}
 CONFIRM_SETTINGS = "SAVE SETUP"
 CONFIRM_DRAFT = "SAVE SETUP DRAFT"
 CONFIRM_PUBLISH = "PUBLISH SETUP"
+ELIGIBILITY_MODES = frozenset(
+    {"STANDARD", "MINIMUM", "OPEN", "COMBINED_RATING_CAP", "CUSTOM"}
+)
+STANDARD_TEAM_EVENT_TYPES = frozenset(
+    {"GENDER_DOUBLES", "MIXED_DOUBLES", "DOUBLES", "MIXED"}
+)
+LEGACY_MINIMUM_SKILL_MODES = frozenset({"MINIMUM", "MIN", "AT_LEAST"})
+EXPLICIT_STANDARD_SKILL_MODES = frozenset(
+    {"STANDARD", "SKILL_BRACKET", "CEILING", "MAXIMUM"}
+)
+LEGACY_OPEN_SKILL_MODES = frozenset({"OPEN", "NONE"})
+SKILL_LABEL_PATTERN = re.compile(
+    r"^(?:skill\s*)?([0-9](?:\.[0-9]{1,2})?)\s*(\+)?$",
+    re.IGNORECASE,
+)
+MIN_EXECUTABLE_EVENT_CAPACITY = 4
+MAX_EXECUTABLE_EVENT_CAPACITY = 16
+WOMENS_LABEL_PATTERN = re.compile(r"\bwomen(?:['’]s)?\b", re.IGNORECASE)
+MENS_LABEL_PATTERN = re.compile(r"(?<!wo)\bmen(?:['’]s)?\b", re.IGNORECASE)
 
 
 def _truthy_env(name: str) -> bool:
@@ -116,6 +146,9 @@ def _settings_payload(row: dict[str, Any]) -> dict[str, Any]:
         "weather_policy_markdown": row.get("weather_policy_markdown"),
         "sponsor_markdown": row.get("sponsor_markdown"),
         "location_name": row.get("location_name"),
+        "venue_address": row.get("venue_address"),
+        "venue_directions": row.get("venue_directions"),
+        "venue_courts_json": list(row.get("venue_courts_json") or []),
         "timezone": row.get("timezone"),
         "sponsors_json": list(row.get("sponsors_json") or []),
         "updated_at": row.get("updated_at"),
@@ -130,15 +163,30 @@ def _event_option_payload(row: dict[str, Any]) -> dict[str, Any]:
         "scheduled_day_ids": list(row.get("scheduled_day_ids") or []),
         "event_family_label": row.get("event_family_label"),
         "division_name": row.get("division_name"),
+        "label": row.get("label"),
         "event_type": row.get("event_type"),
         "gender_restriction": row.get("gender_restriction"),
+        "partner_required": row.get("partner_required"),
+        "public_partner_board": row.get("public_partner_board"),
         "event_format_default": row.get("event_format_default"),
         "scoring_default": row.get("scoring_default"),
+        "event_format_override": row.get("event_format_override"),
+        "scoring_override": row.get("scoring_override"),
         "skill_label": row.get("skill_label"),
         "skill_mode": row.get("skill_mode"),
         "age_label": row.get("age_label"),
         "age_mode": row.get("age_mode"),
         "age_rules": row.get("age_rules"),
+        "eligibility_mode": row.get("eligibility_mode"),
+        "skill_min_rating": row.get("skill_min_rating"),
+        "skill_max_rating": row.get("skill_max_rating"),
+        "combined_rating_cap": row.get("combined_rating_cap"),
+        "competition_format": row.get("competition_format"),
+        "team_roster_size": row.get("team_roster_size"),
+        "team_gender_rule": row.get("team_gender_rule"),
+        "team_tiebreak_mode": row.get("team_tiebreak_mode"),
+        "team_playoff_format": row.get("team_playoff_format"),
+        "team_allow_substitutes": row.get("team_allow_substitutes"),
         "capacity_teams": row.get("capacity_teams"),
         "price_usd": row.get("price_usd"),
         "waitlist_enabled": row.get("waitlist_enabled"),
@@ -150,12 +198,21 @@ def _event_option_payload(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _day_payload(row: dict[str, Any]) -> dict[str, Any]:
+    court_labels = row.get("court_labels")
+    if not isinstance(court_labels, list):
+        court_labels = []
     return {
         "id": row.get("id"),
         "tournament_id": row.get("tournament_id"),
         "label": row.get("label"),
         "event_date": row.get("event_date") or row.get("date") or row.get("start_date"),
         "date": row.get("event_date") or row.get("date") or row.get("start_date"),
+        "court_count": row.get("court_count"),
+        "court_labels": list(court_labels),
+        "available_court_ids": list(row.get("available_court_ids") or []),
+        "court_open_time": row.get("court_open_time"),
+        "court_close_time": row.get("court_close_time"),
+        "court_notes": row.get("court_notes"),
         "enabled": row.get("enabled"),
         "sort_order": row.get("sort_order"),
     }
@@ -235,6 +292,10 @@ def build_admin_tournament_setup_templates(
                 "scoring_default": "GAME_TO_15",
                 "skill_label": "Open",
                 "skill_mode": "OPEN",
+                "eligibility_mode": "OPEN",
+                "skill_min_rating": None,
+                "skill_max_rating": None,
+                "combined_rating_cap": None,
                 "age_mode": "ALL_AGES",
                 "age_label": "All ages",
                 "age_rules": "{}",
@@ -339,7 +400,14 @@ def get_admin_tournament_setup_detail(supabase: Any, *, club_id: str, tournament
     impact = None
     impact_warning = None
     try:
-        impact = analyze_registration_publish_impact(supabase, tournament_id=str(tournament_id), days=draft_days, event_options=draft_events)
+        impact = analyze_registration_publish_impact(
+            supabase,
+            tournament_id=str(tournament_id),
+            days=draft_days,
+            event_options=draft_events,
+            event_families=list(draft.get("event_families") or []),
+            builder_event_options=list(draft.get("event_options") or draft.get("divisions") or []),
+        )
     except Exception as exc:  # noqa: BLE001 - setup detail should still render
         impact_warning = str(exc)
     return {
@@ -358,6 +426,628 @@ def get_admin_tournament_setup_detail(supabase: Any, *, club_id: str, tournament
     }
 
 
+
+
+FORCED_RESOLUTION_ACTIONS = {
+    "MOVE_REGISTRATION",
+    "CANCEL_REFUND",
+    "CREDIT",
+    "GRANDFATHER",
+    "OTHER",
+}
+COMMUNICATION_ACK_ACTIONS = {
+    "NOTIFY_AFFECTED",
+    "ACKNOWLEDGE_NO_NOTICE",
+}
+
+
+def _dict(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _list_of_dicts(value: Any) -> list[dict[str, Any]]:
+    return [dict(row) for row in value if isinstance(row, dict)] if isinstance(value, list) else []
+
+
+def _eligibility_number(
+    event: dict[str, Any],
+    *,
+    field: str,
+    event_label: str,
+) -> float | None:
+    value = event.get(field)
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if isinstance(value, bool):
+        raise ValueError(f"{event_label}: {field} must be a finite number, not a boolean.")
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{event_label}: {field} must be a finite number.") from exc
+    if not math.isfinite(parsed):
+        raise ValueError(f"{event_label}: {field} must be a finite number.")
+    return parsed
+
+
+def _skill_label_anchor(value: Any, *, require_plus: bool | None) -> float | None:
+    match = SKILL_LABEL_PATTERN.fullmatch(_clean(value, limit=80))
+    if not match:
+        return None
+    has_plus = bool(match.group(2))
+    if require_plus is not None and has_plus is not require_plus:
+        return None
+    try:
+        anchor = float(match.group(1))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return anchor if math.isfinite(anchor) and 1.0 <= anchor <= 7.0 else None
+
+
+def _canonicalize_legacy_event_option_eligibility(event: dict[str, Any]) -> None:
+    """Upgrade legacy draft metadata without relaxing explicit new policies."""
+
+    raw_value = event.get("eligibility_mode")
+    if raw_value is not None and not isinstance(raw_value, str):
+        return
+    raw_mode = _clean(raw_value, limit=60).upper()
+    if raw_mode not in {"", "STANDARD"}:
+        return
+
+    skill_mode = _clean(event.get("skill_mode"), limit=60).upper()
+    skill_label = _clean(event.get("skill_label"), limit=80)
+    if skill_mode in LEGACY_MINIMUM_SKILL_MODES:
+        minimum = _skill_label_anchor(skill_label, require_plus=True)
+        if minimum is None:
+            raise ValueError(
+                "Legacy MINIMUM eligibility requires a numeric skill_label from 1 to 7 ending in +."
+            )
+        event["eligibility_mode"] = "MINIMUM"
+        event["skill_mode"] = "MINIMUM"
+        event["skill_min_rating"] = minimum
+        event["skill_max_rating"] = None
+        event["combined_rating_cap"] = None
+        return
+
+    if skill_mode in EXPLICIT_STANDARD_SKILL_MODES:
+        event["eligibility_mode"] = "STANDARD"
+        return
+
+    if skill_label.lower() == "open" or skill_label.endswith("+"):
+        event["eligibility_mode"] = "OPEN"
+        event["skill_mode"] = "OPEN"
+        event["skill_label"] = "Open"
+        event["skill_min_rating"] = None
+        event["skill_max_rating"] = None
+        event["combined_rating_cap"] = None
+        return
+
+    if raw_mode == "STANDARD" and _skill_label_anchor(
+        skill_label, require_plus=False
+    ) is not None:
+        event["eligibility_mode"] = "STANDARD"
+        return
+
+    if skill_mode in LEGACY_OPEN_SKILL_MODES:
+        event["eligibility_mode"] = "OPEN"
+        event["skill_mode"] = "OPEN"
+        event["skill_label"] = "Open"
+        event["skill_min_rating"] = None
+        event["skill_max_rating"] = None
+        event["combined_rating_cap"] = None
+        return
+
+    event["eligibility_mode"] = "STANDARD"
+
+
+def _validate_event_option_eligibility(
+    event: dict[str, Any],
+    *,
+    index: int,
+    payload_name: str,
+) -> None:
+    label = _clean(
+        event.get("division_name")
+        or event.get("label")
+        or event.get("event_family_label"),
+        limit=180,
+    ) or f"{payload_name} row {index}"
+    event_label = f"Division {label}"
+    raw_mode = event.get("eligibility_mode")
+    if isinstance(raw_mode, bool):
+        raise ValueError(
+            f"{event_label}: eligibility_mode must be one of {', '.join(sorted(ELIGIBILITY_MODES))}."
+        )
+    mode = (
+        "STANDARD"
+        if raw_mode is None or (isinstance(raw_mode, str) and not raw_mode.strip())
+        else _clean(raw_mode, limit=60).upper()
+    )
+    if mode not in ELIGIBILITY_MODES:
+        raise ValueError(
+            f"{event_label}: eligibility_mode must be one of {', '.join(sorted(ELIGIBILITY_MODES))}."
+        )
+
+    minimum = _eligibility_number(
+        event,
+        field="skill_min_rating",
+        event_label=event_label,
+    )
+    maximum = _eligibility_number(
+        event,
+        field="skill_max_rating",
+        event_label=event_label,
+    )
+    combined_cap = _eligibility_number(
+        event,
+        field="combined_rating_cap",
+        event_label=event_label,
+    )
+
+    competition_format = _clean(
+        event.get("competition_format") or "STANDARD", limit=60
+    ).upper()
+    if competition_format == "FOUR_PLAYER_TEAM" and mode != "STANDARD":
+        raise ValueError(
+            f"{event_label}: four-player team divisions must keep STANDARD eligibility."
+        )
+
+    if mode == "STANDARD":
+        if minimum is not None or maximum is not None or combined_cap is not None:
+            raise ValueError(
+                f"{event_label}: STANDARD eligibility cannot include explicit minimum, maximum, or combined-cap fields."
+            )
+        if _skill_label_anchor(event.get("skill_label"), require_plus=False) is None:
+            raise ValueError(
+                f"{event_label}: STANDARD eligibility requires a numeric skill_label between 1 and 7 without a trailing +."
+            )
+        return
+
+    if mode == "MINIMUM":
+        if minimum is None or not 1.0 <= minimum <= 7.0:
+            raise ValueError(
+                f"{event_label}: MINIMUM eligibility requires skill_min_rating between 1 and 7."
+            )
+        if maximum is not None or combined_cap is not None:
+            raise ValueError(
+                f"{event_label}: MINIMUM eligibility cannot include a maximum or combined cap."
+            )
+        return
+
+    if mode == "OPEN":
+        if minimum is not None or maximum is not None or combined_cap is not None:
+            raise ValueError(
+                f"{event_label}: OPEN eligibility cannot include rating boundaries or a combined cap."
+            )
+        return
+
+    if mode == "COMBINED_RATING_CAP":
+        if minimum is not None or maximum is not None:
+            raise ValueError(
+                f"{event_label}: COMBINED_RATING_CAP cannot include individual rating boundaries."
+            )
+        if combined_cap is None or not 0.0 < combined_cap <= 14.0:
+            raise ValueError(
+                f"{event_label}: COMBINED_RATING_CAP requires combined_rating_cap greater than 0 and no more than 14."
+            )
+        event_type = _clean(
+            event.get("event_type") or event.get("participant_type"), limit=60
+        ).upper()
+        if competition_format != "STANDARD" or event_type not in STANDARD_TEAM_EVENT_TYPES:
+            raise ValueError(
+                f"{event_label}: COMBINED_RATING_CAP is only available for standard doubles/team divisions, not Singles or FOUR_PLAYER_TEAM."
+            )
+        return
+
+    if combined_cap is not None:
+        raise ValueError(f"{event_label}: CUSTOM eligibility cannot include a combined cap.")
+    if minimum is None and maximum is None:
+        raise ValueError(
+            f"{event_label}: CUSTOM eligibility requires a minimum, a maximum, or both."
+        )
+    if minimum is not None and not 1.0 <= minimum <= 7.0:
+        raise ValueError(
+            f"{event_label}: CUSTOM minimum rating must be between 1 and 7."
+        )
+    if maximum is not None and not 1.0 < maximum <= 7.5:
+        raise ValueError(
+            f"{event_label}: CUSTOM maximum rating must be greater than 1 and no more than 7.5."
+        )
+    if minimum is not None and maximum is not None and minimum >= maximum:
+        raise ValueError(
+            f"{event_label}: CUSTOM maximum rating must be greater than the minimum rating."
+        )
+
+
+def _validate_event_option_operability(
+    event: dict[str, Any],
+    *,
+    index: int,
+    payload_name: str,
+) -> None:
+    label = _clean(
+        event.get("division_name")
+        or event.get("label")
+        or event.get("event_family_label"),
+        limit=180,
+    ) or f"{payload_name} row {index}"
+    event_label = f"Division {label}"
+    raw_capacity = event.get("capacity_teams")
+    if raw_capacity not in (None, ""):
+        if isinstance(raw_capacity, bool):
+            raise ValueError(f"{event_label}: capacity_teams must be a whole number.")
+        try:
+            numeric_capacity = float(raw_capacity)
+            capacity = int(numeric_capacity)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(
+                f"{event_label}: capacity_teams must be a whole number."
+            ) from exc
+        if not math.isfinite(numeric_capacity) or numeric_capacity != capacity:
+            raise ValueError(f"{event_label}: capacity_teams must be a whole number.")
+        if not MIN_EXECUTABLE_EVENT_CAPACITY <= capacity <= MAX_EXECUTABLE_EVENT_CAPACITY:
+            raise ValueError(
+                f"{event_label}: capacity_teams must be between {MIN_EXECUTABLE_EVENT_CAPACITY} and {MAX_EXECUTABLE_EVENT_CAPACITY}, matching the executable round-robin engine."
+            )
+
+    combined_label = " / ".join(
+        value
+        for value in (
+            _clean(event.get("event_family_label"), limit=180),
+            _clean(event.get("division_name"), limit=180),
+            _clean(event.get("label"), limit=180),
+        )
+        if value
+    )
+    gender = _clean(event.get("gender_restriction"), limit=40).upper()
+    if WOMENS_LABEL_PATTERN.search(combined_label) and gender not in {
+        "WOMEN",
+        "WOMENS",
+        "FEMALE",
+    }:
+        raise ValueError(
+            f"{event_label}: a Women's division must use the WOMEN gender restriction."
+        )
+    if MENS_LABEL_PATTERN.search(combined_label) and not WOMENS_LABEL_PATTERN.search(
+        combined_label
+    ) and gender not in {"MEN", "MENS", "MALE"}:
+        raise ValueError(
+            f"{event_label}: a Men's division must use the MEN gender restriction."
+        )
+
+
+def _validate_substitution_configuration(
+    *,
+    event_options: list[dict[str, Any]],
+    event_families: list[dict[str, Any]] | None = None,
+    builder_event_options: list[dict[str, Any]] | None = None,
+) -> None:
+    for payload_name, rows in (
+        ("event_families", event_families or []),
+        ("event_options", event_options),
+        ("builder_event_options", builder_event_options or []),
+    ):
+        for index, event in enumerate(rows, start=1):
+            if not isinstance(event, dict):
+                raise ValueError(f"{payload_name} row {index} must be an object.")
+            competition_format = _clean(
+                event.get("competition_format") or "STANDARD", limit=60
+            ).upper()
+            if (
+                competition_format != "FOUR_PLAYER_TEAM"
+                and _bool(event.get("team_allow_substitutes"), default=False)
+            ):
+                raise ValueError(
+                    f"{payload_name} row {index}: standard tournament events cannot enable substitutes. "
+                    "Correct the authoritative roster before play; tournament check-in never changes a draw roster."
+                )
+
+
+def _validate_tournament_setup_eligibility(
+    *,
+    event_options: list[dict[str, Any]],
+    event_families: list[dict[str, Any]] | None = None,
+    builder_event_options: list[dict[str, Any]] | None = None,
+) -> None:
+    _validate_substitution_configuration(
+        event_options=event_options,
+        event_families=event_families,
+        builder_event_options=builder_event_options,
+    )
+
+    for payload_name, rows in (
+        ("event_options", event_options),
+        ("builder_event_options", builder_event_options or []),
+    ):
+        for index, event in enumerate(rows, start=1):
+            if not isinstance(event, dict):
+                raise ValueError(f"{payload_name} row {index} must be an object.")
+            _validate_event_option_operability(
+                event,
+                index=index,
+                payload_name=payload_name,
+            )
+            _canonicalize_legacy_event_option_eligibility(event)
+            _validate_event_option_eligibility(
+                event,
+                index=index,
+                payload_name=payload_name,
+            )
+
+
+def preview_admin_tournament_age_split(
+    supabase: Any,
+    *,
+    club_id: str,
+    tournament_id: str,
+    event_family: str,
+    participant_type: str | None,
+    policy: dict[str, Any],
+    event_options: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Preview an event-level age policy without changing registrations or divisions."""
+
+    _assert_enabled()
+    _get_tournament_for_club(
+        supabase,
+        club_id=str(club_id),
+        tournament_id=str(tournament_id),
+    )
+    family = _clean(event_family, limit=180)
+    if not family:
+        raise ValueError("event_family is required.")
+    normalized_policy = normalize_age_policy(policy)
+    family_events = [
+        dict(row)
+        for row in event_options or []
+        if _clean(row.get("event_family_label") or row.get("event_family"), limit=180).lower()
+        == family.lower()
+    ]
+    canonical_event_ids = {
+        str(row.get("id") or "").strip()
+        for row in list_event_options(supabase, str(tournament_id))
+        if str(row.get("id") or "").strip()
+    }
+    event_ids = {
+        str(row.get("id") or "").strip()
+        for row in family_events
+        if str(row.get("id") or "").strip() in canonical_event_ids
+    }
+    resolved_participant_type = _clean(
+        participant_type
+        or (family_events[0].get("event_type") if family_events else None)
+        or (family_events[0].get("participant_type") if family_events else None),
+        limit=40,
+    ).upper() or "GENDER_DOUBLES"
+    registrations = {
+        str(row.get("id") or ""): dict(row)
+        for row in list_registrations(supabase, str(tournament_id))
+        if str(row.get("id") or "").strip()
+    }
+    selections = [
+        dict(row)
+        for row in list_registration_selections(supabase, str(tournament_id))
+        if str(row.get("event_option_id") or "").strip() in event_ids
+        and str(row.get("registration_id") or "").strip() in registrations
+    ]
+    partner_links = list_partner_team_links(supabase, str(tournament_id))
+    linked_partner_by_selection_id = linked_partner_registration_lookup(
+        partner_links,
+        registrations,
+    )
+    canonical_team_key_by_selection_id: dict[str, str] = {}
+    for link in partner_links:
+        if _clean(link.get("status"), limit=40).upper() not in {
+            "CONFIRMED",
+            "ADMIN_CONFIRMED",
+        }:
+            continue
+        selection_ids = sorted(
+            selection_id
+            for selection_id in (
+                str(link.get("selection1_id") or "").strip(),
+                str(link.get("selection2_id") or "").strip(),
+            )
+            if selection_id
+        )
+        if len(selection_ids) != 2:
+            continue
+        team_key = ":".join(selection_ids)
+        for selection_id in selection_ids:
+            canonical_team_key_by_selection_id[selection_id] = team_key
+
+    preview_selections: list[dict[str, Any]] = []
+    seen_canonical_teams: set[str] = set()
+    for selection in selections:
+        selection_id = str(selection.get("id") or "").strip()
+        partner_registration = linked_partner_by_selection_id.get(selection_id)
+        if partner_registration is not None:
+            team_key = canonical_team_key_by_selection_id.get(selection_id, selection_id)
+            if team_key in seen_canonical_teams:
+                continue
+            seen_canonical_teams.add(team_key)
+            selection["partner_mode"] = "HAS_PARTNER"
+            selection["partner_age"] = partner_registration.get("age")
+        preview_selections.append(selection)
+    preview = build_age_split_preview(
+        policy=normalized_policy,
+        registrations=registrations,
+        selections=preview_selections,
+        participant_type=resolved_participant_type,
+    )
+    return {
+        "ok": True,
+        "mode": "tournament_age_split_preview",
+        "dry_run": True,
+        "write_count": 0,
+        "event_family": family,
+        **preview,
+    }
+
+
+def _forced_resolution_summary(
+    impact: dict[str, Any],
+    settings: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    blocked_details = _list_of_dicts(impact.get("blocked_details"))
+    if not blocked_details:
+        return []
+    plans = _dict(_dict(settings).get("forced_change_resolutions"))
+    summaries: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for detail in blocked_details:
+        block_id = _clean(detail.get("block_id"), limit=240)
+        label = _clean(detail.get("entity_label"), limit=180) or "blocked change"
+        resolution_options = {
+            _clean(value, limit=80).upper()
+            for value in (detail.get("resolution_options") or [])
+        }
+        if "FORCE_CHANGE_WITH_RESOLUTION" not in resolution_options:
+            errors.append(
+                f"{label}: this change cannot be forced after draws, teams, or games exist; keep the published value or edit the draft."
+            )
+            continue
+        required_registration_rows = _list_of_dicts(detail.get("affected_registrations"))
+        if not required_registration_rows:
+            errors.append(f"{label}: no affected registration rows are available for a guarded force-change queue.")
+            continue
+        plan = _dict(plans.get(block_id))
+        if not plan:
+            errors.append(f"{label}: choose Keep published value, edit the draft, or complete a force-change resolution queue.")
+            continue
+        if _clean(plan.get("status"), limit=40).upper() != "RESOLVED":
+            errors.append(f"{label}: the force-change registration queue is not fully resolved.")
+            continue
+        if stable_tournament_admin_fingerprint(plan.get("current_value")) != stable_tournament_admin_fingerprint(detail.get("current_value")):
+            errors.append(f"{label}: the published value changed after the force-change queue was created.")
+            continue
+        if stable_tournament_admin_fingerprint(plan.get("proposed_value")) != stable_tournament_admin_fingerprint(detail.get("proposed_value")):
+            errors.append(f"{label}: the proposed draft changed after the force-change queue was created.")
+            continue
+        required_rows = {
+            (
+                _clean(row.get("registration_id"), limit=120),
+                _clean(row.get("selection_id"), limit=120),
+            )
+            for row in required_registration_rows
+        }
+        resolved_rows = _list_of_dicts(plan.get("affected_registrations"))
+        resolved_keys = {
+            (
+                _clean(row.get("registration_id"), limit=120),
+                _clean(row.get("selection_id"), limit=120),
+            )
+            for row in resolved_rows
+        }
+        if required_rows != resolved_keys:
+            errors.append(f"{label}: affected registrations changed; refresh the review and rebuild the queue.")
+            continue
+        invalid_rows = []
+        for row in resolved_rows:
+            action = _clean(row.get("action"), limit=60).upper()
+            notes = _clean(row.get("notes"), limit=2000)
+            note_required = action == "OTHER"
+            if (
+                not _bool(row.get("resolved"))
+                or action not in FORCED_RESOLUTION_ACTIONS
+                or (note_required and not notes)
+            ):
+                invalid_rows.append(_clean(row.get("display_name"), limit=180) or _clean(row.get("registration_id"), limit=120))
+        if invalid_rows:
+            errors.append(f"{label}: unresolved registration actions remain for {', '.join(invalid_rows[:5])}.")
+            continue
+        summaries.append({
+            "block_id": block_id,
+            "entity_label": label,
+            "field": detail.get("field"),
+            "affected_registration_count": len(resolved_rows),
+            "resolutions": resolved_rows,
+        })
+    if errors:
+        raise ValueError("Publish remains blocked: " + " | ".join(errors))
+    return summaries
+
+
+def _communication_acknowledgement_summary(
+    impact: dict[str, Any],
+    settings: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    details = _list_of_dicts(impact.get("communication_impact_details"))
+    if not details:
+        return []
+    plans = _dict(_dict(settings).get("communication_change_acknowledgements"))
+    summaries: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for detail in details:
+        required_rows = _list_of_dicts(detail.get("affected_registrations"))
+        if not _bool(detail.get("requires_acknowledgement"), bool(required_rows)):
+            continue
+        impact_id = _clean(detail.get("impact_id"), limit=240)
+        label = _clean(detail.get("entity_label"), limit=180) or "configuration change"
+        data_completion_rows = _list_of_dicts(detail.get("data_completion_registrations"))
+        if data_completion_rows:
+            names = [
+                _clean(row.get("display_name"), limit=180)
+                or _clean(row.get("registration_id"), limit=120)
+                for row in data_completion_rows
+            ]
+            errors.append(
+                f"{label}: complete required eligibility information for {', '.join(names[:5])} before acknowledging this change."
+            )
+            continue
+        plan = _dict(plans.get(impact_id))
+        if not plan:
+            errors.append(
+                f"{label}: acknowledge the communication impact or keep the published value."
+            )
+            continue
+        action = _clean(plan.get("action"), limit=80).upper()
+        if (
+            _clean(plan.get("status"), limit=40).upper() != "ACKNOWLEDGED"
+            or not _bool(plan.get("acknowledged"))
+            or action not in COMMUNICATION_ACK_ACTIONS
+        ):
+            errors.append(f"{label}: the communication acknowledgement is incomplete.")
+            continue
+        if stable_tournament_admin_fingerprint(plan.get("current_value")) != stable_tournament_admin_fingerprint(detail.get("current_value")):
+            errors.append(f"{label}: the published value changed after acknowledgement.")
+            continue
+        if stable_tournament_admin_fingerprint(plan.get("proposed_value")) != stable_tournament_admin_fingerprint(detail.get("proposed_value")):
+            errors.append(f"{label}: the proposed value changed after acknowledgement.")
+            continue
+        expected_keys = {
+            (
+                _clean(row.get("registration_id"), limit=120),
+                _clean(row.get("selection_id"), limit=120),
+            )
+            for row in required_rows
+        }
+        acknowledged_rows = _list_of_dicts(plan.get("affected_registrations"))
+        acknowledged_keys = {
+            (
+                _clean(row.get("registration_id"), limit=120),
+                _clean(row.get("selection_id"), limit=120),
+            )
+            for row in acknowledged_rows
+        }
+        if expected_keys != acknowledged_keys:
+            errors.append(f"{label}: affected registrations changed; refresh Review and acknowledge again.")
+            continue
+        summaries.append(
+            {
+                "impact_id": impact_id,
+                "entity_label": label,
+                "field": detail.get("field"),
+                "action": action,
+                "notes": _clean(plan.get("notes"), limit=2000) or None,
+                "affected_registration_count": len(acknowledged_rows),
+                "affected_registrations": acknowledged_rows,
+            }
+        )
+    if errors:
+        raise ValueError("Publish remains blocked: " + " | ".join(errors))
+    return summaries
+
+
 def review_admin_tournament_setup_impact(
     supabase: Any,
     *,
@@ -365,10 +1055,20 @@ def review_admin_tournament_setup_impact(
     tournament_id: str,
     days: list[dict[str, Any]],
     event_options: list[dict[str, Any]],
+    event_families: list[dict[str, Any]] | None = None,
+    builder_event_options: list[dict[str, Any]] | None = None,
+    basics: dict[str, Any] | None = None,
+    settings: dict[str, Any] | None = None,
     expected_state_fingerprint: str,
 ) -> dict[str, Any]:
     """Analyze a draft without writing any table."""
 
+    _assert_enabled()
+    _validate_tournament_setup_eligibility(
+        event_options=event_options,
+        event_families=event_families,
+        builder_event_options=builder_event_options,
+    )
     detail = get_admin_tournament_setup_detail(
         supabase,
         club_id=str(club_id),
@@ -387,6 +1087,8 @@ def review_admin_tournament_setup_impact(
         tournament_id=str(tournament_id),
         days=normalized_days,
         event_options=normalized_events,
+        event_families=list(event_families or []),
+        builder_event_options=list(builder_event_options or []),
     )
     impact_fingerprint = stable_tournament_admin_fingerprint(
         {
@@ -394,6 +1096,10 @@ def review_admin_tournament_setup_impact(
             "state_fingerprint": detail["state_fingerprint"],
             "days": normalized_days,
             "event_options": normalized_events,
+            "event_families": list(event_families or []),
+            "builder_event_options": list(builder_event_options or []),
+            "basics": dict(basics or {}),
+            "settings": dict(settings or {}),
             "impact": impact,
         }
     )
@@ -437,8 +1143,12 @@ def update_admin_tournament_setup_settings(
         "partner_board_enabled",
         "rules_markdown",
         "refund_policy_markdown",
+        "weather_policy_markdown",
         "sponsor_markdown",
         "location_name",
+        "venue_address",
+        "venue_directions",
+        "venue_courts_json",
         "timezone",
         "sponsors_json",
     }
@@ -478,6 +1188,8 @@ def save_admin_tournament_setup_draft(
     days: list[dict[str, Any]],
     event_families: list[dict[str, Any]],
     event_options: list[dict[str, Any]],
+    basics: dict[str, Any] | None = None,
+    settings: dict[str, Any] | None = None,
     saved_step: str | None,
     actor_email: str,
     actor_role: str,
@@ -488,6 +1200,11 @@ def save_admin_tournament_setup_draft(
     _assert_enabled()
     if _clean(confirmation_text, limit=80).upper() != CONFIRM_DRAFT:
         raise ValueError(f"Type {CONFIRM_DRAFT} to save tournament setup draft.")
+    _validate_substitution_configuration(
+        event_options=list(event_options or []),
+        event_families=list(event_families or []),
+        builder_event_options=None,
+    )
     _get_tournament_for_club(supabase, club_id=str(club_id), tournament_id=str(tournament_id))
     before = get_builder_draft(supabase, str(tournament_id))
     if dry_run:
@@ -499,6 +1216,8 @@ def save_admin_tournament_setup_draft(
             "day_count": len(days or []),
             "event_family_count": len(event_families or []),
             "event_option_count": len(event_options or []),
+            "basics_saved": bool(basics),
+            "settings_saved": bool(settings),
         }
     draft = save_builder_draft(
         supabase,
@@ -506,6 +1225,8 @@ def save_admin_tournament_setup_draft(
         days=list(days or []),
         event_families=list(event_families or []),
         divisions=list(event_options or []),
+        basics=dict(basics or {}),
+        settings=dict(settings or {}),
         saved_step=saved_step,
     )
     warnings = _audit(
@@ -530,6 +1251,10 @@ def publish_admin_tournament_setup(
     tournament_id: str,
     days: list[dict[str, Any]],
     event_options: list[dict[str, Any]],
+    event_families: list[dict[str, Any]] | None = None,
+    builder_event_options: list[dict[str, Any]] | None = None,
+    basics: dict[str, Any] | None = None,
+    settings: dict[str, Any] | None = None,
     actor_email: str,
     actor_role: str,
     confirmation_text: str,
@@ -541,8 +1266,20 @@ def publish_admin_tournament_setup(
     _assert_enabled()
     if _clean(confirmation_text, limit=80).upper() != CONFIRM_PUBLISH:
         raise ValueError(f"Type {CONFIRM_PUBLISH} to publish tournament setup.")
+    _validate_tournament_setup_eligibility(
+        event_options=event_options,
+        event_families=event_families,
+        builder_event_options=builder_event_options,
+    )
     _get_tournament_for_club(supabase, club_id=str(club_id), tournament_id=str(tournament_id))
-    impact = analyze_registration_publish_impact(supabase, tournament_id=str(tournament_id), days=list(days or []), event_options=list(event_options or []))
+    impact = analyze_registration_publish_impact(
+        supabase,
+        tournament_id=str(tournament_id),
+        days=list(days or []),
+        event_options=list(event_options or []),
+        event_families=list(event_families or []),
+        builder_event_options=list(builder_event_options or []),
+    )
     if reviewed_impact_fingerprint:
         detail = get_admin_tournament_setup_detail(
             supabase,
@@ -559,16 +1296,107 @@ def publish_admin_tournament_setup(
                 "state_fingerprint": detail["state_fingerprint"],
                 "days": list(days or []),
                 "event_options": list(event_options or []),
+                "event_families": list(event_families or []),
+                "builder_event_options": list(builder_event_options or []),
+                "basics": dict(basics or {}),
+                "settings": dict(settings or {}),
                 "impact": impact,
             }
         )
         if str(reviewed_impact_fingerprint) != expected_impact_fingerprint:
             raise ValueError("Publish payload does not match the last reviewed impact. Review impact again before publishing.")
-    if impact.get("blocked"):
-        raise ValueError("Publish blocked due to destructive changes: " + " | ".join(str(x) for x in impact.get("blocked") or []))
+    forced_resolution_summary = _forced_resolution_summary(impact, settings)
+    communication_acknowledgement_summary = _communication_acknowledgement_summary(impact, settings)
     if dry_run:
-        return {"ok": True, "mode": "tournament_setup_publish_preflight", "dry_run": True, "write_count": 0, "publish_impact": impact}
-    result = publish_registration_configuration(supabase, tournament_id=str(tournament_id), days=list(days or []), event_options=list(event_options or []))
+        return {
+            "ok": True,
+            "mode": "tournament_setup_publish_preflight",
+            "dry_run": True,
+            "write_count": 0,
+            "publish_impact": impact,
+            "forced_resolution_summary": forced_resolution_summary,
+            "communication_acknowledgement_summary": communication_acknowledgement_summary,
+            "event_families": list(event_families or []),
+            "builder_event_options": list(builder_event_options or []),
+            "basics": dict(basics or {}),
+            "settings": dict(settings or {}),
+        }
+
+    clean_basics = dict(basics or {})
+    tournament_patch: dict[str, Any] = {}
+    for source_key, target_key in (("name", "name"), ("start_date", "start_date"), ("end_date", "end_date")):
+        if source_key in clean_basics:
+            tournament_patch[target_key] = clean_basics.get(source_key)
+    if tournament_patch:
+        tournament_patch["updated_at"] = datetime.now(timezone.utc).isoformat()
+        response = (
+            supabase.table("tournaments")
+            .update(tournament_patch)
+            .eq("id", str(tournament_id))
+            .eq("club_id", str(club_id))
+            .execute()
+        )
+        if not _safe_rows(response):
+            raise RuntimeError("Tournament basics were not published.")
+
+    clean_settings = dict(settings or {})
+    before_settings = get_registration_settings(supabase, str(tournament_id))
+    published_settings = dict(before_settings)
+    preserved_registration_status = str(
+        before_settings.get("registration_status") or "draft"
+    )
+    for basics_key in ("location_name", "timezone", "sponsors_json"):
+        if basics_key in clean_basics:
+            clean_settings[basics_key] = clean_basics.get(basics_key)
+    # Registration status is deliberately controlled by the separate Open/Close
+    # Registration action on the final review page.
+    clean_settings.pop("registration_status", None)
+    if clean_settings:
+        preserved_settings = {
+            **before_settings,
+            **clean_settings,
+            "id": before_settings.get("id"),
+            "tournament_id": str(tournament_id),
+            "registration_status": before_settings.get("registration_status") or "draft",
+        }
+        updated_settings = upsert_registration_settings(supabase, preserved_settings)
+        published_settings = dict(updated_settings)
+        preserved_registration_status = str(
+            updated_settings.get("registration_status")
+            or preserved_settings["registration_status"]
+        )
+
+    result = publish_registration_configuration(
+        supabase,
+        tournament_id=str(tournament_id),
+        days=list(days or []),
+        event_options=list(event_options or []),
+        allowed_block_ids={
+            _clean(row.get("block_id"), limit=240)
+            for row in forced_resolution_summary
+            if _clean(row.get("block_id"), limit=240)
+        },
+    )
+    published_draft_settings = dict(settings or {})
+    # The post-publish builder snapshot must reflect the values actually stored
+    # by the repository (trimmed text, canonical slug, and preserved status),
+    # not an unnormalized request representation.
+    published_draft_settings.update(_settings_payload(published_settings))
+    published_draft_settings["registration_status"] = preserved_registration_status
+    published_draft_settings.pop("forced_change_resolutions", None)
+    published_draft_settings.pop("communication_change_acknowledgements", None)
+    published_builder_draft = save_builder_draft(
+        supabase,
+        tournament_id=str(tournament_id),
+        days=list(days or []),
+        event_families=list(event_families or []),
+        divisions=list(builder_event_options or event_options or []),
+        basics=dict(basics or {}),
+        settings=published_draft_settings,
+        saved_step="review",
+        published_event_families=list(event_families or []),
+        published_at=datetime.now(timezone.utc).isoformat(),
+    )
     warnings = _audit(
         supabase,
         club_id=str(club_id),
@@ -576,8 +1404,21 @@ def publish_admin_tournament_setup(
         actor_role=actor_role,
         action_type="tournament_setup_publish",
         entity_id=str(tournament_id),
-        before_json={"impact": impact},
-        after_json={"result": result, "day_count": len(days or []), "event_option_count": len(event_options or [])},
+        before_json={
+            "impact": impact,
+            "forced_resolution_summary": forced_resolution_summary,
+            "communication_acknowledgement_summary": communication_acknowledgement_summary,
+        },
+        after_json={
+            "result": result,
+            "day_count": len(days or []),
+            "event_option_count": len(event_options or []),
+            "basics": dict(basics or {}),
+            "settings": dict(settings or {}),
+            "forced_resolution_summary": forced_resolution_summary,
+            "communication_acknowledgement_summary": communication_acknowledgement_summary,
+            "published_builder_draft": published_builder_draft,
+        },
         source=source,
     )
     return {
@@ -585,6 +1426,9 @@ def publish_admin_tournament_setup(
         "mode": "tournament_setup_publish",
         "publish_result": result,
         "publish_impact": impact,
+        "forced_resolution_summary": forced_resolution_summary,
+        "communication_acknowledgement_summary": communication_acknowledgement_summary,
+        "published_builder_draft": published_builder_draft,
         "days": [_day_payload(row) for row in list_registration_days(supabase, str(tournament_id))],
         "event_options": [_event_option_payload(row) for row in list_event_options(supabase, str(tournament_id))],
         "warnings": [*warnings, *list(result.get("warnings") or [])],

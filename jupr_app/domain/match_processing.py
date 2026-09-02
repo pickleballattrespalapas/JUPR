@@ -27,6 +27,38 @@ from jupr_app.domain.matches import (
 
 logger = logging.getLogger(__name__)
 
+_RESERVED_LEAGUE_NAMES = frozenset({"", "overall", "popup", "singles"})
+
+
+def is_official_league_name(value: Any) -> bool:
+    """Return whether ``value`` is a candidate managed-league name."""
+
+    try:
+        normalized = str(value or "").strip().casefold()
+    except Exception:
+        return False
+    return normalized not in _RESERVED_LEAGUE_NAMES
+
+
+def has_managed_league_metadata(df_meta: Any, league_name: Any) -> bool:
+    """Return whether the loaded metadata snapshot owns ``league_name``.
+
+    A non-reserved label alone is not enough: tournaments and other event
+    contexts also use the legacy ``matches.league`` display field.  Requiring
+    a metadata row keeps the roster invariant scoped to actual managed
+    leagues while the later CAS expectation validates status and format.
+    """
+
+    if not is_official_league_name(league_name):
+        return False
+    if df_meta is None or getattr(df_meta, "empty", True):
+        return False
+    try:
+        names = df_meta["league_name"].astype(str).str.strip().str.casefold()
+        return bool((names == str(league_name).strip().casefold()).any())
+    except Exception:
+        return False
+
 
 def _safe_positive_float(value: Any) -> float:
     if value in (None, ""):
@@ -82,12 +114,11 @@ def build_active_league_metadata_expectations(
     if clean_match_format not in {"doubles", "singles"}:
         raise ValueError("League match format must be doubles or singles.")
 
-    reserved = {"overall", "popup", "singles"}
     required_names = sorted(
         {
             str(name or "").strip()
             for name in league_names
-            if str(name or "").strip().casefold() not in reserved
+            if is_official_league_name(name)
         },
         key=str.casefold,
     )
@@ -219,6 +250,7 @@ def process_matches(
     affected_players: set[int] = set()
     match_payloads: list[dict[str, Any]] = []
     successful_match_dates: list[str] = []
+    managed_league_names: set[str] = set()
 
     skipped_incomplete = 0
     skipped_empty = 0
@@ -345,7 +377,20 @@ def process_matches(
         rating_scope = normalize_rating_scope(m)
         is_popup = is_popup_match(match_type, bool(m.get("is_popup", False)))
         is_unrated = rating_scope == "unrated"
-        update_island = should_update_island(is_popup=is_popup, rating_scope=rating_scope)
+        managed_league = has_managed_league_metadata(df_meta, league_name)
+        if managed_league:
+            managed_league_names.add(league_name)
+        update_island = managed_league and should_update_island(
+            is_popup=is_popup,
+            rating_scope=rating_scope,
+        )
+        if managed_league:
+            # League membership is a structural invariant, not a side effect of
+            # whether this particular result is league-rated.  Unrated and
+            # overall-only official league games must still leave every
+            # participant on the league roster with a baseline rating row.
+            for player_id in (p1, p2, p3, p4):
+                ensure_island_entry(player_id, league_name)
         winner_bonus_elo = 0.0 if is_unrated else _safe_positive_float(m.get("rating_bonus_elo", m.get("winner_bonus_elo")))
         if (not is_popup) and (not is_unrated):
             has_badge_eligible_match = True
@@ -532,6 +577,13 @@ def process_matches(
                 "match_payloads": match_payloads,
             },
         }
+
+    if managed_league_names:
+        league_labels = ", ".join(sorted(managed_league_names, key=str.casefold))
+        raise RuntimeError(
+            "Managed league matches require the atomic match-entry path; "
+            f"no match was written for: {league_labels}."
+        )
 
     badge_summary: dict[str, Any] = {"mode": "skipped", "awarded_count": 0, "candidate_count": 0, "badge_ids": []}
     if db_matches:

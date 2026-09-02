@@ -11,6 +11,8 @@ from jupr_app.domain.tournament_commerce import (
 
 
 EVENT = "00000000-0000-4000-8000-000000000001"
+EVENT2 = "00000000-0000-4000-8000-000000000011"
+EVENT3 = "00000000-0000-4000-8000-000000000012"
 ITEM = "00000000-0000-4000-8000-000000000002"
 VARIANT = "00000000-0000-4000-8000-000000000003"
 BUNDLE = "00000000-0000-4000-8000-000000000004"
@@ -310,3 +312,91 @@ def test_existing_registration_keeps_original_date_window_eligibility():
 
     assert quote["total_minor"] == 0
     assert quote["promotion_diagnostics"][0]["reason"] == "eligible"
+
+
+def test_flexible_event_bundle_applies_to_best_any_two_of_three_events():
+    catalog = _catalog(
+        bundles=[
+            {
+                "id": BUNDLE,
+                "name": "Any two events",
+                "status": "ACTIVE",
+                "price_minor": 7000,
+                "max_per_registration": 1,
+            }
+        ],
+        bundle_components=[
+            {
+                "bundle_id": BUNDLE,
+                "component_type": "EVENT_CHOICE",
+                "event_option_id": event_id,
+                "quantity": 2,
+            }
+            for event_id in (EVENT, EVENT2, EVENT3)
+        ],
+    )
+    catalog["items"] = []
+    catalog["variants"] = []
+    catalog["event_options"] = [
+        {"id": EVENT, "label": "Event A", "price_minor": 4000, "enabled": True, "status": "open"},
+        {"id": EVENT2, "label": "Event B", "price_minor": 5000, "enabled": True, "status": "open"},
+        {"id": EVENT3, "label": "Event C", "price_minor": 6000, "enabled": True, "status": "open"},
+    ]
+
+    quote = quote_tournament_commerce(
+        catalog,
+        {"event_option_ids": [EVENT, EVENT2, EVENT3], "item_selections": []},
+        quote_at=NOW,
+    )
+
+    assert quote["list_subtotal_minor"] == 15000
+    assert quote["discount_minor"] == 4000
+    assert quote["total_minor"] == 11000
+    assert quote["applied_bundles"] == [
+        {
+            "bundle_id": BUNDLE,
+            "name": "Any two events",
+            "quantity": 1,
+            "regular_minor": 11000,
+            "bundle_price_minor": 7000,
+            "final_minor": 7000,
+            "promotion_savings_minor": 0,
+            "savings_minor": 4000,
+        }
+    ]
+    bundle_line = next(row for row in quote["lines"] if row["line_type"] == "BUNDLE")
+    assert {row["event_option_id"] for row in bundle_line["component_snapshot"]} == {EVENT2, EVENT3}
+
+
+def test_flexible_event_bundle_requires_one_consistent_any_n_rule():
+    catalog = _catalog(
+        bundles=[
+            {
+                "id": BUNDLE,
+                "name": "Invalid flexible bundle",
+                "status": "ACTIVE",
+                "price_minor": 7000,
+                "max_per_registration": 1,
+            }
+        ],
+        bundle_components=[
+            {
+                "bundle_id": BUNDLE,
+                "component_type": "EVENT_CHOICE",
+                "event_option_id": EVENT,
+                "quantity": 1,
+            },
+            {
+                "bundle_id": BUNDLE,
+                "component_type": "EVENT_CHOICE",
+                "event_option_id": EVENT2,
+                "quantity": 2,
+            },
+        ],
+    )
+    catalog["event_options"].append(
+        {"id": EVENT2, "label": "Event B", "price_minor": 5000, "enabled": True, "status": "open"}
+    )
+
+    with pytest.raises(TournamentCommerceValidationError, match="same required-event count"):
+        normalize_tournament_commerce_catalog(catalog)

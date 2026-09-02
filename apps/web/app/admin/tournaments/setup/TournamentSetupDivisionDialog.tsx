@@ -1,34 +1,71 @@
 "use client";
 
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useMemo, useRef, useState, type CSSProperties } from "react";
 import {
-  AGE_MODES,
+  FormDialog,
+  InteractionActionError,
+  useOpenDialogInitializer,
+  type ActionCompletion
+} from "@/components/interaction";
+import {
+  GENDER_RESTRICTIONS,
   SKILL_LABEL_OPTIONS,
   cleanString,
   dayLabel,
   dayReference,
+  editableString,
   eventDayReferences,
-  eventFamilyDefaults,
   eventFamilyName,
+  expectedGenderFromDivisionName,
   numberInputValue,
-  setEventAgeMode,
   setEventDayReferences,
+  setCanonicalRecordString,
   setRecordNumber,
   setRecordString,
   type BuilderRow,
   type SetupRecord
 } from "../../tournament-setup/tournamentSetupBuilder";
+import TournamentAgePolicyEditor, {
+  DIVISION_AGE_POLICY_FIELDS,
+  EVENT_AGE_POLICY_FIELDS,
+  agePolicySummary,
+  readAgePolicy,
+  validateAgePolicy,
+  writeAgePolicy
+} from "./TournamentAgePolicyEditor";
+import {
+  skillAnchor,
+  skillEligibilityLabel,
+  skillEligibilityMode,
+  skillEligibilitySummary,
+  validateTournamentSkillEligibility,
+  type SkillEligibilityMode
+} from "@/lib/tournamentSkillEligibility";
+
+function genderOptionLabel(value: string): string {
+  return value
+    .toLowerCase()
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function genderOptionsWithCurrent(current: string): string[] {
+  return current && !GENDER_RESTRICTIONS.includes(current as (typeof GENDER_RESTRICTIONS)[number])
+    ? [current, ...GENDER_RESTRICTIONS]
+    : [...GENDER_RESTRICTIONS];
+}
 
 type Props = {
   open: boolean;
+  mode?: "add" | "edit";
   initialValue: SetupRecord;
   eventFamilies: BuilderRow[];
   days: BuilderRow[];
   onCancel: () => void;
-  onConfirm: (value: SetupRecord) => void;
+  onConfirm: (value: SetupRecord) => Promise<ActionCompletion>;
+  onAcknowledge?: () => void;
 };
-
-type EventMode = "STANDARD" | "COMBINED_RATING_CAP" | "FOUR_PLAYER_TEAM";
 
 const inputStyle: CSSProperties = {
   width: "100%",
@@ -40,65 +77,75 @@ const inputStyle: CSSProperties = {
   font: "inherit"
 };
 
-function optionLabel(value: string): string {
-  return value
-    .toLowerCase()
-    .split("_")
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function mode(value: SetupRecord): EventMode {
-  if (cleanString(value.competition_format).toUpperCase() === "FOUR_PLAYER_TEAM") {
-    return "FOUR_PLAYER_TEAM";
-  }
-  if (cleanString(value.eligibility_mode).toUpperCase() === "COMBINED_RATING_CAP") {
-    return "COMBINED_RATING_CAP";
-  }
-  return "STANDARD";
-}
-
-function applyMode(value: SetupRecord, nextMode: EventMode): SetupRecord {
+function applyEligibilityMode(
+  value: SetupRecord,
+  nextMode: SkillEligibilityMode
+): SetupRecord {
+  const anchor = skillAnchor(value.skill_label) ?? 3.5;
   if (nextMode === "COMBINED_RATING_CAP") {
+    const cap = Number(value.combined_rating_cap);
     return {
       ...value,
       eligibility_mode: "COMBINED_RATING_CAP",
-      combined_rating_cap:
-        Number(value.combined_rating_cap) > 0 ? Number(value.combined_rating_cap) : 8,
-      competition_format: "STANDARD",
-      team_roster_size: 2,
-      team_gender_rule: "NONE",
-      team_allow_substitutes: false
+      skill_mode: "COMBINED_RATING_CAP",
+      skill_label: `Below ${Number.isFinite(cap) && cap > 0 ? cap : 8} combined`,
+      skill_min_rating: null,
+      skill_max_rating: null,
+      combined_rating_cap: Number.isFinite(cap) && cap > 0 ? cap : 8
     };
   }
-  if (nextMode === "FOUR_PLAYER_TEAM") {
+  if (nextMode === "MINIMUM") {
+    const minimum = Number(value.skill_min_rating);
+    const threshold = Number.isFinite(minimum) && minimum > 0 ? minimum : anchor;
     return {
       ...value,
-      eligibility_mode: "STANDARD",
-      combined_rating_cap: null,
-      competition_format: "FOUR_PLAYER_TEAM",
-      team_roster_size: 4,
-      team_gender_rule: "TWO_MEN_TWO_WOMEN",
-      team_tiebreak_mode: "SINGLES",
-      team_playoff_format: "NONE",
-      team_allow_substitutes: false
+      eligibility_mode: "MINIMUM",
+      skill_mode: "MINIMUM",
+      skill_label: `${threshold.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}+`,
+      skill_min_rating: threshold,
+      skill_max_rating: null,
+      combined_rating_cap: null
+    };
+  }
+  if (nextMode === "OPEN") {
+    return {
+      ...value,
+      eligibility_mode: "OPEN",
+      skill_mode: "OPEN",
+      skill_label: "Open",
+      skill_min_rating: null,
+      skill_max_rating: null,
+      combined_rating_cap: null
+    };
+  }
+  if (nextMode === "CUSTOM") {
+    return {
+      ...value,
+      eligibility_mode: "CUSTOM",
+      skill_mode: "CUSTOM",
+      skill_label: cleanString(value.skill_label) || "Custom rating",
+      skill_min_rating: value.skill_min_rating ?? null,
+      skill_max_rating: value.skill_max_rating ?? null,
+      combined_rating_cap: null
     };
   }
   return {
     ...value,
     eligibility_mode: "STANDARD",
-    combined_rating_cap: null,
-    competition_format: "STANDARD",
-    team_roster_size: 2,
-    team_gender_rule: "NONE",
-    team_allow_substitutes: false
+    skill_mode: "STANDARD",
+    skill_label: anchor.toFixed(2).replace(/0+$/, "").replace(/\.$/, ""),
+    skill_min_rating: null,
+    skill_max_rating: null,
+    combined_rating_cap: null
   };
 }
 
 function applyFamily(value: SetupRecord, family: SetupRecord): SetupRecord {
   const familyName = eventFamilyName(family);
   const schedule = eventDayReferences(family);
-  return setEventDayReferences(
+  const eventAgePolicy = readAgePolicy(family, EVENT_AGE_POLICY_FIELDS);
+  const inheritAge = cleanString(value.age_policy_source).toUpperCase() !== "OVERRIDE";
+  let next = setEventDayReferences(
     {
       ...value,
       event_family_label: familyName,
@@ -107,6 +154,12 @@ function applyFamily(value: SetupRecord, family: SetupRecord): SetupRecord {
       event_type: cleanString(family.participant_type) || value.event_type,
       gender_restriction:
         cleanString(family.gender_restriction) || value.gender_restriction,
+      competition_format: cleanString(family.competition_format) || "STANDARD",
+      team_roster_size: family.team_roster_size ?? value.team_roster_size ?? 2,
+      team_gender_rule: cleanString(family.team_gender_rule) || value.team_gender_rule || "NONE",
+      team_tiebreak_mode: cleanString(family.team_tiebreak_mode) || value.team_tiebreak_mode || "SINGLES",
+      team_playoff_format: cleanString(family.team_playoff_format) || value.team_playoff_format || "NONE",
+      team_allow_substitutes: family.team_allow_substitutes ?? value.team_allow_substitutes ?? false,
       capacity_teams:
         family.default_capacity_teams ?? value.capacity_teams ?? 16,
       price_usd: family.default_price_usd ?? value.price_usd ?? 0,
@@ -114,33 +167,55 @@ function applyFamily(value: SetupRecord, family: SetupRecord): SetupRecord {
         family.default_waitlist ?? value.waitlist_enabled ?? true,
       partner_board_enabled:
         family.default_partner_board ?? value.partner_board_enabled ?? true,
-      schedule_mode: "INHERIT_EVENT"
+      schedule_mode: "INHERIT_EVENT",
+      age_policy_source: inheritAge ? "INHERIT_EVENT" : "OVERRIDE"
     },
     schedule
   );
+  if (inheritAge) {
+    next = writeAgePolicy(next, DIVISION_AGE_POLICY_FIELDS, eventAgePolicy);
+  }
+  return next;
 }
 
 export default function TournamentSetupDivisionDialog({
   open,
+  mode: dialogMode = "add",
   initialValue,
   eventFamilies,
   days,
   onCancel,
-  onConfirm
+  onConfirm,
+  onAcknowledge
 }: Props) {
   const [draft, setDraft] = useState<SetupRecord>(initialValue);
-  const [message, setMessage] = useState("");
+  const [baseline, setBaseline] = useState("");
+  const familyRef = useRef<HTMLSelectElement>(null);
+  const nameRef = useRef<HTMLInputElement>(null);
+  const skillRef = useRef<HTMLInputElement>(null);
+  const eligibilityRef = useRef<HTMLSelectElement>(null);
+  const genderRef = useRef<HTMLSelectElement>(null);
+  const capacityRef = useRef<HTMLInputElement>(null);
+  const priceRef = useRef<HTMLInputElement>(null);
+  const agePolicyRef = useRef<HTMLFieldSetElement>(null);
+  const scheduleRef = useRef<HTMLFieldSetElement>(null);
+  const invalidFieldRef = useRef<HTMLElement | null>(null);
 
-  useEffect(() => {
+  useOpenDialogInitializer(open, () => {
     if (!open) return;
     const familyName = eventFamilyName(initialValue);
     const family =
       eventFamilies.find(
         (row) => eventFamilyName(row.value).toLowerCase() === familyName.toLowerCase()
       )?.value || eventFamilies[0]?.value;
-    setDraft(family ? applyFamily(initialValue, family) : initialValue);
-    setMessage("");
-  }, [open, initialValue, eventFamilies]);
+    const prepared =
+      dialogMode === "add" && family
+        ? applyFamily({ ...initialValue }, family)
+        : { ...initialValue };
+    setDraft(prepared);
+    setBaseline(JSON.stringify(prepared));
+    invalidFieldRef.current = null;
+  });
 
   const family = useMemo(() => {
     const name = eventFamilyName(draft);
@@ -151,66 +226,107 @@ export default function TournamentSetupDivisionDialog({
   const availableDayIds = eventDayReferences(family || {});
   const selectedDayIds = eventDayReferences(draft);
   const scheduleMode = cleanString(draft.schedule_mode) || "INHERIT_EVENT";
+  const agePolicySource = cleanString(draft.age_policy_source).toUpperCase() === "OVERRIDE"
+    ? "OVERRIDE"
+    : "INHERIT_EVENT";
+  const inheritedAgePolicy = readAgePolicy(family || {}, EVENT_AGE_POLICY_FIELDS);
+  const divisionAgePolicy = readAgePolicy(draft, DIVISION_AGE_POLICY_FIELDS);
+  const participantType = cleanString(
+    family?.participant_type || family?.event_type || draft.participant_type || draft.event_type
+  ).toUpperCase();
+  const competitionFormat = cleanString(
+    family?.competition_format || draft.competition_format
+  ).toUpperCase();
+  const mixedGenderRequired =
+    participantType === "MIXED_DOUBLES" || competitionFormat === "FOUR_PLAYER_TEAM";
+  const divisionGender = mixedGenderRequired
+    ? "MIXED"
+    : cleanString(draft.gender_restriction || family?.gender_restriction || "ANY").toUpperCase();
   const dayById = new Map(
     days.map((day) => [dayReference(day.value), dayLabel(day.value) || dayReference(day.value)])
   );
 
   if (!open) return null;
 
-  function submit() {
+  function validationError(message: string, field: string, target: HTMLElement | null): never {
+    invalidFieldRef.current = target;
+    throw new InteractionActionError(message, { kind: "validation", fieldErrors: { [field]: message } });
+  }
+
+  async function submit(): Promise<ActionCompletion> {
     if (!eventFamilyName(draft)) {
-      setMessage("Choose an event before adding the division.");
-      return;
+      validationError("Choose an event before adding the division.", "Parent event", familyRef.current);
     }
     if (!cleanString(draft.division_name ?? draft.label)) {
-      setMessage("Division name is required.");
-      return;
+      validationError("Division name is required.", "Division name", nameRef.current);
+    }
+    if (!cleanString(draft.skill_label) && skillEligibilityMode(draft) !== "OPEN") {
+      validationError("Skill division is required.", "Skill division", skillRef.current);
     }
     if (!selectedDayIds.length) {
-      setMessage("Choose at least one tournament day for this division.");
-      return;
+      validationError("Choose at least one tournament day for this division.", "Tournament days", scheduleRef.current);
     }
-    onConfirm(draft);
+    const expectedGender = expectedGenderFromDivisionName(draft.division_name ?? draft.label);
+    if (expectedGender && divisionGender !== expectedGender) {
+      validationError(
+        `${expectedGender === "WOMEN" ? "Women's" : "Men's"} divisions must use the matching gender category.`,
+        "Division gender category",
+        genderRef.current
+      );
+    }
+    const capacity = Number(draft.capacity_teams);
+    if (!Number.isInteger(capacity) || capacity < 4 || capacity > 16) {
+      validationError("Capacity must be a whole number from 4 through 16.", "Capacity", capacityRef.current);
+    }
+    const price = Number(draft.price_usd);
+    if (!Number.isFinite(price) || price < 0) {
+      validationError("Entry fee cannot be negative.", "Entry fee", priceRef.current);
+    }
+    const skillIssue = validateTournamentSkillEligibility(draft);
+    if (skillIssue) {
+      validationError(skillIssue, "Division eligibility", eligibilityRef.current);
+    }
+    const participantType = cleanString(family?.participant_type).toUpperCase();
+    const competitionFormat = cleanString(family?.competition_format).toUpperCase();
+    if (
+      skillEligibilityMode(draft) === "COMBINED_RATING_CAP" &&
+      (participantType === "SINGLES" || competitionFormat === "FOUR_PLAYER_TEAM")
+    ) {
+      validationError("Combined team-rating cap is available only for standard doubles/team divisions.", "Division eligibility", eligibilityRef.current);
+    }
+    if (agePolicySource === "OVERRIDE") {
+      const ageIssues = validateAgePolicy(divisionAgePolicy, cleanString(family?.participant_type));
+      if (ageIssues.length) {
+        validationError(ageIssues[0], "Age policy", agePolicyRef.current);
+      }
+    }
+    const canonicalDraft = setCanonicalRecordString(
+      draft,
+      ["division_name", "label"],
+      draft.division_name ?? draft.label
+    );
+    return onConfirm({
+      ...canonicalDraft,
+      gender_restriction: divisionGender
+    });
   }
 
   return (
-    <div
-      role="presentation"
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 1000,
-        display: "grid",
-        placeItems: "center",
-        padding: "1rem",
-        background: "rgba(15, 23, 42, 0.58)"
-      }}
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onCancel();
-      }}
+    <FormDialog
+      open={open}
+      mode={dialogMode === "add" ? "create" : "edit"}
+      size="wide"
+      title={dialogMode === "add" ? "Add division" : `Edit ${cleanString(draft.division_name ?? draft.label) || "division"}`}
+      description="Divisions implement the event policy for a specific skill or age group. Saving returns a compact, read-only card; published data remains unchanged until Review."
+      dirty={Boolean(baseline) && JSON.stringify(draft) !== baseline}
+      submitLabel={dialogMode === "add" ? "Add division" : "Save division"}
+      workingLabel="Saving division…"
+      initialFocusRef={nameRef}
+      getFirstInvalidField={() => invalidFieldRef.current}
+      onSubmit={submit}
+      onCancel={onCancel}
+      onAcknowledge={onAcknowledge}
     >
-      <section
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="add-division-title"
-        style={{
-          width: "min(760px, 100%)",
-          maxHeight: "calc(100vh - 2rem)",
-          overflowY: "auto",
-          padding: "1.1rem",
-          borderRadius: "16px",
-          background: "white",
-          boxShadow: "0 24px 70px rgba(15, 23, 42, 0.35)"
-        }}
-      >
-        <h2 id="add-division-title" style={{ marginTop: 0 }}>
-          Add division
-        </h2>
-        <p style={{ color: "#475569" }}>
-          Set up the new division here. Confirming adds it to the division list,
-          where every field remains editable before the setup is published.
-        </p>
-
         <div
           style={{
             display: "grid",
@@ -219,9 +335,9 @@ export default function TournamentSetupDivisionDialog({
           }}
         >
           <label>
-            <strong>Parent event</strong>
-            <br />
+            <strong>Parent event</strong><br />
             <select
+              ref={familyRef}
               value={eventFamilyName(draft)}
               style={inputStyle}
               onChange={(event) => {
@@ -234,105 +350,130 @@ export default function TournamentSetupDivisionDialog({
               <option value="">Choose an event</option>
               {eventFamilies.map((row) => {
                 const name = eventFamilyName(row.value);
-                return name ? (
-                  <option key={row.key} value={name}>
-                    {name}
-                  </option>
-                ) : null;
+                return name ? <option key={row.key} value={name}>{name}</option> : null;
               })}
             </select>
           </label>
           <label>
-            <strong>Division name</strong>
-            <br />
+            <strong>Division name</strong><br />
             <input
-              value={cleanString(draft.division_name ?? draft.label)}
+              ref={nameRef}
+              value={editableString(draft.division_name ?? draft.label)}
               placeholder="3.5 · 50+"
               style={inputStyle}
               onChange={(event) =>
                 setDraft((current) =>
-                  setRecordString(
-                    current,
-                    ["division_name", "label"],
-                    event.target.value
-                  )
+                  setRecordString(current, ["division_name", "label"], event.target.value)
                 )
               }
             />
           </label>
           <label>
-            <strong>Skill division</strong>
-            <br />
+            <strong>Skill division</strong><br />
             <input
+              ref={skillRef}
               list="new-division-skills"
-              value={cleanString(draft.skill_label) || "Open"}
+              value={draft.skill_label == null ? "" : String(draft.skill_label)}
               style={inputStyle}
               onChange={(event) =>
-                setDraft((current) =>
-                  setRecordString(current, ["skill_label"], event.target.value)
-                )
+                setDraft((current) => setRecordString(current, ["skill_label"], event.target.value))
               }
             />
             <datalist id="new-division-skills">
-              {SKILL_LABEL_OPTIONS.map((option) => (
-                <option key={option} value={option} />
-              ))}
+              {SKILL_LABEL_OPTIONS.map((option) => <option key={option} value={option} />)}
             </datalist>
           </label>
           <label>
-            <strong>Age format</strong>
-            <br />
+            <strong>Division eligibility</strong><br />
             <select
-              value={cleanString(draft.age_mode) || "ALL_AGES"}
+              ref={eligibilityRef}
+              value={skillEligibilityMode(draft)}
               style={inputStyle}
               onChange={(event) =>
-                setDraft((current) => setEventAgeMode(current, event.target.value))
+                setDraft((current) => applyEligibilityMode(current, event.target.value as SkillEligibilityMode))
               }
             >
-              {AGE_MODES.map((option) => (
-                <option key={option} value={option}>
-                  {optionLabel(option)}
-                </option>
-              ))}
-            </select>
-          </label>
-          {cleanString(draft.age_mode) === "FIXED_AGE_BRACKET" ? (
-            <label>
-              <strong>Age bracket</strong>
-              <br />
-              <input
-                value={cleanString(draft.age_label)}
-                placeholder="50+"
-                style={inputStyle}
-                onChange={(event) =>
-                  setDraft((current) =>
-                    setRecordString(current, ["age_label"], event.target.value)
-                  )
+              <option value="STANDARD">Standard skill ceiling</option>
+              <option value="MINIMUM">Minimum skill / Skill+</option>
+              <option value="OPEN">Open — no rating restriction</option>
+              <option
+                value="COMBINED_RATING_CAP"
+                disabled={
+                  cleanString(family?.participant_type).toUpperCase() === "SINGLES" ||
+                  cleanString(family?.competition_format).toUpperCase() === "FOUR_PLAYER_TEAM"
                 }
-              />
-            </label>
-          ) : null}
+              >
+                Combined team-rating cap
+              </option>
+              <option value="CUSTOM">Custom rating boundaries</option>
+            </select>
+            <small>{skillEligibilitySummary(draft)}</small>
+          </label>
           <label>
-            <strong>Division format</strong>
-            <br />
+            <strong>Division gender category</strong><br />
             <select
-              value={mode(draft)}
+              ref={genderRef}
+              value={divisionGender}
               style={inputStyle}
+              disabled={mixedGenderRequired}
               onChange={(event) =>
                 setDraft((current) =>
-                  applyMode(current, event.target.value as EventMode)
+                  setRecordString(current, ["gender_restriction"], event.target.value)
                 )
               }
             >
-              <option value="STANDARD">Standard singles or doubles</option>
-              <option value="COMBINED_RATING_CAP">Combined-rating doubles</option>
-              <option value="FOUR_PLAYER_TEAM">Four-player team</option>
+              {genderOptionsWithCurrent(divisionGender).map((option) => (
+                <option key={option} value={option}>{genderOptionLabel(option)}</option>
+              ))}
             </select>
+            <small>
+              {mixedGenderRequired
+                ? "This event format always uses Mixed gender."
+                : "Set this explicitly when one parent event contains men's and women's divisions."}
+            </small>
           </label>
-          {mode(draft) === "COMBINED_RATING_CAP" ? (
+          {skillEligibilityMode(draft) === "MINIMUM" ? (
             <label>
-              <strong>Maximum combined rating</strong>
-              <br />
+              <strong>Minimum rating</strong><br />
+              <input
+                type="number"
+                inputMode="decimal"
+                min="1"
+                max="7"
+                step="0.01"
+                value={numberInputValue(draft.skill_min_rating ?? skillAnchor(draft.skill_label))}
+                style={inputStyle}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setDraft((current) => {
+                    const next = setRecordNumber(current, "skill_min_rating", value);
+                    const parsed = Number(value);
+                    return {
+                      ...next,
+                      skill_label: Number.isFinite(parsed) && value !== ""
+                        ? `${parsed.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}+`
+                        : current.skill_label
+                    };
+                  });
+                }}
+              />
+            </label>
+          ) : null}
+          {skillEligibilityMode(draft) === "CUSTOM" ? (
+            <>
+              <label>
+                <strong>Minimum rating (optional)</strong><br />
+                <input type="number" inputMode="decimal" min="1" max="7" step="0.01" value={numberInputValue(draft.skill_min_rating)} style={inputStyle} onChange={(event) => setDraft((current) => setRecordNumber(current, "skill_min_rating", event.target.value))} />
+              </label>
+              <label>
+                <strong>Maximum rating — exclusive (optional)</strong><br />
+                <input type="number" inputMode="decimal" min="1" max="7.5" step="0.01" value={numberInputValue(draft.skill_max_rating)} style={inputStyle} onChange={(event) => setDraft((current) => setRecordNumber(current, "skill_max_rating", event.target.value))} />
+              </label>
+            </>
+          ) : null}
+          {skillEligibilityMode(draft) === "COMBINED_RATING_CAP" ? (
+            <label>
+              <strong>Maximum combined rating</strong><br />
               <input
                 type="number"
                 inputMode="decimal"
@@ -341,57 +482,81 @@ export default function TournamentSetupDivisionDialog({
                 step="0.01"
                 value={numberInputValue(draft.combined_rating_cap)}
                 style={inputStyle}
-                onChange={(event) =>
-                  setDraft((current) =>
-                    setRecordNumber(current, "combined_rating_cap", event.target.value)
-                  )
-                }
+                onChange={(event) => setDraft((current) => setRecordNumber(current, "combined_rating_cap", event.target.value))}
               />
             </label>
           ) : null}
           <label>
-            <strong>Capacity</strong>
-            <br />
+            <strong>Capacity</strong><br />
             <input
+              ref={capacityRef}
               type="number"
-              min="1"
+              min="4"
+              max="16"
               step="1"
               value={numberInputValue(draft.capacity_teams)}
               style={inputStyle}
-              onChange={(event) =>
-                setDraft((current) =>
-                  setRecordNumber(current, "capacity_teams", event.target.value)
-                )
-              }
+              onChange={(event) => setDraft((current) => setRecordNumber(current, "capacity_teams", event.target.value))}
             />
           </label>
           <label>
-            <strong>Entry fee (USD)</strong>
-            <br />
+            <strong>Entry fee (USD)</strong><br />
             <input
+              ref={priceRef}
               type="number"
               inputMode="decimal"
               min="0"
               step="0.01"
               value={numberInputValue(draft.price_usd)}
               style={inputStyle}
-              onChange={(event) =>
-                setDraft((current) =>
-                  setRecordNumber(current, "price_usd", event.target.value)
-                )
-              }
+              onChange={(event) => setDraft((current) => setRecordNumber(current, "price_usd", event.target.value))}
             />
+            <small>Commerce is the consolidated place to review all fees.</small>
           </label>
         </div>
+        <div style={{ marginTop: "0.85rem", padding: "0.75rem", border: "1px solid #bfdbfe", borderRadius: "10px", background: "#eff6ff" }}>
+          <strong>{skillEligibilityLabel(draft)}</strong><br />
+          <span>{skillEligibilitySummary(draft)}</span>
+          {!["OPEN", "COMBINED_RATING_CAP"].includes(skillEligibilityMode(draft)) && cleanString(family?.participant_type).toUpperCase() !== "SINGLES" ? (
+            <small style={{ display: "block", marginTop: "0.25rem" }}>For doubles, the higher-rated partner is the controlling rating.</small>
+          ) : null}
+        </div>
 
-        <fieldset
-          style={{
-            marginTop: "1rem",
-            padding: "0.85rem",
-            border: "1px solid #cbd5e1",
-            borderRadius: "12px"
-          }}
-        >
+        <fieldset ref={agePolicyRef} tabIndex={-1} style={{ marginTop: "1rem", padding: "0.85rem", border: "1px solid #cbd5e1", borderRadius: "12px" }}>
+          <legend style={{ fontWeight: 800 }}>Age policy</legend>
+          <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+            <input
+              type="radio"
+              name="division-age-policy-source"
+              checked={agePolicySource === "INHERIT_EVENT"}
+              onChange={() =>
+                setDraft((current) => writeAgePolicy({ ...current, age_policy_source: "INHERIT_EVENT" }, DIVISION_AGE_POLICY_FIELDS, inheritedAgePolicy))
+              }
+            />
+            Inherit from parent event — {agePolicySummary(inheritedAgePolicy)}
+          </label>
+          <label style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginTop: "0.45rem" }}>
+            <input
+              type="radio"
+              name="division-age-policy-source"
+              checked={agePolicySource === "OVERRIDE"}
+              onChange={() => setDraft((current) => ({ ...current, age_policy_source: "OVERRIDE" }))}
+            />
+            Override for this division
+          </label>
+          {agePolicySource === "OVERRIDE" ? (
+            <div style={{ marginTop: "0.75rem" }}>
+              <TournamentAgePolicyEditor
+                policy={divisionAgePolicy}
+                participantType={cleanString(family?.participant_type)}
+                onChange={(policy) => setDraft((current) => writeAgePolicy(current, DIVISION_AGE_POLICY_FIELDS, policy))}
+                title="Division age-policy override"
+              />
+            </div>
+          ) : null}
+        </fieldset>
+
+        <fieldset ref={scheduleRef} tabIndex={-1} style={{ marginTop: "1rem", padding: "0.85rem", border: "1px solid #cbd5e1", borderRadius: "12px" }}>
           <legend style={{ fontWeight: 800 }}>Tournament days</legend>
           <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
             <input
@@ -400,46 +565,24 @@ export default function TournamentSetupDivisionDialog({
               checked={scheduleMode === "INHERIT_EVENT"}
               onChange={() =>
                 setDraft((current) =>
-                  setEventDayReferences(
-                    { ...current, schedule_mode: "INHERIT_EVENT" },
-                    availableDayIds
-                  )
+                  setEventDayReferences({ ...current, schedule_mode: "INHERIT_EVENT" }, availableDayIds)
                 )
               }
             />
             Use every day selected for the parent event
           </label>
-          <label
-            style={{
-              display: "flex",
-              gap: "0.5rem",
-              alignItems: "center",
-              marginTop: "0.45rem"
-            }}
-          >
+          <label style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginTop: "0.45rem" }}>
             <input
               type="radio"
               name="new-division-schedule-mode"
               checked={scheduleMode === "CUSTOM"}
-              onChange={() =>
-                setDraft((current) => ({ ...current, schedule_mode: "CUSTOM" }))
-              }
+              onChange={() => setDraft((current) => ({ ...current, schedule_mode: "CUSTOM" }))}
             />
             Choose specific event days
           </label>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-              gap: "0.45rem",
-              marginTop: "0.65rem"
-            }}
-          >
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.45rem", marginTop: "0.65rem" }}>
             {availableDayIds.map((dayId) => (
-              <label
-                key={dayId}
-                style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}
-              >
+              <label key={dayId} style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
                 <input
                   type="checkbox"
                   checked={selectedDayIds.includes(dayId)}
@@ -457,55 +600,11 @@ export default function TournamentSetupDivisionDialog({
           </div>
           {!availableDayIds.length ? (
             <p style={{ color: "#b91c1c" }}>
-              The selected event has no tournament days. Return to Events and
-              choose at least one day.
+              The selected event has no tournament days. Return to Events and choose at least one day.
             </p>
           ) : null}
         </fieldset>
 
-        {message ? <p role="alert" style={{ color: "#b91c1c" }}>{message}</p> : null}
-
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "flex-end",
-            gap: "0.65rem",
-            flexWrap: "wrap",
-            marginTop: "1rem"
-          }}
-        >
-          <button
-            type="button"
-            onClick={onCancel}
-            style={{
-              padding: "0.6rem 0.9rem",
-              borderRadius: "999px",
-              border: "1px solid #64748b",
-              background: "white",
-              color: "#0f172a",
-              fontWeight: 800,
-              cursor: "pointer"
-            }}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={submit}
-            style={{
-              padding: "0.6rem 0.9rem",
-              borderRadius: "999px",
-              border: "1px solid #0f172a",
-              background: "#0f172a",
-              color: "white",
-              fontWeight: 800,
-              cursor: "pointer"
-            }}
-          >
-            Add division
-          </button>
-        </div>
-      </section>
-    </div>
+    </FormDialog>
   );
 }

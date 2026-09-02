@@ -166,7 +166,7 @@ def submit_admin_singles_match(
     (
         df_players_all,
         _df_players_active,
-        _df_leagues,
+        df_leagues,
         _df_matches,
         df_meta,
         _df_badges,
@@ -187,6 +187,7 @@ def submit_admin_singles_match(
         source=source,
         name_to_id=name_to_id,
         df_players_all=df_players_all,
+        df_leagues=df_leagues,
         df_meta=df_meta,
     )
     return {

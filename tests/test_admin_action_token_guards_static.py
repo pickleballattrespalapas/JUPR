@@ -26,9 +26,6 @@ def _async_function_body(source: str, name: str) -> str:
 
 
 TOKEN_ACTIONS: dict[str, tuple[str, ...]] = {
-    "apps/web/app/admin/tournaments/status/TournamentStatusPanel.tsx": (
-        "submitAction",
-    ),
     "apps/web/app/admin/tournaments/bulk/BulkRegistrationPanel.tsx": (
         "saveBulkUpdate",
     ),
@@ -37,9 +34,6 @@ TOKEN_ACTIONS: dict[str, tuple[str, ...]] = {
     ),
     "apps/web/app/admin/tournaments/create/TournamentCreatePanel.tsx": (
         "createTournament",
-    ),
-    "apps/web/app/admin/tournaments/tournament/TournamentHomePanel.tsx": (
-        "saveTournament",
     ),
     "apps/web/app/admin/tournaments/editor/TournamentRegistrationEditorPanel.tsx": (
         "saveRegistration",
@@ -98,13 +92,12 @@ TOKEN_ACTIONS: dict[str, tuple[str, ...]] = {
         "generatePlayoffs",
         "saveScore",
         "generatePodium",
-        "awardPodium",
-        "publishOfficialMatches",
         "previewResultsImport",
         "commitResultsImport",
     ),
     "apps/web/app/admin/tournament-live/TournamentLivePanel.tsx": (
         "executePending",
+        "reviewPodium",
         "reconcileOperation",
     ),
     "apps/web/app/admin/match-canonical-audit/MatchCanonicalAuditPanel.tsx": (
@@ -150,7 +143,11 @@ TOKEN_ACTIONS: dict[str, tuple[str, ...]] = {
 def test_modified_admin_actions_are_scoped_to_the_current_access_token() -> None:
     for relative, action_names in TOKEN_ACTIONS.items():
         source = _source(relative)
-        assert "const actionRequest = useLatestRequestGuard(accessToken" in source, relative
+        if relative.endswith("TournamentLivePanel.tsx"):
+            assert "const actionScope = `${accessToken}\\u0000${selectedTournamentId}\\u0000${selectedDrawId}`;" in source
+            assert "const actionRequest = useLatestRequestGuard(actionScope);" in source
+        else:
+            assert "const actionRequest = useLatestRequestGuard(accessToken" in source, relative
         for action_name in action_names:
             body = _async_function_body(source, action_name)
             assert "actionRequest.begin()" in body, f"{relative}:{action_name}"
@@ -177,7 +174,7 @@ def test_existing_shared_action_guards_remain_token_scoped() -> None:
         "replaceSubscriber",
         "deactivateSubscriber",
     ):
-        assert "await runAction(" in _async_function_body(player_updates, wrapper)
+        assert "return runAction(" in _async_function_body(player_updates, wrapper)
 
     replay = _source("apps/web/app/admin/replay-history/ReplayHistoryForm.tsx")
     replay_action = _async_function_body(replay, "onSubmit")
@@ -203,7 +200,6 @@ def test_existing_shared_action_guards_remain_token_scoped() -> None:
                 "saveRole",
                 "runQueueWorker",
                 "moderateSocialSubmission",
-                "applyTournamentMatchBackfill",
                 "runBadgeRecompute",
                 "inspectOperation",
                 "recoverTournamentBackfill",

@@ -40,14 +40,22 @@ def _fetch_league_metadata(supabase: Any, *, club_id: str) -> tuple[pd.DataFrame
     try:
         rows = _safe_rows(
             supabase.table("leagues_metadata")
-            .select("league_name,k_factor,is_active,status")
+            .select("league_name,k_factor,is_active,status,match_format")
             .eq("club_id", str(club_id))
             .execute()
         )
         return pd.DataFrame(rows), warnings
     except Exception as exc:
         warnings.append(f"Could not load leagues_metadata: {exc.__class__.__name__}")
-        return pd.DataFrame(columns=["league_name", "k_factor", "is_active", "status"]), warnings
+        return pd.DataFrame(
+            columns=[
+                "league_name",
+                "k_factor",
+                "is_active",
+                "status",
+                "match_format",
+            ]
+        ), warnings
 
 
 def _fallback_league_names(supabase: Any, *, club_id: str) -> list[str]:
@@ -152,7 +160,7 @@ def _safety_rules() -> list[str]:
     return [
         "Replay runs server-side through FastAPI and the Python replay_history domain function.",
         "Every replay creates a durable replay_jobs record; client retries reuse an idempotency key and workers hold expiring leases.",
-        "League replay rewrites snapshots and rebuilds league_ratings for the selected league.",
+        "League replay rewrites snapshots and reconciles match-backed ratings without removing roster-only membership.",
         "Full reset updates overall player aggregates and rebuilds replay-managed singles rows from their preserved legacy baseline.",
         "Replay requires Supabase JWT authorization with run_replay permission.",
         "Confirm the accessible Yes/No dialog; keep Streamlit fallback available during pilot validation.",

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import re
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlencode
 
@@ -37,6 +39,11 @@ from jupr_app.services.public_tournament_commerce_service import (
     is_tournament_commerce_enabled,
     prepare_public_registration_commerce_transaction,
     require_tournament_commerce_mutation_runtime,
+)
+from jupr_app.services.admin_guarded_write_service import (
+    GuardedWriteRecoveryRequired,
+    begin_guarded_operation,
+    update_guarded_operation,
 )
 
 
@@ -79,6 +86,7 @@ def _selection_public_payload(selection: dict[str, Any]) -> dict[str, Any]:
         "partner_dupr_id": _clean_text(selection.get("partner_dupr_id"), limit=80),
         "partner_skill": _safe_float(selection.get("partner_skill")),
         "partner_age": _safe_int(selection.get("partner_age")),
+        "partner_gender": _clean_text(selection.get("partner_gender"), limit=40),
         "partner_note": _clean_text(selection.get("partner_note"), limit=500),
         "show_on_partner_board": _safe_bool(selection.get("show_on_partner_board")),
         "updated_at": selection.get("updated_at"),
@@ -256,6 +264,7 @@ def request_public_tournament_registration_edit_link(
     email: str,
     tournament_id: str | None = None,
     registration_slug: str | None = None,
+    idempotency_key: str = "legacy-edit-link-request",
     website: str | None = None,
     public_base_url: str | None = None,
 ) -> dict[str, Any]:
@@ -288,23 +297,80 @@ def request_public_tournament_registration_edit_link(
         registration_id=registration_id,
     ):
         return _generic_edit_link_response()
+    # Dedupe by recipient/tournament in a short server-side bucket as well as by
+    # the caller's request. A user can double-click, retry after a dropped
+    # response, or generate a new browser key without triggering another email.
+    # The opaque operation key never exposes the recipient address.
+    bucket = int(datetime.now(timezone.utc).timestamp() // (15 * 60))
+    operation_scope = "\x1f".join((str(club_id), tid, registration_id, clean_email, str(bucket)))
+    delivery_operation_key = "editlink:" + hashlib.sha256(operation_scope.encode("utf-8")).hexdigest()
+    try:
+        operation, idempotent = begin_guarded_operation(
+            supabase,
+            club_id=str(club_id),
+            workflow="public_tournament_edit_link_delivery",
+            action="send_tournament_registration_edit_link",
+            operation_key=delivery_operation_key,
+            request_payload={
+                "tournament_id": tid,
+                "registration_id": registration_id,
+                "recipient_fingerprint": hashlib.sha256(clean_email.encode("utf-8")).hexdigest(),
+                "delivery_bucket": bucket,
+            },
+            actor_email="public-registration@system.invalid",
+            actor_role="public_registration",
+            source="next_public_tournament_registration_edit_link",
+            before_json={"client_request_key_fingerprint": hashlib.sha256(str(idempotency_key).encode("utf-8")).hexdigest()},
+        )
+        if idempotent:
+            return _generic_edit_link_response()
+    except (GuardedWriteRecoveryRequired, RuntimeError, ValueError):
+        # Preserve the anti-enumeration response and suppress a second delivery
+        # whenever durable delivery state cannot prove that sending is safe.
+        return _generic_edit_link_response()
     token = build_registration_edit_token(
         tournament_id=tid,
         registration_id=registration_id,
         email=clean_email,
         secret=secret,
     )
-    send_tournament_registration_edit_email(
-        tournament_name=_clean_text(tournament.get("name") or "Tournament"),
-        registered_email=clean_email,
-        edit_url=_edit_url(
-            club_slug=str(club_slug),
-            edit_token=token,
-            tournament_id=tid,
-            registration_slug=_clean_text(settings.get("registration_slug"), limit=120) or _clean_text(registration_slug, limit=120) or None,
-            public_base_url=public_base_url,
-        ),
-    )
+    try:
+        send_tournament_registration_edit_email(
+            tournament_name=_clean_text(tournament.get("name") or "Tournament"),
+            registered_email=clean_email,
+            edit_url=_edit_url(
+                club_slug=str(club_slug),
+                edit_token=token,
+                tournament_id=tid,
+                registration_slug=_clean_text(settings.get("registration_slug"), limit=120) or _clean_text(registration_slug, limit=120) or None,
+                public_base_url=public_base_url,
+            ),
+        )
+    except Exception as exc:
+        try:
+            update_guarded_operation(
+                supabase,
+                operation_id=operation.get("id"),
+                operation_key=delivery_operation_key,
+                status="recovery_required",
+                error_text=f"Edit-link provider outcome is uncertain: {exc.__class__.__name__}",
+            )
+        except GuardedWriteRecoveryRequired:
+            pass
+        return _generic_edit_link_response()
+    try:
+        update_guarded_operation(
+            supabase,
+            operation_id=operation.get("id"),
+            operation_key=delivery_operation_key,
+            status="completed",
+            result_json=_generic_edit_link_response(),
+            after_json={"delivery": "accepted", "delivery_bucket": bucket},
+        )
+    except GuardedWriteRecoveryRequired:
+        # The provider may already have accepted the message. Never send again
+        # just because the response/receipt write was interrupted.
+        return _generic_edit_link_response()
     return _generic_edit_link_response()
 
 

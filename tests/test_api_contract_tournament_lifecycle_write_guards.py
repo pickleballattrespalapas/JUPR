@@ -36,10 +36,13 @@ def test_dedicated_registration_editor_scopes_each_write_to_current_token() -> N
         assert "actionRequest.isCurrent(generation)" in body
 
 
-def test_tournament_home_write_remains_token_scoped() -> None:
+def test_tournament_home_is_read_only_and_load_remains_token_scoped() -> None:
     panel = read("app/admin/tournaments/tournament/TournamentHomePanel.tsx")
-    body = async_body(panel, "saveTournament")
+    body = async_body(panel, "loadDetail")
 
-    assert "const actionRequest = useLatestRequestGuard(accessToken);" in panel
-    assert "const generation = actionRequest.begin();" in body
-    assert "actionRequest.isCurrent(generation)" in body
+    assert "const detailRequest = useLatestRequestGuard(" in panel
+    assert "const generation = detailRequest.begin();" in body
+    assert "detailRequest.isCurrent(generation)" in body
+    assert "saveTournament" not in panel
+    for method in ('method: "PATCH"', 'method: "POST"', 'method: "DELETE"'):
+        assert method not in panel

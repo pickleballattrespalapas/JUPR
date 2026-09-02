@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import logging
+import math
 import re
 import uuid
 from datetime import date, datetime
@@ -8,7 +10,11 @@ from typing import Any
 from urllib.parse import urlencode
 
 from jupr_app.config import get_env_or_default
-from jupr_app.domain.tournament_registration_compiler import validate_selection_against_skill
+from jupr_app.domain.tournament_age_policy import evaluate_age_eligibility, normalize_age_policy
+from jupr_app.domain.tournament_registration_compiler import (
+    evaluate_selection_gender_eligibility,
+    validate_selection_against_skill,
+)
 from jupr_app.domain.notifications.smtp_mailer import get_smtp_config_status
 from jupr_app.domain.notifications.tournament_registration_confirmation_email import (
     PAYMENT_NOTE,
@@ -88,19 +94,27 @@ def _clean_email(value: Any) -> str:
 def _safe_int(value: Any) -> int | None:
     if value in (None, ""):
         return None
+    if isinstance(value, bool):
+        return None
     try:
-        return int(float(value))
+        numeric = float(value)
     except Exception:
         return None
+    if not math.isfinite(numeric) or not numeric.is_integer():
+        return None
+    return int(numeric)
 
 
 def _safe_float(value: Any) -> float | None:
     if value in (None, ""):
         return None
+    if isinstance(value, bool):
+        return None
     try:
-        return float(value)
+        numeric = float(value)
     except Exception:
         return None
+    return numeric if math.isfinite(numeric) else None
 
 
 def _safe_bool(value: Any) -> bool:
@@ -131,8 +145,14 @@ def _canonical_player_skills(row: dict[str, Any]) -> tuple[float | None, float |
     if overall is not None:
         # JUPR stores its club rating as Elo (roughly 1,200 == 3.0 skill).
         canonical = overall / 400.0 if overall > 10 else overall
-        return canonical, canonical
-    return _safe_float(row.get("doubles_skill")), _safe_float(row.get("singles_skill"))
+        if 1.0 <= canonical <= 7.0:
+            return canonical, canonical
+    doubles = _safe_float(row.get("doubles_skill"))
+    singles = _safe_float(row.get("singles_skill"))
+    return (
+        doubles if doubles is not None and 1.0 <= doubles <= 7.0 else None,
+        singles if singles is not None and 1.0 <= singles <= 7.0 else None,
+    )
 
 
 def _public_registration_player(row: dict[str, Any]) -> dict[str, Any]:
@@ -275,6 +295,65 @@ def _event_label(event: dict[str, Any]) -> str:
     return _clean_text(event.get("division_name") or event.get("label") or "Division", limit=160)
 
 
+def _age_rules_mapping(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return {}
+        return dict(parsed) if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _normalized_public_age_policy(event: dict[str, Any]) -> dict[str, Any]:
+    rules = _age_rules_mapping(event.get("age_rules"))
+    mode = _clean_text(event.get("age_mode") or rules.get("mode") or "ALL_AGES", limit=40).upper()
+    if mode in {"", "OPEN", "ALL", "ALL AGES", "ALL_AGES"}:
+        mode = "ALL_AGES"
+    return normalize_age_policy(
+        {
+            **rules,
+            "mode": mode,
+            "label": _clean_text(
+                event.get("age_label") or rules.get("label") or rules.get("age_label"),
+                limit=80,
+            ),
+        }
+    )
+
+
+def _validate_age_eligibility(
+    *,
+    event: dict[str, Any],
+    selection: dict[str, Any],
+    player_profile: dict[str, Any],
+) -> None:
+    result = evaluate_age_eligibility(
+        policy=_normalized_public_age_policy(event),
+        player_age=_safe_float(player_profile.get("age")),
+        partner_age=_safe_float(selection.get("partner_age")),
+        participant_type=_clean_text(
+            event.get("event_type") or event.get("participant_type") or "GENDER_DOUBLES",
+            limit=40,
+        ),
+    )
+    status = str(result.get("status") or "ELIGIBLE").upper()
+    if status == "ELIGIBLE":
+        return
+    partner_mode = _clean_text(selection.get("partner_mode") or "NONE", limit=40).upper()
+    missing_fields = {str(value) for value in (result.get("missing_fields") or [])}
+    if status == "MISSING_DATA" and partner_mode == "NEEDS_PARTNER" and missing_fields <= {"partner age"}:
+        # A player looking for a partner may register provisionally. The future
+        # partner's age determines the team's final preferred age placement.
+        return
+    raise ValueError(
+        f"{_event_label(event)}: "
+        f"{_clean_text(result.get('issue') or 'Age eligibility requirements were not met.', limit=500)}"
+    )
+
+
 def _validate_gender_eligibility(
     *,
     event: dict[str, Any],
@@ -282,33 +361,41 @@ def _validate_gender_eligibility(
     partner_mode: str,
     partner_gender: Any = None,
 ) -> None:
-    restriction = _clean_text(event.get("gender_restriction") or "ANY", limit=40).upper()
-    if restriction in {"", "ANY", "OPEN", "NONE"}:
+    selection = {"partner_mode": partner_mode}
+    partner = {"gender": partner_gender} if partner_gender not in (None, "") else None
+    result = evaluate_selection_gender_eligibility(
+        event=event,
+        selection=selection,
+        player={"gender": player_gender},
+        partner=partner,
+    )
+    status = str(result.get("status") or "ELIGIBLE").upper()
+    if status == "ELIGIBLE":
         return
-
-    player = _normalized_gender(player_gender)
+    missing_fields = {str(value) for value in (result.get("missing_fields") or [])}
+    if status == "MISSING_DATA" and str(partner_mode or "").upper() == "NEEDS_PARTNER" and missing_fields <= {"partner gender"}:
+        # A player looking for a partner may register provisionally. The future
+        # partner must satisfy the Division's gender rule before final pairing.
+        return
     label = _event_label(event)
-    if restriction in {"MEN", "MALE"}:
+    restriction = str(result.get("restriction") or "").upper()
+    player = str(result.get("player_gender") or "").upper()
+    partner_value = str(result.get("partner_gender") or "").upper()
+    issue_type = str(result.get("issue_type") or "").upper()
+    if issue_type == "GENDER_NOT_ELIGIBLE" and restriction == "MEN":
         if player != "MEN":
             raise ValueError(f"{label}: this division is limited to men's registrations.")
-        if partner_mode == "HAS_PARTNER" and _normalized_gender(partner_gender) != "MEN":
+        if partner_value != "MEN":
             raise ValueError(f"{label}: both partners must be eligible for the men's division.")
-        return
-    if restriction in {"WOMEN", "FEMALE"}:
+    if issue_type == "GENDER_NOT_ELIGIBLE" and restriction == "WOMEN":
         if player != "WOMEN":
             raise ValueError(f"{label}: this division is limited to women's registrations.")
-        if partner_mode == "HAS_PARTNER" and _normalized_gender(partner_gender) != "WOMEN":
+        if partner_value != "WOMEN":
             raise ValueError(f"{label}: both partners must be eligible for the women's division.")
-        return
-    if restriction == "MIXED":
-        if player not in {"MEN", "WOMEN"}:
-            raise ValueError(f"{label}: select an eligible gender for mixed doubles.")
-        if partner_mode == "HAS_PARTNER":
-            partner = _normalized_gender(partner_gender)
-            if partner not in {"MEN", "WOMEN"}:
-                raise ValueError(f"{label}: partner gender is required for mixed-doubles eligibility.")
-            if partner == player:
-                raise ValueError(f"{label}: mixed doubles requires one men's and one women's registrant.")
+    raise ValueError(
+        f"{label}: "
+        f"{_clean_text(result.get('issue') or 'Gender eligibility requirements were not met.', limit=500)}"
+    )
 
 
 def _event_family_key(event: dict[str, Any]) -> tuple[str, str]:
@@ -348,6 +435,10 @@ def _public_settings(row: dict[str, Any] | None) -> dict[str, Any] | None:
         "refund_policy_markdown": _clean_text(row.get("refund_policy_markdown"), limit=4000),
         "weather_policy_markdown": _clean_text(row.get("weather_policy_markdown"), limit=4000),
         "sponsor_markdown": _clean_text(row.get("sponsor_markdown"), limit=4000),
+        "location_name": _clean_text(row.get("location_name"), limit=240),
+        "venue_address": _clean_text(row.get("venue_address"), limit=500),
+        "venue_directions": _clean_text(row.get("venue_directions"), limit=2000),
+        "timezone": _clean_text(row.get("timezone") or "America/Mazatlan", limit=120),
     }
 
 
@@ -387,6 +478,7 @@ def _public_event(row: dict[str, Any], *, registration_open: bool) -> dict[str, 
         "age_label": _clean_text(row.get("age_label"), limit=80),
         "skill_mode": _clean_text(row.get("skill_mode"), limit=80),
         "age_mode": _clean_text(row.get("age_mode"), limit=80),
+        "age_rules": row.get("age_rules"),
         "event_format": _clean_text(event_format, limit=120),
         "scoring": _clean_text(scoring, limit=120),
         "capacity_teams": _safe_int(row.get("capacity_teams")),
@@ -397,6 +489,8 @@ def _public_event(row: dict[str, Any], *, registration_open: bool) -> dict[str, 
         "eligibility_mode": _clean_text(
             row.get("eligibility_mode") or "STANDARD", limit=40
         ),
+        "skill_min_rating": _safe_float(row.get("skill_min_rating")),
+        "skill_max_rating": _safe_float(row.get("skill_max_rating")),
         "combined_rating_cap": _safe_float(row.get("combined_rating_cap")),
         "rating_source_policy": _clean_text(
             row.get("rating_source_policy"), limit=80
@@ -858,9 +952,6 @@ def _clean_selection(selection: dict[str, Any]) -> dict[str, Any]:
         "partner_dupr_id": _clean_text(selection.get("partner_dupr_id"), limit=80),
         "partner_skill": _safe_float(selection.get("partner_skill")),
         "partner_age": _safe_int(selection.get("partner_age")),
-        # Transient validation-only field. The established staging schema does not
-        # persist partner gender, so edits re-resolve it from a registered partner
-        # or ask for it again when a restricted division needs it.
         "partner_gender": _clean_text(selection.get("partner_gender"), limit=40),
         "partner_note": _clean_text(selection.get("partner_note"), limit=500),
         "show_on_partner_board": _safe_bool(selection.get("show_on_partner_board")),
@@ -869,13 +960,17 @@ def _clean_selection(selection: dict[str, Any]) -> dict[str, Any]:
 
 def _validated_rating(value: Any, *, label: str) -> float | None:
     rating = _safe_float(value)
-    if rating is not None and not 0.0 <= rating <= 7.0:
-        raise ValueError(f"{label} must be between 0 and 7.")
+    if value not in (None, "") and rating is None:
+        raise ValueError(f"{label} must be a finite number between 1 and 7.")
+    if rating is not None and not 1.0 <= rating <= 7.0:
+        raise ValueError(f"{label} must be between 1 and 7.")
     return rating
 
 
 def _validated_age(value: Any, *, label: str) -> int | None:
     age = _safe_int(value)
+    if value not in (None, "") and age is None:
+        raise ValueError(f"{label} must be a finite whole number between 1 and 120.")
     if age is not None and not 1 <= age <= 120:
         raise ValueError(f"{label} must be between 1 and 120.")
     return age
@@ -982,6 +1077,13 @@ def validate_and_clean_tournament_selection(
         raise ValueError("Invalid partner status in event selection.")
 
     clean_selection = _clean_selection(raw_selection)
+    if raw_mode == "HAS_PARTNER":
+        clean_selection["partner_skill"] = _validated_rating(
+            raw_selection.get("partner_skill"), label="Partner skill"
+        )
+        clean_selection["partner_age"] = _validated_age(
+            raw_selection.get("partner_age"), label="Partner age"
+        )
     event_option_id = str(clean_selection.get("event_option_id") or "").strip()
     if not event_option_id:
         raise ValueError("Each event selection must identify a division.")
@@ -1017,8 +1119,12 @@ def validate_and_clean_tournament_selection(
         )
         if registered_partner:
             submitted_skill = _validated_rating(clean_selection.get("partner_skill"), label="Partner skill")
-            registered_doubles = _safe_float(registered_partner.get("doubles_skill"))
-            registered_singles = _safe_float(registered_partner.get("singles_skill"))
+            registered_doubles = _validated_rating(
+                registered_partner.get("doubles_skill"), label="Partner doubles skill"
+            )
+            registered_singles = _validated_rating(
+                registered_partner.get("singles_skill"), label="Partner singles skill"
+            )
             resolved_skill = (
                 registered_doubles
                 if registered_doubles is not None
@@ -1068,6 +1174,8 @@ def validate_and_clean_tournament_selection(
             clean_selection[key] = None if key in {"partner_skill", "partner_age"} else ""
         partner_gender = ""
 
+    clean_selection["partner_gender"] = _clean_text(partner_gender, limit=40)
+
     _validate_gender_eligibility(
         event=event,
         player_gender=player_profile.get("gender"),
@@ -1084,10 +1192,13 @@ def validate_and_clean_tournament_selection(
     if not eligible:
         raise ValueError(f"{_event_label(event)}: {message or 'Skill eligibility requirements were not met.'}")
 
+    _validate_age_eligibility(
+        event=event,
+        selection=clean_selection,
+        player_profile=player_profile,
+    )
+
     clean_selection["registration_day_id"] = str(event.get("registration_day_id") or "")
-    # This field is intentionally validation-only and is not part of the
-    # established tournament_registration_selections schema.
-    clean_selection.pop("partner_gender", None)
     return clean_selection
 
 
@@ -1359,12 +1470,27 @@ def build_public_tournament_registration_confirmation(
     for selection in bundle.get("selections") or []:
         event = event_lookup.get(str(selection.get("event_option_id") or "")) or {}
         day = day_lookup.get(str(selection.get("registration_day_id") or "")) or {}
+        scheduled_day_ids = event.get("scheduled_day_ids") or [
+            selection.get("registration_day_id")
+        ]
         selections.append(
             {
                 "event_label": _clean_text(event.get("division_name") or event.get("label") or "Division"),
                 "event_family_label": _clean_text(event.get("event_family_label") or event.get("label") or "Event"),
                 "day_label": _clean_text(day.get("label") or "Day"),
                 "event_date": _json_safe(day.get("event_date")),
+                "scheduled_days": [
+                    {
+                        "label": _clean_text(
+                            day_lookup.get(str(day_id), {}).get("label") or "Day"
+                        ),
+                        "event_date": _json_safe(
+                            day_lookup.get(str(day_id), {}).get("event_date")
+                        ),
+                    }
+                    for day_id in scheduled_day_ids
+                    if str(day_id) in day_lookup
+                ],
                 "skill_label": _clean_text(event.get("skill_label"), limit=80),
                 "age_label": _clean_text(event.get("age_label"), limit=80),
                 "price_usd": _safe_float(event.get("price_usd")) or 0,

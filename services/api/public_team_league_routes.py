@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable
 from urllib.parse import quote
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Query
 from pydantic import BaseModel, Field
 
 from jupr_app.config import get_next_web_base_url
@@ -67,13 +67,16 @@ def install_public_team_league_routes(
     public_club_payload: Callable[[dict[str, Any], str], dict[str, Any]],
 ) -> None:
     @app.get("/clubs/{club_slug}/team-leagues")
-    def get_public_team_leagues(club_slug: str) -> dict[str, Any]:
+    def get_public_team_leagues(
+        club_slug: str,
+        view: str = Query(default="active", pattern="^(active|past)$"),
+    ) -> dict[str, Any]:
         require_team_leagues_enabled_or_403()
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
         try:
             result = list_public_team_leagues(
-                get_supabase_client(), club_id=club_id
+                get_supabase_client(), club_id=club_id, league_view=view
             )
         except Exception as exc:
             _public_error(exc)

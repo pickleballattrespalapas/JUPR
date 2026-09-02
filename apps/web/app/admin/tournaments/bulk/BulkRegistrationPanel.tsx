@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess } from "@/components/interaction";
 import type { AdminTournament, AdminTournamentDetailResponse, AdminTournamentListResponse, AdminTournamentStatusResponse, AdminTournamentWriteResponse } from "@/lib/adminTournamentApi";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
@@ -11,6 +12,8 @@ type Props = {
   apiBase: string | null;
   clubId: string;
   status: AdminTournamentStatusResponse;
+  initialTournamentId: string;
+  initialTournamentName: string;
 };
 
 const REGISTRATION_STATUS_OPTIONS = ["", "confirmed", "waitlist", "cancelled"];
@@ -35,11 +38,11 @@ function StatusChip({ value }: { value?: string | null }) {
   return <span style={{ border: "1px solid", borderRadius: "999px", padding: "0.12rem 0.5rem", fontSize: "0.78rem", ...statusStyle(value) }}>{value || "—"}</span>;
 }
 
-export default function BulkRegistrationPanel({ apiBase, clubId, status }: Props) {
+export default function BulkRegistrationPanel({ apiBase, clubId, status, initialTournamentId, initialTournamentName }: Props) {
   const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
   const [includeArchived, setIncludeArchived] = useState(false);
   const [tournaments, setTournaments] = useState<AdminTournament[]>([]);
-  const [selectedTournamentId, setSelectedTournamentId] = useState("");
+  const [selectedTournamentId, setSelectedTournamentId] = useState(initialTournamentId);
   const [detail, setDetail] = useState<AdminTournamentDetailResponse | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [registrationStatus, setRegistrationStatus] = useState("");
@@ -66,7 +69,7 @@ export default function BulkRegistrationPanel({ apiBase, clubId, status }: Props
   function clearProtectedBulkState() {
     detailRequest.invalidate();
     setBusy(false); setMessage(null);
-    setTournaments([]); setSelectedTournamentId(""); setDetail(null); setSelectedIds([]);
+    setTournaments([]); setSelectedTournamentId(initialTournamentId); setDetail(null); setSelectedIds([]);
     setRegistrationStatus(""); setPaymentStatus(""); setAppendNote("");
   }
 
@@ -87,7 +90,7 @@ export default function BulkRegistrationPanel({ apiBase, clubId, status }: Props
       setTournaments(nextTournaments);
       setMessage(nextTournaments.length ? `Loaded ${payload.count ?? nextTournaments.length} tournament(s).` : "No tournaments match this view.");
       if (selectionStillAvailable) await loadDetail(selectedBeforeRefresh);
-      else setSelectedTournamentId("");
+      else setMessage("The selected tournament is not available to this admin session.");
     } catch (error) {
       if (!listRequest.isCurrent(generation)) return;
       setMessage(error instanceof Error ? error.message : "Unable to load tournaments.");
@@ -123,15 +126,15 @@ export default function BulkRegistrationPanel({ apiBase, clubId, status }: Props
   async function saveBulkUpdate(confirmationText: string) {
     if (!detail) {
       setMessage("Select a tournament first.");
-      return;
+      throw new Error("Select a tournament first.");
     }
     if (!selectedIds.length) {
       setMessage("Select at least one registration.");
-      return;
+      throw new Error("Select at least one registration.");
     }
     if (!registrationStatus && !paymentStatus && !appendNote.trim()) {
       setMessage("Choose a status/payment change or note to append.");
-      return;
+      throw new Error("Choose a status/payment change or note to append.");
     }
     const generation = actionRequest.begin();
     const requestedTournamentId = detail.tournament.id;
@@ -154,14 +157,18 @@ export default function BulkRegistrationPanel({ apiBase, clubId, status }: Props
           })
         }
       );
-      if (!actionRequest.isCurrent(generation)) return;
+      const updatedCount = payload.updated_count ?? payload.registration_ids?.length ?? 0;
+      const completion = actionSuccess("Registrations updated", `${updatedCount} registration${updatedCount === 1 ? "" : "s"} updated successfully.`);
+      if (!actionRequest.isCurrent(generation)) return completion;
       const refreshed = await requestJson<AdminTournamentDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(requestedTournamentId)}`);
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) return completion;
       setDetail(refreshed);
       setSelectedIds([]);
       setMessage(payload.idempotent_replay ? "Bulk response reconciled from the durable operation." : `Updated ${payload.updated_count ?? payload.registration_ids?.length ?? 0} registration(s).`);
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to update registrations.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
@@ -198,11 +205,8 @@ export default function BulkRegistrationPanel({ apiBase, clubId, status }: Props
 
       {tournaments.length ? (
         <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>Select tournament</h2>
-          <select value={selectedTournamentId} onChange={(event) => loadDetail(event.target.value)} disabled={busy} style={inputStyle}>
-            <option value="">Choose a tournament…</option>
-            {tournaments.map((tournament) => <option key={tournament.id} value={tournament.id}>{tournament.name} · {tournament.status} · {tournament.registration_count ?? 0} registrations</option>)}
-          </select>
+          <h2 style={{ marginTop: 0 }}>Selected tournament</h2>
+          <p><strong>{tournaments.find((tournament) => tournament.id === selectedTournamentId)?.name || initialTournamentName}</strong></p>
         </article>
       ) : <article style={cardStyle}><p style={{ color: "#64748b" }}>{busy ? "Loading tournaments…" : "No tournaments match this view."}</p></article>}
 

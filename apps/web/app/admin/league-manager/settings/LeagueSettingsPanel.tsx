@@ -11,6 +11,9 @@ import type {
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { useAdminSession } from "@/lib/useAdminSession";
 import { GuidedLeagueSettingsEditor } from "../GuidedLeagueSettingsEditor";
+import { isTeamLeagueType } from "@/lib/leagueRouteContext";
+import LeagueAwardsSetupPanel from "./LeagueAwardsSetupPanel";
+import TeamLeagueSetupPanel from "./TeamLeagueSetupPanel";
 
 type Props = {
   apiBase: string | null;
@@ -145,13 +148,30 @@ export default function LeagueSettingsPanel({ apiBase, clubId, status, initialLe
       {busy && !detail ? <p role="status">Loading {initialLeague} settings…</p> : null}
       {message ? <p role="status" style={{ color: /unable|error|required/i.test(message) ? "#b91c1c" : "#166534" }}>{message}</p> : null}
       {detail ? (
-        <GuidedLeagueSettingsEditor
-          detail={detail}
-          saving={busy}
-          canWrite={Boolean(accessToken)}
-          onSave={saveSettings}
-          onPreview={previewSchedule}
-        />
+        <>
+          <GuidedLeagueSettingsEditor
+            detail={detail}
+            saving={busy}
+            canWrite={Boolean(accessToken)}
+            onSave={saveSettings}
+            onPreview={previewSchedule}
+          />
+          {isTeamLeagueType(detail.league.league_type) ? (
+            <TeamLeagueSetupPanel
+              apiBase={apiBase}
+              clubId={clubId}
+              leagueName={initialLeague}
+              leagueStatus={detail.league.status}
+              status={status}
+            />
+          ) : null}
+          <LeagueAwardsSetupPanel
+            apiBase={apiBase}
+            clubId={clubId}
+            leagueName={initialLeague}
+            leagueStatus={detail.league.status}
+          />
+        </>
       ) : null}
     </div>
   );

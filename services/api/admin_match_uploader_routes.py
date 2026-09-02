@@ -11,10 +11,12 @@ from jupr_app.services.admin_match_uploader_service import (
     build_admin_match_uploader_round_robin_preview,
     build_admin_match_uploader_status,
     create_admin_match_uploader_players,
+    get_admin_match_uploader_player_operation,
     is_admin_match_uploader_enabled,
     is_admin_match_uploader_preview_enabled,
     is_admin_match_uploader_singles_enabled,
     submit_admin_match_uploader_batch,
+    reconcile_admin_match_uploader_player_operation,
 )
 from jupr_app.services.admin_player_updates_service import auto_send_player_updates_for_match_payloads
 from jupr_app.services.admin_singles_match_service import submit_admin_singles_match
@@ -22,6 +24,7 @@ from jupr_app.services.direct_match_entry_service import (
     DirectMatchConflictError,
     DirectMatchRecoveryRequiredError,
 )
+from jupr_app.services.admin_guarded_write_service import GuardedWriteRecoveryRequired
 from services.api.auth import authenticate_bearer, auth_header
 
 
@@ -74,12 +77,24 @@ class AdminMatchUploaderRoundRobinPreviewRequest(BaseModel):
 
 class AdminMatchUploaderNewPlayerRequest(BaseModel):
     name: str
-    starting_jupr: float = Field(default=3.5, ge=1.0, le=7.0)
+    starting_jupr: float = Field(ge=1.0, le=7.0)
 
 
 class AdminMatchUploaderCreatePlayersRequest(BaseModel):
-    players: list[AdminMatchUploaderNewPlayerRequest] = Field(default_factory=list)
+    players: list[AdminMatchUploaderNewPlayerRequest] = Field(min_length=1, max_length=40)
+    reviewed_fingerprint: str = Field(min_length=64, max_length=64)
+    idempotency_key: str = Field(
+        min_length=8,
+        max_length=160,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]+$",
+    )
+    confirmation_text: str = Field(default="", max_length=80)
     source: str = "next_match_uploader_new_players"
+
+
+class AdminMatchUploaderPlayerReconcileRequest(BaseModel):
+    confirmation_text: str = Field(default="", max_length=80)
+    source: str = "next_match_uploader_player_reconcile"
 
 
 def _dump_model(model: BaseModel) -> dict[str, Any]:
@@ -115,6 +130,17 @@ def _resolve_score_entry_role_or_403(*, supabase: Any, club_id: str, authorizati
 
 
 def _handle_write_error(exc: Exception) -> None:
+    if isinstance(exc, GuardedWriteRecoveryRequired):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "RECOVERY_REQUIRED",
+                "kind": "uncertain",
+                "message": str(exc),
+                "operation_key": exc.operation_key,
+                "recovery_required": True,
+            },
+        ) from exc
     if isinstance(exc, PermissionError):
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     if isinstance(exc, DirectMatchConflictError):
@@ -134,7 +160,78 @@ def install_admin_match_uploader_routes(app, *, get_supabase_client) -> None:
     @app.get("/admin/clubs/{club_id}/match-uploader/status")
     def get_admin_match_uploader_status(club_id: str) -> dict[str, Any]:
         supabase = get_supabase_client() if is_admin_match_uploader_enabled() else None
-        return build_admin_match_uploader_status(supabase, club_id=str(club_id))
+        result = build_admin_match_uploader_status(supabase, club_id=str(club_id))
+        result["player_operation_endpoint"] = (
+            "/admin/clubs/{club_id}/match-uploader/player-operations/{operation_key}"
+            if result.get("enabled")
+            else None
+        )
+        return result
+
+    @app.get("/admin/clubs/{club_id}/match-uploader/player-operations/{operation_key}")
+    def get_admin_match_uploader_player_batch_operation(
+        club_id: str,
+        operation_key: str,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_match_uploader_enabled():
+            raise HTTPException(status_code=403, detail="Next Match Uploader is disabled.")
+        supabase = get_supabase_client()
+        _resolve_score_entry_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source="next_match_uploader_player_operation",
+        )
+        operation = get_admin_match_uploader_player_operation(
+            supabase,
+            club_id=str(club_id),
+            operation_key=str(operation_key),
+        )
+        if operation is None:
+            raise HTTPException(status_code=404, detail="Player batch operation was not found.")
+        result_json = operation.get("result_json") or {}
+        error_text = operation.get("error_text")
+        return {
+            "ok": True,
+            "operation_key": operation.get("operation_key"),
+            "status": operation.get("status"),
+            "result_json": result_json,
+            "error_text": error_text,
+            # Compatibility aliases for callers already tolerant of either shape.
+            "result": result_json,
+            "error": error_text,
+            "recovery_required": operation.get("status") in {"intent_recorded", "recovery_required"},
+        }
+
+    @app.post("/admin/clubs/{club_id}/match-uploader/player-operations/{operation_key}/reconcile")
+    def post_admin_match_uploader_player_batch_reconcile(
+        club_id: str,
+        operation_key: str,
+        payload: AdminMatchUploaderPlayerReconcileRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_match_uploader_enabled():
+            raise HTTPException(status_code=403, detail="Next Match Uploader is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_score_entry_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        try:
+            return reconcile_admin_match_uploader_player_operation(
+                supabase,
+                club_id=str(club_id),
+                operation_key=str(operation_key),
+                confirmation_text=payload.confirmation_text,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                source=payload.source,
+            )
+        except Exception as exc:
+            _handle_write_error(exc)
 
     @app.post("/admin/clubs/{club_id}/match-uploader/round-robin/preview")
     def post_admin_match_uploader_round_robin_preview(
@@ -185,6 +282,9 @@ def install_admin_match_uploader_routes(app, *, get_supabase_client) -> None:
                 players=[_dump_model(player) for player in payload.players],
                 actor_email=actor_email,
                 actor_role=actor_role,
+                reviewed_fingerprint=payload.reviewed_fingerprint,
+                idempotency_key=payload.idempotency_key,
+                confirmation_text=payload.confirmation_text,
                 source=payload.source,
             )
         except Exception as exc:

@@ -11,6 +11,10 @@ from jupr_app.services.admin_tournament_draw_service import _draw_payload
 from jupr_app.services.admin_tournament_game_service import _require_reviewed_row_versions
 from jupr_app.services.admin_tournament_guarded_operation import StaleTournamentAdminStateError
 from jupr_app.services.admin_tournament_podium_service import _podium_payload
+from jupr_app.services.admin_tournament_podium_review_service import (
+    build_admin_tournament_podium_review_fingerprint,
+    find_current_admin_tournament_podium_review,
+)
 from jupr_app.services.admin_tournament_service import TOURNAMENT_SELECT, _clean_text, _first_row, is_admin_tournament_admin_enabled
 
 CONFIRM_AWARD_PODIUM = "AWARD PODIUM"
@@ -67,6 +71,19 @@ def _teams_for_draw(supabase: Any, *, tournament_id: str, draw_id: str) -> list[
         )
     except Exception as exc:
         raise RuntimeError("Could not load draw teams; podium awards were refused.") from exc
+
+
+def _games_for_draw(supabase: Any, *, tournament_id: str, draw_id: str) -> list[dict[str, Any]]:
+    try:
+        return _safe_rows(
+            supabase.table("tournament_games")
+            .select("*")
+            .eq("tournament_id", str(tournament_id))
+            .eq("draw_id", str(draw_id))
+            .execute()
+        )
+    except Exception as exc:
+        raise RuntimeError("Could not load draw games; podium awards were refused.") from exc
 
 
 def _podium_structure(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -157,6 +174,8 @@ def award_admin_tournament_draw_podium(
     confirmation_text: str,
     expected_draw_updated_at: str | None = None,
     expected_team_versions: list[dict[str, Any]] | None = None,
+    expected_source_game_versions: list[dict[str, Any]] | None = None,
+    expected_podium_versions: list[dict[str, Any]] | None = None,
     expected_podium: list[dict[str, Any]] | None = None,
     expected_awards: list[dict[str, Any]] | None = None,
     source: str = "next_tournament_admin_award_podium",
@@ -191,6 +210,37 @@ def award_admin_tournament_draw_podium(
     podium_rows = _podium_for_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id)
     if not podium_rows:
         raise ValueError("Generate a draw-scoped podium before awarding trophies.")
+    _require_reviewed_row_versions(
+        podium_rows,
+        expected_podium_versions,
+        label="podium set",
+        atomic=atomic,
+    )
+    games = _games_for_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id)
+    _require_reviewed_row_versions(
+        games,
+        expected_source_game_versions,
+        label="source game set",
+        atomic=atomic,
+    )
+    review_fingerprint = build_admin_tournament_podium_review_fingerprint(
+        draw=draw,
+        teams=teams,
+        games=games,
+        podium=podium_rows,
+    )
+    review = find_current_admin_tournament_podium_review(
+        supabase,
+        club_id=str(club_id),
+        tournament_id=clean_tournament_id,
+        draw_id=clean_draw_id,
+        review_fingerprint=review_fingerprint,
+    )
+    if not bool(review.get("current")):
+        reason = str(
+            (review.get("blockers") or ["The current podium has not been explicitly reviewed."])[0]
+        )
+        raise ValueError(f"Podium awards are blocked: {reason}")
 
     ctx = SimpleNamespace(supabase=supabase, club_id=str(club_id))
     candidates = build_tournament_podium_candidates(ctx, clean_tournament_id, str(tournament.get("name") or ""), draw_id=clean_draw_id)

@@ -7,6 +7,7 @@ import styles from "./PublicSiteHeader.module.css";
 type Props = {
   productName: string;
   isStaging: boolean;
+  stagingBuildSha: string | null;
 };
 
 type NavigationItem = {
@@ -82,24 +83,55 @@ const navigationItems: NavigationItem[] = [
   }
 ];
 
-function Brand({ productName, isStaging }: Props) {
+function Brand({ productName, isStaging, stagingBuildSha }: Props) {
+  const shortBuildSha = stagingBuildSha?.slice(0, 7).toUpperCase() || null;
+
   return (
     <div className={styles.brandGroup}>
       <Link href="/" className={styles.brand}>
         {productName}
       </Link>
-      {isStaging ? <span className={styles.environment}>STAGING</span> : null}
+      {isStaging ? (
+        <span className={styles.stagingIdentity}>
+          <span className={styles.environment}>STAGING</span>
+          <span
+            className={styles.buildSha}
+            role="note"
+            data-staging-build-sha={stagingBuildSha || "unavailable"}
+            aria-label={
+              stagingBuildSha
+                ? `Staging build commit ${stagingBuildSha}`
+                : "Staging build commit unavailable"
+            }
+            title={
+              stagingBuildSha
+                ? `Staging deployment commit ${stagingBuildSha}`
+                : "Staging deployment commit is unavailable"
+            }
+          >
+            BUILD {shortBuildSha || "UNAVAILABLE"}
+          </span>
+        </span>
+      ) : null}
     </div>
   );
 }
 
-export default function PublicSiteHeader({ productName, isStaging }: Props) {
+export default function PublicSiteHeader({
+  productName,
+  isStaging,
+  stagingBuildSha
+}: Props) {
   const pathname = usePathname() || "/";
 
   if (pathname === "/admin" || pathname.startsWith("/admin/")) {
     return (
       <header className={styles.compactHeader}>
-        <Brand productName={productName} isStaging={isStaging} />
+        <Brand
+          productName={productName}
+          isStaging={isStaging}
+          stagingBuildSha={stagingBuildSha}
+        />
       </header>
     );
   }
@@ -107,7 +139,11 @@ export default function PublicSiteHeader({ productName, isStaging }: Props) {
   return (
     <header className={styles.header}>
       <div className={styles.brandRow}>
-        <Brand productName={productName} isStaging={isStaging} />
+        <Brand
+          productName={productName}
+          isStaging={isStaging}
+          stagingBuildSha={stagingBuildSha}
+        />
       </div>
       <nav className={styles.nav} aria-label="Primary navigation">
         {navigationItems.map((item) => {

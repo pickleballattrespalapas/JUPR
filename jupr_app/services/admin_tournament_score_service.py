@@ -6,6 +6,12 @@ import os
 
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.domain.tournaments import finalize_game, resolve_playoff_dependencies
+from jupr_app.domain.tournaments.score_policy import (
+    SUPPORTED_SCORING_FORMATS,
+    require_best_of_three_game_scores,
+    require_tournament_score,
+    resolve_tournament_scoring_format,
+)
 from jupr_app.services.admin_tournament_game_service import (
     _fetch_draw,
     _game_payload,
@@ -55,6 +61,53 @@ def _fetch_game(supabase: Any, *, tournament_id: str, game_id: str) -> dict[str,
     except Exception as exc:
         raise RuntimeError("Could not verify the tournament game; score save was refused.") from exc
     return rows[0] if rows else None
+
+
+def _fetch_event_scoring(
+    supabase: Any,
+    *,
+    tournament_id: str,
+    event_option_id: str,
+) -> dict[str, Any]:
+    if not str(event_option_id or "").strip():
+        raise ValueError(
+            "This game has no event scoring authority. Assign it to a configured event before scoring."
+        )
+    try:
+        rows = _safe_rows(
+            supabase.table("tournament_event_options")
+            .select("id,tournament_id,scoring_default,scoring_override,division_scoring")
+            .eq("tournament_id", str(tournament_id))
+            .eq("id", str(event_option_id))
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "Could not verify the configured event scoring format; score save was refused."
+        ) from exc
+    if len(rows) != 1:
+        raise ValueError(
+            "This game's configured event scoring format is unavailable; score save was refused."
+        )
+    return rows[0]
+
+
+def _game_scoring_format(
+    game: dict[str, Any],
+    event: dict[str, Any],
+) -> str:
+    """Prefer a reviewed game's frozen format, with event fallback for legacy rows."""
+
+    game_format = str(game.get("scoring_format") or "").strip().upper()
+    if not game_format:
+        return resolve_tournament_scoring_format(event)
+    if game_format not in SUPPORTED_SCORING_FORMATS:
+        raise ValueError(
+            "This playoff game's scoring format is unsupported. Review and regenerate "
+            "the bracket before recording a result."
+        )
+    return game_format
 
 
 def _games_for_draw(supabase: Any, *, tournament_id: str, draw_id: str | None) -> list[dict[str, Any]]:
@@ -152,6 +205,8 @@ def update_admin_tournament_game_score(
     game_id: str,
     score_a: Any,
     score_b: Any,
+    game_scores: list[dict[str, Any]] | None = None,
+    unusual_score_acknowledged: bool = False,
     actor_email: str,
     actor_role: str,
     confirmation_text: str,
@@ -227,17 +282,62 @@ def update_admin_tournament_game_score(
         game_ids=game_ids,
     ):
         raise ValueError(
-            "This draw already has official Match Log rows. Correct published results through Match Log and Replay History."
+            "This draw already has official rated matches. Linked tournament source results are immutable; "
+            "stop and use the documented tournament publication recovery and reconciliation workflow. "
+            "Do not edit or exclude the linked Match Log rows."
         )
 
     next_score_a = _safe_int(score_a)
     next_score_b = _safe_int(score_b)
     if next_score_a is None or next_score_b is None:
         raise ValueError("Both scores are required.")
-    if next_score_a < 0 or next_score_b < 0:
-        raise ValueError("Tournament scores cannot be negative.")
+    existing_result_type = str(before.get("result_type") or "PLAYED").strip().upper()
+    if existing_result_type != "PLAYED":
+        raise ValueError(
+            "A non-played tournament outcome cannot be converted by ordinary score entry. "
+            "Use the explicit Tournament Day outcome-correction workflow."
+        )
+    event = _fetch_event_scoring(
+        supabase,
+        tournament_id=clean_tournament_id,
+        event_option_id=str(before.get("event_option_id") or (draw or {}).get("event_option_id") or ""),
+    )
+    scoring_format = _game_scoring_format(before, event)
+    if scoring_format == "BEST_2_OF_3":
+        if game_scores is None:
+            raise ValueError(
+                "BEST_2_OF_3 requires the individual Game 1, Game 2, and, when needed, Game 3 scores."
+            )
+        score_review = require_best_of_three_game_scores(
+            game_scores,
+            unusual_score_acknowledged=bool(unusual_score_acknowledged),
+        )
+        if (
+            next_score_a != int(score_review["score_a"])
+            or next_score_b != int(score_review["score_b"])
+        ):
+            raise ValueError(
+                "The best-of-three aggregate must match the individual game winners."
+            )
+        next_score_a = int(score_review["score_a"])
+        next_score_b = int(score_review["score_b"])
+    else:
+        if game_scores is not None:
+            raise ValueError(
+                "Individual game scores are accepted only for BEST_2_OF_3 matchups."
+            )
+        score_review = require_tournament_score(
+            next_score_a,
+            next_score_b,
+            scoring_format=scoring_format,
+            unusual_score_acknowledged=bool(unusual_score_acknowledged),
+        )
     updated_fields = {
         **finalize_game({**before, "score_a": next_score_a, "score_b": next_score_b}),
+        "result_type": "PLAYED",
+        "result_note": None,
+        "result_recorded_by": str(actor_email or "") or None,
+        "score_review_json": score_review,
         "updated_at": _now_iso(),
     }
     after_preview = {**before, **updated_fields}
@@ -272,12 +372,13 @@ def update_admin_tournament_game_score(
             "write_count": 0,
             "game": _game_payload(after_preview),
             "dependency_updates": [_game_payload({**existing_by_id.get(str(row.get("id")), {}), **row}) for row in dependency_preview],
-            "warnings": [],
+            "score_review": score_review,
+            "warnings": list(score_review.get("reasons") or []),
         }
     if atomic:
         try:
             response = supabase.rpc(
-                "admin_score_tournament_game_cas",
+                "admin_score_tournament_game_result_cas",
                 {
                     "p_club_id": str(club_id),
                     "p_tournament_id": clean_tournament_id,

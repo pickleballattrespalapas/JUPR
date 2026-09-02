@@ -4,6 +4,10 @@ from typing import Any
 
 from jupr_app.domain.constants import DEFAULT_K_FACTOR
 from jupr_app.domain.match_explorer import build_match_explorer_projection
+from jupr_app.services.public_league_visibility import (
+    ACTIVE_LEAGUE_VIEW,
+    public_league_view,
+)
 from jupr_app.services.public_player_service import get_public_players
 
 LEAGUE_RATING_SELECT = "player_id,league_name,rating,is_active"
@@ -43,15 +47,7 @@ def _jupr(elo: float | None) -> float | None:
 
 def _active_league_name(row: dict[str, Any]) -> str | None:
     league_name = str(row.get("league_name") or "").strip()
-    if not league_name or league_name.upper() == "OVERALL":
-        return None
-    status = str(row.get("status") or "").strip().lower()
-    is_active = row.get("is_active")
-    if is_active is False:
-        return None
-    if status and status not in {"active", "published", "live"}:
-        return None
-    return league_name
+    return league_name if public_league_view(row) == ACTIVE_LEAGUE_VIEW else None
 
 
 def get_public_match_explorer_contexts(supabase: Any, *, club_id: str) -> list[str]:
@@ -74,21 +70,6 @@ def get_public_match_explorer_contexts(supabase: Any, *, club_id: str) -> list[s
         league_name = _active_league_name(row)
         if league_name:
             contexts.add(league_name)
-
-    if len(contexts) == 1:
-        try:
-            lr_rows = _safe_rows(
-                supabase.table("league_ratings")
-                .select("league_name,is_active")
-                .eq("club_id", cid)
-                .execute()
-            )
-        except Exception:
-            lr_rows = []
-        for row in lr_rows:
-            league_name = _active_league_name(row)
-            if league_name:
-                contexts.add(league_name)
 
     return ["OVERALL"] + sorted(name for name in contexts if name != "OVERALL")
 

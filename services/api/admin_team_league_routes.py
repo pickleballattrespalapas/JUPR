@@ -17,9 +17,11 @@ from jupr_app.domain.admin_activity_log import (
 from jupr_app.services.team_league_service import (
     TeamLeagueConflictError,
     TeamLeagueRecoveryRequiredError,
+    admin_team_league_roster_action,
     admin_team_league_waitlist_action,
     build_admin_team_league_schedule_preview,
     commit_admin_team_league_schedule,
+    create_admin_team_league_team,
     get_admin_team_league,
     inspect_admin_team_league_operation,
     list_admin_team_leagues,
@@ -65,6 +67,37 @@ class TeamLeagueWaitlistActionRequest(BaseModel):
     idempotency_key: str = Field(min_length=8, max_length=160)
     confirmation_text: str = Field(min_length=1, max_length=80)
     source: str = Field(default="next_team_league_waitlist", max_length=160)
+
+
+class TeamLeagueRosterActionRequest(BaseModel):
+    action: str = Field(pattern=r"^(add_member|remove_member|set_pool)$")
+    player_id: int
+    team_id: str | None = Field(default=None, max_length=80)
+    member_role: str = Field(
+        default="primary", pattern=r"^(captain|primary|alternate)$"
+    )
+    member_status: str = Field(
+        default="active",
+        pattern=r"^(invited|active|available|unavailable|withdrawn)$",
+    )
+    contact_email: str = Field(default="", max_length=320)
+    note: str = Field(default="", max_length=500)
+    expected_roster_version: int = Field(ge=0)
+    idempotency_key: str = Field(min_length=8, max_length=160)
+    confirmation_text: str = Field(min_length=1, max_length=80)
+    source: str = Field(default="next_team_league_roster", max_length=160)
+
+
+class TeamLeagueCreateTeamRequest(BaseModel):
+    team_name: str = Field(min_length=1, max_length=120)
+    captain_player_id: int
+    captain_contact_email: str = Field(min_length=3, max_length=320)
+    initial_primary_player_id: int | None = None
+    initial_primary_contact_email: str = Field(default="", max_length=320)
+    expected_roster_version: int = Field(ge=0)
+    idempotency_key: str = Field(min_length=8, max_length=160)
+    confirmation_text: str = Field(min_length=1, max_length=80)
+    source: str = Field(default="next_team_league_create_team", max_length=160)
 
 
 class TeamLeagueFixtureScoreRequest(BaseModel):
@@ -222,10 +255,88 @@ def install_admin_team_league_routes(app, *, get_supabase_client) -> None:
             _error(exc)
 
     @app.post(
+        "/admin/clubs/{club_id}/league-manager/team-leagues/{league_name}/teams"
+    )
+    def post_admin_team_league_team(
+        club_id: str,
+        league_name: str,
+        payload: TeamLeagueCreateTeamRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        require_team_leagues_enabled_or_403()
+        require_admin_team_league_write_or_403()
+        supabase = get_supabase_client()
+        email, role = _role_or_403(
+            supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        try:
+            return create_admin_team_league_team(
+                supabase,
+                club_id=str(club_id),
+                league_name=league_name,
+                team_name=payload.team_name,
+                captain_player_id=payload.captain_player_id,
+                captain_contact_email=payload.captain_contact_email,
+                initial_primary_player_id=payload.initial_primary_player_id,
+                initial_primary_contact_email=payload.initial_primary_contact_email,
+                expected_roster_version=payload.expected_roster_version,
+                idempotency_key=payload.idempotency_key,
+                confirmation_text=payload.confirmation_text,
+                actor_email=email,
+                actor_role=role,
+                source=payload.source,
+            )
+        except Exception as exc:
+            _error(exc)
+
+    @app.post(
+        "/admin/clubs/{club_id}/league-manager/team-leagues/{league_name}/roster-actions"
+    )
+    def post_admin_team_league_roster_action(
+        club_id: str,
+        league_name: str,
+        payload: TeamLeagueRosterActionRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        require_team_leagues_enabled_or_403()
+        require_admin_team_league_write_or_403()
+        supabase = get_supabase_client()
+        email, role = _role_or_403(
+            supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        try:
+            return admin_team_league_roster_action(
+                supabase,
+                club_id=str(club_id),
+                league_name=league_name,
+                action=payload.action,
+                player_id=payload.player_id,
+                team_id=payload.team_id,
+                member_role=payload.member_role,
+                member_status=payload.member_status,
+                contact_email=payload.contact_email,
+                note=payload.note,
+                expected_roster_version=payload.expected_roster_version,
+                idempotency_key=payload.idempotency_key,
+                confirmation_text=payload.confirmation_text,
+                actor_email=email,
+                actor_role=role,
+                source=payload.source,
+            )
+        except Exception as exc:
+            _error(exc)
+
+    @app.get(
         "/admin/clubs/{club_id}/league-manager/team-leagues/"
         "{league_name}/schedule-preview/{phase}"
     )
-    def post_admin_team_league_schedule_preview(
+    def get_admin_team_league_schedule_preview(
         club_id: str,
         league_name: str,
         phase: str,

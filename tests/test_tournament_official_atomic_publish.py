@@ -12,7 +12,10 @@ from jupr_app.services.admin_tournament_match_publish_service import (
     publish_admin_tournament_draw_matches,
 )
 from tests.test_admin_match_log_service import FakeSupabase
-from tests.test_api_contract_admin_tournament_match_publish import match_publish_tables
+from tests.test_api_contract_admin_tournament_match_publish import (
+    install_official_publish_prerequisites,
+    match_publish_tables,
+)
 
 
 class _RpcCall:
@@ -123,6 +126,7 @@ def _enable_atomic_publish(monkeypatch) -> None:
 def test_atomic_publish_receipt_binds_identity_and_failed_queue_blocks_receipt(monkeypatch) -> None:
     _enable_atomic_publish(monkeypatch)
     tables = match_publish_tables()
+    install_official_publish_prerequisites(tables)
     supabase = AtomicFakeSupabase(tables)
     plan = build_admin_tournament_official_publish_plan(
         supabase,
@@ -168,6 +172,7 @@ def test_atomic_publish_receipt_binds_identity_and_failed_queue_blocks_receipt(m
     assert len(rpc_payload["p_player_updates"]) == 4
 
     failed_tables = match_publish_tables()
+    install_official_publish_prerequisites(failed_tables)
     failed_supabase = AtomicFakeSupabase(failed_tables)
     failed_plan = build_admin_tournament_official_publish_plan(
         failed_supabase,
@@ -192,12 +197,16 @@ def test_atomic_publish_receipt_binds_identity_and_failed_queue_blocks_receipt(m
             guarded_operation_key="failed-operation-key",
             guarded_request_fingerprint="failed-request-fingerprint",
         )
-    assert failed_tables["admin_activity_log"] == []
+    assert not any(
+        row.get("action_type") == "publish_tournament_games_to_matches_admin"
+        for row in failed_tables["admin_activity_log"]
+    )
 
 
 def test_atomic_publish_missing_bound_receipt_is_ambiguous_after_cas(monkeypatch) -> None:
     _enable_atomic_publish(monkeypatch)
     tables = match_publish_tables()
+    install_official_publish_prerequisites(tables)
     supabase = AtomicFakeSupabase(tables)
     plan = build_admin_tournament_official_publish_plan(
         supabase,
@@ -236,4 +245,7 @@ def test_atomic_publish_missing_bound_receipt_is_ambiguous_after_cas(monkeypatch
             guarded_request_fingerprint="request-fingerprint",
         )
     assert len(supabase.rpc_calls) == 1
-    assert tables["admin_activity_log"] == []
+    assert not any(
+        row.get("action_type") == "publish_tournament_games_to_matches_admin"
+        for row in tables["admin_activity_log"]
+    )

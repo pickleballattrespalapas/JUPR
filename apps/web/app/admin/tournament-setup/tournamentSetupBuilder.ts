@@ -1,3 +1,8 @@
+import {
+  skillEligibilityMode,
+  skillEligibilityPolicy
+} from "../../../lib/tournamentSkillEligibility";
+
 export type SetupRecord = Record<string, unknown>;
 
 export type BuilderRow = {
@@ -24,6 +29,13 @@ export type ValidationIssue = {
   message: string;
 };
 
+export function expectedGenderFromDivisionName(value: unknown): "MEN" | "WOMEN" | null {
+  const normalized = cleanString(value).toLowerCase().replaceAll("’", "'");
+  if (/^(women|womens|women's|ladies|female)\b/.test(normalized)) return "WOMEN";
+  if (/^(men|mens|men's|male)\b/.test(normalized)) return "MEN";
+  return null;
+}
+
 export const COMPETITION_FORMATS = [
   "ROUND_ROBIN",
   "SINGLE_ELIM",
@@ -36,7 +48,11 @@ export const AGE_MODES = ["ALL_AGES", "FIXED_AGE_BRACKET", "AUTO_AGE_SPLIT", "SP
 export const PARTICIPANT_TYPES = ["SINGLES", "GENDER_DOUBLES", "MIXED_DOUBLES"] as const;
 export const GENDER_RESTRICTIONS = ["ANY", "MEN", "WOMEN", "MIXED"] as const;
 export const DIVISION_STATUSES = ["draft", "open", "tentative", "confirmed", "closed"] as const;
-export const SKILL_LABEL_OPTIONS = ["Open", "3.0", "3.5", "4.0", "4.5", "5.0", "5.5"] as const;
+export const SKILL_LABEL_OPTIONS = ["Open", "2.5", "3.0", "3.5", "4.0", "4.5", "5.0", "5.5"] as const;
+export const FACILITY_COURT_LIMIT = 100;
+export const MAX_TOURNAMENT_DAYS = 31;
+export const DEFAULT_COURT_OPEN_TIME = "";
+export const DEFAULT_COURT_CLOSE_TIME = "";
 
 let builderKeySequence = 0;
 
@@ -55,6 +71,10 @@ function newContractId(prefix: string): string {
 
 export function cleanString(value: unknown): string {
   return value == null ? "" : String(value).trim();
+}
+
+export function editableString(value: unknown): string {
+  return value == null ? "" : String(value);
 }
 
 export function recordBoolean(value: unknown, fallback = false): boolean {
@@ -80,11 +100,57 @@ export function rowsToPayload(rows: BuilderRow[]): SetupRecord[] {
   return rows.map((row) => ({ ...row.value }));
 }
 
+function canonicalDayPayload(row: SetupRecord): SetupRecord {
+  const next = { ...row };
+  if (Object.prototype.hasOwnProperty.call(row, "label")) {
+    next.label = cleanString(row.label);
+  }
+  if (Array.isArray(row.court_labels)) {
+    next.court_labels = row.court_labels.map(cleanString);
+  }
+  if (Object.prototype.hasOwnProperty.call(row, "court_notes")) {
+    next.court_notes = cleanString(row.court_notes);
+  }
+  return next;
+}
+
+function canonicalSubstitutePolicy(row: SetupRecord): SetupRecord {
+  const next = { ...row };
+  const competitionFormat = cleanString(row.competition_format).toUpperCase() || "STANDARD";
+  if (
+    competitionFormat !== "FOUR_PLAYER_TEAM"
+    && Object.prototype.hasOwnProperty.call(row, "team_allow_substitutes")
+  ) {
+    next.team_allow_substitutes = false;
+  }
+  return next;
+}
+
+function canonicalEventFamilyPayload(row: SetupRecord): SetupRecord {
+  const next = canonicalSubstitutePolicy(row);
+  for (const key of ["event_family", "event_family_label"] as const) {
+    if (Object.prototype.hasOwnProperty.call(row, key)) {
+      next[key] = cleanString(row[key]);
+    }
+  }
+  return next;
+}
+
+function canonicalEventOptionPayload(row: SetupRecord): SetupRecord {
+  const next = canonicalSubstitutePolicy(row);
+  for (const key of ["division_name", "label", "skill_label", "age_label"] as const) {
+    if (Object.prototype.hasOwnProperty.call(row, key)) {
+      next[key] = cleanString(row[key]);
+    }
+  }
+  return next;
+}
+
 export function configurationPayload(configuration: SetupConfiguration): SetupPayload {
   return {
-    days: rowsToPayload(configuration.days),
-    event_families: rowsToPayload(configuration.eventFamilies),
-    event_options: rowsToPayload(configuration.eventOptions)
+    days: rowsToPayload(configuration.days).map(canonicalDayPayload),
+    event_families: rowsToPayload(configuration.eventFamilies).map(canonicalEventFamilyPayload),
+    event_options: rowsToPayload(configuration.eventOptions).map(canonicalEventOptionPayload)
   };
 }
 
@@ -113,6 +179,56 @@ export function appendBuilderRow(rows: BuilderRow[], prefix: string, value: Setu
   return [...rows, { key: nextBuilderKey(prefix, value, rows.length), value: { ...value } }];
 }
 
+function dayOrderMap(days: BuilderRow[]): Map<string, number> {
+  const result = new Map<string, number>();
+  days.forEach((row, index) => {
+    const id = dayReference(row.value);
+    const label = dayLabel(row.value);
+    if (id) result.set(id, index);
+    if (label) result.set(label, index);
+  });
+  return result;
+}
+
+export function sortEventFamiliesByTournamentDay(
+  rows: BuilderRow[],
+  days: BuilderRow[]
+): BuilderRow[] {
+  const order = dayOrderMap(days);
+  return [...rows]
+    .sort((left, right) => {
+      const leftDays = eventDayReferences(left.value);
+      const rightDays = eventDayReferences(right.value);
+      const leftIndex = Math.min(...leftDays.map((value) => order.get(value) ?? 9999), 9999);
+      const rightIndex = Math.min(...rightDays.map((value) => order.get(value) ?? 9999), 9999);
+      if (leftIndex !== rightIndex) return leftIndex - rightIndex;
+      return eventFamilyName(left.value).localeCompare(eventFamilyName(right.value));
+    })
+    .map((row, index) => ({ ...row, value: { ...row.value, sort_order: index + 1 } }));
+}
+
+export function sortDivisionsByEventAndName(
+  rows: BuilderRow[],
+  eventFamilies: BuilderRow[],
+  days: BuilderRow[]
+): BuilderRow[] {
+  const familyOrder = new Map(
+    sortEventFamiliesByTournamentDay(eventFamilies, days).map((row, index) => [
+      eventFamilyName(row.value).toLowerCase(),
+      index
+    ])
+  );
+  return [...rows]
+    .sort((left, right) => {
+      const leftFamily = eventFamilyName(left.value).toLowerCase();
+      const rightFamily = eventFamilyName(right.value).toLowerCase();
+      const eventDelta = (familyOrder.get(leftFamily) ?? 9999) - (familyOrder.get(rightFamily) ?? 9999);
+      if (eventDelta) return eventDelta;
+      return eventDivisionName(left.value).localeCompare(eventDivisionName(right.value));
+    })
+    .map((row, index) => ({ ...row, value: { ...row.value, sort_order: index + 1 } }));
+}
+
 export function setRecordString(
   row: SetupRecord,
   keys: readonly string[],
@@ -120,6 +236,14 @@ export function setRecordString(
 ): SetupRecord {
   const targetKey = keys.find((key) => Object.prototype.hasOwnProperty.call(row, key)) || keys[0];
   return { ...row, [targetKey]: value };
+}
+
+export function setCanonicalRecordString(
+  row: SetupRecord,
+  keys: readonly string[],
+  value: unknown
+): SetupRecord {
+  return setRecordString(row, keys, cleanString(value));
 }
 
 export function setRecordNumber(
@@ -202,6 +326,67 @@ export function eventAgeMode(row: SetupRecord): string {
   return cleanString(row.age_mode)
     || (state.valid ? cleanString(state.rules.mode) : "")
     || "ALL_AGES";
+}
+
+export function ageRulesRecord(
+  row: SetupRecord,
+  key = "age_rules"
+): SetupRecord {
+  const raw = row[key];
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    return { ...(raw as SetupRecord) };
+  }
+  if (typeof raw === "string" && raw.trim()) {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return { ...(parsed as SetupRecord) };
+      }
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
+export function eventFamilyAgeMode(row: SetupRecord): string {
+  const rules = ageRulesRecord(row, "default_age_rules");
+  return cleanString(row.default_age_mode) || cleanString(rules.mode) || "ALL_AGES";
+}
+
+export function eventFamilyAgeLabel(row: SetupRecord): string {
+  const rules = ageRulesRecord(row, "default_age_rules");
+  return cleanString(row.default_age_label)
+    || cleanString(rules.age_label)
+    || (eventFamilyAgeMode(row) === "ALL_AGES" ? "All Ages" : "");
+}
+
+export function eventFamilyAgeRules(row: SetupRecord): SetupRecord {
+  const rules = ageRulesRecord(row, "default_age_rules");
+  return {
+    ...rules,
+    mode: eventFamilyAgeMode(row),
+    age_label: eventFamilyAgeLabel(row)
+  };
+}
+
+export function eventFamilyHasAgePolicy(row: SetupRecord): boolean {
+  return ["default_age_mode", "default_age_label", "default_age_rules"].some(
+    (key) => Object.prototype.hasOwnProperty.call(row, key)
+  );
+}
+
+export function divisionAgePolicySource(row: SetupRecord): string {
+  const explicit = cleanString(row.age_policy_source).toUpperCase();
+  if (explicit === "OVERRIDE" || explicit === "INHERIT_EVENT") return explicit;
+  const hasExplicitAgePolicy = [
+    "age_mode",
+    "age_label",
+    "age_rules",
+    "min_teams_per_age_group",
+    "split_age_threshold"
+  ].some((key) => Object.prototype.hasOwnProperty.call(row, key));
+  return hasExplicitAgePolicy ? "OVERRIDE" : "INHERIT_EVENT";
 }
 
 function encodeAgeRules(state: AgeRulesState, rules: SetupRecord): unknown {
@@ -332,7 +517,7 @@ export function eventDayReference(row: SetupRecord): string {
   return cleanString(row.assigned_day ?? row.registration_day_id);
 }
 
-function cleanStringList(value: unknown): string[] {
+export function cleanStringList(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return [...new Set(value.map(cleanString).filter(Boolean))];
 }
@@ -367,14 +552,78 @@ export function eventUsesLabelDayReference(row: SetupRecord): boolean {
   return Object.prototype.hasOwnProperty.call(row, "assigned_day");
 }
 
-export function newDayRow(position: number, label = `Day ${position}`): SetupRecord {
+export function defaultCourtLabels(count = FACILITY_COURT_LIMIT): string[] {
+  const safeCount = Math.max(1, Math.min(FACILITY_COURT_LIMIT, Math.trunc(Number(count) || FACILITY_COURT_LIMIT)));
+  return Array.from({ length: safeCount }, (_, index) => `Court ${index + 1}`);
+}
+
+export function dayCourtLabels(row: SetupRecord): string[] {
+  const raw = Array.isArray(row.court_labels) ? row.court_labels : [];
+  return raw.map(cleanString).filter(Boolean);
+}
+
+export function dayAvailableCourtIds(row: SetupRecord): string[] {
+  return cleanStringList(row.available_court_ids);
+}
+
+export function withDefaultDayCourts(row: SetupRecord): SetupRecord {
+  const rawCount = Number(row.court_count);
+  const count = Number.isInteger(rawCount) && rawCount > 0
+    ? Math.min(rawCount, FACILITY_COURT_LIMIT)
+    : 10;
+  const labels = dayCourtLabels(row).slice(0, count);
   return {
+    ...row,
+    court_count: count,
+    court_labels: labels,
+    available_court_ids: dayAvailableCourtIds(row),
+    court_open_time: cleanString(row.court_open_time) || null,
+    court_close_time: cleanString(row.court_close_time) || null,
+    court_notes: cleanString(row.court_notes)
+  };
+}
+
+export function newDayRow(position: number, label = `Day ${position}`): SetupRecord {
+  return withDefaultDayCourts({
     id: newContractId("day"),
     label,
     event_date: "",
     enabled: true,
     sort_order: position
-  };
+  });
+}
+
+export function syncTournamentDays(
+  startDate: string,
+  endDate: string,
+  existingRows: BuilderRow[]
+): BuilderRow[] {
+  if (!startDate || !endDate || endDate < startDate) return existingRows;
+  const byDate = new Map(
+    existingRows.map((row) => [cleanString(row.value.event_date), row] as const)
+  );
+  const start = new Date(`${startDate}T00:00:00Z`);
+  const end = new Date(`${endDate}T00:00:00Z`);
+  if (Number.isNaN(start.valueOf()) || Number.isNaN(end.valueOf())) return existingRows;
+  const next: BuilderRow[] = [];
+  const cursor = new Date(start);
+  while (cursor <= end && next.length < MAX_TOURNAMENT_DAYS) {
+    const date = cursor.toISOString().slice(0, 10);
+    const position = next.length + 1;
+    const existing = byDate.get(date);
+    const base = existing?.value || newDayRow(position, `Day ${position}`);
+    next.push({
+      key: existing?.key || nextBuilderKey("day", base, position - 1),
+      value: withDefaultDayCourts({
+        ...base,
+        event_date: date,
+        enabled: true,
+        sort_order: position
+      })
+    });
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return next;
 }
 
 export function newEventFamilyRow(
@@ -396,6 +645,15 @@ export function newEventFamilyRow(
     default_capacity_teams: 16,
     default_price_usd: 0,
     default_status: "open",
+    competition_format: "STANDARD",
+    team_roster_size: 2,
+    team_gender_rule: "NONE",
+    team_tiebreak_mode: "SINGLES",
+    team_playoff_format: "NONE",
+    team_allow_substitutes: false,
+    default_age_mode: "ALL_AGES",
+    default_age_label: "All Ages",
+    default_age_rules: { mode: "ALL_AGES", age_label: "All Ages", team_age_rule: "YOUNGER" },
     sort_order: position
   };
 }
@@ -461,8 +719,10 @@ export function newEventOptionRow(configuration: SetupConfiguration): SetupRecor
       event_family: familyName,
       division_name: divisionName,
       skill_label: "Open",
-      age_mode: "ALL_AGES",
-      age_label: "All Ages",
+      age_policy_source: "INHERIT_EVENT",
+      age_mode: eventFamilyAgeMode(defaults || {}),
+      age_label: eventFamilyAgeLabel(defaults || {}),
+      age_rules: eventFamilyAgeRules(defaults || {}),
       assigned_day: dayLabel(primaryDay) || scheduledDayIds[0] || dayLabel(firstDay),
       scheduled_day_ids: scheduledDayIds,
       schedule_mode: "INHERIT_EVENT",
@@ -492,8 +752,10 @@ export function newEventOptionRow(configuration: SetupConfiguration): SetupRecor
     scoring_default: cleanString(defaults?.default_scoring) || "GAME_TO_15",
     skill_label: "Open",
     skill_mode: "OPEN",
-    age_mode: "ALL_AGES",
-    age_label: "All Ages",
+    age_policy_source: "INHERIT_EVENT",
+    age_mode: eventFamilyAgeMode(defaults || {}),
+    age_label: eventFamilyAgeLabel(defaults || {}),
+    age_rules: eventFamilyAgeRules(defaults || {}),
     capacity_teams: Number(defaults?.default_capacity_teams ?? 16),
     price_usd: Number(defaults?.default_price_usd ?? 0),
     waitlist_enabled: recordBoolean(defaults?.default_waitlist, true),
@@ -593,6 +855,21 @@ function booleanWithDefault(row: SetupRecord, key: string, fallback: boolean): b
   return hasValue(row, key) ? recordBoolean(row[key], fallback) : fallback;
 }
 
+function publishedSkillEligibility(row: SetupRecord): SetupRecord {
+  const mode = skillEligibilityMode(row);
+  const policy = skillEligibilityPolicy(row);
+  return {
+    eligibility_mode: mode,
+    skill_min_rating:
+      mode === "MINIMUM" || mode === "CUSTOM" ? policy.minimum : null,
+    // Standard's next-half-step ceiling is derived from skill_label. Persisting
+    // it would violate the canonical cross-field contract.
+    skill_max_rating: mode === "CUSTOM" ? policy.maximumExclusive : null,
+    combined_rating_cap:
+      mode === "COMBINED_RATING_CAP" ? policy.combinedCap : null
+  };
+}
+
 function legacyAgeRules(row: SetupRecord): unknown {
   const state = readAgeRules(row);
   const mode = eventAgeMode(row);
@@ -670,7 +947,18 @@ export function publishConfigurationPayload(configuration: SetupConfiguration): 
   const eventOptions = draft.event_options.map((row, index) => {
     const usesLegacyShape = eventUsesLegacyBuilderShape(row);
     if (!usesLegacyShape) {
-      const projected = projectCanonicalAgeRuleEdits(row);
+      const defaults = familiesByName.get(normalizedLookupKey(eventFamilyName(row)));
+      const inheritedAge = divisionAgePolicySource(row) === "INHERIT_EVENT";
+      let projected = projectCanonicalAgeRuleEdits(row);
+      if (inheritedAge && defaults && eventFamilyHasAgePolicy(defaults)) {
+        projected = {
+          ...projected,
+          age_mode: eventFamilyAgeMode(defaults),
+          age_label: eventFamilyAgeLabel(defaults),
+          age_rules: eventFamilyAgeRules(defaults)
+        };
+      }
+      delete projected.age_policy_source;
       const scheduledDayIds = eventDayReferences(projected)
         .map((reference) =>
           dayIdsByLabel.get(normalizedLookupKey(reference)) || reference
@@ -679,7 +967,11 @@ export function publishConfigurationPayload(configuration: SetupConfiguration): 
       const primary = scheduledDayIds[0] || cleanString(projected.registration_day_id);
       const next: SetupRecord = {
         ...projected,
-        registration_day_id: primary
+        registration_day_id: primary,
+        team_allow_substitutes:
+          cleanString(projected.competition_format).toUpperCase() === "FOUR_PLAYER_TEAM"
+            ? recordBoolean(projected.team_allow_substitutes, false)
+            : false
       };
       if (
         Object.prototype.hasOwnProperty.call(projected, "scheduled_day_ids") ||
@@ -689,7 +981,7 @@ export function publishConfigurationPayload(configuration: SetupConfiguration): 
           ? scheduledDayIds
           : (primary ? [primary] : []);
       }
-      return next;
+      return { ...next, ...publishedSkillEligibility(projected) };
     }
 
     const familyName = eventFamilyName(row);
@@ -720,8 +1012,11 @@ export function publishConfigurationPayload(configuration: SetupConfiguration): 
     ).toUpperCase();
     const divisionName = eventDivisionName(row);
     const skillLabel = cleanString(row.skill_label) || "Open";
-    const ageMode = eventAgeMode(row);
-    const ageLabel = cleanString(row.age_label) || "All Ages";
+    const inheritAge = divisionAgePolicySource(row) === "INHERIT_EVENT";
+    const ageMode = inheritAge ? eventFamilyAgeMode(defaults) : eventAgeMode(row);
+    const ageLabel = inheritAge
+      ? eventFamilyAgeLabel(defaults)
+      : (cleanString(row.age_label) || "All Ages");
     const capacity = finiteNumber(row.capacity_teams)
       ?? finiteNumber(defaults.default_capacity_teams)
       ?? 16;
@@ -751,7 +1046,7 @@ export function publishConfigurationPayload(configuration: SetupConfiguration): 
         || (skillLabel.toLowerCase() === "open" ? "OPEN" : "SKILL_BRACKET"),
       age_label: ageLabel,
       age_mode: ageMode,
-      age_rules: legacyAgeRules(row),
+      age_rules: inheritAge ? eventFamilyAgeRules(defaults) : legacyAgeRules(row),
       partner_required: booleanWithDefault(row, "partner_required", eventType !== "SINGLES"),
       capacity_teams: capacity,
       public_partner_board: booleanWithDefault(
@@ -783,6 +1078,23 @@ export function publishConfigurationPayload(configuration: SetupConfiguration): 
       status: firstCleanString(row.status, "draft").toLowerCase(),
       enabled: booleanWithDefault(row, "enabled", true)
     };
+    const competitionFormat = firstCleanString(
+      defaults.competition_format,
+      row.competition_format
+    ).toUpperCase();
+    if (competitionFormat && competitionFormat !== "STANDARD") {
+      canonical.competition_format = competitionFormat;
+      canonical.team_roster_size = defaults.team_roster_size ?? row.team_roster_size ?? 4;
+      canonical.team_gender_rule = firstCleanString(defaults.team_gender_rule, row.team_gender_rule, "TWO_MEN_TWO_WOMEN");
+      canonical.team_tiebreak_mode = firstCleanString(defaults.team_tiebreak_mode, row.team_tiebreak_mode, "SINGLES");
+      canonical.team_playoff_format = firstCleanString(defaults.team_playoff_format, row.team_playoff_format, "NONE");
+      canonical.team_allow_substitutes = booleanWithDefault(
+        defaults,
+        "team_allow_substitutes",
+        booleanWithDefault(row, "team_allow_substitutes", false)
+      );
+    }
+    Object.assign(canonical, publishedSkillEligibility(row));
     for (const key of ["id", "tournament_id"] as const) {
       if (hasValue(row, key)) canonical[key] = row[key];
     }
@@ -790,6 +1102,122 @@ export function publishConfigurationPayload(configuration: SetupConfiguration): 
   });
 
   return { days, event_options: eventOptions };
+}
+
+function stableSetupJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableSetupJsonValue);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value as SetupRecord)
+      .filter(([, item]) => item !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => [key, stableSetupJsonValue(item)])
+  );
+}
+
+export function stableSetupJsonStringify(value: unknown): string {
+  return JSON.stringify(stableSetupJsonValue(value));
+}
+
+function comparableNumber(value: unknown, fallback: number | null = null): number | null {
+  return finiteNumber(value) ?? fallback;
+}
+
+function comparableJsonValue(value: unknown): unknown {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    try {
+      return stableSetupJsonValue(JSON.parse(trimmed));
+    } catch {
+      return trimmed;
+    }
+  }
+  return stableSetupJsonValue(value ?? null);
+}
+
+function comparablePublishedDay(day: SetupRecord, index: number): SetupRecord {
+  const eventDate = cleanString(day.event_date || day.date || day.start_date).slice(0, 10);
+  return {
+    id: cleanString(day.id),
+    label: cleanString(day.label),
+    event_date: eventDate || null,
+    court_count: comparableNumber(day.court_count),
+    court_labels: Array.isArray(day.court_labels)
+      ? day.court_labels.map(cleanString)
+      : [],
+    available_court_ids: Array.isArray(day.available_court_ids)
+      ? [...new Set(day.available_court_ids.map(cleanString).filter(Boolean))]
+      : [],
+    court_open_time: cleanString(day.court_open_time) || null,
+    court_close_time: cleanString(day.court_close_time) || null,
+    court_notes: cleanString(day.court_notes),
+    enabled: recordBoolean(day.enabled, true),
+    sort_order: comparableNumber(day.sort_order, index + 1)
+  };
+}
+
+function comparablePublishedEvent(event: SetupRecord, index: number): SetupRecord {
+  const eventType = cleanString(event.event_type).toUpperCase();
+  const registrationDayId = cleanString(event.registration_day_id);
+  const scheduledDayIds = Array.isArray(event.scheduled_day_ids)
+    ? [...new Set(event.scheduled_day_ids.map(cleanString).filter(Boolean))]
+    : [];
+  const partnerBoardEnabled = recordBoolean(event.partner_board_enabled, true);
+  const competitionFormat = cleanString(event.competition_format).toUpperCase() || "STANDARD";
+  const fourPlayerTeam = competitionFormat === "FOUR_PLAYER_TEAM";
+  return {
+    id: cleanString(event.id),
+    registration_day_id: registrationDayId,
+    scheduled_day_ids: scheduledDayIds.length
+      ? scheduledDayIds
+      : (registrationDayId ? [registrationDayId] : []),
+    sort_order: comparableNumber(event.sort_order, index + 1),
+    label: cleanString(event.label || event.division_name || event.event_family_label),
+    event_type: eventType,
+    gender_restriction: cleanString(event.gender_restriction).toUpperCase() || "ANY",
+    skill_label: cleanString(event.skill_label),
+    age_label: cleanString(event.age_label),
+    partner_required: recordBoolean(event.partner_required, eventType !== "SINGLES"),
+    capacity_teams: comparableNumber(event.capacity_teams),
+    public_partner_board: recordBoolean(event.public_partner_board, partnerBoardEnabled),
+    price_usd: comparableNumber(event.price_usd),
+    event_family_label: cleanString(event.event_family_label),
+    division_name: cleanString(event.division_name),
+    event_format_default: cleanString(event.event_format_default).toUpperCase(),
+    scoring_default: cleanString(event.scoring_default).toUpperCase(),
+    event_format_override: cleanString(event.event_format_override).toUpperCase() || null,
+    scoring_override: cleanString(event.scoring_override).toUpperCase() || null,
+    skill_mode: cleanString(event.skill_mode).toUpperCase(),
+    skill_min_rating: comparableNumber(event.skill_min_rating),
+    skill_max_rating: comparableNumber(event.skill_max_rating),
+    age_mode: cleanString(event.age_mode).toUpperCase(),
+    age_rules: comparableJsonValue(event.age_rules),
+    eligibility_mode: cleanString(event.eligibility_mode).toUpperCase(),
+    combined_rating_cap: comparableNumber(event.combined_rating_cap),
+    competition_format: competitionFormat,
+    team_roster_size: comparableNumber(event.team_roster_size, fourPlayerTeam ? 4 : 2),
+    team_gender_rule: cleanString(event.team_gender_rule).toUpperCase()
+      || (fourPlayerTeam ? "TWO_MEN_TWO_WOMEN" : "NONE"),
+    team_tiebreak_mode: cleanString(event.team_tiebreak_mode).toUpperCase() || "SINGLES",
+    team_playoff_format: cleanString(event.team_playoff_format).toUpperCase() || "NONE",
+    team_allow_substitutes: fourPlayerTeam
+      ? recordBoolean(event.team_allow_substitutes, false)
+      : false,
+    waitlist_enabled: recordBoolean(event.waitlist_enabled, true),
+    partner_board_enabled: partnerBoardEnabled,
+    enabled: recordBoolean(event.enabled, true)
+  };
+}
+
+export function comparablePublishedConfigurationPayload(
+  configuration: SetupConfiguration
+): SetupPublishPayload {
+  const publishable = publishConfigurationPayload(configuration);
+  return {
+    days: publishable.days.map(comparablePublishedDay),
+    event_options: publishable.event_options.map(comparablePublishedEvent)
+  };
 }
 
 export function validateSetupConfiguration(configuration: SetupConfiguration): ValidationIssue[] {
@@ -810,8 +1238,37 @@ export function validateSetupConfiguration(configuration: SetupConfiguration): V
     if (duplicateDayLabels.has(index)) issues.push({ path: `days.${index}.label`, message: "Day labels must be unique." });
     if (duplicateDayIds.has(index)) issues.push({ path: `days.${index}.id`, message: "Day IDs must be unique." });
     const dateValue = cleanString(row.event_date ?? row.date ?? row.start_date);
-    if (dateValue && !isIsoDate(dateValue)) {
+    if (!dateValue) {
+      issues.push({ path: `days.${index}.event_date`, message: "Tournament day date is required." });
+    } else if (!isIsoDate(dateValue)) {
       issues.push({ path: `days.${index}.event_date`, message: "Use a valid date in YYYY-MM-DD format." });
+    }
+    const courtCount = finiteNumber(row.court_count);
+    if (courtCount == null || !Number.isInteger(courtCount) || courtCount < 1 || courtCount > FACILITY_COURT_LIMIT) {
+      issues.push({
+        path: `days.${index}.court_count`,
+        message: `Available courts must be a whole number from 1 to ${FACILITY_COURT_LIMIT}.`
+      });
+    }
+    const labels = dayCourtLabels(row);
+    const availableCourtIds = dayAvailableCourtIds(row);
+    if (availableCourtIds.length && courtCount != null && availableCourtIds.length !== courtCount) {
+      issues.push({
+        path: `days.${index}.available_court_ids`,
+        message: "Available-court selection must match the available court count."
+      });
+    }
+    if (new Set(availableCourtIds).size !== availableCourtIds.length) {
+      issues.push({ path: `days.${index}.available_court_ids`, message: "Available courts must be unique." });
+    }
+    if (courtCount != null && labels.length > courtCount) {
+      issues.push({
+        path: `days.${index}.court_labels`,
+        message: "Optional court titles cannot exceed the venue court count."
+      });
+    }
+    if (new Set(labels.map((label) => label.toLowerCase())).size !== labels.length) {
+      issues.push({ path: `days.${index}.court_labels`, message: "Court titles must be unique." });
     }
     if (recordBoolean(row.enabled, true)) {
       if (cleanString(row.id)) enabledDayReferences.add(cleanString(row.id));
@@ -851,13 +1308,68 @@ export function validateSetupConfiguration(configuration: SetupConfiguration): V
     }
     if (duplicateFamilies.has(index)) issues.push({ path: `families.${index}.event_family`, message: "Event names must be unique." });
     if (duplicateFamilyIds.has(index)) issues.push({ path: `families.${index}.id`, message: "Event-family IDs must be unique." });
+    const participantType = cleanString(row.participant_type).toUpperCase();
+    const gender = cleanString(row.gender_restriction).toUpperCase();
+    if (participantType === "MIXED_DOUBLES" && gender !== "MIXED") {
+      issues.push({
+        path: `families.${index}.gender_restriction`,
+        message: "Mixed Doubles automatically uses Mixed gender."
+      });
+    }
     const capacity = finiteNumber(row.default_capacity_teams);
-    if (capacity != null && (!Number.isInteger(capacity) || capacity < 1)) {
-      issues.push({ path: `families.${index}.default_capacity_teams`, message: "Default capacity must be a whole number of at least 1." });
+    if (capacity != null && (!Number.isInteger(capacity) || capacity < 4 || capacity > 16)) {
+      issues.push({ path: `families.${index}.default_capacity_teams`, message: "Default capacity must be a whole number from 4 through 16." });
     }
     const price = finiteNumber(row.default_price_usd);
     if (price != null && price < 0) {
       issues.push({ path: `families.${index}.default_price_usd`, message: "Default price cannot be negative." });
+    }
+    const familyAgeMode = eventFamilyAgeMode(row);
+    const familyAgeRules = eventFamilyAgeRules(row);
+    if (familyAgeMode === "AUTO_AGE_SPLIT") {
+      const minimum = finiteNumber(familyAgeRules.min_teams_per_age_group);
+      const brackets = Array.isArray(familyAgeRules.brackets) ? familyAgeRules.brackets : [];
+      if (minimum == null || !Number.isInteger(minimum) || minimum < 1) {
+        issues.push({ path: `families.${index}.default_age_rules.min_teams_per_age_group`, message: "Auto age split needs a whole-number minimum of at least 1 entry per bracket." });
+      }
+      if (brackets.length < 2) {
+        issues.push({ path: `families.${index}.default_age_rules.brackets`, message: "Auto age split needs at least two candidate age brackets." });
+      }
+      let previousMaximum: number | null = null;
+      const labelsSeen = new Set<string>();
+      brackets.forEach((value, bracketIndex) => {
+        const bracket = value && typeof value === "object" && !Array.isArray(value) ? value as SetupRecord : {};
+        const label = cleanString(bracket.label);
+        const minimumAge = finiteNumber(bracket.min_age);
+        const maximumAge = finiteNumber(bracket.max_age);
+        if (!label) issues.push({ path: `families.${index}.default_age_rules.brackets.${bracketIndex}.label`, message: "Every candidate age bracket needs a label." });
+        if (label && labelsSeen.has(label.toLowerCase())) issues.push({ path: `families.${index}.default_age_rules.brackets.${bracketIndex}.label`, message: "Candidate age bracket labels must be unique." });
+        if (label) labelsSeen.add(label.toLowerCase());
+        if (minimumAge != null && maximumAge != null && maximumAge < minimumAge) issues.push({ path: `families.${index}.default_age_rules.brackets.${bracketIndex}`, message: "Age bracket maximum cannot be below its minimum." });
+        if (previousMaximum != null && minimumAge != null && minimumAge <= previousMaximum) issues.push({ path: `families.${index}.default_age_rules.brackets.${bracketIndex}`, message: "Candidate age brackets must be ordered and may not overlap." });
+        if (maximumAge != null) previousMaximum = maximumAge;
+      });
+    }
+    if (familyAgeMode === "SPLIT_AGE") {
+      const threshold = finiteNumber(familyAgeRules.split_age_threshold);
+      if (threshold == null || !Number.isInteger(threshold) || threshold < 1) {
+        issues.push({ path: `families.${index}.default_age_rules.split_age_threshold`, message: "Split age needs a whole-number threshold of at least 1." });
+      }
+    }
+    const competitionFormat = cleanString(row.competition_format).toUpperCase() || "STANDARD";
+    if (competitionFormat !== "FOUR_PLAYER_TEAM" && recordBoolean(row.team_allow_substitutes, false)) {
+      issues.push({
+        path: `families.${index}.team_allow_substitutes`,
+        message: "Standard tournament events cannot enable substitutes. Correct the authoritative roster before play."
+      });
+    }
+    if (competitionFormat === "FOUR_PLAYER_TEAM") {
+      if (participantType !== "MIXED_DOUBLES" || gender !== "MIXED") {
+        issues.push({ path: `families.${index}.competition_format`, message: "Four-player team events use Mixed participant and gender rules." });
+      }
+      if (Number(row.team_roster_size || 0) !== 4) {
+        issues.push({ path: `families.${index}.team_roster_size`, message: "Four-player team events require four roster slots." });
+      }
     }
   });
 
@@ -901,28 +1413,48 @@ export function validateSetupConfiguration(configuration: SetupConfiguration): V
     }
 
     const capacity = finiteNumber(row.capacity_teams);
-    if (capacity == null || !Number.isInteger(capacity) || capacity < 1) {
-      issues.push({ path: `events.${index}.capacity_teams`, message: "Capacity must be a whole number of at least 1." });
+    if (capacity == null || !Number.isInteger(capacity) || capacity < 4 || capacity > 16) {
+      issues.push({ path: `events.${index}.capacity_teams`, message: "Capacity must be a whole number from 4 through 16." });
+    }
+    const eventType = cleanString(row.event_type ?? row.participant_type).toUpperCase();
+    const gender = cleanString(row.gender_restriction || "ANY").toUpperCase();
+    if (eventType === "MIXED_DOUBLES" && gender !== "MIXED") {
+      issues.push({ path: `events.${index}.gender_restriction`, message: "Mixed Doubles automatically uses Mixed gender." });
+    }
+    const expectedGender = expectedGenderFromDivisionName(name);
+    if (expectedGender && gender !== expectedGender) {
+      issues.push({
+        path: `events.${index}.gender_restriction`,
+        message: `${expectedGender === "WOMEN" ? "Women's" : "Men's"} divisions must use the matching gender category.`
+      });
+    }
+    const competitionFormat = cleanString(row.competition_format).toUpperCase() || "STANDARD";
+    if (competitionFormat !== "FOUR_PLAYER_TEAM" && recordBoolean(row.team_allow_substitutes, false)) {
+      issues.push({
+        path: `events.${index}.team_allow_substitutes`,
+        message: "Standard tournament divisions cannot enable substitutes. Correct the authoritative roster before play."
+      });
     }
     const price = finiteNumber(row.price_usd);
     if (price == null || price < 0) {
       issues.push({ path: `events.${index}.price_usd`, message: "Price must be zero or greater." });
     }
+    const overridesAgePolicy = divisionAgePolicySource(row) === "OVERRIDE";
     const ageRulesState = readAgeRules(row);
-    if (hasValue(row, "age_rules") && !ageRulesState.valid) {
+    if (overridesAgePolicy && hasValue(row, "age_rules") && !ageRulesState.valid) {
       issues.push({
         path: `events.${index}.age_rules`,
         message: "Age rules must be a valid JSON object."
       });
     }
     const ageMode = eventAgeMode(row);
-    if (ageMode === "AUTO_AGE_SPLIT") {
+    if (overridesAgePolicy && ageMode === "AUTO_AGE_SPLIT") {
       const minimum = finiteNumber(ageRuleValue(row, "min_teams_per_age_group"));
       if (minimum == null || !Number.isInteger(minimum) || minimum < 1) {
         issues.push({ path: `events.${index}.min_teams_per_age_group`, message: "Auto age split needs a whole-number minimum of at least 1 team per age group." });
       }
     }
-    if (ageMode === "SPLIT_AGE") {
+    if (overridesAgePolicy && ageMode === "SPLIT_AGE") {
       const threshold = finiteNumber(ageRuleValue(row, "split_age_threshold"));
       if (threshold == null || !Number.isInteger(threshold) || threshold < 1) {
         issues.push({ path: `events.${index}.split_age_threshold`, message: "Split age needs a whole-number threshold of at least 1." });

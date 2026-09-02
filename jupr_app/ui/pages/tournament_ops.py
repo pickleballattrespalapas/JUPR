@@ -8,9 +8,7 @@ import pandas as pd
 import streamlit as st
 
 from jupr_app.domain.event_tags import derive_default_date_tags, normalize_event_tags
-from jupr_app.services import ServiceContext, submit_match_batch
 from jupr_app.domain.player_ops import safe_add_player
-from jupr_app.domain.tournament_match_payload import build_tournament_match_payload
 from jupr_app.domain.tournament_results_import import (
     STAGE_OPTIONS,
     build_draw_import_payload,
@@ -26,11 +24,9 @@ from jupr_app.domain.tournaments import (
     compute_podium_from_rr,
     compute_round_robin_standings,
     finalize_game,
-    resolve_playoff_dependencies,
 )
-from jupr_app.domain.tournament_podium import award_tournament_trophies_from_podium, upsert_tournament_podium
+from jupr_app.domain.tournament_podium import upsert_tournament_podium
 from jupr_app.domain.tournament_registration_repo import (
-    archive_tournament,
     build_public_urls,
     build_registration_state,
     delete_unused_draft_tournament,
@@ -40,7 +36,6 @@ from jupr_app.domain.tournament_registration_repo import (
     list_registration_days,
     registration_feature_available,
     tournament_can_be_deleted,
-    unarchive_tournament,
     upsert_registration_settings,
 )
 from jupr_app.ui.layout import page_shell
@@ -352,16 +347,15 @@ def render(ctx):
     st.caption("Delete Draft is only available for empty draft shells with no registrations, draws, teams, games, or podium.")
     action_cols = st.columns(2)
     if _safe_text(tournament.get("status")).upper() == "ARCHIVED":
-        action_cols[0].caption("Unarchive restores this tournament as DRAFT; you can change status afterward if needed.")
-        if action_cols[0].button("Unarchive Tournament", key=f"unarchive_tournament_{tournament_id}"):
-            unarchive_tournament(supabase, tournament_id)
-            st.success("Tournament unarchived and restored to DRAFT.")
-            st.rerun()
+        action_cols[0].warning(
+            "Direct unarchive is unavailable. Archived tournament history remains closed; "
+            "contact an administrator for a reviewed recovery workflow."
+        )
     else:
-        if action_cols[0].button("Archive Tournament", key=f"archive_tournament_{tournament_id}"):
-            archive_tournament(supabase, tournament_id)
-            st.success("Tournament archived and hidden from default selectors and public registration.")
-            st.rerun()
+        action_cols[0].warning(
+            "Archive is available only from Tournament Closeout after every score, "
+            "podium review, award, official match, and recovery prerequisite passes."
+        )
 
     can_delete, usage_summary, delete_reason = tournament_can_be_deleted(supabase, tournament)
     if can_delete:
@@ -1166,7 +1160,6 @@ def _render_podium_review(
     playoff_games: list[dict],
 ) -> None:
     tournament_id = tournament["id"]
-    tournament_name = tournament.get("name", "Tournament")
     team_count = len(teams_by_id)
     max_places = min(3, team_count)
 
@@ -1213,24 +1206,10 @@ def _render_podium_review(
             if selection:
                 placements.append({"placement": placement, "team_id": selection})
 
-    if st.button("Finalize tournament", type="primary", disabled=max_places == 0):
-        if mode == "MANUAL" and len(placements) < max_places:
-            st.error("Select a team for each podium placement.")
-            return
-        try:
-            payload = build_podium_payload(tournament_id, placements, source)
-        except ValueError as exc:
-            st.error(str(exc))
-            return
-        if not payload:
-            st.error("Podium placements are required to complete the tournament.")
-            return
-        upsert_tournament_podium(ctx.supabase, tournament_id, payload)
-        award_tournament_trophies_from_podium(ctx, tournament_id, tournament_name)
-        ctx.supabase.table("tournaments").update({"status": "COMPLETE"}).eq("id", tournament_id).execute()
-        st.success("Tournament completed and podium locked.")
-        st.session_state.pop(f"podium_review_open_{tournament_id}", None)
-        st.rerun()
+    st.warning(
+        "Legacy podium finalization is disabled. Use Tournament Live to generate and "
+        "explicitly review the podium, then use Tournament Closeout for awards and completion."
+    )
 
 
 def _render_podium_read_only(podium_rows: list[dict], teams_by_id: dict[str, dict], id_to_name: dict[Any, str]) -> None:
@@ -1280,63 +1259,11 @@ def _team_label(team: dict, id_to_name: dict[Any, str]) -> str:
 
 
 def _save_games(ctx, tournament: dict[str, Any], teams_by_id: dict[str, dict], game_map: dict[str, dict], stage: str):
-    supabase = ctx.supabase
-    if tournament.get("status") == "COMPLETE":
-        st.error("Tournament is complete. Scores are locked.")
-        return
-    updated_any = False
-    for game_id, game in game_map.items():
-        if game.get("finalized_at"):
-            continue
-        score_a = int(st.session_state.get(f"{_score_key(stage, 'a', game_id)}", 0))
-        score_b = int(st.session_state.get(f"{_score_key(stage, 'b', game_id)}", 0))
-        if score_a == 0 and score_b == 0:
-            if game.get("score_a") or game.get("score_b"):
-                supabase.table("tournament_games").update({"score_a": None, "score_b": None}).eq("id", game_id).execute()
-                updated_any = True
-            continue
-        supabase.table("tournament_games").update({"score_a": score_a, "score_b": score_b}).eq("id", game_id).execute()
-        updated_any = True
-        try:
-            finalize_payload = finalize_game({**game, "score_a": score_a, "score_b": score_b})
-        except ValueError:
-            continue
-        match_payload = build_tournament_match_payload(tournament, game, teams_by_id, score_a=score_a, score_b=score_b)
-        service_ctx = ServiceContext(
-            supabase=supabase,
-            club_id=str(ctx.club_id),
-            actor_email=getattr(ctx, "admin_email", None),
-            actor_role=st.session_state.get("admin_role"),
-            source="tournament_ops",
-            public_base_url=st.session_state.get("public_base_url"),
-        )
-        result = submit_match_batch(
-            service_ctx,
-            [match_payload],
-            name_to_id=ctx.name_to_id,
-            df_players_all=ctx.df_players_all,
-            df_leagues=ctx.df_leagues,
-            df_meta=ctx.df_meta,
-        )
-        if not result.ok:
-            st.error("; ".join(result.errors) or "Could not save tournament match.")
-            continue
-        supabase.table("tournament_games").update(finalize_payload).eq("id", game_id).execute()
-
-        if stage == "PLAYOFF":
-            playoff_query = supabase.table("tournament_games").select("*").eq("tournament_id", tournament["id"]).eq("stage", "PLAYOFF")
-            if tournament.get("active_draw_id"):
-                playoff_query = playoff_query.eq("draw_id", tournament.get("active_draw_id"))
-            else:
-                playoff_query = playoff_query.is_("draw_id", "null")
-            playoff_games = (playoff_query.execute().data or [])
-            for update in resolve_playoff_dependencies(playoff_games):
-                supabase.table("tournament_games").update(update).eq("id", update["id"]).execute()
-
-    if updated_any:
-        st.success("Scores saved.")
-        st.session_state["force_data_refresh"] = True
-        st.rerun()
+    del ctx, tournament, teams_by_id, game_map, stage
+    st.error(
+        "Legacy score saving is disabled. Use Tournament Live scoring so results stay "
+        "draw-scoped, audited, recoverable, and separate from official Match Log publication."
+    )
 
 
 def _score_key(stage: str, side: str, game_id: str) -> str:

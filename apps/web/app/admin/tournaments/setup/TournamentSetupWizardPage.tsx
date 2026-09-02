@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import type { TournamentSetupStep } from "@/components/TournamentSetupWizardNav";
 import TournamentSetupWizardPanel from "./TournamentSetupWizardPanel";
+import { readTournamentRouteContext } from "@/lib/tournamentRouteContext";
 
 type StatusResponse = {
   enabled: boolean;
@@ -56,9 +57,9 @@ export default async function TournamentSetupWizardPage({
   step,
   searchParams
 }: Props) {
-  const tournamentId = first(searchParams?.tournament).trim();
-  const tournamentName = first(searchParams?.name).trim();
-  if (!tournamentId) redirect("/admin/tournaments");
+  const context = readTournamentRouteContext(searchParams);
+  const resolveDivisionId = first(searchParams?.resolveDivision).trim();
+  if (!context.tournamentId) redirect("/admin/tournaments");
 
   const clubId = "tres_palapas";
   const { data: status, error } = await loadStatus(clubId);
@@ -75,12 +76,13 @@ export default async function TournamentSetupWizardPage({
           fontSize: "0.78rem"
         }}
       >
-        Tournament Manager / Guided Setup
+        Tournament Manager / Tournament Builder
       </p>
-      <h1 style={{ marginTop: 0 }}>{tournamentName || "Tournament"} setup</h1>
+      <h1 style={{ marginTop: 0 }}>{context.tournamentName || "Tournament"} builder</h1>
       <p style={{ color: "#334155", maxWidth: "860px" }}>
-        Complete the six setup steps in order. Each save keeps the current
-        tournament context and moves you directly to the next task.
+        Build the tournament across four logical domains: Tournament, Competition,
+        Commerce, and Review. Draft saves never change public tournament pages;
+        publication remains a separate, guarded action in Review.
       </p>
       {error ? (
         <p role="alert" style={{ color: "#b91c1c" }}>
@@ -89,12 +91,15 @@ export default async function TournamentSetupWizardPage({
       ) : null}
       {status ? (
         <TournamentSetupWizardPanel
+          key={context.tournamentId}
           apiBase={apiBase()}
           clubId={clubId}
           status={status}
-          tournamentId={tournamentId}
-          tournamentName={tournamentName || tournamentId}
+          tournamentId={context.tournamentId}
+          tournamentName={context.tournamentName || context.tournamentId}
+          drawId={context.drawId}
           step={step}
+          resolveDivisionId={resolveDivisionId}
         />
       ) : null}
     </section>

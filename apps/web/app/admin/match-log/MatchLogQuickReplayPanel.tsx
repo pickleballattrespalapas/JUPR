@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess, type ActionCompletion } from "@/components/interaction";
 import type { AdminReplayResultResponse } from "@/lib/adminReplayApi";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
@@ -65,16 +66,18 @@ export default function MatchLogQuickReplayPanel({
   const [result, setResult] = useState<AdminReplayResultResponse | null>(null);
   const [idempotencyKey, setIdempotencyKey] = useState(requestKey);
 
-  async function onSubmit(confirmationText: string) {
+  async function onSubmit(confirmationText: string): Promise<ActionCompletion> {
     setMessage(null);
     setResult(null);
     if (!apiBase) {
-      setMessage("API base URL is not configured.");
-      return;
+      const error = new Error("API base URL is not configured.");
+      setMessage(error.message);
+      throw error;
     }
     if (!accessToken) {
-      setMessage("Sign in at /admin/login before running Replay History.");
-      return;
+      const error = new Error("Sign in at /admin/login before running Replay History.");
+      setMessage(error.message);
+      throw error;
     }
     setPending(true);
     try {
@@ -93,14 +96,17 @@ export default function MatchLogQuickReplayPanel({
       });
       const payload = await response.json().catch(() => null);
       if (!response.ok) throw new Error(String(payload?.detail || `API error (${response.status})`));
-      setResult(payload as AdminReplayResultResponse);
-      setMessage(replayMessage(payload as AdminReplayResultResponse));
-      if ((payload as AdminReplayResultResponse).job_status === "succeeded") {
-        setIdempotencyKey(requestKey());
-        onMutationComplete();
-      }
+      const typed = payload as AdminReplayResultResponse;
+      const summary = replayMessage(typed) || "Replay completed.";
+      setResult(typed);
+      setMessage(summary);
+      if (!typed.ok || typed.job_status !== "succeeded") throw new Error(summary);
+      setIdempotencyKey(requestKey());
+      onMutationComplete();
+      return actionSuccess("Replay complete", summary);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to run replay.");
+      throw error;
     } finally {
       setPending(false);
     }

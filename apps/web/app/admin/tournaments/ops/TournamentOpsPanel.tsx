@@ -1,10 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess, actionUncertain, type ActionCompletion } from "@/components/interaction";
 import type {
   AdminTournamentOpsSnapshotResponse,
+  AdminTournamentOpsPlayer,
   AdminTournamentOpsTeam,
   AdminTournamentResultsImportPreviewResponse,
   AdminTournamentStatusResponse,
@@ -12,15 +14,63 @@ import type {
 } from "@/lib/adminTournamentApi";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { useAdminSession } from "@/lib/useAdminSession";
+import { tournamentRouteHref } from "@/lib/tournamentRouteContext";
+import {
+  clearRoundRobinGenerationIdempotencyKey,
+  stableRoundRobinGenerationIdempotencyKey
+} from "@/lib/tournamentRoundRobinIdempotency.mjs";
 
 export type OpsWorkflow = "all" | "draws" | "import" | "results" | "publish";
-type Props = { apiBase: string | null; clubId: string; status: AdminTournamentStatusResponse; workflow?: OpsWorkflow; initialTournamentId: string };
+type Props = { apiBase: string | null; clubId: string; status: AdminTournamentStatusResponse; workflow?: OpsWorkflow; initialTournamentId: string; initialDrawId?: string | null };
 type TeamEditorRow = { editor_key: string; team_number: string; player1_id: string; player2_id: string; seed: string; notes: string };
+type RegistrationImportBody = {
+  import_mode: string;
+  idempotency_key: string;
+  expected_state_fingerprint: string;
+  expected_draw_updated_at: string;
+  confirmation_text: string;
+  source: string;
+};
+type RegistrationImportRecovery = {
+  version: 1;
+  clubId: string;
+  tournamentId: string;
+  drawId: string;
+  createdAt: string;
+  operationReference: string;
+  message: string;
+  body: RegistrationImportBody;
+};
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 const inputStyle = { width: "100%", padding: "0.55rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
 const buttonStyle = { padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800 };
 const ghostButtonStyle = { ...buttonStyle, background: "white", color: "#0f172a" };
+const registrationImportReconcileConfirmation = "RECONCILE REGISTRATION IMPORT";
+const NON_PLAYED_RESULT_TYPES: ReadonlySet<string> = new Set(["FORFEIT", "NO_SHOW", "RETIREMENT"]);
+const DISABLED_EVENT_STATUSES: ReadonlySet<string> = new Set(["disabled", "cancelled", "canceled", "inactive", "archived", "deleted", "void", "voided"]);
+
+class TournamentOpsRequestError extends Error {
+  readonly status: number;
+  readonly uncertain: boolean;
+  readonly operationReference: string | null;
+
+  constructor(message: string, status: number, uncertain = false, operationReference: string | null = null) {
+    super(message);
+    this.name = "TournamentOpsRequestError";
+    this.status = status;
+    this.uncertain = uncertain;
+    this.operationReference = operationReference;
+  }
+}
+
+function registrationImportStorageKey(clubId: string): string {
+  return `jupr_tournament_ops_registration_import_pending_v1:${clubId}`;
+}
+
+function registrationImportErrorIsUncertain(error: unknown): boolean {
+  return !(error instanceof TournamentOpsRequestError) || error.uncertain;
+}
 
 function apiUrl(apiBase: string, path: string): string {
   return `${apiBase.replace(/\/$/, "")}${path}`;
@@ -32,6 +82,22 @@ function shortValue(value: unknown): string {
   return String(value);
 }
 
+function gameResultType(game: Record<string, unknown>): string {
+  return String(game.result_type || "PLAYED").toUpperCase();
+}
+
+function isNonPlayedGame(game: Record<string, unknown>): boolean {
+  return NON_PLAYED_RESULT_TYPES.has(gameResultType(game));
+}
+
+function resultTypeLabel(game: Record<string, unknown>): string {
+  const resultType = gameResultType(game);
+  if (resultType === "NO_SHOW") return "No-show";
+  if (resultType === "RETIREMENT") return "Retirement";
+  if (resultType === "FORFEIT") return "Forfeit";
+  return resultType === "PLAYED" ? "Played" : resultType.replace(/_/g, " ").toLowerCase();
+}
+
 function eventOptionLabel(row: Record<string, unknown>): string {
   const family = String(row.event_family_label || "").trim();
   const division = String(row.division_name || row.label || "").trim();
@@ -39,11 +105,53 @@ function eventOptionLabel(row: Record<string, unknown>): string {
   return division || family || String(row.id || "Event");
 }
 
-function gameLabel(row: Record<string, unknown>): string {
+function eventOptionEnabled(row: Record<string, unknown>): boolean {
+  const enabledValue = row.enabled;
+  const enabled = typeof enabledValue === "boolean"
+    ? enabledValue
+    : !["0", "false", "no", "off", "disabled", "cancelled", "canceled"].includes(String(enabledValue ?? "true").trim().toLowerCase());
+  const status = String(row.status || "").trim().toLowerCase();
+  return enabled && !DISABLED_EVENT_STATUSES.has(status);
+}
+
+function effectiveGameScoringFormat(
+  game: Record<string, unknown>,
+  draw: { event_option_id?: unknown } | null | undefined,
+  eventOptions: Array<Record<string, unknown>>,
+): string {
+  const frozenFormat = String(game.scoring_format || "").trim().toUpperCase();
+  if (frozenFormat) return frozenFormat;
+  const eventOptionId = String(game.event_option_id || draw?.event_option_id || "").trim();
+  const eventOption = eventOptions.find((row) => String(row.id || "") === eventOptionId);
+  return String(
+    eventOption?.scoring_override
+    || eventOption?.division_scoring
+    || eventOption?.scoring_default
+    || "",
+  ).trim().toUpperCase();
+}
+
+function playerLabel(players: AdminTournamentOpsPlayer[], playerId: number | null | undefined): string {
+  if (playerId == null) return "Player unavailable";
+  return players.find((player) => Number(player.id) === Number(playerId))?.name || "Player unavailable";
+}
+
+function teamLabel(team: AdminTournamentOpsTeam | undefined, players: AdminTournamentOpsPlayer[]): string {
+  if (!team) return "Team unavailable";
+  const first = playerLabel(players, team.player1_id);
+  const second = team.player2_id == null ? "" : playerLabel(players, team.player2_id);
+  return second ? `${first} / ${second}` : first;
+}
+
+function gameLabel(
+  row: Record<string, unknown>,
+  teamsById: Map<string, AdminTournamentOpsTeam>,
+  players: AdminTournamentOpsPlayer[]
+): string {
   const stage = String(row.stage || "Game");
   const round = row.rr_round_number ? `R${row.rr_round_number}` : String(row.playoff_round || "");
   const slot = row.rr_slot_number ? `S${row.rr_slot_number}` : String(row.playoff_game_code || "");
-  const teams = `${shortValue(row.team_a_id)} vs ${shortValue(row.team_b_id)}`;
+  const teams = `${teamLabel(teamsById.get(String(row.team_a_id || "")), players)} vs ${teamLabel(teamsById.get(String(row.team_b_id || "")), players)}`;
   return [stage, round, slot, teams].filter(Boolean).join(" · ");
 }
 
@@ -64,40 +172,20 @@ function teamRowsFromTeams(teams: AdminTournamentOpsTeam[], drawId: string): Tea
   }));
 }
 
-function GenericRowsTable({ rows, preferredColumns }: { rows: Array<Record<string, unknown>>; preferredColumns: string[] }) {
-  if (!rows.length) return <p style={{ color: "#64748b" }}>No rows loaded.</p>;
-  const discovered = Array.from(new Set(rows.flatMap((row) => Object.keys(row))));
-  const columns = [...preferredColumns.filter((key) => discovered.includes(key)), ...discovered.filter((key) => !preferredColumns.includes(key)).slice(0, 6)];
-  return (
-    <div style={{ overflowX: "auto" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "860px" }}>
-        <thead>
-          <tr>{columns.map((column) => <th key={column} style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>{column}</th>)}</tr>
-        </thead>
-        <tbody>
-          {rows.map((row, index) => (
-            <tr key={String(row.id || index)}>
-              {columns.map((column) => <td key={column} style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0", maxWidth: 260, overflowWrap: "anywhere" }}>{shortValue(row[column])}</td>)}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
 export default function TournamentOpsPanel({
   apiBase,
   clubId,
   status,
   workflow = "all",
-  initialTournamentId
+  initialTournamentId,
+  initialDrawId = ""
 }: Props) {
   const { accessToken } = useAdminSession();
   const [selectedTournamentId, setSelectedTournamentId] = useState(initialTournamentId);
-  const [selectedDrawId, setSelectedDrawId] = useState("");
+  const [selectedDrawId, setSelectedDrawId] = useState(initialDrawId || "");
   const [snapshot, setSnapshot] = useState<AdminTournamentOpsSnapshotResponse | null>(null);
   const [drawEventOptionId, setDrawEventOptionId] = useState("");
+  const [emptyEventOptionId, setEmptyEventOptionId] = useState("");
   const [drawName, setDrawName] = useState("");
   const [teamRows, setTeamRows] = useState<TeamEditorRow[]>(() => teamRowsFromTeams([], ""));
   const [registrationImportMode, setRegistrationImportMode] = useState("REPLACE");
@@ -106,8 +194,8 @@ export default function TournamentOpsPanel({
   const [scoreGameId, setScoreGameId] = useState("");
   const [scoreA, setScoreA] = useState("");
   const [scoreB, setScoreB] = useState("");
+  const [unusualScoreAcknowledged, setUnusualScoreAcknowledged] = useState(false);
   const [playoffAdvanceCount, setPlayoffAdvanceCount] = useState("4");
-  const [publishBonusElo, setPublishBonusElo] = useState("0");
   const [resultsImportMode, setResultsImportMode] = useState("REPLACE");
   const [resultsRawText, setResultsRawText] = useState("playerA1,playerB1,teamAGame1,teamBGame1\n");
   const [resultsPreview, setResultsPreview] = useState<AdminTournamentResultsImportPreviewResponse | null>(null);
@@ -115,11 +203,41 @@ export default function TournamentOpsPanel({
   const [resultsMatchReviews, setResultsMatchReviews] = useState<Record<string, { include?: boolean; stage?: string }>>({});
   const [resultsPodiumRefs, setResultsPodiumRefs] = useState<Record<string, string | null>>({});
   const [allowDuplicateMapping, setAllowDuplicateMapping] = useState(false);
+  const [unusualImportScoresAcknowledged, setUnusualImportScoresAcknowledged] = useState(false);
   const [resultsReviewDirty, setResultsReviewDirty] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [registrationImportRecovery, setRegistrationImportRecovery] = useState<RegistrationImportRecovery | null>(null);
+  const [registrationImportRecoveryLoaded, setRegistrationImportRecoveryLoaded] = useState(false);
   const snapshotRequest = useLatestRequestGuard(accessToken);
   const actionRequest = useLatestRequestGuard(accessToken);
+  const importRecoveryStorageKey = registrationImportStorageKey(clubId);
+
+  useEffect(() => {
+    setRegistrationImportRecovery(null);
+    setRegistrationImportRecoveryLoaded(false);
+    try {
+      const raw = globalThis.sessionStorage?.getItem(importRecoveryStorageKey);
+      if (!raw) return;
+      const stored = JSON.parse(raw) as Partial<RegistrationImportRecovery>;
+      if (
+        stored.version === 1
+        && stored.clubId === clubId
+        && typeof stored.tournamentId === "string"
+        && typeof stored.drawId === "string"
+        && typeof stored.createdAt === "string"
+        && typeof stored.operationReference === "string"
+        && typeof stored.message === "string"
+        && typeof stored.body?.idempotency_key === "string"
+      ) {
+        setRegistrationImportRecovery(stored as RegistrationImportRecovery);
+      }
+    } catch {
+      // The in-memory guard remains available when browser storage is blocked.
+    } finally {
+      setRegistrationImportRecoveryLoaded(true);
+    }
+  }, [clubId, importRecoveryStorageKey]);
 
   const operationsWriteReady = Boolean(
     status.mutation_runtime?.service_role_ready
@@ -128,19 +246,42 @@ export default function TournamentOpsPanel({
   );
   const reviewedState = snapshot?.state_fingerprint || "";
   const selectedDraw = snapshot?.draws?.find((row) => String(row.id || "") === selectedDrawId) || null;
+  const players = snapshot?.players || [];
+  const teamsById = new Map((snapshot?.teams || []).map((team) => [String(team.id || ""), team]));
+  const effectiveScoringFormat = (game: Record<string, unknown>) => effectiveGameScoringFormat(
+    game,
+    selectedDraw,
+    snapshot?.event_options || [],
+  );
+  const bestOfThreeGames = (snapshot?.games || []).filter(
+    (game) => !isNonPlayedGame(game) && effectiveScoringFormat(game) === "BEST_2_OF_3",
+  );
+  const scoreableGames = (snapshot?.games || []).filter(
+    (game) => !isNonPlayedGame(game) && effectiveScoringFormat(game) !== "BEST_2_OF_3",
+  );
+  const nonPlayedGames = (snapshot?.games || []).filter(isNonPlayedGame);
+  const selectedScoreGame = scoreableGames.find((game) => String(game.id || "") === scoreGameId) || null;
+  const teamEditorPlayerChoicesReady = players.length > 0;
   const reviewedDrawUpdatedAt = String(selectedDraw?.updated_at || "").trim();
   const reviewedTeamVersions = (snapshot?.teams || [])
     .filter((row) => String(row.draw_id || "") === selectedDrawId)
     .map((row) => ({ id: String(row.id || ""), updated_at: String(row.updated_at || "") }));
-  const reviewedSourceGameVersions = (snapshot?.games || [])
-    .filter((row) => String(row.draw_id || "") === selectedDrawId)
+  const reviewedSourceGameVersions = (snapshot?.source_game_versions || [])
+    .filter((row) => !row.draw_id || String(row.draw_id) === selectedDrawId)
     .map((row) => ({ id: String(row.id || ""), updated_at: String(row.updated_at || "") }));
+  const manualTeamRowsReady = teamRows.some((row) => row.player1_id.trim());
   const officialPublishReady = Boolean(snapshot?.operation_runtime?.official_publish_enabled);
-  const guardedWriteDisabled = busy || !accessToken || !operationsWriteReady || !reviewedState;
+  // One tab retains one exact registration-import request for this club. Block
+  // every guarded Ops write until it is reconciled so navigating to another
+  // tournament cannot overwrite that sole recovery slot.
+  const registrationImportBlocksWrites = registrationImportRecovery !== null;
+  const guardedWriteDisabled = busy || !accessToken || !operationsWriteReady || !reviewedState || !registrationImportRecoveryLoaded || registrationImportBlocksWrites;
   const drawCasWriteDisabled = guardedWriteDisabled || !reviewedDrawUpdatedAt;
+  const registrationImportDisabled = drawCasWriteDisabled || !selectedDrawId || reviewedSourceGameVersions.length > 0;
   const teamSnapshotCasDisabled = drawCasWriteDisabled || !reviewedTeamVersions.length || reviewedTeamVersions.some((row) => !row.id || !row.updated_at);
   const gameSnapshotCasDisabled = teamSnapshotCasDisabled || !reviewedSourceGameVersions.length || reviewedSourceGameVersions.some((row) => !row.id || !row.updated_at);
   const shows = (name: Exclude<OpsWorkflow, "all">) => workflow === "all" || workflow === name;
+  const showsLegacyDrawRuntime = workflow === "all";
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
     if (!apiBase) throw new Error("API base URL is not configured.");
@@ -151,14 +292,30 @@ export default function TournamentOpsPanel({
     const response = await fetch(apiUrl(apiBase, path), { ...options, headers });
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
-      const detail = String(payload?.detail || `API error (${response.status})`);
-      if (response.status === 409) {
-        const recovery = /recovery|required|may already|identical request|response.?lost/i.test(detail);
-        throw new Error(recovery
-          ? `${detail} Keep this exact reviewed request intact and retry it only to reconcile, or use the Streamlit fallback.`
-          : `${detail} Reload the authoritative Ops snapshot before submitting a new request.`);
-      }
-      throw new Error(detail);
+      const detail = payload?.detail;
+      const detailRecord = detail && typeof detail === "object" ? detail as Record<string, unknown> : null;
+      const detailMessage = typeof detail === "string"
+        ? detail
+        : String(detailRecord?.message || `API error (${response.status})`);
+      const recoveryRequired = detailRecord?.recovery_required === true
+        || detailRecord?.kind === "uncertain"
+        || (response.status === 409 && /recovery|required|may already|identical request|response.?lost/i.test(detailMessage));
+      const explicitlyFailed = detailRecord?.kind === "failed"
+        && detailRecord?.recovery_required !== true;
+      const operationReference = typeof detailRecord?.operation_reference === "string"
+        ? detailRecord.operation_reference
+        : typeof detailRecord?.operation_key === "string"
+          ? detailRecord.operation_key
+          : null;
+      const message = response.status === 409 && !recoveryRequired
+        ? `${detailMessage} Reload the authoritative Ops snapshot before submitting a new request.`
+        : detailMessage;
+      throw new TournamentOpsRequestError(
+        message,
+        response.status,
+        recoveryRequired || (!explicitlyFailed && (response.status >= 500 || [408, 425, 429].includes(response.status))),
+        operationReference,
+      );
     }
     return payload as T;
   }
@@ -167,8 +324,8 @@ export default function TournamentOpsPanel({
     snapshotRequest.invalidate();
     setBusy(false); setMessage(null);
     setSelectedTournamentId(initialTournamentId); setSelectedDrawId(""); setSnapshot(null);
-    setDrawEventOptionId(""); setTeamRows(teamRowsFromTeams([], "")); setScoreGameId(""); setScoreA(""); setScoreB("");
-    setResultsPreview(null); setResultsMappings({}); setResultsMatchReviews({}); setResultsPodiumRefs({}); setResultsReviewDirty(true);
+    setDrawEventOptionId(""); setEmptyEventOptionId(""); setTeamRows(teamRowsFromTeams([], "")); setScoreGameId(""); setScoreA(""); setScoreB(""); setUnusualScoreAcknowledged(false);
+    setResultsPreview(null); setResultsMappings({}); setResultsMatchReviews({}); setResultsPodiumRefs({}); setUnusualImportScoresAcknowledged(false); setResultsReviewDirty(true);
   }
 
   function operationSuffix(payload: AdminTournamentWriteResponse): string {
@@ -177,15 +334,31 @@ export default function TournamentOpsPanel({
     return payload.operation_key ? ` Operation ${payload.operation_key.slice(0, 12)} recorded.` : "";
   }
 
+  function warningSuffix(payload: AdminTournamentWriteResponse): string {
+    const warnings = (payload.warnings || []).map((warning) => String(warning || "").trim()).filter(Boolean);
+    return warnings.length ? ` ${warnings.join(" ")}` : "";
+  }
+
+  function persistRegistrationImportRecovery(recovery: RegistrationImportRecovery | null) {
+    try {
+      if (recovery) globalThis.sessionStorage?.setItem(importRecoveryStorageKey, JSON.stringify(recovery));
+      else globalThis.sessionStorage?.removeItem(importRecoveryStorageKey);
+    } catch {
+      // State still blocks replacement writes for the lifetime of this page.
+    }
+    setRegistrationImportRecovery(recovery);
+  }
+
   function resetTeamEditor(nextSnapshot: AdminTournamentOpsSnapshotResponse | null, drawId: string) {
     setTeamRows(teamRowsFromTeams(nextSnapshot?.teams || [], drawId));
   }
 
   function resetScoreEditor(nextSnapshot: AdminTournamentOpsSnapshotResponse | null) {
-    const firstGame = (nextSnapshot?.games || [])[0] || null;
+    const firstGame = (nextSnapshot?.games || []).find((game) => !isNonPlayedGame(game)) || null;
     setScoreGameId(firstGame ? String(firstGame.id || "") : "");
     setScoreA(firstGame?.score_a == null ? "" : String(firstGame.score_a));
     setScoreB(firstGame?.score_b == null ? "" : String(firstGame.score_b));
+    setUnusualScoreAcknowledged(false);
   }
 
   async function loadOps(
@@ -206,9 +379,13 @@ export default function TournamentOpsPanel({
       const payload = await requestJson<AdminTournamentOpsSnapshotResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/ops${suffix}`);
       if (!snapshotRequest.isCurrent(generation)) return null;
       setSnapshot(payload);
-      setDrawEventOptionId((current) => payload.event_options?.some((row) => String(row.id || "") === current)
+      const eligibleEventOptions = (payload.event_options || []).filter(eventOptionEnabled);
+      setDrawEventOptionId((current) => eligibleEventOptions.some((row) => String(row.id || "") === current)
         ? current
-        : String(payload.event_options?.[0]?.id || ""));
+        : String(eligibleEventOptions[0]?.id || ""));
+      setEmptyEventOptionId((current) => eligibleEventOptions.some((row) => String(row.id || "") === current)
+        ? current
+        : String(eligibleEventOptions[0]?.id || ""));
       resetTeamEditor(payload, drawId);
       resetScoreEditor(payload);
       setResultsPreview(null);
@@ -235,7 +412,7 @@ export default function TournamentOpsPanel({
   async function createDraw(confirmationText: string) {
     if (!selectedTournamentId) {
       setMessage("Select a tournament before creating a draw.");
-      return;
+      throw new Error("Select a tournament before creating a draw.");
     }
     const generation = actionRequest.begin();
     const tournamentId = selectedTournamentId;
@@ -247,49 +424,162 @@ export default function TournamentOpsPanel({
         method: "POST",
         body: JSON.stringify({ event_option_id: drawEventOptionId || null, registration_day_id: String(selectedEvent?.registration_day_id || "") || null, name: drawName, expected_state_fingerprint: reviewedState, confirmation_text: confirmationText, source: "next_tournament_ops_create_draw" })
       });
-      if (!actionRequest.isCurrent(generation)) return;
       const nextDrawId = payload.draw?.id || "";
+      const completion = actionSuccess("Draw created", `The draft draw${payload.draw?.name ? ` ${payload.draw.name}` : ""} was created.`);
+      if (!actionRequest.isCurrent(generation)) return completion;
       setSelectedDrawId(nextDrawId);
+      setRegistrationImportMode("REPLACE");
       await loadOps(tournamentId, nextDrawId);
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) return completion;
       setMessage(`Draw created${payload.draw?.name ? `: ${payload.draw.name}` : ""}.${operationSuffix(payload)}`);
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to create draw.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
-  async function importRegistrations(confirmationText: string) {
-    if (!selectedTournamentId || !selectedDrawId) {
-      setMessage("Select a tournament and draw before importing registrations.");
-      return;
-    }
-    const generation = actionRequest.begin();
-    const tournamentId = selectedTournamentId;
-    const drawId = selectedDrawId;
+  async function executeRegistrationImport(
+    recovery: RegistrationImportRecovery,
+    generation: number,
+  ): Promise<ActionCompletion> {
     setBusy(true);
     setMessage(null);
     try {
-      const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/draws/${encodeURIComponent(drawId)}/teams/import-registrations`, {
+      const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(recovery.tournamentId)}/draws/${encodeURIComponent(recovery.drawId)}/teams/import-registrations`, {
         method: "POST",
-        body: JSON.stringify({ import_mode: registrationImportMode, expected_state_fingerprint: reviewedState, expected_draw_updated_at: reviewedDrawUpdatedAt, confirmation_text: confirmationText, source: "next_tournament_ops_import_registrations" })
+        body: JSON.stringify(recovery.body),
       });
-      if (!actionRequest.isCurrent(generation)) return;
-      await loadOps(tournamentId, drawId);
-      if (!actionRequest.isCurrent(generation)) return;
-      setMessage(`Imported ${payload.updated_count ?? payload.teams?.length ?? 0} registration team(s) with ${payload.import_mode || registrationImportMode} mode.${operationSuffix(payload)}`);
+      const importedCount = payload.updated_count ?? payload.teams?.length ?? 0;
+      const importWarning = warningSuffix(payload);
+      const completion = actionSuccess("Registration teams imported", `${importedCount} registration team${importedCount === 1 ? " was" : "s were"} imported.${importWarning}`);
+      persistRegistrationImportRecovery(null);
+      if (!actionRequest.isCurrent(generation)) return completion;
+      await loadOps(recovery.tournamentId, recovery.drawId);
+      if (!actionRequest.isCurrent(generation)) return completion;
+      setMessage(`Imported ${importedCount} registration team(s) with ${payload.import_mode || recovery.body.import_mode} mode.${importWarning}${operationSuffix(payload)}`);
+      return completion;
     } catch (error) {
-      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to import registrations.");
+      const errorMessage = error instanceof Error ? error.message : "Unable to confirm the registration import.";
+      if (!registrationImportErrorIsUncertain(error)) {
+        persistRegistrationImportRecovery(null);
+        if (actionRequest.isCurrent(generation)) setMessage(errorMessage);
+        throw error;
+      }
+      const operationReference = error instanceof TournamentOpsRequestError && error.operationReference
+        ? error.operationReference
+        : recovery.operationReference;
+      const pending = { ...recovery, operationReference, message: errorMessage };
+      persistRegistrationImportRecovery(pending);
+      if (actionRequest.isCurrent(generation)) {
+        setMessage(`${errorMessage} The exact browser request is retained; reconcile it before another guarded Ops write in this club tab.`);
+      }
+      return actionUncertain(
+        "Registration import outcome needs checking",
+        "The request reached an uncertain outcome. Reconcile the protected operation; the recovery action will never repeat the import or guess from a momentary readback.",
+        operationReference,
+        "Reconcile protected operation",
+        () => reconcileRegistrationImport(pending),
+      );
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
+  }
+
+  async function reconcileRegistrationImport(
+    recovery: RegistrationImportRecovery,
+  ): Promise<ActionCompletion> {
+    const generation = actionRequest.begin();
+    setBusy(true);
+    setMessage(null);
+    try {
+      const payload = await requestJson<AdminTournamentWriteResponse>(
+        `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(recovery.tournamentId)}/draws/${encodeURIComponent(recovery.drawId)}/teams/import-registrations/operations/${encodeURIComponent(recovery.operationReference)}/reconcile`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            retained_request: recovery.body,
+            confirmation_text: registrationImportReconcileConfirmation,
+            source: "next_tournament_ops_registration_import_reconcile",
+          }),
+        },
+      );
+      const notApplied = payload.recovery_disposition === "not_applied";
+      const completion = actionSuccess(
+        notApplied ? "Registration import did not run" : "Registration import reconciled",
+        notApplied
+          ? "The exact recovery reservation prevented this request from beginning, so no teams were changed. The prior lock is closed; reload and review before starting a new import."
+          : "Authoritative evidence proves the exact import completed. Its stored result was recovered without repeating the write.",
+      );
+      persistRegistrationImportRecovery(null);
+      if (!actionRequest.isCurrent(generation)) return completion;
+      await loadOps(recovery.tournamentId, recovery.drawId);
+      if (!actionRequest.isCurrent(generation)) return completion;
+      setMessage(notApplied
+        ? "The interrupted registration import is proven not applied. Review the reloaded draw before starting a new import."
+        : `The interrupted registration import was reconciled.${operationSuffix(payload)}`);
+      return completion;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Unable to reconcile the registration import.";
+      const pending = { ...recovery, message: errorMessage };
+      persistRegistrationImportRecovery(pending);
+      if (actionRequest.isCurrent(generation)) {
+        setMessage(`${errorMessage} The retained operation remains blocked; do not submit a replacement import.`);
+      }
+      return actionUncertain(
+        "Registration import still needs verification",
+        "The protected operation has no commit-safe completion evidence yet. The original request remains retained and no import was repeated.",
+        recovery.operationReference,
+        "Reconcile protected operation again",
+        () => reconcileRegistrationImport(pending),
+      );
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
+  }
+
+  async function importRegistrations(confirmationText: string): Promise<ActionCompletion> {
+    const generation = actionRequest.begin();
+    if (!selectedTournamentId || !selectedDrawId || !reviewedState || !reviewedDrawUpdatedAt) {
+      setMessage("Reload a tournament draw before importing registrations.");
+      throw new Error("Reload a tournament draw before importing registrations.");
+    }
+    if (registrationImportRecovery) {
+      const blocked = `Reconcile retained operation ${registrationImportRecovery.operationReference} before another guarded Ops write in this club tab.`;
+      setMessage(blocked);
+      throw new Error(blocked);
+    }
+    if (!actionRequest.isCurrent(generation)) {
+      throw new Error("The admin session changed before this registration import could start.");
+    }
+    const idempotencyKey = globalThis.crypto.randomUUID();
+    const recovery: RegistrationImportRecovery = {
+      version: 1,
+      clubId,
+      tournamentId: selectedTournamentId,
+      drawId: selectedDrawId,
+      createdAt: new Date().toISOString(),
+      operationReference: idempotencyKey,
+      message: "Registration import request is being submitted.",
+      body: {
+        import_mode: registrationImportMode,
+        idempotency_key: idempotencyKey,
+        expected_state_fingerprint: reviewedState,
+        expected_draw_updated_at: reviewedDrawUpdatedAt,
+        confirmation_text: confirmationText,
+        source: "next_tournament_ops_import_registrations",
+      },
+    };
+    persistRegistrationImportRecovery(recovery);
+    return executeRegistrationImport(recovery, generation);
   }
 
   async function importBulkTeams(confirmationText: string) {
     if (!selectedTournamentId || !selectedDrawId) {
       setMessage("Select a tournament and draw before importing teams.");
-      return;
+      throw new Error("Select a tournament and draw before importing teams.");
     }
     const generation = actionRequest.begin();
     const tournamentId = selectedTournamentId;
@@ -301,12 +591,16 @@ export default function TournamentOpsPanel({
         method: "POST",
         body: JSON.stringify({ raw_text: bulkTeamText, import_mode: bulkTeamMode, expected_state_fingerprint: reviewedState, expected_draw_updated_at: reviewedDrawUpdatedAt, confirmation_text: confirmationText, source: "next_tournament_ops_import_bulk_teams" })
       });
-      if (!actionRequest.isCurrent(generation)) return;
+      const importedCount = payload.updated_count ?? payload.teams?.length ?? 0;
+      const completion = actionSuccess("Teams imported", `${importedCount} team${importedCount === 1 ? " was" : "s were"} imported from the reviewed file.`);
+      if (!actionRequest.isCurrent(generation)) return completion;
       await loadOps(tournamentId, drawId);
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) return completion;
       setMessage(`Imported ${payload.updated_count ?? payload.teams?.length ?? 0} bulk team(s) with ${payload.import_mode || bulkTeamMode} mode.${operationSuffix(payload)}`);
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to import bulk teams.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
@@ -315,18 +609,18 @@ export default function TournamentOpsPanel({
   async function saveTeams(confirmationText: string) {
     if (!selectedTournamentId || !selectedDrawId) {
       setMessage("Select a tournament and draw before saving teams.");
-      return;
+      throw new Error("Select a tournament and draw before saving teams.");
     }
     const teams = teamRows
       .filter((row) => row.player1_id.trim())
       .map((row, index) => ({ team_number: Number(row.team_number || index + 1), player1_id: Number(row.player1_id), player2_id: row.player2_id.trim() ? Number(row.player2_id) : null, seed: row.seed.trim() ? Number(row.seed) : null, source: "MANUAL", notes: row.notes }));
     if (!teams.length) {
       setMessage("Add at least one team with Player 1 before saving.");
-      return;
+      throw new Error("Add at least one team with Player 1 before saving.");
     }
     if (teams.some((team) => !Number.isFinite(team.team_number) || !Number.isFinite(team.player1_id) || (team.player2_id !== null && !Number.isFinite(team.player2_id)))) {
-      setMessage("Team number and player IDs must be numeric. Use player selectors when available.");
-      return;
+      setMessage("One or more team entries are invalid. Reload the player choices and review every row.");
+      throw new Error("One or more team entries are invalid. Reload the player choices and review every row.");
     }
     const generation = actionRequest.begin();
     const tournamentId = selectedTournamentId;
@@ -338,21 +632,90 @@ export default function TournamentOpsPanel({
         method: "PUT",
         body: JSON.stringify({ teams, expected_state_fingerprint: reviewedState, expected_draw_updated_at: reviewedDrawUpdatedAt, confirmation_text: confirmationText, source: "next_tournament_ops_team_editor" })
       });
-      if (!actionRequest.isCurrent(generation)) return;
+      const savedCount = payload.updated_count ?? payload.teams?.length ?? teams.length;
+      const completion = actionSuccess("Teams saved", `${savedCount} team${savedCount === 1 ? " was" : "s were"} saved to the draw.`);
+      if (!actionRequest.isCurrent(generation)) return completion;
       await loadOps(tournamentId, drawId);
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) return completion;
       setMessage(`Saved ${payload.updated_count ?? payload.teams?.length ?? teams.length} team(s).${operationSuffix(payload)}`);
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to save teams.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
-  async function generateGames(confirmationText: string) {
+  async function generateGames(confirmationText: string): Promise<ActionCompletion> {
     if (!selectedTournamentId || !selectedDrawId) {
       setMessage("Select a tournament and draw before generating games.");
-      return;
+      throw new Error("Select a tournament and draw before generating games.");
+    }
+    const generation = actionRequest.begin();
+    const tournamentId = selectedTournamentId;
+    const drawId = selectedDrawId;
+    const request = {
+      expected_state_fingerprint: reviewedState,
+      expected_draw_updated_at: reviewedDrawUpdatedAt,
+      expected_team_versions: [...reviewedTeamVersions].sort((left, right) => (
+        left.id.localeCompare(right.id) || left.updated_at.localeCompare(right.updated_at)
+      )),
+      confirmation_text: confirmationText,
+      source: "next_tournament_ops_generate_round_robin"
+    };
+    const operationScope = `${clubId}:${tournamentId}:${drawId}`;
+    const idempotencyKey = stableRoundRobinGenerationIdempotencyKey(operationScope, request);
+    setBusy(true);
+    setMessage(null);
+    try {
+      const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/draws/${encodeURIComponent(drawId)}/games/round-robin`, {
+        method: "POST",
+        body: JSON.stringify({ ...request, idempotency_key: idempotencyKey })
+      });
+      const gameCount = payload.game_count ?? payload.games?.length ?? 0;
+      const completion = actionSuccess("Round-robin games generated", `${gameCount} round-robin game${gameCount === 1 ? " was" : "s were"} generated.`);
+      if (!actionRequest.isCurrent(generation)) {
+        clearRoundRobinGenerationIdempotencyKey(operationScope, idempotencyKey);
+        return completion;
+      }
+      await loadOps(tournamentId, drawId);
+      if (!actionRequest.isCurrent(generation)) {
+        clearRoundRobinGenerationIdempotencyKey(operationScope, idempotencyKey);
+        return completion;
+      }
+      clearRoundRobinGenerationIdempotencyKey(operationScope, idempotencyKey);
+      setMessage(`Generated ${payload.game_count ?? payload.games?.length ?? 0} round-robin game(s).${operationSuffix(payload)}`);
+      return completion;
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to generate games.");
+      if (error instanceof TournamentOpsRequestError && !error.uncertain) {
+        clearRoundRobinGenerationIdempotencyKey(operationScope, idempotencyKey);
+      }
+      if (!(error instanceof TournamentOpsRequestError) || error.uncertain) {
+        return actionUncertain(
+          "Round-robin generation needs verification",
+          "The exact reviewed request is retained on this tab. Retry it with the same operation key; a changed authoritative state will create a new request instead.",
+          error instanceof TournamentOpsRequestError && error.operationReference
+            ? error.operationReference
+            : idempotencyKey,
+          "Retry exact generation",
+          () => generateGames(confirmationText)
+        );
+      }
+      throw error;
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
+  }
+
+  async function recoverRoundRobin(
+    mode: "reconcile" | "rebuild",
+    confirmationText: string
+  ) {
+    if (!selectedTournamentId || !selectedDrawId) {
+      setMessage("Select a tournament and draw before repairing games.");
+      throw new Error("Select a tournament and draw before repairing games.");
     }
     const generation = actionRequest.begin();
     const tournamentId = selectedTournamentId;
@@ -360,16 +723,124 @@ export default function TournamentOpsPanel({
     setBusy(true);
     setMessage(null);
     try {
-      const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/draws/${encodeURIComponent(drawId)}/games/round-robin`, {
-        method: "POST",
-        body: JSON.stringify({ expected_state_fingerprint: reviewedState, expected_draw_updated_at: reviewedDrawUpdatedAt, expected_team_versions: reviewedTeamVersions, confirmation_text: confirmationText, source: "next_tournament_ops_generate_round_robin" })
-      });
-      if (!actionRequest.isCurrent(generation)) return;
+      const payload = await requestJson<AdminTournamentWriteResponse>(
+        `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/draws/${encodeURIComponent(drawId)}/games/round-robin/${mode}`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            expected_state_fingerprint: reviewedState,
+            expected_draw_updated_at: reviewedDrawUpdatedAt,
+            expected_team_versions: reviewedTeamVersions,
+            confirmation_text: confirmationText,
+            source: `next_tournament_ops_round_robin_${mode}`
+          })
+        }
+      );
+      const gameCount = payload.game_count ?? payload.games?.length ?? 0;
+      const completion = actionSuccess(
+        mode === "reconcile" ? "Round robin reconciled" : "Round robin rebuilt",
+        mode === "reconcile"
+          ? `${gameCount} total round-robin games are now present; existing valid games were preserved.`
+          : `${gameCount} unstarted round-robin games were rebuilt from the reviewed team list.`
+      );
+      if (!actionRequest.isCurrent(generation)) return completion;
       await loadOps(tournamentId, drawId);
-      if (!actionRequest.isCurrent(generation)) return;
-      setMessage(`Generated ${payload.game_count ?? payload.games?.length ?? 0} round-robin game(s).${operationSuffix(payload)}`);
+      if (!actionRequest.isCurrent(generation)) return completion;
+      setMessage(
+        `${mode === "reconcile" ? "Reconciled" : "Rebuilt"} the round-robin schedule.${operationSuffix(payload)}`
+      );
+      return completion;
     } catch (error) {
-      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to generate games.");
+      if (actionRequest.isCurrent(generation)) {
+        setMessage(
+          error instanceof Error
+            ? error.message
+            : `Unable to ${mode} the round-robin schedule.`
+        );
+      }
+      throw error;
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
+  }
+
+  async function cancelEmptyDraw(confirmationText: string) {
+    if (!selectedTournamentId || !selectedDrawId) {
+      throw new Error("Select an empty draw before cancelling it.");
+    }
+    const generation = actionRequest.begin();
+    const tournamentId = selectedTournamentId;
+    const drawId = selectedDrawId;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const payload = await requestJson<AdminTournamentWriteResponse>(
+        `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/draws/${encodeURIComponent(drawId)}/cancel-empty`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            expected_state_fingerprint: reviewedState,
+            expected_draw_updated_at: reviewedDrawUpdatedAt,
+            confirmation_text: confirmationText,
+            source: "next_tournament_ops_cancel_empty_draw"
+          })
+        }
+      );
+      const completion = actionSuccess(
+        "Empty draw cancelled",
+        "The empty draw was disabled without changing teams, games, results, or publication evidence."
+      );
+      if (!actionRequest.isCurrent(generation)) return completion;
+      setSelectedDrawId("");
+      await loadOps(tournamentId, "");
+      if (!actionRequest.isCurrent(generation)) return completion;
+      setMessage(`Empty draw cancelled.${operationSuffix(payload)}`);
+      return completion;
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) {
+        setMessage(error instanceof Error ? error.message : "Unable to cancel the empty draw.");
+      }
+      throw error;
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
+  }
+
+  async function cancelEmptyEvent(confirmationText: string) {
+    if (!selectedTournamentId || !emptyEventOptionId) {
+      throw new Error("Choose an empty event before cancelling it.");
+    }
+    const generation = actionRequest.begin();
+    const tournamentId = selectedTournamentId;
+    const eventOptionId = emptyEventOptionId;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const payload = await requestJson<AdminTournamentWriteResponse>(
+        `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/events/${encodeURIComponent(eventOptionId)}/cancel-empty`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            expected_state_fingerprint: reviewedState,
+            confirmation_text: confirmationText,
+            source: "next_tournament_ops_cancel_empty_event"
+          })
+        }
+      );
+      const completion = actionSuccess(
+        "Empty event cancelled",
+        "The zero-entry event was disabled and no registrations, teams, games, or results were changed."
+      );
+      if (!actionRequest.isCurrent(generation)) return completion;
+      await loadOps(tournamentId, selectedDrawId);
+      if (!actionRequest.isCurrent(generation)) return completion;
+      setMessage(`Empty event cancelled.${operationSuffix(payload)}`);
+      return completion;
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) {
+        setMessage(error instanceof Error ? error.message : "Unable to cancel the empty event.");
+      }
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
@@ -378,12 +849,12 @@ export default function TournamentOpsPanel({
   async function generatePlayoffs(confirmationText: string) {
     if (!selectedTournamentId || !selectedDrawId) {
       setMessage("Select a tournament and draw before generating playoffs.");
-      return;
+      throw new Error("Select a tournament and draw before generating playoffs.");
     }
     const advanceCount = Number(playoffAdvanceCount);
     if (!Number.isFinite(advanceCount)) {
       setMessage("Advance count must be numeric.");
-      return;
+      throw new Error("Advance count must be numeric.");
     }
     const generation = actionRequest.begin();
     const tournamentId = selectedTournamentId;
@@ -395,12 +866,16 @@ export default function TournamentOpsPanel({
         method: "POST",
         body: JSON.stringify({ advance_count: advanceCount, expected_state_fingerprint: reviewedState, expected_draw_updated_at: reviewedDrawUpdatedAt, expected_team_versions: reviewedTeamVersions, expected_source_game_versions: reviewedSourceGameVersions, confirmation_text: confirmationText, source: "next_tournament_ops_generate_playoffs" })
       });
-      if (!actionRequest.isCurrent(generation)) return;
+      const gameCount = payload.game_count ?? payload.games?.length ?? 0;
+      const completion = actionSuccess("Playoff games generated", `${gameCount} playoff game${gameCount === 1 ? " was" : "s were"} generated.`);
+      if (!actionRequest.isCurrent(generation)) return completion;
       await loadOps(tournamentId, drawId);
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) return completion;
       setMessage(`Generated ${payload.game_count ?? payload.games?.length ?? 0} playoff game(s).${operationSuffix(payload)}`);
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to generate playoffs.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
@@ -409,13 +884,26 @@ export default function TournamentOpsPanel({
   async function saveScore(confirmationText: string) {
     if (!selectedTournamentId || !scoreGameId) {
       setMessage("Select a game before saving a score.");
-      return;
+      throw new Error("Select a game before saving a score.");
+    }
+    const selectedGame = (snapshot?.games || []).find((row) => String(row.id || "") === scoreGameId) || null;
+    if (!selectedGame || isNonPlayedGame(selectedGame)) {
+      setMessage("This game has a non-played outcome and cannot be changed through ordinary score entry.");
+      throw new Error("This game has a non-played outcome and cannot be changed through ordinary score entry.");
+    }
+    if (effectiveScoringFormat(selectedGame) === "BEST_2_OF_3") {
+      setMessage("Best-of-three matchups require each individual game score. Enter this result in the Tournament Day Workspace.");
+      throw new Error("Best-of-three matchups require each individual game score. Enter this result in the Tournament Day Workspace.");
+    }
+    if (!scoreA.trim() || !scoreB.trim()) {
+      setMessage("Enter both team scores before saving.");
+      throw new Error("Enter both team scores before saving.");
     }
     const nextA = Number(scoreA);
     const nextB = Number(scoreB);
-    if (!Number.isFinite(nextA) || !Number.isFinite(nextB)) {
-      setMessage("Both scores must be numeric.");
-      return;
+    if (!Number.isInteger(nextA) || !Number.isInteger(nextB) || nextA < 0 || nextB < 0 || nextA === nextB) {
+      setMessage("Enter two non-tied, non-negative whole-number scores.");
+      throw new Error("Enter two non-tied, non-negative whole-number scores.");
     }
     const generation = actionRequest.begin();
     const tournamentId = selectedTournamentId;
@@ -424,17 +912,20 @@ export default function TournamentOpsPanel({
     setBusy(true);
     setMessage(null);
     try {
-      const selectedGame = (snapshot?.games || []).find((row) => String(row.id || "") === scoreGameId) || null;
       const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/games/${encodeURIComponent(gameId)}/score`, {
         method: "PATCH",
-        body: JSON.stringify({ score_a: nextA, score_b: nextB, expected_state_fingerprint: reviewedState, expected_game_updated_at: String(selectedGame?.updated_at || "") || null, expected_draw_updated_at: reviewedDrawUpdatedAt, confirmation_text: confirmationText, source: "next_tournament_ops_score_game" })
+        body: JSON.stringify({ score_a: nextA, score_b: nextB, unusual_score_acknowledged: unusualScoreAcknowledged, expected_state_fingerprint: reviewedState, expected_game_updated_at: String(selectedGame?.updated_at || "") || null, expected_draw_updated_at: reviewedDrawUpdatedAt, confirmation_text: confirmationText, source: "next_tournament_ops_score_game" })
       });
-      if (!actionRequest.isCurrent(generation)) return;
+      const selectedMatchup = selectedGame ? gameLabel(selectedGame, teamsById, players) : "the selected matchup";
+      const completion = actionSuccess("Score saved", `The score for ${selectedMatchup} was saved.`);
+      if (!actionRequest.isCurrent(generation)) return completion;
       await loadOps(tournamentId, drawId);
-      if (!actionRequest.isCurrent(generation)) return;
-      setMessage(`Saved score for game ${String(payload.game?.id || gameId)}.${operationSuffix(payload)}`);
+      if (!actionRequest.isCurrent(generation)) return completion;
+      setMessage(`Saved score for ${selectedMatchup}.${operationSuffix(payload)}`);
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to save score.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
@@ -443,7 +934,7 @@ export default function TournamentOpsPanel({
   async function generatePodium(confirmationText: string) {
     if (!selectedTournamentId || !selectedDrawId) {
       setMessage("Select a tournament and draw before generating a podium.");
-      return;
+      throw new Error("Select a tournament and draw before generating a podium.");
     }
     const generation = actionRequest.begin();
     const tournamentId = selectedTournamentId;
@@ -455,76 +946,16 @@ export default function TournamentOpsPanel({
         method: "POST",
         body: JSON.stringify({ expected_state_fingerprint: reviewedState, expected_draw_updated_at: reviewedDrawUpdatedAt, expected_team_versions: reviewedTeamVersions, expected_source_game_versions: reviewedSourceGameVersions, confirmation_text: confirmationText, source: "next_tournament_ops_generate_podium" })
       });
-      if (!actionRequest.isCurrent(generation)) return;
+      const podiumCount = payload.podium?.length ?? 0;
+      const completion = actionSuccess("Podium generated", `${podiumCount} podium placement${podiumCount === 1 ? " was" : "s were"} generated.`);
+      if (!actionRequest.isCurrent(generation)) return completion;
       await loadOps(tournamentId, drawId);
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) return completion;
       setMessage(`Generated ${payload.podium?.length ?? 0} ${payload.podium_source || "draw"} podium placement(s).${operationSuffix(payload)}`);
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to generate podium.");
-    } finally {
-      if (actionRequest.isCurrent(generation)) setBusy(false);
-    }
-  }
-
-  async function awardPodium(confirmationText: string) {
-    if (!selectedTournamentId || !selectedDrawId) {
-      setMessage("Select a tournament and draw before awarding podium trophies.");
-      return;
-    }
-    const generation = actionRequest.begin();
-    const tournamentId = selectedTournamentId;
-    const drawId = selectedDrawId;
-    setBusy(true);
-    setMessage(null);
-    try {
-      const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/draws/${encodeURIComponent(drawId)}/podium/awards`, {
-        method: "POST",
-        body: JSON.stringify({ expected_state_fingerprint: reviewedState, confirmation_text: confirmationText, source: "next_tournament_ops_award_podium" })
-      });
-      if (!actionRequest.isCurrent(generation)) return;
-      await loadOps(tournamentId, drawId);
-      if (!actionRequest.isCurrent(generation)) return;
-      setMessage(`Awarded ${payload.awarded_count ?? 0} new badge(s) from ${payload.candidate_count ?? 0} podium candidate(s).${operationSuffix(payload)}`);
-    } catch (error) {
-      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to award podium trophies.");
-    } finally {
-      if (actionRequest.isCurrent(generation)) setBusy(false);
-    }
-  }
-
-  async function publishOfficialMatches(
-    confirmationText: string,
-    ratingChildDrawId = ""
-  ) {
-    if (!selectedTournamentId || (!selectedDrawId && !ratingChildDrawId)) {
-      setMessage("Select a tournament and draw before publishing official matches.");
-      return;
-    }
-    const bonusElo = ratingChildDrawId ? 0 : Number(publishBonusElo || "0");
-    if (!Number.isFinite(bonusElo) || bonusElo < 0) {
-      setMessage("Playoff winner bonus must be a non-negative number.");
-      return;
-    }
-    const generation = actionRequest.begin();
-    const tournamentId = selectedTournamentId;
-    const drawId = ratingChildDrawId || selectedDrawId;
-    setBusy(true);
-    setMessage(null);
-    try {
-      const payload = await requestJson<AdminTournamentWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/draws/${encodeURIComponent(drawId)}/matches/publish`, {
-        method: "POST",
-        body: JSON.stringify({ confirmation_text: confirmationText, playoff_winner_bonus_elo: bonusElo, expected_state_fingerprint: reviewedState, source: ratingChildDrawId ? "next_team_tournament_child_publish" : "next_tournament_ops_publish_matches" })
-      });
-      if (!actionRequest.isCurrent(generation)) return;
-      await loadOps(tournamentId, ratingChildDrawId ? "" : drawId);
-      if (!actionRequest.isCurrent(generation)) return;
-      setMessage(
-        ratingChildDrawId
-          ? `Published ${payload.match_count ?? 0} four-player child game as an official rating match.${operationSuffix(payload)}`
-          : `Published ${payload.match_count ?? 0} official rating match(es). Bonus applied to ${payload.bonus_match_count ?? 0} medal-playoff match(es) at ${payload.playoff_winner_bonus_elo ?? bonusElo} Elo per winning player.${operationSuffix(payload)}`
-      );
-    } catch (error) {
-      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to publish official tournament matches.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
@@ -557,6 +988,7 @@ export default function TournamentOpsPanel({
       setResultsMappings(payload.mapping_decisions || {});
       setResultsMatchReviews(payload.match_reviews || {});
       setResultsPodiumRefs(payload.podium_refs || {});
+      setUnusualImportScoresAcknowledged(false);
       setResultsReviewDirty(false);
       setMessage(payload.ok
         ? `Reviewed ${payload.summary.matches} match(es) across ${payload.summary.teams} team(s). No data was written.`
@@ -571,7 +1003,7 @@ export default function TournamentOpsPanel({
   async function commitResultsImport(confirmationText: string) {
     if (!selectedTournamentId || !selectedDrawId || !resultsPreview) {
       setMessage("Create and review a results preview before committing.");
-      return;
+      throw new Error("Create and review a results preview before committing.");
     }
     const generation = actionRequest.begin();
     const tournamentId = selectedTournamentId;
@@ -588,6 +1020,7 @@ export default function TournamentOpsPanel({
           match_reviews: resultsMatchReviews,
           podium_refs: resultsPodiumRefs,
           allow_duplicate_mapping: allowDuplicateMapping,
+          unusual_scores_acknowledged: unusualImportScoresAcknowledged,
           expected_review_fingerprint: resultsPreview.review_fingerprint,
           expected_state_fingerprint: reviewedState,
           expected_draw_updated_at: reviewedDrawUpdatedAt,
@@ -595,13 +1028,17 @@ export default function TournamentOpsPanel({
           source: "next_tournament_ops_results_import"
         })
       });
-      if (!actionRequest.isCurrent(generation)) return;
+      const gameCount = payload.game_count ?? 0;
+      const completion = actionSuccess("Tournament results imported", `${gameCount} reviewed result${gameCount === 1 ? " was" : "s were"} committed to the draw.`);
+      if (!actionRequest.isCurrent(generation)) return completion;
       await loadOps(tournamentId, drawId);
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) return completion;
       setResultsReviewDirty(true);
       setMessage(`Imported ${payload.game_count ?? 0} reviewed result(s), ${payload.team_count ?? 0} team(s), and ${payload.podium_count ?? 0} podium row(s).${operationSuffix(payload)}`);
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to commit tournament results.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
@@ -624,10 +1061,19 @@ export default function TournamentOpsPanel({
   }
 
   function selectScoreGame(gameId: string) {
-    setScoreGameId(gameId);
     const game = (snapshot?.games || []).find((row) => String(row.id || "") === gameId) || null;
+    if (game && isNonPlayedGame(game)) {
+      setMessage(`${resultTypeLabel(game)} results are locked as non-played outcomes. Use the guarded Day Workspace to review or change that outcome.`);
+      return;
+    }
+    if (game && effectiveScoringFormat(game) === "BEST_2_OF_3") {
+      setMessage("Best-of-three matchups require each individual game score. Enter this result in the Tournament Day Workspace.");
+      return;
+    }
+    setScoreGameId(gameId);
     setScoreA(game?.score_a == null ? "" : String(game.score_a));
     setScoreB(game?.score_b == null ? "" : String(game.score_b));
+    setUnusualScoreAcknowledged(false);
   }
 
   function updateTeamRow(index: number, patch: Partial<TeamEditorRow>) {
@@ -638,9 +1084,31 @@ export default function TournamentOpsPanel({
     return id || "";
   }
 
+  function importedPlayerLabel(playerRef: unknown): string {
+    const ref = String(playerRef || "");
+    if (ref.startsWith("existing:")) {
+      const playerId = ref.slice("existing:".length);
+      return resultsPreview?.player_options.find((player) => String(player.id) === playerId)?.name || "Player unavailable";
+    }
+    if (ref.startsWith("create:")) {
+      const importKey = ref.slice("create:".length);
+      const imported = resultsPreview?.players.find((player) => String(player.import_key || "") === importKey);
+      return String(imported?.display_name || imported?.name || "Player unavailable");
+    }
+    return "Player unavailable";
+  }
+
+  function importedTeamLabel(teamRef: unknown): string {
+    const team = resultsPreview?.teams.find((row) => String(row.team_ref || "") === String(teamRef || ""));
+    if (!team) return "Team unavailable";
+    const first = importedPlayerLabel(team.p1_ref);
+    const second = team.p2_ref ? importedPlayerLabel(team.p2_ref) : "";
+    return second ? `${first} / ${second}` : first;
+  }
+
   useAuthenticatedAutoLoad(
     status.enabled ? `${accessToken}\u0000${initialTournamentId}` : "",
-    () => loadOps(initialTournamentId, "")
+    () => loadOps(initialTournamentId, initialDrawId || "")
   );
 
 
@@ -667,15 +1135,34 @@ export default function TournamentOpsPanel({
         </article>
       ) : null}
 
+      {registrationImportRecovery ? (
+        <article data-testid="registration-import-recovery" style={{ ...cardStyle, background: "#fff7ed", borderColor: "#f59e0b" }}>
+          <h2 style={{ marginTop: 0 }}>Interrupted registration import retained</h2>
+          <p>The exact registration import request is retained in this browser tab. Its technical recovery reference remains protected without exposing tournament or draw identifiers in the operator workflow.</p>
+          <p style={{ color: "#92400e" }}>{registrationImportRecovery.message}</p>
+          <p>All guarded Ops writes in this club tab stay blocked until commit-safe operation evidence proves completion or the exact recovery reservation proves the request could not begin.</p>
+          <ConfirmAction
+            triggerLabel="Reconcile protected operation"
+            title="Reconcile this registration import?"
+            description="This reads the retained operation and never repeats the import. A normal empty recovery remains blocked unless commit-safe evidence exists."
+            confirmLabel="Yes, reconcile operation"
+            confirmationText={registrationImportReconcileConfirmation}
+            disabled={!accessToken || !operationsWriteReady}
+            busy={busy}
+            onConfirm={() => reconcileRegistrationImport(registrationImportRecovery)}
+          />
+        </article>
+      ) : null}
+
       {operationsWriteReady && snapshot && shows("draws") ? (
         <article style={{ ...cardStyle, background: "#f8fafc" }}>
           <h2 style={{ marginTop: 0 }}>Create empty division draw</h2>
           <p style={{ color: "#475569" }}>This creates a DRAFT draw shell scoped to the selected registration division.</p>
           <div style={{ display: "grid", gridTemplateColumns: "minmax(240px, 1fr) minmax(180px, 1fr)", gap: "0.75rem", alignItems: "end" }}>
-            <label><strong>Registration division</strong><br /><select value={drawEventOptionId} onChange={(event) => setDrawEventOptionId(event.target.value)} style={inputStyle}><option value="">Legacy / tournament-wide draw</option>{(snapshot.event_options || []).map((row) => <option key={String(row.id)} value={String(row.id)}>{eventOptionLabel(row)}</option>)}</select></label>
+            <label><strong>Registration division</strong><br /><select value={drawEventOptionId} onChange={(event) => setDrawEventOptionId(event.target.value)} style={inputStyle}><option value="">Legacy / tournament-wide draw</option>{(snapshot.event_options || []).filter(eventOptionEnabled).map((row) => <option key={String(row.id)} value={String(row.id)}>{eventOptionLabel(row)}</option>)}</select></label>
             <label><strong>Draw name</strong><br /><input value={drawName} onChange={(event) => setDrawName(event.target.value)} placeholder="optional" style={inputStyle} /></label>
           </div>
-          <p><ConfirmAction triggerLabel="Create draw" title="Create this tournament draw?" description={`This creates a new draft draw${drawName.trim() ? ` named ${drawName.trim()}` : ""}${drawEventOptionId ? " for the selected registration division" : " for the tournament-wide legacy scope"}.`} confirmLabel="Yes, create draw" confirmationText="CREATE DRAW" disabled={!accessToken || !operationsWriteReady || !reviewedState} busy={busy} onConfirm={createDraw} /></p>
+          <p><ConfirmAction triggerLabel="Create draw" title="Create this tournament draw?" description={`This creates a new draft draw${drawName.trim() ? ` named ${drawName.trim()}` : ""}${drawEventOptionId ? " for the selected registration division" : " for the tournament-wide legacy scope"}.`} confirmLabel="Yes, create draw" confirmationText="CREATE DRAW" disabled={!accessToken || !operationsWriteReady || !reviewedState || !registrationImportRecoveryLoaded || registrationImportBlocksWrites} busy={busy} onConfirm={createDraw} /></p>
         </article>
       ) : null}
 
@@ -705,46 +1192,49 @@ export default function TournamentOpsPanel({
           <article style={{ ...cardStyle, background: "#f8fafc" }}>
             <h2 style={{ marginTop: 0 }}>Draw selection</h2>
             <div style={{ display: "grid", gridTemplateColumns: "minmax(240px, 1fr) auto", gap: "0.75rem", alignItems: "end" }}>
-              <label><strong>Draw</strong><br /><select value={selectedDrawId} onChange={(event) => selectDraw(event.target.value)} disabled={busy} style={inputStyle}><option value="">Choose a draw…</option>{snapshot.draws.map((draw) => <option key={draw.id} value={draw.id}>{draw.name || draw.id}</option>)}</select></label>
+              <label><strong>Draw</strong><br /><select value={selectedDrawId} onChange={(event) => selectDraw(event.target.value)} disabled={busy} style={inputStyle}><option value="">Choose a draw…</option>{snapshot.draws.map((draw, index) => <option key={draw.id} value={draw.id}>{draw.name || `Unnamed draw ${index + 1}`}</option>)}</select></label>
               <button type="button" onClick={() => selectedTournamentId && selectedDrawId ? loadOps(selectedTournamentId, selectedDrawId) : undefined} disabled={!selectedTournamentId || !selectedDrawId || busy} style={ghostButtonStyle}>Reload selected draw</button>
             </div>
           </article>
 
-          {operationsWriteReady && shows("import") ? <>
+          {operationsWriteReady && (shows("import") || workflow === "draws") ? <>
           <article style={{ ...cardStyle, background: "#f8fafc" }}>
             <h2 style={{ marginTop: 0 }}>Import confirmed registrations</h2>
             <p style={{ color: "#475569" }}>Imports confirmed registration entries for the selected draw’s registration day/division. Each registration must already be linked to a JUPR player.</p>
             <div style={{ display: "grid", gridTemplateColumns: "minmax(160px, 220px) auto", gap: "0.75rem", alignItems: "end" }}>
               <label><strong>Mode</strong><br /><select value={registrationImportMode} onChange={(event) => setRegistrationImportMode(event.target.value)} style={inputStyle}><option value="REPLACE">Replace current teams</option><option value="APPEND">Append after current teams</option></select></label>
-              <ConfirmAction triggerLabel="Import registrations" title={`${registrationImportMode === "REPLACE" ? "Replace teams from" : "Append teams from"} confirmed registrations?`} description={registrationImportMode === "REPLACE" ? "This replaces the draw's current team list with teams built from confirmed, player-linked registrations." : "This appends teams built from confirmed, player-linked registrations after the current teams."} confirmLabel={registrationImportMode === "REPLACE" ? "Yes, replace teams" : "Yes, append teams"} confirmationText="IMPORT REGISTRATIONS" tone={registrationImportMode === "REPLACE" ? "danger" : "default"} disabled={drawCasWriteDisabled || !selectedDrawId} busy={busy} onConfirm={importRegistrations} />
+              <ConfirmAction triggerLabel="Import confirmed registrations" title={`${registrationImportMode === "REPLACE" ? "Replace teams from" : "Append teams from"} confirmed registrations?`} description={registrationImportMode === "REPLACE" ? "This replaces the draw's current team list with teams built from confirmed, player-linked registrations." : "This appends teams built from confirmed, player-linked registrations after the current teams."} confirmLabel={registrationImportMode === "REPLACE" ? "Yes, replace teams" : "Yes, append teams"} confirmationText="IMPORT REGISTRATIONS" tone={registrationImportMode === "REPLACE" ? "danger" : "default"} disabled={registrationImportDisabled} busy={busy} onConfirm={importRegistrations} />
             </div>
+            {selectedDrawId && reviewedSourceGameVersions.length > 0 ? <p style={{ marginBottom: 0, color: "#92400e" }}>Registration import is closed because games already exist for this draw.</p> : null}
           </article>
 
+          {shows("import") ? (
           <article style={{ ...cardStyle, background: "#f8fafc" }}>
             <h2 style={{ marginTop: 0 }}>Bulk import teams</h2>
-            <p style={{ color: "#475569" }}>Paste CSV or TSV with headers like <code>Player 1, Player 2, Seed, Notes</code>. Player names or IDs must match the club roster. Import is blocked after games exist.</p>
+            <p style={{ color: "#475569" }}>Paste CSV or TSV with headers like <code>Player 1, Player 2, Seed, Notes</code>. Player names must match the club roster. Import is blocked after games exist.</p>
             <textarea value={bulkTeamText} onChange={(event) => setBulkTeamText(event.target.value)} style={{ ...inputStyle, minHeight: "8rem", fontFamily: "monospace" }} />
             <div style={{ display: "grid", gridTemplateColumns: "minmax(160px, 220px) auto", gap: "0.75rem", alignItems: "end", marginTop: "0.75rem" }}>
               <label><strong>Mode</strong><br /><select value={bulkTeamMode} onChange={(event) => setBulkTeamMode(event.target.value)} style={inputStyle}><option value="REPLACE">Replace current teams</option><option value="APPEND">Append after current teams</option></select></label>
               <ConfirmAction triggerLabel="Import teams" title={`${bulkTeamMode === "REPLACE" ? "Replace" : "Append"} teams from this file?`} description={bulkTeamMode === "REPLACE" ? "This replaces the draw's current teams with the reviewed CSV or TSV contents." : "This appends teams from the reviewed CSV or TSV contents after the current teams."} confirmLabel={bulkTeamMode === "REPLACE" ? "Yes, replace teams" : "Yes, append teams"} confirmationText="IMPORT TEAMS" tone={bulkTeamMode === "REPLACE" ? "danger" : "default"} disabled={drawCasWriteDisabled || !selectedDrawId} busy={busy} onConfirm={importBulkTeams} />
             </div>
           </article>
+          ) : null}
           </> : null}
 
           {operationsWriteReady && shows("draws") ? <>
           <article style={{ ...cardStyle, background: "#f8fafc" }}>
             <h2 style={{ marginTop: 0 }}>Team editor</h2>
-            <p style={{ color: "#475569" }}>Assign players manually, then review the full team list before saving.</p>
-            {selectedDrawId ? (
+            <p style={{ color: "#475569" }}>For registered divisions, import confirmed registrations above first. Use this editor only for deliberate manual setup or pre-game corrections.</p>
+            {selectedDrawId && teamEditorPlayerChoicesReady ? (
               <>
-                <ConfirmAction triggerLabel="Save teams" title="Replace the draw's saved teams?" description="This saves the currently reviewed team rows as the authoritative team list for the selected draw." confirmLabel="Yes, save teams" confirmationText="SAVE TEAMS" tone="danger" disabled={drawCasWriteDisabled} busy={busy} onConfirm={saveTeams} />
+                <ConfirmAction triggerLabel="Save teams" title="Replace the draw's saved teams?" description="This saves the currently reviewed team rows as the authoritative team list for the selected draw." confirmLabel="Yes, save teams" confirmationText="SAVE TEAMS" tone="danger" disabled={drawCasWriteDisabled || !manualTeamRowsReady} disabledReason={!manualTeamRowsReady ? "Choose Player 1 for at least one team before saving manually." : undefined} busy={busy} onConfirm={saveTeams} />
                 <div style={{ overflowX: "auto", marginTop: "1rem" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "920px" }}>
                     <thead><tr>{["Team #", "Player 1", "Player 2", "Seed", "Notes", "Action"].map((header) => <th key={header} style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>{header}</th>)}</tr></thead>
                     <tbody>{teamRows.map((row, index) => <tr key={row.editor_key}>
                       <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}><input value={row.team_number} onChange={(event) => updateTeamRow(index, { team_number: event.target.value })} style={inputStyle} /></td>
-                      <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{snapshot.players?.length ? <select value={playerSelectValue(row.player1_id)} onChange={(event) => updateTeamRow(index, { player1_id: event.target.value })} style={inputStyle}><option value="">Choose player…</option>{snapshot.players.map((player) => <option key={player.id} value={String(player.id)}>{player.name}</option>)}</select> : <input value={row.player1_id} onChange={(event) => updateTeamRow(index, { player1_id: event.target.value })} placeholder="player id" style={inputStyle} />}</td>
-                      <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{snapshot.players?.length ? <select value={playerSelectValue(row.player2_id)} onChange={(event) => updateTeamRow(index, { player2_id: event.target.value })} style={inputStyle}><option value="">Singles / no partner</option>{snapshot.players.map((player) => <option key={player.id} value={String(player.id)}>{player.name}</option>)}</select> : <input value={row.player2_id} onChange={(event) => updateTeamRow(index, { player2_id: event.target.value })} placeholder="optional player id" style={inputStyle} />}</td>
+                      <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}><select value={playerSelectValue(row.player1_id)} onChange={(event) => updateTeamRow(index, { player1_id: event.target.value })} style={inputStyle}><option value="">Choose player…</option>{players.map((player) => <option key={player.id} value={String(player.id)}>{player.name}</option>)}</select></td>
+                      <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}><select value={playerSelectValue(row.player2_id)} onChange={(event) => updateTeamRow(index, { player2_id: event.target.value })} style={inputStyle}><option value="">Singles / no partner</option>{players.map((player) => <option key={player.id} value={String(player.id)}>{player.name}</option>)}</select></td>
                       <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}><input value={row.seed} onChange={(event) => updateTeamRow(index, { seed: event.target.value })} style={inputStyle} /></td>
                       <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}><input value={row.notes} onChange={(event) => updateTeamRow(index, { notes: event.target.value })} style={inputStyle} /></td>
                       <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}><button type="button" onClick={() => setTeamRows((current) => current.filter((_, rowIndex) => rowIndex !== index))} style={ghostButtonStyle}>Remove</button></td>
@@ -753,14 +1243,81 @@ export default function TournamentOpsPanel({
                 </div>
                 <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}><button type="button" onClick={() => setTeamRows((current) => [...current, { editor_key: `new-team-${Date.now()}`, team_number: String(current.length + 1), player1_id: "", player2_id: "", seed: String(current.length + 1), notes: "" }])} style={ghostButtonStyle}>Add team row</button><button type="button" onClick={() => resetTeamEditor(snapshot, selectedDrawId)} style={ghostButtonStyle}>Reset from snapshot</button></p>
               </>
-            ) : <p style={{ color: "#64748b" }}>Create or select a draw before editing teams.</p>}
+            ) : <p style={{ color: "#64748b" }}>{selectedDrawId ? "Club player names are unavailable, so manual team setup is disabled. Reload the authoritative snapshot or use the guarded registration import." : "Create or select a draw before editing teams."}</p>}
           </article>
 
-          <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Generate round-robin games</h2><p style={{ color: "#475569" }}>Generate the schedule only after teams are saved and team numbers are contiguous.</p><ConfirmAction triggerLabel="Generate games" title="Generate round-robin games?" description="This creates the schedule from the currently reviewed teams and draw version." confirmLabel="Yes, generate games" confirmationText="GENERATE GAMES" disabled={teamSnapshotCasDisabled || !selectedDrawId} busy={busy} onConfirm={generateGames} /></article>
-          <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Score game</h2><p style={{ color: "#475569" }}>Select a game and enter the score. Ties are blocked; published, awarded, or downstream-finalized draws are locked.</p>{snapshot.games.length ? <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1fr) minmax(100px, 140px) minmax(100px, 140px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Game</strong><br /><select value={scoreGameId} onChange={(event) => selectScoreGame(event.target.value)} style={inputStyle}><option value="">Choose a game…</option>{snapshot.games.map((game) => <option key={String(game.id)} value={String(game.id)}>{gameLabel(game)}</option>)}</select></label><label><strong>Score A</strong><br /><input type="number" value={scoreA} onChange={(event) => setScoreA(event.target.value)} style={inputStyle} /></label><label><strong>Score B</strong><br /><input type="number" value={scoreB} onChange={(event) => setScoreB(event.target.value)} style={inputStyle} /></label><ConfirmAction triggerLabel="Save score" title="Save this game score?" description={`This records ${scoreA || "0"}–${scoreB || "0"} for the selected game.`} confirmLabel="Yes, save score" confirmationText="SAVE SCORE" disabled={drawCasWriteDisabled || !scoreGameId} busy={busy} onConfirm={saveScore} /></div> : <p style={{ color: "#64748b" }}>Generate games before scoring.</p>}</article>
+          <article style={{ ...cardStyle, background: "#f8fafc" }}>
+            <h2 style={{ marginTop: 0 }}>Round-robin schedule</h2>
+            <p style={{ color: "#475569" }}>
+              Generate a new schedule, add only missing pairings to a partial schedule,
+              or rebuild an unstarted schedule. Rebuild is refused after any score,
+              publication, award, podium, or day-live evidence exists.
+            </p>
+            <div style={{ display: "flex", gap: "0.65rem", flexWrap: "wrap" }}>
+              <ConfirmAction triggerLabel="Generate games" title="Generate round-robin games?" description="This creates the schedule from the currently reviewed teams and draw version." confirmLabel="Yes, generate games" confirmationText="GENERATE GAMES" disabled={teamSnapshotCasDisabled || !selectedDrawId} busy={busy} onConfirm={generateGames} />
+              <ConfirmAction triggerLabel="Reconcile missing games" title="Reconcile this partial round robin?" description="This preserves every valid existing game, including finalized games, and inserts only missing current-roster pairings." confirmLabel="Yes, reconcile games" confirmationText="RECONCILE GAMES" disabled={teamSnapshotCasDisabled || !selectedDrawId || !reviewedSourceGameVersions.length} busy={busy} onConfirm={(text) => recoverRoundRobin("reconcile", text)} />
+              <ConfirmAction triggerLabel="Rebuild unstarted games" title="Rebuild this unstarted round robin?" description="This removes the reviewed unstarted round-robin games and replaces them with one complete schedule. Any result or downstream evidence blocks the action." confirmLabel="Yes, rebuild games" confirmationText="REBUILD GAMES" tone="danger" disabled={teamSnapshotCasDisabled || !selectedDrawId || !reviewedSourceGameVersions.length} busy={busy} onConfirm={(text) => recoverRoundRobin("rebuild", text)} />
+            </div>
+          </article>
+          <article style={{ ...cardStyle, background: "#fff7ed", borderColor: "#fed7aa" }}>
+            <h2 style={{ marginTop: 0 }}>Cancel empty setup</h2>
+            <p style={{ color: "#7c2d12" }}>
+              Use these guarded actions only for a draw or event that received no
+              participation. The server refuses either action if registrations,
+              teams, games, podiums, awards, official matches, or day-live evidence exists.
+            </p>
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(240px, 1fr) auto auto", gap: "0.75rem", alignItems: "end" }}>
+              <label><strong>Event</strong><br />
+                <select value={emptyEventOptionId} onChange={(event) => setEmptyEventOptionId(event.target.value)} style={inputStyle}>
+                  <option value="">Choose an event…</option>
+                  {(snapshot.event_options || []).filter(eventOptionEnabled).map((row) => <option key={String(row.id)} value={String(row.id)}>{eventOptionLabel(row)}</option>)}
+                </select>
+              </label>
+              <ConfirmAction triggerLabel="Cancel selected empty event" title="Cancel this empty event?" description="This disables only the selected zero-entry event after the server verifies it has no registration or draw evidence." confirmLabel="Yes, cancel empty event" confirmationText="CANCEL EMPTY EVENT" tone="danger" disabled={guardedWriteDisabled || !emptyEventOptionId} busy={busy} onConfirm={cancelEmptyEvent} />
+              <ConfirmAction triggerLabel="Cancel selected empty draw" title="Cancel this empty draw?" description="This disables only the working draw after the server verifies it has no team, game, result, award, publication, or day-live evidence." confirmLabel="Yes, cancel empty draw" confirmationText="CANCEL EMPTY DRAW" tone="danger" disabled={drawCasWriteDisabled || !selectedDrawId} busy={busy} onConfirm={cancelEmptyDraw} />
+            </div>
+          </article>
+          {showsLegacyDrawRuntime ? <>
+          <article style={{ ...cardStyle, background: "#f8fafc" }}>
+            <h2 style={{ marginTop: 0 }}>Score game</h2>
+            <p style={{ color: "#475569" }}>Select a single-game matchup and enter the score. The configured scoring format is enforced; unusual but possible scores require an explicit review acknowledgement.</p>
+            {bestOfThreeGames.length ? (
+              <section aria-label="Best-of-three score entry handoff" style={{ marginBottom: "1rem", padding: "0.85rem", border: "1px solid #bfdbfe", borderRadius: "10px", background: "#eff6ff" }}>
+                <strong>{bestOfThreeGames.length} best-of-three matchup{bestOfThreeGames.length === 1 ? "" : "s"} require individual game scores.</strong>{" "}
+                <Link href={tournamentRouteHref("/admin/tournaments/live-operations", { tournamentId: selectedTournamentId, tournamentName: snapshot.tournament.name || "", drawId: selectedDrawId })}>Open the Tournament Day Workspace</Link>
+                {" "}to enter Game 1, Game 2, and the deciding Game 3 when needed.
+              </section>
+            ) : null}
+            {scoreableGames.length ? <div style={{ display: "grid", gap: "0.75rem" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1fr) minmax(100px, 140px) minmax(100px, 140px) auto", gap: "0.75rem", alignItems: "end" }}>
+                <label><strong>Matchup</strong><br /><select value={scoreGameId} onChange={(event) => selectScoreGame(event.target.value)} style={inputStyle}><option value="">Choose a matchup…</option>{scoreableGames.map((game) => <option key={String(game.id)} value={String(game.id)}>{gameLabel(game, teamsById, players)}</option>)}</select></label>
+                <label><strong>Score A</strong><br /><input type="number" min="0" step="1" value={scoreA} onChange={(event) => { setScoreA(event.target.value); setUnusualScoreAcknowledged(false); }} style={inputStyle} /></label>
+                <label><strong>Score B</strong><br /><input type="number" min="0" step="1" value={scoreB} onChange={(event) => { setScoreB(event.target.value); setUnusualScoreAcknowledged(false); }} style={inputStyle} /></label>
+                <ConfirmAction triggerLabel="Save score" title="Save this matchup score?" description={`This records ${scoreA || "—"}–${scoreB || "—"} for the selected matchup${unusualScoreAcknowledged ? " with an explicit unusual-score acknowledgement" : ""}.`} confirmLabel="Yes, save score" confirmationText="SAVE SCORE" disabled={drawCasWriteDisabled || !selectedScoreGame || !scoreA.trim() || !scoreB.trim()} busy={busy} onConfirm={saveScore} />
+              </div>
+              <label style={{ display: "flex", gap: "0.45rem", alignItems: "flex-start", color: "#475569" }}>
+                <input type="checkbox" checked={unusualScoreAcknowledged} onChange={(event) => setUnusualScoreAcknowledged(event.target.checked)} />
+                I reviewed this score and confirm it is intentional if the server classifies it as unusual.
+              </label>
+            </div> : <p style={{ color: "#64748b" }}>{snapshot.games.length ? "No ordinary played matchup is available for score entry." : "Generate games before scoring."}</p>}
+            {nonPlayedGames.length ? (
+              <section aria-label="Non-played tournament outcomes" style={{ marginTop: "1rem", padding: "0.85rem", border: "1px solid #fed7aa", borderRadius: "10px", background: "#fff7ed" }}>
+                <h3 style={{ marginTop: 0 }}>Non-played outcomes</h3>
+                <p style={{ color: "#7c2d12" }}>These results stay visible but are locked in this ordinary score editor. Review or change them only in the guarded Day Workspace.</p>
+                <ul>
+                  {nonPlayedGames.map((game) => (
+                    <li key={String(game.id || gameLabel(game, teamsById, players))}>
+                      <strong>{resultTypeLabel(game)} — not played:</strong> {gameLabel(game, teamsById, players)}. Winner: {teamLabel(teamsById.get(String(game.winner_team_id || "")), players)}. {shortValue(game.result_note)}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : null}
+          </article>
           <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Generate playoffs</h2><p style={{ color: "#475569" }}>After all round-robin games are scored, choose how many teams advance.</p><div style={{ display: "grid", gridTemplateColumns: "minmax(140px, 180px) auto", gap: "0.75rem", alignItems: "end" }}><label><strong>Advance count</strong><br /><select value={playoffAdvanceCount} onChange={(event) => setPlayoffAdvanceCount(event.target.value)} style={inputStyle}><option value="4">4 teams</option><option value="5">5 teams</option><option value="6">6 teams</option></select></label><ConfirmAction triggerLabel="Generate playoffs" title="Generate the playoff bracket?" description={`This advances ${playoffAdvanceCount} teams from the reviewed round-robin results into the playoff bracket.`} confirmLabel="Yes, generate playoffs" confirmationText="GENERATE PLAYOFFS" disabled={gameSnapshotCasDisabled || !selectedDrawId} busy={busy} onConfirm={generatePlayoffs} /></div></article>
           <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Generate podium</h2><p style={{ color: "#475569" }}>Creates draw-scoped podium rows from finalized playoffs, or from completed round-robin standings when no playoffs exist.</p><ConfirmAction triggerLabel="Generate podium" title="Generate podium placements?" description="This calculates and stores podium rows from the currently reviewed final results." confirmLabel="Yes, generate podium" confirmationText="GENERATE PODIUM" disabled={gameSnapshotCasDisabled || !selectedDrawId} busy={busy} onConfirm={generatePodium} /></article>
-          <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Award podium trophies</h2><p style={{ color: "#475569" }}>Awards draw-scoped tournament badges from generated podium rows. Re-running is idempotent for existing badge context.</p><ConfirmAction triggerLabel="Award podium" title="Award the generated podium trophies?" description="This mints draw-scoped tournament badges for the verified podium placements." confirmLabel="Yes, award podium" confirmationText="AWARD PODIUM" disabled={guardedWriteDisabled || !selectedDrawId} busy={busy} onConfirm={awardPodium} /></article>
+          <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Review and award podium</h2><p style={{ color: "#475569" }}>Podium awards require current explicit review evidence and exact award versions. This legacy editor cannot mint awards.</p><Link href={tournamentRouteHref("/admin/tournaments/live-operations/podium", { tournamentId: selectedTournamentId, tournamentName: snapshot.tournament.name || "", drawId: selectedDrawId })}>Open guarded Podium review</Link></article>
+          </> : null}
           </> : null}
 
           {operationsWriteReady && shows("results") ? (
@@ -775,12 +1332,13 @@ export default function TournamentOpsPanel({
               <p style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
                 <button type="button" onClick={previewResultsImport} disabled={busy || !accessToken || !selectedDrawId || !resultsRawText.trim()} style={ghostButtonStyle}>{busy ? "Reviewing…" : resultsPreview ? "Re-preview exact choices" : "Preview without writing"}</button>
                 <label style={{ display: "flex", gap: "0.4rem", alignItems: "center" }}><input type="checkbox" checked={allowDuplicateMapping} onChange={(event) => { setAllowDuplicateMapping(event.target.checked); setResultsReviewDirty(true); }} />Explicitly allow duplicate player mappings</label>
+                <label style={{ display: "flex", gap: "0.4rem", alignItems: "center" }}><input type="checkbox" checked={unusualImportScoresAcknowledged} onChange={(event) => setUnusualImportScoresAcknowledged(event.target.checked)} />I reviewed every score marked unusual in the preview</label>
               </p>
 
               {resultsPreview ? (
                 <div style={{ display: "grid", gap: "1rem" }}>
                   <div style={{ padding: "0.75rem", background: resultsPreview.ok && !resultsReviewDirty ? "#f0fdf4" : "#fff7ed", borderRadius: "10px" }}>
-                    <strong>{resultsPreview.ok ? "Preview parsed" : "Preview needs review"}</strong> · {resultsPreview.summary.imported_players} players · {resultsPreview.summary.teams} teams · {resultsPreview.summary.matches} matches · {resultsPreview.summary.create_players} proposed new players
+                    <strong>{resultsPreview.ok ? "Preview parsed" : "Preview needs review"}</strong> · {resultsPreview.summary.imported_players} players · {resultsPreview.summary.teams} teams · {resultsPreview.summary.matches} matches · {resultsPreview.summary.create_players} proposed new players · {resultsPreview.summary.unusual_scores || 0} unusual scores
                     <div>Review fingerprint: <code>{resultsPreview.review_fingerprint.slice(0, 16)}</code>{resultsReviewDirty ? " · choices changed; preview again" : " · exact review current"}</div>
                     {resultsPreview.errors.length ? <ul style={{ color: "#b91c1c" }}>{resultsPreview.errors.map((error) => <li key={error}>{error}</li>)}</ul> : null}
                     {resultsPreview.warnings.length ? <ul style={{ color: "#92400e" }}>{resultsPreview.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
@@ -795,7 +1353,7 @@ export default function TournamentOpsPanel({
                         const decision = resultsMappings[importKey] || {};
                         const suggestion = resultsPreview.suggestions[importKey] || {};
                         return <tr key={importKey}>
-                          <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}>{String(player.display_name || player.name || importKey)}</td>
+                          <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}>{String(player.display_name || player.name || `Imported player ${index + 1}`)}</td>
                           <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}><select value={decision.action || "unresolved"} onChange={(event) => { const action = event.target.value; setResultsMappings((current) => ({ ...current, [importKey]: { action, player_id: action === "use_existing" ? current[importKey]?.player_id ?? null : null } })); setResultsReviewDirty(true); }} style={inputStyle}><option value="unresolved">Resolve before commit</option><option value="use_existing">Use existing player</option><option value="create_new">Create new player</option></select></td>
                           <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}>{decision.action === "use_existing" ? <select value={String(decision.player_id || "")} onChange={(event) => { setResultsMappings((current) => ({ ...current, [importKey]: { action: "use_existing", player_id: event.target.value || null } })); setResultsReviewDirty(true); }} style={inputStyle}><option value="">Choose player…</option>{resultsPreview.player_options.map((option) => <option key={String(option.id)} value={String(option.id)}>{option.name}</option>)}</select> : <span>—</span>}</td>
                           <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}>{shortValue(suggestion.suggested_player_name || suggestion.suggested_name || suggestion.reason)}</td>
@@ -815,8 +1373,8 @@ export default function TournamentOpsPanel({
                           <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}>{rowKey}</td>
                           <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}><input type="checkbox" checked={review.include !== false} onChange={(event) => { setResultsMatchReviews((current) => ({ ...current, [rowKey]: { ...review, include: event.target.checked } })); setResultsReviewDirty(true); }} /></td>
                           <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}><select value={review.stage || "PLAYOFF"} onChange={(event) => { setResultsMatchReviews((current) => ({ ...current, [rowKey]: { ...review, stage: event.target.value } })); setResultsReviewDirty(true); }} style={inputStyle}><option value="ROUND_ROBIN">Round robin</option><option value="PLAYOFF">Playoff</option><option value="BRONZE">Bronze</option><option value="FINAL">Final</option></select></td>
-                          <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}>{shortValue(match.team_a_label || match.team_a_ref)}</td>
-                          <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}>{shortValue(match.team_b_label || match.team_b_ref)}</td>
+                          <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}>{String(match.team_a_label || importedTeamLabel(match.team_a_ref))}</td>
+                          <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}>{String(match.team_b_label || importedTeamLabel(match.team_b_ref))}</td>
                           <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}>{shortValue(match.score_a)}–{shortValue(match.score_b)}</td>
                         </tr>;
                       })}</tbody>
@@ -825,11 +1383,11 @@ export default function TournamentOpsPanel({
 
                   <div>
                     <h3>Podium review</h3>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem" }}>{["1", "2", "3"].map((placement) => <label key={placement}><strong>Place {placement}</strong><br /><select value={resultsPodiumRefs[placement] || ""} onChange={(event) => { setResultsPodiumRefs((current) => ({ ...current, [placement]: event.target.value || null })); setResultsReviewDirty(true); }} style={inputStyle}><option value="">No placement</option>{resultsPreview.podium_candidates.map((teamRef) => <option key={teamRef} value={teamRef}>{teamRef}</option>)}</select></label>)}</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem" }}>{["1", "2", "3"].map((placement) => <label key={placement}><strong>Place {placement}</strong><br /><select value={resultsPodiumRefs[placement] || ""} onChange={(event) => { setResultsPodiumRefs((current) => ({ ...current, [placement]: event.target.value || null })); setResultsReviewDirty(true); }} style={inputStyle}><option value="">No placement</option>{resultsPreview.podium_candidates.map((teamRef) => <option key={teamRef} value={teamRef}>{importedTeamLabel(teamRef)}</option>)}</select></label>)}</div>
                   </div>
 
                   {operationsWriteReady ? <div style={{ padding: "0.9rem", border: "1px solid #93c5fd", borderRadius: "10px", background: "white" }}>
-                    <ConfirmAction triggerLabel="Commit reviewed results" title={`${resultsImportMode === "REPLACE" ? "Replace" : "Import"} the draw results?`} description={<>{resultsImportMode === "REPLACE" ? "This replaces the draw's teams, games, and podium with the exact reviewed CSV fingerprint." : "This appends the exact reviewed CSV results to the selected draw."}{resultsPreview.summary.create_players ? ` It also creates ${resultsPreview.summary.create_players} permanent player record${resultsPreview.summary.create_players === 1 ? "" : "s"} from the reviewed mappings.` : " It creates no new player records."}</>} confirmLabel={resultsImportMode === "REPLACE" ? "Yes, replace results" : "Yes, import results"} confirmationText={resultsImportMode === "REPLACE" ? "REPLACE RESULTS" : "IMPORT RESULTS"} tone={resultsImportMode === "REPLACE" ? "danger" : "default"} disabled={drawCasWriteDisabled || !selectedDrawId || !resultsPreview.ok || resultsReviewDirty} busy={busy} onConfirm={commitResultsImport} />
+                    <ConfirmAction triggerLabel="Commit reviewed results" title={`${resultsImportMode === "REPLACE" ? "Replace" : "Import"} the draw results?`} description={<>{resultsImportMode === "REPLACE" ? "This replaces the draw's teams, games, and podium with the exact reviewed CSV fingerprint." : "This appends the exact reviewed CSV results to the selected draw."}{resultsPreview.summary.create_players ? ` It also creates ${resultsPreview.summary.create_players} permanent player record${resultsPreview.summary.create_players === 1 ? "" : "s"} from the reviewed mappings.` : " It creates no new player records."}{resultsPreview.summary.unusual_scores ? ` You acknowledged ${resultsPreview.summary.unusual_scores} unusual score${resultsPreview.summary.unusual_scores === 1 ? "" : "s"}.` : ""}</>} confirmLabel={resultsImportMode === "REPLACE" ? "Yes, replace results" : "Yes, import results"} confirmationText={resultsImportMode === "REPLACE" ? "REPLACE RESULTS" : "IMPORT RESULTS"} tone={resultsImportMode === "REPLACE" ? "danger" : "default"} disabled={drawCasWriteDisabled || !selectedDrawId || !resultsPreview.ok || resultsReviewDirty || Boolean(resultsPreview.summary.unusual_scores && !unusualImportScoresAcknowledged)} busy={busy} onConfirm={commitResultsImport} />
                   </div> : null}
                 </div>
               ) : null}
@@ -838,58 +1396,23 @@ export default function TournamentOpsPanel({
 
           {operationsWriteReady && shows("publish") ? (
             <article style={{ ...cardStyle, background: "#fff7ed", borderColor: "#fed7aa" }}>
-              <h2 style={{ marginTop: 0 }}>Publish official rating matches</h2>
-              <p style={{ color: "#7c2d12" }}>Creates official Match Log rows from finalized tournament games and applies the regular rating path for both doubles and singles. Optional medal-playoff bonus adds Elo only to semifinal, bronze, and gold winners. Publishing needs both tournament and match-management permissions, a separate staging gate, and a safe email mode when automatic player updates are enabled.</p>
-              {!officialPublishReady ? <p style={{ color: "#b91c1c", fontWeight: 700 }}>Official publish is gated off in this environment.</p> : null}
-              {snapshot.rating_child_publish_queue?.length ? (
-                <div style={{ display: "grid", gap: "0.75rem", marginBottom: "1rem" }}>
-                  <h3 style={{ marginBottom: 0 }}>Four-player rating games</h3>
-                  <p style={{ color: "#7c2d12", margin: 0 }}>Each finalized child game publishes separately. Parent team results never enter ratings.</p>
-                  {snapshot.rating_child_publish_queue.map((row) => {
-                    const drawId = String(row.draw?.id || "");
-                    const label = String(
-                      row.draw?.name ||
-                      row.child_game?.game_code ||
-                      "Four-player rating game"
-                    );
-                    return (
-                      <div key={drawId} style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", alignItems: "center", justifyContent: "space-between", padding: "0.75rem", border: "1px solid #fed7aa", borderRadius: "10px", background: "white" }}>
-                        <div>
-                          <strong>{label}</strong>
-                          <br />
-                          <span style={{ color: "#7c2d12" }}>{row.publish_state.replaceAll("_", " ")}</span>
-                        </div>
-                        {row.publish_state === "READY_TO_PUBLISH" ? (
-                          <ConfirmAction
-                            triggerLabel="Publish rating game"
-                            title={`Publish ${label} as an official rating match?`}
-                            description="This publishes only the finalized child game. No playoff bonus is permitted."
-                            confirmLabel="Publish rating game"
-                            confirmationText="PUBLISH MATCHES"
-                            tone="danger"
-                            disabled={guardedWriteDisabled || !officialPublishReady || !drawId}
-                            busy={busy}
-                            onConfirm={(confirmation) =>
-                              publishOfficialMatches(confirmation, drawId)
-                            }
-                          />
-                        ) : null}
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : null}
-              <div style={{ display: "grid", gridTemplateColumns: "minmax(160px, 220px) auto", gap: "0.75rem", alignItems: "end" }}>
-                <label><strong>Winner bonus Elo</strong><br /><input type="number" min="0" step="0.5" value={publishBonusElo} onChange={(event) => setPublishBonusElo(event.target.value)} style={inputStyle} /><small style={{ color: "#7c2d12" }}>4 Elo = +0.01 JUPR.</small></label>
-                <ConfirmAction triggerLabel="Publish official matches" title="Publish these tournament games as official rated matches?" description={`This terminal write creates Match Log rows from every finalized game and applies a ${publishBonusElo || "0"}-Elo medal-playoff bonus to eligible winners.`} confirmLabel="Yes, publish official matches" confirmationText="PUBLISH MATCHES" tone="danger" disabled={guardedWriteDisabled || !officialPublishReady || !selectedDrawId} busy={busy} onConfirm={publishOfficialMatches} />
-              </div>
+              <h2 style={{ marginTop: 0 }}>Official publishing moved</h2>
+              <p style={{ color: "#7c2d12" }}>This legacy operations editor cannot publish official matches or four-player rating children. The guarded Publish workspace requires tournament-wide score, podium-review, award, official-link, and recovery evidence before any write.</p>
+              <Link href={tournamentRouteHref("/admin/tournaments/ops/publish", { tournamentId: selectedTournamentId, tournamentName: snapshot.tournament.name || "", drawId: selectedDrawId })}>Open guarded Publish workspace</Link>
             </article>
           ) : null}
 
-          <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Draws</h2><GenericRowsTable rows={snapshot.draws} preferredColumns={["id", "name", "status", "registration_day_id", "event_option_id", "team_count"]} /></article>
-          <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Teams</h2><GenericRowsTable rows={snapshot.teams} preferredColumns={["team_number", "player1_id", "player2_id", "source", "draw_id", "event_option_id"]} /></article>
-          <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Games</h2><GenericRowsTable rows={snapshot.games} preferredColumns={["stage", "rr_round_number", "rr_slot_number", "playoff_game_code", "playoff_round", "team_a_id", "team_b_id", "score_a", "score_b", "winner_team_id", "status"]} /></article>
-          <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Podium</h2><GenericRowsTable rows={snapshot.podium} preferredColumns={["placement", "team_id", "player1_id", "player2_id", "award_label", "draw_id"]} /></article>
+          {showsLegacyDrawRuntime ? (
+          <article data-testid="legacy-ops-human-summary" style={cardStyle}>
+            <h2 style={{ marginTop: 0 }}>Human-readable live details</h2>
+            <p style={{ color: "#475569" }}>Raw draw, player, team, game, and podium identifiers are intentionally hidden from this legacy workspace. Use the focused Live views for matchup cards, score corrections, and podium review.</p>
+            <p style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+              <Link href={tournamentRouteHref("/admin/tournaments/live-operations/draws", { tournamentId: selectedTournamentId, tournamentName: snapshot.tournament.name || "", drawId: selectedDrawId })}>Open draw overview</Link>
+              <Link href={tournamentRouteHref("/admin/tournaments/live-operations/scoring", { tournamentId: selectedTournamentId, tournamentName: snapshot.tournament.name || "", drawId: selectedDrawId })}>Open matchup scoring</Link>
+              <Link href={tournamentRouteHref("/admin/tournaments/live-operations/podium", { tournamentId: selectedTournamentId, tournamentName: snapshot.tournament.name || "", drawId: selectedDrawId })}>Open podium review</Link>
+            </p>
+          </article>
+          ) : null}
         </>
       ) : null}
 

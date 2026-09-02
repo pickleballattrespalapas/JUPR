@@ -17,11 +17,12 @@ from jupr_app.services.match_exclusion_durability_service import (
 
 MATCH_LOG_SELECT = (
     "id,date,league,week_tag,match_type,t1_p1,t1_p2,t2_p1,t2_p2,"
-    "score_t1,score_t2,notes,deleted_at,context_type,context_id,updated_at,row_version"
+    "score_t1,score_t2,notes,deleted_at,context_type,context_id,tournament_id,"
+    "tournament_game_id,updated_at,row_version"
 )
 MATCH_LOG_MINIMAL_SELECT = (
     "id,date,league,week_tag,match_type,t1_p1,t1_p2,t2_p1,t2_p2,"
-    "score_t1,score_t2,deleted_at,row_version"
+    "score_t1,score_t2,deleted_at,tournament_id,tournament_game_id,row_version"
 )
 MATCH_LOG_RECOVERY_SELECT = (
     f"{MATCH_LOG_MINIMAL_SELECT},context_type,context_id"
@@ -80,6 +81,54 @@ def _safe_int(value: Any) -> int | None:
 def _clean_text(value: Any, *, limit: int = 200) -> str:
     text = str(value or "").replace("<", "").replace(">", "").strip()
     return text[:limit]
+
+
+def _reject_official_tournament_match_mutations(
+    supabase: Any,
+    *,
+    club_id: str,
+    match_ids: list[int],
+) -> None:
+    """Keep generic Match Log writes from diverging tournament authority.
+
+    Official tournament rows are projections of ``tournament_games``. Their
+    score, participants, and active state must be corrected through Tournament
+    Manager so bracket/standings state and the canonical rating match stay in
+    lockstep.
+    """
+
+    clean_ids = sorted({int(value) for value in match_ids if int(value) > 0})
+    if not clean_ids:
+        return
+    try:
+        rows = _safe_rows(
+            supabase.table("matches")
+            .select("id,tournament_id,tournament_game_id,context_type,context_id")
+            .eq("club_id", str(club_id))
+            .in_("id", clean_ids)
+            .execute()
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "Match Log could not verify tournament linkage before mutation."
+        ) from exc
+
+    linked_ids = sorted(
+        int(match_id)
+        for row in rows
+        if (
+            row.get("tournament_game_id") not in (None, "")
+            or str(row.get("context_type") or "").strip().casefold()
+            == "tournament_game"
+        )
+        if (match_id := _safe_int(row.get("id"))) is not None
+    )
+    if linked_ids:
+        raise ValueError(
+            "Official tournament matches cannot be edited or excluded from "
+            "the generic Match Log. Use Tournament Manager correction and "
+            f"recovery tools for match IDs {linked_ids[:10]}."
+        )
 
 
 def _safe_rows(resp: Any) -> list[dict[str, Any]]:
@@ -351,6 +400,8 @@ def _match_payload(row: dict[str, Any], *, club_id: str, names: dict[int, str]) 
         "is_active": row.get("deleted_at") in (None, ""),
         "context_type": _clean_text(row.get("context_type"), limit=80),
         "context_id": row.get("context_id"),
+        "tournament_id": row.get("tournament_id"),
+        "tournament_game_id": row.get("tournament_game_id"),
         "created_at": _json_safe(row.get("created_at")),
         "updated_at": _json_safe(row.get("updated_at")),
         "dup_key": dup_key,
@@ -428,7 +479,7 @@ def _recent_match_exclusion_operations(
             supabase.table("match_exclusion_operations")
             .select(
                 "id,mode,status,recovery_stage,replay_job_id,error_text,"
-                "affected_player_ids,result_json,created_at,finished_at"
+                "affected_player_ids,result_json,source,created_at,finished_at"
             )
             .eq("club_id", str(club_id))
             .order("created_at", desc=True)
@@ -457,6 +508,7 @@ def _recent_match_exclusion_operations(
             "replay_job_id": str(row.get("replay_job_id") or "") or None,
             "error_text": _clean_text(row.get("error_text"), limit=500)
             or None,
+            "source": _clean_text(row.get("source"), limit=120) or None,
             "affected_player_ids": [
                 int(value) for value in row.get("affected_player_ids") or []
             ],
@@ -805,6 +857,16 @@ def apply_admin_match_log_edits(
         raise ValueError(f"No more than {MAX_PATCHES} patches can be applied at once.")
     if any("is_active" in patch for patch in clean_patches):
         raise ValueError("Use the guarded rated-match exclude workflow to change match activity.")
+    patch_ids = [
+        int(match_id)
+        for patch in clean_patches
+        if (match_id := _safe_int(patch.get("id"))) is not None
+    ]
+    _reject_official_tournament_match_mutations(
+        supabase,
+        club_id=str(club_id),
+        match_ids=patch_ids,
+    )
 
     return apply_atomic_match_edits(
         supabase,
@@ -887,6 +949,11 @@ def apply_admin_match_log_duplicate_cleanup(
     )
     scan_warnings: list[str] = []
     if stored_operation is None:
+        _reject_official_tournament_match_mutations(
+            supabase,
+            club_id=str(club_id),
+            match_ids=requested_ids,
+        )
         duplicate_payload, _all_rows, scan_warnings = _cleanup_candidate_payload(
             supabase,
             club_id=str(club_id),
@@ -952,12 +1019,28 @@ def apply_admin_match_log_exclusions(
         raise PermissionError("Next Match Log destructive actions are disabled.")
     if str(confirmation_text or "").strip().upper() != "DELETE":
         raise ValueError("Type DELETE to confirm rated match exclusion.")
+    clean_targets = [
+        dict(target) for target in (targets or []) if isinstance(target, dict)
+    ]
+    stored_operation = find_match_exclusion_operation_by_idempotency_key(
+        supabase,
+        club_id=str(club_id),
+        idempotency_key=idempotency_key,
+    )
+    if stored_operation is None:
+        _reject_official_tournament_match_mutations(
+            supabase,
+            club_id=str(club_id),
+            match_ids=[
+                int(match_id)
+                for target in clean_targets
+                if (match_id := _safe_int(target.get("match_id"))) is not None
+            ],
+        )
     return apply_atomic_match_exclusions(
         supabase,
         club_id=str(club_id),
-        targets=[
-            dict(target) for target in (targets or []) if isinstance(target, dict)
-        ],
+        targets=clean_targets,
         actor_email=str(actor_email or ""),
         actor_role=str(actor_role or ""),
         source=source,

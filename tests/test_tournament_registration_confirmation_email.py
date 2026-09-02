@@ -196,6 +196,39 @@ class _CaptureSupabase:
         return _CaptureQuery(name, self.storage, self.calls)
 
 
+class _CaptureRpc:
+    def __init__(self, owner, name, params):
+        self.owner = owner
+        self.name = name
+        self.params = params
+
+    def execute(self):
+        self.owner.rpc_calls.append((self.name, self.params))
+        registration = self.params["p_registration"]
+        return type(
+            "Resp",
+            (),
+            {
+                "data": {
+                    "ok": True,
+                    "registration_id": registration["id"],
+                    "submitted_at": registration["submitted_at"],
+                    "updated_at": registration["updated_at"],
+                    "selection_count": len(self.params["p_selections"]),
+                }
+            },
+        )()
+
+
+class _CaptureRpcSupabase(_CaptureSupabase):
+    def __init__(self):
+        super().__init__()
+        self.rpc_calls = []
+
+    def rpc(self, name, params):
+        return _CaptureRpc(self, name, params)
+
+
 def test_non_edit_duplicate_registration_does_not_silently_overwrite(monkeypatch):
     from jupr_app.domain import tournament_registration_repo as repo
 
@@ -295,6 +328,30 @@ def test_admin_supplied_registration_status_is_respected(monkeypatch):
         payload={"display_name": "Cancelled Player", "email": "cancelled@example.com", "status": "cancelled", "selections": []},
     )
     assert supabase.storage["tournament_registrations"][0]["status"] == "cancelled"
+
+
+def test_admin_registration_uses_validated_rpc_and_preserves_player_id(monkeypatch):
+    from jupr_app.domain import tournament_registration_repo as repo
+
+    supabase = _CaptureRpcSupabase()
+    monkeypatch.setattr(repo, "_get_existing_registration_by_email", lambda *_args: None)
+    monkeypatch.setattr(repo, "list_registration_days", lambda *_args: [])
+    monkeypatch.setattr(repo, "list_event_options", lambda *_args: [])
+
+    result = repo.create_admin_registration(
+        supabase,
+        tournament_id="tournament_1",
+        payload={
+            "display_name": "Known Player",
+            "email": "known@example.com",
+            "player_id": 42,
+            "selections": [],
+        },
+    )
+
+    assert result["registration_id"].startswith("reg_")
+    assert supabase.rpc_calls[0][0] == repo.ADMIN_REGISTRATION_CANONICAL_CREATE_RPC
+    assert supabase.rpc_calls[0][1]["p_registration"]["player_id"] == 42
 
 
 def test_edit_registration_without_status_preserves_existing_status(monkeypatch):

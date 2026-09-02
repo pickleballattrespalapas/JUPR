@@ -37,7 +37,7 @@ def test_selected_tournament_ops_keeps_read_only_snapshots_and_hides_post_contro
     assert "Tournament and draw snapshots remain available." in panel
     assert "POST-backed previews and mutation controls are hidden" in panel
     assert 'operationsWriteReady && snapshot && shows("draws")' in panel
-    assert 'operationsWriteReady && shows("import")' in panel
+    assert 'operationsWriteReady && (shows("import") || workflow === "draws")' in panel
     assert 'operationsWriteReady && shows("draws")' in panel
     assert 'operationsWriteReady && shows("results")' in panel
     assert 'operationsWriteReady && shows("publish")' in panel
@@ -51,15 +51,48 @@ def test_selected_tournament_ops_keeps_read_only_snapshots_and_hides_post_contro
 
     assert "initialTournamentId: string" in panel
     assert "useAuthenticatedAutoLoad(" in panel
-    assert "() => loadOps(initialTournamentId, \"\")" in panel
+    assert '() => loadOps(initialTournamentId, initialDrawId || "")' in panel
     assert "Refresh tournaments" not in panel
     assert "selectTournament(event.target.value)" not in panel
     assert "loadTournaments" not in panel
     assert "Reload selected draw" in panel
     assert ">Load tournaments<" not in panel
     assert "Load ops snapshot" not in panel
-    for read_only_table in ("Draws", "Teams", "Games", "Podium"):
-        assert f">{read_only_table}</h2><GenericRowsTable" in panel
+    assert "This legacy operations editor cannot publish official matches" in panel
+    assert "This legacy editor cannot mint awards" in panel
+    assert "awardPodium" not in panel
+    assert "publishOfficialMatches" not in panel
+    assert "Publish rating game" not in panel
+    assert 'data-testid="legacy-ops-human-summary"' in panel
+    assert "Raw draw, player, team, game, and podium identifiers are intentionally hidden" in panel
+    assert "GenericRowsTable" not in panel
+    assert 'placeholder="player id"' not in panel
+    assert 'placeholder="optional player id"' not in panel
+    assert "Player names must match the club roster" in panel
+    assert "Player names or IDs" not in panel
+    assert "draw.name || draw.id" not in panel
+    assert "gameLabel(game, teamsById, players)" in panel
+    assert "importedTeamLabel(match.team_a_ref)" in panel
+    assert "importedTeamLabel(match.team_b_ref)" in panel
+    assert "{importedTeamLabel(teamRef)}</option>" in panel
+
+
+def test_legacy_streamlit_tournament_pages_have_no_direct_unarchive_action() -> None:
+    for relative_path in (
+        "jupr_app/ui/pages/tournaments.py",
+        "jupr_app/ui/pages/tournament_ops.py",
+    ):
+        source = _read(relative_path)
+        assert "unarchive_tournament" not in source
+        assert 'button("Unarchive Tournament"' not in source
+        assert "Direct unarchive is unavailable" in source
+
+
+def test_setup_operator_labels_never_fall_back_to_registration_ids() -> None:
+    panel = _read("apps/web/app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")
+
+    assert "registration.display_name || registration.email || registration.registration_id" not in panel
+    assert 'registration.display_name || registration.email || "Registration needs details"' in panel
 
 
 def test_tournament_ops_workflow_header_preserves_phase_and_tournament_context() -> None:
@@ -73,3 +106,148 @@ def test_tournament_ops_workflow_header_preserves_phase_and_tournament_context()
     assert "TournamentOpsPanel" in page
     assert "initialTournamentId={tournamentId}" in page
     assert "operationsWriteReady" not in page
+
+
+def test_draw_setup_and_recovery_is_reachable_from_live_operations() -> None:
+    route = _read("apps/web/app/admin/tournaments/ops/draws/page.tsx")
+    phase_nav = _read("apps/web/components/TournamentPhaseNav.tsx")
+    panel = _read("apps/web/app/admin/tournaments/ops/TournamentOpsPanel.tsx")
+
+    assert 'workflow="draws"' in route
+    assert 'title="draw setup & recovery"' in route
+    assert 'redirect("/admin/tournaments")' in route
+    assert '"/admin/tournaments/live-operations"' not in route
+    assert 'label: "Draw setup & recovery"' in phase_nav
+    assert 'href: tournamentRouteHref("/admin/tournaments/ops/draws", context)' in phase_nav
+    assert 'pathname === "/admin/tournaments/ops/draws"' in phase_nav
+    assert "Cancel empty setup" in panel
+    assert "Cancel selected empty event" in panel
+    assert "Reconcile missing games" in panel
+    assert "function eventOptionEnabled" in panel
+    assert "(snapshot.event_options || []).filter(eventOptionEnabled).map" in panel
+    assert "const eligibleEventOptions = (payload.event_options || []).filter(eventOptionEnabled);" in panel
+    assert "setDrawEventOptionId((current) => eligibleEventOptions.some" in panel
+    assert "setEmptyEventOptionId((current) => eligibleEventOptions.some" in panel
+
+
+def test_draw_setup_and_recovery_hides_retired_day_runtime_controls() -> None:
+    panel = _read("apps/web/app/admin/tournaments/ops/TournamentOpsPanel.tsx")
+
+    assert 'const showsLegacyDrawRuntime = workflow === "all";' in panel
+    draw_workflow = panel.split('{operationsWriteReady && shows("draws") ? <>', 1)[1].split(
+        '{operationsWriteReady && shows("results")', 1
+    )[0]
+    runtime_start = draw_workflow.index("{showsLegacyDrawRuntime ? <>")
+    setup_only = draw_workflow[:runtime_start]
+    for heading in ("Team editor", "Round-robin schedule", "Cancel empty setup"):
+        assert heading in setup_only
+    legacy_runtime = draw_workflow[runtime_start:]
+    for heading in (
+        "Score game",
+        "Generate playoffs",
+        "Generate podium",
+        "Review and award podium",
+    ):
+        assert heading not in setup_only
+        assert heading in legacy_runtime
+
+    assert (
+        '{showsLegacyDrawRuntime ? (\n'
+        '          <article data-testid="legacy-ops-human-summary"'
+    ) in panel
+
+
+def test_draw_setup_exposes_confirmed_registration_import_without_advanced_bulk_import() -> None:
+    panel = _read("apps/web/app/admin/tournaments/ops/TournamentOpsPanel.tsx")
+
+    shared_import = panel.split(
+        '{operationsWriteReady && (shows("import") || workflow === "draws") ? <>', 1
+    )[1].split('{operationsWriteReady && shows("draws") ? <>', 1)[0]
+    assert "Import confirmed registrations" in shared_import
+    assert 'triggerLabel="Import confirmed registrations"' in shared_import
+    assert "onConfirm={importRegistrations}" in shared_import
+    assert "disabled={registrationImportDisabled}" in shared_import
+    assert 'Registration import is closed because games already exist for this draw.' in shared_import
+    assert '{shows("import") ? (' in shared_import
+    assert "Bulk import teams" in shared_import.split('{shows("import") ? (', 1)[1]
+
+    assert "const registrationImportDisabled = drawCasWriteDisabled || !selectedDrawId || reviewedSourceGameVersions.length > 0;" in panel
+    assert "For registered divisions, import confirmed registrations above first." in panel
+    assert 'setRegistrationImportMode("REPLACE");' in panel.split("async function createDraw", 1)[1].split("async function executeRegistrationImport", 1)[0]
+    assert "const manualTeamRowsReady = teamRows.some" in panel
+    assert "disabled={drawCasWriteDisabled || !manualTeamRowsReady}" in panel
+    assert "Choose Player 1 for at least one team before saving manually." in panel
+
+
+def test_registration_import_surfaces_excluded_needs_partner_warning_in_success_result() -> None:
+    panel = _read("apps/web/app/admin/tournaments/ops/TournamentOpsPanel.tsx")
+
+    assert "function warningSuffix(payload: AdminTournamentWriteResponse)" in panel
+    assert "const importWarning = warningSuffix(payload);" in panel
+    assert 'actionSuccess("Registration teams imported"' in panel
+    assert 'imported.${importWarning}`' in panel
+
+
+def test_legacy_admin_tools_cannot_bypass_canonical_tournament_publish() -> None:
+    next_tools = _read("apps/web/app/admin/tools/AdminToolsPanel.tsx")
+    streamlit_tools = _read("jupr_app/ui/pages/admin_tools.py")
+
+    assert "Preview missing tournament matches" in next_tools
+    assert "Tournament match backfill is diagnostic and read-only" in next_tools
+    assert "No write is available here" in next_tools
+    assert "applyTournamentMatchBackfill" not in next_tools
+    assert "Apply selected tournament matches" not in next_tools
+
+    assert "Tournament match backfill writes are retired" in streamlit_tools
+    assert "Backfill Missing Tournament Matches" not in streamlit_tools
+    assert "_run_tournament_match_backfill" not in streamlit_tools
+    assert "submit_match_batch" not in streamlit_tools
+
+
+def test_legacy_tournament_score_surfaces_reject_blank_and_lock_non_played_results() -> None:
+    live = _read("apps/web/app/admin/tournament-live/TournamentLivePanel.tsx")
+    ops = _read("apps/web/app/admin/tournaments/ops/TournamentOpsPanel.tsx")
+
+    for source in (live, ops):
+        assert "NON_PLAYED_RESULT_TYPES" in source
+        assert "isNonPlayedGame" in source
+        assert "scoreA.trim()" in source
+        assert "scoreB.trim()" in source
+        assert "cannot be changed through ordinary score entry" in source
+        assert "not played" in source
+
+    assert "scoreableGames" in ops
+    assert 'aria-label="Non-played tournament outcomes"' in ops
+    assert "editable && !nonPlayed" in live
+    assert "guarded Day Workspace" in live
+
+
+def test_standalone_ops_routes_inherited_best_of_three_scoring_to_day_workspace() -> None:
+    ops = _read("apps/web/app/admin/tournaments/ops/TournamentOpsPanel.tsx")
+
+    resolver = ops.split("function effectiveGameScoringFormat(", 1)[1].split(
+        "function playerLabel(", 1
+    )[0]
+    assert "game.scoring_format" in resolver
+    assert "game.event_option_id || draw?.event_option_id" in resolver
+    assert resolver.index("eventOption?.scoring_override") < resolver.index(
+        "eventOption?.division_scoring"
+    ) < resolver.index("eventOption?.scoring_default")
+    assert ops.count('effectiveScoringFormat(game) === "BEST_2_OF_3"') == 2
+    assert ops.count('effectiveScoringFormat(game) !== "BEST_2_OF_3"') == 1
+    assert 'effectiveScoringFormat(selectedGame) === "BEST_2_OF_3"' in ops
+    assert "String(selectedGame.scoring_format" not in ops
+    assert "Open the Tournament Day Workspace" in ops
+
+
+def test_tournament_home_and_closeout_handle_terminal_publication_without_a_draw() -> None:
+    home = _read("apps/web/app/admin/tournaments/tournament/TournamentHomePanel.tsx")
+    live = _read("apps/web/app/admin/tournament-live/TournamentLivePanel.tsx")
+
+    assert "officialPublishComplete" in home
+    assert 'official_publish.state || "").toLowerCase() === "complete"' in home
+    assert "!officialPublishComplete" in home
+    assert "Review completed tournament" in home
+    assert '["overview", "results", "publish-overview", "closeout", "status"].includes(view) ? payload : null' in live
+    assert "setSnapshot(board)" in live
+    assert "lifecycle: current.lifecycle" in live

@@ -11,6 +11,12 @@ require_api_dependency("supabase")
 from fastapi.testclient import TestClient
 
 from services.api.main import app
+from jupr_app.services.admin_tournament_guarded_operation import (
+    TournamentAdminMutationNotAppliedError,
+)
+
+
+ROUND_ROBIN_IDEMPOTENCY_KEY = "11111111-1111-4111-8111-111111111111"
 
 
 def tournament_game_tables():
@@ -68,7 +74,10 @@ def test_admin_tournament_round_robin_generation_contract(monkeypatch):
     response = TestClient(app).post(
         "/admin/clubs/club/tournaments/admin/tournaments/tour_1/draws/draw_1/games/round-robin",
         headers={"Authorization": "Bearer local"},
-        json={"confirmation_text": "GENERATE GAMES"},
+        json={
+            "confirmation_text": "GENERATE GAMES",
+            "idempotency_key": ROUND_ROBIN_IDEMPOTENCY_KEY,
+        },
     )
 
     assert response.status_code == 200
@@ -97,8 +106,89 @@ def test_admin_tournament_round_robin_generation_blocks_existing_games(monkeypat
     response = TestClient(app).post(
         "/admin/clubs/club/tournaments/admin/tournaments/tour_1/draws/draw_1/games/round-robin",
         headers={"Authorization": "Bearer local"},
-        json={"confirmation_text": "GENERATE GAMES"},
+        json={
+            "confirmation_text": "GENERATE GAMES",
+            "idempotency_key": ROUND_ROBIN_IDEMPOTENCY_KEY,
+        },
     )
 
     assert response.status_code == 400
     assert "already has games" in response.json()["detail"]
+
+
+def test_admin_tournament_round_robin_generation_requires_uuid_idempotency_key(
+    monkeypatch,
+):
+    tables = tournament_game_tables()
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr(
+        "services.api.main.create_client", lambda _url, _credential: supabase
+    )
+    _install_auth(monkeypatch)
+
+    missing = TestClient(app).post(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/draws/draw_1/games/round-robin",
+        headers={"Authorization": "Bearer local"},
+        json={"confirmation_text": "GENERATE GAMES"},
+    )
+    invalid = TestClient(app).post(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/draws/draw_1/games/round-robin",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "confirmation_text": "GENERATE GAMES",
+            "idempotency_key": "not-a-uuid",
+        },
+    )
+
+    assert missing.status_code == 422
+    assert invalid.status_code == 422
+
+
+def test_admin_tournament_round_robin_not_applied_envelope_has_operation_key(
+    monkeypatch,
+):
+    tables = tournament_game_tables()
+    supabase = FakeSupabase(tables)
+    operation_key = "a" * 64
+    guarded_kwargs: dict = {}
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr(
+        "services.api.main.create_client", lambda _url, _credential: supabase
+    )
+    _install_auth(monkeypatch)
+
+    def reject_without_write(_supabase, **kwargs):
+        guarded_kwargs.update(kwargs)
+        raise TournamentAdminMutationNotAppliedError(
+            "The database rejected the atomic game schedule; no games were created.",
+            operation_key=operation_key,
+        )
+
+    monkeypatch.setattr(
+        "services.api.admin_tournament_routes._guarded_ops_mutation",
+        reject_without_write,
+    )
+
+    response = TestClient(app).post(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/draws/draw_1/games/round-robin",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "confirmation_text": "GENERATE GAMES",
+            "idempotency_key": ROUND_ROBIN_IDEMPOTENCY_KEY,
+        },
+    )
+
+    assert response.status_code == 409
+    assert guarded_kwargs["idempotency_key"] == ROUND_ROBIN_IDEMPOTENCY_KEY
+    assert response.json()["detail"] == {
+        "kind": "failed",
+        "code": "TOURNAMENT_ADMIN_MUTATION_NOT_APPLIED",
+        "message": "The database rejected the atomic game schedule; no games were created.",
+        "operation_key": operation_key,
+        "recovery_required": False,
+    }

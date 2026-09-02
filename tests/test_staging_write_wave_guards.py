@@ -86,13 +86,18 @@ def test_every_unsafe_fastapi_route_has_an_exact_nonstale_wave_classification() 
     league_domain_overlap = {
         ("POST", "/admin/clubs/{club_id}/league-manager/live/roster-suggestion"),
         ("POST", "/admin/clubs/{club_id}/league-manager/live-sessions"),
+        ("POST", "/admin/clubs/{club_id}/league-manager/live-operations/{operation_key}/reconcile"),
         ("PATCH", "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/snapshot"),
         ("POST", "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}/plan"),
         ("POST", "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}"),
     }
     live_overlap = {
+        ("POST", "/admin/clubs/{club_id}/tournament-live/tournaments/{tournament_id}/check-in/bulk"),
+        ("PUT", "/admin/clubs/{club_id}/tournament-live/tournaments/{tournament_id}/check-in/{registration_id}"),
         ("POST", "/admin/clubs/{club_id}/tournament-live/tournaments/{tournament_id}/draws/{draw_id}/commands"),
         ("POST", "/admin/clubs/{club_id}/tournament-live/tournaments/{tournament_id}/draws/{draw_id}/operations/{operation_key}/reconcile"),
+        ("POST", "/admin/clubs/{club_id}/tournament-live/tournaments/{tournament_id}/days/{day_id}/commands"),
+        ("POST", "/admin/clubs/{club_id}/tournament-live/tournaments/{tournament_id}/days/{day_id}/operations/{operation_key}/reconcile"),
     }
     expected_overlaps = {
         **{
@@ -170,6 +175,10 @@ def test_wave_matching_is_exact_and_unknown_or_none_never_allows_writes() -> Non
         "/admin/clubs/fixture/match-log/exclusions/"
         "00000000-0000-4000-8000-000000000001/recover"
     )
+    league_live_retry_path = (
+        "/admin/clubs/fixture/league-manager/live-sessions/"
+        "00000000-0000-4000-8000-000000000001/rounds/1/retry"
+    )
 
     assert wave_allows_request("public-intake-auth", "POST", intake_path)
     assert not wave_allows_request("public-intake-auth", "POST", f"{intake_path}/extra")
@@ -187,6 +196,16 @@ def test_wave_matching_is_exact_and_unknown_or_none_never_allows_writes() -> Non
     )
     assert not wave_allows_request(
         NO_WRITE_WAVE, "POST", round_robin_preview_path
+    )
+    assert wave_allows_request(
+        "league-live-submit", "POST", league_live_retry_path
+    )
+    assert wave_allows_request("open", "POST", league_live_retry_path)
+    assert not wave_allows_request(
+        "league-live-domain", "POST", league_live_retry_path
+    )
+    assert not wave_allows_request(
+        "league-live-submit", "POST", f"{league_live_retry_path}/extra"
     )
     assert not wave_allows_request("match-player", "POST", exclusion_path)
     assert wave_allows_request(
@@ -247,7 +266,7 @@ def test_direct_singles_uploader_gate_opens_only_in_atomic_match_wave() -> None:
         wave for wave, flags in STAGING_WRITE_WAVES.items() if flag in flags
     } == {"match-player"}
     assert expected_write_flags("match-player")[flag] is True
-    assert f'{flag} = "1"' in (ROOT / "fly.staging.toml").read_text(
+    assert f'{flag} = "0"' in (ROOT / "fly.staging.toml").read_text(
         encoding="utf-8"
     )
     assert f'{flag} = "0"' in (ROOT / "fly.toml").read_text(encoding="utf-8")
@@ -277,7 +296,7 @@ def test_match_log_destructive_gate_opens_only_in_atomic_recovery_wave() -> None
         }
         for name in ALL_STAGING_WRITE_FLAGS
     }
-    assert f'{flag} = "1"' in (ROOT / "fly.staging.toml").read_text(
+    assert f'{flag} = "0"' in (ROOT / "fly.staging.toml").read_text(
         encoding="utf-8"
     )
     assert f'{flag} = "0"' in (ROOT / "fly.toml").read_text(encoding="utf-8")
@@ -290,6 +309,9 @@ def test_match_log_destructive_gate_opens_only_in_atomic_recovery_wave() -> None
 
 def test_tournament_commerce_gate_opens_only_in_its_two_reviewed_waves() -> None:
     flag = "JUPR_ENABLE_STAGING_TOURNAMENT_COMMERCE_WRITES"
+    commerce_service = (
+        ROOT / "jupr_app/services/public_tournament_commerce_service.py"
+    ).read_text(encoding="utf-8")
 
     assert flag not in DORMANT_STAGING_WRITE_FLAGS
     assert {
@@ -298,12 +320,15 @@ def test_tournament_commerce_gate_opens_only_in_its_two_reviewed_waves() -> None
     assert expected_write_flags(NO_WRITE_WAVE)[flag] is False
     assert expected_write_flags("public-intake-auth")[flag] is True
     assert expected_write_flags("tournament-commerce-admin")[flag] is True
-    assert f'{flag} = "1"' in (ROOT / "fly.staging.toml").read_text(
+    assert f'{flag} = "0"' in (ROOT / "fly.staging.toml").read_text(
         encoding="utf-8"
     )
-    assert f'{flag} = "0"' in (ROOT / "fly.toml").read_text(
+    assert f'{flag} = "1"' in (ROOT / "fly.toml").read_text(
         encoding="utf-8"
     )
+    assert 'if environment == "production":' in commerce_service
+    assert "require_production_tournament_writes()" in commerce_service
+    assert "if not _truthy(MUTATION_FLAG):" in commerce_service
     workflow = (
         ROOT / ".github/workflows/fly_api_staging_deploy.yml"
     ).read_text(encoding="utf-8")

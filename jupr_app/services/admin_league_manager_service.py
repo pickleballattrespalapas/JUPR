@@ -9,8 +9,8 @@ from jupr_app.services.staging_write_guard import staging_league_manager_writes_
 from jupr_app.domain.leagues import normalize_league_status
 
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
-LEAGUE_MANAGER_EXTENDED_SELECT = "league_name,league_type,match_format,description,min_weeks,is_active,status,started_at,ended_at,ended_by,schedule_config,court_board_defaults,rules_config,awards_config,k_factor,min_games,event_tags"
-LEAGUE_MANAGER_MINIMAL_SELECT = "league_name,is_active,k_factor,min_games"
+LEAGUE_MANAGER_EXTENDED_SELECT = "id,league_name,league_type,match_format,description,min_weeks,is_active,status,started_at,ended_at,ended_by,schedule_config,court_board_defaults,rules_config,awards_config,k_factor,min_games,event_tags"
+LEAGUE_MANAGER_MINIMAL_SELECT = "id,league_name,is_active,k_factor,min_games"
 LEAGUE_LIFECYCLE_ACTIONS = {
     "draft": ["start"],
     "active": ["pause", "end"],
@@ -212,6 +212,7 @@ def build_admin_league_schedule_preview(schedule_config: Any, *, league_name: An
 def _league_row_payload(row: dict[str, Any]) -> dict[str, Any]:
     league_name = _clean_text(row.get("league_name"), limit=120)
     return {
+        "league_id": _clean_text(row.get("id") or row.get("league_id"), limit=160),
         "league_name": league_name,
         "league_type": _clean_text(row.get("league_type"), limit=80) or "Standard",
         "match_format": "singles" if str(row.get("match_format") or "").strip().casefold() == "singles" else "doubles",
@@ -255,7 +256,7 @@ def _fetch_player_rows(supabase: Any, *, club_id: str) -> list[dict[str, Any]]:
     try:
         rows = _safe_rows(
             supabase.table("players")
-            .select("id,name,active,last_game_at")
+            .select("id,name,rating,starting_rating,active,last_game_at")
             .eq("club_id", str(club_id))
             .order("name", desc=False)
             .execute()
@@ -276,7 +277,14 @@ def _fetch_player_names(supabase: Any, *, club_id: str) -> dict[int, str]:
     return names
 
 
-def _league_standings(supabase: Any, *, club_id: str, league_name: str, limit: int = 50) -> list[dict[str, Any]]:
+def _league_standings(
+    supabase: Any,
+    *,
+    club_id: str,
+    league_name: str,
+    limit: int = 50,
+    include_inactive: bool = False,
+) -> list[dict[str, Any]]:
     player_names = _fetch_player_names(supabase, club_id=str(club_id))
     try:
         rows = _safe_rows(
@@ -290,6 +298,10 @@ def _league_standings(supabase: Any, *, club_id: str, league_name: str, limit: i
         rows = []
     standings: list[dict[str, Any]] = []
     for row in rows:
+        if not include_inactive and (
+            row.get("is_active") is False or bool(row.get("inactive_at"))
+        ):
+            continue
         pid = _safe_int(row.get("player_id"))
         if pid is None:
             continue
@@ -323,6 +335,7 @@ def _league_roster(supabase: Any, *, club_id: str, league_name: str, standings: 
             continue
         league_row = standing_by_player.get(int(pid))
         rating = _safe_float((league_row or {}).get("rating"))
+        overall_rating = _safe_float(player.get("rating"))
         league_active = bool((league_row or {}).get("is_active", False)) and not bool((league_row or {}).get("inactive_at")) if league_row else False
         roster.append(
             {
@@ -332,6 +345,8 @@ def _league_roster(supabase: Any, *, club_id: str, league_name: str, standings: 
                 "league_name": str(league_name),
                 "rating": rating,
                 "rating_jupr": None if rating is None else rating / 400.0,
+                "overall_rating": overall_rating,
+                "overall_rating_jupr": None if overall_rating is None else overall_rating / 400.0,
                 "wins": _safe_int((league_row or {}).get("wins")) or 0,
                 "losses": _safe_int((league_row or {}).get("losses")) or 0,
                 "matches_played": _safe_int((league_row or {}).get("matches_played")) or 0,
@@ -403,7 +418,7 @@ def build_admin_league_manager_validation(
         "warnings": warnings,
         "capabilities": {
             "settings_mode": settings_mode,
-            "roster_mutable": status in {"draft", "active", "paused"},
+            "roster_mutable": status in {"draft", "active"},
             "lifecycle_actions": list(LEAGUE_LIFECYCLE_ACTIONS.get(status, [])),
             "printable": True,
         },
@@ -479,7 +494,16 @@ def get_admin_league_manager_detail(supabase: Any, *, club_id: str, league_name:
     league = next((row for row in leagues if row.get("league_name") == clean_league), None)
     if league is None:
         raise ValueError("league not found")
-    standings = _league_standings(supabase, club_id=str(club_id), league_name=clean_league)
+    include_inactive = str(league.get("status") or "").strip().lower() in {
+        "ended",
+        "archived",
+    }
+    standings = _league_standings(
+        supabase,
+        club_id=str(club_id),
+        league_name=clean_league,
+        include_inactive=include_inactive,
+    )
     roster = _league_roster(supabase, club_id=str(club_id), league_name=clean_league, standings=standings)
     schedule_config = league.get("schedule_config")
     schedule_preview = _schedule_preview(schedule_config)

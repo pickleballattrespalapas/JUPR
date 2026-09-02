@@ -52,8 +52,20 @@ class FakeSupabase:
 def fake_storage():
     return {
         "leagues_metadata": [
-            {"club_id": "club", "league_name": "Open", "k_factor": 32, "is_active": True},
-            {"club_id": "club", "league_name": "Advanced", "k_factor": 24, "is_active": False},
+            {
+                "club_id": "club",
+                "league_name": "Open",
+                "k_factor": 32,
+                "is_active": True,
+                "match_format": "doubles",
+            },
+            {
+                "club_id": "club",
+                "league_name": "Advanced",
+                "k_factor": 24,
+                "is_active": False,
+                "match_format": "doubles",
+            },
         ],
         "replay_jobs": [
             {
@@ -154,6 +166,7 @@ def test_run_replay_calls_domain_and_audits(monkeypatch) -> None:
     assert result["ok"] is True
     assert result["result"]["matches_rewritten"] == 3
     assert calls and calls[0]["target_reset"] == "Open"
+    assert set(calls[0]["df_meta"]["match_format"]) == {"doubles"}
     assert result["job_id"] == "job-1"
     assert storage["admin_activity_log"][0]["action_type"] == "replay_history"
 

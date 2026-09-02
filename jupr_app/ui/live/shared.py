@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import difflib
+import math
 import re
 from typing import Callable
 
@@ -94,7 +95,7 @@ def _default_state(config: LivePageConfig) -> dict:
         "roster_confirmed": False,
         "resolved_roster_ids": {},
         "admin_roster_rows": [],
-        "default_new_player_rating": 3.5,
+        "default_new_player_rating": None,
         "quick_paste_nonce": 0,
     }
 
@@ -272,6 +273,19 @@ def _existing_player_rating_jupr(ctx, player_id: int | None) -> float | None:
     return round(float(rating_elo.iloc[0]) / 400.0, 2)
 
 
+def _new_player_rating(value: object, *, fallback: object = None) -> float | None:
+    for candidate in (value, fallback):
+        if candidate is None:
+            continue
+        try:
+            rating = float(candidate)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(rating) and 1.0 <= rating <= 7.0:
+            return rating
+    return None
+
+
 def _build_roster_candidate_rows(
     participant_names: list[str],
     player_name_to_id: dict[str, int],
@@ -415,7 +429,7 @@ def _default_admin_roster_row(
     *,
     order: int,
     player_name_to_id: dict[str, int],
-    default_new_player_rating: float,
+    default_new_player_rating: float | None,
 ) -> dict:
     normalized_display = normalize_name(display_name)
     exact_pid = player_name_to_id.get(normalized_display)
@@ -448,7 +462,7 @@ def _default_admin_roster_row(
     else:
         status = "create_new_player"
         selected_name = ""
-        starting_rating = float(default_new_player_rating)
+        starting_rating = _new_player_rating(default_new_player_rating)
     return {
         "order": int(order),
         "display_name": normalized_display,
@@ -466,7 +480,7 @@ def _append_roster_names(
     incoming_names: list[str],
     *,
     player_name_to_id: dict[str, int],
-    default_new_player_rating: float,
+    default_new_player_rating: float | None,
 ) -> list[dict]:
     existing_keys = {
         normalize_name(row.get("display_name")).casefold()
@@ -501,7 +515,7 @@ def _rows_from_admin_editor_df(
     *,
     player_name_to_id: dict[str, int],
     ctx,
-    default_new_player_rating: float,
+    default_new_player_rating: float | None,
 ) -> list[dict]:
     rows: list[dict] = []
     for _, row in editor_df.iterrows():
@@ -524,17 +538,12 @@ def _rows_from_admin_editor_df(
         if resolution_status == "existing_player" and selected_player_id is not None:
             starting_rating = _existing_player_rating_jupr(ctx, selected_player_id)
         elif resolution_status == "create_new_player":
-            try:
-                starting_rating = float(row.get("Current / Starting JUPR"))
-            except Exception:
-                starting_rating = float(default_new_player_rating)
-            if starting_rating <= 0:
-                starting_rating = float(default_new_player_rating)
+            starting_rating = _new_player_rating(
+                row.get("Current / Starting JUPR"),
+                fallback=default_new_player_rating,
+            )
         else:
-            try:
-                starting_rating = float(row.get("Current / Starting JUPR"))
-            except Exception:
-                starting_rating = None
+            starting_rating = _new_player_rating(row.get("Current / Starting JUPR"))
         rows.append(
             {
                 "order": int(order),
@@ -555,7 +564,7 @@ def _create_and_resolve_admin_players(
     ctx,
     *,
     roster_rows: list[dict],
-    default_new_player_rating: float,
+    default_new_player_rating: float | None,
     player_name_to_id: dict[str, int],
 ) -> tuple[list[str], dict[str, int], list[str], list[str]]:
     sorted_rows = sorted(
@@ -593,13 +602,15 @@ def _create_and_resolve_admin_players(
             resolved_ids[display_name] = int(selected_pid)
             continue
 
-        rating_jupr = row.get("starting_jupr_rating")
-        try:
-            rating_jupr = float(rating_jupr)
-        except Exception:
-            rating_jupr = float(default_new_player_rating)
-        if rating_jupr <= 0:
-            rating_jupr = float(default_new_player_rating)
+        rating_jupr = _new_player_rating(
+            row.get("starting_jupr_rating"),
+            fallback=default_new_player_rating,
+        )
+        if rating_jupr is None:
+            review_messages.append(
+                f"Review roster: {display_name} needs an explicit Starting JUPR before a new player can be created."
+            )
+            continue
         ok, err = safe_add_player(
             supabase=ctx.supabase,
             club_id=str(ctx.club_id),
@@ -822,8 +833,6 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
     if selected_players_key not in st.session_state:
         st.session_state[selected_players_key] = state.get("selected_existing_players", [])
     default_rating_key = f"{config.state_key}_default_new_player_rating"
-    if default_rating_key not in st.session_state:
-        st.session_state[default_rating_key] = float(state.get("default_new_player_rating") or 3.5)
     previous_selected_existing_players = list(state.get("selected_existing_players") or [])
     selected_existing_players = st.multiselect(
         "Add from current players",
@@ -839,15 +848,20 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
     if use_admin_roster_builder:
         quick_paste_nonce = int(state.get("quick_paste_nonce") or 0)
         quick_paste_key = f"{config.state_key}_quick_paste_{quick_paste_nonce}"
-        state["default_new_player_rating"] = float(
+        state["default_new_player_rating"] = _new_player_rating(
             st.number_input(
-                "Default new-player rating (JUPR)",
+                "New-player starting JUPR (optional batch value)",
                 min_value=1.0,
-                max_value=8.0,
+                max_value=7.0,
+                value=_new_player_rating(state.get("default_new_player_rating")),
                 step=0.05,
+                placeholder="Enter a batch value",
                 key=default_rating_key,
-                help="Used when creating a new player unless overridden per roster row.",
+                help="If entered, this pre-fills new-player rows. Every new player must have an explicit starting JUPR before creation.",
             )
+        )
+        st.caption(
+            "Existing players keep their current overall JUPR. Enter a starting JUPR for every new-player row."
         )
         quick_paste = st.text_area(
             "Quick paste names (one per line)",
@@ -863,7 +877,7 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
                 list(state.get("admin_roster_rows") or []),
                 incoming,
                 player_name_to_id=player_name_to_id,
-                default_new_player_rating=float(state["default_new_player_rating"]),
+                default_new_player_rating=state.get("default_new_player_rating"),
             )
             state["quick_paste_nonce"] = quick_paste_nonce + 1
             st.rerun()
@@ -879,7 +893,7 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
                 list(state.get("admin_roster_rows") or []),
                 newly_added,
                 player_name_to_id=player_name_to_id,
-                default_new_player_rating=float(state["default_new_player_rating"]),
+                default_new_player_rating=state.get("default_new_player_rating"),
             )
         roster_rows = list(state.get("admin_roster_rows") or [])
         if not roster_rows and state.get("participant_text"):
@@ -888,7 +902,7 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
                 [],
                 _participant_lines(state["participant_text"]),
                 player_name_to_id=player_name_to_id,
-                default_new_player_rating=float(state["default_new_player_rating"]),
+                default_new_player_rating=state.get("default_new_player_rating"),
             )
         if not roster_rows:
             st.caption("Add current players or paste names to build the roster.")
@@ -899,14 +913,13 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
                     "Name": str(row.get("display_name") or ""),
                     "Resolution": str(row.get("resolution_status") or "create_new_player"),
                     "Matched Player": str(row.get("selected_existing_name") or ""),
-                    "Current / Starting JUPR": (
-                        row.get("starting_jupr_rating")
-                        if row.get("resolution_status") == "existing_player"
-                        else float(
-                            row.get("starting_jupr_rating")
-                            if row.get("starting_jupr_rating") is not None
-                            else state["default_new_player_rating"]
-                        )
+                    "Current / Starting JUPR": _new_player_rating(
+                        row.get("starting_jupr_rating"),
+                        fallback=(
+                            state.get("default_new_player_rating")
+                            if row.get("resolution_status") == "create_new_player"
+                            else None
+                        ),
                     ),
                 }
                 for idx, row in enumerate(roster_rows)
@@ -932,8 +945,9 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
                 "Current / Starting JUPR": st.column_config.NumberColumn(
                     "Current / Starting JUPR",
                     min_value=1.0,
-                    max_value=8.0,
+                    max_value=7.0,
                     step=0.05,
+                    required=True,
                 ),
             },
         )
@@ -941,7 +955,7 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
             edited_df,
             player_name_to_id=player_name_to_id,
             ctx=ctx,
-            default_new_player_rating=float(state["default_new_player_rating"]),
+            default_new_player_rating=state.get("default_new_player_rating"),
         )
         state["participant_text"] = "\n".join(
             row["display_name"] for row in (state.get("admin_roster_rows") or [])
@@ -1154,7 +1168,7 @@ def render_setup(ctx, state: dict, config: LivePageConfig) -> None:
                 ) = _create_and_resolve_admin_players(
                     ctx,
                     roster_rows=list(state.get("admin_roster_rows") or []),
-                    default_new_player_rating=float(state.get("default_new_player_rating") or 3.5),
+                    default_new_player_rating=state.get("default_new_player_rating"),
                     player_name_to_id=player_name_to_id,
                 )
                 if review_messages:

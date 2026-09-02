@@ -18,6 +18,7 @@ import {
   TournamentCommerceSelection
 } from "@/lib/tournamentCommerceApi";
 import { publicEventEligibilityReason, publicEventFamilyKey } from "@/lib/tournamentRegistrationEligibility";
+import { InteractionDialog } from "@/components/interaction";
 import TournamentCommerceChooser from "../TournamentCommerceChooser";
 
 type EditTournamentRegistrationFormProps = {
@@ -33,6 +34,11 @@ type EditTournamentRegistrationFormProps = {
   commerce?: TournamentCommerceCatalog | null;
   commerceOrder?: TournamentCommerceOrder | null;
 };
+
+type EventSelectionDraft = Omit<
+  PublicRegistrationSelectionPayload,
+  "event_option_id" | "registration_day_id" | "partner_mode"
+>;
 
 const cardStyle = {
   border: "1px solid #e2e8f0",
@@ -59,6 +65,22 @@ function eventMeta(event: PublicRegistrationEvent): string {
   if (event.price_usd != null) pieces.push(`$${Number(event.price_usd).toFixed(2)}`);
   if (event.capacity_teams != null) pieces.push(`Cap ${event.capacity_teams}`);
   return pieces.join(" • ");
+}
+
+function scheduledDaysLabel(
+  event: PublicRegistrationEvent,
+  daysById: Map<string, PublicRegistrationDay>
+): string {
+  const scheduledIds = event.scheduled_day_ids?.length
+    ? event.scheduled_day_ids
+    : [event.registration_day_id];
+  return scheduledIds
+    .map((dayId) => daysById.get(dayId))
+    .filter(Boolean)
+    .map((day) =>
+      day?.event_date ? `${day.label} · ${day.event_date}` : day?.label
+    )
+    .join(" · ");
 }
 
 function numericState(value: string): number | null {
@@ -90,7 +112,30 @@ export default function EditTournamentRegistrationForm({
     }
     return modes;
   });
+  const [selectionDrafts, setSelectionDrafts] = useState<
+    Record<string, EventSelectionDraft>
+  >(() =>
+    Object.fromEntries(
+      selections.map((selection) => [
+        selection.event_option_id,
+        {
+          partner_name: selection.partner_name || "",
+          partner_email: selection.partner_email || "",
+          partner_phone: selection.partner_phone || "",
+          partner_dupr_id: selection.partner_dupr_id || "",
+          partner_skill: selection.partner_skill ?? null,
+          partner_age: selection.partner_age ?? null,
+          partner_gender: selection.partner_gender || "",
+          partner_note: selection.partner_note || "",
+          show_on_partner_board: Boolean(selection.show_on_partner_board)
+        }
+      ])
+    )
+  );
+  const [editingEventId, setEditingEventId] = useState<string | null>(null);
+  const [addEventOpen, setAddEventOpen] = useState(false);
   const [gender, setGender] = useState(String(registration.gender || ""));
+  const [ageDraft, setAgeDraft] = useState(String(registration.age ?? ""));
   const [doublesSkill, setDoublesSkill] = useState(String(registration.doubles_skill ?? ""));
   const [singlesSkill, setSinglesSkill] = useState(String(registration.singles_skill ?? ""));
   const [pending, setPending] = useState(false);
@@ -111,9 +156,10 @@ export default function EditTournamentRegistrationForm({
   const linkedPlayer = useMemo(() => players.find((player) => player.id === String(registration.player_id ?? "")) ?? null, [players, registration.player_id]);
   const eligibilityProfile = useMemo(() => ({
     gender,
+    age: numericState(ageDraft),
     doublesSkill: linkedPlayer?.doubles_skill ?? numericState(doublesSkill),
     singlesSkill: linkedPlayer?.singles_skill ?? numericState(singlesSkill)
-  }), [gender, linkedPlayer, doublesSkill, singlesSkill]);
+  }), [ageDraft, gender, linkedPlayer, doublesSkill, singlesSkill]);
   const selectionByEventId = useMemo(() => new Map(selections.map((selection) => [selection.event_option_id, selection])), [selections]);
   const selectionByFamily = useMemo(() => {
     const lookup = new Map<string, PublicRegistrationEditSelection>();
@@ -130,6 +176,10 @@ export default function EditTournamentRegistrationForm({
       events: visibleEvents.filter((event) => event.registration_day_id === day.id)
     })).filter((row) => row.events.length > 0);
   }, [days, visibleEvents]);
+  const dayById = useMemo(
+    () => new Map(days.map((day) => [day.id, day])),
+    [days]
+  );
 
   const totalPrice = selectedIds.reduce((sum, id) => {
     const price = eventById.get(id)?.price_usd;
@@ -167,6 +217,40 @@ export default function EditTournamentRegistrationForm({
     if (checked && !partnerModes[eventId]) {
       setPartnerModes((current) => ({ ...current, [eventId]: eventById.get(eventId)?.partner_required ? "NEEDS_PARTNER" : "NONE" }));
     }
+    if (checked && !selectionDrafts[eventId]) {
+      const nextEvent = eventById.get(eventId);
+      const prior = nextEvent
+        ? selectionByFamily.get(publicEventFamilyKey(nextEvent))
+        : undefined;
+      setSelectionDrafts((current) => ({
+        ...current,
+        [eventId]: {
+          partner_name: prior?.partner_name || "",
+          partner_email: prior?.partner_email || "",
+          partner_phone: prior?.partner_phone || "",
+          partner_dupr_id: prior?.partner_dupr_id || "",
+          partner_skill: prior?.partner_skill ?? null,
+          partner_age: prior?.partner_age ?? null,
+          partner_gender: prior?.partner_gender || "",
+          partner_note: prior?.partner_note || "",
+          show_on_partner_board: Boolean(prior?.show_on_partner_board)
+        }
+      }));
+    }
+    if (commerce?.available && commerceQuote) {
+      setCommerceQuote(null);
+      setCommerceIdempotencyKey(crypto.randomUUID());
+    }
+  }
+
+  function updateSelectionDraft(
+    eventId: string,
+    patch: Partial<EventSelectionDraft>
+  ) {
+    setSelectionDrafts((current) => ({
+      ...current,
+      [eventId]: { ...(current[eventId] || {}), ...patch }
+    }));
     if (commerce?.available && commerceQuote) {
       setCommerceQuote(null);
       setCommerceIdempotencyKey(crypto.randomUUID());
@@ -176,6 +260,12 @@ export default function EditTournamentRegistrationForm({
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
+    const formData = new FormData(event.currentTarget);
+    const submittedAge = numberOrNull(formData.get("age"));
+    if (submittedAge == null || submittedAge < 1 || submittedAge > 120) {
+      setError("Enter an age between 1 and 120 before choosing or saving events.");
+      return;
+    }
     if (!selectedIds.length) {
       setError("Select at least one event.");
       return;
@@ -183,7 +273,13 @@ export default function EditTournamentRegistrationForm({
     const ineligible = selectedIds
       .map((id) => eventById.get(id))
       .filter((row): row is PublicRegistrationEvent => Boolean(row))
-      .map((row) => ({ row, reason: publicEventEligibilityReason(row, eligibilityProfile) }))
+      .map((row) => ({
+        row,
+        reason: publicEventEligibilityReason(row, {
+          ...eligibilityProfile,
+          age: submittedAge
+        })
+      }))
       .find((item) => item.reason);
     if (ineligible?.reason) {
       setError(`${ineligible.row.division_name}: ${ineligible.reason}`);
@@ -195,25 +291,27 @@ export default function EditTournamentRegistrationForm({
       );
       return;
     }
-    const formData = new FormData(event.currentTarget);
     const payloadSelections: Array<PublicRegistrationSelectionPayload & { id?: string }> = selectedIds.map((eventId) => {
       const eventOption = eventById.get(eventId);
       const prior = selectionByEventId.get(eventId) ?? (eventOption ? selectionByFamily.get(publicEventFamilyKey(eventOption)) : undefined);
       const mode = partnerModes[eventId] ?? (eventOption?.partner_required ? "NEEDS_PARTNER" : "NONE");
+      const draft = selectionDrafts[eventId] || {};
       return {
         id: prior?.id,
         event_option_id: eventId,
         registration_day_id: eventOption?.registration_day_id,
         partner_mode: mode,
-        partner_name: textValue(formData, `partner_name_${eventId}`),
-        partner_email: textValue(formData, `partner_email_${eventId}`),
-        partner_phone: textValue(formData, `partner_phone_${eventId}`),
-        partner_dupr_id: textValue(formData, `partner_dupr_id_${eventId}`),
-        partner_skill: numberOrNull(formData.get(`partner_skill_${eventId}`)),
-        partner_age: numberOrNull(formData.get(`partner_age_${eventId}`)),
-        partner_gender: textValue(formData, `partner_gender_${eventId}`),
-        partner_note: textValue(formData, `partner_note_${eventId}`),
-        show_on_partner_board: mode === "NEEDS_PARTNER" && formData.get(`show_on_partner_board_${eventId}`) === "on"
+        partner_name: String(draft.partner_name || "").trim(),
+        partner_email: String(draft.partner_email || "").trim(),
+        partner_phone: String(draft.partner_phone || "").trim(),
+        partner_dupr_id: String(draft.partner_dupr_id || "").trim(),
+        partner_skill: draft.partner_skill ?? null,
+        partner_age: draft.partner_age ?? null,
+        partner_gender: String(draft.partner_gender || "").trim(),
+        partner_note: String(draft.partner_note || "").trim(),
+        show_on_partner_board:
+          mode === "NEEDS_PARTNER" &&
+          Boolean(draft.show_on_partner_board)
       };
     });
 
@@ -233,7 +331,7 @@ export default function EditTournamentRegistrationForm({
       dupr_id: textValue(formData, "dupr_id"),
       doubles_skill: numberOrNull(formData.get("doubles_skill")),
       singles_skill: numberOrNull(formData.get("singles_skill")),
-      age: numberOrNull(formData.get("age")),
+      age: submittedAge,
       gender: textValue(formData, "gender"),
       notes: textValue(formData, "notes"),
       wants_partner_board_contact: formData.get("wants_partner_board_contact") === "on",
@@ -320,69 +418,228 @@ export default function EditTournamentRegistrationForm({
           <label>Email<br /><input name="email" type="email" value={registration.email} disabled style={{ width: "100%" }} /></label>
           <label>Phone<br /><input name="phone" defaultValue={registration.phone || ""} style={{ width: "100%" }} /></label>
           <label>DUPR ID<br /><input name="dupr_id" defaultValue={registration.dupr_id || ""} style={{ width: "100%" }} /></label>
-          <label>Doubles skill<br /><input name="doubles_skill" value={linkedPlayer?.doubles_skill ?? doublesSkill} onChange={(event) => setDoublesSkill(event.target.value)} disabled={registration.player_id != null} type="number" min="0" max="7" step="0.01" style={{ width: "100%" }} /></label>
-          <label>Singles skill<br /><input name="singles_skill" value={linkedPlayer?.singles_skill ?? singlesSkill} onChange={(event) => setSinglesSkill(event.target.value)} disabled={registration.player_id != null} type="number" min="0" max="7" step="0.01" style={{ width: "100%" }} /></label>
-          <label>Age<br /><input name="age" defaultValue={registration.age ?? ""} type="number" min="1" max="120" style={{ width: "100%" }} /></label>
+          <label>Doubles skill<br /><input name="doubles_skill" value={linkedPlayer?.doubles_skill ?? doublesSkill} onChange={(event) => setDoublesSkill(event.target.value)} disabled={registration.player_id != null} type="number" min="1" max="7" step="0.01" style={{ width: "100%" }} /></label>
+          <label>Singles skill<br /><input name="singles_skill" value={linkedPlayer?.singles_skill ?? singlesSkill} onChange={(event) => setSinglesSkill(event.target.value)} disabled={registration.player_id != null} type="number" min="1" max="7" step="0.01" style={{ width: "100%" }} /></label>
+          <label>Age<br /><input name="age" value={ageDraft} onChange={(event) => setAgeDraft(event.target.value)} type="number" min="1" max="120" required style={{ width: "100%" }} /></label>
           <label>Gender<br /><select name="gender" value={gender} onChange={(event) => setGender(event.target.value)} style={{ width: "100%" }}><option value="">Select</option><option>Women</option><option>Men</option><option>Non-binary</option><option>Prefer not to say</option></select></label>
         </div>
       </section>
 
       <section style={cardStyle}>
-        <h2 style={{ marginTop: 0 }}>Choose events</h2>
-        <p style={{ color: "#475569" }}>Choose one division per day and event family. Existing closed divisions may be preserved or removed, but cannot be newly added.</p>
-        {groupedEvents.map(({ day, events: dayEvents }) => (
-          <div key={day.id} style={{ marginBottom: "1rem" }}>
-            <h3 style={{ marginBottom: "0.35rem" }}>{day.label}{day.event_date ? ` · ${day.event_date}` : ""}</h3>
-            <div style={{ display: "grid", gap: "0.5rem" }}>
-              {dayEvents.map((eventOption) => {
-                const selected = selectedIds.includes(eventOption.id);
-                const prior = selectionByEventId.get(eventOption.id);
-                const mode = partnerModes[eventOption.id] ?? (eventOption.partner_required ? "NEEDS_PARTNER" : "NONE");
-                const eligibilityReason = publicEventEligibilityReason(eventOption, eligibilityProfile);
-                return (
-                  <article key={eventOption.id} style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: selected ? "#f8fafc" : "white" }}>
-                    <label style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start" }}>
-                      <input type="checkbox" checked={selected} disabled={(!eventOption.selectable && !prior) || (Boolean(eligibilityReason) && !prior)} onChange={(e) => toggleEvent(eventOption.id, e.target.checked)} />
-                      <span><strong>{eventOption.event_family_label} — {eventOption.division_name}</strong><br /><span style={{ color: "#64748b" }}>{eventMeta(eventOption)}{!eventOption.selectable ? " • no longer selectable" : ""}</span></span>
-                    </label>
-                    {eligibilityReason ? <p style={{ color: "#b91c1c", margin: "0.4rem 0 0" }}>{eligibilityReason}</p> : null}
-                    {selected ? (
-                      <div style={{ marginTop: "0.75rem", display: "grid", gap: "0.5rem" }}>
-                        <label>Partner status<br />
-                          <select value={mode} onChange={(e) => setPartnerModes((current) => ({ ...current, [eventOption.id]: e.target.value as "NONE" | "HAS_PARTNER" | "NEEDS_PARTNER" }))} style={{ width: "100%" }}>
-                            {!eventOption.partner_required ? <option value="NONE">No partner needed</option> : null}
-                            {eventOption.partner_required ? <option value="HAS_PARTNER">I have a partner</option> : null}
-                            {eventOption.partner_required ? <option value="NEEDS_PARTNER">I need a partner</option> : null}
-                          </select>
-                        </label>
-                        {mode === "HAS_PARTNER" ? (
-                          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.5rem" }}>
-                            <label>Partner name<br /><input name={`partner_name_${eventOption.id}`} defaultValue={prior?.partner_name || ""} required style={{ width: "100%" }} /></label>
-                            <label>Partner email<br /><input name={`partner_email_${eventOption.id}`} defaultValue={prior?.partner_email || ""} type="email" required style={{ width: "100%" }} /></label>
-                            <label>Partner phone<br /><input name={`partner_phone_${eventOption.id}`} defaultValue={prior?.partner_phone || ""} style={{ width: "100%" }} /></label>
-                            <label>Partner DUPR ID<br /><input name={`partner_dupr_id_${eventOption.id}`} defaultValue={prior?.partner_dupr_id || ""} style={{ width: "100%" }} /></label>
-                            <label>Partner skill<br /><input name={`partner_skill_${eventOption.id}`} defaultValue={prior?.partner_skill ?? ""} type="number" min="1" max="7" step="0.01" style={{ width: "100%" }} /></label>
-                            <label>Partner age<br /><input name={`partner_age_${eventOption.id}`} defaultValue={prior?.partner_age ?? ""} type="number" min="1" max="120" style={{ width: "100%" }} /></label>
-                            <label>Partner gender<br /><select name={`partner_gender_${eventOption.id}`} required={String(eventOption.gender_restriction || "ANY").toUpperCase() !== "ANY"} style={{ width: "100%" }}><option value="">Select</option><option value="Women">Women</option><option value="Men">Men</option><option value="Other">Other</option><option value="Prefer not to say">Prefer not to say</option></select></label>
-                          </div>
-                        ) : null}
-                        {mode === "NEEDS_PARTNER" ? (
-                          <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-                            <input name={`show_on_partner_board_${eventOption.id}`} type="checkbox" defaultChecked={Boolean(prior?.show_on_partner_board)} disabled={!eventOption.partner_board_enabled} /> Show me on the public partner board for this event
-                          </label>
-                        ) : null}
-                        <label>Partner note<br /><textarea name={`partner_note_${eventOption.id}`} defaultValue={prior?.partner_note || ""} rows={2} style={{ width: "100%" }} /></label>
-                      </div>
-                    ) : null}
-                  </article>
-                );
-              })}
-            </div>
-          </div>
-        ))}
-        {!visibleEvents.length ? <p style={{ color: "#64748b" }}>No events are currently available for editing.</p> : null}
+        <h2 style={{ marginTop: 0 }}>Registered events</h2>
+        <p style={{ color: "#475569" }}>
+          Each event has its own edit action for division and partner details.
+          Changes are staged until you save the full registration below.
+        </p>
+        <div style={{ display: "grid", gap: "0.65rem" }}>
+          {selectedIds.map((eventId) => {
+            const eventOption = eventById.get(eventId);
+            if (!eventOption) return null;
+            const schedule = scheduledDaysLabel(eventOption, dayById);
+            const mode =
+              partnerModes[eventId] ||
+              (eventOption.partner_required ? "NEEDS_PARTNER" : "NONE");
+            const eligibilityReason = publicEventEligibilityReason(eventOption, eligibilityProfile);
+            return (
+              <article
+                key={eventId}
+                style={{
+                  border: "1px solid #cbd5e1",
+                  borderRadius: "12px",
+                  padding: "0.85rem",
+                  background: "#f8fafc",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: "0.75rem",
+                  alignItems: "flex-start",
+                  flexWrap: "wrap"
+                }}
+              >
+                <div>
+                  <strong>
+                    {eventOption.event_family_label} — {eventOption.division_name}
+                  </strong>
+                  <p style={{ color: "#64748b", margin: "0.3rem 0" }}>
+                    {schedule || "Schedule TBD"} · {eventMeta(eventOption)}
+                  </p>
+                  <span style={{ color: "#475569" }}>
+                    Partner: {mode.replaceAll("_", " ").toLowerCase()}
+                  </span>
+                  {eligibilityReason ? <p role="alert" style={{ color: "#b91c1c", marginBottom: 0 }}>{eligibilityReason} Update the player details or choose another division before saving.</p> : null}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setEditingEventId(eventId)}
+                  style={{
+                    border: "1px solid #0f172a",
+                    borderRadius: "9px",
+                    padding: "0.5rem 0.75rem",
+                    background: "white",
+                    fontWeight: 800
+                  }}
+                >
+                  Edit event
+                </button>
+              </article>
+            );
+          })}
+        </div>
+        {!selectedIds.length ? (
+          <p style={{ color: "#92400e" }}>No events are currently selected.</p>
+        ) : null}
+        <button
+          type="button"
+          onClick={() => setAddEventOpen(true)}
+          disabled={!visibleEvents.some((event) => (
+            !selectedIds.includes(event.id)
+              && event.selectable
+              && !publicEventEligibilityReason(event, eligibilityProfile)
+          ))}
+          style={{
+            marginTop: "0.8rem",
+            border: "1px solid #2563eb",
+            borderRadius: "9px",
+            padding: "0.55rem 0.8rem",
+            color: "#1d4ed8",
+            background: "white",
+            fontWeight: 800
+          }}
+        >
+          + Add Event
+        </button>
         <p><strong>Estimated total:</strong> ${totalPrice.toFixed(2)}</p>
       </section>
+
+      {addEventOpen ? (
+        <InteractionDialog
+          open={addEventOpen}
+          phase="ready"
+          title="Add Event"
+          description="Choose an available division. Choosing another division in the same event family replaces the current division."
+          onRequestClose={() => setAddEventOpen(false)}
+          actions={(
+            <button type="button" onClick={() => setAddEventOpen(false)}>
+              Close
+            </button>
+          )}
+        >
+          {groupedEvents.map(({ day, events: dayEvents }) => {
+            const available = dayEvents.filter(
+              (eventOption) =>
+                !selectedIds.includes(eventOption.id) &&
+                eventOption.selectable &&
+                !publicEventEligibilityReason(eventOption, eligibilityProfile)
+            );
+            if (!available.length) return null;
+            return (
+              <section key={day.id}>
+                <h3>{day.label}{day.event_date ? ` · ${day.event_date}` : ""}</h3>
+                <div style={{ display: "grid", gap: "0.5rem" }}>
+                  {available.map((eventOption) => (
+                    <button
+                      key={eventOption.id}
+                      type="button"
+                      onClick={() => {
+                        toggleEvent(eventOption.id, true);
+                        setAddEventOpen(false);
+                        setEditingEventId(eventOption.id);
+                      }}
+                      style={{
+                        textAlign: "left",
+                        border: "1px solid #cbd5e1",
+                        borderRadius: "10px",
+                        padding: "0.7rem",
+                        background: "white"
+                      }}
+                    >
+                      <strong>{eventOption.event_family_label} — {eventOption.division_name}</strong>
+                      <br />
+                      <span style={{ color: "#64748b" }}>{scheduledDaysLabel(eventOption, dayById) || "Schedule TBD"}<br />{eventMeta(eventOption)}</span>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            );
+          })}
+        </InteractionDialog>
+      ) : null}
+
+      {editingEventId && eventById.get(editingEventId) ? (() => {
+        const eventOption = eventById.get(editingEventId)!;
+        const prior = selectionDrafts[editingEventId];
+        const mode =
+          partnerModes[editingEventId] ||
+          (eventOption.partner_required ? "NEEDS_PARTNER" : "NONE");
+        return (
+          <InteractionDialog
+            open={Boolean(editingEventId)}
+            phase="ready"
+            title="Edit event"
+            description={`${eventOption.event_family_label} — ${eventOption.division_name}`}
+            onRequestClose={() => setEditingEventId(null)}
+            actions={(
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    toggleEvent(editingEventId, false);
+                    setEditingEventId(null);
+                  }}
+                  style={{ color: "#b91c1c" }}
+                >
+                  Remove event
+                </button>
+                <button type="button" onClick={() => setEditingEventId(null)} style={{ fontWeight: 800 }}>
+                  Apply event changes
+                </button>
+              </>
+            )}
+          >
+            <h3>{eventOption.event_family_label} — {eventOption.division_name}</h3>
+            <p style={{ color: "#475569" }}>{scheduledDaysLabel(eventOption, dayById) || "Schedule TBD"}<br />{eventMeta(eventOption)}</p>
+            <div style={{ display: "grid", gap: "0.6rem" }}>
+              <label>Partner status<br />
+                <select
+                  value={mode}
+                  onChange={(event) =>
+                    setPartnerModes((current) => ({
+                      ...current,
+                      [editingEventId]: event.target.value as "NONE" | "HAS_PARTNER" | "NEEDS_PARTNER"
+                    }))
+                  }
+                  style={{ width: "100%" }}
+                >
+                  {!eventOption.partner_required ? <option value="NONE">No partner needed</option> : null}
+                  {eventOption.partner_required ? <option value="HAS_PARTNER">I have a partner</option> : null}
+                  {eventOption.partner_required ? <option value="NEEDS_PARTNER">I need a partner</option> : null}
+                </select>
+              </label>
+              {mode === "HAS_PARTNER" ? (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.5rem" }}>
+                  <label>Partner name<br /><input defaultValue={prior?.partner_name || ""} onChange={(event) => updateSelectionDraft(editingEventId, { partner_name: event.target.value })} required style={{ width: "100%" }} /></label>
+                  <label>Partner email<br /><input defaultValue={prior?.partner_email || ""} onChange={(event) => updateSelectionDraft(editingEventId, { partner_email: event.target.value })} type="email" required style={{ width: "100%" }} /></label>
+                  <label>Partner phone<br /><input defaultValue={prior?.partner_phone || ""} onChange={(event) => updateSelectionDraft(editingEventId, { partner_phone: event.target.value })} style={{ width: "100%" }} /></label>
+                  <label>Partner DUPR ID<br /><input defaultValue={prior?.partner_dupr_id || ""} onChange={(event) => updateSelectionDraft(editingEventId, { partner_dupr_id: event.target.value })} style={{ width: "100%" }} /></label>
+                  <label>Partner skill<br /><input defaultValue={prior?.partner_skill ?? ""} onChange={(event) => updateSelectionDraft(editingEventId, { partner_skill: numberOrNull(event.target.value) })} type="number" min="1" max="7" step="0.01" style={{ width: "100%" }} /></label>
+                  <label>Partner age<br /><input defaultValue={prior?.partner_age ?? ""} type="number" min="1" max="120" required onChange={(event) => updateSelectionDraft(editingEventId, { partner_age: numberOrNull(event.target.value) })} style={{ width: "100%" }} /></label>
+                  <label>Partner gender<br /><select defaultValue={prior?.partner_gender || ""} required onChange={(event) => updateSelectionDraft(editingEventId, { partner_gender: event.target.value })} style={{ width: "100%" }}><option value="">Select</option><option value="Women">Women</option><option value="Men">Men</option><option value="Non-binary">Non-binary</option><option value="Other">Other</option><option value="Prefer not to say">Prefer not to say</option></select></label>
+                </div>
+              ) : null}
+              {mode === "NEEDS_PARTNER" ? (
+                <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                  <input
+                    type="checkbox"
+                    defaultChecked={Boolean(prior?.show_on_partner_board)}
+                    disabled={!eventOption.partner_board_enabled}
+                    onChange={(event) => updateSelectionDraft(editingEventId, { show_on_partner_board: event.target.checked })}
+                  /> Show me on the public partner board for this event
+                </label>
+              ) : null}
+              <label>Partner note<br /><textarea defaultValue={prior?.partner_note || ""} onChange={(event) => updateSelectionDraft(editingEventId, { partner_note: event.target.value })} rows={2} style={{ width: "100%" }} /></label>
+            </div>
+          </InteractionDialog>
+        );
+      })() : null}
 
       {commerce?.available ? (
         <TournamentCommerceChooser

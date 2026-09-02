@@ -6,7 +6,7 @@ import json
 import os
 import re
 from datetime import datetime, timezone
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import pandas as pd
 
@@ -18,6 +18,7 @@ from jupr_app.domain.leagues import (
     mint_top_performer_badges,
     normalize_league_status,
 )
+from jupr_app.domain.awards import TOP_PERFORMER_SPECS
 from jupr_app.domain.league_analytics import (
     award_category_catalog,
     compute_league_player_analytics,
@@ -93,6 +94,28 @@ def _first_row(resp: Any) -> dict[str, Any] | None:
 
 def _clean_text(value: Any, *, limit: int = 240) -> str:
     return str(value or "").replace("<", "").replace(">", "").strip()[:limit]
+
+
+def _award_catalog_for_league(
+    meta_row: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Return only award measures that exist for this league's format."""
+
+    league_type = _clean_text(meta_row.get("league_type"), limit=40).casefold()
+    match_format = _clean_text(meta_row.get("match_format"), limit=20).casefold()
+    is_team = league_type in {"team", "team league", "team_league"}
+    unavailable: set[str] = set()
+    if not is_team:
+        unavailable.update(
+            {"team_champion", "team_wins", "team_point_differential"}
+        )
+    if match_format == "singles":
+        unavailable.update({"best_partnership", "partner_variety"})
+    return [
+        dict(row)
+        for row in award_category_catalog()
+        if str(row.get("key")) not in unavailable
+    ]
 
 
 def _json_value(value: Any, default: Any) -> Any:
@@ -199,58 +222,88 @@ def _award_inputs(
     *,
     club_id: str,
     league_name: str,
+    metadata: Mapping[str, Any] | None = None,
+    league_rows: Sequence[Mapping[str, Any]] | None = None,
+    match_rows: Sequence[Mapping[str, Any]] | None = None,
+    player_rows: Sequence[Mapping[str, Any]] | None = None,
+    team_rows: Sequence[Mapping[str, Any]] | None = None,
+    fixture_rows: Sequence[Mapping[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], pd.DataFrame, pd.DataFrame, dict[int, str]]:
     clean_league = _clean_text(league_name, limit=120)
     if not clean_league:
         raise ValueError("league_name is required")
-    meta_row = _fetch_league_meta_row(supabase, club_id=str(club_id), league_name=clean_league)
+    meta_row = dict(metadata) if metadata is not None else _fetch_league_meta_row(
+        supabase, club_id=str(club_id), league_name=clean_league
+    )
     if not meta_row:
         raise ValueError("league not found")
+    if _clean_text(meta_row.get("league_name"), limit=120) != clean_league:
+        raise ValueError("league metadata does not match league_name")
 
     meta_rows = [meta_row]
-    league_rows = _fetch_table_rows(
-        supabase,
-        "league_ratings",
-        club_id=str(club_id),
-        filters={"league_name": clean_league},
+    resolved_league_rows = (
+        [dict(row) for row in league_rows]
+        if league_rows is not None
+        else _fetch_table_rows(
+            supabase,
+            "league_ratings",
+            club_id=str(club_id),
+            filters={"league_name": clean_league},
+        )
     )
-    match_rows = _fetch_table_rows(
-        supabase,
-        "matches",
-        club_id=str(club_id),
-        filters={"league": clean_league},
+    resolved_match_rows = (
+        [dict(row) for row in match_rows]
+        if match_rows is not None
+        else _fetch_table_rows(
+            supabase,
+            "matches",
+            club_id=str(club_id),
+            filters={"league": clean_league},
+        )
     )
-    team_rows = _fetch_table_rows(
-        supabase,
-        "team_league_teams",
-        club_id=str(club_id),
-        filters={"league_name": clean_league},
+    resolved_team_rows = (
+        [dict(row) for row in team_rows]
+        if team_rows is not None
+        else _fetch_table_rows(
+            supabase,
+            "team_league_teams",
+            club_id=str(club_id),
+            filters={"league_name": clean_league},
+        )
     )
-    fixture_rows = _fetch_table_rows(
-        supabase,
-        "team_league_fixtures",
-        club_id=str(club_id),
-        filters={"league_name": clean_league},
+    resolved_fixture_rows = (
+        [dict(row) for row in fixture_rows]
+        if fixture_rows is not None
+        else _fetch_table_rows(
+            supabase,
+            "team_league_fixtures",
+            club_id=str(club_id),
+            filters={"league_name": clean_league},
+        )
     )
     player_ids = {
         int(value)
-        for row in league_rows
+        for row in resolved_league_rows
         for value in [row.get("player_id")]
         if value not in (None, "")
     }
-    for row in match_rows:
+    for row in resolved_match_rows:
         for key in ("t1_p1", "t1_p2", "t2_p1", "t2_p2"):
             try:
                 player_ids.add(int(row.get(key)))
             except Exception:
                 pass
-    player_rows = _fetch_players_by_id(
-        supabase, club_id=str(club_id), player_ids=player_ids
+    resolved_player_rows = (
+        [dict(row) for row in player_rows]
+        if player_rows is not None
+        else _fetch_players_by_id(
+            supabase, club_id=str(club_id), player_ids=player_ids
+        )
     )
-    id_to_name = _id_to_name(player_rows)
+    id_to_name = _id_to_name(resolved_player_rows)
 
     df_meta = pd.DataFrame(meta_rows)
-    df_leagues = pd.DataFrame(league_rows)
+    df_leagues = pd.DataFrame(resolved_league_rows)
     awards_config = _json_value(meta_row.get("awards_config"), {}) or {}
     awards = compute_top_performer_awards_for_config(
         df_leagues,
@@ -272,22 +325,38 @@ def _award_inputs(
                 break
     regular_weeks = [
         int(row.get("week_number") or 0)
-        for row in fixture_rows
+        for row in resolved_fixture_rows
         if str(row.get("phase") or "") == "regular"
     ]
     if expected_weeks is None and regular_weeks:
         expected_weeks = max(regular_weeks)
     player_analytics = compute_league_player_analytics(
-        match_rows,
+        resolved_match_rows,
         club_id=str(club_id),
         league_name=clean_league,
-        players=player_rows,
-        league_ratings=league_rows,
+        players=resolved_player_rows,
+        league_ratings=resolved_league_rows,
+        match_format=_clean_text(meta_row.get("match_format"), limit=20),
         expected_weeks=expected_weeks,
     )
-    team_analytics = compute_team_league_analytics(fixture_rows, team_rows)
+    if normalize_league_status(meta_row) not in {"ended", "archived"}:
+        active_member_ids = {
+            int(row["player_id"])
+            for row in resolved_league_rows
+            if row.get("player_id") not in (None, "")
+            and row.get("is_active") is not False
+            and not row.get("inactive_at")
+        }
+        player_analytics["players"] = [
+            row
+            for row in player_analytics["players"]
+            if int(row.get("player_id") or 0) in active_member_ids
+        ]
+    team_analytics = compute_team_league_analytics(
+        resolved_fixture_rows, resolved_team_rows
+    )
     analytics_context = {
-        "catalog": award_category_catalog(),
+        "catalog": _award_catalog_for_league(meta_row),
         "measurable_player_stats": list(
             player_analytics["players"][0].keys()
             if player_analytics["players"]
@@ -302,6 +371,7 @@ def _award_inputs(
         analytics_context,
         awards_config if isinstance(awards_config, dict) else {},
     )
+    analytics_context["award_progress"] = list(configured or [])
     if configured is not None:
         awards = configured
     meta_row = {**meta_row, "_analytics": analytics_context}
@@ -394,7 +464,7 @@ def _computed_configured_awards(
                     "recipient_name": row.get("player_name")
                     or row.get("team_name"),
                     "metric_value": metric_value,
-                    "metric_display": str(metric_value),
+                    "metric_display": _metric_display(spec, row, metric_value),
                     "rank": rank,
                     "is_co_winner": is_co_winner,
                     "min_games": minimum,
@@ -402,6 +472,200 @@ def _computed_configured_awards(
                 }
             )
     return result
+
+
+_LEGACY_PUBLIC_AWARD_KEYS = tuple(
+    spec.category_key for spec in TOP_PERFORMER_SPECS
+)
+
+
+def _award_minimum(
+    config: Mapping[str, Any],
+    meta_row: Mapping[str, Any],
+    awards_config: Mapping[str, Any] | None = None,
+) -> int:
+    """Return the configured award threshold with a safe legacy fallback."""
+
+    defaults = awards_config if isinstance(awards_config, Mapping) else {}
+    for value in (
+        config.get("minimum"),
+        config.get("min_games"),
+        config.get("default_min_games"),
+        defaults.get("default_min_games"),
+        meta_row.get("min_games"),
+    ):
+        if value is None or value == "":
+            continue
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            continue
+    return 0
+
+
+def _award_race_entries(
+    spec: Mapping[str, Any],
+    recipients: Sequence[Mapping[str, Any]],
+    *,
+    minimum: int,
+) -> list[dict[str, Any]]:
+    """Build every currently qualified public placement for one award race.
+
+    These are live race positions, not the final award recipients.  Keeping the
+    full qualified field here lets the public view show a short preview while
+    a player profile can still explain a player's exact current context.
+    """
+
+    metric = str(spec.get("metric") or "")
+    minimum_metric = str(spec.get("minimum_metric") or "games")
+    qualified = [
+        dict(row)
+        for row in recipients
+        if row.get(metric) is not None
+        and float(row.get(minimum_metric) or 0) >= minimum
+    ]
+    qualified.sort(
+        key=lambda row: (
+            -float(row.get(metric) or 0),
+            str(row.get("player_name") or row.get("team_name") or "").lower(),
+            str(row.get("player_id") or row.get("team_id") or ""),
+        )
+    )
+    if not qualified:
+        return []
+
+    result: list[dict[str, Any]] = []
+    previous_metric: float | None = None
+    previous_rank = 0
+    for index, row in enumerate(qualified, start=1):
+        metric_value = row.get(metric)
+        numeric_metric = float(metric_value or 0)
+        rank = previous_rank if previous_metric is not None and numeric_metric == previous_metric else index
+        previous_metric = numeric_metric
+        previous_rank = rank
+        recipient_type = str(spec.get("recipient_type") or "player")
+        recipient_id = row.get("team_id") if recipient_type == "team" else row.get("player_id")
+        if recipient_id in (None, ""):
+            continue
+        result.append(
+            {
+                "category_key": str(spec.get("key") or ""),
+                "category_label": str(spec.get("label") or "Award"),
+                "recipient_type": recipient_type,
+                "player_id": row.get("player_id"),
+                "team_id": row.get("team_id"),
+                "recipient_name": row.get("player_name") or row.get("team_name"),
+                "metric_value": metric_value,
+                "metric_display": _metric_display(spec, row, metric_value),
+                "rank": rank,
+                "is_co_winner": sum(
+                    float(other.get(metric) or 0) == numeric_metric
+                    for other in qualified
+                ) > 1,
+                "min_games": minimum,
+                "minimum_metric": minimum_metric,
+            }
+        )
+    return result
+
+
+def _public_award_races(
+    meta_row: Mapping[str, Any],
+    analytics: Mapping[str, Any],
+    awards_config: Mapping[str, Any],
+    *,
+    explicit_categories: bool,
+) -> list[dict[str, Any]]:
+    """Return all qualified placements, grouped by the enabled public award."""
+
+    catalog = {
+        str(row.get("key")): dict(row)
+        for row in analytics.get("catalog", [])
+        if isinstance(row, Mapping) and row.get("key")
+    }
+    raw_categories = awards_config.get("categories")
+    categories = raw_categories if isinstance(raw_categories, Mapping) else {}
+    if explicit_categories:
+        category_configs = [
+            (str(key), dict(value) if isinstance(value, Mapping) else {})
+            for key, value in categories.items()
+        ]
+    else:
+        category_configs = [(key, {}) for key in _LEGACY_PUBLIC_AWARD_KEYS]
+
+    races: list[dict[str, Any]] = []
+    for category_key, config in category_configs:
+        if config.get("enabled") is False:
+            continue
+        spec = catalog.get(category_key)
+        if not spec:
+            continue
+        recipients = (
+            analytics.get("team_analytics", [])
+            if spec.get("recipient_type") == "team"
+            else analytics.get("player_analytics", [])
+        )
+        minimum = _award_minimum(config, meta_row, awards_config)
+        entries = _award_race_entries(spec, recipients, minimum=minimum)
+        if not entries:
+            continue
+        races.append(
+            {
+                "category_key": category_key,
+                "category_label": spec.get("label"),
+                "recipient_type": spec.get("recipient_type"),
+                "min_games": minimum,
+                "minimum_metric": spec.get("minimum_metric") or "games",
+                "eligible_count": len(entries),
+                "entries": entries,
+            }
+        )
+    return races
+
+
+def _public_award_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep the public race projection deliberately limited to display data."""
+
+    return {
+        "category_key": row.get("category_key"),
+        "category_label": row.get("category_label"),
+        "recipient_type": row.get("recipient_type"),
+        "player_id": row.get("player_id"),
+        "team_id": row.get("team_id"),
+        "recipient_name": row.get("recipient_name")
+        or row.get("player_name")
+        or row.get("team_name"),
+        "metric_value": row.get("metric_value"),
+        "metric_display": row.get("metric_display"),
+        "rank": row.get("rank"),
+        "is_co_winner": row.get("is_co_winner"),
+        "min_games": row.get("min_games"),
+        "minimum_metric": row.get("minimum_metric"),
+    }
+
+
+def _metric_display(
+    spec: Mapping[str, Any], row: Mapping[str, Any], metric_value: Any
+) -> str:
+    format_name = str(spec.get("format") or "")
+    try:
+        number = float(metric_value)
+    except Exception:
+        return str(metric_value)
+    if format_name == "percent":
+        return f"{number * 100:.1f}%"
+    if format_name in {"rating", "signed_rating"}:
+        prefix = "+" if format_name == "signed_rating" and number > 0 else ""
+        return f"{prefix}{number:.3f}"
+    if format_name in {"integer", "signed_integer"}:
+        prefix = "+" if format_name == "signed_integer" and number > 0 else ""
+        return f"{prefix}{int(number)}"
+    if format_name in {"decimal", "signed_decimal"}:
+        prefix = "+" if format_name == "signed_decimal" and number > 0 else ""
+        return f"{prefix}{number:.2f}"
+    if format_name == "team_record":
+        return f"{int(row.get('wins') or 0)}-{int(row.get('losses') or 0)}"
+    return str(metric_value)
 
 
 def _award_identity(award: Mapping[str, Any]) -> str:
@@ -435,6 +699,8 @@ def _league_payload(row: dict[str, Any]) -> dict[str, Any]:
         "status": normalize_league_status(row),
         "is_active": bool(row.get("is_active", False)),
         "min_games": row.get("min_games"),
+        "league_type": row.get("league_type"),
+        "match_format": row.get("match_format"),
         "awards_config": _json_value(row.get("awards_config"), {}) or {},
         "awards_config_version": int(row.get("awards_config_version") or 0),
         "ended_at": row.get("ended_at"),
@@ -813,12 +1079,16 @@ def _response(
         "badge_verified_count": int(mint.get("verified_count") or 0),
         "idempotent_replay": bool(idempotent_replay),
         "warnings": list(warnings or []),
-        "award_catalog": analytics.get("catalog", award_category_catalog()),
+        "award_catalog": analytics.get(
+            "catalog", _award_catalog_for_league(meta_row)
+        ),
         "measurable_player_stats": analytics.get(
             "measurable_player_stats", []
         ),
         "player_analytics": analytics.get("player_analytics", []),
         "team_analytics": analytics.get("team_analytics", []),
+        "award_progress": analytics.get("award_progress", []),
+        "award_progress_count": len(analytics.get("award_progress", [])),
         "provenance": (
             (workflow.get("frozen_snapshot") or {}).get("provenance")
             if workflow.get("frozen_snapshot")
@@ -830,6 +1100,147 @@ def _response(
         ),
         **_badge_definition_readiness(supabase),
     }
+
+
+def _enabled_public_award_specs(
+    meta_row: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    awards_config = _json_value(meta_row.get("awards_config"), {}) or {}
+    if not isinstance(awards_config, Mapping):
+        return []
+    categories = awards_config.get("categories")
+    if not isinstance(categories, Mapping) or not categories:
+        return []
+    catalog = {
+        str(row.get("key")): dict(row)
+        for row in _award_catalog_for_league(meta_row)
+    }
+    enabled: list[dict[str, Any]] = []
+    for category_key, raw_config in categories.items():
+        config = dict(raw_config) if isinstance(raw_config, Mapping) else {}
+        spec = catalog.get(str(category_key))
+        if spec and config.get("enabled") is not False:
+            enabled.append(spec)
+    return enabled
+
+
+def _has_explicit_award_categories(meta_row: Mapping[str, Any]) -> bool:
+    """Whether a league intentionally saved award category choices.
+
+    Older leagues predate the draft-only award editor.  They still have valid
+    default top-performer calculations, so an entirely absent ``categories``
+    key must not hide their public awards.  An explicitly saved categories
+    object, including an empty one, remains authoritative.
+    """
+
+    awards_config = _json_value(meta_row.get("awards_config"), {}) or {}
+    return isinstance(awards_config, Mapping) and "categories" in awards_config
+
+
+def get_public_league_award_progress(
+    supabase: Any,
+    *,
+    club_id: str,
+    league_name: str,
+    metadata: Mapping[str, Any] | None = None,
+    league_rows: Sequence[Mapping[str, Any]] | None = None,
+    match_rows: Sequence[Mapping[str, Any]] | None = None,
+    player_rows: Sequence[Mapping[str, Any]] | None = None,
+    team_rows: Sequence[Mapping[str, Any]] | None = None,
+    fixture_rows: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Return current eligible awards without exposing workflow internals.
+
+    Explicit award choices always win.  Leagues created before that editor (or
+    with no saved category choices) use the established top-performer defaults
+    so public standings do not silently lose valid award leaders.
+    """
+
+    try:
+        meta_row = dict(metadata) if metadata is not None else _fetch_league_meta_row(
+            supabase,
+            club_id=str(club_id),
+            league_name=str(league_name),
+        )
+        if not meta_row:
+            return {"awards": [], "award_count": 0}
+        awards_config = _json_value(meta_row.get("awards_config"), {}) or {}
+        enabled_specs = _enabled_public_award_specs(meta_row)
+        explicit_categories = _has_explicit_award_categories(meta_row)
+        if explicit_categories and not enabled_specs:
+            return {"awards": [], "award_count": 0}
+
+        # A legacy/default league uses the existing individual top-performer
+        # calculation, which needs the same player inputs as configured awards.
+        needs_player_analytics = (not explicit_categories) or any(
+            spec.get("recipient_type") == "player" for spec in enabled_specs
+        )
+        needs_team_analytics = any(
+            spec.get("recipient_type") == "team" for spec in enabled_specs
+        )
+        if not needs_player_analytics:
+            league_rows = ()
+            match_rows = ()
+            player_rows = ()
+        league_type = _clean_text(meta_row.get("league_type"), limit=40).casefold()
+        if not needs_team_analytics and league_type not in {
+            "team",
+            "team league",
+            "team_league",
+        }:
+            team_rows = ()
+            fixture_rows = ()
+
+        meta_row, computed_awards, _df_meta, _df_leagues, _id_map = _award_inputs(
+            supabase,
+            club_id=str(club_id),
+            league_name=str(league_name),
+            metadata=meta_row,
+            league_rows=league_rows,
+            match_rows=match_rows,
+            player_rows=player_rows,
+            team_rows=team_rows,
+            fixture_rows=fixture_rows,
+        )
+        analytics = dict(meta_row.get("_analytics") or {})
+        rows = list(analytics.get("award_progress") or [])
+        if not explicit_categories:
+            rows = list(computed_awards or [])
+        races = _public_award_races(
+            meta_row,
+            analytics,
+            awards_config if isinstance(awards_config, Mapping) else {},
+            explicit_categories=explicit_categories,
+        )
+    except Exception:
+        rows = []
+        races = []
+    safe_rows = [_public_award_row(row) for row in rows]
+    safe_races = [
+        {
+            "category_key": race.get("category_key"),
+            "category_label": race.get("category_label"),
+            "recipient_type": race.get("recipient_type"),
+            "min_games": race.get("min_games"),
+            "minimum_metric": race.get("minimum_metric"),
+            "eligible_count": race.get("eligible_count"),
+            "entries": [
+                _public_award_row(entry)
+                for entry in race.get("entries", [])
+                if isinstance(entry, Mapping)
+            ],
+        }
+        for race in races
+        if isinstance(race, Mapping)
+    ]
+    response = {
+        "awards": safe_rows,
+        "award_count": len(safe_rows),
+    }
+    if safe_races:
+        response["races"] = safe_races
+        response["race_count"] = len(safe_races)
+    return response
 
 
 def get_admin_league_awards_wizard(supabase: Any, *, club_id: str, league_name: str) -> dict[str, Any]:
@@ -886,7 +1297,12 @@ def save_admin_league_awards_config(
     categories = config.get("categories", {})
     if not isinstance(categories, dict):
         raise ValueError("awards_config.categories must be an object.")
-    known = {row["key"] for row in award_category_catalog()}
+    meta_row = _fetch_league_meta_row(
+        supabase, club_id=str(club_id), league_name=clean_league
+    )
+    if not meta_row:
+        raise ValueError("league not found")
+    known = {row["key"] for row in _award_catalog_for_league(meta_row)}
     unknown = sorted(set(categories) - known)
     if unknown:
         raise ValueError(

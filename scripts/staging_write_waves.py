@@ -13,9 +13,9 @@ ADMIN_WRITE_PILOT_FLAG = "JUPR_ENABLE_NEXT_ADMIN_WRITE_PILOT"
 def _admin_wave(*flags: str) -> tuple[str, ...]:
     return (ADMIN_WRITE_PILOT_FLAG, *flags)
 
-# Named waves remain available for diagnosis and emergency isolation. The `open`
-# wave is the normal staging posture and enables every reviewed staging mutation
-# gate. Production-only email and public-live override flags remain disabled.
+# Named waves are available only for explicitly approved staging tests. The
+# fail-closed `none` wave is the normal staging posture. `open` enables every
+# reviewed staging mutation gate and must never be selected automatically.
 STAGING_WRITE_WAVES: dict[str, tuple[str, ...]] = {
     NO_WRITE_WAVE: (),
     "public-intake-auth": (
@@ -164,6 +164,7 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
     ),
     "match-player": (
         ("PATCH", "/admin/clubs/{club_id}/match-log/social/{social_match_id}"),
+        ("POST", "/admin/clubs/{club_id}/match-log/social/operations/{operation_key}/reconcile"),
         ("POST", "/admin/clubs/{club_id}/match-log/social/delete"),
         ("PATCH", "/admin/clubs/{club_id}/match-log/edits"),
         ("POST", "/admin/clubs/{club_id}/match-log/edits/{operation_id}/recover"),
@@ -172,6 +173,7 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/admin/clubs/{club_id}/matches/batch"),
         ("POST", "/admin/clubs/{club_id}/match-uploader/round-robin/preview"),
         ("POST", "/admin/clubs/{club_id}/match-uploader/players"),
+        ("POST", "/admin/clubs/{club_id}/match-uploader/player-operations/{operation_key}/reconcile"),
         ("POST", "/admin/clubs/{club_id}/match-uploader/singles"),
         ("POST", "/admin/clubs/{club_id}/match-uploader/batch"),
         ("POST", "/admin/clubs/{club_id}/players/editor/merge/preview"),
@@ -183,6 +185,7 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/admin/clubs/{club_id}/players/editor/players"),
         ("PATCH", "/admin/clubs/{club_id}/players/editor/players/{player_id}"),
         ("PATCH", "/admin/clubs/{club_id}/players/editor/players/{player_id}/league-ratings/{league_rating_id}"),
+        ("POST", "/admin/clubs/{club_id}/players/editor/operations/{operation_key}/reconcile"),
         ("POST", "/admin/clubs/{club_id}/match-canonical-audit/run"),
         ("POST", "/admin/clubs/{club_id}/match-canonical-audit/normalize"),
     ),
@@ -203,7 +206,8 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("PATCH", "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/roster/{player_id}"),
         ("POST", "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/roster/batch"),
         ("PUT", "/admin/clubs/{club_id}/league-manager/team-leagues/{league_name}/settings"),
-        ("POST", "/admin/clubs/{club_id}/league-manager/team-leagues/{league_name}/schedule-preview/{phase}"),
+        ("POST", "/admin/clubs/{club_id}/league-manager/team-leagues/{league_name}/teams"),
+        ("POST", "/admin/clubs/{club_id}/league-manager/team-leagues/{league_name}/roster-actions"),
         ("POST", "/admin/clubs/{club_id}/league-manager/team-leagues/{league_name}/schedule"),
         ("POST", "/admin/clubs/{club_id}/league-manager/team-leagues/{league_name}/waitlist-actions"),
         ("POST", "/admin/clubs/{club_id}/league-manager/team-leagues/{league_name}/fixtures/{fixture_id}/score"),
@@ -223,6 +227,7 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/admin/clubs/{club_id}/match-uploader/round-robin/preview"),
         ("POST", "/admin/clubs/{club_id}/league-manager/live/roster-suggestion"),
         ("POST", "/admin/clubs/{club_id}/league-manager/live-sessions"),
+        ("POST", "/admin/clubs/{club_id}/league-manager/live-operations/{operation_key}/reconcile"),
         ("PATCH", "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/snapshot"),
         ("POST", "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}/plan"),
         ("POST", "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}"),
@@ -231,10 +236,13 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/admin/clubs/{club_id}/match-uploader/round-robin/preview"),
         ("POST", "/admin/clubs/{club_id}/league-manager/live/roster-suggestion"),
         ("POST", "/admin/clubs/{club_id}/league-manager/live-sessions"),
+        ("POST", "/admin/clubs/{club_id}/league-manager/live-operations/{operation_key}/reconcile"),
         ("PATCH", "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/snapshot"),
         ("POST", "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}/plan"),
         ("POST", "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}"),
         ("POST", "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}/submit"),
+        ("POST", "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}/movement"),
+        ("POST", "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}/retry"),
         ("POST", "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}/reconcile"),
         ("POST", "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}/compensate"),
         ("POST", "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/guests"),
@@ -284,7 +292,7 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/admin/clubs/{club_id}/jupr-live/sessions/{session_key}/publish"),
         ("POST", "/admin/clubs/{club_id}/jupr-live/operations/{operation_key}/reconcile"),
         # Round-Robin Generator and Ladder Generator share the reviewed
-        # permanent-open staging gate while using their own product-facing API.
+        # staging gate while using their own product-facing API.
         ("POST", "/admin/clubs/{club_id}/play-generators/preview"),
         ("POST", "/admin/clubs/{club_id}/play-generators/sessions"),
         ("PATCH", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/rounds/{round_number}/scores"),
@@ -318,6 +326,7 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
     "tournament-setup": (
         ("POST", "/admin/clubs/{club_id}/tournaments/setup/tournaments"),
         ("POST", "/admin/clubs/{club_id}/tournaments/setup/tournaments/{tournament_id}/impact"),
+        ("POST", "/admin/clubs/{club_id}/tournaments/setup/tournaments/{tournament_id}/age-split-preview"),
         ("PATCH", "/admin/clubs/{club_id}/tournaments/setup/tournaments/{tournament_id}/settings"),
         ("PUT", "/admin/clubs/{club_id}/tournaments/setup/tournaments/{tournament_id}/draft"),
         ("POST", "/admin/clubs/{club_id}/tournaments/setup/tournaments/{tournament_id}/publish"),
@@ -327,7 +336,10 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/registrations/broadcast-preview"),
         ("PATCH", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/registrations/bulk"),
         ("PATCH", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/registrations/{registration_id}"),
+        ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/registrations/{registration_id}/selections"),
         ("PATCH", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/selections/{selection_id}"),
+        ("DELETE", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/selections/{selection_id}"),
+        ("PUT", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/selections/{selection_id}/partner"),
         ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/team-competition/rating-verifications"),
         ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/team-competition/rating-reviews"),
         ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/team-competition/rating-reviews/close"),
@@ -339,12 +351,18 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws"),
         ("PUT", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/teams"),
         ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/teams/import-registrations"),
+        ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/teams/import-registrations/operations/{operation_reference}/reconcile"),
         ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/teams/import-bulk"),
         ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/games/round-robin"),
+        ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/games/round-robin/reconcile"),
+        ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/games/round-robin/rebuild"),
+        ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/cancel-empty"),
+        ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/events/{event_option_id}/cancel-empty"),
         ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/games/playoffs"),
         ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/results-import/preview"),
         ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/results-import/commit"),
         ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/podium"),
+        ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/podium/review"),
         ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/podium/awards"),
         ("PATCH", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/games/{game_id}/score"),
         ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/team-competition/draws/{draw_id}/round-robin"),
@@ -361,19 +379,29 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/matches/publish"),
     ),
     "tournament-live": (
+        ("POST", "/admin/clubs/{club_id}/tournament-live/tournaments/{tournament_id}/check-in/bulk"),
+        ("PUT", "/admin/clubs/{club_id}/tournament-live/tournaments/{tournament_id}/check-in/{registration_id}"),
         ("POST", "/admin/clubs/{club_id}/tournament-live/tournaments/{tournament_id}/draws/{draw_id}/commands"),
         ("POST", "/admin/clubs/{club_id}/tournament-live/tournaments/{tournament_id}/draws/{draw_id}/operations/{operation_key}/reconcile"),
+        ("POST", "/admin/clubs/{club_id}/tournament-live/tournaments/{tournament_id}/days/{day_id}/commands"),
+        ("POST", "/admin/clubs/{club_id}/tournament-live/tournaments/{tournament_id}/days/{day_id}/operations/{operation_key}/reconcile"),
     ),
     "tournament-live-official-publish": (
+        ("POST", "/admin/clubs/{club_id}/tournament-live/tournaments/{tournament_id}/check-in/bulk"),
+        ("PUT", "/admin/clubs/{club_id}/tournament-live/tournaments/{tournament_id}/check-in/{registration_id}"),
         ("POST", "/admin/clubs/{club_id}/tournament-live/tournaments/{tournament_id}/draws/{draw_id}/commands"),
         ("POST", "/admin/clubs/{club_id}/tournament-live/tournaments/{tournament_id}/draws/{draw_id}/operations/{operation_key}/reconcile"),
+        ("POST", "/admin/clubs/{club_id}/tournament-live/tournaments/{tournament_id}/days/{day_id}/commands"),
+        ("POST", "/admin/clubs/{club_id}/tournament-live/tournaments/{tournament_id}/days/{day_id}/operations/{operation_key}/reconcile"),
         ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/draws/{draw_id}/matches/publish"),
     ),
     "tournament-commerce-admin": (
         ("POST", "/admin/clubs/{club_id}/tournaments/commerce/tournaments/{tournament_id}/catalog/preview"),
         ("PUT", "/admin/clubs/{club_id}/tournaments/commerce/tournaments/{tournament_id}/catalog"),
+        ("PUT", "/admin/clubs/{club_id}/tournaments/commerce/tournaments/{tournament_id}/orders/{registration_id}"),
         ("PATCH", "/admin/clubs/{club_id}/tournaments/commerce/tournaments/{tournament_id}/orders/{registration_id}/payment"),
         ("POST", "/admin/clubs/{club_id}/tournaments/commerce/tournaments/{tournament_id}/orders/{registration_id}/cancel"),
+        ("POST", "/admin/clubs/{club_id}/tournaments/commerce/tournaments/{tournament_id}/orders/{registration_id}/quote"),
         ("PATCH", "/admin/clubs/{club_id}/tournaments/commerce/tournaments/{tournament_id}/fulfillment/{fulfillment_id}"),
     ),
 }
@@ -466,7 +494,7 @@ def append_github_env(path: Path, *, wave: str) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Configure the Fly staging write posture; open is the permanent test default."
+        description="Configure the Fly staging write posture; none is the fail-closed default."
     )
     parser.add_argument("--wave", required=True, choices=(OPEN_WRITE_WAVE, *tuple(STAGING_WRITE_WAVES)))
     parser.add_argument("--fly-config", type=Path, required=True)

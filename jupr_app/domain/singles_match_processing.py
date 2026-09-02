@@ -12,10 +12,15 @@ from jupr_app.domain.matches import (
     compute_team_deltas,
     extract_scores,
     insert_match_chunks_with_rating_scope_fallback,
+    is_popup_match,
     normalize_rating_scope,
+    should_update_island,
 )
 from jupr_app.domain.notifications.player_profile_update_repo import queue_player_updates_for_affected_subscribers
-from jupr_app.domain.match_processing import build_active_league_metadata_expectations
+from jupr_app.domain.match_processing import (
+    build_active_league_metadata_expectations,
+    has_managed_league_metadata,
+)
 from jupr_app.domain.player_activity import build_player_activity_update, coerce_utc_datetime, max_activity_time
 
 logger = logging.getLogger(__name__)
@@ -39,6 +44,18 @@ def _safe_positive_float(value: Any) -> float:
         return 0.0
 
 
+def _finite_float_or_none(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if math.isfinite(result) else None
+
+
 def _is_singles_match(match: dict[str, Any]) -> bool:
     return str(match.get("match_format") or match.get("format") or "").strip().lower() == "singles"
 
@@ -51,6 +68,64 @@ def _fallback_player_frame_lookup(df_players_all: Any, pid: int) -> dict[str, An
         return dict(row.iloc[0])
     except Exception:
         return None
+
+
+def _league_frame_rows(
+    df_leagues: Any,
+    *,
+    player_id: int,
+    league_name: str,
+) -> list[dict[str, Any]]:
+    if isinstance(df_leagues, list):
+        return [
+            dict(row)
+            for row in df_leagues
+            if str(row.get("player_id")) == str(int(player_id))
+            and str(row.get("league_name") or "").casefold()
+            == str(league_name).casefold()
+        ]
+    if df_leagues is None or getattr(df_leagues, "empty", True):
+        return []
+    try:
+        selected = df_leagues[
+            (df_leagues["player_id"].astype(str) == str(int(player_id)))
+            & (
+                df_leagues["league_name"].astype(str).str.casefold()
+                == str(league_name).casefold()
+            )
+        ]
+    except Exception:
+        return []
+    return [dict(row) for _, row in selected.iterrows()]
+
+
+def _fetch_league_rows(
+    supabase: Any,
+    *,
+    club_id: str,
+    player_ids: set[int],
+) -> list[dict[str, Any]]:
+    if not player_ids:
+        return []
+    try:
+        rows = (
+            supabase.table("league_ratings")
+            .select(
+                "id,player_id,league_name,rating,starting_rating,wins,losses,"
+                "matches_played,is_active,inactive_at"
+            )
+            .eq("club_id", str(club_id))
+            .in_("player_id", sorted(int(pid) for pid in player_ids))
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "Authoritative league roster baselines are unavailable; "
+            "no singles match was written."
+        ) from exc
+    return [dict(row) for row in rows]
 
 
 def _fetch_player_rows(supabase: Any, *, club_id: str, player_ids: set[int]) -> dict[int, dict[str, Any]]:
@@ -148,6 +223,7 @@ def process_singles_matches(
     club_id: str,
     name_to_id: dict[str, int],
     df_players_all: Any = None,
+    df_leagues: Any = None,
     df_meta: Any = None,
     sb_retry: Callable | None = None,
     default_k_factor: int = 32,
@@ -175,9 +251,11 @@ def process_singles_matches(
 
     db_matches: list[dict[str, Any]] = []
     player_updates: dict[int, dict[str, Any]] = {}
+    league_updates: dict[tuple[int, str], dict[str, Any]] = {}
     last_game_updates: dict[int, datetime] = {}
     affected_players: set[int] = set()
     successful_match_dates: list[str] = []
+    managed_league_names: set[str] = set()
 
     skipped_incomplete = 0
     skipped_empty = 0
@@ -197,6 +275,18 @@ def process_singles_matches(
         raise RuntimeError(
             "Authoritative singles player rows are incomplete; "
             f"no singles match was written: {missing_player_ids[:10]}"
+        )
+
+    # The legacy direct-write path has no atomic compare-and-swap wrapper, so
+    # refresh its league rows immediately before calculating final values. The
+    # atomic path deliberately uses the caller's snapshot as its expected CAS
+    # state instead.
+    effective_df_leagues = df_leagues
+    if not build_write_plan_only:
+        effective_df_leagues = _fetch_league_rows(
+            supabase,
+            club_id=str(club_id),
+            player_ids=candidate_ids,
         )
 
     def player_row(pid: int) -> dict[str, Any] | None:
@@ -233,6 +323,82 @@ def process_singles_matches(
             player_updates[pid]["l"] += 1
         return float(player_updates[pid]["r"])
 
+    def league_k_factor(league_name: str) -> int:
+        if df_meta is None or getattr(df_meta, "empty", True):
+            return int(default_k_factor)
+        try:
+            selected = df_meta[
+                df_meta["league_name"].astype(str).str.casefold()
+                == str(league_name).casefold()
+            ]
+            if len(selected) == 1:
+                return int(
+                    selected.iloc[0].get("k_factor", default_k_factor)
+                    or default_k_factor
+                )
+        except Exception:
+            pass
+        return int(default_k_factor)
+
+    def ensure_league_entry(pid: int, league_name: str) -> None:
+        key = (int(pid), str(league_name))
+        if key in league_updates:
+            return
+        rows = _league_frame_rows(
+            effective_df_leagues,
+            player_id=int(pid),
+            league_name=str(league_name),
+        )
+        if len(rows) > 1:
+            raise RuntimeError(
+                "Official singles publish found duplicate league-rating rows "
+                f"for player {int(pid)} in {league_name}."
+            )
+        current = rows[0] if rows else None
+        seed = _seed_singles_rating(player_row(int(pid)))
+        baseline = (
+            _finite_float_or_none(current.get("rating"))
+            if current is not None
+            else None
+        )
+        if baseline is None:
+            baseline = seed
+        starting_rating = (
+            _finite_float_or_none(current.get("starting_rating"))
+            if current is not None
+            else None
+        )
+        if starting_rating is None:
+            starting_rating = baseline
+        league_updates[key] = {
+            "r": baseline,
+            "start": starting_rating,
+            "w": _seed_stat(current, "wins"),
+            "l": _seed_stat(current, "losses"),
+            "mp": _seed_stat(current, "matches_played"),
+        }
+
+    def league_rating(pid: int, league_name: str) -> float:
+        ensure_league_entry(int(pid), str(league_name))
+        return float(league_updates[(int(pid), str(league_name))]["r"])
+
+    def apply_league_update(
+        pid: int,
+        league_name: str,
+        delta: float,
+        outcome: bool | None,
+        *,
+        bonus_elo: float = 0.0,
+    ) -> None:
+        ensure_league_entry(int(pid), str(league_name))
+        state = league_updates[(int(pid), str(league_name))]
+        state["r"] += float(delta) + _safe_positive_float(bonus_elo)
+        state["mp"] += 1
+        if outcome is True:
+            state["w"] += 1
+        elif outcome is False:
+            state["l"] += 1
+
     for match_dt, _row_index, match in prepared_singles_rows:
         p1_raw = as_player_id(match.get("t1_p1"), name_to_id)
         p2_raw = as_player_id(match.get("t2_p1"), name_to_id)
@@ -250,6 +416,23 @@ def process_singles_matches(
             continue
         rating_scope = normalize_rating_scope(match)
         is_unrated = rating_scope == "unrated"
+        league_name = str(match.get("league") or "Singles").strip() or "Singles"
+        official_league = has_managed_league_metadata(df_meta, league_name)
+        if official_league:
+            managed_league_names.add(league_name)
+        is_popup = is_popup_match(
+            str(match.get("match_type") or ""),
+            bool(match.get("is_popup", False)),
+        )
+        update_league_rating = official_league and should_update_island(
+            is_popup=is_popup,
+            rating_scope=rating_scope,
+        )
+        if official_league:
+            # Membership and its league-format baseline must exist even for an
+            # unrated or overall-only result.
+            ensure_league_entry(p1, league_name)
+            ensure_league_entry(p2, league_name)
         winner_bonus_elo = 0.0 if is_unrated else _safe_positive_float(match.get("rating_bonus_elo", match.get("winner_bonus_elo")))
         dt_val = match_dt.isoformat()
         r1, r2 = get_singles_r(p1), get_singles_r(p2)
@@ -266,6 +449,18 @@ def process_singles_matches(
         p1_bonus = winner_bonus_elo if p1_outcome is True else 0.0
         p2_bonus = winner_bonus_elo if p2_outcome is True else 0.0
 
+        league_d1, league_d2 = 0.0, 0.0
+        if update_league_rating:
+            league_d1, league_d2 = compute_team_deltas(
+                league_rating(p1, league_name),
+                league_rating(p2, league_name),
+                score_t1,
+                score_t2,
+                k_factor=float(league_k_factor(league_name)),
+                min_win_delta=float(min_win_delta_elo),
+                cap_loser_gain=cap_loser_gain_elo,
+            )
+
         if is_unrated:
             end_r1, end_r2 = r1, r2
             stored_delta = 0.0
@@ -273,6 +468,21 @@ def process_singles_matches(
         else:
             end_r1 = apply_update(p1, d1, p1_outcome, bonus_elo=p1_bonus)
             end_r2 = apply_update(p2, d2, p2_outcome, bonus_elo=p2_bonus)
+            if update_league_rating:
+                apply_league_update(
+                    p1,
+                    league_name,
+                    league_d1,
+                    p1_outcome,
+                    bonus_elo=p1_bonus,
+                )
+                apply_league_update(
+                    p2,
+                    league_name,
+                    league_d2,
+                    p2_outcome,
+                    bonus_elo=p2_bonus,
+                )
             for pid in (p1, p2):
                 last_game_updates[pid] = max_activity_time(last_game_updates.get(pid), match_dt)
                 affected_players.add(int(pid))
@@ -284,7 +494,7 @@ def process_singles_matches(
         db_match = build_match_row(
             club_id=str(club_id),
             dt_val=dt_val,
-            league_name=str(match.get("league") or "Singles").strip() or "Singles",
+            league_name=league_name,
             pids=(p1, None, p2, None),
             scores=(int(score_t1), int(score_t2)),
             stored_elo_delta=stored_delta,
@@ -346,13 +556,58 @@ def process_singles_matches(
             planned_player_updates.append(
                 {"player_id": int(pid), "rating_mode": "singles", "expected": expected, "after": after}
             )
-        # Official singles leagues are lifecycle-guarded, but singles never
-        # mutate doubles league-rating rows. Pop-Up/Social remains metadata-only.
+        planned_league_updates: list[dict[str, Any]] = []
+        for (pid, league_name), stats in sorted(league_updates.items()):
+            rows = _league_frame_rows(
+                effective_df_leagues,
+                player_id=int(pid),
+                league_name=str(league_name),
+            )
+            if len(rows) > 1:
+                raise RuntimeError(
+                    "Official singles publish found duplicate league-rating "
+                    f"rows for player {int(pid)} in {league_name}."
+                )
+            current = rows[0] if rows else None
+            expected = None
+            if current is not None:
+                expected_rating = _finite_float_or_none(current.get("rating"))
+                expected_starting_rating = _finite_float_or_none(
+                    current.get("starting_rating")
+                )
+                expected = {
+                    "id": int(current["id"]),
+                    "rating": expected_rating,
+                    "wins": _seed_stat(current, "wins"),
+                    "losses": _seed_stat(current, "losses"),
+                    "matches_played": _seed_stat(current, "matches_played"),
+                    "starting_rating": expected_starting_rating,
+                    "is_active": (
+                        bool(current.get("is_active"))
+                        if current.get("is_active") is not None
+                        else None
+                    ),
+                    "inactive_at": current.get("inactive_at"),
+                }
+            planned_league_updates.append(
+                {
+                    "player_id": int(pid),
+                    "league_name": str(league_name),
+                    "expected": expected,
+                    "after": {
+                        "rating": float(stats["r"]),
+                        "wins": int(stats["w"]),
+                        "losses": int(stats["l"]),
+                        "matches_played": int(stats["mp"]),
+                        "starting_rating": float(stats["start"]),
+                        "is_active": True,
+                        "inactive_at": None,
+                    },
+                }
+            )
+
         official_league_names = {
-            str(row.get("league") or "").strip()
-            for row in db_matches
-            if str(row.get("league") or "").strip().casefold()
-            not in {"", "overall", "popup", "singles"}
+            str(league_name) for _, league_name in league_updates
         }
         league_metadata_expectations = build_active_league_metadata_expectations(
             df_meta,
@@ -374,7 +629,7 @@ def process_singles_matches(
             "write_plan": {
                 "match_rows": db_matches,
                 "player_updates": planned_player_updates,
-                "league_rating_updates": [],
+                "league_rating_updates": planned_league_updates,
                 "league_metadata_expectations": (
                     league_metadata_expectations
                 ),
@@ -395,8 +650,60 @@ def process_singles_matches(
             },
         }
 
+    if managed_league_names:
+        league_labels = ", ".join(sorted(managed_league_names, key=str.casefold))
+        raise RuntimeError(
+            "Managed league matches require the atomic match-entry path; "
+            f"no singles match was written for: {league_labels}."
+        )
+
     if db_matches:
         insert_match_chunks_with_rating_scope_fallback(db_matches=db_matches, supabase=supabase, sb_retry=sb_retry)
+
+    for (pid, league_name), stats in sorted(league_updates.items()):
+        rows = _league_frame_rows(
+            effective_df_leagues,
+            player_id=int(pid),
+            league_name=str(league_name),
+        )
+        if len(rows) > 1:
+            raise RuntimeError(
+                "Official singles publish found duplicate league-rating rows "
+                f"for player {int(pid)} in {league_name}."
+            )
+        payload = {
+            "club_id": str(club_id),
+            "player_id": int(pid),
+            "league_name": str(league_name),
+            "rating": float(stats["r"]),
+            "wins": int(stats["w"]),
+            "losses": int(stats["l"]),
+            "matches_played": int(stats["mp"]),
+            "starting_rating": float(stats["start"]),
+            "is_active": True,
+            "inactive_at": None,
+        }
+        if rows:
+            row_id = rows[0].get("id")
+            if row_id is None:
+                raise RuntimeError(
+                    "Official singles league roster row is missing its stable id."
+                )
+            sb_retry(
+                lambda payload=payload, row_id=int(row_id): supabase.table(
+                    "league_ratings"
+                )
+                .update(payload)
+                .eq("club_id", str(club_id))
+                .eq("id", row_id)
+                .execute()
+            )
+        else:
+            sb_retry(
+                lambda payload=payload: supabase.table("league_ratings")
+                .insert(payload)
+                .execute()
+            )
 
     for pid, stats in player_updates.items():
         if pid not in affected_players:

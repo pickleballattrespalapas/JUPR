@@ -4,11 +4,17 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from jupr_app.services.admin_league_print_service import (
+    _parse_week_num,
     build_admin_league_printout,
     build_admin_top_players_printable,
 )
 from tests.conftest import require_api_dependency
 from tests.test_admin_match_log_service import FakeSupabase
+
+
+def test_print_week_number_ignores_non_week_identifiers() -> None:
+    assert _parse_week_num("Week 3") == 3
+    assert _parse_week_num("E2E 9b956dfc-32802308745-1") is None
 
 
 def _match(match_id: int, *, date: str, week: int = 1, with_snapshots: bool = True) -> dict:
@@ -38,6 +44,33 @@ def _match(match_id: int, *, date: str, week: int = 1, with_snapshots: bool = Tr
                 "t2_p1_r_end": 1390,
                 "t2_p2_r": 1300,
                 "t2_p2_r_end": 1290,
+            }
+        )
+    return row
+
+
+def _singles_match(
+    match_id: int,
+    *,
+    date: str,
+    week: int = 1,
+    with_snapshots: bool = True,
+) -> dict:
+    row = _match(match_id, date=date, week=week, with_snapshots=False)
+    row.update(
+        {
+            "match_format": "singles",
+            "t1_p2": None,
+            "t2_p2": None,
+        }
+    )
+    if with_snapshots:
+        row.update(
+            {
+                "t1_p1_r": 1600,
+                "t1_p1_r_end": 1612,
+                "t2_p1_r": 1400,
+                "t2_p1_r_end": 1390,
             }
         )
     return row
@@ -155,6 +188,262 @@ def test_league_printout_has_true_weekly_leaders_and_top_performers(monkeypatch)
     }
     assert payload["detail"]["capabilities"]["roster_mutable"] is True
     assert payload["rating_source"] == "stored_snapshots"
+    assert payload["has_printable_data"] is True
+    assert payload["printable_sections"] == {
+        "schedule": True,
+        "weekly_leaders": True,
+        "season_leaders": True,
+        "standings": True,
+        "roster": True,
+        "team_standings": False,
+        "team_rosters": False,
+        "substitute_pool": False,
+    }
+
+
+def test_singles_league_printout_includes_canonical_two_player_match(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER", "1")
+    tables = print_tables()
+    tables["leagues_metadata"][0]["match_format"] = "singles"
+    tables["matches"] = [
+        _singles_match(1, date="2026-02-07T18:00:00Z", week=1),
+    ]
+
+    payload = build_admin_league_printout(
+        FakeSupabase(tables),
+        club_id="club",
+        league_name="Open",
+        week_num=1,
+    )
+
+    assert payload["available_weeks"] == [1]
+    assert payload["selected_week"] == 1
+    assert payload["rating_source"] == "stored_snapshots"
+    assert [row["player_name"] for row in payload["weekly_rating_leaders"]] == [
+        "Alex",
+        "Casey",
+    ]
+    assert payload["weekly_rating_leaders"][0]["rating_delta_jupr"] == 0.03
+    assert payload["weekly_win_leaders"][0]["player_name"] == "Alex"
+    assert payload["weekly_win_leaders"][0]["wins"] == 1
+    assert payload["printable_sections"]["weekly_leaders"] is True
+
+
+def test_singles_league_printout_replays_missing_snapshots(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER", "1")
+    tables = print_tables()
+    tables["leagues_metadata"][0]["match_format"] = "singles"
+    tables["matches"] = [
+        _singles_match(1, date="2026-02-07T18:00:00Z", week=1, with_snapshots=False),
+    ]
+    for row in tables["league_ratings"]:
+        if row["player_id"] in {1, 3}:
+            row["starting_rating"] = 1200
+
+    payload = build_admin_league_printout(
+        FakeSupabase(tables),
+        club_id="club",
+        league_name="Open",
+        week_num=1,
+    )
+
+    leaders = {row["player_name"]: row for row in payload["weekly_rating_leaders"]}
+    assert set(leaders) == {"Alex", "Casey"}
+    assert leaders["Alex"]["rating_delta_elo"] > 0
+    assert leaders["Casey"]["rating_delta_elo"] < 0
+    assert payload["rating_source"] == "stored_snapshots_with_python_replay"
+    assert payload["warnings"] == [
+        "Replayed 1 match(es) in Python because complete stored rating snapshots were unavailable."
+    ]
+
+
+def test_empty_team_draft_is_not_printable_and_does_not_claim_player_standings(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER", "1")
+    tables = print_tables()
+    tables["leagues_metadata"][0].update(
+        {
+            "league_type": "Team",
+            "status": "draft",
+            "is_active": False,
+            "schedule_config": {},
+        }
+    )
+    tables["league_ratings"] = []
+    tables["matches"] = []
+
+    payload = build_admin_league_printout(
+        FakeSupabase(tables),
+        club_id="club",
+        league_name="Open",
+    )
+
+    assert payload["has_printable_data"] is False
+    assert payload["printable_sections"] == {
+        "schedule": False,
+        "weekly_leaders": False,
+        "season_leaders": False,
+        "standings": False,
+        "roster": False,
+        "team_standings": False,
+        "team_rosters": False,
+        "substitute_pool": False,
+    }
+    assert payload["warnings"] == [
+        "No printable league-night data is available yet; add a schedule, "
+        "league roster, or scored results before printing."
+    ]
+
+
+def test_team_player_ratings_do_not_masquerade_as_team_print_data(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER", "1")
+    tables = print_tables()
+    tables["leagues_metadata"][0].update(
+        {
+            "league_type": "Team",
+            "status": "draft",
+            "is_active": False,
+            "schedule_config": {},
+        }
+    )
+    tables["matches"] = []
+
+    payload = build_admin_league_printout(
+        FakeSupabase(tables),
+        club_id="club",
+        league_name="Open",
+    )
+
+    assert payload["has_printable_data"] is True
+    assert payload["printable_sections"]["standings"] is False
+    assert payload["printable_sections"]["roster"] is False
+    assert payload["printable_sections"]["team_standings"] is False
+    assert payload["printable_sections"]["team_rosters"] is False
+
+
+def test_team_printout_uses_normalized_teams_rosters_and_substitute_pool(monkeypatch) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER", "1")
+    tables = print_tables()
+    tables["leagues_metadata"][0].update(
+        {
+            "league_type": "Team",
+            "awards_config": {
+                "categories": {
+                    "team_champion": {
+                        "enabled": True,
+                        "depth": 1,
+                        "minimum": 1,
+                    }
+                }
+            },
+        }
+    )
+    tables["players"].append(
+        {
+            "club_id": "club",
+            "id": 7,
+            "name": "Ellis",
+            "rating": 1450,
+            "active": True,
+        }
+    )
+    tables["team_league_settings"] = [
+        {
+            "club_id": "club",
+            "league_name": "Open",
+            "team_size": 2,
+            "team_category": "mixed",
+            "max_alternates": 1,
+            "substitute_pool_enabled": True,
+            "allow_substitutes": True,
+            "roster_version": 3,
+        }
+    ]
+    tables["team_league_teams"] = [
+        {
+            "id": "team-a",
+            "club_id": "club",
+            "league_name": "Open",
+            "team_name": "Dink Dynasty",
+            "status": "confirmed",
+            "captain_player_id": 1,
+            "partner_player_id": 2,
+        },
+        {
+            "id": "team-b",
+            "club_id": "club",
+            "league_name": "Open",
+            "team_name": "Kitchen Crew",
+            "status": "confirmed",
+            "captain_player_id": 3,
+            "partner_player_id": 4,
+        },
+    ]
+    tables["team_league_team_members"] = [
+        {
+            "id": f"member-{player_id}",
+            "team_id": team_id,
+            "club_id": "club",
+            "league_name": "Open",
+            "player_id": player_id,
+            "role": role,
+            "status": "active",
+        }
+        for team_id, player_id, role in (
+            ("team-a", 1, "captain"),
+            ("team-a", 2, "primary"),
+            ("team-b", 3, "captain"),
+            ("team-b", 4, "primary"),
+        )
+    ]
+    tables["team_league_substitute_pool"] = [
+        {
+            "id": "pool-1",
+            "club_id": "club",
+            "league_name": "Open",
+            "player_id": 7,
+            "status": "available",
+            "note": "Text first",
+        }
+    ]
+    tables["team_league_fixtures"] = [
+        {
+            "id": "fixture-1",
+            "club_id": "club",
+            "league_name": "Open",
+            "phase": "regular",
+            "team_a_id": "team-a",
+            "team_b_id": "team-b",
+            "status": "complete",
+            "team_a_score": 11,
+            "team_b_score": 8,
+        }
+    ]
+    tables["team_league_solo_waitlist"] = []
+    tables["team_league_operations"] = []
+
+    payload = build_admin_league_printout(
+        FakeSupabase(tables),
+        club_id="club",
+        league_name="Open",
+    )
+
+    assert payload["printable_sections"]["standings"] is False
+    assert payload["printable_sections"]["roster"] is False
+    assert payload["printable_sections"]["team_standings"] is True
+    assert payload["printable_sections"]["team_rosters"] is True
+    assert payload["printable_sections"]["substitute_pool"] is True
+    assert payload["team_print"]["standings"][0]["team_name"] == "Dink Dynasty"
+    assert payload["season_top_performers"][0]["recipient_type"] == "team"
+    assert payload["season_top_performers"][0]["recipient_name"] == "Dink Dynasty"
+    assert payload["team_print"]["teams"][0]["members"][0]["player_name"] == "Alex"
+    assert payload["team_print"]["substitute_pool"] == [
+        {
+            "player_id": 7,
+            "player_name": "Ellis",
+            "status": "available",
+            "note": "Text first",
+        }
+    ]
 
 
 def test_league_printout_replays_missing_selected_week_snapshots(monkeypatch) -> None:

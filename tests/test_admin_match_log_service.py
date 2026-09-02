@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from jupr_app.domain.live_social import (
     delete_social_matches,
     list_social_match_log_rows,
@@ -10,6 +12,7 @@ from jupr_app.domain.live_social import (
 from jupr_app.services.admin_match_log_service import (
     apply_admin_match_log_duplicate_cleanup,
     apply_admin_match_log_edits,
+    apply_admin_match_log_exclusions,
     build_admin_match_log,
     resolve_admin_match_log_duplicate_false_positive,
 )
@@ -161,6 +164,8 @@ def fake_tables():
                 "deleted_at": None,
                 "context_type": None,
                 "context_id": None,
+                "tournament_id": None,
+                "tournament_game_id": None,
                 "updated_at": None,
                 "row_version": 1,
             },
@@ -180,6 +185,8 @@ def fake_tables():
                 "deleted_at": None,
                 "context_type": None,
                 "context_id": None,
+                "tournament_id": None,
+                "tournament_game_id": None,
                 "updated_at": None,
                 "row_version": 1,
             },
@@ -199,6 +206,8 @@ def fake_tables():
                 "deleted_at": None,
                 "context_type": None,
                 "context_id": None,
+                "tournament_id": None,
+                "tournament_game_id": None,
                 "updated_at": None,
                 "row_version": 1,
             },
@@ -218,6 +227,8 @@ def fake_tables():
                 "deleted_at": "2026-03-03T12:00:00Z",
                 "context_type": None,
                 "context_id": None,
+                "tournament_id": None,
+                "tournament_game_id": None,
                 "updated_at": "2026-03-03T12:00:00Z",
                 "row_version": 2,
             },
@@ -322,6 +333,41 @@ def test_admin_match_log_duplicate_scan(monkeypatch) -> None:
     ]
 
 
+def test_distinct_tournament_series_games_are_not_duplicate_matches(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG", "1")
+    tables = fake_tables()
+    first = {
+        **tables["matches"][0],
+        "id": 10,
+        "context_type": "tournament_game",
+        "context_id": "series-child-1",
+        "tournament_id": "tournament-1",
+        "tournament_game_id": "series-child-1",
+    }
+    second = {
+        **first,
+        "id": 11,
+        "context_id": "series-child-2",
+        "tournament_game_id": "series-child-2",
+    }
+    tables["matches"] = [first, second]
+
+    payload = build_admin_match_log(
+        FakeSupabase(tables, strict_select_tables=SCHEMA_STRICT_TABLES),
+        club_id="club",
+        limit=20,
+    )
+
+    assert payload["summary"]["duplicate_groups"] == 0
+    assert payload["duplicate_groups"] == []
+    assert payload["duplicate_delete_preview"] is None
+    assert {
+        row["tournament_game_id"] for row in payload["matches"]
+    } == {"series-child-1", "series-child-2"}
+
+
 def test_admin_match_log_surfaces_recent_exclusion_recovery(monkeypatch) -> None:
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG", "1")
     tables = fake_tables()
@@ -334,6 +380,7 @@ def test_admin_match_log_surfaces_recent_exclusion_recovery(monkeypatch) -> None
             "recovery_stage": "badge_reconcile",
             "replay_job_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
             "error_text": "badge worker unavailable",
+            "source": "staging_league_live_browser_acceptance_legacy_cleanup",
             "affected_player_ids": [1, 2],
             "result_json": {"excluded_ids": [3]},
             "created_at": "2026-07-26T12:00:00Z",
@@ -350,6 +397,9 @@ def test_admin_match_log_surfaces_recent_exclusion_recovery(monkeypatch) -> None
     operation = payload["recent_exclusion_operations"][0]
     assert operation["status"] == "recovery_required"
     assert operation["recovery_stage"] == "badge_reconcile"
+    assert operation["source"] == (
+        "staging_league_live_browser_acceptance_legacy_cleanup"
+    )
     assert operation["affected_player_ids"] == [1, 2]
     assert operation["result_json"]["excluded_ids"] == [3]
 
@@ -607,6 +657,71 @@ def test_admin_match_log_apply_edits(monkeypatch) -> None:
     assert result["updated_count"] == 1
     assert tables["matches"][0]["week_tag"] == "Week 2"
     assert tables["matches"][0]["updated_by"] == "admin@example.com"
+
+
+def test_admin_match_log_rejects_official_tournament_match_edits(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    tables = fake_tables()
+    tables["matches"][0].update(
+        {
+            "context_type": "tournament_game",
+            "context_id": "series-child-1",
+            "tournament_id": "tournament-1",
+            "tournament_game_id": "series-child-1",
+        }
+    )
+    monkeypatch.setattr(
+        "jupr_app.services.admin_match_log_service.apply_atomic_match_edits",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("official tournament match must not reach edit RPC")
+        ),
+    )
+
+    with pytest.raises(ValueError, match="Official tournament matches"):
+        apply_admin_match_log_edits(
+            FakeSupabase(tables),
+            club_id="club",
+            patches=[{"id": 1, "score_t1": 15}],
+            actor_email="admin@example.com",
+            actor_role="club_owner",
+            confirmation_text="APPLY",
+            idempotency_key="official-child-edit",
+        )
+
+
+def test_admin_match_log_rejects_official_tournament_match_exclusion(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "1")
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE", "1")
+    tables = fake_tables()
+    tables["matches"][0].update(
+        {
+            "context_type": "tournament_game",
+            "context_id": "series-child-1",
+            "tournament_id": "tournament-1",
+            "tournament_game_id": "series-child-1",
+        }
+    )
+    monkeypatch.setattr(
+        "jupr_app.services.admin_match_log_service.apply_atomic_match_exclusions",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("official tournament match must not reach exclusion RPC")
+        ),
+    )
+
+    with pytest.raises(ValueError, match="Official tournament matches"):
+        apply_admin_match_log_exclusions(
+            FakeSupabase(tables),
+            club_id="club",
+            targets=[{"match_id": 1, "expected_row_version": 1}],
+            actor_email="admin@example.com",
+            actor_role="club_owner",
+            confirmation_text="DELETE",
+            idempotency_key="11111111-1111-1111-1111-111111111111",
+        )
 
 
 def test_admin_match_log_rejects_activity_edits(monkeypatch) -> None:

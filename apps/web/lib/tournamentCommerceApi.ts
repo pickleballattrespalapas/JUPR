@@ -41,7 +41,7 @@ export type TournamentCommerceBundleComponent = {
   id?: string;
   bundle_id?: string;
   resource_key?: string;
-  component_type: "EVENT_OPTION" | "ITEM_VARIANT";
+  component_type: "EVENT_OPTION" | "EVENT_CHOICE" | "ITEM_VARIANT";
   event_option_id?: string | null;
   item_id?: string | null;
   variant_id?: string | null;

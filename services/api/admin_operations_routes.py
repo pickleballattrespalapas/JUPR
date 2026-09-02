@@ -23,7 +23,13 @@ from services.api.admin_replay_routes import install_admin_replay_routes
 from services.api.admin_support_requests_routes import install_admin_support_requests_routes
 from services.api.admin_tools_routes import install_admin_tools_routes
 from services.api.admin_tournament_routes import install_admin_tournament_routes
+from services.api.admin_tournament_checkin_routes import (
+    install_admin_tournament_checkin_routes,
+)
 from services.api.admin_tournament_live_routes import install_admin_tournament_live_routes
+from services.api.admin_tournament_day_live_routes import (
+    install_admin_tournament_day_live_routes,
+)
 from services.api.admin_tournament_commerce_routes import (
     install_admin_tournament_commerce_routes,
 )
@@ -72,7 +78,13 @@ def install_admin_operations_routes(app, *, get_supabase_client=None) -> None:
         install_admin_badge_diagnostics_routes(app, get_supabase_client=get_supabase_client)
         install_admin_tournament_setup_routes(app, get_supabase_client=get_supabase_client)
         install_admin_tournament_routes(app, get_supabase_client=get_supabase_client)
+        install_admin_tournament_checkin_routes(
+            app, get_supabase_client=get_supabase_client
+        )
         install_admin_tournament_live_routes(app, get_supabase_client=get_supabase_client)
+        install_admin_tournament_day_live_routes(
+            app, get_supabase_client=get_supabase_client
+        )
         install_admin_tournament_commerce_routes(
             app, get_supabase_client=get_supabase_client
         )

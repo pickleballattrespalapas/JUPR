@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import math
+import unicodedata
 from typing import Any, Callable, Dict, Optional
 
 import pandas as pd
-import unicodedata
 
 from jupr_app.domain.constants import DEFAULT_K_FACTOR
 from jupr_app.domain.matches import compute_outcomes, compute_team_deltas
@@ -12,6 +13,8 @@ from jupr_app.domain.player_activity import coerce_utc_datetime, max_activity_ti
 from jupr_app.domain.ratings import calculate_hybrid_elo
 
 FULL_RESET_LABEL = "ALL (Full System Reset)"
+_RESERVED_LEAGUE_NAMES = frozenset({"", "overall", "popup", "singles"})
+_LEAGUE_RATING_STORAGE_QUANTUM = Decimal("0.0001")
 
 
 class ReplayLeaseLostError(RuntimeError):
@@ -36,15 +39,45 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return float(default)
 
 
+def _league_rating_storage_value(value: Any) -> float:
+    """Match the numeric(10,4) league-rating columns before strict RPC checks."""
+
+    try:
+        parsed = Decimal(str(value))
+        if not parsed.is_finite():
+            raise InvalidOperation
+        return float(
+            parsed.quantize(
+                _LEAGUE_RATING_STORAGE_QUANTUM,
+                rounding=ROUND_HALF_UP,
+            )
+        )
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise RuntimeError(
+            "Replay History produced a non-finite league-rating value."
+        ) from exc
+
+
+def _normalize_league_name(value: Any) -> str:
+    normalized = unicodedata.normalize("NFKC", str(value or ""))
+    normalized = normalized.replace("’", "'")
+    return " ".join(normalized.split())
+
+
 def _managed_singles_replay_plan(
     *,
     rows: list[dict[str, Any]],
     players: list[dict[str, Any]],
     club_id: str,
+    managed_leagues: dict[str, dict[str, Any]] | None = None,
+    existing_league_ratings: dict[tuple[int, str], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Rebuild post-baseline singles state without touching legacy aggregates."""
+    """Rebuild post-baseline singles and official-league projections."""
 
     state: dict[int, dict[str, Any]] = {}
+    league_state: dict[tuple[int, str], dict[str, Any]] = {}
+    managed_league_rows = dict(managed_leagues or {})
+    existing_league_rows = dict(existing_league_ratings or {})
     player_rows: dict[int, dict[str, Any]] = {}
     for player in players:
         pid = _safe_int(player.get("id"))
@@ -59,6 +92,7 @@ def _managed_singles_replay_plan(
         player_rows[pid] = dict(player)
 
     snapshots: list[dict[str, Any]] = []
+    snapshots_by_league: dict[str, list[dict[str, Any]]] = {}
     active_rated = 0
     active_unrated = 0
     deleted = 0
@@ -107,6 +141,61 @@ def _managed_singles_replay_plan(
         }
         return state[pid]
 
+    def managed_league_for(row: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
+        league_key = _normalize_league_name(row.get("league")).casefold()
+        if league_key in _RESERVED_LEAGUE_NAMES:
+            return None
+        metadata = managed_league_rows.get(league_key)
+        if metadata is None:
+            return None
+        match_format = str(metadata.get("match_format") or "").strip().casefold()
+        if match_format != "singles":
+            raise RuntimeError(
+                "A replay-managed singles row conflicts with its managed "
+                f"league match format: {metadata.get('league_name') or league_key}."
+            )
+        return league_key, metadata
+
+    def ensure_league_player(
+        pid: int,
+        league_key: str,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        key = (int(pid), str(league_key))
+        if key in league_state:
+            return league_state[key]
+        player_state = ensure_player(int(pid))
+        existing = existing_league_rows.get(key)
+        existing_start = _safe_float(
+            existing.get("starting_rating") if existing else None,
+            float("nan"),
+        )
+        existing_rating = _safe_float(
+            existing.get("rating") if existing else None,
+            float("nan"),
+        )
+        if math.isfinite(existing_start):
+            seed = float(existing_start)
+        elif math.isfinite(existing_rating):
+            seed = float(existing_rating)
+        else:
+            seed = float(player_state["r"])
+        league_state[key] = {
+            "r": seed,
+            "start": seed,
+            "w": 0,
+            "l": 0,
+            "mp": 0,
+            "league_name": str(
+                (existing or {}).get("league_name")
+                or metadata.get("league_name")
+                or ""
+            ).strip(),
+            "is_active": bool((existing or {}).get("is_active", True)),
+            "inactive_at": (existing or {}).get("inactive_at"),
+        }
+        return league_state[key]
+
     # A full replay restores the entire club projection, not just players still
     # referenced by current managed rows. This clears contributions left behind
     # by a supported participant correction or a physically removed managed row.
@@ -148,9 +237,30 @@ def _managed_singles_replay_plan(
                 "A replay-managed singles row has an invalid final score."
             )
 
+        rating_scope = str(row.get("rating_scope") or "").strip().casefold()
+        is_popup = (
+            str(row.get("match_type") or "").strip().casefold()
+            == "popup"
+        )
+        managed_league = managed_league_for(row)
+        league_p1_state: dict[str, Any] | None = None
+        league_p2_state: dict[str, Any] | None = None
+        if (
+            managed_league is not None
+            and not is_popup
+            and rating_scope not in {"overall_only", "unrated"}
+        ):
+            league_key, league_metadata = managed_league
+            league_p1_state = ensure_league_player(
+                p1, league_key, league_metadata
+            )
+            league_p2_state = ensure_league_player(
+                p2, league_key, league_metadata
+            )
+
         r1 = float(p1_state["r"])
         r2 = float(p2_state["r"])
-        is_unrated = str(row.get("rating_scope") or "").strip().lower() == "unrated"
+        is_unrated = rating_scope == "unrated"
         if is_unrated:
             d1 = d2 = 0.0
             end_r1, end_r2 = r1, r2
@@ -197,21 +307,46 @@ def _managed_singles_replay_plan(
             ) + (winner_bonus if (p1_outcome is True or p2_outcome is True) else 0.0)
             active_rated += 1
 
-        snapshots.append(
-            {
-                "id": match_id,
-                "club_id": str(club_id),
-                "elo_delta": float(stored_delta),
-                "t1_p1_r": r1,
-                "t1_p2_r": None,
-                "t2_p1_r": r2,
-                "t2_p2_r": None,
-                "t1_p1_r_end": float(end_r1),
-                "t1_p2_r_end": None,
-                "t2_p1_r_end": float(end_r2),
-                "t2_p2_r_end": None,
-            }
-        )
+            if (
+                league_p1_state is not None
+                and league_p2_state is not None
+            ):
+                league_d1, league_d2 = compute_team_deltas(
+                    float(league_p1_state["r"]),
+                    float(league_p2_state["r"]),
+                    s1,
+                    s2,
+                    k_factor=float(league_metadata.get("k_factor") or DEFAULT_K_FACTOR),
+                    min_win_delta=1.0,
+                    cap_loser_gain=16.0,
+                )
+                for league_player_state, delta, won, bonus in (
+                    (league_p1_state, league_d1, p1_outcome, p1_bonus),
+                    (league_p2_state, league_d2, p2_outcome, p2_bonus),
+                ):
+                    league_player_state["r"] += float(delta) + float(bonus)
+                    league_player_state["mp"] += 1
+                    if won is True:
+                        league_player_state["w"] += 1
+                    elif won is False:
+                        league_player_state["l"] += 1
+
+        snapshot = {
+            "id": match_id,
+            "club_id": str(club_id),
+            "elo_delta": float(stored_delta),
+            "t1_p1_r": r1,
+            "t1_p2_r": None,
+            "t2_p1_r": r2,
+            "t2_p2_r": None,
+            "t1_p1_r_end": float(end_r1),
+            "t1_p2_r_end": None,
+            "t2_p1_r_end": float(end_r2),
+            "t2_p2_r_end": None,
+        }
+        snapshots.append(snapshot)
+        row_league_key = _normalize_league_name(row.get("league")).casefold()
+        snapshots_by_league.setdefault(row_league_key, []).append(snapshot)
 
     player_updates: list[dict[str, Any]] = []
     for pid in sorted(player_rows):
@@ -229,9 +364,30 @@ def _managed_singles_replay_plan(
                 ),
             }
         )
+    league_ratings: list[dict[str, Any]] = []
+    for (pid, _league_key), league_player_state in sorted(
+        league_state.items(),
+        key=lambda item: (item[0][1], item[0][0]),
+    ):
+        league_ratings.append(
+            {
+                "club_id": str(club_id),
+                "player_id": int(pid),
+                "league_name": str(league_player_state["league_name"]),
+                "rating": float(league_player_state["r"]),
+                "wins": int(league_player_state["w"]),
+                "losses": int(league_player_state["l"]),
+                "matches_played": int(league_player_state["mp"]),
+                "starting_rating": float(league_player_state["start"]),
+                "is_active": bool(league_player_state["is_active"]),
+                "inactive_at": league_player_state["inactive_at"],
+            }
+        )
     return {
         "snapshots": snapshots,
+        "snapshots_by_league": snapshots_by_league,
         "player_updates": player_updates,
+        "league_ratings": league_ratings,
         "matches_scanned": len(rows),
         "active_rated": active_rated,
         "active_unrated": active_unrated,
@@ -254,7 +410,7 @@ def replay_history(
     Replays match history in chronological order and:
 
       - rewrites match snapshot columns (RPC bulk UPDATE)
-      - rebuilds league_ratings (delete + insert)
+      - reconciles match-evidenced league_ratings without deleting roster-only rows
       - updates players table ONLY when doing FULL reset (RPC bulk UPDATE)
 
     No per-row .execute() loops for writes.
@@ -273,16 +429,13 @@ def replay_history(
     RPC_PLAYERS_STATS = "bulk_update_players_stats"
     RPC_PLAYER_SINGLES_STATS = "bulk_update_player_singles_stats"
     RPC_FENCED_WRITE_BATCH = "apply_replay_write_batch_atomic"
+    RPC_FENCED_LEAGUE_RATINGS = "apply_replay_league_rating_rows_atomic"
 
     # ------------------------------
     # Helpers
     # ------------------------------
     def _norm_league(val: Any) -> str:
-        s = str(val or "")
-        s = unicodedata.normalize("NFKC", s)
-        s = s.replace("’", "'")
-        s = " ".join(s.split())
-        return s
+        return _normalize_league_name(val)
 
     def _chunk(rows: list[dict[str, Any]], size: int) -> list[list[dict[str, Any]]]:
         if not rows:
@@ -421,6 +574,29 @@ def replay_history(
                 ) from exc
             raise
 
+    def _fenced_league_rating_rpc(
+        rows: list[dict[str, Any]],
+        *,
+        label: str,
+    ) -> Any:
+        if fence_params is None:
+            raise RuntimeError("Replay fenced RPC called without a write fence.")
+        try:
+            return _retry(
+                lambda: supabase.rpc(
+                    RPC_FENCED_LEAGUE_RATINGS,
+                    {**fence_params, "p_rows": rows},
+                ).execute(),
+                label=label,
+            )
+        except Exception as exc:
+            if _is_replay_fence_error(exc):
+                raise ReplayLeaseLostError(
+                    "Replay mutation was rejected because this worker no "
+                    "longer owns the active database lease."
+                ) from exc
+            raise
+
     # ---------------------------------------------------------
     # Load players (only what we need)
     # ---------------------------------------------------------
@@ -447,8 +623,43 @@ def replay_history(
             "Managed singles player baselines are incomplete."
         )
 
+    try:
+        existing_league_ratings = _load_exact_pages(
+            lambda start, end: (
+                supabase.table("league_ratings")
+                .select(
+                    "player_id,league_name,rating,wins,losses,"
+                    "matches_played,starting_rating,is_active,inactive_at",
+                    count="exact",
+                )
+                .eq("club_id", club_id)
+                .order("player_id", desc=False)
+                .order("league_name", desc=False)
+                .range(start, end)
+            ),
+            label="select_existing_league_ratings",
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "Existing league-rating membership is required for Replay History."
+        ) from exc
+
+    existing_league_rows: dict[tuple[int, str], dict[str, Any]] = {}
+    for existing_rating in existing_league_ratings:
+        player_id = _safe_int(existing_rating.get("player_id"))
+        league_name = _norm_league(existing_rating.get("league_name"))
+        if player_id is None or not league_name:
+            raise RuntimeError(
+                "Replay History loaded an invalid existing league-rating row."
+            )
+        key = (int(player_id), league_name.casefold())
+        if key in existing_league_rows:
+            raise RuntimeError(
+                "Replay History loaded duplicate normalized league-rating rows."
+            )
+        existing_league_rows[key] = dict(existing_rating)
+
     valid_player_ids: set[int] = set()
-    start_base_by_pid: dict[int, float] = {}
 
     for p in all_players:
         try:
@@ -458,29 +669,46 @@ def replay_history(
 
         valid_player_ids.add(pid)
 
-        base = p.get("starting_rating")
-        if base is None:
-            base = p.get("rating", 1200.0)
-
-        try:
-            start_base_by_pid[pid] = float(base or 1200.0)
-        except Exception:
-            start_base_by_pid[pid] = 1200.0
-
     # ---------------------------------------------------------
     # Build K-factor map (normalized league names)
     # ---------------------------------------------------------
     k_map: Dict[str, int] = {}
+    managed_leagues: dict[str, dict[str, Any]] = {}
     if df_meta is not None and not df_meta.empty:
         for _, r in df_meta.iterrows():
             try:
                 lg_name = _norm_league(r["league_name"])
-                k_map[lg_name] = int(r.get("k_factor", DEFAULT_K_FACTOR) or DEFAULT_K_FACTOR)
+                k_map[lg_name.casefold()] = int(
+                    r.get("k_factor", DEFAULT_K_FACTOR) or DEFAULT_K_FACTOR
+                )
             except Exception:
                 pass
+            league_key = _norm_league(r.get("league_name")).casefold()
+            if league_key in _RESERVED_LEAGUE_NAMES:
+                continue
+            if league_key in managed_leagues:
+                raise RuntimeError(
+                    "Replay History loaded duplicate normalized league metadata: "
+                    f"{_norm_league(r.get('league_name'))}."
+                )
+            managed_leagues[league_key] = {
+                "league_name": _norm_league(r.get("league_name")),
+                "match_format": str(r.get("match_format") or "").strip().casefold(),
+                "k_factor": int(
+                    _safe_int(r.get("k_factor")) or DEFAULT_K_FACTOR
+                ),
+            }
+
+    target_managed_league = managed_leagues.get(target_league_norm.casefold())
+    target_managed_singles = bool(
+        target_managed_league
+        and target_managed_league.get("match_format") == "singles"
+    )
 
     def k_for(lg: str) -> int:
-        return int(k_map.get(_norm_league(lg), DEFAULT_K_FACTOR))
+        return int(
+            k_map.get(_norm_league(lg).casefold(), DEFAULT_K_FACTOR)
+        )
 
     # ---------------------------------------------------------
     # Initialize overall player state (in-memory)
@@ -518,17 +746,44 @@ def replay_history(
 
         key = (pid_i, lg_s)
         if key not in island_map:
-            base_r = seed_rating if seed_rating is not None else float(p_map[pid_i]["r"])
-            island_map[key] = {"r": float(base_r), "w": 0, "l": 0, "mp": 0}
+            existing = existing_league_rows.get((pid_i, lg_s.casefold()))
+            existing_start = _safe_float(
+                existing.get("starting_rating") if existing else None,
+                float("nan"),
+            )
+            existing_rating = _safe_float(
+                existing.get("rating") if existing else None,
+                float("nan"),
+            )
+            if math.isfinite(existing_start):
+                base_r = float(existing_start)
+            elif math.isfinite(existing_rating):
+                base_r = float(existing_rating)
+            elif seed_rating is not None:
+                base_r = float(seed_rating)
+            else:
+                base_r = float(p_map[pid_i]["r"])
+            island_map[key] = {
+                "r": float(base_r),
+                "start": float(base_r),
+                "w": 0,
+                "l": 0,
+                "mp": 0,
+                "league_name": str(
+                    (existing or {}).get("league_name") or lg_s
+                ),
+                "is_active": bool((existing or {}).get("is_active", True)),
+                "inactive_at": (existing or {}).get("inactive_at"),
+            }
         return float(island_map[key]["r"])
 
     # ---------------------------------------------------------
     # Read matches with pagination
     # ---------------------------------------------------------
     match_cols = (
-        "id,date,league,match_type,"
+        "id,date,league,match_type,match_format,"
         "t1_p1,t1_p2,t2_p1,t2_p2,"
-        "score_t1,score_t2,deleted_at,rating_scope"
+        "score_t1,score_t2,rating_bonus_elo,deleted_at,rating_scope"
     )
 
     matches_to_update: list[dict[str, Any]] = []
@@ -617,7 +872,10 @@ def replay_history(
                                 activity_time,
                             )
                         )
-            if "rating_scope" in m and str(m.get("rating_scope", "") or "").strip().lower() == "unrated":
+            rating_scope = str(
+                m.get("rating_scope", "") or ""
+            ).strip().casefold()
+            if "rating_scope" in m and rating_scope == "unrated":
                 continue
             lg = _norm_league(m.get("league", "") or "")
             in_scope = full_reset or (lg == target_league_norm)
@@ -627,7 +885,14 @@ def replay_history(
                 if (
                     p2 is None
                     and p4 is None
-                    and str(m.get("match_type") or "").strip().lower() == "singles"
+                    and (
+                        str(m.get("match_type") or "").strip().casefold()
+                        == "singles"
+                        or str(m.get("match_format") or "")
+                        .strip()
+                        .casefold()
+                        == "singles"
+                    )
                 ):
                     continue
                 if in_scope:
@@ -647,7 +912,12 @@ def replay_history(
             sr1, sr2, sr3, sr4 = gr(p1), gr(p2), gr(p3), gr(p4)
 
             # league-specific only if in_scope and not PopUp
-            do_league = (str(m.get("match_type", "")) != "PopUp") and in_scope
+            do_league = (
+                str(m.get("match_type") or "").strip().casefold()
+                != "popup"
+                and rating_scope != "overall_only"
+                and in_scope
+            )
             if do_league:
                 ir1 = gir(p1, lg, seed_rating=sr1)
                 ir2 = gir(p2, lg, seed_rating=sr2)
@@ -673,16 +943,22 @@ def replay_history(
             )
 
             win = s1 > s2
+            winner_bonus = max(
+                0.0,
+                _safe_float(m.get("rating_bonus_elo"), 0.0),
+            )
+            team1_bonus = winner_bonus if win else 0.0
+            team2_bonus = winner_bonus if not win else 0.0
 
             # overall updates
-            for pid, delta, won_flag in [
-                (p1, do1, win),
-                (p2, do1, win),
-                (p3, do2, not win),
-                (p4, do2, not win),
+            for pid, delta, won_flag, bonus in [
+                (p1, do1, win, team1_bonus),
+                (p2, do1, win, team1_bonus),
+                (p3, do2, not win, team2_bonus),
+                (p4, do2, not win, team2_bonus),
             ]:
                 ensure_player(pid)
-                p_map[pid]["r"] += float(delta)
+                p_map[pid]["r"] += float(delta) + float(bonus)
                 p_map[pid]["mp"] += 1
                 if won_flag:
                     p_map[pid]["w"] += 1
@@ -691,17 +967,17 @@ def replay_history(
 
             # league updates
             if do_league:
-                for pid, delta, won_flag in [
-                    (p1, di1, win),
-                    (p2, di1, win),
-                    (p3, di2, not win),
-                    (p4, di2, not win),
+                for pid, delta, won_flag, bonus in [
+                    (p1, di1, win, team1_bonus),
+                    (p2, di1, win, team1_bonus),
+                    (p3, di2, not win, team2_bonus),
+                    (p4, di2, not win, team2_bonus),
                 ]:
                     key = (int(pid), lg)
                     if key not in island_map:
-                        island_map[key] = {"r": float(gr(pid)), "w": 0, "l": 0, "mp": 0}
+                        gir(int(pid), lg, seed_rating=float(gr(pid)))
 
-                    island_map[key]["r"] += float(delta)
+                    island_map[key]["r"] += float(delta) + float(bonus)
                     island_map[key]["mp"] += 1
                     if won_flag:
                         island_map[key]["w"] += 1
@@ -711,7 +987,9 @@ def replay_history(
             er1, er2, er3, er4 = gr(p1), gr(p2), gr(p3), gr(p4)
 
             if in_scope:
-                stored_elo_delta = abs(do1) if win else abs(do2)
+                stored_elo_delta = (
+                    abs(do1) if win else abs(do2)
+                ) + winner_bonus
                 matches_to_update.append(
                     {
                         "id": int(m["id"]),
@@ -734,20 +1012,22 @@ def replay_history(
 
     singles_plan = {
         "snapshots": [],
+        "snapshots_by_league": {},
         "player_updates": [],
+        "league_ratings": [],
         "matches_scanned": 0,
         "active_rated": 0,
         "active_unrated": 0,
         "deleted": 0,
         "invalid": 0,
     }
-    if full_reset:
+    if full_reset or target_managed_singles:
         try:
             singles_rows = _load_exact_pages(
                 lambda start, end: (
                     supabase.table("matches")
                     .select(
-                        "id,date,match_format,rating_scope,"
+                        "id,date,league,match_type,match_format,rating_scope,"
                         "t1_p1,t1_p2,t2_p1,t2_p2,"
                         "score_t1,score_t2,rating_bonus_elo,deleted_at,"
                         "singles_replay_managed",
@@ -769,8 +1049,18 @@ def replay_history(
             rows=[dict(row) for row in singles_rows],
             players=[dict(player) for player in all_players],
             club_id=str(club_id),
+            managed_leagues=managed_leagues,
+            existing_league_ratings=existing_league_rows,
         )
-        matches_to_update.extend(singles_plan["snapshots"])
+        if full_reset:
+            matches_to_update.extend(singles_plan["snapshots"])
+        else:
+            matches_to_update.extend(
+                singles_plan["snapshots_by_league"].get(
+                    target_league_norm.casefold(),
+                    [],
+                )
+            )
 
     # ---------------------------------------------------------
     # Build league_ratings rows
@@ -780,18 +1070,90 @@ def replay_history(
         if pid not in valid_player_ids:
             continue
 
-        start_base = float(start_base_by_pid.get(int(pid), 1200.0))
         new_rows.append(
             {
                 "club_id": club_id,
                 "player_id": int(pid),
-                "league_name": str(lg),
+                "league_name": str(s.get("league_name") or lg),
                 "rating": float(s["r"]),
                 "wins": int(s["w"]),
                 "losses": int(s["l"]),
                 "matches_played": int(s["mp"]),
-                "starting_rating": float(start_base),
+                "starting_rating": float(s["start"]),
+                "is_active": bool(s["is_active"]),
+                "inactive_at": s["inactive_at"],
             }
+        )
+    if full_reset:
+        new_rows.extend(singles_plan["league_ratings"])
+    elif target_managed_singles:
+        new_rows.extend(
+            row
+            for row in singles_plan["league_ratings"]
+            if _norm_league(row.get("league_name")).casefold()
+            == target_league_norm.casefold()
+        )
+
+    rebuilt_keys: set[tuple[int, str]] = set()
+    for row in new_rows:
+        row_key = (
+            int(row["player_id"]),
+            _norm_league(row.get("league_name")).casefold(),
+        )
+        if row_key in rebuilt_keys:
+            raise RuntimeError(
+                "Replay History produced duplicate normalized league-rating rows."
+            )
+        rebuilt_keys.add(row_key)
+
+    reset_without_active_evidence = 0
+    for row_key, existing in existing_league_rows.items():
+        if row_key in rebuilt_keys:
+            continue
+        if not full_reset and row_key[1] != target_league_norm.casefold():
+            continue
+        matches_played = _safe_int(existing.get("matches_played"))
+        if matches_played is None or matches_played < 0:
+            raise RuntimeError(
+                "Replay History loaded invalid existing league-rating counters."
+            )
+        if matches_played == 0:
+            continue
+        starting_rating = _safe_float(
+            existing.get("starting_rating"),
+            float("nan"),
+        )
+        if not math.isfinite(starting_rating):
+            starting_rating = _safe_float(existing.get("rating"), float("nan"))
+        if not math.isfinite(starting_rating):
+            raise RuntimeError(
+                "Replay History cannot reset an unevidenced league rating "
+                "without a finite starting rating."
+            )
+        new_rows.append(
+            {
+                "club_id": club_id,
+                "player_id": int(row_key[0]),
+                "league_name": str(existing.get("league_name") or ""),
+                "rating": float(starting_rating),
+                "wins": 0,
+                "losses": 0,
+                "matches_played": 0,
+                "starting_rating": float(starting_rating),
+                "is_active": bool(existing.get("is_active", True)),
+                "inactive_at": existing.get("inactive_at"),
+            }
+        )
+        rebuilt_keys.add(row_key)
+        reset_without_active_evidence += 1
+
+    # The durable writer verifies exact values after PostgreSQL stores these
+    # columns as numeric(10,4). Normalize at the application boundary so the
+    # write and its strict readback compare the same representation.
+    for row in new_rows:
+        row["rating"] = _league_rating_storage_value(row.get("rating"))
+        row["starting_rating"] = _league_rating_storage_value(
+            row.get("starting_rating")
         )
 
     # ---------------------------------------------------------
@@ -870,76 +1232,32 @@ def replay_history(
                 label="Managed singles player replay",
             )
 
-    # 2) league_ratings: delete then insert (insert is fine because rows are complete)
-    if fence_params is not None:
-        league_names = (
-            []
-            if full_reset
-            else list(
-                dict.fromkeys(
-                    value
-                    for value in (target_reset_raw, target_league_norm)
-                    if value
-                )
-            )
-        )
-        _before_mutation()
-        _fenced_rpc(
-            {
-                "p_write_kind": "delete_league_ratings",
-                "p_delete_all": full_reset,
-                "p_league_names": league_names,
-            },
-            label="rpc_fenced_delete_league_ratings",
-        )
-    elif not full_reset:
-        # delete both raw and normalized league names if they differ
-        if target_reset_raw and target_reset_raw != target_league_norm:
-            _before_mutation()
-            _retry(
-                lambda: supabase.table("league_ratings")
-                .delete(returning="minimal")
-                .eq("club_id", club_id)
-                .eq("league_name", target_reset_raw)
-                .execute(),
-                label="delete_league_ratings_raw",
-            )
-
-        _before_mutation()
-        _retry(
-            lambda: supabase.table("league_ratings")
-            .delete(returning="minimal")
-            .eq("club_id", club_id)
-            .eq("league_name", target_league_norm)
-            .execute(),
-            label="delete_league_ratings_norm",
-        )
-    else:
-        _before_mutation()
-        _retry(
-            lambda: supabase.table("league_ratings")
-            .delete(returning="minimal")
-            .eq("club_id", club_id)
-            .execute(),
-            label="delete_league_ratings_all",
-        )
-
+    # 2) league_ratings: upsert only match-evidenced projections and explicit
+    # stale-stat resets. Unevidenced zero-counter roster rows are structural
+    # membership, not disposable replay output, so they remain untouched.
     for batch in _chunk(new_rows, WRITE_BATCH_SIZE):
         _before_mutation()
         if fence_params is not None:
-            _fenced_rpc(
-                {
-                    "p_write_kind": "insert_league_ratings",
-                    "p_rows": batch,
-                },
-                label="rpc_fenced_insert_league_ratings",
+            response = _fenced_league_rating_rpc(
+                batch,
+                label="rpc_fenced_upsert_league_ratings",
             )
         else:
-            _retry(
+            response = _retry(
                 lambda b=batch: supabase.table("league_ratings")
-                .insert(b, returning="minimal")
+                .upsert(
+                    b,
+                    on_conflict="club_id,player_id,league_name",
+                    returning="minimal",
+                )
                 .execute(),
-                label="insert_league_ratings",
+                label="upsert_league_ratings",
+            )
+        if fence_params is not None:
+            _require_rpc_count(
+                response,
+                expected=len(batch),
+                label="League-rating replay",
             )
 
     # 3) match snapshots: update via RPC bulk UPDATE (never touches league)
@@ -981,6 +1299,9 @@ def replay_history(
         "matches_rewritten": int(len(matches_to_update)),
         "matches_snapshots_updated_rows": int(updated_rows_total),
         "league_ratings_rows": int(len(new_rows)),
+        "league_ratings_reset_without_active_evidence": int(
+            reset_without_active_evidence
+        ),
         "matches_scanned_total": int(matches_scanned_total),
         "activity_players_updated": (
             int(len(valid_player_ids)) if full_reset else 0
@@ -1005,9 +1326,20 @@ def replay_history(
             if full_reset
             else 0
         ),
-        "singles_replay_supported": bool(full_reset),
-        "singles_players_updated": int(len(singles_plan["player_updates"])),
-        "singles_matches_rewritten": int(len(singles_plan["snapshots"])),
+        "singles_replay_supported": bool(full_reset or target_managed_singles),
+        "singles_players_updated": (
+            int(len(singles_plan["player_updates"])) if full_reset else 0
+        ),
+        "singles_matches_rewritten": int(
+            len(singles_plan["snapshots"])
+            if full_reset
+            else len(
+                singles_plan["snapshots_by_league"].get(
+                    target_league_norm.casefold(),
+                    [],
+                )
+            )
+        ),
         "singles_matches_scanned_total": int(singles_plan["matches_scanned"]),
         "singles_active_rated": int(singles_plan["active_rated"]),
         "singles_active_unrated": int(singles_plan["active_unrated"]),

@@ -6,9 +6,15 @@ import uuid
 
 import pytest
 
+from jupr_app.domain.tournament_podium import PODIUM_BADGE_MAP
 from jupr_app.domain.tournament_admin_operations import (
     build_tournament_admin_operation_request,
     stable_tournament_admin_fingerprint,
+)
+from jupr_app.services.admin_tournament_podium_review_service import (
+    PODIUM_REVIEW_ACTION,
+    PODIUM_REVIEW_CONTRACT,
+    build_admin_tournament_podium_review_fingerprint,
 )
 from jupr_app.services.admin_tournament_guarded_operation import (
     StaleTournamentAdminStateError,
@@ -37,6 +43,29 @@ require_api_dependency("supabase")
 from fastapi.testclient import TestClient
 
 from services.api.main import app
+from services.api.admin_tournament_live_routes import AdminTournamentLiveCommandRequest
+
+
+def test_live_command_api_types_individual_best_of_three_scores() -> None:
+    request = AdminTournamentLiveCommandRequest.model_validate(
+        {
+            "command": "save_score",
+            "expected_state_fingerprint": "a" * 64,
+            "idempotency_key": str(uuid.uuid4()),
+            "confirmation_text": "SAVE SCORE",
+            "expected_draw_updated_at": "2026-08-31T20:35:00Z",
+            "expected_game_updated_at": "2026-08-31T20:35:00Z",
+            "game_id": "game-1",
+            "game_scores": [
+                {"game_number": 1, "score_a": 11, "score_b": 7},
+                {"game_number": 2, "score_a": 8, "score_b": 11},
+                {"game_number": 3, "score_a": 11, "score_b": 9},
+            ],
+        }
+    )
+
+    assert [row.game_number for row in request.game_scores or []] == [1, 2, 3]
+
 
 
 def test_tournament_live_command_permission_matrix_matches_underlying_routes() -> None:
@@ -63,7 +92,7 @@ class _FakeRpc:
         )
 
     def execute(self):
-        if self.name == "admin_score_tournament_game_cas":
+        if self.name == "admin_score_tournament_game_result_cas":
             game = next(row for row in self.tables["tournament_games"] if row["id"] == self.params["p_game_id"])
             draw = next(row for row in self.tables["tournament_event_draws"] if row["id"] == game["draw_id"])
             if str(game.get("updated_at") or "") != str(self.params["p_expected_updated_at"]):
@@ -175,6 +204,15 @@ def live_tables() -> dict[str, list[dict]]:
                 "updated_at": "2026-07-19T10:00:00Z",
             }
         ],
+        "tournament_event_options": [
+            {
+                "id": "event-1",
+                "tournament_id": "tour-1",
+                "registration_day_id": "day-1",
+                "scoring_default": "GAME_TO_11",
+                "updated_at": "2026-07-19T10:00:00Z",
+            }
+        ],
         "tournament_teams": [
             {
                 "id": f"team-{number}",
@@ -212,11 +250,76 @@ def live_tables() -> dict[str, list[dict]]:
             {"id": player_id, "club_id": "club", "name": f"Player {player_id}", "active": True, "is_active": True}
             for player_id in range(1, 9)
         ],
+        "badges": [
+            {"badge_id": badge_id}
+            for badge_id in PODIUM_BADGE_MAP.values()
+        ],
         "matches": [],
         "player_badges": [],
         "tournament_admin_operations": [],
         "admin_activity_log": [],
     }
+
+
+def install_current_live_podium_review(
+    tables: dict[str, list[dict]],
+    *,
+    install_awards: bool = False,
+) -> None:
+    draw = tables["tournament_event_draws"][0]
+    draw_id = str(draw["id"])
+    teams = [row for row in tables["tournament_teams"] if row.get("draw_id") == draw_id]
+    games = [row for row in tables["tournament_games"] if row.get("draw_id") == draw_id]
+    podium = [row for row in tables["tournament_podium"] if row.get("draw_id") == draw_id]
+    fingerprint = build_admin_tournament_podium_review_fingerprint(
+        draw=draw,
+        teams=teams,
+        games=games,
+        podium=podium,
+    )
+    tables["admin_activity_log"] = [
+        row
+        for row in tables.get("admin_activity_log", [])
+        if row.get("action_type") != PODIUM_REVIEW_ACTION
+    ]
+    tables["admin_activity_log"].append(
+        {
+            "club_id": "club",
+            "actor_email": "reviewer@example.com",
+            "action_type": PODIUM_REVIEW_ACTION,
+            "entity_type": "tournament_event_draw",
+            "entity_id": draw_id,
+            "after_json": {
+                "podium_review_evidence": {
+                    "contract": PODIUM_REVIEW_CONTRACT,
+                    "tournament_id": "tour-1",
+                    "draw_id": draw_id,
+                    "review_fingerprint": fingerprint,
+                }
+            },
+        }
+    )
+    if not install_awards:
+        return
+    teams_by_id = {str(row["id"]): row for row in teams}
+    tables["player_badges"] = []
+    for podium_row in podium:
+        placement = int(podium_row["placement"])
+        team = teams_by_id[str(podium_row["team_id"])]
+        for player_id in (team.get("player1_id"), team.get("player2_id")):
+            if player_id is None:
+                continue
+            tables["player_badges"].append(
+                {
+                    "id": f"award-{placement}-{player_id}",
+                    "club_id": "club",
+                    "player_id": player_id,
+                    "badge_id": PODIUM_BADGE_MAP[placement],
+                    "context_type": "tournament",
+                    "context_id": f"tour-1:draw:{draw_id}:podium:{placement}",
+                    "revoked_at": None,
+                }
+            )
 
 
 def _enable_live(monkeypatch) -> None:
@@ -264,7 +367,7 @@ def _recovery_operation(action: str, payload: dict, *, expected_state: str = "f"
     }
 
 
-def test_live_status_is_staging_only_and_checks_private_operation_store(monkeypatch) -> None:
+def test_live_status_is_hosted_only_and_checks_private_operation_store(monkeypatch) -> None:
     tables = live_tables()
     supabase = FakeSupabase(tables)
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
@@ -274,12 +377,13 @@ def test_live_status_is_staging_only_and_checks_private_operation_store(monkeypa
 
     local = build_admin_tournament_live_status(supabase, club_id="club")
     assert local["writes_enabled"] is False
-    assert local["staging_only"] is True
+    assert local["staging_only"] is False
     assert local["product_boundary"] == "draw_scoped_tournament_runner_not_jupr_live"
 
     monkeypatch.setenv("JUPR_ENV", "staging")
     staging = build_admin_tournament_live_status(supabase, club_id="club")
     assert staging["writes_enabled"] is True
+    assert staging["official_publish_writes_enabled"] is False
     assert staging["operation_store_ready"] is True
     assert staging["audit_store_ready"] is True
     assert staging["write_flag"]["name"] == "JUPR_ENABLE_STAGING_NEXT_ADMIN_TOURNAMENT_LIVE_WRITES"
@@ -301,8 +405,74 @@ def test_live_status_fails_closed_when_required_audit_store_is_unavailable(monke
     assert any("audit storage is unavailable" in warning for warning in status["warnings"])
 
 
+def test_closed_official_publish_gate_blocks_before_live_intent(monkeypatch) -> None:
+    _enable_live(monkeypatch)
+    tables = live_tables()
+    game = tables["tournament_games"][0]
+    game.update(
+        {
+            "score_a": 11,
+            "score_b": 7,
+            "winner_team_id": "team-1",
+            "loser_team_id": "team-2",
+            "finalized_at": "2026-07-19T11:00:00Z",
+            "updated_at": "2026-07-19T11:00:00Z",
+        }
+    )
+    tables["tournament_podium"] = [
+        {
+            "id": f"podium-{placement}",
+            "tournament_id": "tour-1",
+            "draw_id": "draw-1",
+            "placement": placement,
+            "team_id": f"team-{placement}",
+            "source": "ROUND_ROBIN",
+            "created_at": "2026-07-19T11:00:00Z",
+            "updated_at": "2026-07-19T11:00:00Z",
+        }
+        for placement in (1, 2, 3)
+    ]
+    install_current_live_podium_review(tables, install_awards=True)
+    supabase = FakeSupabase(tables)
+    snapshot = build_admin_tournament_live_snapshot(
+        supabase,
+        club_id="club",
+        tournament_id="tour-1",
+        draw_id="draw-1",
+    )
+    assert snapshot["runtime"]["writes_enabled"] is True
+    assert snapshot["runtime"]["official_publish_writes_enabled"] is False
+    assert snapshot["readiness"]["publish_official_matches"]["ready"] is False
+    before_audit = deepcopy(tables["admin_activity_log"])
+    request = _command(
+        snapshot,
+        command="publish_official_matches",
+        confirmation_text="PUBLISH MATCHES",
+        expected_team_versions=_FakeRpc._versions(tables["tournament_teams"]),
+        expected_source_game_versions=_FakeRpc._versions(tables["tournament_games"]),
+    )
+
+    with pytest.raises(PermissionError, match="official publishing is disabled"):
+        execute_admin_tournament_live_command(
+            supabase,
+            club_id="club",
+            tournament_id="tour-1",
+            draw_id="draw-1",
+            request=request,
+            actor_email="admin@example.com",
+            actor_role="club_owner",
+        )
+
+    assert tables["tournament_admin_operations"] == []
+    assert tables["admin_activity_log"] == before_audit
+
+
 def test_draw_snapshot_is_stable_python_authority_with_progression_and_readiness(monkeypatch) -> None:
     _enable_live(monkeypatch)
+    monkeypatch.setattr(
+        "jupr_app.services.admin_tournament_live_service.get_admin_tournament_ops_state_fingerprint",
+        lambda *_args, **_kwargs: "c" * 64,
+    )
     supabase = FakeSupabase(live_tables())
 
     first = build_admin_tournament_live_snapshot(
@@ -323,6 +493,8 @@ def test_draw_snapshot_is_stable_python_authority_with_progression_and_readiness
     assert first["product_boundary"] == "draw_scoped_tournament_runner_not_jupr_live"
     assert first["state_fingerprint"] == second["state_fingerprint"]
     assert len(first["state_fingerprint"]) == 64
+    assert first["ops_state_fingerprint"] == "c" * 64
+    assert first["ops_state_fingerprint"] != first["state_fingerprint"]
     assert first["readiness"]["save_score"]["ready"] is True
     assert first["readiness"]["generate_playoffs"]["ready"] is False
     assert first["progression"] == {
@@ -333,6 +505,96 @@ def test_draw_snapshot_is_stable_python_authority_with_progression_and_readiness
         "expected_awards": 0,
         "verified_awards": 0,
     }
+
+
+def test_live_snapshot_hides_series_children_but_preserves_publish_evidence(
+    monkeypatch,
+) -> None:
+    _enable_live(monkeypatch)
+    tables = live_tables()
+    parent = tables["tournament_games"][0]
+    parent.update(
+        {
+            "scoring_format": "BEST_2_OF_3",
+            "parent_result_only": True,
+            "score_a": 2,
+            "score_b": 0,
+            "winner_team_id": "team-1",
+            "loser_team_id": "team-2",
+            "finalized_at": "2026-07-19T11:00:00Z",
+            "updated_at": "2026-07-19T11:00:00Z",
+        }
+    )
+    child_reviews = [
+        {
+            "accepted": True,
+            "scoring_format": "GAME_TO_11",
+            "score_a": 11,
+            "score_b": 6 + game_number,
+        }
+        for game_number in (1, 2)
+    ]
+    parent["score_review_json"] = {
+        "accepted": True,
+        "scoring_format": "BEST_2_OF_3",
+        "score_a": 2,
+        "score_b": 0,
+        "game_scores": [
+            {
+                "game_number": game_number,
+                "score_a": 11,
+                "score_b": 6 + game_number,
+                "score_review": child_reviews[game_number - 1],
+            }
+            for game_number in (1, 2)
+        ],
+    }
+    tables["tournament_games"].extend(
+        [
+            {
+                **parent,
+                "id": f"series-game-{game_number}",
+                "stage": "SERIES_GAME",
+                "series_parent_game_id": parent["id"],
+                "series_game_number": game_number,
+                "scoring_format": "GAME_TO_11",
+                "parent_result_only": False,
+                "score_a": 11,
+                "score_b": 6 + game_number,
+                "score_review_json": child_reviews[game_number - 1],
+                "finalized_at": f"2026-07-19T11:00:0{game_number}Z",
+                "updated_at": f"2026-07-19T11:00:0{game_number}Z",
+            }
+            for game_number in (1, 2)
+        ]
+    )
+
+    snapshot = build_admin_tournament_live_snapshot(
+        FakeSupabase(tables),
+        club_id="club",
+        tournament_id="tour-1",
+        draw_id="draw-1",
+    )
+
+    assert [row["id"] for row in snapshot["games"]] == ["game-1"]
+    assert snapshot["games"][0]["game_scores"] == [
+        {"game_number": 1, "score_a": 11, "score_b": 7},
+        {"game_number": 2, "score_a": 11, "score_b": 8},
+    ]
+    assert snapshot["summary"]["games"] == 1
+    assert snapshot["summary"]["completed_games"] == 1
+    assert snapshot["progression"]["completed_games"] == 1
+    assert snapshot["progression"]["open_games"] == 0
+    assert snapshot["publication_rating_game_ids"] == [
+        "series-game-1",
+        "series-game-2",
+    ]
+    assert snapshot["publication_source_game_versions"] == [
+        {"id": "game-1", "updated_at": "2026-07-19T11:00:00Z"},
+        {"id": "series-game-1", "updated_at": "2026-07-19T11:00:01Z"},
+        {"id": "series-game-2", "updated_at": "2026-07-19T11:00:02Z"},
+    ]
+    assert snapshot["source_game_versions"] == snapshot["publication_source_game_versions"]
 
 
 def test_orphan_draw_award_evidence_locks_score_and_progression(monkeypatch) -> None:
@@ -375,7 +637,11 @@ def test_score_command_is_stale_safe_audited_and_exactly_idempotent(monkeypatch)
     assert replay["operation_key"] == first["operation_key"]
     assert replay["client_idempotency_key"] == request["idempotency_key"]
     assert tables["tournament_games"][0]["winner_team_id"] == "team-1"
-    assert supabase.rpc_calls[0][0] == "admin_score_tournament_game_cas"
+    assert tables["tournament_games"][0]["result_type"] == "PLAYED"
+    assert tables["tournament_games"][0]["result_note"] is None
+    assert tables["tournament_games"][0]["result_recorded_by"] == "admin@example.com"
+    assert tables["tournament_games"][0]["score_review_json"]["accepted"] is True
+    assert supabase.rpc_calls[0][0] == "admin_score_tournament_game_result_cas"
     assert supabase.rpc_calls[0][1]["p_expected_updated_at"] == "2026-07-19T10:00:00Z"
     assert supabase.rpc_calls[0][1]["p_expected_draw_updated_at"] == "2026-07-19T10:00:00Z"
     assert len(tables["tournament_admin_operations"]) == 1
@@ -391,6 +657,136 @@ def test_score_command_is_stale_safe_audited_and_exactly_idempotent(monkeypatch)
     assert operation["status"] == "completed"
     assert operation["audit_evidence"]["intent_present"] is True
     assert operation["audit_evidence"]["completion_present"] is True
+
+
+def test_playoff_score_uses_frozen_game_format_before_event_default(monkeypatch) -> None:
+    _enable_live(monkeypatch)
+    tables = live_tables()
+    tables["tournament_games"][0].update(
+        {
+            "stage": "PLAYOFF",
+            "playoff_game_code": "P3",
+            "playoff_round": "FINAL",
+            "scoring_format": "BEST_2_OF_3",
+        }
+    )
+    # This remains the fallback for legacy games, but must not override the
+    # reviewed per-game playoff format.
+    tables["tournament_event_options"][0]["scoring_default"] = "GAME_TO_11"
+    supabase = FakeSupabase(tables)
+    snapshot = build_admin_tournament_live_snapshot(
+        supabase,
+        club_id="club",
+        tournament_id="tour-1",
+        draw_id="draw-1",
+    )
+
+    result = _execute_score(
+        supabase,
+        _command(
+            snapshot,
+            score_a=2,
+            score_b=1,
+            game_scores=[
+                {"game_number": 1, "score_a": 11, "score_b": 7},
+                {"game_number": 2, "score_a": 9, "score_b": 11},
+                {"game_number": 3, "score_a": 11, "score_b": 8},
+            ],
+        ),
+    )
+
+    assert result["game"]["scoring_format"] == "BEST_2_OF_3"
+    review = tables["tournament_games"][0]["score_review_json"]
+    assert review["status"] == "ordinary"
+    assert review["scoring_format"] == "BEST_2_OF_3"
+    assert review["target"] == 2
+    assert review["individual_game_format"] == "GAME_TO_11"
+    assert (review["score_a"], review["score_b"]) == (2, 1)
+    assert [
+        (row["game_number"], row["score_a"], row["score_b"])
+        for row in review["game_scores"]
+    ] == [(1, 11, 7), (2, 9, 11), (3, 11, 8)]
+    assert all(row["score_review"]["accepted"] is True for row in review["game_scores"])
+    rpc_patch = supabase.rpc_calls[0][1]["p_game_patch"]
+    assert rpc_patch["score_review_json"] == review
+    assert (rpc_patch["score_a"], rpc_patch["score_b"]) == (2, 1)
+
+
+def test_best_of_three_live_score_refuses_aggregate_only_request(monkeypatch) -> None:
+    _enable_live(monkeypatch)
+    tables = live_tables()
+    tables["tournament_games"][0].update(
+        {
+            "stage": "PLAYOFF",
+            "playoff_game_code": "P3",
+            "playoff_round": "FINAL",
+            "scoring_format": "BEST_2_OF_3",
+        }
+    )
+    supabase = FakeSupabase(tables)
+    snapshot = build_admin_tournament_live_snapshot(
+        supabase,
+        club_id="club",
+        tournament_id="tour-1",
+        draw_id="draw-1",
+    )
+
+    with pytest.raises(ValueError, match="requires the individual Game 1"):
+        _execute_score(supabase, _command(snapshot, score_a=2, score_b=0))
+
+    assert supabase.rpc_calls == []
+    assert tables["tournament_admin_operations"] == []
+
+
+def test_single_game_live_score_refuses_best_of_three_rows(monkeypatch) -> None:
+    _enable_live(monkeypatch)
+    tables = live_tables()
+    supabase = FakeSupabase(tables)
+    snapshot = build_admin_tournament_live_snapshot(
+        supabase,
+        club_id="club",
+        tournament_id="tour-1",
+        draw_id="draw-1",
+    )
+
+    with pytest.raises(ValueError, match="accepted only for BEST_2_OF_3"):
+        _execute_score(
+            supabase,
+            _command(
+                snapshot,
+                score_a=2,
+                score_b=0,
+                game_scores=[
+                    {"game_number": 1, "score_a": 11, "score_b": 7},
+                    {"game_number": 2, "score_a": 11, "score_b": 8},
+                ],
+            ),
+        )
+
+    assert supabase.rpc_calls == []
+
+
+def test_live_fingerprint_binds_frozen_game_scoring_format(monkeypatch) -> None:
+    _enable_live(monkeypatch)
+    tables = live_tables()
+    tables["tournament_games"][0]["scoring_format"] = "GAME_TO_15"
+    supabase = FakeSupabase(tables)
+    before = build_admin_tournament_live_snapshot(
+        supabase,
+        club_id="club",
+        tournament_id="tour-1",
+        draw_id="draw-1",
+    )
+
+    tables["tournament_games"][0]["scoring_format"] = "BEST_2_OF_3"
+    after = build_admin_tournament_live_snapshot(
+        supabase,
+        club_id="club",
+        tournament_id="tour-1",
+        draw_id="draw-1",
+    )
+
+    assert before["state_fingerprint"] != after["state_fingerprint"]
 
 
 def test_score_command_binds_all_post_lock_game_versions_before_rpc(monkeypatch) -> None:
@@ -806,6 +1202,248 @@ def test_award_recovery_uses_stored_recipient_set_and_rejects_duplicates(monkeyp
     assert duplicate["evidence"]["exact_award_set_match"] is False
 
 
+def _award_command(snapshot: dict, *, idempotency_key: str | None = None) -> dict:
+    return {
+        "command": "award_podium",
+        "expected_state_fingerprint": snapshot["state_fingerprint"],
+        "idempotency_key": idempotency_key or str(uuid.uuid4()),
+        "confirmation_text": "AWARD PODIUM",
+        "expected_draw_updated_at": snapshot["draws"][0]["updated_at"],
+        "expected_team_versions": [
+            {"id": row["id"], "updated_at": row["updated_at"]}
+            for row in snapshot["teams"]
+        ],
+        "expected_source_game_versions": [
+            {"id": row["id"], "updated_at": row["updated_at"]}
+            for row in snapshot["games"]
+        ],
+    }
+
+
+def _install_completed_draw_podium(
+    tables: dict[str, list[dict]],
+    *,
+    include_versions: bool,
+) -> None:
+    tables["tournament_games"][0].update(
+        {
+            "score_a": 11,
+            "score_b": 7,
+            "winner_team_id": "team-1",
+            "loser_team_id": "team-2",
+            "finalized_at": "2026-07-19T11:00:00Z",
+            "updated_at": "2026-07-19T11:00:00Z",
+        }
+    )
+    tables["tournament_podium"] = [
+        {
+            "id": f"podium-{placement}",
+            "tournament_id": "tour-1",
+            "draw_id": "draw-1",
+            "placement": placement,
+            "team_id": f"team-{placement}",
+            "source": "ROUND_ROBIN",
+            "created_at": "2026-07-19T11:00:00Z",
+            **(
+                {"updated_at": "2026-07-19T11:00:00Z"}
+                if include_versions
+                else {}
+            ),
+        }
+        for placement in (1, 2, 3)
+    ]
+    install_current_live_podium_review(tables)
+
+
+def test_missing_podium_versions_fail_before_durable_live_intent(monkeypatch) -> None:
+    _enable_live(monkeypatch)
+    tables = live_tables()
+    _install_completed_draw_podium(tables, include_versions=False)
+    supabase = FakeSupabase(tables)
+    snapshot = build_admin_tournament_live_snapshot(
+        supabase,
+        club_id="club",
+        tournament_id="tour-1",
+        draw_id="draw-1",
+    )
+
+    with pytest.raises(ValueError, match="reviewed podium version set is incomplete"):
+        execute_admin_tournament_live_command(
+            supabase,
+            club_id="club",
+            tournament_id="tour-1",
+            draw_id="draw-1",
+            request=_award_command(snapshot),
+            actor_email="admin@example.com",
+            actor_role="club_owner",
+        )
+
+    assert tables["player_badges"] == []
+    assert tables["tournament_admin_operations"] == []
+    assert not any(
+        row.get("action_type") == "tournament_live_awards_intent"
+        for row in tables["admin_activity_log"]
+    )
+
+
+def test_missing_podium_badge_catalog_fails_before_durable_live_intent(monkeypatch) -> None:
+    _enable_live(monkeypatch)
+    tables = live_tables()
+    _install_completed_draw_podium(tables, include_versions=True)
+    tables["badges"] = [
+        row
+        for row in tables["badges"]
+        if row.get("badge_id") != "tournament_runner_up"
+    ]
+    supabase = FakeSupabase(tables)
+    snapshot = build_admin_tournament_live_snapshot(
+        supabase,
+        club_id="club",
+        tournament_id="tour-1",
+        draw_id="draw-1",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="badge catalog is incomplete; missing tournament_runner_up",
+    ):
+        execute_admin_tournament_live_command(
+            supabase,
+            club_id="club",
+            tournament_id="tour-1",
+            draw_id="draw-1",
+            request=_award_command(snapshot),
+            actor_email="admin@example.com",
+            actor_role="club_owner",
+        )
+
+    assert tables["player_badges"] == []
+    assert tables["tournament_admin_operations"] == []
+    assert not any(
+        row.get("action_type") == "tournament_live_awards_intent"
+        for row in tables["admin_activity_log"]
+    )
+
+
+@pytest.mark.parametrize(
+    "error_text",
+    [
+        (
+            "The reviewed podium version set is incomplete or duplicated. "
+            "Reload the live board."
+        ),
+        "Atomic tournament podium awards failed; no badge set was committed.",
+    ],
+    ids=["podium-version-rejection", "atomic-award-rollback"],
+)
+def test_exact_retry_closes_proven_no_write_podium_award_failure(
+    monkeypatch,
+    error_text: str,
+) -> None:
+    _enable_live(monkeypatch)
+    tables = live_tables()
+    _install_completed_draw_podium(tables, include_versions=True)
+    supabase = FakeSupabase(tables)
+    snapshot = build_admin_tournament_live_snapshot(
+        supabase,
+        club_id="club",
+        tournament_id="tour-1",
+        draw_id="draw-1",
+    )
+    client_key = str(uuid.uuid4())
+    command = _award_command(snapshot, idempotency_key=client_key)
+    award_podium_plan = [
+        {
+            "placement": placement,
+            "team_id": f"team-{placement}",
+            "source": "ROUND_ROBIN",
+        }
+        for placement in (1, 2, 3)
+    ]
+    award_plan = sorted(
+        [
+            {
+                "player_id": player_id,
+                "badge_id": PODIUM_BADGE_MAP[placement],
+                "context_id": f"tour-1:draw:draw-1:podium:{placement}",
+            }
+            for placement, player_ids in (
+                (1, (1, 2)),
+                (2, (3, 4)),
+                (3, (5, 6)),
+            )
+            for player_id in player_ids
+        ],
+        key=lambda row: (row["context_id"], row["badge_id"], row["player_id"]),
+    )
+    stored_payload = {
+        "command": "award_podium",
+        "expected_draw_updated_at": command["expected_draw_updated_at"],
+        "expected_team_versions": command["expected_team_versions"],
+        "expected_source_game_versions": command["expected_source_game_versions"],
+        "award_podium_plan": award_podium_plan,
+        "award_plan": award_plan,
+    }
+    operation = build_tournament_admin_operation_request(
+        club_id="club",
+        surface="tournament_live",
+        action="tournament_live_awards",
+        entity_type="tournament_event_draw",
+        entity_id="draw-1",
+        lock_scope="tournament:tour-1:draw:draw-1",
+        expected_state=snapshot["state_fingerprint"],
+        payload=stored_payload,
+        idempotency_key=client_key,
+    )
+    tables["tournament_admin_operations"].append(
+        {
+            **{
+                key: operation[key]
+                for key in (
+                    "operation_key",
+                    "request_fingerprint",
+                    "club_id",
+                    "surface",
+                    "action",
+                    "entity_type",
+                    "entity_id",
+                    "lock_scope",
+                    "expected_state",
+                )
+            },
+            "client_idempotency_key": client_key,
+            "status": "recovery_required",
+            "request_json": operation,
+            "result_json": {},
+            "error_text": error_text,
+            "attempt_count": 1,
+            "created_by": "admin@example.com",
+            "updated_by": "admin@example.com",
+            "created_at": "2026-07-19T12:00:00Z",
+            "updated_at": "2026-07-19T12:00:00Z",
+        }
+    )
+
+    result = execute_admin_tournament_live_command(
+        supabase,
+        club_id="club",
+        tournament_id="tour-1",
+        draw_id="draw-1",
+        request=command,
+        actor_email="admin@example.com",
+        actor_role="club_owner",
+    )
+
+    assert result["recovery_disposition"] == "not_applied"
+    assert result["reconciled"] is True
+    assert tables["player_badges"] == []
+    assert tables["tournament_admin_operations"][0]["status"] == "failed"
+    assert tables["tournament_admin_operations"][0]["attempt_count"] == 2
+    assert tables["admin_activity_log"][-1]["action_type"] == (
+        "tournament_live_awards_recovery_not_applied"
+    )
+
+
 def test_atomic_award_refuses_podium_drift_after_live_lock_with_zero_badges(monkeypatch) -> None:
     class DriftingAwardSupabase(FakeSupabase):
         def rpc(self, name, params):
@@ -824,9 +1462,20 @@ def test_atomic_award_refuses_podium_drift_after_live_lock_with_zero_badges(monk
             "placement": placement,
             "team_id": team_id,
             "source": "ROUND_ROBIN",
+            "updated_at": "2026-07-19T10:00:00Z",
         }
         for placement, team_id in ((1, "team-1"), (2, "team-2"), (3, "team-3"))
     ]
+    tables["tournament_games"][0].update(
+        {
+            "score_a": 11,
+            "score_b": 7,
+            "winner_team_id": "team-1",
+            "loser_team_id": "team-2",
+            "finalized_at": "2026-07-19T11:00:00Z",
+        }
+    )
+    install_current_live_podium_review(tables)
     supabase = DriftingAwardSupabase(tables)
     snapshot = build_admin_tournament_live_snapshot(
         supabase,
@@ -891,6 +1540,18 @@ def test_publish_expected_plan_recheck_blocks_changed_score_before_processors(mo
             "updated_at": "2026-07-19T12:00:00Z",
         }
     )
+    tables["tournament_podium"] = [
+        {
+            "id": f"podium-{placement}",
+            "tournament_id": "tour-1",
+            "draw_id": "draw-1",
+            "placement": placement,
+            "team_id": team_id,
+            "source": "ROUND_ROBIN",
+        }
+        for placement, team_id in ((1, "team-2"), (2, "team-1"), (3, "team-3"))
+    ]
+    install_current_live_podium_review(tables, install_awards=True)
     processor_calls: list[list[dict]] = []
     monkeypatch.setattr(
         "jupr_app.services.admin_tournament_match_publish_service.process_matches",

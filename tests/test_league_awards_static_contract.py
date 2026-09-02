@@ -52,17 +52,18 @@ def test_league_awards_mint_fails_closed_without_seeded_badge_definitions() -> N
     assert "mint was not attempted" in service
     assert TOP_PERFORMER_BADGE_SEED in service
     assert "badge_definitions_ready" in panel
-    assert "Badge minting is blocked" in panel
+    assert "Badge publishing is unavailable until all required award definitions are ready." in panel
 
 
-def test_league_awards_staging_gate_is_open_only_in_staging_and_disabled_in_production() -> None:
+def test_league_awards_staging_gate_is_closed_at_rest_and_available_only_in_its_wave() -> None:
     staging = tomllib.loads((ROOT / "fly.staging.toml").read_text())
     production = tomllib.loads((ROOT / "fly.toml").read_text())
     flag = "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE"
 
-    assert staging["env"]["JUPR_STAGING_WRITE_WAVE"] == "open"
-    assert staging["env"][flag] == "1"
-    assert expected_write_flags("open")[flag] is True
+    assert staging["env"]["JUPR_STAGING_WRITE_WAVE"] == "none"
+    assert staging["env"][flag] == "0"
+    assert expected_write_flags("none")[flag] is False
+    assert expected_write_flags("league-awards")[flag] is True
     assert production["env"][flag] == "0"
 
 

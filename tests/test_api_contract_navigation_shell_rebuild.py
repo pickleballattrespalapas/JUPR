@@ -101,6 +101,9 @@ def test_leagues_hub_lists_active_leagues_and_opens_league_home() -> None:
     assert "getClubLeagueResults" in leagues
     assert "Choose a league" in leagues
     assert "data?.leagues || []" in leagues
+    assert "data?.past_leagues || []" in leagues
+    assert 'data-testid="public-league-view-toggle"' in leagues
+    assert '"Past leagues"' in leagues
     assert "publicLeagueHomeHref" in leagues
     assert "Open League Home" in leagues
     assert "PublicLeagueNav" in league_home
@@ -130,7 +133,8 @@ def test_selected_league_modules_are_dedicated_pages_without_legacy_switchers() 
 
     assert "PublicLeagueNav" in standings
     assert 'active="overall"' in standings
-    assert "Current standings" in standings
+    assert "Awards race" in standings
+    assert "Player roster" in standings
     assert "data.leagues.map" not in standings
     assert "sectionLabels" not in standings
 

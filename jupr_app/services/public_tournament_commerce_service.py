@@ -13,8 +13,11 @@ from jupr_app.domain.tournament_commerce import (
     quote_tournament_commerce,
     stable_fingerprint,
 )
+from jupr_app.services.production_tournament_guard import (
+    production_tournament_writes_enabled,
+    require_production_tournament_writes,
+)
 from jupr_app.services.staging_write_guard import staging_write_wave_allows
-from jupr_app.services.production_tournament_guard import production_tournament_writes_enabled, require_production_tournament_writes
 
 
 FEATURE_FLAG = "JUPR_ENABLE_TOURNAMENT_COMMERCE"

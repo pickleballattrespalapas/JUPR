@@ -4,20 +4,18 @@ import {
   getAdminTournamentApiBaseUrl,
   getAdminTournamentStatus
 } from "@/lib/adminTournamentApi";
+import { readTournamentRouteContext, tournamentRouteHref } from "@/lib/tournamentRouteContext";
 import TournamentRegistrantEditPanel from "./TournamentRegistrantEditPanel";
 
 type Props = {
   params: { registrationId: string };
   searchParams?: Record<string, string | string[] | undefined>;
 };
-function first(value: string | string[] | undefined): string { return Array.isArray(value) ? String(value[0] || "") : String(value || ""); }
-
 export default async function TournamentRegistrantEditPage({ params, searchParams }: Props) {
-  const tournamentId = first(searchParams?.tournament).trim();
-  const tournamentName = first(searchParams?.name).trim();
+  const context = readTournamentRouteContext(searchParams);
   const registrationId = decodeURIComponent(String(params.registrationId || "")).trim();
-  if (!tournamentId) redirect("/admin/tournaments");
-  if (!registrationId) redirect(`/admin/tournaments/registration/registrants?tournament=${encodeURIComponent(tournamentId)}&name=${encodeURIComponent(tournamentName)}`);
+  if (!context.tournamentId) redirect("/admin/tournaments");
+  if (!registrationId) redirect(tournamentRouteHref("/admin/tournaments/registration/registrants", context));
   const clubId = "tres_palapas";
   const { data, error } = await getAdminTournamentStatus(clubId);
   return (
@@ -26,7 +24,7 @@ export default async function TournamentRegistrantEditPage({ params, searchParam
       <h1 style={{ marginTop: 0 }}>Edit registration</h1>
       <TournamentPhaseNav phase="registration" />
       {error ? <p role="alert" style={{ color: "#b91c1c" }}>Registration editing is unavailable. {error}</p> : null}
-      {data ? <TournamentRegistrantEditPanel apiBase={getAdminTournamentApiBaseUrl()} clubId={clubId} status={data} tournamentId={tournamentId} tournamentName={tournamentName || tournamentId} registrationId={registrationId} /> : null}
+      {data ? <TournamentRegistrantEditPanel apiBase={getAdminTournamentApiBaseUrl()} clubId={clubId} status={data} tournamentId={context.tournamentId} tournamentName={context.tournamentName || context.tournamentId} drawId={context.drawId} registrationId={registrationId} /> : null}
     </section>
   );
 }

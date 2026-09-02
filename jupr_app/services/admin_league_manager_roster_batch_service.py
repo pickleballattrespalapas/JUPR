@@ -7,7 +7,6 @@ import re
 from typing import Any
 from uuid import uuid4
 
-
 CONFIRM_ROSTER_BATCH = "SAVE LEAGUE ROSTER BATCH"
 IDEMPOTENCY_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,159}$")
 
@@ -72,7 +71,7 @@ def update_admin_league_manager_roster_batch(
     }
     try:
         response = supabase.rpc(
-            "admin_apply_league_roster_batch_atomic_v1",
+            "admin_apply_league_roster_batch_atomic_v3",
             {
                 "p_operation_id": str(uuid4()),
                 "p_club_id": str(club_id),
@@ -89,7 +88,11 @@ def update_admin_league_manager_roster_batch(
         ).execute()
     except Exception as exc:
         detail = str(exc)
-        if "IDEMPOTENCY_CONFLICT" in detail or "CONCURRENT_CONFLICT" in detail:
+        if (
+            "IDEMPOTENCY_CONFLICT" in detail
+            or "CONCURRENT_CONFLICT" in detail
+            or "WRITE_CONFLICT" in detail
+        ):
             raise RuntimeError(
                 "Roster data changed. Reload before another bulk update."
             ) from exc
@@ -97,6 +100,40 @@ def update_admin_league_manager_roster_batch(
             raise RuntimeError(
                 "Replay History is rebuilding this club. Wait for it to finish."
             ) from exc
+        if "LEAGUE_NOT_FOUND" in detail:
+            raise ValueError("league not found") from exc
+        if "LIFECYCLE_INVALID" in detail:
+            raise ValueError(
+                "League lifecycle state is inconsistent; reload before editing the roster."
+            ) from exc
+        if "READ_ONLY" in detail:
+            raise ValueError(
+                "League roster is read-only unless the league is draft or active."
+            ) from exc
+        if "PLAYER_NOT_FOUND" in detail:
+            raise ValueError("Every selected player must belong to this club.") from exc
+        if "PLAYER_INACTIVE" in detail:
+            raise ValueError(
+                "Inactive club players cannot be added to a league."
+            ) from exc
+        if "ALREADY_ACTIVE" in detail:
+            raise ValueError(
+                "At least one selected player is already active in this league."
+            ) from exc
+        if "NOT_ACTIVE" in detail:
+            raise ValueError(
+                "Every selected player must currently be active in this league."
+            ) from exc
+        if "RATING_INVALID" in detail:
+            raise ValueError(
+                "Every new league member needs a valid starting rating."
+            ) from exc
+        if "OVERALL_RATING_REQUIRED" in detail:
+            raise ValueError(
+                "Set a reviewed Overall JUPR in Player Editor before adding this player to a league."
+            ) from exc
+        if "FORMAT_INVALID" in detail:
+            raise ValueError("League match format must be singles or doubles.") from exc
         raise
     result = _payload(response)
     if (

@@ -234,9 +234,8 @@ def test_tournament_match_backfill_preview_is_read_only_and_classifies_candidate
     assert supabase.storage == before
 
 
-def test_tournament_match_backfill_apply_requires_current_selected_preview(monkeypatch):
+def test_tournament_match_backfill_preview_cannot_be_applied_through_retired_writer(monkeypatch):
     install_write_env(monkeypatch)
-    monkeypatch.setenv("JUPR_REQUIRE_API_AUDIT_LOG", "1")
     supabase = FakeSupabase()
     supabase.storage["tournaments"] = [
         {"id": "tour-1", "club_id": "club", "name": "Summer Cup"},
@@ -253,63 +252,56 @@ def test_tournament_match_backfill_apply_requires_current_selected_preview(monke
         for value in (1, 2, 3, 4)
     ]
     preview = build_admin_tournament_match_backfill_preview(supabase, club_id="club")
-    captured: dict[str, object] = {}
-
-    def fake_process(match_payloads, **kwargs):
-        captured["payloads"] = deepcopy(match_payloads)
-        captured["club_id"] = kwargs.get("club_id")
-        for payload in match_payloads:
-            supabase.storage["matches"].append(
-                {
-                    "id": f"match-{len(supabase.storage['matches']) + 1}",
-                    "club_id": kwargs.get("club_id"),
-                    "tournament_game_id": payload.get("tournament_game_id"),
-                }
-            )
-        return {"inserted": len(match_payloads), "badge_summary": {"mode": "test"}}
-
-    monkeypatch.setattr("jupr_app.services.admin_tools_service.process_matches", fake_process)
+    before = deepcopy(supabase.storage)
+    called = {"process": False}
+    monkeypatch.setattr(
+        "jupr_app.services.admin_tools_service.process_matches",
+        lambda *_args, **_kwargs: called.update(process=True),
+    )
     try:
         apply_admin_tournament_match_backfill(
             supabase,
             club_id="club",
             game_ids=["ready"],
             preview_fingerprint=preview["preview_fingerprint"],
-            preview_limit=1000,
             confirmation_text="BACKFILL TOURNAMENT MATCHES",
             actor_email="owner@example.com",
             actor_role="super_admin",
-            operation_key="backfill-wrong-limit",
+            operation_key="backfill-ready-one",
         )
-    except ValueError as exc:
-        assert "stale" in str(exc).lower()
+    except PermissionError as exc:
+        assert "canonical Tournament Live official-publish command" in str(exc)
     else:
-        raise AssertionError("expected preview-limit fingerprint rejection")
-    assert supabase.storage["matches"] == []
-    assert supabase.storage["admin_activity_log"] == []
-
-    result = apply_admin_tournament_match_backfill(
-        supabase,
-        club_id="club",
-        game_ids=["ready"],
-        preview_fingerprint=preview["preview_fingerprint"],
-        confirmation_text="BACKFILL TOURNAMENT MATCHES",
-        actor_email="owner@example.com",
-        actor_role="super_admin",
-        operation_key="backfill-ready-one",
-    )
-
-    assert result["inserted_count"] == 1
-    assert result["selected_game_ids"] == ["ready"]
-    assert captured["club_id"] == "club"
-    assert captured["payloads"][0]["t1_p2"] == 2
-    assert [row["action_type"] for row in supabase.storage["admin_activity_log"]] == [
-        "tournament_match_backfill_apply_intent",
-        "tournament_match_backfill_applied",
-    ]
+        raise AssertionError("expected the legacy tournament match backfill to be retired")
+    assert called["process"] is False
+    assert supabase.storage == before
 
 
-def test_tournament_match_backfill_apply_rejects_stale_preview_without_writes(monkeypatch):
+def test_tournament_match_backfill_apply_is_retired_before_any_read_or_write(monkeypatch):
+    install_write_env(monkeypatch)
+    supabase = FakeSupabase()
+    before = deepcopy(supabase.storage)
+
+    try:
+        apply_admin_tournament_match_backfill(
+            supabase,
+            club_id="club",
+            game_ids=["game-1"],
+            preview_fingerprint="reviewed-preview",
+            confirmation_text="BACKFILL TOURNAMENT MATCHES",
+            actor_email="owner@example.com",
+            actor_role="super_admin",
+            operation_key="retired-backfill",
+        )
+    except PermissionError as exc:
+        assert "canonical Tournament Live official-publish command" in str(exc)
+    else:
+        raise AssertionError("expected the legacy tournament match backfill to be retired")
+
+    assert supabase.storage == before
+
+
+def test_tournament_match_backfill_apply_rejects_before_stale_preview_read(monkeypatch):
     install_write_env(monkeypatch)
     supabase = FakeSupabase()
     before = deepcopy(supabase.storage)
@@ -330,10 +322,10 @@ def test_tournament_match_backfill_apply_rejects_stale_preview_without_writes(mo
             actor_role="super_admin",
             operation_key="backfill-stale-one",
         )
-    except ValueError as exc:
-        assert "stale" in str(exc).lower()
+    except PermissionError as exc:
+        assert "canonical Tournament Live official-publish command" in str(exc)
     else:
-        raise AssertionError("expected stale preview rejection")
+        raise AssertionError("expected the legacy tournament match backfill to be retired")
     assert called["process"] is False
     assert supabase.storage == before
 

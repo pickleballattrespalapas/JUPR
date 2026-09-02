@@ -30,6 +30,10 @@ from jupr_app.domain.tournament_team_invitation_tokens import (
 from jupr_app.domain.tournament_team_canonical_publish import (
     classify_team_child_publish_state,
 )
+from jupr_app.domain.tournaments.score_policy import (
+    require_tournament_score,
+    resolve_tournament_scoring_format,
+)
 from jupr_app.services.admin_tournament_service import (
     is_admin_tournament_admin_enabled,
 )
@@ -1198,13 +1202,54 @@ def score_team_match_game(
     match_game_id: str,
     score_a: int,
     score_b: int,
+    unusual_score_acknowledged: bool = False,
     expected_game_version: int,
     expected_matchup_version: int,
     actor_email: str,
     idempotency_key: str,
 ) -> dict[str, Any]:
     require_admin_team_tournament_runtime()
-    payload = {"score_a": int(score_a), "score_b": int(score_b)}
+    child = _one(
+        supabase,
+        "tournament_team_match_games",
+        filters=(
+            ("id", str(match_game_id)),
+            ("tournament_id", str(tournament_id)),
+        ),
+    )
+    if not child:
+        raise ValueError("team tournament game not found")
+    matchup = _one(
+        supabase,
+        "tournament_team_matchups",
+        filters=(
+            ("id", str(child.get("matchup_id") or "")),
+            ("tournament_id", str(tournament_id)),
+        ),
+    )
+    event = _one(
+        supabase,
+        "tournament_event_options",
+        filters=(
+            ("id", str((matchup or {}).get("event_option_id") or "")),
+            ("tournament_id", str(tournament_id)),
+        ),
+    )
+    if not matchup or not event:
+        raise ValueError(
+            "This team game has no configured event scoring authority. Reload the tournament setup before scoring."
+        )
+    score_review = require_tournament_score(
+        score_a,
+        score_b,
+        scoring_format=resolve_tournament_scoring_format(event),
+        unusual_score_acknowledged=bool(unusual_score_acknowledged),
+    )
+    payload = {
+        "score_a": int(score_a),
+        "score_b": int(score_b),
+        "score_review": score_review,
+    }
     op = _operation(
         club_id=club_id,
         tournament_id=tournament_id,
@@ -1218,13 +1263,14 @@ def score_team_match_game(
     )
     return _call_rpc(
         supabase,
-        "admin_score_tournament_team_match_game_cas",
+        "admin_score_tournament_team_match_game_reviewed_cas",
         {
             "p_club_id": str(club_id),
             "p_tournament_id": str(tournament_id),
             "p_match_game_id": str(match_game_id),
             "p_score_a": int(score_a),
             "p_score_b": int(score_b),
+            "p_score_review": score_review,
             "p_expected_game_version": int(expected_game_version),
             "p_expected_matchup_version": int(expected_matchup_version),
             "p_operation_key": op["operation_key"],
@@ -1392,6 +1438,12 @@ def replace_team_podium(
     podium: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     require_admin_team_tournament_runtime()
+    if publish:
+        raise PermissionError(
+            "TEAM_PODIUM_CANONICAL_REVIEW_UNAVAILABLE: publishing a four-player "
+            "team podium is disabled until explicit immutable review evidence, "
+            "exact awards, and tournament lifecycle closeout are integrated."
+        )
     snapshot = get_admin_team_tournament_snapshot(
         supabase, club_id=club_id, tournament_id=tournament_id
     )

@@ -59,7 +59,7 @@ def test_public_live_edit_credentials_stay_fragment_and_session_only() -> None:
     assert "exact preserved request" in creator
 
 
-def test_public_live_old_league_rounds_are_read_only_and_writes_are_staging_gated() -> None:
+def test_public_live_old_league_rounds_are_read_only_and_writes_use_reviewed_host_gates() -> None:
     runner = _read("apps/web/app/clubs/[clubSlug]/live/[sessionKey]/LiveSessionRunner.tsx")
     api = _read("services/api/main.py")
     staging = _read("fly.staging.toml")
@@ -70,8 +70,10 @@ def test_public_live_old_league_rounds_are_read_only_and_writes_are_staging_gate
     assert "JUPR_ENABLE_PUBLIC_LIVE_WRITES" in api
     assert "JUPR_ENABLE_PUBLIC_LIVE_WRITES_PRODUCTION" in api
     assert 'JUPR_ENABLE_PUBLIC_LIVE_WRITES = "0"' in staging
-    assert 'JUPR_ENABLE_PUBLIC_LIVE_WRITES = "0"' in production
-    assert 'JUPR_ENABLE_PUBLIC_LIVE_WRITES_PRODUCTION = "0"' in production
+    assert 'JUPR_ENABLE_PUBLIC_LIVE_WRITES = "1"' in production
+    assert 'JUPR_ENABLE_PUBLIC_LIVE_WRITES_PRODUCTION = "1"' in production
+    assert 'if environment == "production":' in api
+    assert 'return os.getenv("JUPR_ENABLE_PUBLIC_LIVE_WRITES_PRODUCTION", "")' in api
     assert 'address_scope = f"{fly_address}\\x1f{visitor_address}"' in api
 
 

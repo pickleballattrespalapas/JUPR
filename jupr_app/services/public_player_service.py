@@ -6,10 +6,13 @@ from collections import defaultdict
 from datetime import date, datetime
 from typing import Any
 
+from jupr_app.services.public_league_visibility import league_is_public
+
 PLAYER_SELECT = "id,club_id,name,rating,starting_rating,wins,losses,matches_played,active,last_game_at,inactive_at,singles_rating,singles_wins,singles_losses,singles_matches_played,singles_last_game_at"
 PLAYER_BASE_SELECT = "id,club_id,name,rating,wins,losses,matches_played,active,last_game_at,inactive_at,singles_rating,singles_wins,singles_losses,singles_matches_played,singles_last_game_at"
 PLAYER_MINIMAL_SELECT = "id,club_id,name,rating,wins,losses,matches_played"
 LEAGUE_RATINGS_SELECT = "id,club_id,player_id,league_name,rating,starting_rating,wins,losses,matches_played,is_active"
+LEAGUE_META_VISIBILITY_SELECT = "club_id,league_name,is_active,status"
 MATCH_SELECT = "*"
 PLAYER_BADGE_SELECT = "club_id,player_id,badge_id,earned_at,context_type,context_id,value_num,value_json,revoked_at"
 PLAYER_BADGE_FALLBACK_SELECT = "club_id,player_id,badge_id,earned_at,context_type,context_id,value_num,value_json"
@@ -20,7 +23,27 @@ DIRECTORY_SORTS = {"rating", "singles", "matches", "name", "win_pct", "recent"}
 PUBLIC_PROFILE_HISTORY_LIMIT = 500
 PUBLIC_PROFILE_RECENT_LIMIT = 12
 _HTML_TAG_RE = re.compile(r"<[^>]*>")
-_TROPHY_BADGE_TOKENS = ("champion", "runner_up", "third_place", "podium", "top_performer", "trophy")
+_FORMAL_TROPHY_CONTEXTS = {
+    "league",
+    "league_award",
+    "league_end",
+    "league_end_award",
+    "season_award",
+    "tournament",
+    "tournament_award",
+    "tournament_podium",
+    "podium",
+}
+_FORMAL_TROPHY_CONTEXT_TOKENS = (":podium:", ":top_performer:", ":league_award:")
+_REPEATABLE_BADGE_TOKENS = (
+    "level_up",
+    "hot_streak",
+    "rocket_start",
+    "blowout_artist",
+    "bounce_back",
+    "first_win",
+    "participant",
+)
 
 
 def _safe_rows(resp: Any) -> list[dict[str, Any]]:
@@ -222,6 +245,23 @@ def _fetch_league_ratings(supabase: Any, club_id: str, player_id: int | str | No
         return []
 
 
+def _public_league_names(supabase: Any, club_id: str) -> set[str]:
+    try:
+        rows = _safe_rows(
+            supabase.table("leagues_metadata")
+            .select(LEAGUE_META_VISIBILITY_SELECT)
+            .eq("club_id", str(club_id))
+            .execute()
+        )
+    except Exception:
+        return set()
+    return {
+        str(row.get("league_name") or "").strip()
+        for row in rows
+        if league_is_public(row)
+    }
+
+
 def _fetch_recent_matches(supabase: Any, club_id: str, *, limit: int = 300) -> list[dict[str, Any]]:
     try:
         rows = _safe_rows(
@@ -417,6 +457,32 @@ def _award_context_label(row: dict[str, Any]) -> str | None:
     return None
 
 
+def _is_formal_trophy(row: dict[str, Any], badge_id: str) -> bool:
+    """Keep the public Trophy Case for one-time major honors only.
+
+    Repeatable progression badges can be issued in a league or tournament
+    context too, so context alone is not enough.  A trophy needs durable
+    evidence of an end-of-league award or a tournament podium placement.
+    """
+
+    normalized_badge_id = badge_id.casefold()
+    if any(token in normalized_badge_id for token in _REPEATABLE_BADGE_TOKENS):
+        return False
+    context_type = str(row.get("context_type") or "").strip().casefold()
+    if context_type not in _FORMAL_TROPHY_CONTEXTS:
+        return False
+    context_id = str(row.get("context_id") or "").casefold()
+    value_json = _json_object(row.get("value_json"))
+    if _placement_from_award(row) is not None:
+        return True
+    if any(token in context_id for token in _FORMAL_TROPHY_CONTEXT_TOKENS):
+        return True
+    return any(
+        value_json.get(key) not in (None, "")
+        for key in ("award_key", "category_key", "category_label", "podium_place")
+    )
+
+
 def _public_awards(supabase: Any, *, club_id: str, player_id: int | str) -> dict[str, Any]:
     player_badges = _fetch_player_badges(supabase, club_id=club_id, player_id=player_id)
     definitions = _fetch_badge_definitions(supabase)
@@ -431,36 +497,34 @@ def _public_awards(supabase: Any, *, club_id: str, player_id: int | str) -> dict
     prestige_total = 0
     for badge_id, rows in grouped.items():
         definition = definitions.get(badge_id, {})
+        badge_name = _plain_text(definition.get("name"), limit=160) or badge_id.replace("_", " ").title()
         if definition.get("is_active") is False and not rows:
             continue
         prestige = _int_or_none(definition.get("prestige")) or 0
-        prestige_total += prestige * len(rows)
-        earned_values = [str(row.get("earned_at") or "") for row in rows]
-        badge = {
-            "badge_id": badge_id,
-            "name": _plain_text(definition.get("name"), limit=160) or badge_id.replace("_", " ").title(),
-            "category": _plain_text(definition.get("category"), limit=80) or "Other",
-            "prestige": prestige,
-            "rarity": _plain_text(definition.get("rarity") or definition.get("tier"), limit=80),
-            "icon_key": _plain_text(definition.get("icon_key"), limit=80),
-            "description": _plain_text(definition.get("lore"), limit=280),
-            "requirements": _plain_text(definition.get("hint"), limit=280),
-            "count": len(rows),
-            "last_earned_at": max(earned_values) or None,
-        }
-        badges.append(badge)
-
-        trophy_rows = [
-            row
-            for row in rows
-            if str(row.get("context_type") or "").strip().casefold() in {"tournament", "league"}
-            or any(token in badge_id.casefold() for token in _TROPHY_BADGE_TOKENS)
-        ]
+        trophy_rows = [row for row in rows if _is_formal_trophy(row, badge_id)]
+        cabinet_rows = [row for row in rows if row not in trophy_rows]
+        if cabinet_rows:
+            prestige_total += prestige * len(cabinet_rows)
+            earned_values = [str(row.get("earned_at") or "") for row in cabinet_rows]
+            badges.append(
+                {
+                    "badge_id": badge_id,
+                    "name": badge_name,
+                    "category": _plain_text(definition.get("category"), limit=80) or "Other",
+                    "prestige": prestige,
+                    "rarity": _plain_text(definition.get("rarity") or definition.get("tier"), limit=80),
+                    "icon_key": _plain_text(definition.get("icon_key"), limit=80),
+                    "description": _plain_text(definition.get("lore"), limit=280),
+                    "requirements": _plain_text(definition.get("hint"), limit=280),
+                    "count": len(cabinet_rows),
+                    "last_earned_at": max(earned_values) or None,
+                }
+            )
         for row in trophy_rows:
             trophies.append(
                 {
                     "badge_id": badge_id,
-                    "title": badge["name"],
+                    "title": badge_name,
                     "placement": _placement_from_award(row),
                     "context_type": _plain_text(row.get("context_type"), limit=80),
                     "context_label": _award_context_label(row),
@@ -473,6 +537,7 @@ def _public_awards(supabase: Any, *, club_id: str, player_id: int | str) -> dict
     return {
         "badge_count": len(badges),
         "badge_award_count": sum(int(item.get("count") or 0) for item in badges),
+        "trophy_count": len(trophies),
         "prestige_total": int(prestige_total),
         "badges": badges,
         "trophies": trophies,
@@ -890,7 +955,12 @@ def get_public_player_profile(
     if not row:
         return None
     player = _player_base(row)
-    league_ratings = [_public_league_rating(r) for r in _fetch_league_ratings(supabase, cid, player_id)]
+    public_league_names = _public_league_names(supabase, cid)
+    league_ratings = [
+        _public_league_rating(row)
+        for row in _fetch_league_ratings(supabase, cid, player_id)
+        if str(row.get("league_name") or "").strip() in public_league_names
+    ]
     league_ratings.sort(key=lambda r: str(r.get("league_name") or "").casefold())
 
     players = _fetch_players(supabase, cid)

@@ -1,27 +1,19 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any
-import os
+from uuid import uuid4
 
-from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.services.admin_league_manager_service import (
     get_admin_league_manager_detail,
     is_admin_league_manager_enabled,
-    validate_admin_league_manager_lifecycle_state,
+)
+from jupr_app.services.admin_league_manager_roster_batch_service import (
+    CONFIRM_ROSTER_BATCH,
+    update_admin_league_manager_roster_batch,
 )
 
 CONFIRM_SAVE_ROSTER = "SAVE ROSTER"
-TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
 ACTIONS = {"activate", "deactivate"}
-
-
-def _truthy_env(name: str) -> bool:
-    return os.getenv(name, "").strip().lower() in TRUTHY_ENV_VALUES
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _safe_rows(resp: Any) -> list[dict[str, Any]]:
@@ -42,28 +34,13 @@ def _safe_int(value: Any, *, field: str = "value") -> int:
         raise ValueError(f"{field} must be a whole number.") from exc
 
 
-def _safe_float(value: Any, *, default: float | None = None) -> float | None:
-    if value in (None, ""):
-        return default
-    try:
-        return float(value)
-    except Exception as exc:
-        raise ValueError("rating must be a number.") from exc
-
-
-def _fetch_player(supabase: Any, *, club_id: str, player_id: int) -> dict[str, Any] | None:
-    rows = _safe_rows(
-        supabase.table("players")
-        .select("id,name,rating")
-        .eq("club_id", str(club_id))
-        .eq("id", int(player_id))
-        .limit(1)
-        .execute()
-    )
-    return rows[0] if rows else None
-
-
-def _fetch_league_rating(supabase: Any, *, club_id: str, league_name: str, player_id: int) -> dict[str, Any] | None:
+def _fetch_league_rating(
+    supabase: Any,
+    *,
+    club_id: str,
+    league_name: str,
+    player_id: int,
+) -> dict[str, Any] | None:
     rows = _safe_rows(
         supabase.table("league_ratings")
         .select("*")
@@ -74,77 +51,6 @@ def _fetch_league_rating(supabase: Any, *, club_id: str, league_name: str, playe
         .execute()
     )
     return rows[0] if rows else None
-
-
-def _fetch_league_meta(supabase: Any, *, club_id: str, league_name: str) -> dict[str, Any] | None:
-    rows = _safe_rows(
-        supabase.table("leagues_metadata")
-        .select("*")
-        .eq("club_id", str(club_id))
-        .eq("league_name", str(league_name))
-        .limit(1)
-        .execute()
-    )
-    return rows[0] if rows else None
-
-
-def _starting_elo(value: Any, *, player: dict[str, Any]) -> float:
-    parsed = _safe_float(value, default=None)
-    if parsed is None:
-        parsed = _safe_float(player.get("rating"), default=1200.0)
-    assert parsed is not None
-    if parsed <= 20:
-        parsed *= 400.0
-    if parsed < 400 or parsed > 2800:
-        raise ValueError("rating must be an Elo value from 400-2800 or a JUPR value from 1.0-7.0.")
-    return float(parsed)
-
-
-def _rollback_roster_membership(
-    supabase: Any,
-    *,
-    club_id: str,
-    league_name: str,
-    player_id: int,
-    before: dict[str, Any] | None,
-    after: dict[str, Any] | None,
-) -> None:
-    """Best-effort compensation when staging requires an audit row."""
-
-    try:
-        if before is None:
-            delete_query = (
-                supabase.table("league_ratings")
-                .delete()
-                .eq("club_id", str(club_id))
-                .eq("league_name", str(league_name))
-                .eq("player_id", int(player_id))
-            )
-            if after and after.get("id") is not None:
-                delete_query = delete_query.eq("id", after.get("id"))
-            delete_query.execute()
-        else:
-            (
-                supabase.table("league_ratings")
-                .update(
-                    {
-                        "rating": before.get("rating"),
-                        "starting_rating": before.get("starting_rating"),
-                        "wins": before.get("wins"),
-                        "losses": before.get("losses"),
-                        "matches_played": before.get("matches_played"),
-                        "is_active": before.get("is_active"),
-                        "inactive_at": before.get("inactive_at"),
-                    }
-                )
-                .eq("club_id", str(club_id))
-                .eq("league_name", str(league_name))
-                .eq("player_id", int(player_id))
-                .eq("id", before.get("id"))
-                .execute()
-            )
-    except Exception:
-        pass
 
 
 def update_admin_league_manager_roster_membership(
@@ -159,6 +65,7 @@ def update_admin_league_manager_roster_membership(
     actor_role: str,
     confirmation_text: str,
     source: str = "next_league_manager_roster_update",
+    idempotency_key: str = "",
 ) -> dict[str, Any]:
     if not is_admin_league_manager_enabled():
         raise PermissionError("Next League Manager is disabled.")
@@ -170,118 +77,65 @@ def update_admin_league_manager_roster_membership(
     clean_action = _clean_text(action, limit=40).lower()
     if clean_action not in ACTIONS:
         raise ValueError("action must be activate or deactivate.")
-    league = _fetch_league_meta(supabase, club_id=str(club_id), league_name=clean_league)
-    if not league:
-        raise ValueError("league not found")
-    league_status = validate_admin_league_manager_lifecycle_state(league)
-    if league_status in {"ended", "archived"}:
-        raise ValueError(f"League roster is read-only after a league is {league_status}.")
     pid = _safe_int(player_id, field="player_id")
-    player = _fetch_player(supabase, club_id=str(club_id), player_id=pid)
-    if not player:
-        raise ValueError("player not found")
-    before = _fetch_league_rating(supabase, club_id=str(club_id), league_name=clean_league, player_id=pid)
-
-    if clean_action == "activate":
-        if before:
-            if bool(before.get("is_active", True)) and not before.get("inactive_at"):
-                raise ValueError("player is already active in this league")
-            patch = {"is_active": True, "inactive_at": None}
-            updated = _safe_rows(
-                supabase.table("league_ratings")
-                .update(patch)
-                .eq("club_id", str(club_id))
-                .eq("league_name", clean_league)
-                .eq("player_id", pid)
-                .eq("id", before.get("id"))
-                .execute()
-            )
-            if not updated:
-                raise ValueError("League roster changed before this save completed; reload and try again.")
-            after = updated[0] if updated else {**before, **patch}
-        else:
-            start = _starting_elo(starting_rating, player=player)
-            patch = {
-                "club_id": str(club_id),
-                "player_id": pid,
-                "league_name": clean_league,
-                "rating": start,
-                "starting_rating": start,
-                "wins": 0,
-                "losses": 0,
-                "matches_played": 0,
-                "is_active": True,
-                "inactive_at": None,
-            }
-            inserted = _safe_rows(supabase.table("league_ratings").insert(patch).execute())
-            after = inserted[0] if inserted else patch
-    else:
-        if not before:
-            raise ValueError("player is not currently in this league")
-        if before.get("is_active") is False or before.get("inactive_at"):
-            raise ValueError("player is already inactive in this league")
-        patch = {"is_active": False, "inactive_at": _now_iso()}
-        updated = _safe_rows(
-            supabase.table("league_ratings")
-            .update(patch)
-            .eq("club_id", str(club_id))
-            .eq("league_name", clean_league)
-            .eq("player_id", pid)
-            .eq("id", before.get("id"))
-            .execute()
-        )
-        if not updated:
-            raise ValueError("League roster changed before this save completed; reload and try again.")
-        after = updated[0] if updated else {**before, **patch}
-
-    audit_payload = build_activity_payload(
+    operation_key = str(idempotency_key or "").strip()
+    if not operation_key:
+        operation_key = f"legacy-roster:{uuid4()}"
+    receipt = update_admin_league_manager_roster_batch(
+        supabase,
         club_id=str(club_id),
+        league_name=clean_league,
+        action=clean_action,
+        player_ids=[pid],
+        starting_rating=starting_rating if clean_action == "activate" else None,
+        idempotency_key=operation_key,
         actor_email=str(actor_email or ""),
         actor_role=str(actor_role or ""),
-        action_type="update_league_manager_roster_membership_admin",
-        entity_type="league_ratings",
-        entity_id=f"{clean_league}:{pid}",
-        before_json=before or {},
-        after_json={
-            "source_client": "fastapi/nextjs",
-            "source_page": source,
-            "league_name": clean_league,
-            "player_id": pid,
-            "player_name": player.get("name"),
-            "action": clean_action,
-            "league_rating": after,
-        },
-        source_page=source,
-        flagged_for_review=True,
+        confirmation_text=CONFIRM_ROSTER_BATCH,
+        source=str(source or ""),
     )
-    try:
-        audit_write = write_admin_activity_log(supabase, audit_payload)
-    except Exception:
-        if _truthy_env("JUPR_REQUIRE_API_AUDIT_LOG"):
-            _rollback_roster_membership(
+    receipt_rows = receipt.get("league_ratings")
+    after = (
+        next(
+            (
+                dict(row)
+                for row in receipt_rows
+                if isinstance(row, dict)
+                and int(row.get("player_id") or 0) == pid
+            ),
+            None,
+        )
+        if isinstance(receipt_rows, list)
+        else None
+    )
+    warnings: list[str] = []
+    if after is None:
+        try:
+            after = _fetch_league_rating(
                 supabase,
                 club_id=str(club_id),
                 league_name=clean_league,
                 player_id=pid,
-                before=before,
-                after=after,
             )
-        raise
-    warnings: list[str] = []
-    if audit_write.warning:
-        warnings.append(audit_write.warning)
-    if not audit_write.ok and _truthy_env("JUPR_REQUIRE_API_AUDIT_LOG"):
-        _rollback_roster_membership(
+        except Exception:
+            after = None
+    if not after:
+        after = {}
+        warnings.append(
+            "Roster membership committed, but its player row could not be read back."
+        )
+
+    try:
+        detail = get_admin_league_manager_detail(
             supabase,
             club_id=str(club_id),
             league_name=clean_league,
-            player_id=pid,
-            before=before,
-            after=after,
         )
-        raise RuntimeError("audit log write required but unavailable")
-
-    detail = get_admin_league_manager_detail(supabase, club_id=str(club_id), league_name=clean_league)
+    except Exception:
+        detail = {}
+        warnings.append(
+            "Roster membership committed, but refreshed league detail is unavailable."
+        )
     return {
         "ok": True,
         "mode": "league_manager_roster_membership_update",
@@ -291,4 +145,6 @@ def update_admin_league_manager_roster_membership(
         "league_rating": after,
         "detail": detail,
         "warnings": warnings,
+        "operation_id": receipt.get("operation_id"),
+        "idempotent": bool(receipt.get("idempotent")),
     }

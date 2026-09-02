@@ -122,6 +122,37 @@ def _match_collision_ids(
     return sorted(source_ids & target_ids)
 
 
+def _official_tournament_match_ids(
+    supabase: Any,
+    *,
+    club_id: str,
+    player_id: int,
+) -> list[int]:
+    """Return immutable official tournament projections for one player.
+
+    Those rows are derived from tournament teams/games. Rewriting only the
+    Match projection during a generic player merge would desynchronize the
+    authoritative tournament source, so the merge must stop before its RPC.
+    """
+
+    match_ids: set[int] = set()
+    for column in PLAYER_COLUMNS:
+        rows = _safe_rows(
+            supabase.table("matches")
+            .select("id,tournament_game_id")
+            .eq("club_id", str(club_id))
+            .eq(column, int(player_id))
+            .execute()
+        )
+        match_ids.update(
+            _safe_int(row.get("id"), field="match_id")
+            for row in rows
+            if row.get("id") not in (None, "")
+            and row.get("tournament_game_id") not in (None, "")
+        )
+    return sorted(match_ids)
+
+
 def _social_identity_ids(supabase: Any, *, club_id: str, player_id: int) -> list[str]:
     rows = _safe_rows(
         supabase.table("club_people")
@@ -240,6 +271,11 @@ def build_admin_player_merge_preview(supabase: Any, *, club_id: str, source_play
         source_player_id=src_id,
         target_player_id=dst_id,
     )
+    official_tournament_match_ids = _official_tournament_match_ids(
+        supabase,
+        club_id=str(club_id),
+        player_id=src_id,
+    )
     source_social_ids = _social_identity_ids(
         supabase,
         club_id=str(club_id),
@@ -266,6 +302,7 @@ def build_admin_player_merge_preview(supabase: Any, *, club_id: str, source_play
         and target.get("active") is not False
         and not target.get("inactive_at")
         and not collision_match_ids
+        and not official_tournament_match_ids
     )
     warnings = [
         "After executing a merge, run a tracked Replay History ALL job and attach its succeeded job ID.",
@@ -276,6 +313,11 @@ def build_admin_player_merge_preview(supabase: Any, *, club_id: str, source_play
             0,
             "Merge blocked: source and target already appear in the same match. Correct those matches before merging.",
         )
+    if official_tournament_match_ids:
+        warnings.insert(
+            0,
+            "Merge blocked: the source player appears in immutable official tournament matches. Correct the authoritative tournament participant first; a generic player merge cannot rewrite only the rating projection.",
+        )
     return {
         "ok": True,
         "mode": "player_merge_preview",
@@ -285,6 +327,7 @@ def build_admin_player_merge_preview(supabase: Any, *, club_id: str, source_play
         "preview_fingerprint": _fingerprint(expected_state),
         "match_reference_counts": _match_reference_counts(match_reference_ids),
         "collision_match_ids": collision_match_ids,
+        "official_tournament_match_ids": official_tournament_match_ids,
         "league_rating_plan": {
             "source_rows": source_leagues,
             "target_rows": target_leagues,

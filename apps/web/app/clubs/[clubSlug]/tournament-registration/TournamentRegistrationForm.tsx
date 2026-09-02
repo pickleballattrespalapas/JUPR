@@ -153,6 +153,22 @@ function eventMeta(event: PublicRegistrationEvent): string {
   return pieces.join(" • ");
 }
 
+function scheduledDaysLabel(
+  event: PublicRegistrationEvent,
+  daysById: Map<string, PublicRegistrationDay>
+): string {
+  const scheduledIds = event.scheduled_day_ids?.length
+    ? event.scheduled_day_ids
+    : [event.registration_day_id];
+  return scheduledIds
+    .map((dayId) => daysById.get(dayId))
+    .filter(Boolean)
+    .map((day) =>
+      day?.event_date ? `${day.label} · ${day.event_date}` : day?.label
+    )
+    .join(" · ");
+}
+
 function candidateLabel(candidate: PublicRegistrationPlayer): string {
   const rating = candidate.doubles_skill ?? candidate.singles_skill;
   return rating == null ? candidate.display_name : `${candidate.display_name} · Rating ${Number(rating).toFixed(2)}`;
@@ -225,10 +241,11 @@ export default function TournamentRegistrationForm({
   const eligibilityProfile = useMemo(
     () => ({
       gender: contact.gender,
+      age: numericValue(contact.age),
       doublesSkill: numericValue(profile.doublesSkill),
       singlesSkill: numericValue(profile.singlesSkill)
     }),
-    [contact.gender, profile.doublesSkill, profile.singlesSkill]
+    [contact.gender, contact.age, profile.doublesSkill, profile.singlesSkill]
   );
   const totalPrice = selectedIds.reduce((sum, id) => sum + Number(eventById.get(id)?.price_usd || 0), 0);
   const needsPartnerBoardConsent = selectedIds.some(
@@ -410,8 +427,12 @@ export default function TournamentRegistrationForm({
         return `${event.division_name} does not accept partner information.`;
       }
       if (partner.mode === "HAS_PARTNER") {
-        if (!partner.name.trim() || !partner.email.trim() || !partner.age.trim() || !partner.gender) {
-          return `${event.division_name}: partner name, email, age, and gender are required.`;
+        if (!partner.name.trim() || !partner.email.trim() || !partner.age.trim() || !partner.gender || !partner.skill.trim()) {
+          return `${event.division_name}: partner name, email, age, gender, and starting skill are required.`;
+        }
+        const partnerSkill = numericValue(partner.skill);
+        if (partnerSkill == null || partnerSkill < 1 || partnerSkill > 7) {
+          return `${event.division_name}: partner starting skill must be between 1 and 7.`;
         }
         if (partner.email.trim().toLowerCase() === contact.email.trim().toLowerCase()) {
           return "A player cannot register themselves as their own partner.";
@@ -450,8 +471,8 @@ export default function TournamentRegistrationForm({
       ["Singles skill", profile.singlesSkill]
     ]) {
       const parsed = numericValue(value);
-      if (parsed != null && (parsed < 0 || parsed > 7)) {
-        setError(`${label} must be between 0 and 7.`);
+      if (parsed != null && (parsed < 1 || parsed > 7)) {
+        setError(`${label} must be between 1 and 7.`);
         return;
       }
     }
@@ -748,8 +769,8 @@ export default function TournamentRegistrationForm({
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
             <label>Display name *<br /><input aria-label="Display name" value={profile.displayName} onChange={(event) => updateProfile("displayName", event.target.value)} style={inputStyle} /></label>
             <label>DUPR ID<br /><input aria-label="DUPR ID" value={profile.duprId} onChange={(event) => updateProfile("duprId", event.target.value)} style={inputStyle} /></label>
-            <label>Doubles skill<br /><input aria-label="Doubles skill" type="number" min="0" max="7" step="0.01" value={profile.doublesSkill} onChange={(event) => updateProfile("doublesSkill", event.target.value)} style={inputStyle} /></label>
-            <label>Singles skill<br /><input aria-label="Singles skill" type="number" min="0" max="7" step="0.01" value={profile.singlesSkill} onChange={(event) => updateProfile("singlesSkill", event.target.value)} style={inputStyle} /></label>
+            <label>Doubles skill<br /><input aria-label="Doubles skill" type="number" min="1" max="7" step="0.01" value={profile.doublesSkill} onChange={(event) => updateProfile("doublesSkill", event.target.value)} style={inputStyle} /></label>
+            <label>Singles skill<br /><input aria-label="Singles skill" type="number" min="1" max="7" step="0.01" value={profile.singlesSkill} onChange={(event) => updateProfile("singlesSkill", event.target.value)} style={inputStyle} /></label>
           </div>
         </section>
       ) : null}
@@ -770,7 +791,7 @@ export default function TournamentRegistrationForm({
                     <article key={eventOption.id} style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: selected ? "#f8fafc" : "white" }}>
                       <label style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start" }}>
                         <input type="checkbox" aria-label={`${eventOption.event_family_label} ${eventOption.division_name}`} checked={selected} disabled={Boolean(eligibilityReason)} onChange={(event) => toggleEvent(eventOption.id, event.target.checked)} />
-                        <span><strong>{eventOption.event_family_label} — {eventOption.division_name}</strong><br /><span style={{ color: "#64748b" }}>{eventMeta(eventOption)}</span></span>
+                        <span><strong>{eventOption.event_family_label} — {eventOption.division_name}</strong><br /><span style={{ color: "#64748b" }}>{scheduledDaysLabel(eventOption, daysById) || "Schedule TBD"}<br />{eventMeta(eventOption)}</span></span>
                       </label>
                       {eligibilityReason ? <p style={{ color: "#b91c1c", marginBottom: 0 }}>{eligibilityReason}</p> : null}
                       {selected &&
@@ -787,13 +808,13 @@ export default function TournamentRegistrationForm({
                           </label>
                           {partner.mode === "HAS_PARTNER" ? (
                             <>
-                              <p style={{ color: "#475569", margin: 0 }}>Partner details are sent for staff review; they do not create or confirm a team. Both players should register individually.</p>
+                              <p style={{ color: "#475569", margin: 0 }}>We will match this person to an existing club player or create their tournament entry, then list both players as one confirmed team. Your partner does not need to register again.</p>
                               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.5rem" }}>
-                                <label>Partner name *<br /><input aria-label={`${eventOption.division_name} partner name`} value={partner.name} onChange={(event) => updatePartner(eventOption.id, { name: event.target.value })} style={inputStyle} /></label>
-                                <label>Partner email *<br /><input aria-label={`${eventOption.division_name} partner email`} type="email" value={partner.email} onChange={(event) => updatePartner(eventOption.id, { email: event.target.value })} style={inputStyle} /></label>
-                                <label>Partner age *<br /><input aria-label={`${eventOption.division_name} partner age`} type="number" min="1" max="120" value={partner.age} onChange={(event) => updatePartner(eventOption.id, { age: event.target.value })} style={inputStyle} /></label>
-                                <label>Partner gender *<br /><select aria-label={`${eventOption.division_name} partner gender`} value={partner.gender} onChange={(event) => updatePartner(eventOption.id, { gender: event.target.value })} style={inputStyle}><option value="">Select</option><option>Women</option><option>Men</option><option>Non-binary</option><option>Other</option><option>Prefer not to say</option></select></label>
-                                <label>Partner skill<br /><input aria-label={`${eventOption.division_name} partner skill`} type="number" min="0" max="7" step="0.01" value={partner.skill} onChange={(event) => updatePartner(eventOption.id, { skill: event.target.value })} style={inputStyle} /></label>
+                                <label>Partner name *<br /><input required aria-label={`${eventOption.division_name} partner name`} value={partner.name} onChange={(event) => updatePartner(eventOption.id, { name: event.target.value })} style={inputStyle} /></label>
+                                <label>Partner email *<br /><input required aria-label={`${eventOption.division_name} partner email`} type="email" value={partner.email} onChange={(event) => updatePartner(eventOption.id, { email: event.target.value })} style={inputStyle} /></label>
+                                <label>Partner age *<br /><input required aria-label={`${eventOption.division_name} partner age`} type="number" min="1" max="120" value={partner.age} onChange={(event) => updatePartner(eventOption.id, { age: event.target.value })} style={inputStyle} /></label>
+                                <label>Partner gender *<br /><select required aria-label={`${eventOption.division_name} partner gender`} value={partner.gender} onChange={(event) => updatePartner(eventOption.id, { gender: event.target.value })} style={inputStyle}><option value="">Select</option><option>Women</option><option>Men</option><option>Non-binary</option><option>Other</option><option>Prefer not to say</option></select></label>
+                                <label>Partner starting skill *<br /><input required aria-label={`${eventOption.division_name} partner skill`} type="number" min="1" max="7" step="0.01" value={partner.skill} onChange={(event) => updatePartner(eventOption.id, { skill: event.target.value })} style={inputStyle} /></label>
                                 <label>Partner phone<br /><input aria-label={`${eventOption.division_name} partner phone`} value={partner.phone} onChange={(event) => updatePartner(eventOption.id, { phone: event.target.value })} style={inputStyle} /></label>
                                 <label>Partner DUPR ID<br /><input aria-label={`${eventOption.division_name} partner DUPR ID`} value={partner.duprId} onChange={(event) => updatePartner(eventOption.id, { duprId: event.target.value })} style={inputStyle} /></label>
                               </div>
@@ -864,7 +885,7 @@ export default function TournamentRegistrationForm({
                   : event.partner_required
                 ? partner.mode === "HAS_PARTNER" ? `Partner: ${partner.name}` : "Needs partner"
                 : isDoublesEvent(event) ? "Individual doubles entry" : "Singles";
-              return <li key={id}>{daysById.get(event.registration_day_id)?.label || "Day"} · {event.event_family_label} — {event.division_name} · {entryLabel}</li>;
+              return <li key={id}>{scheduledDaysLabel(event, daysById) || "Schedule TBD"} · {event.event_family_label} — {event.division_name} · {entryLabel}</li>;
             })}
           </ul>
           <p>

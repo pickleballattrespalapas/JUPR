@@ -1,0 +1,88 @@
+import Link from "next/link";
+import type { LeagueAwardProgress, LeagueAwardProgressRow, LeagueAwardRace } from "@/lib/api";
+
+const cardStyle = {
+  border: "1px solid #bfdbfe",
+  borderRadius: "14px",
+  padding: "1rem",
+  background: "#eff6ff"
+};
+
+function normalizedRank(entry: LeagueAwardProgressRow, index: number): number {
+  const rank = Number(entry.rank);
+  return Number.isFinite(rank) && rank > 0 ? rank : index + 1;
+}
+
+function fallbackRaces(progress: LeagueAwardProgress): LeagueAwardRace[] {
+  const grouped = new Map<string, LeagueAwardProgressRow[]>();
+  for (const award of progress.awards || []) {
+    const key = award.category_key || award.category_label || "award";
+    grouped.set(key, [...(grouped.get(key) || []), award]);
+  }
+  return Array.from(grouped.entries()).map(([categoryKey, entries]) => ({
+    category_key: categoryKey,
+    category_label: entries[0]?.category_label || "Award",
+    recipient_type: entries[0]?.recipient_type,
+    min_games: entries[0]?.min_games,
+    minimum_metric: entries[0]?.minimum_metric,
+    eligible_count: entries.length,
+    entries
+  }));
+}
+
+export function awardRaces(progress: LeagueAwardProgress): LeagueAwardRace[] {
+  return progress.races?.filter((race) => race.entries?.length) || fallbackRaces(progress);
+}
+
+function previewEntries(entries: LeagueAwardProgressRow[]): LeagueAwardProgressRow[] {
+  if (entries.length <= 5) return entries;
+  const fifthRank = normalizedRank(entries[4], 4);
+  return entries.filter((entry, index) => normalizedRank(entry, index) <= fifthRank);
+}
+
+function playerName(clubSlug: string, entry: LeagueAwardProgressRow) {
+  if (entry.player_id == null) return entry.recipient_name || "—";
+  return <Link href={`/clubs/${clubSlug}/players/${entry.player_id}`}>{entry.recipient_name || "—"}</Link>;
+}
+
+function placementRow(clubSlug: string, entry: LeagueAwardProgressRow, index: number) {
+  return (
+    <li key={`${entry.player_id ?? entry.team_id ?? entry.recipient_name}-${normalizedRank(entry, index)}`} style={{ display: "flex", gap: "0.45rem", justifyContent: "space-between", alignItems: "baseline" }}>
+      <span><strong>#{normalizedRank(entry, index)}</strong> {playerName(clubSlug, entry)}{entry.is_co_winner ? " · tied" : ""}</span>
+      <span style={{ color: "#334155", whiteSpace: "nowrap" }}>{entry.metric_display || "—"}</span>
+    </li>
+  );
+}
+
+export function LeagueAwardRaceGrid({ progress, clubSlug }: { progress: LeagueAwardProgress; clubSlug: string }) {
+  const races = awardRaces(progress);
+  if (!races.length) return null;
+  return (
+    <div data-testid="league-award-races" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))", gap: "0.75rem" }}>
+      {races.map((race) => {
+        const entries = race.entries || [];
+        const preview = previewEntries(entries);
+        const minimum = `${race.min_games ?? 0} ${String(race.minimum_metric || "games").replace(/_/g, " ")}`;
+        return (
+          <article key={race.category_key} data-testid={`league-award-race-${race.category_key}`} style={cardStyle}>
+            <h3 style={{ margin: "0 0 0.25rem" }}>{race.category_label}</h3>
+            <p style={{ margin: "0 0 0.65rem", color: "#475569", fontSize: "0.88rem" }}>
+              {race.eligible_count ?? entries.length} eligible · minimum {minimum}
+            </p>
+            <ol style={{ margin: 0, paddingLeft: "1.5rem", display: "grid", gap: "0.3rem" }}>
+              {preview.map((entry, index) => placementRow(clubSlug, entry, index))}
+            </ol>
+            {preview.length < entries.length ? (
+              <details style={{ marginTop: "0.75rem" }}>
+                <summary style={{ cursor: "pointer", fontWeight: 700 }}>View all eligible players ({entries.length})</summary>
+                <ol style={{ margin: "0.65rem 0 0", paddingLeft: "1.5rem", display: "grid", gap: "0.3rem" }}>
+                  {entries.slice(preview.length).map((entry, index) => placementRow(clubSlug, entry, preview.length + index))}
+                </ol>
+              </details>
+            ) : null}
+          </article>
+        );
+      })}
+    </div>
+  );
+}

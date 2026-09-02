@@ -192,6 +192,37 @@ def test_tournament_backfill_preview_route_requires_authentication(monkeypatch):
     assert supabase.storage == before
 
 
+def test_tournament_backfill_apply_route_is_retired_without_durable_intent(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOOLS", "1")
+    monkeypatch.setattr(
+        "services.api.admin_tools_routes.authenticate_bearer",
+        lambda _authorization: SimpleNamespace(email="owner@example.com", user_id="user-1"),
+    )
+    monkeypatch.setattr(
+        "services.api.admin_tools_routes.resolve_admin_role",
+        lambda **_kwargs: SimpleNamespace(role="super_admin", assigned=True, source="admin_role_assignments"),
+    )
+    supabase = FakeSupabase()
+    before = deepcopy(supabase.storage)
+    local_app = FastAPI()
+    install_admin_tools_routes(local_app, get_supabase_client=lambda: supabase)
+
+    response = TestClient(local_app).post(
+        "/admin/clubs/club/tools/backfills/tournament-matches/apply",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "game_ids": ["game-1"],
+            "preview_fingerprint": "reviewed-preview",
+            "confirmation_text": "BACKFILL TOURNAMENT MATCHES",
+            "operation_key": "retired-backfill-route",
+        },
+    )
+
+    assert response.status_code == 403
+    assert "canonical Tournament Live official-publish command" in response.json()["detail"]
+    assert supabase.storage == before
+
+
 def test_social_review_allows_read_only_role_but_moderation_requires_manage_matches(monkeypatch):
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOOLS", "1")
     monkeypatch.setattr("services.api.admin_tools_routes.authenticate_bearer", lambda _authorization: SimpleNamespace(email="reader@example.com", user_id="reader-1"))

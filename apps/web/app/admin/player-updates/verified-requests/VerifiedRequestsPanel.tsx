@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess } from "@/components/interaction";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
@@ -89,12 +90,15 @@ export default function VerifiedRequestsPanel({ apiBase, clubId, status }: Props
         method: "PATCH",
         body: JSON.stringify({ action, admin_note: notes[row.id] || "", confirmation_text: confirmationText, source: "next_verified_updates_request_review" })
       });
-      if (!actionRequest.isCurrent(generation)) return;
+      const completion = actionSuccess("Verified update request saved", `${action.replace(/_/g, " ")} saved for ${row.player_name}.`);
+      if (!actionRequest.isCurrent(generation)) return completion;
       setMessage(`${action} saved for ${row.player_name}.`);
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) return completion;
       await loadRows();
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to update request.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }

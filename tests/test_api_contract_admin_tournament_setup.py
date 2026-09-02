@@ -9,6 +9,8 @@ require_api_dependency("supabase")
 
 from fastapi.testclient import TestClient
 
+from jupr_app.domain.tournament_registration_repo import EVENT_CONFIGURATION_WRITE_FIELDS
+from jupr_app.services.admin_tournament_setup_service import _event_option_payload
 from services.api.main import app
 
 
@@ -281,8 +283,9 @@ def test_tournament_setup_draft_and_publish(monkeypatch):
     supabase = FakeSupabase()
     install_env(monkeypatch, supabase)
     client = TestClient(app)
+    supabase.storage["tournament_registration_settings"][0]["registration_status"] = "open"
     days = [{"id": "day1", "tournament_id": "t1", "label": "Day 1", "date": "2026-10-01", "enabled": True, "sort_order": 1}]
-    events = [{"id": "event1", "tournament_id": "t1", "registration_day_id": "day1", "event_family_label": "Mixed Doubles", "division_name": "Mixed Open", "event_type": "MIXED_DOUBLES", "gender_restriction": "MIXED", "event_format_default": "ROUND_ROBIN_PLUS_PLAYOFF", "scoring_default": "GAME_TO_15", "status": "open", "enabled": True, "sort_order": 1}]
+    events = [{"id": "event1", "tournament_id": "t1", "registration_day_id": "day1", "event_family_label": "Mixed Doubles", "division_name": "Mixed Open", "label": "Mixed Open", "event_type": "MIXED_DOUBLES", "gender_restriction": "MIXED", "partner_required": True, "public_partner_board": True, "skill_label": "Open", "skill_mode": "OPEN", "event_format_default": "ROUND_ROBIN_PLUS_PLAYOFF", "scoring_default": "GAME_TO_15", "event_format_override": "ROUND_ROBIN_PLUS_PLAYOFF", "scoring_override": "GAME_TO_15", "status": "open", "enabled": True, "sort_order": 1}]
 
     draft = client.put(
         "/admin/clubs/club/tournaments/setup/tournaments/t1/draft",
@@ -295,9 +298,47 @@ def test_tournament_setup_draft_and_publish(monkeypatch):
     published = client.post(
         "/admin/clubs/club/tournaments/setup/tournaments/t1/publish",
         headers={"Authorization": "Bearer local"},
-        json={"days": days, "event_options": events, "confirmation_text": "PUBLISH SETUP"},
+        json={
+            "days": days,
+            "event_options": events,
+            "settings": {
+                "registration_slug": " Setup Smoke ",
+                "registration_status": "draft",
+                "venue_directions": "  Enter at the south gate.  ",
+                "waitlist_enabled": False,
+            },
+            "confirmation_text": "PUBLISH SETUP",
+        },
     )
     assert published.status_code == 200
     assert published.json()["publish_result"]["mode"] == "replace"
+    assert supabase.storage["tournament_registration_settings"][0]["registration_status"] == "open"
+    assert supabase.storage["tournament_registration_settings"][0]["registration_slug"] == "setup-smoke"
+    assert supabase.storage["tournament_registration_settings"][0]["venue_directions"] == "Enter at the south gate."
+    assert supabase.storage["tournament_registration_settings"][0]["waitlist_enabled"] is False
+    assert (
+        supabase.storage["tournament_registration_settings"][0]["builder_draft_json"]["settings"]["registration_status"]
+        == "open"
+    )
+    assert (
+        supabase.storage["tournament_registration_settings"][0]["builder_draft_json"]["settings"]["venue_directions"]
+        == "Enter at the south gate."
+    )
     assert supabase.storage["tournament_registration_days"]
     assert supabase.storage["tournament_event_options"]
+    detail = client.get(
+        "/admin/clubs/club/tournaments/setup/tournaments/t1",
+        headers={"Authorization": "Bearer local"},
+    )
+    assert detail.status_code == 200
+    event_detail = detail.json()["event_options"][0]
+    assert event_detail["label"] == "Mixed Open"
+    assert event_detail["partner_required"] is True
+    assert event_detail["public_partner_board"] is True
+    assert event_detail["event_format_override"] == "ROUND_ROBIN_PLUS_PLAYOFF"
+    assert event_detail["scoring_override"] == "GAME_TO_15"
+
+
+def test_setup_event_detail_projects_every_publishable_event_field() -> None:
+    payload = _event_option_payload({})
+    assert set(payload) == set(EVENT_CONFIGURATION_WRITE_FIELDS)

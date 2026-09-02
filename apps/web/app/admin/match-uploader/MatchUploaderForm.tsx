@@ -3,9 +3,11 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { InteractionDialog, StaticActionFeedback, actionSuccess } from "@/components/interaction";
 import type { PublicPlayer } from "@/lib/api";
 import type {
   AdminMatchUploaderCreatePlayersResult,
+  AdminMatchUploaderPlayerBatchOperation,
   AdminMatchUploaderRoundRobinPreview,
   AdminMatchUploaderStatusResponse,
   AdminMatchUploaderWriteResult
@@ -70,6 +72,14 @@ type RrScoreRow = {
 type RrCourtSchedule = { court: number; formatType: string; expectedGames?: number | null; matches: RrScoreRow[] };
 type RrPayload = { source: string; custom_schedule: string; schedule_mode: string; courts: Array<{ court: number; format_type: string; player_names: string[] }> };
 type NewPlayerDraft = { name: string; startingJupr: string };
+type PlayerBatchRecovery = {
+  operationKey: string;
+  operationScope: string;
+  status: string;
+  message: string;
+  continueRoundRobin: boolean;
+};
+type StoredPlayerBatchRecovery = PlayerBatchRecovery & { version: 1 };
 type PlayerRoundRobinRecord = { wins: number; losses: number };
 type PlayerRoundRobinRecords = Record<string, PlayerRoundRobinRecord>;
 type SearchablePlayerInputProps = {
@@ -105,6 +115,45 @@ const buttonStyle = { padding: "0.6rem 0.9rem", borderRadius: "999px", border: "
 const ghostButtonStyle = { ...buttonStyle, background: "white", color: "#0f172a" };
 const dangerButtonStyle = { ...buttonStyle, background: "#b91c1c", borderColor: "#b91c1c" };
 
+class MatchUploaderApiError extends Error {
+  operationKey: string | null;
+  uncertain: boolean;
+
+  constructor(message: string, operationKey: string | null = null, uncertain = false) {
+    super(message);
+    this.name = "MatchUploaderApiError";
+    this.operationKey = operationKey;
+    this.uncertain = uncertain;
+  }
+}
+
+function apiErrorDetail(payload: unknown, status: number): { message: string; operationKey: string | null; uncertain: boolean } {
+  const fallback = `API error (${status}).`;
+  if (!payload || typeof payload !== "object") return { message: fallback, operationKey: null, uncertain: status >= 500 || status === 409 };
+  const record = payload as Record<string, unknown>;
+  const detail = record.detail ?? record.message ?? record.error;
+  if (detail && typeof detail === "object" && !Array.isArray(detail)) {
+    const detailRecord = detail as Record<string, unknown>;
+    const explicitlyFailed = detailRecord.kind === "failed" && detailRecord.recovery_required !== true;
+    return {
+      message: typeof detailRecord.message === "string" ? detailRecord.message : fallback,
+      operationKey: typeof detailRecord.operation_key === "string" ? detailRecord.operation_key : null,
+      uncertain: detailRecord.recovery_required === true
+        || detailRecord.kind === "uncertain"
+        || detailRecord.code === "RECOVERY_REQUIRED"
+        || (!explicitlyFailed && (status >= 500 || [408, 425, 429].includes(status))),
+    };
+  }
+  if (Array.isArray(detail)) {
+    return {
+      message: detail.map((item) => typeof item === "string" ? item : JSON.stringify(item)).join("; ") || fallback,
+      operationKey: null,
+      uncertain: status >= 500 || status === 409,
+    };
+  }
+  return { message: typeof detail === "string" ? detail : fallback, operationKey: null, uncertain: status >= 500 || status === 409 };
+}
+
 function todayIsoDate(): string {
   const today = new Date();
   const year = today.getFullYear();
@@ -115,6 +164,43 @@ function todayIsoDate(): string {
 
 function randomId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function normalizeNewPlayerName(value: string): string {
+  return value.replace(/\s+/gu, " ").trim();
+}
+
+function normalizeNewPlayerBatch(players: Array<{ name: string; starting_jupr: number }>): Array<{ name: string; starting_jupr: number }> {
+  const seen = new Set<string>();
+  const normalized: Array<{ name: string; starting_jupr: number }> = [];
+  for (const player of players) {
+    const name = normalizeNewPlayerName(player.name);
+    const nameKey = name.toLocaleLowerCase("en-US");
+    if (seen.has(nameKey)) continue;
+    seen.add(nameKey);
+    normalized.push({ name, starting_jupr: Number(player.starting_jupr) });
+  }
+  return normalized;
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+async function reviewedPlayerBatchFingerprint(players: Array<{ name: string; starting_jupr: number }>): Promise<string> {
+  const reviewed = {
+    players: normalizeNewPlayerBatch(players).map((player) => ({
+      name: player.name,
+      starting_jupr: Number(player.starting_jupr).toFixed(4)
+    }))
+  };
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalJson(reviewed)));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function newMatchRow(
@@ -215,6 +301,10 @@ function mergePlayers(current: PublicPlayer[], incoming: NonNullable<AdminMatchU
   return Array.from(byId.values()).sort((left, right) => String(left.name).localeCompare(String(right.name)));
 }
 
+function playerBatchOperationResult(operation: AdminMatchUploaderPlayerBatchOperation): AdminMatchUploaderCreatePlayersResult | null {
+  return operation.result || operation.result_json || null;
+}
+
 function SearchablePlayerInput({
   inputId,
   label,
@@ -230,7 +320,7 @@ function SearchablePlayerInput({
   const selected = playerUniverse.find((player) => String(player.id) === value);
   const selectedName = selected ? String(selected.name) : "";
   const [query, setQuery] = useState(selectedName);
-  const [startingJupr, setStartingJupr] = useState("3.5");
+  const [startingJupr, setStartingJupr] = useState("");
   const [creating, setCreating] = useState(false);
   const cleanedQuery = query.replace(/\s+/g, " ").trim();
   const exactPlayer = players.find(
@@ -350,8 +440,9 @@ function SearchablePlayerInput({
         {cleanedQuery && !existingClubPlayer && matchingPlayers.length === 0 ? (
         <div style={{ display: "grid", gridTemplateColumns: "minmax(100px, 1fr) auto", gap: "0.35rem", marginTop: "0.35rem", alignItems: "end" }}>
           <label htmlFor={`${inputId}-starting-jupr`}>
-            <span style={{ display: "block", color: "#475569", fontSize: "0.8rem" }}>Starting JUPR</span>
+            <span style={{ display: "block", color: "#475569", fontSize: "0.8rem" }}>Starting JUPR *</span>
             <input
+              required
               id={`${inputId}-starting-jupr`}
               type="number"
               min={1}
@@ -389,7 +480,7 @@ function SearchablePlayerMultiInput({
   onCreate,
 }: SearchablePlayerMultiInputProps) {
   const [query, setQuery] = useState("");
-  const [startingJupr, setStartingJupr] = useState("3.5");
+  const [startingJupr, setStartingJupr] = useState("");
   const [creating, setCreating] = useState(false);
   const cleanedQuery = query.replace(/\s+/g, " ").trim();
   const selectedNames = new Set(
@@ -495,8 +586,9 @@ function SearchablePlayerMultiInput({
       {cleanedQuery && !exactPlayer ? (
         <div style={{ display: "grid", gridTemplateColumns: "minmax(100px, 1fr) auto", gap: "0.4rem", marginTop: "0.4rem", alignItems: "end" }}>
           <label htmlFor={`${inputId}-starting-jupr`}>
-            <span style={{ display: "block", color: "#475569", fontSize: "0.8rem" }}>Starting JUPR</span>
+            <span style={{ display: "block", color: "#475569", fontSize: "0.8rem" }}>Starting JUPR *</span>
             <input
+              required
               id={`${inputId}-starting-jupr`}
               type="number"
               min={1}
@@ -562,7 +654,7 @@ function previewToSchedule(preview: AdminMatchUploaderRoundRobinPreview): RrCour
   }
 
 
-  function RemoveAllMatchesDialog({
+function RemoveAllMatchesDialog({
   onClose,
   onKeepRows,
   onRemoveAll,
@@ -571,36 +663,23 @@ function previewToSchedule(preview: AdminMatchUploaderRoundRobinPreview): RrCour
   onKeepRows: () => void;
   onRemoveAll: () => void;
 }) {
-  const dialogRef = useRef<HTMLDialogElement>(null);
-
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (dialog && !dialog.open) dialog.showModal();
-    return () => {
-      if (dialog?.open) dialog.close();
-    };
-  }, []);
-
   return (
-    <dialog
-      ref={dialogRef}
-      aria-labelledby="remove-all-matches-title"
-      onCancel={(event) => {
-        event.preventDefault();
-        onClose();
-      }}
-      style={{ width: "min(620px, calc(100vw - 2rem))", border: 0, borderRadius: "16px", padding: 0, boxShadow: "0 24px 70px rgba(15, 23, 42, 0.35)" }}
-    >
-      <div style={{ padding: "1.25rem" }}>
-        <h2 id="remove-all-matches-title" style={{ marginTop: 0 }}>Remove entered matches?</h2>
-        <p>Choose whether to keep completed or partially entered rows, remove only blank rows, or clear the entire batch.</p>
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem", flexWrap: "wrap" }}>
+    <InteractionDialog
+      open
+      phase="ready"
+      title="Remove entered matches?"
+      description="Choose whether to keep completed or partially entered rows, remove only blank rows, or clear the entire batch."
+      onRequestClose={onClose}
+      actions={(
+        <>
           <button type="button" onClick={onClose} style={ghostButtonStyle}>No, go back</button>
           <button type="button" onClick={onKeepRows} style={ghostButtonStyle}>Keep rows with data</button>
           <button type="button" onClick={onRemoveAll} style={dangerButtonStyle}>Yes, remove all</button>
-        </div>
-      </div>
-    </dialog>
+        </>
+      )}
+    >
+      <p>Rows that already contain match data are protected unless you explicitly choose <strong>Yes, remove all</strong>.</p>
+    </InteractionDialog>
   );
 }
 
@@ -615,16 +694,6 @@ function SubmissionResultDialog({
     submissionKind: "manual" | "round_robin" | "singles" | null;
     onClose: () => void;
   }) {
-  const dialogRef = useRef<HTMLDialogElement>(null);
-
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (dialog && !dialog.open) dialog.showModal();
-    return () => {
-      if (dialog?.open) dialog.close();
-    };
-  }, []);
-
   const inserted = result.result?.inserted ?? 0;
   const email = result.auto_player_updates;
   const emailSummary = email?.mode === "auto_sent"
@@ -650,21 +719,26 @@ function SubmissionResultDialog({
         : (result.recovery?.match_log_route || "/admin/match-log");
     const showRoundRobinRecords = Boolean(roundRobinRecords && Object.keys(roundRobinRecords).length);
 
-    return (
-    <dialog
-      ref={dialogRef}
-      aria-labelledby="match-submission-result-title"
-      onCancel={(event) => {
-        event.preventDefault();
-        onClose();
-      }}
-      style={{ width: "min(720px, calc(100vw - 2rem))", maxHeight: "calc(100vh - 2rem)", overflowY: "auto", border: 0, borderRadius: "16px", padding: 0, boxShadow: "0 24px 70px rgba(15, 23, 42, 0.35)" }}
+  const dialogActions = (
+    <>
+      {correctionMatchId && !isManualMulti ? <Link href={correctionHref} style={{ ...ghostButtonStyle, textDecoration: "none", display: "inline-flex", alignItems: "center" }}>Edit results</Link> : null}
+      {correctionMatchId && isManualMulti && !chooseMatchesToEdit ? <button type="button" onClick={() => setChooseMatchesToEdit(true)} style={ghostButtonStyle}>Edit results</button> : null}
+      <button type="button" onClick={onClose} style={buttonStyle}>OK</button>
+    </>
+  );
+
+  return (
+    <InteractionDialog
+      open
+      phase="success"
+      size="wide"
+      title="Match submission complete"
+      onRequestClose={onClose}
+      actions={dialogActions}
     >
-      <div style={{ padding: "1.25rem" }}>
-        <h2 id="match-submission-result-title" style={{ marginTop: 0 }}>Match submission complete</h2>
-        <p role="status" style={{ color: "#166534" }}>
-          Successfully inserted {inserted} rated match{inserted === 1 ? "" : "es"}.
-        </p>
+        <div tabIndex={-1} data-dialog-focus>
+          <StaticActionFeedback tone="success" title="Matches saved" description={`Successfully inserted ${inserted} rated match${inserted === 1 ? "" : "es"}.`} />
+        </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0.75rem" }}>
           <div><strong>Inserted</strong><br />{inserted}</div>
           <div><strong>Match write</strong><br />{result.match_write_committed ? "Committed" : "Review required"}</div>
@@ -719,13 +793,7 @@ function SubmissionResultDialog({
             </p>
           </div>
         ) : null}
-        <p style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem", flexWrap: "wrap", marginBottom: 0 }}>
-        {correctionMatchId && !isManualMulti ? <Link href={correctionHref} style={{ ...ghostButtonStyle, textDecoration: "none", display: "inline-flex", alignItems: "center" }}>Edit results</Link> : null}
-        {correctionMatchId && isManualMulti && !chooseMatchesToEdit ? <button type="button" onClick={() => setChooseMatchesToEdit(true)} style={ghostButtonStyle}>Edit results</button> : null}
-        <button type="button" onClick={onClose} style={buttonStyle}>OK</button>
-      </p>
-      </div>
-    </dialog>
+    </InteractionDialog>
   );
 }
 
@@ -757,12 +825,42 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
   const [saving, setSaving] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [creatingPlayers, setCreatingPlayers] = useState(false);
+  const [playerBatchRecovery, setPlayerBatchRecovery] = useState<PlayerBatchRecovery | null>(null);
+  const [checkingPlayerBatchRecovery, setCheckingPlayerBatchRecovery] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [result, setResult] = useState<AdminMatchUploaderWriteResult | null>(null);
   const [submissionKind, setSubmissionKind] = useState<"manual" | "round_robin" | "singles" | null>(null);
   const [manualValidationAttempted, setManualValidationAttempted] = useState(false);
   const [singlesValidationAttempted, setSinglesValidationAttempted] = useState(false);
   const [removeAllDialogOpen, setRemoveAllDialogOpen] = useState(false);
+
+  const playerRecoveryStorageKey = `jupr-match-uploader-player-recovery:${clubId}`;
+
+  useEffect(() => {
+    setPlayerBatchRecovery(null);
+    try {
+      const raw = globalThis.sessionStorage?.getItem(playerRecoveryStorageKey);
+      if (!raw) return;
+      const stored = JSON.parse(raw) as Partial<StoredPlayerBatchRecovery>;
+      if (
+        stored.version === 1
+        && typeof stored.operationKey === "string"
+        && typeof stored.operationScope === "string"
+        && typeof stored.status === "string"
+        && typeof stored.message === "string"
+      ) {
+        setPlayerBatchRecovery({
+          operationKey: stored.operationKey,
+          operationScope: stored.operationScope,
+          status: stored.status,
+          message: stored.message,
+          continueRoundRobin: stored.continueRoundRobin === true,
+        });
+      }
+    } catch {
+      // A blocked or stale session store must not hide the rest of Match Uploader.
+    }
+  }, [playerRecoveryStorageKey]);
 
   const activeLeagueOptions = entryMethod === "singles" ? singlesLeagueOptions : doublesLeagueOptions;
   const activeLeagueFormatLabel = entryMethod === "singles" ? "singles" : "doubles";
@@ -802,6 +900,27 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
   function clearEntryFeedback() {
     setMessage(null);
     setResult(null);
+  }
+
+  function retainPlayerBatchRecovery(recovery: PlayerBatchRecovery) {
+    setPlayerBatchRecovery(recovery);
+    try {
+      globalThis.sessionStorage?.setItem(
+        playerRecoveryStorageKey,
+        JSON.stringify({ version: 1, ...recovery } satisfies StoredPlayerBatchRecovery),
+      );
+    } catch {
+      // The in-memory guard still prevents a second write in this page session.
+    }
+  }
+
+  function clearPlayerBatchRecovery() {
+    setPlayerBatchRecovery(null);
+    try {
+      globalThis.sessionStorage?.removeItem(playerRecoveryStorageKey);
+    } catch {
+      // The completed server operation is authoritative if storage cleanup fails.
+    }
   }
 
   function resetManualRows() {
@@ -1003,17 +1122,111 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
     return { source: "next_match_uploader_round_robin_preview", custom_schedule: rrCustomSchedule, schedule_mode: "full", courts };
   }
 
-  async function postJson<T>(path: string, body: unknown): Promise<T> {
+  async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
     if (!apiBase) throw new Error("API base URL is not configured.");
     if (!accessToken) throw new Error("Sign in at /admin/login before using Match Uploader.");
     const response = await fetch(apiUrl(apiBase, path), {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
-      body: JSON.stringify(body)
+      ...init,
+      headers: {
+        ...(init.body === undefined ? {} : { "Content-Type": "application/json" }),
+        Authorization: `Bearer ${accessToken}`,
+        ...init.headers,
+      },
     });
     const payload = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(String(payload?.detail || `API error (${response.status})`));
+    if (!response.ok) {
+      const detail = apiErrorDetail(payload, response.status);
+      throw new MatchUploaderApiError(detail.message, detail.operationKey, detail.uncertain);
+    }
     return payload as T;
+  }
+
+  async function postJson<T>(path: string, body: unknown): Promise<T> {
+    return requestJson<T>(path, { method: "POST", body: JSON.stringify(body) });
+  }
+
+  function playerOperationPath(operationKey: string): string {
+    const template = status.player_operation_endpoint
+      || "/admin/clubs/{club_id}/match-uploader/player-operations/{operation_key}";
+    return template
+      .replace("{club_id}", encodeURIComponent(clubId))
+      .replace("{operation_key}", encodeURIComponent(operationKey));
+  }
+
+  async function inspectPlayerBatchOperation() {
+    const recovery = playerBatchRecovery;
+    if (!recovery) return;
+    setCheckingPlayerBatchRecovery(true);
+    try {
+      const operation = await requestJson<AdminMatchUploaderPlayerBatchOperation>(
+        playerOperationPath(recovery.operationKey),
+      );
+      const operationStatus = String(operation.status || "unknown");
+      const recoveredResult = playerBatchOperationResult(operation);
+      if (operationStatus === "completed") {
+        if (recoveredResult?.players?.length) {
+          setKnownPlayers((current) => mergePlayers(current, recoveredResult.players || []));
+        }
+        clearDirectMatchIdempotencyKey(recovery.operationScope, recovery.operationKey);
+        clearPlayerBatchRecovery();
+        setMessage(
+          `Exact player operation ${recovery.operationKey} completed. ${recoveredResult?.accepted_count ?? recoveredResult?.players?.length ?? 0} player profile(s) were reconciled.`,
+        );
+        if (recovery.continueRoundRobin && rrPendingPayload) {
+          await previewRoundRobin(rrPendingPayload);
+        }
+        return;
+      }
+      if (operationStatus === "failed") {
+        clearDirectMatchIdempotencyKey(recovery.operationScope, recovery.operationKey);
+        clearPlayerBatchRecovery();
+        setMessage(
+          `Exact player operation ${recovery.operationKey} is confirmed failed and did not complete. Review the player list, then submit a new reviewed request if it is still needed.`,
+        );
+        return;
+      }
+      const reconciled = await requestJson<AdminMatchUploaderCreatePlayersResult>(
+        `${playerOperationPath(recovery.operationKey)}/reconcile`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            confirmation_text: "RECONCILE PLAYER BATCH",
+            source: "next_match_uploader_player_operation_reconcile",
+          }),
+        },
+      );
+      if (reconciled.ok) {
+        if (reconciled.players?.length) {
+          setKnownPlayers((current) => mergePlayers(current, reconciled.players || []));
+        }
+        clearDirectMatchIdempotencyKey(recovery.operationScope, recovery.operationKey);
+        clearPlayerBatchRecovery();
+        setMessage(
+          `Exact player operation ${recovery.operationKey} completed during reconciliation. ${reconciled.accepted_count ?? reconciled.players?.length ?? 0} player profile(s) were applied from authoritative readback.`,
+        );
+        if (recovery.continueRoundRobin && rrPendingPayload) {
+          await previewRoundRobin(rrPendingPayload);
+        }
+        return;
+      }
+      if (reconciled.status === "failed" && reconciled.recovery_required !== true) {
+        clearDirectMatchIdempotencyKey(recovery.operationScope, recovery.operationKey);
+        clearPlayerBatchRecovery();
+        setMessage(
+          `Exact player operation ${recovery.operationKey} is proven failed. Review the player list before submitting a new reviewed request.`,
+        );
+        return;
+      }
+      const operationMessage = operation.error || operation.error_text || recovery.message;
+      retainPlayerBatchRecovery({ ...recovery, status: operationStatus, message: operationMessage });
+      setMessage(`Exact player operation ${recovery.operationKey} still needs recovery. Do not create another batch or use a new key.`);
+    } catch (error) {
+      setMessage(
+        `${error instanceof Error ? error.message : "Unable to inspect the player operation."} Operation ${recovery.operationKey} remains retained; do not retry it with a new key.`,
+      );
+    } finally {
+      setCheckingPlayerBatchRecovery(false);
+    }
   }
 
   async function createAndSelectPlayer(
@@ -1021,15 +1234,30 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
     startingJupr: number,
   ): Promise<PublicPlayer | null> {
     if (!requireReady()) return null;
+    if (playerBatchRecovery) {
+      setMessage(`Check exact operation ${playerBatchRecovery.operationKey} before creating another player.`);
+      return null;
+    }
     setCreatingPlayers(true);
+    const playersToCreate = normalizeNewPlayerBatch([{ name, starting_jupr: startingJupr }]);
+    const request = {
+      source: "next_match_uploader_inline_new_player",
+      players: playersToCreate,
+      reviewed_fingerprint: await reviewedPlayerBatchFingerprint(playersToCreate),
+      confirmation_text: "CREATE PLAYERS"
+    };
+    const operationScope = `match-uploader:${clubId}:create-player:inline`;
+    const idempotencyKey = directMatchIdempotencyKey(operationScope, request);
     try {
       const payload = await postJson<AdminMatchUploaderCreatePlayersResult>(
         `/admin/clubs/${encodeURIComponent(clubId)}/match-uploader/players`,
         {
-          source: "next_match_uploader_inline_new_player",
-          players: [{ name, starting_jupr: startingJupr }],
+          ...request,
+          idempotency_key: idempotencyKey
         },
       );
+      clearDirectMatchIdempotencyKey(operationScope, idempotencyKey);
+      clearPlayerBatchRecovery();
       const incoming = payload.players || [];
       if (incoming.length) {
         setKnownPlayers((current) => mergePlayers(current, incoming));
@@ -1046,9 +1274,26 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
       );
       return (created as PublicPlayer | undefined) || null;
     } catch (error) {
-      setMessage(
-        error instanceof Error ? error.message : "Unable to create player.",
-      );
+      const operationKey = error instanceof MatchUploaderApiError && error.operationKey
+        ? error.operationKey
+        : idempotencyKey;
+      const errorMessage = error instanceof Error ? error.message : "Unable to create player.";
+      const uncertain = !(error instanceof MatchUploaderApiError) || error.uncertain;
+      if (uncertain) {
+        retainPlayerBatchRecovery({
+          operationKey,
+          operationScope,
+          status: "uncertain",
+          message: errorMessage,
+          continueRoundRobin: false,
+        });
+        setMessage(
+          `${errorMessage} The exact create request is retained as ${operationKey}. Check that operation before retrying or creating another player.`,
+        );
+      } else {
+        clearDirectMatchIdempotencyKey(operationScope, idempotencyKey);
+        setMessage(errorMessage);
+      }
       return null;
     } finally {
       setCreatingPlayers(false);
@@ -1124,7 +1369,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
       if (preview.missing_players?.length) {
         setRrSchedule([]);
         setRrPendingPayload(payload);
-        setNewPlayerDrafts(preview.missing_players.map((name) => ({ name, startingJupr: "3.5" })));
+        setNewPlayerDrafts(preview.missing_players.map((name) => ({ name, startingJupr: "" })));
         setMessage(`Found ${preview.missing_players.length} new player(s). Create profiles to continue.`);
         return;
       }
@@ -1151,20 +1396,51 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
     setMessage(null);
     setResult(null);
     if (!requireReady() || !rrPendingPayload) return;
-    const playersToCreate = newPlayerDrafts.map((draft) => ({ name: draft.name.trim(), starting_jupr: Number(draft.startingJupr) }));
+    if (playerBatchRecovery) {
+      setMessage(`Check exact operation ${playerBatchRecovery.operationKey} before creating another player batch.`);
+      return;
+    }
+    const playersToCreate = normalizeNewPlayerBatch(newPlayerDrafts.map((draft) => ({ name: draft.name, starting_jupr: Number(draft.startingJupr) })));
     const invalid = playersToCreate.find((player) => !player.name || !Number.isFinite(player.starting_jupr) || player.starting_jupr < 1 || player.starting_jupr > 7);
     if (invalid) {
       setMessage("Each new player needs a name and a Starting JUPR between 1.0 and 7.0.");
       return;
     }
     setCreatingPlayers(true);
+    const request = {
+      source: "next_match_uploader_new_players",
+      players: playersToCreate,
+      reviewed_fingerprint: await reviewedPlayerBatchFingerprint(playersToCreate),
+      confirmation_text: "CREATE PLAYERS"
+    };
+    const operationScope = `match-uploader:${clubId}:create-players:round-robin`;
+    const idempotencyKey = directMatchIdempotencyKey(operationScope, request);
     try {
-      const payload = await postJson<AdminMatchUploaderCreatePlayersResult>(`/admin/clubs/${encodeURIComponent(clubId)}/match-uploader/players`, { source: "next_match_uploader_new_players", players: playersToCreate });
+      const payload = await postJson<AdminMatchUploaderCreatePlayersResult>(`/admin/clubs/${encodeURIComponent(clubId)}/match-uploader/players`, { ...request, idempotency_key: idempotencyKey });
+      clearDirectMatchIdempotencyKey(operationScope, idempotencyKey);
+      clearPlayerBatchRecovery();
       if (payload.players?.length) setKnownPlayers((current) => mergePlayers(current, payload.players || []));
       setMessage(`Created or confirmed ${payload.accepted_count ?? playersToCreate.length} player profile(s). Regenerating schedule…`);
       await previewRoundRobin(rrPendingPayload);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to create players.");
+      const operationKey = error instanceof MatchUploaderApiError && error.operationKey
+        ? error.operationKey
+        : idempotencyKey;
+      const errorMessage = error instanceof Error ? error.message : "Unable to create players.";
+      const uncertain = !(error instanceof MatchUploaderApiError) || error.uncertain;
+      if (uncertain) {
+        retainPlayerBatchRecovery({
+          operationKey,
+          operationScope,
+          status: "uncertain",
+          message: errorMessage,
+          continueRoundRobin: true,
+        });
+        setMessage(`${errorMessage} The exact reviewed batch is retained as ${operationKey}. Check that operation before retrying or creating another batch.`);
+      } else {
+        clearDirectMatchIdempotencyKey(operationScope, idempotencyKey);
+        setMessage(errorMessage);
+      }
     } finally {
       setCreatingPlayers(false);
     }
@@ -1317,6 +1593,26 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
         {context === "league" && !hasActiveOfficialLeague ? <p role="alert" style={{ color: "#92400e", marginBottom: 0 }}><strong>No active {activeLeagueFormatLabel} leagues.</strong> Create one in League Manager or use Pop-Up / Social.</p> : null}
       </article>
 
+      {playerBatchRecovery ? (
+        <article aria-live="polite" style={{ ...cardStyle, borderColor: "#f59e0b", background: "#fffbeb" }}>
+          <h2 style={{ marginTop: 0 }}>Player creation needs exact-operation recovery</h2>
+          <p style={{ color: "#92400e" }}>
+            The create response was not conclusive. Do not submit another player batch or use a new key until this exact operation is checked.
+          </p>
+          <p><strong>Operation key:</strong> <code style={{ overflowWrap: "anywhere" }}>{playerBatchRecovery.operationKey}</code></p>
+          <p><strong>Last known status:</strong> {playerBatchRecovery.status.replace(/_/g, " ")}</p>
+          <p>{playerBatchRecovery.message}</p>
+          <button
+            type="button"
+            onClick={inspectPlayerBatchOperation}
+            disabled={checkingPlayerBatchRecovery || !accessToken}
+            style={ghostButtonStyle}
+          >
+            {checkingPlayerBatchRecovery ? "Checking and reconciling…" : "Check exact operation and reconcile"}
+          </button>
+        </article>
+      ) : null}
+
       {entryMethod === "singles" && singlesEnabled ? (
         <article style={{ ...cardStyle, background: "#f8fafc" }}>
           <h2 style={{ marginTop: 0 }}>Singles match entry</h2>
@@ -1387,7 +1683,10 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
                       tone="danger"
                       disabled={saving}
                       busy={saving}
-                      onConfirm={() => removeRow(row.rowId)}
+                      onConfirm={async () => {
+                        removeRow(row.rowId);
+                        return actionSuccess("Match removed", "The match row was removed from this unsaved batch.");
+                      }}
                     />
                   ) : (
                     <button type="button" onClick={() => removeRow(row.rowId)} disabled={rows.length <= 1}>Remove match</button>
@@ -1469,7 +1768,7 @@ export default function MatchUploaderForm({ apiBase, clubId, players, status }: 
                   </div>
                 ))}
               </div>
-              <p><button type="button" onClick={createPlayersAndContinue} disabled={creatingPlayers || generating || !accessToken} style={buttonStyle}>{creatingPlayers ? "Creating…" : "Create Players & Continue"}</button></p>
+              <p><button type="button" onClick={createPlayersAndContinue} disabled={creatingPlayers || generating || !accessToken || Boolean(playerBatchRecovery)} style={buttonStyle}>{creatingPlayers ? "Creating…" : "Create Players & Continue"}</button></p>
             </article>
           ) : null}
 

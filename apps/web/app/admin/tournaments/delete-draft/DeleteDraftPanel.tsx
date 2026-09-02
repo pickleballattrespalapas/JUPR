@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess } from "@/components/interaction";
 import type { AdminTournament, AdminTournamentListResponse, AdminTournamentStatusResponse, AdminTournamentWriteResponse } from "@/lib/adminTournamentApi";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
@@ -11,6 +12,8 @@ type Props = {
   apiBase: string | null;
   clubId: string;
   status: AdminTournamentStatusResponse;
+  initialTournamentId: string;
+  initialTournamentName: string;
 };
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
@@ -26,10 +29,10 @@ function usageText(value?: Record<string, number>): string {
   return entries.length ? entries.map(([key, count]) => `${key}: ${count}`).join(" · ") : "—";
 }
 
-export default function DeleteDraftPanel({ apiBase, clubId, status }: Props) {
+export default function DeleteDraftPanel({ apiBase, clubId, status, initialTournamentId, initialTournamentName }: Props) {
   const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
   const [tournaments, setTournaments] = useState<AdminTournament[]>([]);
-  const [selectedTournamentId, setSelectedTournamentId] = useState("");
+  const [selectedTournamentId, setSelectedTournamentId] = useState(initialTournamentId);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const listRequest = useLatestRequestGuard(accessToken, clearProtectedDraftState);
@@ -49,7 +52,7 @@ export default function DeleteDraftPanel({ apiBase, clubId, status }: Props) {
   }
 
   function clearProtectedDraftState() {
-    setBusy(false); setMessage(null); setTournaments([]); setSelectedTournamentId("");
+    setBusy(false); setMessage(null); setTournaments([]); setSelectedTournamentId(initialTournamentId);
   }
 
   async function loadTournaments() {
@@ -61,7 +64,7 @@ export default function DeleteDraftPanel({ apiBase, clubId, status }: Props) {
       if (!listRequest.isCurrent(generation)) return;
       const drafts = (payload.tournaments || []).filter((row) => row.status === "DRAFT");
       setTournaments(drafts);
-      setSelectedTournamentId((current) => drafts.some((row) => row.id === current) ? current : "");
+      setSelectedTournamentId((current) => drafts.some((row) => row.id === current) ? current : initialTournamentId);
       setMessage(drafts.length ? `Loaded ${drafts.length} draft tournament(s).` : "No empty draft tournaments are available.");
     } catch (error) {
       if (listRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load tournaments.");
@@ -73,7 +76,7 @@ export default function DeleteDraftPanel({ apiBase, clubId, status }: Props) {
   async function deleteDraft(confirmationText: string) {
     if (!selectedTournamentId) {
       setMessage("Select a draft tournament first.");
-      return;
+      throw new Error("Select a draft tournament first.");
     }
     const generation = actionRequest.begin();
     const requestedTournamentId = selectedTournamentId;
@@ -84,12 +87,15 @@ export default function DeleteDraftPanel({ apiBase, clubId, status }: Props) {
         `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(selectedTournamentId)}/delete-draft`,
         { method: "POST", body: JSON.stringify({ expected_updated_at: selectedTournament?.updated_at, confirmation_text: confirmationText, source: "next_tournament_admin_delete_draft_page" }) }
       );
-      if (!actionRequest.isCurrent(generation)) return;
+      const completion = actionSuccess("Draft deleted", `Draft ${payload.tournament_id} was permanently deleted.`);
+      if (!actionRequest.isCurrent(generation)) return completion;
       setTournaments((current) => current.filter((row) => row.id !== requestedTournamentId));
       setSelectedTournamentId("");
       setMessage(`Deleted draft ${payload.tournament_id}. Usage summary: ${usageText(payload.usage_summary)}.`);
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to delete draft tournament.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
@@ -124,15 +130,10 @@ export default function DeleteDraftPanel({ apiBase, clubId, status }: Props) {
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>Confirm deletion</h2>
           <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) auto", gap: "0.75rem", alignItems: "end" }}>
-            <label><strong>Draft tournament</strong><br />
-              <select value={selectedTournamentId} onChange={(event) => setSelectedTournamentId(event.target.value)} style={inputStyle}>
-                <option value="">Choose a draft…</option>
-                {tournaments.map((tournament) => <option key={tournament.id} value={tournament.id}>{tournament.name}</option>)}
-              </select>
-            </label>
+            <p><strong>{selectedTournament?.name || initialTournamentName}</strong></p>
             <ConfirmAction triggerLabel="Delete draft" title="Delete this draft tournament?" description={`This permanently deletes ${selectedTournament?.name || "the selected draft"}. It can proceed only if no registrations, selections, draws, teams, games, or podium rows exist.`} confirmLabel="Yes, delete draft" confirmationText="DELETE DRAFT" tone="danger" disabled={!selectedTournamentId || !selectedTournament?.updated_at} busy={busy} onConfirm={deleteDraft} />
           </div>
-          {selectedTournament ? <p style={{ color: "#64748b" }}>Selected: <strong>{selectedTournament.name}</strong> ({selectedTournament.id})</p> : null}
+          {selectedTournament ? <p style={{ color: "#64748b" }}>Selected: <strong>{selectedTournament.name}</strong></p> : null}
         </article>
       ) : <article style={cardStyle}><p style={{ color: "#64748b" }}>{busy ? "Loading draft tournaments…" : "No empty draft tournaments are available."}</p></article>}
 
