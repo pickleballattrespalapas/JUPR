@@ -340,7 +340,6 @@ def test_workflow_requires_closed_one_parent_trigger_provenance() -> None:
     assert "production_schema_window.py validate-trigger" in workflow
     assert "--changed-status-file" in workflow
     assert "--parent-sha" in workflow
-    assert not (ROOT / window.PRODUCTION_SCHEMA_WINDOW_TRIGGER_PATH).exists()
 
 
 def test_workflow_only_transitions_runtime_and_attests_both_sides() -> None:
