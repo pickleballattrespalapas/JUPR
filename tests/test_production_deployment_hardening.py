@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -30,6 +31,7 @@ MIGRATION_CONTRACT = verifier.load_migration_contract(
 MIGRATION_CONTRACT_FINGERPRINT = verifier.migration_contract_fingerprint(
     profile=MIGRATION_CONTRACT["profile"],
     required_ledger_names=MIGRATION_CONTRACT["required_ledger_names"],
+    deployment_order=MIGRATION_CONTRACT["deployment_order"],
     repository_migration_content_sha256=MIGRATION_CONTRACT[
         "repository_migration_content_sha256"
     ],
@@ -292,8 +294,8 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         ROOT / "supabase/migrations",
     )
 
-    assert len(versions) == 110
-    assert versions[-29:] == (
+    assert len(versions) == 111
+    assert versions[-30:] == (
         "20261030010000",
         "20261101000000",
         "20261102000000",
@@ -323,10 +325,15 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         "20261108027000",
         "20261109000000",
         "20261109001000",
+        "20261109002000",
     )
-    assert len(names) == 110
+    assert len(names) == 111
     assert all("XX" not in version for version in versions)
-    assert len(contract["required_ledger_names"]) == 97
+    assert len(contract["required_ledger_names"]) == 98
+    assert len(contract["deployment_order"]) == 98
+    assert set(contract["deployment_order"]) == set(
+        contract["required_ledger_names"]
+    )
     assert "tournament_complete_registration_editor" in contract[
         "required_ledger_names"
     ]
@@ -372,6 +379,130 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
     )
     assert contract["schema_contract_only_repository_migrations"] == (
         "tournament_registrations_player_id_postgrest_reload",
+    )
+
+
+def test_reviewed_migration_order_binds_dependency_inversions() -> None:
+    order = MIGRATION_CONTRACT["deployment_order"]
+    position = {name: index for index, name in enumerate(order)}
+
+    dependencies = (
+        (
+            "tournament_setup_courts_flexible_bundles",
+            "tournament_venue_inventory",
+        ),
+        (
+            "team_league_composition_settings",
+            "team_league_normalized_rosters_substitute_pool",
+        ),
+        (
+            "tournament_operator_special_form_repair",
+            "tournament_terminal_completion_and_schedule_recovery",
+        ),
+        (
+            "standard_tournament_substitute_policy",
+            "repair_tournament_game_draw_scoped_uniqueness",
+        ),
+        (
+            "tournament_podium_row_versions",
+            "tournament_podium_badge_catalog",
+        ),
+        (
+            "tournament_podium_badge_catalog",
+            "tournament_team_retirement_results",
+        ),
+        (
+            "tournament_team_retirement_results",
+            "tournament_playoff_round_scoring",
+        ),
+        (
+            "four_player_team_match_schema",
+            "four_player_team_match_management_rpcs",
+        ),
+        (
+            "four_player_team_match_management_rpcs",
+            "four_player_team_match_security_hardening",
+        ),
+        (
+            "server_only_view_security_hardening",
+            "team_league_trigger_function_security_hardening",
+        ),
+    )
+    assert all(
+        position[dependency] < position[dependent]
+        for dependency, dependent in dependencies
+    )
+
+
+def test_pending_migration_plan_preserves_reviewed_dependency_order() -> None:
+    order = MIGRATION_CONTRACT["deployment_order"]
+    expected_pending = (
+        "tournament_setup_courts_flexible_bundles",
+        "tournament_venue_inventory",
+        "team_league_composition_settings",
+        "team_league_normalized_rosters_substitute_pool",
+        "four_player_team_match_schema",
+        "four_player_team_match_security_hardening",
+        "team_league_trigger_function_security_hardening",
+    )
+    pending = set(expected_pending)
+    remote = [
+        ("20260101000000", name)
+        for name in order
+        if name not in pending
+    ]
+
+    assert (
+        verifier.pending_required_migration_names(order, remote)
+        == expected_pending
+    )
+
+
+@pytest.mark.parametrize("malformation", ["duplicate", "set-mismatch"])
+def test_reviewed_migration_contract_rejects_invalid_deployment_order(
+    tmp_path: Path,
+    malformation: str,
+) -> None:
+    payload = json.loads(
+        (ROOT / "config/production_migration_contract.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    if malformation == "duplicate":
+        payload["deployment_order"][1] = payload["deployment_order"][0]
+        match = "deployment order must be unique"
+    else:
+        payload["deployment_order"][-1] = "unreviewed_migration"
+        match = "exactly the required ledger names"
+    contract_path = tmp_path / "production_migration_contract.json"
+    contract_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=match):
+        verifier.load_migration_contract(
+            contract_path,
+            ROOT / "supabase/migrations",
+        )
+
+
+def test_migration_contract_fingerprint_binds_deployment_order() -> None:
+    order = MIGRATION_CONTRACT["deployment_order"]
+    common = {
+        "profile": MIGRATION_CONTRACT["profile"],
+        "required_ledger_names": MIGRATION_CONTRACT["required_ledger_names"],
+        "repository_migration_content_sha256": MIGRATION_CONTRACT[
+            "repository_migration_content_sha256"
+        ],
+        "allowed_duplicate_ledger_names": MIGRATION_CONTRACT[
+            "allowed_duplicate_ledger_names"
+        ],
+    }
+
+    assert verifier.migration_contract_fingerprint(
+        **common,
+        deployment_order=order,
+    ) != verifier.migration_contract_fingerprint(
+        **common,
+        deployment_order=(*order[:-2], order[-1], order[-2]),
     )
 
 
@@ -500,7 +631,7 @@ def test_preflight_accepts_only_matching_protected_project_and_config() -> None:
     )
 
     assert errors == []
-    assert migrations[-1] == "20261109001000"
+    assert migrations[-1] == "20261109002000"
 
     wrong_project_errors, _ = verifier.preflight_errors(
         _production_env(

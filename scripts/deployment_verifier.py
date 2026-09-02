@@ -485,6 +485,32 @@ def load_migration_contract(
             "Production migration contract ledger names must be unique and sorted"
         )
 
+    deployment_order = payload.get("deployment_order")
+    if not isinstance(deployment_order, list) or not deployment_order:
+        raise ValueError(
+            "Production migration contract has no canonical deployment order"
+        )
+    clean_deployment_order = [
+        str(name).strip() for name in deployment_order
+    ]
+    if any(
+        not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_]*", name)
+        for name in clean_deployment_order
+    ):
+        raise ValueError(
+            "Production migration contract deployment order has an invalid "
+            "ledger name"
+        )
+    if len(clean_deployment_order) != len(set(clean_deployment_order)):
+        raise ValueError(
+            "Production migration contract deployment order must be unique"
+        )
+    if set(clean_deployment_order) != set(clean_required):
+        raise ValueError(
+            "Production migration contract deployment order must contain "
+            "exactly the required ledger names"
+        )
+
     contract_only = payload.get("schema_contract_only_repository_migrations")
     if not isinstance(contract_only, list) or set(contract_only) != set(
         SCHEMA_CONTRACT_ONLY_MIGRATION_NAMES
@@ -530,6 +556,7 @@ def load_migration_contract(
     return {
         "profile": profile,
         "required_ledger_names": tuple(clean_required),
+        "deployment_order": tuple(clean_deployment_order),
         "allow_additional_ledger_names": payload[
             "allow_additional_ledger_names"
         ],
@@ -568,6 +595,23 @@ def parse_remote_migration_ledger(
             continue
         entries.append((pieces[0].strip(), pieces[1].strip()))
     return entries, invalid
+
+
+def pending_required_migration_names(
+    deployment_order: Iterable[str],
+    remote_entries: Iterable[tuple[str, str]],
+) -> tuple[str, ...]:
+    """Return missing required migrations in the reviewed dependency order."""
+    remote_names = {
+        str(name).strip()
+        for _, name in remote_entries
+        if str(name).strip()
+    }
+    return tuple(
+        name
+        for raw_name in deployment_order
+        if (name := str(raw_name).strip()) and name not in remote_names
+    )
 
 
 def migration_ledger_errors(
@@ -649,6 +693,7 @@ def migration_contract_fingerprint(
     *,
     profile: str,
     required_ledger_names: Iterable[str],
+    deployment_order: Iterable[str],
     repository_migration_content_sha256: str,
     allowed_duplicate_ledger_names: Iterable[str] = (),
 ) -> str:
@@ -658,6 +703,10 @@ def migration_contract_fingerprint(
         *(
             f"ledger-name:{name}"
             for name in sorted(set(required_ledger_names))
+        ),
+        *(
+            f"deployment-order:{position}:{name}"
+            for position, name in enumerate(deployment_order, start=1)
         ),
         *(
             f"allowed-duplicate-ledger-name:{name}"
@@ -1582,6 +1631,7 @@ def _write_github_env(
     contract_fingerprint = migration_contract_fingerprint(
         profile=str(migration_contract["profile"]),
         required_ledger_names=migration_contract["required_ledger_names"],
+        deployment_order=migration_contract["deployment_order"],
         repository_migration_content_sha256=str(
             migration_contract["repository_migration_content_sha256"]
         ),
@@ -1677,6 +1727,7 @@ def _migrations_command(args: argparse.Namespace) -> int:
     contract_fingerprint = migration_contract_fingerprint(
         profile=str(contract["profile"]),
         required_ledger_names=contract["required_ledger_names"],
+        deployment_order=contract["deployment_order"],
         repository_migration_content_sha256=str(
             contract["repository_migration_content_sha256"]
         ),
@@ -1694,6 +1745,11 @@ def _migrations_command(args: argparse.Namespace) -> int:
         {
             "migration_contract": contract_fingerprint,
             "migration_profile": contract["profile"],
+            "pending_required_ledger_names": list(
+                pending_required_migration_names(
+                    contract["deployment_order"], remote_entries
+                )
+            ),
             "required_ledger_name_count": len(
                 contract["required_ledger_names"]
             ),
