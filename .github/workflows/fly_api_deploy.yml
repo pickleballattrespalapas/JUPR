@@ -46,7 +46,7 @@ jobs:
     environment: production
     env:
       EXPECTED_MIGRATION_HEAD: ${{ vars.PRODUCTION_MIGRATION_LEDGER_HEAD || '20261022000000' }}
-      EXPECTED_SUPABASE_PROJECT_REF: ${{ vars.PRODUCTION_SUPABASE_PROJECT_REF || 'dnoockbwfenunhcibwfn' }}
+      EXPECTED_SUPABASE_PROJECT_REF: dnoockbwfenunhcibwfn
       FLY_APP_NAME: juprleagues-api
       JUPR_ENV: production
       PRODUCTION_API_ORIGIN: https://api.juprleagues.com
@@ -162,8 +162,8 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           FLY_SSH_TOKEN: ${{ secrets.FLY_SSH_TOKEN || secrets.FLY_API_TOKEN }}
+          SUPABASE_PROD_DATABASE_READ_TOKEN: ${{ secrets.SUPABASE_PROD_DATABASE_READ_TOKEN }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-          SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_PROD_DATABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
         run: |
@@ -252,29 +252,49 @@ jobs:
       - name: Verify production migration head before deploy
         shell: bash
         env:
-          SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_PROD_DATABASE_URL }}
+          SUPABASE_PROD_DATABASE_READ_TOKEN: ${{ secrets.SUPABASE_PROD_DATABASE_READ_TOKEN }}
         run: |
           set -euo pipefail
-          command -v psql >/dev/null
-          psql "$SUPABASE_DATABASE_URL" \
-            --set=ON_ERROR_STOP=1 \
-            --no-psqlrc \
-            --tuples-only \
-            --no-align \
-            --command="select version || E'\t' || coalesce(name, '') from supabase_migrations.schema_migrations order by version" \
-            > "$RUNNER_TEMP/production-migration-ledger-before.tsv"
-          psql "$SUPABASE_DATABASE_URL" \
-            --set=ON_ERROR_STOP=1 \
-            --no-psqlrc \
-            --tuples-only \
-            --no-align \
-            --command="select json_build_object('tournament_registrations_player_id_column', exists(select 1 from information_schema.columns where table_schema = 'public' and table_name = 'tournament_registrations' and column_name = 'player_id'), 'idx_tournament_registrations_player_id', to_regclass('public.idx_tournament_registrations_player_id') is not null, 'uq_tournament_registrations_tournament_player', to_regclass('public.uq_tournament_registrations_tournament_player') is not null, 'tournament_player_duplicate_groups', (select count(*) from (select tournament_id, player_id from public.tournament_registrations where player_id is not null group by tournament_id, player_id having count(*) > 1) duplicates))::text" \
-            > "$RUNNER_TEMP/production-schema-contract-before.json"
+          python -c \
+            'import json; from scripts.deployment_verifier import PRODUCTION_MIGRATION_ATTESTATION_QUERY; print(json.dumps({"query": PRODUCTION_MIGRATION_ATTESTATION_QUERY, "parameters":[]}, separators=(",", ":")))' \
+            > "$RUNNER_TEMP/production-migration-attestation-request.json"
+          if ! attestation_status="$(
+            curl \
+              --fail \
+              --silent \
+              --show-error \
+              --proto '=https' \
+              --connect-timeout 10 \
+              --max-time 60 \
+              --max-filesize 1048576 \
+              --retry 2 \
+              --retry-delay 2 \
+              --retry-max-time 20 \
+              --request POST \
+              --header "Authorization: Bearer $SUPABASE_PROD_DATABASE_READ_TOKEN" \
+              --header "Accept: application/json" \
+              --header "Content-Type: application/json" \
+              --data-binary "@$RUNNER_TEMP/production-migration-attestation-request.json" \
+              "https://api.supabase.com/v1/projects/$EXPECTED_SUPABASE_PROJECT_REF/database/query/read-only" \
+              --output "$RUNNER_TEMP/production-migration-attestation-before.json" \
+              --write-out "%{http_code}"
+          )"; then
+            echo "::error title=Production migration attestation failed::Supabase read-only query failed without exposing its response. No production state was mutated."
+            exit 2
+          fi
+          if [ "$attestation_status" != "201" ]; then
+            echo "::error title=Production migration attestation rejected::Supabase read-only query returned unexpected HTTP status $attestation_status. No production state was mutated."
+            exit 2
+          fi
+          test -s "$RUNNER_TEMP/production-migration-attestation-before.json"
+          if [ "$(wc -c < "$RUNNER_TEMP/production-migration-attestation-before.json")" -gt 1048576 ]; then
+            echo "::error title=Production migration attestation rejected::Supabase read-only response exceeded the one MiB safety limit. No production state was mutated."
+            exit 2
+          fi
           python scripts/deployment_verifier.py migrations \
             --migrations-dir supabase/migrations \
             --migration-contract config/production_migration_contract.json \
-            --remote-ledger "$RUNNER_TEMP/production-migration-ledger-before.tsv" \
-            --schema-contract-json "$RUNNER_TEMP/production-schema-contract-before.json"
+            --management-query-response "$RUNNER_TEMP/production-migration-attestation-before.json"
 
       - name: Reject pending Fly secret deployments before mutation
         shell: bash
@@ -502,28 +522,47 @@ jobs:
         id: migration_after
         shell: bash
         env:
-          SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_PROD_DATABASE_URL }}
+          SUPABASE_PROD_DATABASE_READ_TOKEN: ${{ secrets.SUPABASE_PROD_DATABASE_READ_TOKEN }}
         run: |
           set -euo pipefail
-          psql "$SUPABASE_DATABASE_URL" \
-            --set=ON_ERROR_STOP=1 \
-            --no-psqlrc \
-            --tuples-only \
-            --no-align \
-            --command="select version || E'\t' || coalesce(name, '') from supabase_migrations.schema_migrations order by version" \
-            > "$RUNNER_TEMP/production-migration-ledger-after.tsv"
-          psql "$SUPABASE_DATABASE_URL" \
-            --set=ON_ERROR_STOP=1 \
-            --no-psqlrc \
-            --tuples-only \
-            --no-align \
-            --command="select json_build_object('tournament_registrations_player_id_column', exists(select 1 from information_schema.columns where table_schema = 'public' and table_name = 'tournament_registrations' and column_name = 'player_id'), 'idx_tournament_registrations_player_id', to_regclass('public.idx_tournament_registrations_player_id') is not null, 'uq_tournament_registrations_tournament_player', to_regclass('public.uq_tournament_registrations_tournament_player') is not null, 'tournament_player_duplicate_groups', (select count(*) from (select tournament_id, player_id from public.tournament_registrations where player_id is not null group by tournament_id, player_id having count(*) > 1) duplicates))::text" \
-            > "$RUNNER_TEMP/production-schema-contract-after.json"
+          test -s "$RUNNER_TEMP/production-migration-attestation-request.json"
+          if ! attestation_status="$(
+            curl \
+              --fail \
+              --silent \
+              --show-error \
+              --proto '=https' \
+              --connect-timeout 10 \
+              --max-time 60 \
+              --max-filesize 1048576 \
+              --retry 2 \
+              --retry-delay 2 \
+              --retry-max-time 20 \
+              --request POST \
+              --header "Authorization: Bearer $SUPABASE_PROD_DATABASE_READ_TOKEN" \
+              --header "Accept: application/json" \
+              --header "Content-Type: application/json" \
+              --data-binary "@$RUNNER_TEMP/production-migration-attestation-request.json" \
+              "https://api.supabase.com/v1/projects/$EXPECTED_SUPABASE_PROJECT_REF/database/query/read-only" \
+              --output "$RUNNER_TEMP/production-migration-attestation-after.json" \
+              --write-out "%{http_code}"
+          )"; then
+            echo "::error title=Production migration attestation failed::Supabase read-only query failed without exposing its response."
+            exit 2
+          fi
+          if [ "$attestation_status" != "201" ]; then
+            echo "::error title=Production migration attestation rejected::Supabase read-only query returned unexpected HTTP status $attestation_status."
+            exit 2
+          fi
+          test -s "$RUNNER_TEMP/production-migration-attestation-after.json"
+          if [ "$(wc -c < "$RUNNER_TEMP/production-migration-attestation-after.json")" -gt 1048576 ]; then
+            echo "::error title=Production migration attestation rejected::Supabase read-only response exceeded the one MiB safety limit."
+            exit 2
+          fi
           python scripts/deployment_verifier.py migrations \
             --migrations-dir supabase/migrations \
             --migration-contract config/production_migration_contract.json \
-            --remote-ledger "$RUNNER_TEMP/production-migration-ledger-after.tsv" \
-            --schema-contract-json "$RUNNER_TEMP/production-schema-contract-after.json"
+            --management-query-response "$RUNNER_TEMP/production-migration-attestation-after.json"
 
       - name: Verify exact runtime, image, environment, and write policy
         id: runtime_verify

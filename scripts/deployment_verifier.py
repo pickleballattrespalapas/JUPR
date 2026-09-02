@@ -28,6 +28,7 @@ PRODUCTION_WEB_ORIGIN = "https://pickleballclubsandwich.com"
 PRODUCTION_API_ORIGIN = "https://api.juprleagues.com"
 PRODUCTION_FLY_ORIGIN = f"https://{PRODUCTION_FLY_APP}.fly.dev"
 PRODUCTION_PUBLIC_CLUB_SLUG = "tres-palapas"
+PRODUCTION_SUPABASE_PROJECT_REF = "dnoockbwfenunhcibwfn"
 PRODUCTION_RELEASE_TRIGGER_PATH = ".github/production-api-release.trigger"
 PRODUCTION_RELEASE_CONFIRMATION = "DEPLOY PRODUCTION API"
 LEGACY_BASELINE_CONFIRMATION = "BOOTSTRAP REVIEWED LEGACY ROLLBACK"
@@ -76,6 +77,54 @@ MIGRATION_SCHEMA_CONTRACT_KEYS = (
     "uq_tournament_registrations_tournament_player",
     "tournament_player_duplicate_groups",
 )
+PRODUCTION_MIGRATION_ATTESTATION_QUERY = """
+select pg_catalog.json_build_object(
+  'ledger',
+  coalesce(
+    (
+      select pg_catalog.json_agg(
+        pg_catalog.json_build_object(
+          'version', sm.version::text,
+          'name', coalesce(sm.name, '')
+        )
+        order by sm.version
+      )
+      from supabase_migrations.schema_migrations as sm
+    ),
+    '[]'::json
+  ),
+  'schema_contract',
+  pg_catalog.json_build_object(
+    'tournament_registrations_player_id_column',
+    exists(
+      select 1
+      from information_schema.columns as c
+      where c.table_schema = 'public'
+        and c.table_name = 'tournament_registrations'
+        and c.column_name = 'player_id'
+    ),
+    'idx_tournament_registrations_player_id',
+    pg_catalog.to_regclass(
+      'public.idx_tournament_registrations_player_id'
+    ) is not null,
+    'uq_tournament_registrations_tournament_player',
+    pg_catalog.to_regclass(
+      'public.uq_tournament_registrations_tournament_player'
+    ) is not null,
+    'tournament_player_duplicate_groups',
+    (
+      select pg_catalog.count(*)
+      from (
+        select tr.tournament_id, tr.player_id
+        from public.tournament_registrations as tr
+        where tr.player_id is not null
+        group by tr.tournament_id, tr.player_id
+        having pg_catalog.count(*) > 1
+      ) as duplicates
+    )
+  )
+) as release_attestation
+""".strip()
 
 # Read surfaces are also projected so a production deploy cannot silently enable
 # an admin replacement before its guarded staging acceptance is complete.
@@ -179,7 +228,7 @@ REQUIRED_GITHUB_ENV_NAMES = (
     "FLY_SSH_TOKEN",
     "GITHUB_SHA",
     "SUPABASE_ANON_KEY",
-    "SUPABASE_DATABASE_URL",
+    "SUPABASE_PROD_DATABASE_READ_TOKEN",
     "SUPABASE_SERVICE_ROLE_KEY",
     "SUPABASE_URL",
 )
@@ -597,6 +646,81 @@ def parse_remote_migration_ledger(
     return entries, invalid
 
 
+def parse_supabase_migration_attestation_response(
+    payload: Any,
+) -> tuple[list[tuple[str, str]], dict[str, Any]]:
+    """Parse the exact row returned by Supabase's read-only query endpoint."""
+
+    if not isinstance(payload, list) or len(payload) != 1:
+        raise ValueError(
+            "Supabase read-only migration attestation must contain exactly one row."
+        )
+    row = payload[0]
+    if not isinstance(row, dict) or set(row) != {"release_attestation"}:
+        raise ValueError(
+            "Supabase read-only migration attestation row has an unexpected shape."
+        )
+    attestation = row.get("release_attestation")
+    if not isinstance(attestation, dict) or set(attestation) != {
+        "ledger",
+        "schema_contract",
+    }:
+        raise ValueError(
+            "Supabase read-only migration attestation payload has an unexpected shape."
+        )
+
+    raw_ledger = attestation.get("ledger")
+    if not isinstance(raw_ledger, list) or not raw_ledger:
+        raise ValueError(
+            "Supabase read-only migration attestation ledger is empty or invalid."
+        )
+    ledger: list[tuple[str, str]] = []
+    for entry in raw_ledger:
+        if not isinstance(entry, dict) or set(entry) != {"name", "version"}:
+            raise ValueError(
+                "Supabase read-only migration attestation has an invalid ledger row."
+            )
+        version = entry.get("version")
+        name = entry.get("name")
+        if (
+            not isinstance(version, str)
+            or not _MIGRATION_VERSION_RE.fullmatch(version)
+            or not isinstance(name, str)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_]*", name)
+        ):
+            raise ValueError(
+                "Supabase read-only migration attestation has an invalid ledger row."
+            )
+        ledger.append((version, name))
+
+    schema_contract = attestation.get("schema_contract")
+    if not isinstance(schema_contract, dict) or set(schema_contract) != set(
+        MIGRATION_SCHEMA_CONTRACT_KEYS
+    ):
+        raise ValueError(
+            "Supabase read-only migration schema contract has an unexpected shape."
+        )
+    if any(
+        not isinstance(schema_contract.get(key), bool)
+        for key in MIGRATION_SCHEMA_CONTRACT_KEYS[:3]
+    ):
+        raise ValueError(
+            "Supabase read-only migration schema contract has invalid boolean fields."
+        )
+    duplicate_groups = schema_contract.get(
+        "tournament_player_duplicate_groups"
+    )
+    if (
+        not isinstance(duplicate_groups, int)
+        or isinstance(duplicate_groups, bool)
+        or duplicate_groups < 0
+    ):
+        raise ValueError(
+            "Supabase read-only migration schema contract has an invalid duplicate count."
+        )
+    return ledger, dict(schema_contract)
+
+
 def pending_required_migration_names(
     deployment_order: Iterable[str],
     remote_entries: Iterable[tuple[str, str]],
@@ -861,7 +985,12 @@ def preflight_errors(
         errors.append(
             "EXPECTED_SUPABASE_PROJECT_REF must be the exact 20-character production project ref."
         )
-    elif expected_ref in DISALLOWED_PRODUCTION_SUPABASE_PROJECT_REFS:
+    elif expected_ref != PRODUCTION_SUPABASE_PROJECT_REF:
+        errors.append(
+            "EXPECTED_SUPABASE_PROJECT_REF must be the hard-bound protected "
+            "production project ref."
+        )
+    if expected_ref in DISALLOWED_PRODUCTION_SUPABASE_PROJECT_REFS:
         errors.append("The dedicated staging Supabase project is forbidden for production.")
 
     actual_ref = supabase_project_ref(env.get("SUPABASE_URL"))
@@ -870,13 +999,19 @@ def preflight_errors(
     elif expected_ref and actual_ref != expected_ref:
         errors.append("SUPABASE_URL does not target the protected production project ref.")
 
-    database_ref = database_url_project_ref(env.get("SUPABASE_DATABASE_URL"))
-    if database_ref is None:
+    raw_management_token = str(
+        env.get("SUPABASE_PROD_DATABASE_READ_TOKEN") or ""
+    )
+    management_token = raw_management_token.strip()
+    if management_token and (
+        not management_token.startswith("sbp_fc") or len(management_token) < 24
+        or raw_management_token != management_token
+        or re.search(r"\s", management_token)
+    ):
         errors.append(
-            "SUPABASE_DATABASE_URL must be a canonical production Supabase direct or pooler URL."
+            "SUPABASE_PROD_DATABASE_READ_TOKEN must be a scoped Supabase "
+            "personal access token."
         )
-    elif expected_ref and database_ref != expected_ref:
-        errors.append("SUPABASE_DATABASE_URL does not target the protected production project ref.")
 
     errors.extend(production_fly_config_errors(config_path))
     try:
@@ -1706,8 +1841,26 @@ def _migrations_command(args: argparse.Namespace) -> int:
         args.migration_contract,
         args.migrations_dir,
     )
-    remote_lines = args.remote_ledger.read_text(encoding="utf-8").splitlines()
-    remote_entries, invalid_rows = parse_remote_migration_ledger(remote_lines)
+    if args.management_query_response is not None:
+        remote_entries, schema_contract = (
+            parse_supabase_migration_attestation_response(
+                _read_json(args.management_query_response)
+            )
+        )
+        invalid_rows: list[str] = []
+    else:
+        if args.remote_ledger is None or args.schema_contract_json is None:
+            raise ValueError(
+                "Migration verification requires either one Supabase read-only "
+                "query response or both legacy ledger/schema evidence files."
+            )
+        remote_lines = args.remote_ledger.read_text(
+            encoding="utf-8"
+        ).splitlines()
+        remote_entries, invalid_rows = parse_remote_migration_ledger(
+            remote_lines
+        )
+        schema_contract = _read_json(args.schema_contract_json)
     errors = migration_ledger_errors(
         contract["required_ledger_names"],
         remote_entries,
@@ -1716,7 +1869,7 @@ def _migrations_command(args: argparse.Namespace) -> int:
         allowed_duplicate_names=contract["allowed_duplicate_ledger_names"],
     )
     errors.extend(
-        migration_schema_contract_errors(_read_json(args.schema_contract_json))
+        migration_schema_contract_errors(schema_contract)
     )
     remote_versions = [version for version, _ in remote_entries]
     remote_head = (
@@ -1982,8 +2135,13 @@ def build_parser() -> argparse.ArgumentParser:
     preflight.set_defaults(handler=_preflight_command)
 
     migrations = subparsers.add_parser("migrations")
-    migrations.add_argument("--remote-ledger", type=Path, required=True)
-    migrations.add_argument("--schema-contract-json", type=Path, required=True)
+    migration_evidence = migrations.add_mutually_exclusive_group(required=True)
+    migration_evidence.add_argument(
+        "--management-query-response",
+        type=Path,
+    )
+    migration_evidence.add_argument("--remote-ledger", type=Path)
+    migrations.add_argument("--schema-contract-json", type=Path)
     migrations.add_argument(
         "--migrations-dir", type=Path, default=Path("supabase/migrations")
     )

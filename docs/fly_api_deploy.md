@@ -14,12 +14,14 @@ apply migrations, enable business-data writes, or send customer email.
 ## Protected GitHub configuration
 
 Configure a GitHub environment named `production` with required reviewers.
-Store the exact production Supabase ref as an environment variable:
+Store the reviewed migration head as an environment variable:
 
 ```text
-PRODUCTION_SUPABASE_PROJECT_REF=<20-character production project ref>
 PRODUCTION_MIGRATION_LEDGER_HEAD=<reviewed connector ledger head>
 ```
+
+The workflow hard-binds the production Supabase project ref to
+`dnoockbwfenunhcibwfn`; it is not an overridable environment variable.
 
 Configure these production secrets:
 
@@ -29,7 +31,7 @@ FLY_SSH_TOKEN=<short-lived app-scoped SSH token for juprleagues-api>
 SUPABASE_URL=https://<production-ref>.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=<production service-role key>
 SUPABASE_ANON_KEY=<production anon key>
-SUPABASE_PROD_DATABASE_URL=<production direct or transaction-pooler URL>
+SUPABASE_PROD_DATABASE_READ_TOKEN=<project-scoped sbp_fc token with Database Read>
 ```
 
 Use an app-scoped Fly deploy token for app changes and a separately scoped,
@@ -37,8 +39,18 @@ short-lived Fly SSH token for the no-write runtime attestation. The workflow
 has no reason to create or manage any other app. Rotate both tokens on the
 release schedule.
 
-`SUPABASE_PROD_DATABASE_URL` is used only for read-only migration-ledger
-verification in GitHub Actions. It is not staged as a Fly runtime secret.
+`SUPABASE_PROD_DATABASE_READ_TOKEN` is used only in the protected GitHub
+`production` environment with Supabase's read-only Management API query
+endpoint for migration-ledger verification. Scoped PATs are alpha and this
+endpoint is beta. Scope the token only to project `dnoockbwfenunhcibwfn` with
+**Database: Read**, use a short expiry (about seven days at most), and revoke it
+immediately after the release. Never substitute a classic full-account token.
+Although it cannot write, it can broadly read production data and must be
+treated as a sensitive secret. It is not staged as a Fly runtime secret. This
+avoids storing or rotating the production Postgres password for a read-only
+deployment gate. The gate accepts only the endpoint's documented HTTP 201
+response and a strictly validated one-row attestation; a beta response-shape
+change stops the release closed.
 `SUPABASE_SERVICE_ROLE_KEY` must never be added to Vercel.
 
 ## Dispatch contract
@@ -66,9 +78,10 @@ a production deployment.
 
 Before deployment, the workflow:
 
-1. validates every required protected setting without printing secret values;
-2. proves both Supabase URLs target the protected production project and
-   explicitly rejects the staging project;
+1. validates every required protected setting without printing secret values
+   and rejects a non-scoped Supabase token prefix;
+2. proves the Supabase URL and read-only Management API request target the
+   protected production project and explicitly rejects the staging project;
 3. validates `fly.toml` against the exact app, region, CORS allowlist, and
    read-only feature projection;
 4. requires the existing `juprleagues-api` Fly app instead of creating one;
