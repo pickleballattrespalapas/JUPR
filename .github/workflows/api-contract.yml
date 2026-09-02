@@ -44,6 +44,7 @@ jobs:
         run: |
           python -m pytest -q \
             tests/test_production_deployment_hardening.py \
+            tests/test_production_schema_window.py \
             tests/test_admin_action_token_guards_static.py \
             tests/test_authenticated_auto_load_contract.py \
             tests/test_ci_safety_contracts.py \
