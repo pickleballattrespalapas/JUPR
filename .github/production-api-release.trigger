@@ -1,5 +1,8 @@
 {
   "schema_version": 1,
   "confirmation": "DEPLOY PRODUCTION API",
-  "release_parent_sha": "3c4e31831de082ea4c9b8b14502936e050f8ed77"
+  "release_parent_sha": "cd445727e159fd91fb19ece3eea86e4375765540",
+  "legacy_baseline_image_digest": "sha256:aec8462abe9e56fd75f816b3d72bc19af024d098f33ec0406d2b1104fccbd496",
+  "legacy_baseline_config_sha256": "d1b7db94e1e2307bb758c73146176ba766917f0cf5e3482598210c16ed0321bc",
+  "legacy_baseline_confirmation": "BOOTSTRAP REVIEWED LEGACY ROLLBACK"
 }
