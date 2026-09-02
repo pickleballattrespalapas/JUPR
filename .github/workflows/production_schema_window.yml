@@ -1,0 +1,351 @@
+name: Transition production schema migration window
+
+on:
+  push:
+    branches:
+      - rollback-feb8
+    paths:
+      - .github/production-schema-window.trigger
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jupr-production-api-deploy
+  cancel-in-progress: false
+
+jobs:
+  transition-production-runtime:
+    name: Apply and attest the protected runtime transition
+    if: >-
+      github.repository == 'pickleballattrespalapas/JUPR' &&
+      github.actor_id == 250933369
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: production
+    env:
+      EXPECTED_SUPABASE_PROJECT_REF: ${{ vars.PRODUCTION_SUPABASE_PROJECT_REF }}
+      FLY_APP_NAME: juprleagues-api
+      PRODUCTION_API_ORIGIN: https://api.juprleagues.com
+      PRODUCTION_FLY_ORIGIN: https://juprleagues-api.fly.dev
+      PRODUCTION_SOURCE_BRANCH: rollback-feb8
+      TRIGGER_PATH: .github/production-schema-window.trigger
+    steps:
+      - name: Check out canonical production branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: rollback-feb8
+
+      - name: Verify exact trigger-only production provenance
+        id: provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF" != "refs/heads/$PRODUCTION_SOURCE_BRANCH" ]; then
+            echo "::error title=Source branch rejected::The schema-window transition must run from refs/heads/$PRODUCTION_SOURCE_BRANCH."
+            exit 2
+          fi
+
+          HEAD_SHA="$(git rev-parse HEAD)"
+          PRODUCTION_SHA="$(git rev-parse "refs/remotes/origin/$PRODUCTION_SOURCE_BRANCH")"
+          if [ "$HEAD_SHA" != "$GITHUB_SHA" ] \
+            || [ "$HEAD_SHA" != "$PRODUCTION_SHA" ]; then
+            echo "::error title=Production provenance rejected::Checked-out HEAD, GITHUB_SHA, and the canonical production branch must be identical."
+            exit 2
+          fi
+
+          parent_line="$(git rev-list --parents -n 1 "$HEAD_SHA")"
+          if [ "$(awk '{print NF}' <<< "$parent_line")" -ne 2 ]; then
+            echo "::error title=Trigger commit rejected::The schema-window trigger commit must have exactly one parent."
+            exit 2
+          fi
+          parent_sha="$(git rev-parse "$HEAD_SHA^")"
+          git diff-tree \
+            --no-commit-id \
+            --name-status \
+            -r \
+            "$parent_sha" \
+            "$HEAD_SHA" \
+            > "$RUNNER_TEMP/schema-window-changed-status.tsv"
+
+          python scripts/production_schema_window.py validate-trigger \
+            --trigger-json "$TRIGGER_PATH" \
+            --head-sha "$HEAD_SHA" \
+            --parent-sha "$parent_sha" \
+            --changed-status-file "$RUNNER_TEMP/schema-window-changed-status.tsv" \
+            --output-json "$RUNNER_TEMP/schema-window-request.json"
+          ACTION="$(jq -er '.action' "$RUNNER_TEMP/schema-window-request.json")"
+          echo "action=$ACTION" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up pinned flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+        with:
+          version: "0.4.49"
+
+      - name: Validate protected production runtime inputs
+        shell: bash
+        env:
+          JUPR_FLY_DEPLOY_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          JUPR_FLY_SSH_TOKEN: ${{ secrets.FLY_SSH_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$JUPR_FLY_DEPLOY_TOKEN"
+          test -n "$JUPR_FLY_SSH_TOKEN"
+          if [[ ! "$EXPECTED_SUPABASE_PROJECT_REF" =~ ^[a-z0-9]{20}$ ]] \
+            || [ "$EXPECTED_SUPABASE_PROJECT_REF" = "sijpxjxvdtrehmqvirfi" ]; then
+            echo "::error title=Production project rejected::The protected production Supabase project ref is missing or invalid."
+            exit 2
+          fi
+
+      - name: Build the closed runtime transition plan
+        shell: bash
+        env:
+          TRANSITION_ACTION: ${{ steps.provenance.outputs.action }}
+        run: |
+          set -euo pipefail
+          python scripts/production_schema_window.py build-plan \
+            --action "$TRANSITION_ACTION" \
+            --output-json "$RUNNER_TEMP/schema-window-plan.json" \
+            --output-settings "$RUNNER_TEMP/schema-window-settings.txt"
+
+      - name: Capture and validate the live state before mutation
+        shell: bash
+        env:
+          JUPR_FLY_DEPLOY_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          JUPR_FLY_SSH_TOKEN: ${{ secrets.FLY_SSH_TOKEN }}
+        run: |
+          set -euo pipefail
+          FLY_API_TOKEN="$JUPR_FLY_DEPLOY_TOKEN" flyctl status \
+            --app "$FLY_APP_NAME" \
+            --json \
+            > "$RUNNER_TEMP/schema-window-fly-status-before.json"
+          FLY_API_TOKEN="$JUPR_FLY_DEPLOY_TOKEN" flyctl machines list \
+            --app "$FLY_APP_NAME" \
+            --json \
+            > "$RUNNER_TEMP/schema-window-machines-before.json"
+          FLY_API_TOKEN="$JUPR_FLY_DEPLOY_TOKEN" flyctl secrets list \
+            --app "$FLY_APP_NAME" \
+            --json \
+            > "$RUNNER_TEMP/schema-window-secrets-before.json"
+
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            --max-time 20 \
+            "$PRODUCTION_FLY_ORIGIN/health" \
+            --output "$RUNNER_TEMP/schema-window-health-before.json"
+
+          python scripts/production_schema_window.py secrets \
+            --fly-secrets-json "$RUNNER_TEMP/schema-window-secrets-before.json" \
+            --output-json "$RUNNER_TEMP/schema-window-secret-state-before.json"
+          python scripts/production_schema_window.py verify-before \
+            --health-json "$RUNNER_TEMP/schema-window-health-before.json" \
+            --fly-machines-json "$RUNNER_TEMP/schema-window-machines-before.json" \
+            --expected-project-ref "$EXPECTED_SUPABASE_PROJECT_REF" \
+            --output-json "$RUNNER_TEMP/schema-window-attestation-before.json"
+
+          remote_probe="python -c 'import json,os; truth={\"1\",\"true\",\"yes\",\"y\",\"on\"}; names=sorted(name for name in os.environ if name.startswith(\"JUPR_ENABLE_\")); payload={\"environment\":os.getenv(\"JUPR_ENV\",\"\"),\"email_mode\":os.getenv(\"JUPR_EMAIL_MODE\",\"\"),\"production_write_policy\":os.getenv(\"JUPR_PRODUCTION_WRITE_POLICY\",\"\"),\"staging_write_wave\":os.getenv(\"JUPR_STAGING_WRITE_WAVE\",\"\"),\"feature_flags\":{name:os.getenv(name,\"\").strip().lower() in truth for name in names}}; print(json.dumps(payload,sort_keys=True))'"
+          FLY_API_TOKEN="$JUPR_FLY_SSH_TOKEN" flyctl ssh console \
+            --quiet \
+            --app "$FLY_APP_NAME" \
+            --command "$remote_probe" \
+            > "$RUNNER_TEMP/schema-window-ssh-before.json"
+
+      - name: Preserve immutable before-transition evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-schema-window-before-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/schema-window-request.json
+            ${{ runner.temp }}/schema-window-plan.json
+            ${{ runner.temp }}/schema-window-settings.txt
+            ${{ runner.temp }}/schema-window-changed-status.tsv
+            ${{ runner.temp }}/schema-window-fly-status-before.json
+            ${{ runner.temp }}/schema-window-machines-before.json
+            ${{ runner.temp }}/schema-window-secrets-before.json
+            ${{ runner.temp }}/schema-window-secret-state-before.json
+            ${{ runner.temp }}/schema-window-health-before.json
+            ${{ runner.temp }}/schema-window-attestation-before.json
+            ${{ runner.temp }}/schema-window-ssh-before.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Apply only the reviewed runtime secret bundle
+        id: transition
+        shell: bash
+        env:
+          JUPR_FLY_DEPLOY_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          mapfile -t runtime_settings \
+            < "$RUNNER_TEMP/schema-window-settings.txt"
+          if [ "${#runtime_settings[@]}" -lt 3 ]; then
+            echo "::error title=Transition plan rejected::The closed runtime bundle is incomplete."
+            exit 2
+          fi
+          FLY_API_TOKEN="$JUPR_FLY_DEPLOY_TOKEN" flyctl secrets set \
+            --app "$FLY_APP_NAME" \
+            "${runtime_settings[@]}"
+
+      - name: Wait for the exact secret bundle and reject unknown pending names
+        shell: bash
+        env:
+          JUPR_FLY_DEPLOY_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 18); do
+            FLY_API_TOKEN="$JUPR_FLY_DEPLOY_TOKEN" flyctl secrets list \
+              --app "$FLY_APP_NAME" \
+              --json \
+              > "$RUNNER_TEMP/schema-window-secrets-after.json"
+            set +e
+            python scripts/production_schema_window.py secrets \
+              --fly-secrets-json "$RUNNER_TEMP/schema-window-secrets-after.json" \
+              --allowed-settings "$RUNNER_TEMP/schema-window-settings.txt" \
+              --output-json "$RUNNER_TEMP/schema-window-secret-state-after.json"
+            secret_status=$?
+            set -e
+            if [ "$secret_status" -eq 0 ]; then
+              break
+            fi
+            if [ "$secret_status" -ne 3 ]; then
+              echo "::error title=Unknown pending production secret::A pending secret outside the closed transition bundle was detected."
+              exit "$secret_status"
+            fi
+            if [ "$attempt" -eq 18 ]; then
+              echo "::error title=Production secret transition incomplete::The reviewed runtime bundle did not finish deploying."
+              exit 1
+            fi
+            sleep 10
+          done
+
+      - name: Capture and attest the transitioned production runtime
+        shell: bash
+        env:
+          JUPR_FLY_DEPLOY_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          JUPR_FLY_SSH_TOKEN: ${{ secrets.FLY_SSH_TOKEN }}
+          TRANSITION_ACTION: ${{ steps.provenance.outputs.action }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 18); do
+            if curl \
+              --fail \
+              --silent \
+              --show-error \
+              --max-time 15 \
+              "$PRODUCTION_FLY_ORIGIN/health" \
+              --output "$RUNNER_TEMP/schema-window-health-after.json"; then
+              break
+            fi
+            if [ "$attempt" -eq 18 ]; then
+              echo "::error title=Production health unavailable::The transitioned runtime did not become healthy."
+              exit 1
+            fi
+            sleep 10
+          done
+
+          FLY_API_TOKEN="$JUPR_FLY_DEPLOY_TOKEN" flyctl machines list \
+            --app "$FLY_APP_NAME" \
+            --json \
+            > "$RUNNER_TEMP/schema-window-machines-after.json"
+
+          expected_settings_b64="$(
+            jq -c '.settings' "$RUNNER_TEMP/schema-window-plan.json" \
+              | base64 -w0
+          )"
+          remote_check="python -c 'import base64,json,os,sys; expected=json.loads(base64.b64decode(\"$expected_settings_b64\")); matches={name:os.getenv(name,\"\")==value for name,value in expected.items()}; ok=all(matches.values()) and os.getenv(\"JUPR_ENV\",\"\")==\"production\"; print(json.dumps({\"action\":\"$TRANSITION_ACTION\",\"environment_is_production\":os.getenv(\"JUPR_ENV\",\"\")==\"production\",\"ok\":ok,\"settings_match\":matches},sort_keys=True)); sys.exit(0 if ok else 3)'"
+          FLY_API_TOKEN="$JUPR_FLY_SSH_TOKEN" flyctl ssh console \
+            --quiet \
+            --app "$FLY_APP_NAME" \
+            --command "$remote_check" \
+            > "$RUNNER_TEMP/schema-window-ssh-after.json"
+
+          python scripts/production_schema_window.py verify-transition \
+            --before-health-json "$RUNNER_TEMP/schema-window-health-before.json" \
+            --after-health-json "$RUNNER_TEMP/schema-window-health-after.json" \
+            --before-machines-json "$RUNNER_TEMP/schema-window-machines-before.json" \
+            --after-machines-json "$RUNNER_TEMP/schema-window-machines-after.json" \
+            --plan-json "$RUNNER_TEMP/schema-window-plan.json" \
+            --expected-project-ref "$EXPECTED_SUPABASE_PROJECT_REF" \
+            --output-json "$RUNNER_TEMP/schema-window-attestation-after.json"
+
+      - name: Verify exact production CORS remains active
+        shell: bash
+        run: |
+          set -euo pipefail
+          headers_dir="$RUNNER_TEMP/schema-window-cors-after"
+          mkdir -p "$headers_dir"
+          api_origins=(
+            "$PRODUCTION_FLY_ORIGIN"
+            "$PRODUCTION_API_ORIGIN"
+          )
+          origins=(
+            "https://juprleagues.com"
+            "https://www.juprleagues.com"
+            "https://pickleballclubsandwich.com"
+            "https://www.pickleballclubsandwich.com"
+          )
+          for api_index in "${!api_origins[@]}"; do
+            for origin_index in "${!origins[@]}"; do
+              curl \
+                --fail \
+                --silent \
+                --show-error \
+                --max-time 20 \
+                --request OPTIONS \
+                --header "Origin: ${origins[$origin_index]}" \
+                --header "Access-Control-Request-Method: GET" \
+                --dump-header "$headers_dir/$api_index-$origin_index.headers" \
+                --output /dev/null \
+                "${api_origins[$api_index]}/health"
+            done
+            curl \
+              --silent \
+              --show-error \
+              --max-time 20 \
+              --request OPTIONS \
+              --header "Origin: https://not-allowed.invalid" \
+              --header "Access-Control-Request-Method: GET" \
+              --dump-header "$headers_dir/$api_index-blocked.headers" \
+              --output /dev/null \
+              "${api_origins[$api_index]}/health"
+          done
+          python scripts/deployment_verifier.py cors \
+            --headers-dir "$headers_dir" \
+            > "$RUNNER_TEMP/schema-window-cors-attestation-after.json"
+
+      - name: Upload before-and-after transition evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-schema-window-evidence-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/schema-window-request.json
+            ${{ runner.temp }}/schema-window-plan.json
+            ${{ runner.temp }}/schema-window-settings.txt
+            ${{ runner.temp }}/schema-window-changed-status.tsv
+            ${{ runner.temp }}/schema-window-fly-status-before.json
+            ${{ runner.temp }}/schema-window-machines-before.json
+            ${{ runner.temp }}/schema-window-machines-after.json
+            ${{ runner.temp }}/schema-window-secrets-before.json
+            ${{ runner.temp }}/schema-window-secrets-after.json
+            ${{ runner.temp }}/schema-window-secret-state-before.json
+            ${{ runner.temp }}/schema-window-secret-state-after.json
+            ${{ runner.temp }}/schema-window-health-before.json
+            ${{ runner.temp }}/schema-window-health-after.json
+            ${{ runner.temp }}/schema-window-attestation-before.json
+            ${{ runner.temp }}/schema-window-attestation-after.json
+            ${{ runner.temp }}/schema-window-ssh-before.json
+            ${{ runner.temp }}/schema-window-ssh-after.json
+            ${{ runner.temp }}/schema-window-cors-after
+            ${{ runner.temp }}/schema-window-cors-attestation-after.json
+          if-no-files-found: warn
+          retention-days: 90
