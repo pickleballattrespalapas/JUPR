@@ -346,6 +346,14 @@ def test_workflow_requires_closed_one_parent_trigger_provenance() -> None:
 def test_workflow_only_transitions_runtime_and_attests_both_sides() -> None:
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
 
+    assert (
+        "EXPECTED_SUPABASE_PROJECT_REF: "
+        "${{ vars.PRODUCTION_SUPABASE_PROJECT_REF || "
+        "'dnoockbwfenunhcibwfn' }}"
+    ) in workflow
+    assert workflow.count(
+        "${{ secrets.FLY_SSH_TOKEN || secrets.FLY_API_TOKEN }}"
+    ) == 3
     assert "production_schema_window.py build-plan" in workflow
     assert "flyctl secrets set" in workflow
     assert 'flyctl ssh console \\\n' in workflow

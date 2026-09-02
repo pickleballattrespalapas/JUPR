@@ -1254,9 +1254,15 @@ def test_production_workflow_is_exact_candidate_and_never_creates_or_retargets_a
     assert workflow.startswith("name: Deploy FastAPI production to Fly\n")
     assert "environment: production" in workflow
     assert "FLY_APP_NAME: juprleagues-api" in workflow
-    assert "PRODUCTION_SUPABASE_PROJECT_REF" in workflow
+    assert (
+        "EXPECTED_SUPABASE_PROJECT_REF: "
+        "${{ vars.PRODUCTION_SUPABASE_PROJECT_REF || "
+        "'dnoockbwfenunhcibwfn' }}"
+    ) in workflow
     assert "SUPABASE_PROD_DATABASE_URL" in workflow
-    assert "FLY_SSH_TOKEN" in workflow
+    assert workflow.count(
+        "${{ secrets.FLY_SSH_TOKEN || secrets.FLY_API_TOKEN }}"
+    ) == 4
     assert "PRODUCTION_SOURCE_BRANCH: rollback-feb8" in workflow
     assert "ref: rollback-feb8" in workflow
     assert "github.event.repository.default_branch" not in workflow
