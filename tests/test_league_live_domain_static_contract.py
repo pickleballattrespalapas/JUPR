@@ -15,10 +15,10 @@ def test_browser_does_not_own_league_live_movement_math() -> None:
     assert "/plan`" in panel
     assert "expected_operation_key" in panel
     assert "movement_overrides" in panel
-    assert "The browser displays plans but never ranks players" in panel
+    assert "League Live calculates the plan; this page only displays it." in panel
 
 
-def test_league_selection_auto_loads_roster_without_showing_stale_detail() -> None:
+def test_league_selection_loads_set_rosters_and_resets_flex_attendance() -> None:
     panel = PANEL.read_text(encoding="utf-8")
     assert "selectLeague(event.target.value)" in panel
     assert "void loadLeagueDetail(selectedLeague)" in panel
@@ -27,7 +27,10 @@ def test_league_selection_auto_loads_roster_without_showing_stale_detail() -> No
     assert ">Load leagues<" not in panel
     assert "Reload roster" in panel
     assert ">Load roster<" not in panel
-    assert "const suggestion = await fetchRosterSuggestion(payload);" in panel
+    assert 'if (participationModeFromDetail(payload) === "flex") {' in panel
+    assert "setAttendeePlayerIds([]);" in panel
+    assert 'const suggestion = await fetchRosterSuggestion(payload, [], "", []);' in panel
+    assert "applyRosterSuggestion(suggestion);" in panel
     assert "clearPersistedSessionBinding();" in panel
     assert "Session writes remain unavailable until the replacement roster is ready." in panel
 
@@ -48,6 +51,29 @@ def test_league_live_binds_session_to_selected_league_and_pauses_edits_while_bus
     assert "disabled={busy}" in panel
 
 
+def test_resume_loader_only_lists_unfinished_sessions_for_the_route_league() -> None:
+    panel = PANEL.read_text(encoding="utf-8")
+    page = PAGE.read_text(encoding="utf-8")
+    routes = ROUTES.read_text(encoding="utf-8")
+    service = SERVICE.read_text(encoding="utf-8")
+
+    assert "selectedLeagueName={leagueName}" in page
+    assert "key={leagueName}" in page
+    assert "const [leagueName, setLeagueName] = useState(selectedLeagueName);" in panel
+    assert 'league_name: targetLeague' in panel
+    assert 'resumable_only: "true"' in panel
+    assert "resumableSessionsForLeague(payload.sessions || [], targetLeague)" in panel
+    assert 'session.league_name === leagueName' in panel
+    assert 'new Set(["setup", "active", "paused"])' in panel
+    assert "Resume an unfinished session" in panel
+    assert "Unfinished sessions for this league" in panel
+    assert "league_name: str | None = Query(default=None)" in routes
+    assert "resumable_only: bool = Query(default=False)" in routes
+    assert 'query.eq("league_name", clean_league)' in service
+    assert 'query.in_("status", RESUMABLE_SESSION_STATUSES)' in service
+    assert 'if resumable_only and not clean_league:' in service
+
+
 def test_league_live_court_and_bench_controls_are_phone_responsive() -> None:
     panel = PANEL.read_text(encoding="utf-8")
     assert "data-responsive-court-grid" in panel
@@ -63,7 +89,7 @@ def test_page_fetches_python_domain_readiness_and_fails_closed() -> None:
     assert "getAdminLeagueLiveStatus" in page
     assert "liveDomainStatus={liveDomainStatus}" in page
     assert "!liveDomainStatus.enabled" in panel
-    assert "Streamlit League Manager" in panel
+    assert "Live round scoring remains unavailable in this build." in panel
 
 
 def test_fastapi_contract_requires_service_role_stale_guard_and_operation_key() -> None:

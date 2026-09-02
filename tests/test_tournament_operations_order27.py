@@ -13,6 +13,7 @@ from jupr_app.services.admin_tournament_game_service import (
 from jupr_app.services.admin_tournament_team_service import write_admin_tournament_draw_teams_atomic
 from jupr_app.services.admin_tournament_guarded_operation import (
     StaleTournamentAdminStateError,
+    TournamentAdminMutationNotAppliedError,
     TournamentAdminRecoveryRequiredError,
 )
 from jupr_app.services.admin_tournament_match_publish_service import (
@@ -164,6 +165,7 @@ def test_official_publish_complete_set_reconstructs_result_without_a_write() -> 
     )
 
     assert result["match_count"] == 2
+    assert result["game_count"] == 2
     assert result["process_result"]["reconciled_from_authoritative_matches"] is True
     assert tables == before
 
@@ -307,12 +309,17 @@ def test_order27_next_routes_and_recovery_copy_static_contract() -> None:
     assert "reconcile_admin_tournament_official_publish" in api
     assert "PERMISSION_ENTER_SCORES" in api
     assert "PERMISSION_MANAGE_MATCHES" in api
+    # Generation, schedule reconciliation/rebuild, and podium writes all carry
+    # the exact reviewed team set.
     assert panel.count("expected_team_versions: reviewedTeamVersions") == 3
+    assert "expected_team_versions: [...reviewedTeamVersions].sort" in panel
     assert panel.count("expected_source_game_versions: reviewedSourceGameVersions") == 2
-    assert panel.count("expected_draw_updated_at: reviewedDrawUpdatedAt") == 8
-    assert api.count('"expected_draw_updated_at": payload.expected_draw_updated_at') == 16
-    assert api.count('"expected_team_versions": [_dump_model(row) for row in payload.expected_team_versions]') == 6
-    assert api.count('"expected_source_game_versions": [_dump_model(row) for row in payload.expected_source_game_versions]') == 4
+    # Every draw-scoped mutation, including both schedule recovery commands,
+    # carries the reviewed draw version.
+    assert panel.count("expected_draw_updated_at: reviewedDrawUpdatedAt") == 10
+    assert api.count('"expected_draw_updated_at": payload.expected_draw_updated_at') >= 24
+    assert api.count('"expected_team_versions": [_dump_model(row) for row in payload.expected_team_versions]') >= 6
+    assert api.count('"expected_source_game_versions": [_dump_model(row) for row in payload.expected_source_game_versions]') >= 4
 
 
 @pytest.mark.parametrize("label", ["team set", "source game set"])
@@ -358,6 +365,86 @@ def test_atomic_game_rpc_receives_exact_snapshots_and_maps_sql_cas_conflict() ->
     assert supabase.name == "admin_insert_tournament_draw_games_cas"
     assert supabase.payload["p_expected_teams"] == teams
     assert supabase.payload["p_expected_source_games"] == games
+
+
+def test_atomic_game_rpc_maps_structured_database_rejection_to_not_applied() -> None:
+    class DatabaseRejectedError(RuntimeError):
+        code = "23505"
+
+    class FailingRpc:
+        def rpc(self, _name, _payload):
+            return self
+
+        def execute(self):
+            raise DatabaseRejectedError("duplicate key")
+
+    with pytest.raises(
+        TournamentAdminMutationNotAppliedError,
+        match="no games were created.*23505",
+    ):
+        _insert_tournament_draw_games_atomic(
+            FailingRpc(),
+            club_id="club-1",
+            tournament_id="tournament-1",
+            draw_id="draw-2",
+            expected_draw_updated_at="2026-07-19T12:00:00Z",
+            expected_team_versions=[],
+            expected_source_game_versions=[],
+            mode="ROUND_ROBIN",
+            rows=[{"id": "round-robin-1", "stage": "ROUND_ROBIN"}],
+        )
+
+
+def test_atomic_game_rpc_keeps_transport_failure_recovery_required() -> None:
+    class FailingRpc:
+        def rpc(self, _name, _payload):
+            return self
+
+        def execute(self):
+            raise TimeoutError("response lost")
+
+    with pytest.raises(RuntimeError, match="no game set was committed"):
+        _insert_tournament_draw_games_atomic(
+            FailingRpc(),
+            club_id="club-1",
+            tournament_id="tournament-1",
+            draw_id="draw-2",
+            expected_draw_updated_at="2026-07-19T12:00:00Z",
+            expected_team_versions=[],
+            expected_source_game_versions=[],
+            mode="ROUND_ROBIN",
+            rows=[{"id": "round-robin-1", "stage": "ROUND_ROBIN"}],
+        )
+
+
+@pytest.mark.parametrize("error_code", ["504", "08006"])
+def test_atomic_game_rpc_keeps_structured_transport_codes_recovery_required(
+    error_code: str,
+) -> None:
+    class StructuredTransportError(RuntimeError):
+        code = error_code
+
+    class FailingRpc:
+        def rpc(self, _name, _payload):
+            return self
+
+        def execute(self):
+            raise StructuredTransportError("transport outcome is uncertain")
+
+    with pytest.raises(RuntimeError, match="no game set was committed") as error:
+        _insert_tournament_draw_games_atomic(
+            FailingRpc(),
+            club_id="club-1",
+            tournament_id="tournament-1",
+            draw_id="draw-2",
+            expected_draw_updated_at="2026-07-19T12:00:00Z",
+            expected_team_versions=[],
+            expected_source_game_versions=[],
+            mode="ROUND_ROBIN",
+            rows=[{"id": "round-robin-1", "stage": "ROUND_ROBIN"}],
+        )
+
+    assert not isinstance(error.value, TournamentAdminMutationNotAppliedError)
 
 
 def test_atomic_team_rpc_receives_draw_cas_and_maps_sql_stale() -> None:

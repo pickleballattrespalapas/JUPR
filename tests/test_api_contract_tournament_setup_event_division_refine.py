@@ -12,23 +12,29 @@ def test_setup_wizard_has_separate_event_and_division_steps() -> None:
     nav = read("components/TournamentSetupWizardNav.tsx")
     panel = read("app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")
     assert '| "divisions"' in nav
-    assert 'label: "Events"' in nav
+    assert 'label: "Events and event policies"' in nav
     assert 'label: "Divisions"' in nav
-    assert "Step {definition.number} of 6" in panel
+    assert "Domain {domainDefinition.number} of 4" in panel
+    assert "Section ${domainSectionIndex} of ${domainDefinition.steps.length}" in panel
     assert "TournamentSetupEventFamilyCard" in panel
     assert "TournamentSetupDivisionCard" in panel
-    assert 'saveDraftAndContinue("divisions")' in panel
-    assert 'saveDraftAndContinue("pricing")' in panel
+    assert 'goTo("divisions")' in panel
+    assert 'goTo("pricing")' in panel
+    assert "Continue to Divisions" in panel
+    assert "Continue to Commerce" in panel
     assert (WEB / "app/admin/tournaments/setup/divisions/page.tsx").exists()
 
 
-def test_basics_has_location_timezone_sponsors_and_no_save_confirmation() -> None:
+def test_tournament_domain_separates_basics_from_venue_without_save_confirmation() -> None:
     panel = read("app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")
     basics = panel.split("function renderBasics()", 1)[1].split("function renderEvents()", 1)[0]
-    assert "Location or venue" in basics
-    assert "Timezone" in basics
+    venue = panel.split("function renderSchedule()", 1)[1].split("function renderReview()", 1)[0]
+    assert "Registration and public policies" in basics
     assert "Add sponsor" in basics
     assert "Sponsor name" in basics
+    assert "Venue name" in venue
+    assert "Timezone" in venue
+    assert "Total venue courts" in venue
     assert "ConfirmAction" not in basics
     assert "void saveBasics()" in basics
 
@@ -64,6 +70,11 @@ def test_setup_metadata_is_structured_and_migrated() -> None:
 
 def test_setup_status_badges_wait_for_loaded_detail() -> None:
     panel = read("app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")
+    publication_status = read(
+        "app/admin/tournaments/setup/tournamentSetupPublicationStatus.ts"
+    )
     assert "const states = detail ? setupState(basics, settings, configuration) : {};" in panel
     assert "states={states}" in panel
-    assert "busy && !detail" in panel
+    assert 'aria-busy={publicationStatus === "checking"}' in panel
+    assert "Checking published setup…" in panel
+    assert 'if (detailLoadState !== "loaded") return "checking"' in publication_status

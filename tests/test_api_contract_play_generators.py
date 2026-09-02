@@ -41,9 +41,36 @@ def test_generator_preview_and_round_runner_contracts() -> None:
     assert "Add player" in runner
     assert "Remove player" in runner
     assert "Substitute player" in runner
+    assert "Swap players" in runner
+    assert "swapRosterPositions" in runner
     assert "One round only" in runner
     assert "Rest of session" in runner
     assert "Generate Round" in runner
+
+
+def test_skip_round_preserves_acknowledgement_and_partial_advance_recovery() -> None:
+    runners = (
+        read("apps/web/app/admin/play-generators/GeneratorRoundRunner.tsx"),
+        read("apps/web/app/clubs/[clubSlug]/play-generators/PublicGeneratorRoundRunner.tsx"),
+    )
+
+    for runner in runners:
+        # The root-owned confirmation snapshots onAcknowledge when it opens.
+        # A stable ref must therefore carry the destination produced later by
+        # the mutation instead of a stale render closure.
+        assert "const skipDestinationRef = useRef" in runner
+        assert "skipDestinationRef.current = nextRound" in runner
+        assert "const destination = skipDestinationRef.current" in runner
+
+        # Skip and automatic advance are two durable writes. Once the first is
+        # confirmed, any error in the second stage is a partial/uncertain result
+        # and recovery must retain both exact identities.
+        assert "let skipCommitted = false" in runner
+        assert "skipCommitted = true" in runner
+        assert "skipCommitted || isUncertainRequestError(error)" in runner
+        assert "Both exact operation keys are retained" in runner
+        assert "request.advanceIdempotencyKey" in runner
+        assert "() => executeSkipRound(request)" in runner
 
 
 def test_generator_backend_routes_and_adaptive_engine_are_installed() -> None:
@@ -73,6 +100,9 @@ def test_generator_backend_routes_and_adaptive_engine_are_installed() -> None:
     assert "payloads_by_format" in service
     assert "match_format=match_format" in service
     assert "Official publication requires every participant" in service
+    assert '!= "COMPLETE SESSION"' in routes
+    assert '!= "PUBLISH MATCHES"' in routes
+    assert "request_payload=_model_payload(payload)" in routes
 
 
 def test_round_robin_previews_all_rounds_but_ladder_generates_adaptively() -> None:

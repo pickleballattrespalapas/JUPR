@@ -2,6 +2,7 @@ import Link from "next/link";
 import PublicTournamentNav from "@/components/PublicTournamentNav";
 import { getClubTournamentRegistration } from "@/lib/tournamentRegistrationApi";
 import TournamentRegistrationForm from "./TournamentRegistrationForm";
+import EditLinkRequestForm from "./EditLinkRequestForm";
 
 type TournamentRegistrationPageProps = {
   params: { clubSlug: string };
@@ -20,18 +21,6 @@ function dateLabel(value?: string | null): string | null {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value).slice(0, 10);
   return date.toISOString().slice(0, 10);
-}
-
-function markdownish(text?: string | null) {
-  if (!text) return null;
-  return text
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => (
-      <p key={line} style={{ margin: "0 0 0.5rem", color: "#475569" }}>
-        {line.replace(/^#+\s*/, "")}
-      </p>
-    ));
 }
 
 export default async function TournamentRegistrationPage({
@@ -53,6 +42,7 @@ export default async function TournamentRegistrationPage({
     : tournament?.id
       ? `tournament_id=${encodeURIComponent(tournament.id)}`
       : "";
+  const venueMapQuery = settings?.venue_address || settings?.location_name || "";
 
   return (
     <section>
@@ -72,9 +62,9 @@ export default async function TournamentRegistrationPage({
         {tournament?.name ?? "Tournament registration"}
       </h1>
       <p style={{ color: "#334155", maxWidth: "820px" }}>
-        Public tournament registration intake for published JUPR events.
-        Submissions create registration records only; draw seeding, score entry,
-        ratings, and tournament operations remain staff-managed.
+        Choose your divisions and submit your entry. Tournament details,
+        policies, roster, and partner information remain available from
+        Tournament Home.
       </p>
 
       {error ? (
@@ -136,6 +126,49 @@ export default async function TournamentRegistrationPage({
       ) : null}
 
       {tournament ? (
+        <article
+          style={{
+            ...cardStyle,
+            marginBottom: "1rem",
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "1rem",
+            alignItems: "center",
+            justifyContent: "space-between",
+            background: data?.registration_open ? "#eff6ff" : "#f8fafc",
+            borderColor: data?.registration_open ? "#93c5fd" : "#cbd5e1"
+          }}
+        >
+          <div>
+            <h2 style={{ margin: 0 }}>
+              {data?.registration_open ? "Ready to register?" : "Registration is closed"}
+            </h2>
+            <p style={{ color: "#475569", margin: "0.35rem 0 0" }}>
+              {data?.registration_open
+                ? `Complete the form below for ${selectableCount} open division${selectableCount === 1 ? "" : "s"}.`
+                : data?.registration_closed_reason || "Registration is not currently open."}
+            </p>
+          </div>
+          {data?.registration_open ? (
+            <a
+              href="#registration-form"
+              style={{
+                display: "inline-block",
+                padding: "0.7rem 1rem",
+                borderRadius: "999px",
+                background: "#0f172a",
+                color: "white",
+                textDecoration: "none",
+                fontWeight: 800
+              }}
+            >
+              Register now
+            </a>
+          ) : null}
+        </article>
+      ) : null}
+
+      {tournament ? (
         <div
           style={{
             display: "grid",
@@ -159,12 +192,31 @@ export default async function TournamentRegistrationPage({
             <br />
             {selectableCount}
           </article>
-          <article style={cardStyle}>
-            <strong>Registrations</strong>
-            <br />
-            {data?.roster_summary?.total_registrations ?? 0}
-          </article>
         </div>
+      ) : null}
+
+      {tournament && venueMapQuery ? (
+        <article style={{ ...cardStyle, marginBottom: "1rem" }}>
+          <h2 style={{ marginTop: 0 }}>Venue</h2>
+          {settings?.location_name ? <p><strong>{settings.location_name}</strong></p> : null}
+          {settings?.venue_address ? <p>{settings.venue_address}</p> : null}
+          {settings?.timezone ? <p style={{ color: "#475569" }}>Tournament time zone: {settings.timezone}</p> : null}
+          <p>
+            <a
+              href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(venueMapQuery)}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open map
+            </a>
+          </p>
+          {settings?.venue_directions ? (
+            <div>
+              <h3>Arrival directions</h3>
+              <p style={{ whiteSpace: "pre-wrap" }}>{settings.venue_directions}</p>
+            </div>
+          ) : null}
+        </article>
       ) : null}
 
       {tournament && !data?.registration_open ? (
@@ -179,38 +231,37 @@ export default async function TournamentRegistrationPage({
         </article>
       ) : null}
 
-      {tournament && settings?.sponsor_markdown ? (
+      {tournament ? (
+        <div id="registration-form" style={{ scrollMarginTop: "1rem" }}>
+          <TournamentRegistrationForm
+            clubSlug={clubSlug}
+            tournamentId={tournament.id}
+            registrationSlug={settings?.registration_slug ?? null}
+            registrationOpen={Boolean(data?.registration_open)}
+            registrationClosedReason={data?.registration_closed_reason ?? null}
+            days={data.days ?? []}
+            events={data.events ?? []}
+            commerce={data.commerce ?? null}
+          />
+        </div>
+      ) : null}
+
+      {tournament ? (
         <article
-          style={{
-            ...cardStyle,
-            marginBottom: "1rem",
-            background: "#fffbeb",
-            borderColor: "#fde68a"
-          }}
+          id="manage-registration"
+          style={{ ...cardStyle, marginBottom: "1rem", scrollMarginTop: "1rem" }}
         >
-          <h2 style={{ marginTop: 0 }}>Tournament sponsors</h2>
-          {markdownish(settings.sponsor_markdown)}
-        </article>
-      ) : null}
-
-      {tournament && settings?.rules_markdown ? (
-        <article style={{ ...cardStyle, marginBottom: "1rem" }}>
-          <h2 style={{ marginTop: 0 }}>Rules and registration notes</h2>
-          {markdownish(settings.rules_markdown)}
-        </article>
-      ) : null}
-
-      {tournament && settings?.refund_policy_markdown ? (
-        <article style={{ ...cardStyle, marginBottom: "1rem" }}>
-          <h2 style={{ marginTop: 0 }}>Refund policy</h2>
-          {markdownish(settings.refund_policy_markdown)}
-        </article>
-      ) : null}
-
-      {tournament && settings?.weather_policy_markdown ? (
-        <article style={{ ...cardStyle, marginBottom: "1rem" }}>
-          <h2 style={{ marginTop: 0 }}>Weather policy</h2>
-          {markdownish(settings.weather_policy_markdown)}
+          <h2 style={{ marginTop: 0 }}>Manage an existing registration</h2>
+          <p style={{ color: "#475569" }}>
+            Request a secure link to edit an event, change partner details, or
+            add another event. For privacy, the response is the same whether or
+            not a matching registration exists.
+          </p>
+          <EditLinkRequestForm
+            clubSlug={clubSlug}
+            tournamentId={tournament.id}
+            registrationSlug={settings?.registration_slug ?? null}
+          />
         </article>
       ) : null}
 
@@ -227,59 +278,33 @@ export default async function TournamentRegistrationPage({
           }}
         >
           <div>
-            <h2 style={{ margin: 0 }}>Public tournament roster</h2>
+            <h2 style={{ margin: 0 }}>Need tournament details?</h2>
             <p style={{ color: "#475569", margin: "0.35rem 0 0" }}>
-              Review published entries and players still looking for partners
-              before choosing your events.
+              Review the venue, rules, policies, public roster, and Partner Board
+              without losing your place in registration.
             </p>
           </div>
-          <Link
-            href={`/clubs/${clubSlug}/tournament-roster${tournamentQuery ? `?${tournamentQuery}` : ""}`}
-            style={{ fontWeight: 800 }}
-          >
-            View Tournament Roster
-          </Link>
+          <span style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+            <Link
+              href={`/clubs/${clubSlug}/tournaments${tournamentQuery ? `?${tournamentQuery}` : ""}`}
+              style={{ fontWeight: 800 }}
+            >
+              Tournament Home
+            </Link>
+            <Link
+              href={`/clubs/${clubSlug}/tournament-roster${tournamentQuery ? `?${tournamentQuery}` : ""}`}
+              style={{ fontWeight: 800 }}
+            >
+              Tournament Roster
+            </Link>
+            <Link
+              href={`/clubs/${clubSlug}/tournament-team-results`}
+              style={{ fontWeight: 800 }}
+            >
+              Four-player Team Results
+            </Link>
+          </span>
         </article>
-      ) : null}
-
-      {tournament ? (
-        <article
-          style={{
-            ...cardStyle,
-            marginBottom: "1rem",
-            display: "flex",
-            flexWrap: "wrap",
-            gap: "0.75rem",
-            alignItems: "center",
-            justifyContent: "space-between"
-          }}
-        >
-          <div>
-            <h2 style={{ margin: 0 }}>Four-player team results</h2>
-            <p style={{ color: "#475569", margin: "0.35rem 0 0" }}>
-              Follow published team standings, playoff brackets, and podiums.
-            </p>
-          </div>
-          <Link
-            href={`/clubs/${clubSlug}/tournament-team-results`}
-            style={{ fontWeight: 800 }}
-          >
-            View Team Tournament Results
-          </Link>
-        </article>
-      ) : null}
-
-      {tournament ? (
-        <TournamentRegistrationForm
-          clubSlug={clubSlug}
-          tournamentId={tournament.id}
-          registrationSlug={settings?.registration_slug ?? null}
-          registrationOpen={Boolean(data?.registration_open)}
-          registrationClosedReason={data?.registration_closed_reason ?? null}
-          days={data.days ?? []}
-          events={data.events ?? []}
-          commerce={data.commerce ?? null}
-        />
       ) : null}
     </section>
   );

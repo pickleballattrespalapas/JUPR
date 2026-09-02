@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess, type ActionCompletion } from "@/components/interaction";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 import { deriveLiveLadderOperationKey, idempotencyKeyFor, rotateIdempotencyKey } from "@/lib/liveLadderOperations";
@@ -60,90 +61,98 @@ export default function JuprLiveAdminPanel({ apiBase, clubId, clubSlug, status }
   function completeScope(scope: string) { rotateIdempotencyKey(operationKeys.current, scope); }
 
   async function loadSessions() { const generation = sessionsRequest.begin(); setBusy(true); setMessage(null); setSessions([]); try { const query = filter ? `?status=${encodeURIComponent(filter)}&limit=100` : "?limit=100"; const payload = await requestJson<ListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/jupr-live/sessions${query}`); if (!sessionsRequest.isCurrent(generation)) return; setSessions(payload.sessions || []); rememberScores(payload.sessions || []); setMessage(payload.sessions?.length ? `Loaded ${payload.count ?? payload.sessions.length} one-off session(s).` : `No ${filter || "matching"} sessions.`); } catch (error) { if (sessionsRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load live sessions."); } finally { if (sessionsRequest.isCurrent(generation)) setBusy(false); } }
-  async function createSession(confirmationText: string) {
-    if (!writesEnabled) { setMessage("Next writes are guarded off; use Streamlit JUPR Live Admin."); return; }
+  async function createSession(confirmationText: string): Promise<ActionCompletion> {
+    if (!writesEnabled) { const error = new Error("Next writes are guarded off; use Streamlit JUPR Live Admin."); setMessage(error.message); throw error; }
     const generation = actionRequest.begin();
     const scope = "create:new";
     setBusy(true); setMessage(null);
     try {
       const fields = await durableFields(scope, "create_session", "new", "new");
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before live-session creation could continue.");
       setLastOperationKey(fields.operationKey);
       const names = participantNames.replace(/,/g, "\n").split("\n").map((token) => token.trim()).filter(Boolean);
       const payload = await requestJson<WriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/jupr-live/sessions`, { method: "POST", body: JSON.stringify({ title, event_type: eventType, participant_names: names, player_ids: parseIds(participantIds), total_rounds: Number(totalRounds), court_sizes: parseIds(courtSizes), confirmation_text: confirmationText, expected_version: fields.expected_version, idempotency_key: fields.idempotency_key }) });
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the created session response was applied.");
       completeScope(scope); setLastResult(payload); setMessage(`Created durable live session ${payload.session?.session_key || "(recovered)"}.`);
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the live sessions could be refreshed.");
       await loadSessions();
+      return actionSuccess("Live session created", `Durable live session ${payload.session?.session_key || "(recovered)"} was created.`);
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(`${error instanceof Error ? error.message : "Create outcome is uncertain."} Reconcile the operation before creating another session.`);
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
-  async function updateSession(row: LiveSession, nextStatus: string, confirmationText: string) {
+  async function updateSession(row: LiveSession, nextStatus: string, confirmationText: string): Promise<ActionCompletion> {
     const generation = actionRequest.begin();
     const scope = `status:${row.session_key}:${nextStatus}`;
     setBusy(true); setMessage(null);
     try {
       const fields = await durableFields(scope, "update_session", row.session_key, row.version);
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the live-session update could continue.");
       setLastOperationKey(fields.operationKey);
       const payload = await requestJson<WriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/jupr-live/sessions/${encodeURIComponent(row.session_key)}`, { method: "PATCH", body: JSON.stringify({ status: nextStatus, title: row.title || undefined, confirmation_text: confirmationText, expected_version: fields.expected_version, idempotency_key: fields.idempotency_key }) });
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the live-session update response was applied.");
       completeScope(scope); setLastResult(payload); setMessage(`${row.title || row.session_key} marked ${nextStatus}.`);
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the live sessions could be refreshed.");
       await loadSessions();
+      return actionSuccess("Live session updated", `${row.title || row.session_key} was marked ${nextStatus}.`);
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(`${error instanceof Error ? error.message : "Session update is uncertain."} Reconcile before retrying.`);
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
-  async function saveScores(row: LiveSession, confirmationText: string) {
+  async function saveScores(row: LiveSession, confirmationText: string): Promise<ActionCompletion> {
     const generation = actionRequest.begin();
     const scope = `scores:${row.session_key}`;
     setBusy(true); setMessage(null);
     try {
       const fields = await durableFields(scope, "save_scores", row.session_key, row.version);
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the score save could continue.");
       setLastOperationKey(fields.operationKey);
       const scores = Object.entries(scoreDrafts[row.session_key] || {}).map(([match_id, score]) => ({ match_id, score_a: score.score_a === "" ? null : Number(score.score_a), score_b: score.score_b === "" ? null : Number(score.score_b) }));
       const payload = await requestJson<WriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/jupr-live/sessions/${encodeURIComponent(row.session_key)}/scores`, { method: "PATCH", body: JSON.stringify({ scores, confirmation_text: confirmationText, expected_version: fields.expected_version, idempotency_key: fields.idempotency_key }) });
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the saved scores response was applied.");
       completeScope(scope); setLastResult(payload); setMessage(`Saved ${payload.changed_scores || 0} score row(s).`);
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the live sessions could be refreshed.");
       await loadSessions();
+      return actionSuccess("Live scores saved", `${payload.changed_scores || 0} score row(s) were saved.`);
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(`${error instanceof Error ? error.message : "Score save is uncertain."} Reconcile before retrying.`);
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
-  async function advanceRound(row: LiveSession, confirmationText: string) {
+  async function advanceRound(row: LiveSession, confirmationText: string): Promise<ActionCompletion> {
     const generation = actionRequest.begin();
     const scope = `advance:${row.session_key}`;
     setBusy(true); setMessage(null);
     try {
       const fields = await durableFields(scope, "advance_round", row.session_key, row.version);
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the round advance could continue.");
       setLastOperationKey(fields.operationKey);
       const payload = await requestJson<WriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/jupr-live/sessions/${encodeURIComponent(row.session_key)}/advance`, { method: "POST", body: JSON.stringify({ confirmation_text: confirmationText, expected_version: fields.expected_version, idempotency_key: fields.idempotency_key }) });
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the round advance response was applied.");
       completeScope(scope); setLastResult(payload); setMessage("Advanced to the next Python-generated live round.");
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the live sessions could be refreshed.");
       await loadSessions();
+      return actionSuccess("Live round advanced", "The next Python-generated live round is now active.");
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(`${error instanceof Error ? error.message : "Round advance is uncertain."} Reconcile before retrying.`);
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
-  async function publishMatches(row: LiveSession, confirmationText: string) {
+  async function publishMatches(row: LiveSession, confirmationText: string): Promise<ActionCompletion> {
     const generation = actionRequest.begin();
     const scope = `publish:${row.session_key}`;
     const matchDate = publishDate[row.session_key] || new Date().toISOString();
@@ -151,34 +160,39 @@ export default function JuprLiveAdminPanel({ apiBase, clubId, clubSlug, status }
     setBusy(true); setMessage(null);
     try {
       const fields = await durableFields(scope, "official_publish", row.session_key, row.version);
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before official publication could continue.");
       setLastOperationKey(fields.operationKey);
       const payload = await requestJson<WriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/jupr-live/sessions/${encodeURIComponent(row.session_key)}/publish`, { method: "POST", body: JSON.stringify({ match_date: matchDate, confirmation_text: confirmationText, expected_version: fields.expected_version, idempotency_key: fields.idempotency_key }) });
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the publication response was applied.");
       completeScope(scope); setLastResult(payload); setMessage(`${payload.idempotent_replay ? "Recovered" : "Published"} ${payload.published_count || 0} official JUPR Live match(es).`);
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the live sessions could be refreshed.");
       await loadSessions();
+      return actionSuccess(payload.idempotent_replay ? "Official matches recovered" : "Official matches published", `${payload.published_count || 0} official JUPR Live match(es) were ${payload.idempotent_replay ? "recovered" : "published"}.`);
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(`${error instanceof Error ? error.message : "Publish outcome is uncertain."} Do not publish again; reconcile and inspect Match Log/Replay History.`);
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
-  async function reconcileOperation(confirmationText: string) {
-    if (!lastOperationKey) return;
+  async function reconcileOperation(confirmationText: string): Promise<ActionCompletion> {
+    if (!lastOperationKey) throw new Error("No live operation is available to reconcile.");
     const generation = actionRequest.begin();
     const requestedOperationKey = lastOperationKey;
     setBusy(true); setMessage(null);
     try {
       const payload = await requestJson<WriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/jupr-live/operations/${encodeURIComponent(requestedOperationKey)}/reconcile`, { method: "POST", body: JSON.stringify({ confirmation_text: confirmationText }) });
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the reconciliation response was applied.");
       setLastResult(payload);
-      setMessage(payload.ok ? "Recovered the durable response without replaying the write." : "Outcome remains uncertain. Follow Match Log/Replay History recovery.");
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!payload.ok) throw new Error("Outcome remains uncertain. Follow Match Log/Replay History recovery.");
+      setMessage("Recovered the durable response without replaying the write.");
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the live sessions could be refreshed.");
       await loadSessions();
+      return actionSuccess("Live operation reconciled", "The durable response was recovered without replaying the write.");
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to reconcile live operation.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }

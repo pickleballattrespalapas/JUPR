@@ -240,7 +240,7 @@ def render(ctx):
                 seed_df = pd.DataFrame(
                     {
                         "Name": [str(x) for x in pending_new_players],
-                        "Starting JUPR": [3.5] * len(pending_new_players),
+                        "Starting JUPR": [None] * len(pending_new_players),
                     }
                 )
                 st.session_state.mu_new_players_editor_seed = seed_df
@@ -255,6 +255,7 @@ def render(ctx):
                         min_value=1.0,
                         max_value=7.0,
                         step=0.1,
+                        required=True,
                     )
                 },
                 key="mu_new_players_editor",
@@ -264,6 +265,9 @@ def render(ctx):
                 errors = []
                 for _, row in edited_new.iterrows():
                     nm = str(row["Name"]).strip()
+                    if pd.isna(row["Starting JUPR"]):
+                        errors.append(f"{nm or 'New player'}: Starting JUPR is required")
+                        continue
                     jupr = float(row["Starting JUPR"])
                     ok, err = safe_add_player(
                         supabase=ctx.supabase,

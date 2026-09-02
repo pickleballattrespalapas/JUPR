@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess, type ActionCompletion } from "@/components/interaction";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
@@ -122,11 +123,11 @@ export default function MatchCanonicalAuditPanel({ apiBase, clubId, status }: Pr
     finally { if (auditRequest.isCurrent(generation)) setBusy(false); }
   }
 
-  async function normalize(dryRun: boolean, confirmationText = "") {
-    if (!playerId) { setMessage("Select a player first."); return; }
+  async function normalize(dryRun: boolean, confirmationText = ""): Promise<ActionCompletion> {
+    if (!playerId) { const error = new Error("Select a player first."); setMessage(error.message); throw error; }
     const ids = matchIds.split(/[\s,]+/).map((value) => Number(value.trim())).filter((value) => Number.isInteger(value) && value > 0);
-    if (!dryRun && !ids.length) { setMessage("Select the exact IDs from the current dry run before applying."); return; }
-    if (!dryRun && !previewFingerprint) { setMessage("Run and review a current dry run before applying."); return; }
+    if (!dryRun && !ids.length) { const error = new Error("Select the exact IDs from the current dry run before applying."); setMessage(error.message); throw error; }
+    if (!dryRun && !previewFingerprint) { const error = new Error("Run and review a current dry run before applying."); setMessage(error.message); throw error; }
     const generation = actionRequest.begin();
     setBusy(true); setMessage(null);
     try {
@@ -144,7 +145,7 @@ export default function MatchCanonicalAuditPanel({ apiBase, clubId, status }: Pr
           source: dryRun ? "next_match_canonical_audit_dry_run" : "next_match_canonical_audit_apply"
         })
       });
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the normalization response was applied.");
       const result: Record<string, unknown> = payload.result || (payload as unknown as Record<string, unknown>);
       setNormalizeResult(result);
       if (dryRun) {
@@ -155,13 +156,16 @@ export default function MatchCanonicalAuditPanel({ apiBase, clubId, status }: Pr
         setMatchIds(proposedIds.join(", "));
         setOperationKey("");
         setMessage(`Read-only dry run prepared ${proposedIds.length} exact match ID(s). Review every patch before applying.`);
+        return actionSuccess("Normalization preview ready", `The read-only dry run prepared ${proposedIds.length} exact match ID(s).`);
       } else {
         setPreviewFingerprint("");
         setOperationKey("");
         setMessage(`Atomic normalization updated ${payload.updated_count ?? ids.length} match(es) and verified readback. Re-run the audit.`);
+        return actionSuccess("Canonical normalization complete", `Atomic normalization updated ${payload.updated_count ?? ids.length} match(es) and verified readback.`);
       }
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to normalize rows.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
@@ -232,7 +236,7 @@ export default function MatchCanonicalAuditPanel({ apiBase, clubId, status }: Pr
         <p style={{ color: "#475569" }}>Run a read-only dry run first. Apply is bound to its fingerprint and exact proposed IDs, runs atomically through FastAPI/Supabase, and cannot silently replay after an uncertain response.</p>
         <label>Match IDs<br /><textarea value={matchIds} onChange={(event) => { setMatchIds(event.target.value); setPreviewFingerprint(""); }} rows={3} style={inputStyle} /></label>
         <div style={{ display: "flex", gap: "0.75rem", alignItems: "end", flexWrap: "wrap", marginTop: "0.75rem" }}>
-          <button type="button" onClick={() => normalize(true)} disabled={busy || !playerId} style={ghostButtonStyle}>Dry run normalize</button>
+          <button type="button" onClick={() => void normalize(true).catch(() => undefined)} disabled={busy || !playerId} style={ghostButtonStyle}>Dry run normalize</button>
           <ConfirmAction
             triggerLabel="Apply exact reviewed plan"
             title="Apply this canonical normalization plan?"

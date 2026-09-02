@@ -83,3 +83,39 @@ def test_admin_tournament_create_draw_contract(monkeypatch):
     assert tables["tournament_event_draws"][0]["status"] == "draft"
     assert tables["admin_activity_log"][0]["action_type"] == "create_tournament_event_draw_admin"
     assert tables["admin_activity_log"][0]["flagged_for_review"] is True
+
+
+def test_admin_tournament_create_draw_refuses_disabled_or_cancelled_event(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    _install_auth(monkeypatch)
+
+    for event_state in (
+        {"enabled": False, "status": "open"},
+        {"enabled": True, "status": "cancelled"},
+        {"enabled": True, "status": "inactive"},
+        {"enabled": True, "status": "archived"},
+    ):
+        tables = tournament_tables()
+        tables["tournament_event_options"][0].update(event_state)
+        supabase = FakeSupabase(tables)
+        monkeypatch.setattr(
+            "services.api.main.create_client",
+            lambda _url, _credential, current=supabase: current,
+        )
+
+        response = TestClient(app).post(
+            "/admin/clubs/club/tournaments/admin/tournaments/tour_1/draws",
+            headers={"Authorization": "Bearer local"},
+            json={
+                "event_option_id": "event_1",
+                "name": "Cancelled 3.0 Draw",
+                "confirmation_text": "CREATE DRAW",
+            },
+        )
+
+        assert response.status_code == 400
+        assert "disabled or cancelled event" in response.json()["detail"]
+        assert tables["tournament_event_draws"] == []
+        assert tables["admin_activity_log"] == []

@@ -3,9 +3,10 @@ import { getClubLeagueResults } from "@/lib/api";
 import type {
   LeagueResultsHighlights,
   LeagueResultsRecentMatch,
-  LeagueResultsStatRow,
-  LeagueResultsStanding
+  LeagueResultsStatRow
 } from "@/lib/api";
+import { LeagueAwardRaceGrid } from "@/components/LeagueAwardRace";
+import LeaguePlayerRoster from "@/components/LeaguePlayerRoster";
 import PrintButton from "./PrintButton";
 
 type LeagueResultsPageProps = {
@@ -31,8 +32,7 @@ const cardStyle = {
 };
 
 const sectionStyle = {
-  marginTop: "1.25rem",
-  pageBreakInside: "avoid" as const
+  marginTop: "1.25rem"
 };
 
 const sectionLabels: Record<SectionKey, string> = {
@@ -102,6 +102,11 @@ function deltaLabel(value?: number | null): string {
   return `${n >= 0 ? "+" : ""}${n.toFixed(3)}`;
 }
 
+function countLabel(value: number | null | undefined, singular: string, plural = `${singular}s`): string {
+  const count = Number(value ?? 0);
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
 function playerHref(clubSlug: string, playerId: string | number): string {
   return `/clubs/${clubSlug}/players/${playerId}`;
 }
@@ -140,7 +145,7 @@ function HighlightList({ title, rows, clubSlug }: { title: string; rows: LeagueR
         {rows.map((row) => (
           <li key={`${row.week_num ?? "all"}-${row.player_id}-${title}`}>
             <Link href={playerHref(clubSlug, row.player_id)}>{row.player_name}</Link>
-            <span style={{ color: "#475569" }}> — {row.wins ?? 0}-{row.losses ?? 0}, {row.games ?? 0} games</span>
+            <span style={{ color: "#475569" }}> — {row.wins ?? 0}-{row.losses ?? 0}, {countLabel(row.games, "game")}</span>
             {row.rating_delta_jupr != null ? <span style={{ color: "#475569" }}> · Δ {deltaLabel(row.rating_delta_jupr)}</span> : null}
           </li>
         ))}
@@ -154,7 +159,7 @@ function HighlightGrid({ highlights, clubSlug }: { highlights: LeagueResultsHigh
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "1rem", marginBottom: "1rem" }}>
       <HighlightList title="Biggest climbers" rows={highlights.biggest_climbers} clubSlug={clubSlug} />
-      <HighlightList title={`Best win % (${qualifier}+ games)`} rows={highlights.best_win_pct} clubSlug={clubSlug} />
+      <HighlightList title={`Best win % (${qualifier}+ ${qualifier === 1 ? "game" : "games"})`} rows={highlights.best_win_pct} clubSlug={clubSlug} />
       <HighlightList title="Most active" rows={highlights.most_active} clubSlug={clubSlug} />
     </div>
   );
@@ -217,46 +222,6 @@ function BarList({ title, rows, emptyText = "No chart data yet." }: { title: str
   );
 }
 
-function StandingsTable({ standings, clubSlug }: { standings: LeagueResultsStanding[]; clubSlug: string }) {
-  if (!standings.length) return <p>No public standings are available for this league yet.</p>;
-  return (
-    <div style={{ overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: "14px", background: "white" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "720px" }}>
-        <thead>
-          <tr>
-            {[
-              "Rank",
-              "Player",
-              "Rating",
-              "Games",
-              "Wins",
-              "Losses",
-              "Win %",
-              "Rating Δ"
-            ].map((heading) => (
-              <th key={heading} style={{ textAlign: "left", padding: "0.6rem", borderBottom: "1px solid #cbd5e1", fontSize: "0.8rem", color: "#475569" }}>{heading}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {standings.map((row) => (
-            <tr key={String(row.player_id)}>
-              <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{row.rank ?? "—"}</td>
-              <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}><Link href={playerHref(clubSlug, row.player_id)}>{row.player_name}</Link></td>
-              <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{ratingLabel(row.rating_jupr)}</td>
-              <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{row.matches_played ?? 0}</td>
-              <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{row.wins ?? 0}</td>
-              <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{row.losses ?? 0}</td>
-              <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{percentLabel(row.win_pct)}</td>
-              <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{deltaLabel(row.rating_delta_jupr)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
 function StatTable({ rows, clubSlug, title }: { rows: LeagueResultsStatRow[]; clubSlug: string; title: string }) {
   if (!rows.length) return <p style={{ color: "#64748b" }}>No {title.toLowerCase()} data yet.</p>;
   return (
@@ -299,38 +264,6 @@ function StatTable({ rows, clubSlug, title }: { rows: LeagueResultsStatRow[]; cl
   );
 }
 
-function StandingsCharts({ standings, clubSlug }: { standings: LeagueResultsStanding[]; clubSlug: string }) {
-  const topRatings = [...standings]
-    .filter((row) => row.rating_jupr != null)
-    .sort((a, b) => safeNumber(b.rating_jupr) - safeNumber(a.rating_jupr))
-    .slice(0, 10)
-    .map((row) => ({
-      key: `rating-${row.player_id}`,
-      label: row.player_name,
-      value: safeNumber(row.rating_jupr),
-      detail: ratingLabel(row.rating_jupr),
-      href: playerHref(clubSlug, row.player_id)
-    }));
-  const topMovers = [...standings]
-    .filter((row) => row.rating_delta_jupr != null)
-    .sort((a, b) => safeNumber(b.rating_delta_jupr) - safeNumber(a.rating_delta_jupr))
-    .slice(0, 10)
-    .map((row) => ({
-      key: `delta-${row.player_id}`,
-      label: row.player_name,
-      value: safeNumber(row.rating_delta_jupr),
-      detail: deltaLabel(row.rating_delta_jupr),
-      href: playerHref(clubSlug, row.player_id)
-    }));
-
-  return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "1rem", marginTop: "1rem" }}>
-      <BarList title="Top ratings" rows={topRatings} />
-      <BarList title="Biggest season movers" rows={topMovers} />
-    </div>
-  );
-}
-
 function PlayerTrend({ rows, playerName }: { rows: LeagueResultsStatRow[]; playerName: string }) {
   const sortedRows = [...rows].sort((a, b) => safeNumber(a.week_num) - safeNumber(b.week_num));
   const ranked = sortedRows.filter((row) => row.rank != null);
@@ -345,7 +278,7 @@ function PlayerTrend({ rows, playerName }: { rows: LeagueResultsStatRow[]; playe
     key: `games-${row.week_num}`,
     label: row.week_num ? `Week ${row.week_num}` : "Season",
     value: safeNumber(row.games),
-    detail: `${row.games ?? 0} games`
+    detail: countLabel(row.games, "game")
   }));
   const winRows = sortedRows
     .filter((row) => row.win_pct != null)
@@ -403,10 +336,21 @@ export default async function LeagueResultsPage({ params, searchParams }: League
     <section>
       <style>{`
         @media print {
-          .no-print { display: none !important; }
-          body { background: white !important; }
+          @page { margin: 8mm; }
+          header, footer, nav, .no-print { display: none !important; }
+          body { background: white !important; font-size: 10pt; }
           a { color: inherit !important; text-decoration: none !important; }
+          main { max-width: none !important; margin: 0 !important; padding: 0 !important; }
           section { color: #0f172a; }
+          article { padding: 3mm !important; }
+          h1 { font-size: 18pt; margin-bottom: 2mm !important; }
+          h2 { font-size: 13pt; margin: 3mm 0 2mm !important; }
+          h3 { font-size: 11pt; margin: 2mm 0 !important; }
+          table { font-size: 9pt; }
+          th, td { padding: 1mm 1.5mm !important; }
+          thead { display: table-header-group; }
+          tr, h1, h2, h3 { break-inside: avoid; page-break-inside: avoid; }
+          section > section { break-inside: auto; }
         }
       `}</style>
 
@@ -415,7 +359,7 @@ export default async function LeagueResultsPage({ params, searchParams }: League
       </p>
       <h1 style={{ marginTop: 0 }}>{data?.club.name ?? clubSlug} league results</h1>
       <p style={{ color: "#334155", maxWidth: "760px" }}>
-        Public league standings, weekly results, and season performance. This page is read-only and uses public-safe FastAPI summaries.
+        Awards-race placement, an unranked player roster, weekly results, and season performance. This page is read-only and uses public-safe FastAPI summaries.
       </p>
 
       {error ? <p style={{ color: "#b91c1c" }}>League Results are temporarily unavailable. {error}</p> : null}
@@ -457,14 +401,22 @@ export default async function LeagueResultsPage({ params, searchParams }: League
           </div>
 
           {showOverall ? (
+            <section style={sectionStyle} data-testid="league-results-awards-race">
+              <h2>Awards race</h2>
+              {data.award_progress.awards.length ? <>
+                <p style={{ color: "#64748b" }}>Top five qualified players are shown for each award. Expand a race to see every eligible player.</p>
+                <LeagueAwardRaceGrid progress={data.award_progress} clubSlug={clubSlug} />
+              </> : <article style={{ ...cardStyle, background: "#f8fafc", marginBottom: "1rem" }}>No player has met the current award qualification criteria yet.</article>}
+            </section>
+          ) : null}
+
+          {showOverall ? (
             <section style={sectionStyle}>
-              <h2>Current standings</h2>
+              <h2>Player roster</h2>
               <p style={{ color: "#64748b" }}>
-                Current rating and rank with the league&apos;s official season record.
-                Players awaiting a league rating appear unranked.
+                An unranked reference roster for the league&apos;s official record. Sort by the measure you need; award placement is shown above.
               </p>
-              <StandingsTable standings={data.standings} clubSlug={clubSlug} />
-              <StandingsCharts standings={data.standings} clubSlug={clubSlug} />
+              <LeaguePlayerRoster standings={data.standings} clubSlug={clubSlug} />
 
               <h2>Season highlights</h2>
               <p style={{ color: "#64748b" }}>Season totals only; win-percentage leaders must meet the league minimum of {data.season_highlights.min_games ?? 1} games.</p>
@@ -494,13 +446,13 @@ export default async function LeagueResultsPage({ params, searchParams }: League
                 <strong>Best win % qualification:</strong>
                 {[1, 2, 4, 6, 8].map((minimum) => (
                   <Link key={minimum} href={pageHref({ clubSlug, league: selectedLeague, section: "weekly", week: selectedWeek, player: selectedPlayerId, weeklyMinGames: minimum })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.3rem 0.6rem", background: minimum === weeklyMinGames ? "#dcfce7" : "white", color: "#0f172a", textDecoration: "none", fontWeight: minimum === weeklyMinGames ? 800 : 600 }}>
-                    {minimum}+ games
+                    {minimum}+ {minimum === 1 ? "game" : "games"}
                   </Link>
                 ))}
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "1rem", marginBottom: "1rem" }}>
-                <BarList title="Weekly wins" rows={[...recentWeeklyRows].sort((a, b) => safeNumber(b.wins) - safeNumber(a.wins)).slice(0, 10).map((row) => ({ key: `wins-${row.player_id}`, label: row.player_name, value: safeNumber(row.wins), detail: `${row.wins ?? 0} wins`, href: playerHref(clubSlug, row.player_id) }))} />
-                <BarList title="Weekly games" rows={[...recentWeeklyRows].sort((a, b) => safeNumber(b.games) - safeNumber(a.games)).slice(0, 10).map((row) => ({ key: `games-${row.player_id}`, label: row.player_name, value: safeNumber(row.games), detail: `${row.games ?? 0} games`, href: playerHref(clubSlug, row.player_id) }))} />
+                <BarList title="Weekly wins" rows={[...recentWeeklyRows].sort((a, b) => safeNumber(b.wins) - safeNumber(a.wins)).slice(0, 10).map((row) => ({ key: `wins-${row.player_id}`, label: row.player_name, value: safeNumber(row.wins), detail: countLabel(row.wins, "win"), href: playerHref(clubSlug, row.player_id) }))} />
+                <BarList title="Weekly games" rows={[...recentWeeklyRows].sort((a, b) => safeNumber(b.games) - safeNumber(a.games)).slice(0, 10).map((row) => ({ key: `games-${row.player_id}`, label: row.player_name, value: safeNumber(row.games), detail: countLabel(row.games, "game"), href: playerHref(clubSlug, row.player_id) }))} />
                 <BarList title="Weekly rating Δ" rows={recentWeeklyRows.filter((row) => row.rating_delta_jupr != null).sort((a, b) => safeNumber(b.rating_delta_jupr) - safeNumber(a.rating_delta_jupr)).slice(0, 10).map((row) => ({ key: `delta-${row.player_id}`, label: row.player_name, value: safeNumber(row.rating_delta_jupr), detail: deltaLabel(row.rating_delta_jupr), href: playerHref(clubSlug, row.player_id) }))} />
               </div>
               <StatTable title="Weekly" rows={recentWeeklyRows.slice(0, 40)} clubSlug={clubSlug} />

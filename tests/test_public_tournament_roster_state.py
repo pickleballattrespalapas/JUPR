@@ -347,16 +347,41 @@ def _core_storage(*, include_partner_schema=False, include_core_selection_table=
         registration["player_id"] = 101
     storage = {
         "tournament_registration_settings": [
-            {"id": "settings-1", "tournament_id": "tour-1", "builder_draft_json": {}, "builder_draft_updated_at": "now"}
+            {
+                "id": "settings-1",
+                "tournament_id": "tour-1",
+                "builder_draft_json": {},
+                "builder_draft_updated_at": "now",
+                "location_name": "Test venue",
+                "venue_address": "",
+                "venue_directions": "",
+                "venue_courts_json": [],
+                "timezone": "America/Chicago",
+                "sponsors_json": [],
+                "weather_policy_markdown": "",
+            }
         ],
         "tournament_registration_days": [
-            {"id": "day-1", "tournament_id": "tour-1", "enabled": True, "label": "Day 1", "sort_order": 1}
+            {
+                "id": "day-1",
+                "tournament_id": "tour-1",
+                "enabled": True,
+                "label": "Day 1",
+                "sort_order": 1,
+                "court_count": 1,
+                "court_labels": ["Court 1"],
+                "available_court_ids": [],
+                "court_open_time": None,
+                "court_close_time": None,
+                "court_notes": "",
+            }
         ],
         "tournament_event_options": [
             {
                 "id": "event-wd-35",
                 "tournament_id": "tour-1",
                 "registration_day_id": "day-1",
+                "scheduled_day_ids": ["day-1"],
                 "event_family_label": "Women's Doubles",
                 "division_name": "3.5",
                 "event_format_default": "Round Robin",
@@ -364,6 +389,8 @@ def _core_storage(*, include_partner_schema=False, include_core_selection_table=
                 "event_format_override": None,
                 "scoring_override": None,
                 "skill_mode": "division",
+                "skill_min_rating": None,
+                "skill_max_rating": None,
                 "age_mode": "none",
                 "age_rules": {},
                 "waitlist_enabled": True,
@@ -385,6 +412,7 @@ def _core_storage(*, include_partner_schema=False, include_core_selection_table=
                 "registration_day_id": "day-1",
                 "event_option_id": "event-wd-35",
                 "partner_mode": "HAS_PARTNER",
+                "partner_gender": None,
                 "partner_name": "Elizabeth Whelan",
                 "partner_email": "elizabeth@example.com",
                 "created_at": "2026-01-01T00:00:00",

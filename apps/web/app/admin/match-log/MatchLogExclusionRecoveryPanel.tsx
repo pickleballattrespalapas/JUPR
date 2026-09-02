@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess, type ActionCompletion } from "@/components/interaction";
 import type { AdminMatchExclusionOperation } from "@/lib/adminMatchLogApi";
 import { useAdminSession } from "@/lib/useAdminSession";
 
@@ -126,7 +127,7 @@ export default function MatchLogExclusionRecoveryPanel({
     }
   }
 
-  async function recoverOperation(confirmationText: string) {
+  async function recoverOperation(confirmationText: string): Promise<ActionCompletion> {
     setBusy(true);
     setMessage(null);
     try {
@@ -141,15 +142,19 @@ export default function MatchLogExclusionRecoveryPanel({
         }
       );
       onOperationChange(current);
-      setMessage(current.status === "succeeded"
+      const recoveryMessage = current.status === "succeeded"
         ? "The exact exclusion operation, Replay, and badge repair all completed."
-        : `Recovery remains ${current.status.replace(/_/g, " ")}. Do not start another exclusion.`);
+        : `Recovery remains ${current.status.replace(/_/g, " ")}. Do not start another exclusion.`;
+      setMessage(recoveryMessage);
       if (current.status === "succeeded") {
         setCompletedMessage("The exact exclusion operation, rating replay, and badge repair all completed.");
         onMutationComplete();
+        return actionSuccess("Exclusion recovery complete", recoveryMessage);
       }
+      throw new Error(recoveryMessage);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to resume exclusion recovery.");
+      throw error;
     } finally {
       setBusy(false);
     }

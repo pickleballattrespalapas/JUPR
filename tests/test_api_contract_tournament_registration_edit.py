@@ -77,7 +77,7 @@ def test_public_registration_edit_link_request_contract(client_and_storage):
 
     response = client.post(
         "/clubs/tres-palapas/tournament-registration/edit-link/request",
-        json={"registration_slug": "tres-open", "email": "alex@example.com"},
+        json={"registration_slug": "tres-open", "email": "alex@example.com", "idempotency_key": "edit-link-alex-1"},
     )
 
     assert response.status_code == 200
@@ -96,7 +96,7 @@ def test_public_registration_edit_routes_require_server_credential(client_and_st
 
     response = client.post(
         "/clubs/tres-palapas/tournament-registration/edit-link/request",
-        json={"registration_slug": "tres-open", "email": "alex@example.com"},
+        json={"registration_slug": "tres-open", "email": "alex@example.com", "idempotency_key": "edit-link-alex-2"},
     )
 
     assert response.status_code == 503
@@ -109,7 +109,7 @@ def test_public_registration_edit_link_request_does_not_enumerate_missing_email(
 
     response = client.post(
         "/clubs/tres-palapas/tournament-registration/edit-link/request",
-        json={"registration_slug": "tres-open", "email": "missing@example.com"},
+        json={"registration_slug": "tres-open", "email": "missing@example.com", "idempotency_key": "edit-link-missing"},
     )
 
     assert response.status_code == 200
@@ -201,6 +201,7 @@ def test_public_registration_edit_imported_draw_returns_conflict_without_mutatio
             "registration_day_id": "day1",
             "event_option_id": "event1",
             "source": "REGISTRATION",
+            "player1_id": storage["tournament_registrations"][0]["player_id"],
         }
     )
     before = deepcopy(storage)

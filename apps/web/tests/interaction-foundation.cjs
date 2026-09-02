@@ -1,0 +1,146 @@
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+
+const webRoot = path.resolve(__dirname, "..");
+const read = (relativePath) => fs.readFileSync(path.join(webRoot, relativePath), "utf8");
+
+const confirmAction = read("components/ConfirmAction.tsx");
+const provider = read("components/interaction/InteractionProvider.tsx");
+const dialog = read("components/interaction/InteractionDialog.tsx");
+const lifecycle = read("components/interaction/useActionLifecycle.ts");
+const types = read("components/interaction/types.ts");
+const formDialog = read("components/interaction/FormDialog.tsx");
+const feedback = read("components/interaction/ActionFeedback.tsx");
+const openDialogInitializer = read("components/interaction/useOpenDialogInitializer.ts");
+const eventFamilyDialog = read("app/admin/tournaments/setup/TournamentSetupEventFamilyDialog.tsx");
+const divisionDialog = read("app/admin/tournaments/setup/TournamentSetupDivisionDialog.tsx");
+const divisionBulkDialog = read("app/admin/tournaments/setup/TournamentDivisionBulkEditDialog.tsx");
+const divisionPresetDialog = read("app/admin/tournaments/setup/TournamentDivisionPresetDialog.tsx");
+const bulkCourtsDialog = read("app/admin/tournaments/setup/TournamentBulkAddCourtsDialog.tsx");
+const setupWizard = read("app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx");
+const setupPublicationStatus = read("app/admin/tournaments/setup/tournamentSetupPublicationStatus.ts");
+const setupBuilder = read("app/admin/tournament-setup/tournamentSetupBuilder.ts");
+const legacyDayCard = read("app/admin/tournament-setup/TournamentSetupDayCard.tsx");
+const legacyFamilyCard = read("app/admin/tournament-setup/TournamentSetupFamilyCard.tsx");
+const legacyDivisionCard = read("app/admin/tournament-setup/TournamentSetupDivisionCard.tsx");
+const css = read("components/interaction/InteractionDialog.module.css");
+
+assert.match(types, /type ActionCompletion = ActionSuccess \| ActionUncertain/);
+assert.match(types, /type ActionCallback = \(confirmationText: string\) => Promise<ActionCompletion>/);
+assert.match(types, /function actionSuccess\(/);
+assert.match(types, /function actionUncertain\(/);
+assert.doesNotMatch(confirmAction, /Promise<void/);
+assert.doesNotMatch(confirmAction, /window\.(confirm|alert|prompt)/);
+
+assert.match(dialog, /<dialog/);
+assert.match(dialog, /createPortal\(/);
+assert.match(dialog, /document\.body/);
+assert.match(dialog, /showModal\(\)/);
+assert.match(dialog, /aria-busy=/);
+assert.match(dialog, /onCancel=/);
+assert.match(dialog, /event\.target === event\.currentTarget/);
+assert.match(dialog, /returnFocusRef/);
+assert.match(dialog, /originFocusRef/);
+assert.match(dialog, /function isEligibleFocusTarget/);
+assert.match(dialog, /!element\.matches\(":disabled"\)/);
+assert.match(dialog, /element\.getAttribute\("aria-disabled"\) !== "true"/);
+assert.match(dialog, /const returnTarget = returnFocusRef\?\.current \?\? null/);
+assert.match(dialog, /isEligibleFocusTarget\(returnTarget\)/);
+assert.match(dialog, /isEligibleFocusTarget\(rememberedFocusRef\.current\)/);
+assert.match(dialog, /\.find\(\(element\) => isEligibleFocusTarget\(element\) && element\.tabIndex >= 0\)/);
+
+assert.match(lifecycle, /useRef\(false\)/);
+assert.match(lifecycle, /if \(inFlightRef\.current\) return null/);
+assert.match(lifecycle, /setPhase\("working"\)/);
+assert.match(lifecycle, /setPhase\(result\.status\)/);
+assert.match(lifecycle, /normalizeInteractionActionError/);
+assert.match(lifecycle, /if \(!isActionCompletion\(result\)\)/);
+assert.match(lifecycle, /const recover = useCallback/);
+assert.match(lifecycle, /setPhase\("uncertain"\)/);
+
+assert.match(confirmAction, /useInteraction\(\)/);
+assert.match(confirmAction, /openAction\(/);
+assert.doesNotMatch(confirmAction, /useActionLifecycle/);
+assert.match(provider, /Object\.freeze\(\{ \.\.\.request, origin \}\)/);
+assert.match(provider, /activeRef\.current/);
+assert.match(provider, /phase === "success"/);
+assert.match(provider, /phase === "uncertain"/);
+assert.match(provider, /lifecycle\.recover\(completion\.onRecover\)/);
+assert.match(provider, /restoreFocus=\{false\}/);
+assert.match(provider, /function isEligibleFocusTarget/);
+assert.match(provider, /element\?\.isConnected/);
+assert.match(provider, /!element\.matches\(":disabled"\)/);
+assert.match(provider, /element\.getAttribute\("aria-disabled"\) !== "true"/);
+assert.match(provider, /isEligibleFocusTarget\(explicitTarget\)/);
+assert.match(provider, /isEligibleFocusTarget\(origin\)/);
+assert.match(provider, /data-autofocus/);
+assert.match(feedback, /role="alert"/);
+assert.match(feedback, /data-dialog-focus/);
+assert.match(feedback, /aria-label="Action result"/);
+assert.doesNotMatch(feedback, /phase === "success"[\s\S]*?<h3[^>]*>\{completion\.title\}/);
+
+assert.match(formDialog, /Discard unsaved changes\?/);
+assert.match(formDialog, /getFirstInvalidField/);
+assert.match(formDialog, /event\.preventDefault\(\)/);
+assert.match(formDialog, /restoreFocus=\{lifecycle\.phase !== "success"\}/);
+assert.match(formDialog, /originFocusRef=\{rememberedOriginRef\}/);
+assert.match(formDialog, /focusEligibleElement\(explicitTarget\)/);
+assert.match(formDialog, /focusEligibleElement\(rememberedOriginRef\.current\)/);
+assert.doesNotMatch(formDialog, /finally \{\s*lifecycle\.reset\(\);\s*onCancel\(\)/, "success close must not re-enable competing dialog focus restoration");
+
+assert.match(openDialogInitializer, /const initializeRef = useRef\(initialize\)/);
+assert.match(openDialogInitializer, /initializeRef\.current = initialize/);
+assert.match(openDialogInitializer, /if \(open\) initializeRef\.current\(\)/);
+assert.match(openDialogInitializer, /}, \[open\]\)/);
+for (const setupDialog of [
+  eventFamilyDialog,
+  divisionDialog,
+  divisionBulkDialog,
+  divisionPresetDialog,
+  bulkCourtsDialog
+]) {
+  assert.match(setupDialog, /useOpenDialogInitializer\(open,/);
+}
+assert.doesNotMatch(divisionDialog, /\[open, initialValue/);
+assert.doesNotMatch(eventFamilyDialog, /\[open, initialValue/);
+assert.doesNotMatch(divisionBulkDialog, /\[open, divisions/);
+
+assert.match(setupBuilder, /export function editableString\(/);
+assert.match(setupBuilder, /export function setCanonicalRecordString\(/);
+assert.match(setupBuilder, /days: rowsToPayload\(configuration\.days\)\.map\(canonicalDayPayload\)/);
+assert.match(setupBuilder, /event_families: rowsToPayload\(configuration\.eventFamilies\)\.map\(canonicalEventFamilyPayload\)/);
+assert.match(setupBuilder, /event_options: rowsToPayload\(configuration\.eventOptions\)\.map\(canonicalEventOptionPayload\)/);
+assert.match(divisionDialog, /value=\{editableString\(draft\.division_name \?\? draft\.label\)\}/);
+assert.match(divisionDialog, /setCanonicalRecordString\([\s\S]*?\["division_name", "label"\]/);
+assert.doesNotMatch(divisionDialog, /value=\{cleanString\(draft\.division_name/);
+assert.match(eventFamilyDialog, /const editableName = editableString\(draft\.event_family \?\? draft\.event_family_label\)/);
+assert.match(eventFamilyDialog, /value=\{editableName\}/);
+assert.match(divisionPresetDialog, /value=\{editableString\(proposal\.value\.division_name \?\? proposal\.value\.label\)\}/);
+assert.match(setupWizard, /value=\{editableString\(row\.value\.label\)\}/);
+assert.match(legacyDayCard, /value=\{editableString\(value\.label\)\}/);
+assert.match(legacyDayCard, /value=\{editableString\(value\.court_notes\)\}/);
+assert.match(legacyDayCard, /value=\{labels\[index\] \?\? `Court \$\{index \+ 1\}`\}/);
+assert.match(legacyFamilyCard, /const editableName = editableString\(value\.event_family \?\? value\.event_family_label\)/);
+assert.match(legacyDivisionCard, /const editableName = editableString\(value\.division_name \?\? value\.label\)/);
+assert.doesNotMatch(legacyDivisionCard, /const skillLabel = cleanString\(value\.skill_label\)/);
+assert.doesNotMatch(legacyDivisionCard, /const ageLabel = cleanString\(value\.age_label\)/);
+
+assert.match(setupPublicationStatus, /if \(detailLoadState === "failed"\) return "unavailable"/);
+assert.match(setupPublicationStatus, /if \(detailLoadState !== "loaded"\) return "checking"/);
+assert.match(setupPublicationStatus, /if \(!hasAuthoritativeDetail\) return "unavailable"/);
+assert.match(setupPublicationStatus, /return hasUnpublishedChanges \? "unpublished" : "current"/);
+assert.match(setupWizard, /setupPublicationStatus\(\{[\s\S]*?detailLoadState,[\s\S]*?hasAuthoritativeDetail: Boolean\(detail\),[\s\S]*?hasUnpublishedChanges[\s\S]*?\}\)/);
+assert.match(setupWizard, /setDetailLoadState\("loading"\)[\s\S]*?hydrate\(payload\);[\s\S]*?setDetailLoadState\("loaded"\)/);
+assert.match(setupWizard, /catch \(error\) \{[\s\S]*?setDetailLoadState\("failed"\)/);
+assert.match(setupWizard, /publicationStatus === "current" &&[\s\S]*?publishedSetupReady/);
+assert.match(setupWizard, /aria-busy=\{publicationStatus === "checking"\}/);
+assert.doesNotMatch(setupWizard, /background:\s*hasUnpublishedChanges\s*\?/);
+assert.doesNotMatch(setupWizard, /\{hasUnpublishedChanges\s*\?\s*"Unpublished setup draft"\s*:\s*"Published setup is current"\}/);
+
+assert.match(css, /min-height: 44px/);
+assert.match(css, /@media \(max-width: 480px\)/);
+assert.match(css, /calc\(100dvh - 1rem\)/);
+assert.match(css, /outline: 3px solid #60a5fa/);
+
+console.log("interaction foundation contract: ok");

@@ -6,6 +6,7 @@ export type AdminMatchUploaderStatusResponse = {
   singles_submit_endpoint?: string | null;
   round_robin_preview_endpoint?: string | null;
   player_create_endpoint?: string | null;
+  player_operation_endpoint?: string | null;
   max_batch_rows: number;
   league_options: string[];
   doubles_league_options?: string[];
@@ -114,6 +115,12 @@ export type AdminMatchUploaderRoundRobinPreview = {
 export type AdminMatchUploaderCreatePlayersResult = {
   ok: boolean;
   mode?: string;
+  operation_key?: string;
+  status?: string;
+  recovery_required?: boolean;
+  reconciled?: boolean;
+  created_count?: number;
+  unchanged_count?: number;
   requested_count?: number;
   accepted_count?: number;
   players?: Array<{
@@ -127,6 +134,18 @@ export type AdminMatchUploaderCreatePlayersResult = {
     is_active?: boolean | null;
   }>;
   warnings?: string[];
+};
+
+export type AdminMatchUploaderPlayerBatchOperation = {
+  ok?: boolean;
+  operation_key?: string;
+  idempotency_key?: string;
+  status: string;
+  result?: AdminMatchUploaderCreatePlayersResult | null;
+  result_json?: AdminMatchUploaderCreatePlayersResult | null;
+  error?: string | null;
+  error_text?: string | null;
+  recovery_required?: boolean;
 };
 
 type ApiResult<T> = { data: T | null; error: string | null };
@@ -152,6 +171,11 @@ async function apiErrorMessage(response: Response): Promise<string> {
     const payload = JSON.parse(bodyText) as { detail?: unknown; message?: unknown; error?: unknown };
     const detail = payload.detail ?? payload.message ?? payload.error;
     if (Array.isArray(detail)) return `${fallback} ${detail.map((item) => JSON.stringify(item)).join("; ")}`;
+    if (detail && typeof detail === "object") {
+      const detailMessage = (detail as { message?: unknown }).message;
+      if (typeof detailMessage === "string") return `${fallback} ${detailMessage}`;
+      return `${fallback} ${JSON.stringify(detail)}`;
+    }
     if (detail) return `${fallback} ${String(detail)}`;
   } catch {
     // Fall through to short text excerpt below.

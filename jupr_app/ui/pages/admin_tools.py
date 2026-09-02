@@ -33,7 +33,6 @@ from postgrest.exceptions import APIError
 
 from jupr_app.domain.ratings import calculate_hybrid_elo
 from jupr_app.domain.constants import DEFAULT_K_FACTOR
-from jupr_app.domain.tournament_match_payload import build_tournament_match_payload
 from jupr_app.domain.gamification.ensure_badges import ensure_badges
 from jupr_app.services.replay_service import (
     is_replay_jobs_table_missing_error,
@@ -57,7 +56,6 @@ from jupr_app.domain.live_social import (
 )
 from jupr_app.ui.layout import page_shell
 from jupr_app.ui.public_links import redact_query_params
-from jupr_app.services import ServiceContext, submit_match_batch
 
 
 def _query_params_snapshot() -> dict[str, str]:
@@ -799,18 +797,11 @@ def render(ctx):
     # Tournament Match Backfill
     # -------------------------
     st.subheader("🛠️ Tournament Match Backfill")
-    st.caption("Insert missing public match rows for finalized tournament games.")
-
-    if st.button("Backfill Missing Tournament Matches", key="tournament_match_backfill", disabled=not role_can_run_replay):
-        summary = _run_tournament_match_backfill(ctx)
-        st.info(
-            "Backfill summary: "
-            f"attempted={summary['attempted']}, "
-            f"inserted={summary['inserted']}, "
-            f"skipped_incomplete={summary['skipped_incomplete']}, "
-            f"skipped_empty={summary['skipped_empty']}, "
-            f"errors={summary['errors']}"
-        )
+    st.warning(
+        "Tournament match backfill writes are retired. Use the selected "
+        "tournament's Publish workflow; it enforces every game, podium review, "
+        "award, official-link, and recovery prerequisite before creating matches."
+    )
 
 
     st.divider()
@@ -1232,114 +1223,3 @@ def _render_badge_recompute_section(ctx, club_id: str, *, role_can_run_replay: b
         )
         st.success("Recompute finished.")
         st.code(json.dumps(result, indent=2), language="json")
-
-
-
-def _run_tournament_match_backfill(ctx):
-    supabase = ctx.supabase
-    club_id = str(ctx.club_id)
-    df_players_all = ctx.df_players_all
-    df_leagues = ctx.df_leagues
-    df_meta = ctx.df_meta
-    name_to_id = ctx.name_to_id
-
-    missing_games = _load_finalized_tournament_games_missing_matches(supabase, club_id)
-    attempted = len(missing_games)
-    inserted = 0
-    skipped_incomplete = 0
-    skipped_empty = 0
-    errors = 0
-
-    for game in missing_games:
-        tournament_id = game.get("tournament_id")
-        if not tournament_id:
-            skipped_incomplete += 1
-            continue
-
-        tournament_resp = supabase.table("tournaments").select("id,name").eq("id", tournament_id).limit(1).execute()
-        tournaments = tournament_resp.data or []
-        if not tournaments:
-            skipped_incomplete += 1
-            continue
-        tournament = tournaments[0]
-
-        teams_resp = supabase.table("tournament_teams").select("*").eq("tournament_id", tournament_id).execute()
-        teams = teams_resp.data or []
-        teams_by_id = {row["id"]: row for row in teams if row.get("id")}
-
-        score_a = int(game.get("score_a") or 0)
-        score_b = int(game.get("score_b") or 0)
-        if score_a + score_b <= 0:
-            skipped_empty += 1
-            continue
-
-        payload = build_tournament_match_payload(
-            tournament,
-            game,
-            teams_by_id,
-            score_a=score_a,
-            score_b=score_b,
-        )
-
-        if any(payload.get(k) is None for k in ("t1_p1", "t1_p2", "t2_p1", "t2_p2")):
-            skipped_incomplete += 1
-            continue
-
-        try:
-            service_ctx = ServiceContext(
-                supabase=supabase,
-                club_id=club_id,
-                actor_email=st.session_state.get("admin_email"),
-                actor_role=st.session_state.get("admin_role"),
-                source="admin_tools",
-                public_base_url=st.session_state.get("public_base_url"),
-            )
-            service_result = submit_match_batch(
-                service_ctx,
-                [payload],
-                name_to_id=name_to_id,
-                df_players_all=df_players_all,
-                df_leagues=df_leagues,
-                df_meta=df_meta,
-            )
-            if not service_result.ok:
-                raise RuntimeError("; ".join(service_result.errors) or "Unknown backfill error")
-            result = service_result.data
-        except Exception as exc:
-            errors += 1
-            st.error(f"Backfill failed for tournament game {game.get('id')}: {exc}")
-            continue
-
-        inserted += int(result.get("inserted", 0) or 0)
-        skipped_incomplete += int(result.get("skipped_incomplete", 0) or 0)
-        skipped_empty += int(result.get("skipped_empty", 0) or 0)
-
-    return {
-        "attempted": attempted,
-        "inserted": inserted,
-        "skipped_incomplete": skipped_incomplete,
-        "skipped_empty": skipped_empty,
-        "errors": errors,
-    }
-
-
-def _load_finalized_tournament_games_missing_matches(supabase, club_id: str) -> list[dict]:
-    games_resp = (
-        supabase.table("tournament_games")
-        .select("id,tournament_id,team_a_id,team_b_id,score_a,score_b,finalized_at")
-        .execute()
-    )
-    games = [row for row in (games_resp.data or []) if row.get("finalized_at") is not None]
-    if not games:
-        return []
-
-    game_ids = [row.get("id") for row in games if row.get("id")]
-    matches_resp = (
-        supabase.table("matches")
-        .select("tournament_game_id")
-        .eq("club_id", club_id)
-        .in_("tournament_game_id", game_ids)
-        .execute()
-    )
-    existing_ids = {row.get("tournament_game_id") for row in (matches_resp.data or []) if row.get("tournament_game_id")}
-    return [row for row in games if row.get("id") not in existing_ids]

@@ -75,7 +75,7 @@ def test_player_profile_contract_exposes_parity_sections_and_forwards_limits(cli
             "rating_breakdowns": [{"format": "singles", "label": "Singles", "matches": 1, "wins": 1, "losses": 0}],
             "rating_history": [],
             "league_ratings": [],
-            "awards": {"badge_count": 0, "badge_award_count": 0, "prestige_total": 0, "badges": [], "trophies": []},
+            "awards": {"badge_count": 0, "badge_award_count": 0, "trophy_count": 0, "prestige_total": 0, "badges": [], "trophies": []},
             "relationships": {"best_partner": None, "rival": None, "partners": [], "rivals": []},
             "social": {"available": True, "identity": {"linked": False, "label": "No linked Club Social identity"}, "summary": {"events": 0, "matches": 0, "wins": 0, "losses": 0, "score_diff": 0, "last_appearance": None}, "skill_breakdown": [], "recent_events": []},
             "recent_matches": [],

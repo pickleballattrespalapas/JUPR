@@ -1,13 +1,17 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess, actionUncertain, type ActionCompletion } from "@/components/interaction";
+import { swapRosterPositions } from "@/lib/playGeneratorRoster.mjs";
 import { useAdminSession } from "@/lib/useAdminSession";
 
 type GeneratorKind = "round_robin" | "ladder";
 type ScoringMode = "scored" | "unscored";
 type PlayFormat = "singles" | "doubles" | "doubles_singles";
+type RosterAction = "add" | "remove" | "substitute" | "swap" | "reorder";
 
 type Participant = {
   id: string;
@@ -89,6 +93,34 @@ type MutationResponse = {
   published_count?: number;
 };
 
+type SkipRoundRequest = {
+  skipBody: {
+    reason: string;
+    expected_version: string;
+    idempotency_key: string;
+  };
+  advanceIdempotencyKey: string;
+};
+
+type PublishMatchesRequest = {
+  match_date: string | null;
+  confirmation_text: string;
+  expected_version: string;
+  idempotency_key: string;
+};
+
+class ApiRequestError extends Error {
+  readonly status: number;
+  readonly detail: unknown;
+
+  constructor(message: string, status: number, detail: unknown) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
 type Props = {
   apiBase: string | null;
   clubId: string;
@@ -165,6 +197,31 @@ function operationKey(action: string): string {
       ? crypto.randomUUID()
       : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   return `${action}-${suffix}`;
+}
+
+function apiErrorMessage(detail: unknown, status: number): string {
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (detail && typeof detail === "object" && "message" in detail) {
+    const message = String((detail as { message?: unknown }).message || "").trim();
+    if (message) return message;
+  }
+  return `API error (${status})`;
+}
+
+function isUncertainRequestError(error: unknown): boolean {
+  if (!(error instanceof ApiRequestError)) return true;
+  if (error.status >= 500 || [408, 425, 429].includes(error.status)) return true;
+  if (!error.detail || typeof error.detail !== "object") return false;
+  const detail = error.detail as {
+    code?: unknown;
+    kind?: unknown;
+    recovery_required?: unknown;
+  };
+  return (
+    detail.code === "RECOVERY_REQUIRED" ||
+    detail.kind === "uncertain" ||
+    detail.recovery_required === true
+  );
 }
 
 function flattenMatches(round: RoundRow | null): MatchRow[] {
@@ -287,17 +344,20 @@ export default function GeneratorRoundRunner({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [skipReason, setSkipReason] = useState("");
-  const [rosterAction, setRosterAction] = useState<"add" | "remove" | "substitute" | "reorder">("add");
+  const [rosterAction, setRosterAction] = useState<RosterAction>("add");
   const [selectedParticipant, setSelectedParticipant] = useState("");
+  const [firstSwapParticipant, setFirstSwapParticipant] = useState("");
+  const [secondSwapParticipant, setSecondSwapParticipant] = useState("");
   const [newPlayerName, setNewPlayerName] = useState("");
   const [newPlayerId, setNewPlayerId] = useState("");
   const [substituteScope, setSubstituteScope] = useState<"round" | "rest">("rest");
   const [rosterOrder, setRosterOrder] = useState<string[]>([]);
   const [publishDate, setPublishDate] = useState("");
+  const skipDestinationRef = useRef<number | "completed" | null>(null);
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
-    if (!apiBase) throw new Error("Missing API base URL.");
-    if (!accessToken) throw new Error("Sign in before managing this session.");
+    if (!apiBase) throw new ApiRequestError("Missing API base URL.", 400, "local_configuration");
+    if (!accessToken) throw new ApiRequestError("Sign in before managing this session.", 401, "local_authentication");
     const headers = new Headers(options?.headers);
     headers.set("Authorization", `Bearer ${accessToken}`);
     if (options?.body) headers.set("Content-Type", "application/json");
@@ -308,7 +368,8 @@ export default function GeneratorRoundRunner({
     });
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
-      throw new Error(String(payload?.detail || `API error (${response.status})`));
+      const detail = payload?.detail;
+      throw new ApiRequestError(apiErrorMessage(detail, response.status), response.status, detail);
     }
     return payload as T;
   }
@@ -384,7 +445,26 @@ export default function GeneratorRoundRunner({
     session?.status === "active" &&
     isCurrent &&
     round?.status === "active";
-  const anyDraftScore = scoredSession && Object.values(scores).some((value) => value !== "");
+  const draftScoreCount = scoredSession
+    ? Object.values(scores).filter((value) => value !== "").length
+    : 0;
+  const anyDraftScore = draftScoreCount > 0;
+  const publishedMatchIds = new Set(
+    (session?.official_publish?.published_match_ids || []).map(String)
+  );
+  const unpublishedSavedMatchCount = (event?.rounds || []).reduce(
+    (count, row) =>
+      count +
+      (row.status === "saved"
+        ? flattenMatches(row).filter(
+            (match) =>
+              match.scoreA != null &&
+              match.scoreB != null &&
+              !publishedMatchIds.has(String(match.id))
+          ).length
+        : 0),
+    0
+  );
   const results = round ? roundStandings(round, participants) : [];
   const byeNames = (round?.byeParticipantIds || [])
     .map((id) => participants.get(id)?.name || id)
@@ -478,13 +558,10 @@ export default function GeneratorRoundRunner({
   }
 
 
-  async function skipRound(): Promise<void> {
-    if (!session || !round) return;
-    if (anyDraftScore && !window.confirm("Discard the unsaved score entries and skip this round?")) {
-      return;
-    }
+  async function executeSkipRound(request: SkipRoundRequest): Promise<ActionCompletion> {
     setBusy(true);
     setMessage(null);
+    let skipCommitted = false;
     try {
       const payload = await requestJson<MutationResponse>(
         `/admin/clubs/${encodeURIComponent(clubId)}/play-generators/sessions/${encodeURIComponent(
@@ -492,14 +569,11 @@ export default function GeneratorRoundRunner({
         )}/rounds/${roundNumber}/skip`,
         {
           method: "POST",
-          body: JSON.stringify({
-            reason: skipReason,
-            expected_version: session.version,
-            idempotency_key: operationKey("skip")
-          })
+          body: JSON.stringify(request.skipBody)
         }
       );
       if (!payload.session) throw new Error("Round skipped without a refreshed session.");
+      skipCommitted = true;
       applySession(payload.session);
       if (generatorKind === "round_robin" && !scoredSession) {
         const advancedPayload = await requestJson<MutationResponse>(
@@ -510,7 +584,7 @@ export default function GeneratorRoundRunner({
             method: "POST",
             body: JSON.stringify({
               expected_version: payload.session.version,
-              idempotency_key: operationKey("advance-after-skip")
+              idempotency_key: request.advanceIdempotencyKey
             })
           }
         );
@@ -518,20 +592,65 @@ export default function GeneratorRoundRunner({
         applySession(advancedPayload.session);
         if (advancedPayload.session.status === "completed") {
           setMessage("Session completed.");
-          router.refresh();
+          skipDestinationRef.current = "completed";
+          return actionSuccess(
+            "Round skipped and session completed",
+            `Round ${roundNumber} was skipped${draftScoreCount ? ` and ${draftScoreCount} unsaved score ${draftScoreCount === 1 ? "entry was" : "entries were"} discarded` : ""}. The session is complete.`
+          );
         } else {
           const nextRound = advancedPayload.session.current_round_number || roundNumber + 1;
-          router.push(roundPath(generatorKind, sessionKey, nextRound));
-          router.refresh();
+          skipDestinationRef.current = nextRound;
+          return actionSuccess(
+            "Round skipped",
+            `Round ${roundNumber} was skipped${draftScoreCount ? ` and ${draftScoreCount} unsaved score ${draftScoreCount === 1 ? "entry was" : "entries were"} discarded` : ""}. Round ${nextRound} is now current.`
+          );
         }
-        return;
       }
-      setMessage(`Round ${roundNumber} skipped.`);
+      const successMessage = `Round ${roundNumber} was skipped${draftScoreCount ? ` and ${draftScoreCount} unsaved score ${draftScoreCount === 1 ? "entry was" : "entries were"} discarded` : ""}.`;
+      setMessage(successMessage);
+      return actionSuccess("Round skipped", successMessage);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to skip the round.");
+      const errorMessage = error instanceof Error ? error.message : "Unable to skip the round.";
+      if (skipCommitted || isUncertainRequestError(error)) {
+        const recoveryMessage = skipCommitted
+          ? `${errorMessage} The round skip completed as ${request.skipBody.idempotency_key}, but automatic advance ${request.advanceIdempotencyKey} was not confirmed. Both exact operation keys are retained; resume this exact skip-and-advance flow before starting another action.`
+          : `${errorMessage} The exact skip request is retained as ${request.skipBody.idempotency_key}; retry it here before starting another action.`;
+        setMessage(recoveryMessage);
+        return actionUncertain(
+          skipCommitted ? "Round advance needs verification" : "Round skip needs verification",
+          recoveryMessage,
+          request.skipBody.idempotency_key,
+          skipCommitted ? "Resume exact skip and advance" : "Retry exact skip request",
+          () => executeSkipRound(request)
+        );
+      }
+      setMessage(errorMessage);
+      throw error;
     } finally {
       setBusy(false);
     }
+  }
+
+  function skipRound(): Promise<ActionCompletion> {
+    if (!session || !round) throw new Error("Reload the session before skipping this round.");
+    skipDestinationRef.current = null;
+    return executeSkipRound({
+      skipBody: {
+        reason: skipReason,
+        expected_version: session.version,
+        idempotency_key: operationKey("skip")
+      },
+      advanceIdempotencyKey: operationKey("advance-after-skip")
+    });
+  }
+
+  function acknowledgeSkip(): void {
+    const destination = skipDestinationRef.current;
+    skipDestinationRef.current = null;
+    if (typeof destination === "number") {
+      router.push(roundPath(generatorKind, sessionKey, destination));
+    }
+    if (destination !== null) router.refresh();
   }
 
   async function advanceRound(): Promise<void> {
@@ -579,9 +698,17 @@ export default function GeneratorRoundRunner({
     setBusy(true);
     setMessage(null);
     try {
-      const body: Record<string, unknown> = { action: rosterAction };
+      const body: Record<string, unknown> = {
+        action: rosterAction === "swap" ? "reorder" : rosterAction
+      };
       if (rosterAction === "reorder") {
         body.roster_order = rosterOrder;
+      } else if (rosterAction === "swap") {
+        body.roster_order = swapRosterPositions(
+          rosterOrder,
+          firstSwapParticipant,
+          secondSwapParticipant
+        );
       } else if (rosterAction === "remove") {
         body.participant_id = selectedParticipant;
       } else if (rosterAction === "add") {
@@ -600,11 +727,15 @@ export default function GeneratorRoundRunner({
         body
       );
       setSelectedParticipant("");
+      setFirstSwapParticipant("");
+      setSecondSwapParticipant("");
       setNewPlayerName("");
       setNewPlayerId("");
       setMessage(
         rosterAction === "substitute"
           ? "Substitution saved. Completed rounds remain unchanged."
+          : rosterAction === "swap"
+            ? "Player positions swapped. Completed rounds remain unchanged; future matchups were regenerated when applicable."
           : "Roster updated. Future matchups were regenerated when applicable."
       );
       const current = next.current_round_number || roundNumber;
@@ -620,9 +751,7 @@ export default function GeneratorRoundRunner({
     }
   }
 
-  async function publishMatches(): Promise<void> {
-    if (!session) return;
-    if (!window.confirm("Publish all unpublished saved matches as official rated matches?")) return;
+  async function executePublishMatches(request: PublishMatchesRequest): Promise<ActionCompletion> {
     setBusy(true);
     setMessage(null);
     try {
@@ -632,20 +761,45 @@ export default function GeneratorRoundRunner({
         )}/publish`,
         {
           method: "POST",
-          body: JSON.stringify({
-            match_date: publishDate || null,
-            expected_version: session.version,
-            idempotency_key: operationKey("publish")
-          })
+          body: JSON.stringify(request)
         }
       );
-      if (payload.session) applySession(payload.session);
-      setMessage(`Published ${payload.published_count || 0} official match(es).`);
+      if (!payload.ok || !payload.session) {
+        throw new Error("Official matches published without a refreshed session.");
+      }
+      applySession(payload.session);
+      const publishedCount = payload.published_count ?? 0;
+      const successMessage = `Published ${publishedCount} official rated ${publishedCount === 1 ? "match" : "matches"}.`;
+      setMessage(successMessage);
+      return actionSuccess("Official matches published", successMessage);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to publish matches.");
+      const errorMessage = error instanceof Error ? error.message : "Unable to publish matches.";
+      if (isUncertainRequestError(error)) {
+        const recoveryMessage = `${errorMessage} The exact publish request is retained as ${request.idempotency_key}; retry it here before publishing again.`;
+        setMessage(recoveryMessage);
+        return actionUncertain(
+          "Official publish needs verification",
+          recoveryMessage,
+          request.idempotency_key,
+          "Retry exact publish request",
+          () => executePublishMatches(request)
+        );
+      }
+      setMessage(errorMessage);
+      throw error;
     } finally {
       setBusy(false);
     }
+  }
+
+  function publishMatches(confirmationText: string): Promise<ActionCompletion> {
+    if (!session) throw new Error("Reload the session before publishing official matches.");
+    return executePublishMatches({
+      match_date: publishDate || null,
+      confirmation_text: confirmationText,
+      expected_version: session.version,
+      idempotency_key: operationKey("publish")
+    });
   }
 
   if (!session || !event || !round) {
@@ -826,9 +980,33 @@ export default function GeneratorRoundRunner({
                 placeholder="Optional skip reason"
                 style={{ ...inputStyle, maxWidth: 260 }}
               />
-              <button type="button" onClick={() => void skipRound()} disabled={busy} style={secondaryButton}>
-                Skip round
-              </button>
+              <ConfirmAction
+                triggerLabel="Skip round"
+                title={`Skip Round ${roundNumber}?`}
+                description={
+                  anyDraftScore
+                    ? "This skips the current round and permanently discards the unsaved score entries shown below."
+                    : "This skips the current round without saving a result."
+                }
+                preview={
+                  <div style={{ display: "grid", gap: "0.35rem" }}>
+                    <p style={{ margin: 0 }}>
+                      <strong>Unsaved score entries:</strong> {draftScoreCount} {draftScoreCount === 1 ? "entry" : "entries"}
+                      {draftScoreCount ? " will be discarded" : ""}
+                    </p>
+                    <p style={{ margin: 0 }}>
+                      <strong>Skip reason:</strong> {skipReason.trim() || "No reason provided"}
+                    </p>
+                  </div>
+                }
+                confirmLabel="Yes, skip round"
+                confirmationText="SKIP ROUND"
+                tone={anyDraftScore ? "danger" : "default"}
+                disabled={busy}
+                busy={busy}
+                onConfirm={skipRound}
+                onAcknowledge={acknowledgeSkip}
+              />
             </div>
           </div>
         ) : null}
@@ -920,18 +1098,62 @@ export default function GeneratorRoundRunner({
               <select
                 value={rosterAction}
                 onChange={(event_) =>
-                  setRosterAction(
-                    event_.target.value as "add" | "remove" | "substitute" | "reorder"
-                  )
+                  setRosterAction(event_.target.value as RosterAction)
                 }
                 style={inputStyle}
               >
                 <option value="add">Add player</option>
                 <option value="remove">Remove player</option>
                 <option value="substitute">Substitute player</option>
+                <option value="swap">Swap players</option>
                 <option value="reorder">Reorder roster</option>
               </select>
             </label>
+
+            {rosterAction === "swap" ? (
+              <>
+                <label>
+                  First player
+                  <br />
+                  <select
+                    value={firstSwapParticipant}
+                    onChange={(event_) => {
+                      const nextParticipant = event_.target.value;
+                      setFirstSwapParticipant(nextParticipant);
+                      if (nextParticipant === secondSwapParticipant) {
+                        setSecondSwapParticipant("");
+                      }
+                    }}
+                    style={inputStyle}
+                  >
+                    <option value="">Select player</option>
+                    {rosterOrder.map((id, index) => (
+                      <option key={id} value={id}>
+                        {index + 1}. {participants.get(id)?.name || id}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Second player
+                  <br />
+                  <select
+                    value={secondSwapParticipant}
+                    onChange={(event_) => setSecondSwapParticipant(event_.target.value)}
+                    style={inputStyle}
+                  >
+                    <option value="">Select player</option>
+                    {rosterOrder.map((id, index) =>
+                      id === firstSwapParticipant ? null : (
+                        <option key={id} value={id}>
+                          {index + 1}. {participants.get(id)?.name || id}
+                        </option>
+                      )
+                    )}
+                  </select>
+                </label>
+              </>
+            ) : null}
 
             {["remove", "substitute"].includes(rosterAction) ? (
               <label>
@@ -1044,11 +1266,15 @@ export default function GeneratorRoundRunner({
               (rosterAction === "remove" && !selectedParticipant) ||
               (rosterAction === "substitute" &&
                 (!selectedParticipant || !newPlayerName.trim())) ||
+              (rosterAction === "swap" &&
+                (!firstSwapParticipant ||
+                  !secondSwapParticipant ||
+                  firstSwapParticipant === secondSwapParticipant)) ||
               (rosterAction === "add" && !newPlayerName.trim())
             }
             style={{ ...primaryButton, marginTop: "0.8rem" }}
           >
-            Apply roster change
+            {rosterAction === "swap" ? "Swap player positions" : "Apply roster change"}
           </button>
         </article>
       ) : null}
@@ -1071,9 +1297,28 @@ export default function GeneratorRoundRunner({
                 style={inputStyle}
               />
             </label>
-            <button type="button" onClick={() => void publishMatches()} disabled={busy} style={secondaryButton}>
-              Publish official matches
-            </button>
+            <ConfirmAction
+              triggerLabel="Publish official matches"
+              title={`Publish ${unpublishedSavedMatchCount} official rated ${unpublishedSavedMatchCount === 1 ? "match" : "matches"}?`}
+              description="This publishes every unpublished saved result to official rating history. Review the exact count and match date before continuing."
+              preview={
+                <div style={{ display: "grid", gap: "0.35rem" }}>
+                  <p style={{ margin: 0 }}>
+                    <strong>Unpublished saved results:</strong> {unpublishedSavedMatchCount} {unpublishedSavedMatchCount === 1 ? "match" : "matches"}
+                  </p>
+                  <p style={{ margin: 0 }}>
+                    <strong>Match date:</strong> {publishDate || "Publish time (default)"}
+                  </p>
+                </div>
+              }
+              confirmLabel="Yes, publish official matches"
+              confirmationText="PUBLISH MATCHES"
+              tone="danger"
+              disabled={busy || unpublishedSavedMatchCount === 0}
+              disabledReason={unpublishedSavedMatchCount === 0 ? "No unpublished saved matches are ready." : undefined}
+              busy={busy}
+              onConfirm={publishMatches}
+            />
           </div>
           <p style={{ color: "#64748b" }}>
             Published: {session.official_publish?.published_match_ids?.length || 0} match(es)

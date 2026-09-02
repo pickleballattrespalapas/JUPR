@@ -3,10 +3,12 @@
 import Link from "next/link";
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess, type ActionCompletion } from "@/components/interaction";
 import type {
   AdminLeagueManagerListResponse,
   AdminLeagueManagerStatusResponse
 } from "@/lib/adminLeagueManagerApi";
+import { isTeamLeagueType } from "@/lib/leagueRouteContext";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
@@ -15,6 +17,12 @@ type TeamSettings = {
   league_name: string;
   status?: string;
   registration_open?: boolean;
+  team_size?: 2 | 3 | 4;
+  team_category?: "open" | "mens" | "womens" | "mixed";
+  max_alternates?: number;
+  substitute_pool_enabled?: boolean;
+  mixed_required_men?: number;
+  mixed_required_women?: number;
   allow_substitutes?: boolean;
   playoff_format?: string;
   playoff_team_count?: number | null;
@@ -34,11 +42,15 @@ type TeamRow = {
   team_name: string;
   status: string;
   captain_player_id: number;
-  partner_player_id: number;
+  partner_player_id?: number | null;
   invitation_delivery_status?: string;
+  roster_complete?: boolean;
+  members?: TeamMemberRow[];
 };
+type TeamMemberRow = { id: string; team_id: string; player_id: number; role: "captain" | "primary" | "alternate"; status: string; player_name?: string | null; gender?: string | null };
+type SubstitutePoolRow = { id: string; player_id: number; status: "available" | "unavailable" | "withdrawn"; note?: string | null };
 type WaitlistRow = { id: string; player_id: number; status: string; note?: string | null };
-type PlayerRow = { id: number; name: string; rating?: number | null; active?: boolean };
+type PlayerRow = { id: number; name: string; rating?: number | null; gender?: string | null; active?: boolean };
 type FixtureRow = {
   id: string;
   phase: "regular" | "playoff";
@@ -68,6 +80,8 @@ type TeamLeagueDetail = {
   ok: boolean;
   settings: TeamSettings;
   teams: TeamRow[];
+  members: TeamMemberRow[];
+  substitute_pool: SubstitutePoolRow[];
   waitlist: WaitlistRow[];
   players: PlayerRow[];
   fixtures: FixtureRow[];
@@ -95,36 +109,12 @@ type RecoveryEvidence = {
   safe_action?: string;
 };
 type WriteResponse = { ok?: boolean; committed?: boolean; operation_id?: string; message?: string };
-type SettingsDraft = {
-  registrationOpen: boolean;
-  allowSubstitutes: boolean;
-  playoffFormat: string;
-  playoffTeamCount: string;
-  startDate: string;
-  weekday: string;
-  startTime: string;
-  timezone: string;
-  venue: string;
-  registrationClosesAt: string;
-};
-
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 const insetStyle = { border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.8rem", background: "#f8fafc" };
 const inputStyle = { width: "100%", padding: "0.55rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
 const buttonStyle = { padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800 };
 const ghostButtonStyle = { ...buttonStyle, background: "white", color: "#0f172a" };
 const gridStyle = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem", alignItems: "end" };
-const TIMEZONE_OPTIONS = [
-  "America/Mazatlan",
-  "America/Phoenix",
-  "America/Los_Angeles",
-  "America/Denver",
-  "America/Chicago",
-  "America/New_York",
-  "America/Mexico_City",
-  "UTC"
-];
-
 function apiUrl(apiBase: string, path: string): string {
   return `${apiBase.replace(/\/$/, "")}${path}`;
 }
@@ -134,19 +124,15 @@ function operationKey(kind: string): string {
   return `${kind}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
 }
 
-function settingsDraft(settings?: TeamSettings | null): SettingsDraft {
-  return {
-    registrationOpen: Boolean(settings?.registration_open),
-    allowSubstitutes: Boolean(settings?.allow_substitutes),
-    playoffFormat: String(settings?.playoff_format || "none"),
-    playoffTeamCount: settings?.playoff_team_count == null ? "" : String(settings.playoff_team_count),
-    startDate: String(settings?.start_date || ""),
-    weekday: String(settings?.weekday ?? 0),
-    startTime: String(settings?.start_time || "18:00").slice(0, 5),
-    timezone: String(settings?.timezone || "America/Mazatlan"),
-    venue: String(settings?.venue || ""),
-    registrationClosesAt: settings?.registration_closes_at ? String(settings.registration_closes_at).slice(0, 16) : ""
-  };
+const confirmedWriteRefreshWarning = " The action completed, but the latest team league view could not be refreshed. Reload this page before making another change; do not repeat the completed action.";
+
+async function refreshAfterConfirmedWrite(refresh: () => Promise<void>): Promise<string> {
+  try {
+    await refresh();
+    return "";
+  } catch {
+    return confirmedWriteRefreshWarning;
+  }
 }
 
 function teamName(detail: TeamLeagueDetail, teamId?: string | null): string {
@@ -156,6 +142,45 @@ function teamName(detail: TeamLeagueDetail, teamId?: string | null): string {
 
 function playerName(detail: TeamLeagueDetail, playerId: number): string {
   return detail.players.find((player) => player.id === playerId)?.name || `Player ${playerId}`;
+}
+
+function activeTeamMembers(team?: TeamRow): TeamMemberRow[] {
+  return (team?.members || []).filter((member) => member.status === "active");
+}
+
+function defaultPlayingLineup(team?: TeamRow): number[] {
+  const members = activeTeamMembers(team)
+    .filter((member) => member.role !== "alternate")
+    .slice(0, 2)
+    .map((member) => member.player_id);
+  if (members.length === 2) return members;
+  return team
+    ? [team.captain_player_id, team.partner_player_id]
+      .filter((playerId): playerId is number => typeof playerId === "number")
+      .slice(0, 2)
+    : [];
+}
+
+function playingOptions(detail: TeamLeagueDetail, team?: TeamRow): Array<PlayerRow & { sourceLabel: string }> {
+  if (!team) return [];
+  const roleByPlayer = new Map(
+    activeTeamMembers(team).map((member) => [member.player_id, member.role] as const)
+  );
+  const poolIds = new Set(
+    detail.settings.allow_substitutes && detail.settings.substitute_pool_enabled
+      ? detail.substitute_pool
+        .filter((entry) => entry.status === "available")
+        .map((entry) => entry.player_id)
+      : []
+  );
+  return detail.players
+    .filter((player) => player.active !== false && (roleByPlayer.has(player.id) || poolIds.has(player.id)))
+    .map((player) => ({
+      ...player,
+      sourceLabel: roleByPlayer.has(player.id)
+        ? String(roleByPlayer.get(player.id)).replace("primary", "roster")
+        : "substitute pool"
+    }));
 }
 
 function requestError(payload: unknown, statusCode: number): string {
@@ -169,43 +194,6 @@ function requestError(payload: unknown, statusCode: number): string {
     if (detail) return String(detail);
   }
   return `API error (${statusCode})`;
-}
-
-function TeamSettingsForm({
-  settings,
-  busy,
-  onDirty,
-  onSave
-}: {
-  settings?: TeamSettings | null;
-  busy: boolean;
-  onDirty: () => void;
-  onSave: (draft: SettingsDraft, confirmationText: string) => Promise<void>;
-}) {
-  const [draft, setDraft] = useState<SettingsDraft>(() => settingsDraft(settings));
-  function update<K extends keyof SettingsDraft>(key: K, value: SettingsDraft[K]) {
-    setDraft((current) => ({ ...current, [key]: value }));
-    onDirty();
-  }
-  return (
-    <article style={cardStyle}>
-      <h2 style={{ marginTop: 0 }}>Registration and season setup</h2>
-      <p style={{ color: "#475569" }}>Partners remain together for the season. Registration and substitutes are separate choices, and playoffs are optional.</p>
-      <div style={gridStyle}>
-        <label><input type="checkbox" checked={draft.registrationOpen} onChange={(event) => update("registrationOpen", event.target.checked)} /> <strong>Registration open</strong></label>
-        <label><input type="checkbox" checked={draft.allowSubstitutes} onChange={(event) => update("allowSubstitutes", event.target.checked)} /> <strong>Allow substitutes</strong></label>
-        <label><strong>Playoffs</strong><br /><select value={draft.playoffFormat} onChange={(event) => update("playoffFormat", event.target.value)} style={inputStyle}><option value="none">No playoffs</option><option value="top_2_final">Top 2 final</option><option value="top_4_single_elimination">Top 4 single elimination</option><option value="all_team_single_elimination">All-team single elimination</option></select></label>
-        {draft.playoffFormat === "all_team_single_elimination" ? <label><strong>Playoff team count</strong><br /><input type="number" min={2} max={128} value={draft.playoffTeamCount} onChange={(event) => update("playoffTeamCount", event.target.value)} style={inputStyle} /></label> : null}
-        <label><strong>Season start</strong><br /><input type="date" value={draft.startDate} onChange={(event) => update("startDate", event.target.value)} style={inputStyle} /></label>
-        <label><strong>League night</strong><br /><select value={draft.weekday} onChange={(event) => update("weekday", event.target.value)} style={inputStyle}><option value="0">Monday</option><option value="1">Tuesday</option><option value="2">Wednesday</option><option value="3">Thursday</option><option value="4">Friday</option><option value="5">Saturday</option><option value="6">Sunday</option></select></label>
-        <label><strong>Start time</strong><br /><input type="time" value={draft.startTime} onChange={(event) => update("startTime", event.target.value)} style={inputStyle} /></label>
-        <label><strong>Timezone</strong><br /><select value={draft.timezone} onChange={(event) => update("timezone", event.target.value)} style={inputStyle}>{!TIMEZONE_OPTIONS.includes(draft.timezone) ? <option value={draft.timezone}>{draft.timezone}</option> : null}{TIMEZONE_OPTIONS.map((zone) => <option key={zone} value={zone}>{zone}</option>)}</select></label>
-        <label><strong>Venue</strong><br /><input value={draft.venue} onChange={(event) => update("venue", event.target.value)} maxLength={240} style={inputStyle} /></label>
-        <label><strong>Registration closes</strong><br /><input type="datetime-local" value={draft.registrationClosesAt} onChange={(event) => update("registrationClosesAt", event.target.value)} style={inputStyle} /></label>
-      </div>
-      <p><ConfirmAction triggerLabel={busy ? "Saving…" : "Save team league setup"} title="Save this team league setup?" description="This saves registration, fixed-partner season, substitute, weekly schedule, and playoff choices together." confirmLabel="Yes, save setup" confirmationText="SAVE TEAM LEAGUE" disabled={busy} busy={busy} onConfirm={(confirmationText) => onSave(draft, confirmationText)} /></p>
-    </article>
-  );
 }
 
 function ScoreFixtureCard({
@@ -225,14 +213,15 @@ function ScoreFixtureCard({
   const [scoreA, setScoreA] = useState("");
   const [scoreB, setScoreB] = useState("");
   const [winnerId, setWinnerId] = useState(String(fixture.team_a_id || ""));
-  const [playersA, setPlayersA] = useState<number[]>(teamA ? [teamA.captain_player_id, teamA.partner_player_id] : []);
-  const [playersB, setPlayersB] = useState<number[]>(teamB ? [teamB.captain_player_id, teamB.partner_player_id] : []);
+  const [playersA, setPlayersA] = useState<number[]>(() => defaultPlayingLineup(teamA));
+  const [playersB, setPlayersB] = useState<number[]>(() => defaultPlayingLineup(teamB));
   const [note, setNote] = useState("");
   const [scoreKey, setScoreKey] = useState(() => operationKey(`team-score-${fixture.id}`));
   const [reconcileKey, setReconcileKey] = useState(() => operationKey(`team-reconcile-${fixture.id}`));
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const activePlayers = detail.players.filter((player) => player.active !== false);
+  const optionsA = playingOptions(detail, teamA);
+  const optionsB = playingOptions(detail, teamB);
 
   function updateLineup(side: "a" | "b", index: number, value: number) {
     const setter = side === "a" ? setPlayersA : setPlayersB;
@@ -240,7 +229,7 @@ function ScoreFixtureCard({
     setScoreKey(operationKey(`team-score-${fixture.id}`));
   }
 
-  async function saveScore(confirmationText: string) {
+  async function saveScore(confirmationText: string): Promise<ActionCompletion> {
     setBusy(true);
     setMessage(null);
     try {
@@ -257,16 +246,19 @@ function ScoreFixtureCard({
         source: "next_team_league_fixture_result"
       });
       setScoreKey(operationKey(`team-score-${fixture.id}`));
-      setMessage("Result saved.");
-      await onSaved();
+      const refreshWarning = await refreshAfterConfirmedWrite(onSaved);
+      const successMessage = `${resultStatus === "complete" ? "The canonical doubles match and fixture were saved together." : "The forfeit was saved to the fixture and standings."}${refreshWarning}`;
+      setMessage(successMessage);
+      return actionSuccess(resultStatus === "complete" ? "Team result saved" : "Forfeit saved", successMessage);
     } catch (error) {
       setMessage(`${error instanceof Error ? error.message : "Unable to save this result."} The same request key is retained for retry.`);
+      throw error;
     } finally {
       setBusy(false);
     }
   }
 
-  async function reconcile(confirmationText: string) {
+  async function reconcile(confirmationText: string): Promise<ActionCompletion> {
     setBusy(true);
     setMessage(null);
     try {
@@ -276,10 +268,13 @@ function ScoreFixtureCard({
         source: "next_team_league_fixture_reconcile"
       });
       setReconcileKey(operationKey(`team-reconcile-${fixture.id}`));
-      setMessage("Result reconciled.");
-      await onSaved();
+      const refreshWarning = await refreshAfterConfirmedWrite(onSaved);
+      const successMessage = `The fixture was reconciled from its canonical match.${refreshWarning}`;
+      setMessage(successMessage);
+      return actionSuccess("Team result reconciled", successMessage);
     } catch (error) {
       setMessage(`${error instanceof Error ? error.message : "Unable to reconcile this result."} The same request key is retained for retry.`);
+      throw error;
     } finally {
       setBusy(false);
     }
@@ -298,8 +293,8 @@ function ScoreFixtureCard({
           </div>
           {resultStatus === "complete" ? (
             <div style={{ ...gridStyle, marginTop: "0.75rem" }}>
-              {[0, 1].map((index) => <label key={`a-${index}`}><strong>{teamName(detail, fixture.team_a_id)} player {index + 1}</strong><br /><select value={playersA[index] || ""} onChange={(event) => updateLineup("a", index, Number(event.target.value))} style={inputStyle}>{activePlayers.map((player) => <option key={player.id} value={player.id}>{player.name}{teamA && ![teamA.captain_player_id, teamA.partner_player_id].includes(player.id) ? " · substitute" : ""}</option>)}</select></label>)}
-              {[0, 1].map((index) => <label key={`b-${index}`}><strong>{teamName(detail, fixture.team_b_id)} player {index + 1}</strong><br /><select value={playersB[index] || ""} onChange={(event) => updateLineup("b", index, Number(event.target.value))} style={inputStyle}>{activePlayers.map((player) => <option key={player.id} value={player.id}>{player.name}{teamB && ![teamB.captain_player_id, teamB.partner_player_id].includes(player.id) ? " · substitute" : ""}</option>)}</select></label>)}
+              {[0, 1].map((index) => <label key={`a-${index}`}><strong>{teamName(detail, fixture.team_a_id)} player {index + 1}</strong><br /><select value={playersA[index] || ""} onChange={(event) => updateLineup("a", index, Number(event.target.value))} style={inputStyle}>{optionsA.map((player) => <option key={player.id} value={player.id}>{player.name} · {player.sourceLabel}</option>)}</select></label>)}
+              {[0, 1].map((index) => <label key={`b-${index}`}><strong>{teamName(detail, fixture.team_b_id)} player {index + 1}</strong><br /><select value={playersB[index] || ""} onChange={(event) => updateLineup("b", index, Number(event.target.value))} style={inputStyle}>{optionsB.map((player) => <option key={player.id} value={player.id}>{player.name} · {player.sourceLabel}</option>)}</select></label>)}
             </div>
           ) : null}
           <label><strong>Result note</strong><br /><input value={note} onChange={(event) => { setNote(event.target.value); setScoreKey(operationKey(`team-score-${fixture.id}`)); }} maxLength={500} style={inputStyle} /></label>
@@ -323,11 +318,25 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
   const [preview, setPreview] = useState<SchedulePreview | null>(null);
   const [phase, setPhase] = useState<"regular" | "playoff">("regular");
   const [scheduleKey, setScheduleKey] = useState(() => operationKey("team-schedule"));
-  const [settingsKey, setSettingsKey] = useState(() => operationKey("team-settings"));
   const [waitlistIds, setWaitlistIds] = useState<string[]>([]);
   const [waitlistAction, setWaitlistAction] = useState<"pair" | "withdraw">("pair");
   const [waitlistTeamName, setWaitlistTeamName] = useState("");
   const [waitlistKey, setWaitlistKey] = useState(() => operationKey("team-waitlist"));
+  const [newTeamName, setNewTeamName] = useState("");
+  const [newCaptainId, setNewCaptainId] = useState("");
+  const [newCaptainEmail, setNewCaptainEmail] = useState("");
+  const [newInitialPrimaryId, setNewInitialPrimaryId] = useState("");
+  const [newInitialPrimaryEmail, setNewInitialPrimaryEmail] = useState("");
+  const [createTeamKey, setCreateTeamKey] = useState(() => operationKey("team-create"));
+  const [rosterTeamId, setRosterTeamId] = useState("");
+  const [rosterPlayerId, setRosterPlayerId] = useState("");
+  const [rosterRole, setRosterRole] = useState<"primary" | "alternate">("primary");
+  const [rosterStatus, setRosterStatus] = useState<"active" | "invited">("active");
+  const [rosterKey, setRosterKey] = useState(() => operationKey("team-roster"));
+  const [poolPlayerId, setPoolPlayerId] = useState("");
+  const [poolStatus, setPoolStatus] = useState<"available" | "unavailable" | "withdrawn">("available");
+  const [poolNote, setPoolNote] = useState("");
+  const [poolKey, setPoolKey] = useState(() => operationKey("team-substitute-pool"));
   const [recoveryId, setRecoveryId] = useState("");
   const [recoveryEvidence, setRecoveryEvidence] = useState<RecoveryEvidence | null>(null);
   const [recoveryResolution, setRecoveryResolution] = useState<"finalize" | "compensate">("finalize");
@@ -382,7 +391,7 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
         requestJson<TeamLeagueListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/team-leagues`)
       ]);
       if (!listRequest.isCurrent(generation)) return;
-      const names = Array.from(new Set([...(base.leagues || []).filter((league) => String(league.league_type || "Individual") === "Team").map((league) => league.league_name), ...(team.leagues || []).map((league) => league.league_name)])).sort();
+      const names = Array.from(new Set([...(base.leagues || []).filter((league) => isTeamLeagueType(league.league_type)).map((league) => league.league_name), ...(team.leagues || []).map((league) => league.league_name)])).sort();
       setLeagueNames(names);
       setTeamLeagueRows(team.leagues || []);
       if (leagueName && names.includes(leagueName)) await selectLeague(leagueName, team.leagues || []);
@@ -406,8 +415,19 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
     setWaitlistIds([]);
     setRecoveryEvidence(null);
     setScheduleKey(operationKey("team-schedule"));
-    setSettingsKey(operationKey("team-settings"));
     setWaitlistKey(operationKey("team-waitlist"));
+    setNewTeamName("");
+    setNewCaptainId("");
+    setNewCaptainEmail("");
+    setNewInitialPrimaryId("");
+    setNewInitialPrimaryEmail("");
+    setCreateTeamKey(operationKey("team-create"));
+    setRosterTeamId("");
+    setRosterPlayerId("");
+    setRosterKey(operationKey("team-roster"));
+    setPoolPlayerId("");
+    setPoolNote("");
+    setPoolKey(operationKey("team-substitute-pool"));
     setMessage(null);
     if (!selectedLeague || !rows.some((row) => row.league_name === selectedLeague)) return;
     setBusy(true);
@@ -417,6 +437,7 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
       );
       if (!detailRequest.isCurrent(generation)) return;
       setDetail(payload);
+      setWaitlistAction(payload.settings.team_size === 2 ? "pair" : "withdraw");
     } catch (error) {
       if (detailRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load the team league.");
     } finally {
@@ -428,54 +449,11 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
     if (!leagueName) return;
     const payload = await requestJson<TeamLeagueDetail>(teamLeaguePath());
     setDetail(payload);
+    setWaitlistAction(payload.settings.team_size === 2 ? waitlistAction : "withdraw");
     setTeamLeagueRows((current) => {
       const without = current.filter((row) => row.league_name !== leagueName);
       return [...without, payload.settings].sort((a, b) => a.league_name.localeCompare(b.league_name));
     });
-  }
-
-  async function saveSettings(draft: SettingsDraft, confirmationText: string) {
-    if (!leagueName) {
-      setMessage("Select a league first.");
-      return;
-    }
-    const playoffCount = draft.playoffTeamCount ? Number(draft.playoffTeamCount) : null;
-    if (draft.playoffFormat === "all_team_single_elimination" && (!Number.isInteger(playoffCount) || Number(playoffCount) < 2 || Number(playoffCount) > 128)) {
-      setMessage("Playoff team count must be a whole number from 2 to 128.");
-      return;
-    }
-    setBusy(true);
-    setMessage(null);
-    try {
-      await requestJson<WriteResponse>(teamLeaguePath("/settings"), {
-        method: "PUT",
-        body: JSON.stringify({
-          settings: {
-            registration_open: draft.registrationOpen,
-            allow_substitutes: draft.allowSubstitutes,
-            playoff_format: draft.playoffFormat,
-            playoff_team_count: playoffCount,
-            start_date: draft.startDate || null,
-            weekday: Number(draft.weekday),
-            start_time: draft.startTime,
-            timezone: draft.timezone,
-            venue: draft.venue || null,
-            registration_closes_at: draft.registrationClosesAt ? new Date(draft.registrationClosesAt).toISOString() : null
-          },
-          expected_settings_version: Number(detail?.settings.settings_version || 0),
-          idempotency_key: settingsKey,
-          confirmation_text: confirmationText,
-          source: "next_team_league_settings_page"
-        })
-      });
-      await refreshDetail();
-      setSettingsKey(operationKey("team-settings"));
-      setMessage("Team league setup saved.");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to save team league setup.");
-    } finally {
-      setBusy(false);
-    }
   }
 
   async function buildPreview() {
@@ -483,7 +461,7 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
     setBusy(true);
     setMessage(null);
     try {
-      const payload = await requestJson<SchedulePreview>(teamLeaguePath(`/schedule-preview/${phase}`), { method: "POST" });
+      const payload = await requestJson<SchedulePreview>(teamLeaguePath(`/schedule-preview/${phase}`));
       setPreview(payload);
       setScheduleKey(operationKey(`team-schedule-${phase}`));
       setMessage(`Previewed ${payload.proposed_fixtures.length} ${phase} fixture(s).`);
@@ -494,8 +472,12 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
     }
   }
 
-  async function commitSchedule(confirmationText: string) {
-    if (!preview || preview.phase !== phase) return;
+  async function commitSchedule(confirmationText: string): Promise<ActionCompletion> {
+    if (!preview || preview.phase !== phase) {
+      const error = new Error("Preview the current schedule phase before publishing it.");
+      setMessage(error.message);
+      throw error;
+    }
     setBusy(true);
     setMessage(null);
     try {
@@ -513,19 +495,23 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
       });
       setPreview(null);
       setScheduleKey(operationKey(`team-schedule-${phase}`));
-      await refreshDetail();
-      setMessage(`${phase === "regular" ? "Regular-season schedule" : "Playoff bracket"} published.`);
+      const refreshWarning = await refreshAfterConfirmedWrite(refreshDetail);
+      const successMessage = `${phase === "regular" ? "Regular-season schedule" : "Playoff bracket"} published.${refreshWarning}`;
+      setMessage(successMessage);
+      return actionSuccess(phase === "regular" ? "Schedule published" : "Playoff bracket published", successMessage);
     } catch (error) {
       setMessage(`${error instanceof Error ? error.message : "Unable to publish the schedule."} The same request key is retained for retry.`);
+      throw error;
     } finally {
       setBusy(false);
     }
   }
 
-  async function applyWaitlist(confirmationText: string) {
+  async function applyWaitlist(confirmationText: string): Promise<ActionCompletion> {
     if ((waitlistAction === "pair" && waitlistIds.length !== 2) || (waitlistAction === "withdraw" && !waitlistIds.length)) {
-      setMessage(waitlistAction === "pair" ? "Select exactly two waiting players." : "Select at least one waiting player.");
-      return;
+      const error = new Error(waitlistAction === "pair" ? "Select exactly two waiting players." : "Select at least one waiting player.");
+      setMessage(error.message);
+      throw error;
     }
     setBusy(true);
     setMessage(null);
@@ -541,10 +527,147 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
       setWaitlistIds([]);
       setWaitlistTeamName("");
       setWaitlistKey(operationKey("team-waitlist"));
-      await refreshDetail();
-      setMessage(waitlistAction === "pair" ? "Waitlisted players paired." : "Waitlist entries withdrawn.");
+      const refreshWarning = await refreshAfterConfirmedWrite(refreshDetail);
+      const successMessage = `${waitlistAction === "pair" ? "Waitlisted players paired." : "Waitlist entries withdrawn."}${refreshWarning}`;
+      setMessage(successMessage);
+      return actionSuccess(waitlistAction === "pair" ? "Waitlisted players paired" : "Waitlist entries withdrawn", successMessage);
     } catch (error) {
       setMessage(`${error instanceof Error ? error.message : "Unable to update the waitlist."} The same request key is retained for retry.`);
+      throw error;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createTeam(confirmationText: string): Promise<ActionCompletion> {
+    if (!detail || !newTeamName.trim() || !newCaptainId || !newCaptainEmail.trim()) {
+      const error = new Error("Enter a team name, captain, and captain email.");
+      setMessage(error.message);
+      throw error;
+    }
+    setBusy(true);
+    setMessage(null);
+    try {
+      await requestTeamWrite<WriteResponse>("/teams", {
+        team_name: newTeamName,
+        captain_player_id: Number(newCaptainId),
+        captain_contact_email: newCaptainEmail,
+        initial_primary_player_id: newInitialPrimaryId ? Number(newInitialPrimaryId) : null,
+        initial_primary_contact_email: newInitialPrimaryEmail,
+        expected_roster_version: Number(detail.settings.roster_version || 0),
+        idempotency_key: createTeamKey,
+        confirmation_text: confirmationText,
+        source: "next_team_league_create_team_page"
+      });
+      setNewTeamName("");
+      setNewCaptainId("");
+      setNewCaptainEmail("");
+      setNewInitialPrimaryId("");
+      setNewInitialPrimaryEmail("");
+      setCreateTeamKey(operationKey("team-create"));
+      const refreshWarning = await refreshAfterConfirmedWrite(refreshDetail);
+      const successMessage = `The forming team was created.${refreshWarning}`;
+      setMessage(successMessage);
+      return actionSuccess("Team created", successMessage);
+    } catch (error) {
+      setMessage(`${error instanceof Error ? error.message : "Unable to create the team."} The same request key is retained for retry.`);
+      throw error;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addRosterMember(confirmationText: string): Promise<ActionCompletion> {
+    if (!detail || !rosterTeamId || !rosterPlayerId) {
+      const error = new Error("Choose a team and player before updating the roster.");
+      setMessage(error.message);
+      throw error;
+    }
+    setBusy(true);
+    setMessage(null);
+    try {
+      await requestTeamWrite<WriteResponse>("/roster-actions", {
+        action: "add_member",
+        team_id: rosterTeamId,
+        player_id: Number(rosterPlayerId),
+        member_role: rosterRole,
+        member_status: rosterStatus,
+        expected_roster_version: Number(detail.settings.roster_version || 0),
+        idempotency_key: rosterKey,
+        confirmation_text: confirmationText,
+        source: "next_team_league_roster_page"
+      });
+      setRosterPlayerId("");
+      setRosterKey(operationKey("team-roster"));
+      const refreshWarning = await refreshAfterConfirmedWrite(refreshDetail);
+      const successMessage = `The assigned team roster was updated.${refreshWarning}`;
+      setMessage(successMessage);
+      return actionSuccess("Team roster updated", successMessage);
+    } catch (error) {
+      setMessage(`${error instanceof Error ? error.message : "Unable to update the roster."} The same request key is retained for retry.`);
+      throw error;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeRosterMember(teamId: string, playerId: number, confirmationText: string): Promise<ActionCompletion> {
+    if (!detail) throw new Error("Reload the team league before updating its roster.");
+    const key = operationKey("team-roster-remove");
+    setBusy(true);
+    setMessage(null);
+    try {
+      await requestTeamWrite<WriteResponse>("/roster-actions", {
+        action: "remove_member",
+        team_id: teamId,
+        player_id: playerId,
+        member_status: "active",
+        expected_roster_version: Number(detail.settings.roster_version || 0),
+        idempotency_key: key,
+        confirmation_text: confirmationText,
+        source: "next_team_league_roster_page"
+      });
+      const refreshWarning = await refreshAfterConfirmedWrite(refreshDetail);
+      const successMessage = `The player was removed from the assigned roster.${refreshWarning}`;
+      setMessage(successMessage);
+      return actionSuccess("Roster member removed", successMessage);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to remove the roster member.");
+      throw error;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function updateSubstitutePool(confirmationText: string): Promise<ActionCompletion> {
+    if (!detail || !poolPlayerId) {
+      const error = new Error("Choose a player before updating the substitute pool.");
+      setMessage(error.message);
+      throw error;
+    }
+    setBusy(true);
+    setMessage(null);
+    try {
+      await requestTeamWrite<WriteResponse>("/roster-actions", {
+        action: "set_pool",
+        player_id: Number(poolPlayerId),
+        member_status: poolStatus,
+        note: poolNote,
+        expected_roster_version: Number(detail.settings.roster_version || 0),
+        idempotency_key: poolKey,
+        confirmation_text: confirmationText,
+        source: "next_team_league_substitute_pool_page"
+      });
+      setPoolPlayerId("");
+      setPoolNote("");
+      setPoolKey(operationKey("team-substitute-pool"));
+      const refreshWarning = await refreshAfterConfirmedWrite(refreshDetail);
+      const successMessage = `The shared substitute pool was updated.${refreshWarning}`;
+      setMessage(successMessage);
+      return actionSuccess("Substitute pool updated", successMessage);
+    } catch (error) {
+      setMessage(`${error instanceof Error ? error.message : "Unable to update the substitute pool."} The same request key is retained for retry.`);
+      throw error;
     } finally {
       setBusy(false);
     }
@@ -573,10 +696,11 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
     }
   }
 
-  async function resolveRecovery(confirmationText: string) {
+  async function resolveRecovery(confirmationText: string): Promise<ActionCompletion> {
     if (!recoveryId || recoveryNote.trim().length < 5) {
-      setMessage("Add a recovery note of at least five characters.");
-      return;
+      const error = new Error("Add a recovery note of at least five characters.");
+      setMessage(error.message);
+      throw error;
     }
     setBusy(true);
     setMessage(null);
@@ -596,10 +720,13 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
       setRecoveryEvidence(null);
       setRecoveryId("");
       setRecoveryNote("");
-      await refreshDetail();
-      setMessage("Recovery action completed and verified.");
+      const refreshWarning = await refreshAfterConfirmedWrite(refreshDetail);
+      const successMessage = `The interrupted operation was resolved and verified against canonical evidence.${refreshWarning}`;
+      setMessage(successMessage);
+      return actionSuccess("Recovery completed", successMessage);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to resolve the operation.");
+      throw error;
     } finally {
       setBusy(false);
     }
@@ -607,7 +734,6 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
 
   useAuthenticatedAutoLoad(status.enabled ? accessToken : "", loadLeagues);
 
-  const selectedSettings = detail?.settings || teamLeagueRows.find((row) => row.league_name === leagueName);
   const waiting = (detail?.waitlist || []).filter((row) => row.status === "waiting");
 
   return (
@@ -625,7 +751,7 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
         {message ? <p role="status" style={{ color: /unable|error|required|stale|retry|recovery/i.test(message) ? "#b91c1c" : "#166534" }}>{message}</p> : null}
       </article>
 
-      {leagueName ? <TeamSettingsForm key={`${leagueName}:${selectedSettings?.settings_version || 0}`} settings={selectedSettings} busy={busy} onDirty={() => setSettingsKey(operationKey("team-settings"))} onSave={saveSettings} /> : null}
+      {leagueName ? <article style={{ ...cardStyle, background: "#f8fafc" }}><strong>Team setup is managed in League Settings.</strong><p style={{ marginBottom: 0, color: "#475569" }}>Use this tab for teams, assigned rosters, substitutes, schedules, results, standings, playoffs, and recovery.</p></article> : null}
 
       {detail ? (
         <>
@@ -636,7 +762,8 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
                 <thead><tr><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Team</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Players</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Registration</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Standing</th></tr></thead>
                 <tbody>{detail.teams.map((team) => {
                   const standing = detail.standings.find((row) => row.team_id === team.id);
-                  return <tr key={team.id}><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}><strong>{team.team_name}</strong></td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{playerName(detail, team.captain_player_id)} + {playerName(detail, team.partner_player_id)}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{team.status}{team.invitation_delivery_status ? ` · ${team.invitation_delivery_status}` : ""}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{standing ? `#${standing.rank} · ${standing.wins}-${standing.losses} · ${standing.point_differential && standing.point_differential > 0 ? "+" : ""}${standing.point_differential || 0}` : "—"}</td></tr>;
+                  const members = (team.members || []).filter((member) => ["invited", "active"].includes(member.status));
+                  return <tr key={team.id}><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}><strong>{team.team_name}</strong></td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{members.map((member) => <div key={member.id}>{playerName(detail, member.player_id)} · {member.role}{member.status === "invited" ? " · invited" : ""}{member.role !== "captain" ? <> · <ConfirmAction triggerLabel="Remove" title={`Remove ${playerName(detail, member.player_id)} from ${team.team_name}?`} description="The team becomes incomplete if it no longer has the configured number of active primary players." confirmLabel="Yes, remove player" confirmationText="UPDATE TEAM ROSTER" tone="danger" disabled={busy} busy={busy} onConfirm={(confirmationText) => removeRosterMember(team.id, member.player_id, confirmationText)} /></> : null}</div>)}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{team.status}{team.roster_complete ? " · roster ready" : ` · needs ${detail.settings.team_size || 2} active primary players`}{team.invitation_delivery_status ? ` · ${team.invitation_delivery_status}` : ""}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{standing ? `#${standing.rank} · ${standing.wins}-${standing.losses} · ${standing.point_differential && standing.point_differential > 0 ? "+" : ""}${standing.point_differential || 0}` : "—"}</td></tr>;
                 })}</tbody>
               </table>
             </div>
@@ -644,9 +771,45 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
           </article>
 
           <article style={cardStyle}>
-            <h2 style={{ marginTop: 0 }}>Partner waitlist</h2>
+            <h2 style={{ marginTop: 0 }}>Assigned rosters and substitute pool</h2>
+            <p style={{ color: "#475569" }}>Primary players and alternates stay assigned for the season. Match-day replacements must come from the shared pool and still satisfy the league&apos;s lineup eligibility.</p>
+            <h3>Create a forming team</h3>
+            <p style={{ color: "#475569" }}>Start with a captain and optionally one initial primary. Add the remaining primary players below; the team becomes schedule-ready only when all {detail.settings.team_size || 2} primary slots are active.</p>
             <div style={gridStyle}>
-              <label><strong>Action</strong><br /><select value={waitlistAction} onChange={(event) => { setWaitlistAction(event.target.value as "pair" | "withdraw"); setWaitlistIds([]); setWaitlistKey(operationKey("team-waitlist")); }} style={inputStyle}><option value="pair">Pair two players</option><option value="withdraw">Withdraw selected</option></select></label>
+              <label><strong>Team name</strong><br /><input value={newTeamName} onChange={(event) => { setNewTeamName(event.target.value); setCreateTeamKey(operationKey("team-create")); }} maxLength={120} style={inputStyle} /></label>
+              <label><strong>Captain</strong><br /><select value={newCaptainId} onChange={(event) => { setNewCaptainId(event.target.value); if (newInitialPrimaryId === event.target.value) setNewInitialPrimaryId(""); setCreateTeamKey(operationKey("team-create")); }} style={inputStyle}><option value="">Choose an active player</option>{detail.players.filter((player) => player.active !== false).map((player) => <option key={player.id} value={player.id}>{player.name}</option>)}</select></label>
+              <label><strong>Captain email</strong><br /><input type="email" value={newCaptainEmail} onChange={(event) => { setNewCaptainEmail(event.target.value); setCreateTeamKey(operationKey("team-create")); }} style={inputStyle} /></label>
+              <label><strong>Initial primary (optional)</strong><br /><select value={newInitialPrimaryId} onChange={(event) => { setNewInitialPrimaryId(event.target.value); setCreateTeamKey(operationKey("team-create")); }} style={inputStyle}><option value="">Add later</option>{detail.players.filter((player) => player.active !== false && String(player.id) !== newCaptainId).map((player) => <option key={player.id} value={player.id}>{player.name}</option>)}</select></label>
+              {newInitialPrimaryId ? <label><strong>Initial primary email (optional)</strong><br /><input type="email" value={newInitialPrimaryEmail} onChange={(event) => { setNewInitialPrimaryEmail(event.target.value); setCreateTeamKey(operationKey("team-create")); }} style={inputStyle} /></label> : null}
+            </div>
+            <p><ConfirmAction triggerLabel={busy ? "Creating…" : "Create forming team"} title="Create this forming team?" description="The team starts incomplete unless its active primary roster already matches the configured size. Player uniqueness, substitute-pool exclusion, and eligibility are rechecked atomically." confirmLabel="Yes, create team" confirmationText="CREATE TEAM" disabled={busy || !newTeamName.trim() || !newCaptainId || !newCaptainEmail.trim()} busy={busy} onConfirm={createTeam} /></p>
+            <h3>Assign a team member</h3>
+            <div style={gridStyle}>
+              <label><strong>Team</strong><br /><select value={rosterTeamId} onChange={(event) => { setRosterTeamId(event.target.value); setRosterKey(operationKey("team-roster")); }} style={inputStyle}><option value="">Choose a team</option>{detail.teams.filter((team) => ["pending_partner", "confirmed"].includes(team.status)).map((team) => <option key={team.id} value={team.id}>{team.team_name}{team.roster_complete ? " · ready" : " · incomplete"}</option>)}</select></label>
+              <label><strong>Player</strong><br /><select value={rosterPlayerId} onChange={(event) => { setRosterPlayerId(event.target.value); setRosterKey(operationKey("team-roster")); }} style={inputStyle}><option value="">Choose an active player</option>{detail.players.filter((player) => player.active !== false).map((player) => <option key={player.id} value={player.id}>{player.name}{player.gender ? ` · ${player.gender}` : ""}</option>)}</select></label>
+              <label><strong>Season role</strong><br /><select value={rosterRole} onChange={(event) => { setRosterRole(event.target.value as "primary" | "alternate"); setRosterKey(operationKey("team-roster")); }} style={inputStyle}><option value="primary">Primary player</option><option value="alternate">Assigned alternate</option></select></label>
+              <label><strong>Member status</strong><br /><select value={rosterStatus} onChange={(event) => { setRosterStatus(event.target.value as "active" | "invited"); setRosterKey(operationKey("team-roster")); }} style={inputStyle}><option value="active">Active</option><option value="invited">Invited</option></select></label>
+            </div>
+            <p><ConfirmAction triggerLabel={busy ? "Saving…" : "Assign player"} title="Update this assigned roster?" description="The server rechecks player uniqueness, roster capacity, category eligibility, and the current roster version before committing." confirmLabel="Yes, update roster" confirmationText="UPDATE TEAM ROSTER" disabled={busy || !rosterTeamId || !rosterPlayerId} busy={busy} onConfirm={addRosterMember} /></p>
+
+            <h3>Shared substitute pool</h3>
+            {detail.settings.substitute_pool_enabled ? <>
+              <div style={gridStyle}>
+                <label><strong>Player</strong><br /><select value={poolPlayerId} onChange={(event) => { setPoolPlayerId(event.target.value); setPoolKey(operationKey("team-substitute-pool")); }} style={inputStyle}><option value="">Choose an active player</option>{detail.players.filter((player) => player.active !== false).map((player) => <option key={player.id} value={player.id}>{player.name}</option>)}</select></label>
+                <label><strong>Availability</strong><br /><select value={poolStatus} onChange={(event) => { setPoolStatus(event.target.value as "available" | "unavailable" | "withdrawn"); setPoolKey(operationKey("team-substitute-pool")); }} style={inputStyle}><option value="available">Available</option><option value="unavailable">Unavailable</option><option value="withdrawn">Withdrawn</option></select></label>
+                <label><strong>Note</strong><br /><input value={poolNote} onChange={(event) => { setPoolNote(event.target.value); setPoolKey(operationKey("team-substitute-pool")); }} maxLength={500} style={inputStyle} /></label>
+              </div>
+              <p><ConfirmAction triggerLabel={busy ? "Saving…" : "Update substitute pool"} title="Update this substitute pool entry?" description="Assigned team members cannot also be available in the shared substitute pool." confirmLabel="Yes, update pool" confirmationText="UPDATE SUBSTITUTE POOL" disabled={busy || !poolPlayerId} busy={busy} onConfirm={updateSubstitutePool} /></p>
+              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>{detail.substitute_pool.filter((entry) => entry.status !== "withdrawn").map((entry) => <span key={entry.id} style={insetStyle}><strong>{playerName(detail, entry.player_id)}</strong> · {entry.status}{entry.note ? ` · ${entry.note}` : ""}</span>)}</div>
+              {!detail.substitute_pool.some((entry) => entry.status !== "withdrawn") ? <p style={{ color: "#64748b" }}>No players are in the shared substitute pool.</p> : null}
+            </> : <p style={{ color: "#64748b" }}>Enable substitutes and the shared substitute pool in season setup before adding pool players.</p>}
+          </article>
+
+          <article style={cardStyle}>
+            <h2 style={{ marginTop: 0 }}>Partner waitlist</h2>
+            {detail.settings.team_size !== 2 ? <p style={{ color: "#475569" }}>Two-person auto-pairing is closed for this roster size. Create a forming team above, then assign its remaining primary players. Existing waitlist entries can still be withdrawn safely.</p> : null}
+            <div style={gridStyle}>
+              <label><strong>Action</strong><br /><select value={waitlistAction} onChange={(event) => { setWaitlistAction(event.target.value as "pair" | "withdraw"); setWaitlistIds([]); setWaitlistKey(operationKey("team-waitlist")); }} style={inputStyle}>{detail.settings.team_size === 2 ? <option value="pair">Pair two players</option> : null}<option value="withdraw">Withdraw selected</option></select></label>
               {waitlistAction === "pair" ? <label><strong>New team name</strong><br /><input value={waitlistTeamName} onChange={(event) => { setWaitlistTeamName(event.target.value); setWaitlistKey(operationKey("team-waitlist")); }} maxLength={120} style={inputStyle} /></label> : null}
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.6rem", marginTop: "0.75rem" }}>
@@ -685,7 +848,7 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
             {recoveryEvidence ? <div style={{ ...insetStyle, marginTop: "0.75rem" }}><p><strong>Safe action:</strong> {recoveryEvidence.safe_action || "review"} · Canonical commit: {recoveryEvidence.stable_direct_match_receipt?.committed ? "yes" : "no"}</p><div style={gridStyle}><label><strong>Resolution</strong><br /><select value={recoveryResolution} onChange={(event) => setRecoveryResolution(event.target.value as "finalize" | "compensate")} style={inputStyle}><option value="finalize">Finalize from committed evidence</option><option value="compensate">Compensate uncommitted operation</option></select></label><label><strong>Recovery note</strong><br /><input value={recoveryNote} onChange={(event) => setRecoveryNote(event.target.value)} minLength={5} maxLength={500} style={inputStyle} /></label></div><p><ConfirmAction triggerLabel={busy ? "Working…" : recoveryResolution === "finalize" ? "Finalize recovery" : "Compensate operation"} title="Resolve this interrupted operation?" description="The server rechecks the canonical match receipt and refuses an unsafe resolution." confirmLabel="Yes, resolve operation" confirmationText={recoveryResolution === "finalize" ? "FINALIZE TEAM LEAGUE RECOVERY" : "COMPENSATE TEAM LEAGUE RECOVERY"} tone={recoveryResolution === "compensate" ? "danger" : "default"} disabled={busy || recoveryNote.trim().length < 5} busy={busy} onConfirm={resolveRecovery} /></p></div> : null}
           </article>
         </>
-      ) : leagueName ? <p style={{ color: "#475569" }}>Save team league setup to enable registration, scheduling, results, and recovery.</p> : null}
+      ) : leagueName ? <p style={{ color: "#475569" }}>Complete this league&apos;s pre-start setup in Settings before beginning team operations.</p> : null}
     </div>
   );
 }

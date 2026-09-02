@@ -91,9 +91,19 @@ def test_all_team_league_mutation_decorators_are_static_literals_and_gated() -> 
                 route_path = ast.literal_eval(decorator.args[0])
                 assert isinstance(route_path, str)
                 body = ast.get_source_segment(source, node) or ""
-                if not route_path.endswith("/schedule-preview/{phase}"):
-                    assert gate in body
+                assert gate in body
         assert unsafe_count >= 2
+
+
+def test_team_schedule_preview_is_a_read_only_get_route() -> None:
+    routes = _read("services/api/admin_team_league_routes.py")
+    panel = _read("apps/web/app/admin/league-manager/teams/TeamLeaguesPanel.tsx")
+    write_waves = _read("scripts/staging_write_waves.py")
+
+    assert '@app.get(\n        "/admin/clubs/{club_id}/league-manager/team-leagues/"\n        "{league_name}/schedule-preview/{phase}"' in routes
+    assert 'teamLeaguePath(`/schedule-preview/${phase}`)' in panel
+    assert 'teamLeaguePath(`/schedule-preview/${phase}`), { method: "POST" }' not in panel
+    assert '("POST", "/admin/clubs/{club_id}/league-manager/team-leagues/{league_name}/schedule-preview/{phase}")' not in write_waves
 
 
 def test_every_team_league_route_checks_feature_gate_before_any_data_access() -> None:
@@ -122,7 +132,7 @@ def test_every_team_league_route_checks_feature_gate_before_any_data_access() ->
             assert isinstance(first.value, ast.Call)
             assert isinstance(first.value.func, ast.Name)
             assert first.value.func.id == "require_team_leagues_enabled_or_403"
-    assert route_count == 14
+    assert route_count == 16
 
     feature_gate = _read("services/api/team_league_feature.py")
     assert "JUPR_ENABLE_TEAM_LEAGUES" in feature_gate
@@ -163,6 +173,9 @@ def test_team_league_and_award_admin_pages_are_complete_and_responsive() -> None
     team_panel = _read(
         "apps/web/app/admin/league-manager/teams/TeamLeaguesPanel.tsx"
     )
+    team_setup = _read(
+        "apps/web/app/admin/league-manager/settings/TeamLeagueSetupPanel.tsx"
+    )
     roster_panel = _read(
         "apps/web/app/admin/league-manager/roster/LeagueRosterPanel.tsx"
     )
@@ -176,6 +189,9 @@ def test_team_league_and_award_admin_pages_are_complete_and_responsive() -> None
     public_detail = _read(
         "apps/web/app/clubs/[clubSlug]/team-leagues/[leagueName]/page.tsx"
     )
+    public_list = _read(
+        "apps/web/app/clubs/[clubSlug]/team-leagues/page.tsx"
+    )
 
     for target in ("settings", "roster", "teams", "live", "awards"):
         assert f"/admin/league-manager/{target}" in nav
@@ -183,6 +199,9 @@ def test_team_league_and_award_admin_pages_are_complete_and_responsive() -> None
         "Allow substitutes",
         "No playoffs",
         "weekly schedule",
+    ):
+        assert phrase in team_setup
+    for phrase in (
         "SAVE TEAM LEAGUE RESULT",
         "RECONCILE TEAM LEAGUE RESULT",
         "FINALIZE TEAM LEAGUE RECOVERY",
@@ -193,6 +212,7 @@ def test_team_league_and_award_admin_pages_are_complete_and_responsive() -> None
     assert "award_catalog" in awards_panel
     assert "Measurable league results" in awards_panel
     assert "Team measures" in awards_panel
+    assert "Team setup is managed in League Settings." in team_panel
     assert 'useState<"success" | "error" | null>' in registration
     assert 'messageTone === "error" ? "alert" : "status"' in registration
     assert 'boxSizing: "border-box"' in registration
@@ -200,6 +220,8 @@ def test_team_league_and_award_admin_pages_are_complete_and_responsive() -> None
     assert "minmax(min(100%, 200px)" in public_detail
     assert "minmax(min(100%, 120px)" in public_detail
     assert 'overflowX: "auto", maxWidth: "100%"' in public_detail
+    assert 'data-testid="public-team-league-view-toggle"' in public_list
+    assert '"Past leagues"' in public_list
     for source in (team_panel, roster_panel, awards_panel):
         assert "repeat(auto-fit" in source
         assert "overflowX: \"auto\"" in source

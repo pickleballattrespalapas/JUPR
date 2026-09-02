@@ -91,7 +91,7 @@ def _run_browser_evidence_validation(
         cwd=tmp_path,
         env={
             **os.environ,
-            "EXPECTED_PUBLIC_READ_TESTS": "78",
+            "EXPECTED_PUBLIC_READ_TESTS": "79",
             "PYTHONPATH": str(ROOT),
         },
     )
@@ -111,15 +111,15 @@ def test_staging_fly_config_is_isolated_and_full_surface():
     assert env["JUPR_WEB_BASE_URL"] == EXPECTED_STAGING_WEB_ORIGIN
     assert env["JUPR_REQUIRE_API_AUDIT_LOG"] == "1"
     assert env["JUPR_REQUIRE_WORKER_RUN_LOG"] == "1"
-    assert env["JUPR_STAGING_WRITE_WAVE"] == "open"
+    assert env["JUPR_STAGING_WRITE_WAVE"] == "none"
     assert {
         name: env[name] == "1" for name in ALL_STAGING_WRITE_FLAGS
-    } == expected_write_flags("open")
+    } == expected_write_flags("none")
     assert all(env.get(name, "0") == "0" for name in ALWAYS_DISABLED_FLAGS)
     assert all(env.get(name) == "1" for name in FULL_NEXT_ADMIN_FLAGS)
     assert env["JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES"] == "1"
     assert env["JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP"] == "1"
-    assert env["JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS"] == "1"
+    assert env["JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS"] == "0"
     assert production["env"]["JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES"] == "0"
     assert production["env"]["JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP"] == "0"
     assert production["env"]["JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS"] == "0"
@@ -175,6 +175,9 @@ def test_staging_deploy_workflow_has_production_and_database_guards():
         "SELECTED_WRITE_WAVE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.write_wave || 'open' }}"
         in workflow
     )
+    assert "close-temporary-open-wave:" not in workflow
+    assert "run: sleep 2700" not in workflow
+    assert "verify-final-none" not in workflow
     assert "${{ inputs." not in workflow
     assert "STAGING_SUPABASE_URL" in workflow
     assert "STAGING_SUPABASE_SERVICE_ROLE_KEY" in workflow
@@ -243,7 +246,7 @@ def test_staging_deploy_wave_choices_exactly_match_the_code_ledger():
     )
 
     assert 'default: "open"' in write_wave
-    assert choices[0] == "open"
+    assert choices[0] == "none"
     assert set(choices) == {OPEN_WRITE_WAVE, *STAGING_WRITE_WAVES}
     assert len(choices) == len(STAGING_WRITE_WAVES) + 1
 
@@ -288,17 +291,17 @@ def test_staging_smoke_runs_only_the_strict_public_read_manifest():
     assert tuple(token for token in command[2:] if not token.startswith("--")) == expected_specs
     assert {"--retries=0", "--forbid-only"}.issubset(command)
     assert "PLAYWRIGHT_JSON_OUTPUT_FILE: test-results/public-read-report.json" in workflow
-    assert 'EXPECTED_PUBLIC_READ_TESTS: "78"' in workflow
+    assert 'EXPECTED_PUBLIC_READ_TESTS: "79"' in workflow
     assert "from scripts.run_parity_staging_wave import report_errors" in workflow
     assert "Reject incomplete browser public-read evidence" in workflow
 
 
-def test_staging_smoke_browser_evidence_gate_requires_all_78_clean_tests(
+def test_staging_smoke_browser_evidence_gate_requires_all_79_clean_tests(
     tmp_path: Path,
 ):
     valid = _run_browser_evidence_validation(
         tmp_path,
-        {"stats": {"expected": 78, "skipped": 0, "unexpected": 0, "flaky": 0}},
+        {"stats": {"expected": 79, "skipped": 0, "unexpected": 0, "flaky": 0}},
     )
     assert valid.returncode == 0, valid.stdout + valid.stderr
 
@@ -308,7 +311,7 @@ def test_staging_smoke_browser_evidence_gate_requires_all_78_clean_tests(
     )
     assert incomplete.returncode == 1
     assert "skipped 1 test" in incomplete.stdout
-    assert "requires exactly 78" in incomplete.stdout
+    assert "requires exactly 79" in incomplete.stdout
 
 
 def test_staging_smoke_browser_evidence_gate_fails_when_report_is_missing(
@@ -354,15 +357,15 @@ def test_staging_smoke_scopes_bypass_secret_to_request_steps():
     ) == 5
 
 
-def test_staging_smoke_attests_exact_sha_and_disabled_write_projection():
+def test_staging_smoke_attests_exact_sha_and_open_write_projection():
     workflow = (ROOT / ".github/workflows/staging_smoke.yml").read_text(encoding="utf-8")
-    identity = workflow.split("      - name: Attest exact read-only deployment identity\n", 1)[
+    identity = workflow.split("      - name: Attest exact open-write staging deployment identity\n", 1)[
         1
     ].split("\n      - name:", 1)[0]
 
     assert "deployment_identity_errors(" in identity
     assert 'candidate_sha=os.environ["GITHUB_SHA"]' in identity
-    assert 'expected_write_wave="none"' in identity
+    assert 'expected_write_wave="open"' in identity
     assert "expected_web_origin=web_origin" in identity
     assert "_immutable_vercel_origin" in identity
     assert "juprleagues-api-staging:deployment-" in identity
@@ -373,7 +376,7 @@ def test_staging_smoke_repo_import_steps_set_workspace_pythonpath():
     workflow = (ROOT / ".github/workflows/staging_smoke.yml").read_text(encoding="utf-8")
 
     for step_name in (
-        "Attest exact read-only deployment identity",
+        "Attest exact open-write staging deployment identity",
         "Reject incomplete browser public-read evidence",
     ):
         step = workflow.split(f"      - name: {step_name}\n", 1)[1].split(

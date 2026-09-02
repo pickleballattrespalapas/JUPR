@@ -14,20 +14,64 @@ def test_next_uses_one_fastapi_complete_round_publish_path() -> None:
     routes = ROUTES.read_text(encoding="utf-8")
     assert "/match-uploader/batch" not in panel
     assert "/rounds/${encodeURIComponent(String(currentRound))}/submit" in panel
-    assert "expected_match_count: allPreviewMatches.length" in panel
-    assert "validScoreCount !== allPreviewMatches.length" in panel
+    assert "expected_match_count: matches.length" in panel
+    assert "!allSeriesComplete" in panel
+    assert "series_key: match.row_id" in panel
+    assert "Retry exact league-round publish" in panel
+    assert "() => submitRound(confirmationText)" in panel
+    assert "const operationReference = error instanceof LeagueLiveRequestError" in panel
+    assert "${failureDetail} Retry these exact scores" in panel
+    assert "every played game still counts as an official league game" in Path(
+        "apps/web/app/admin/league-manager/GuidedLeagueSettingsEditor.tsx"
+    ).read_text(encoding="utf-8")
     assert "submit_admin_league_live_round_publish" in routes
     assert "rounds/{round_number}/submit" in routes
+    assert "retry_admin_league_live_round_publish" in routes
+    assert "rounds/{round_number}/retry" in routes
 
 
-def test_publish_is_staging_only_python_authority_with_recovery() -> None:
+def test_zero_write_recovery_retries_retained_request_instead_of_reconciling() -> None:
+    panel = PANEL.read_text(encoding="utf-8")
+    service = SERVICE.read_text(encoding="utf-8")
+    assert 'RETRYABLE_PUBLISH_STATUSES = new Set(["intent", "publishing", "retryable"])' in panel
+    assert "Retry retained league-round publish" in panel
+    assert 'confirmationText="RETRY LEAGUE ROUND"' in panel
+    assert "/rounds/${encodeURIComponent(String(round))}/retry" in panel
+    assert "RECONCILABLE_PUBLISH_STATUSES.has(operation.status)" in panel
+    assert "def retry_admin_league_live_round_publish" in service
+    assert 'operation.get("request_json")' in service
+    assert 'operation.get("idempotency_key")' in service
+    assert 'status not in {"intent", "publishing", "retryable"}' in service
+    assert "blockingCurrentRoundPublishOperation" in panel
+    assert "instead of starting a new publish" in panel
+    assert "comparison_operation_key_matches_retained_plan" in service
+
+
+def test_scores_publish_before_movement_and_unusual_scores_require_review() -> None:
+    panel = PANEL.read_text(encoding="utf-8")
+    routes = ROUTES.read_text(encoding="utf-8")
+    assert 'triggerLabel="Publish reviewed scores"' in panel
+    assert 'triggerLabel="Apply movement and continue"' in panel
+    assert "/rounds/${encodeURIComponent(String(appliedRoundNumber))}/movement" in panel
+    assert "unusual_score_acknowledgement: unusualScoresAcknowledged" in panel
+    assert "Unusual score — verify before publish" in panel
+    assert "I verified" in panel
+    assert 'rounds/{round_number}/movement' in routes
+
+
+def test_publish_uses_hosted_runtime_policy_and_python_authority_with_recovery() -> None:
     service = SERVICE.read_text(encoding="utf-8")
     status = STATUS.read_text(encoding="utf-8")
     for token in (
         "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_SUBMIT",
         'runtime == "staging"',
+        'runtime == "production"',
+        "JUPR_PRODUCTION_WRITE_POLICY",
         "ensure_admin_league_live_publish_schema_ready",
         "submit_admin_match_uploader_batch",
+        "idempotency_key=f\"league-live:{key}\"",
+        "allow_league_live_context=True",
+        "match_format=match_format",
         "recover_league_live_round_publish_response_loss_admin",
         "recovery_required",
         "compensate_admin_league_live_round_publish",

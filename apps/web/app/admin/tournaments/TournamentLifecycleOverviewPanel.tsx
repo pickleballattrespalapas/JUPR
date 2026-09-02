@@ -11,6 +11,7 @@ import { useAdminSession } from "@/lib/useAdminSession";
 import TournamentPhaseNav, {
   type TournamentPhase
 } from "@/components/TournamentPhaseNav";
+import { tournamentRouteHref } from "@/lib/tournamentRouteContext";
 
 type Props = {
   apiBase: string | null;
@@ -18,6 +19,7 @@ type Props = {
   status: AdminTournamentStatusResponse;
   tournamentId: string;
   tournamentName: string;
+  drawId?: string;
   phase: TournamentPhase;
 };
 
@@ -52,11 +54,10 @@ function apiUrl(apiBase: string, path: string): string {
 function selectedHref(
   path: string,
   tournamentId: string,
-  tournamentName: string
+  tournamentName: string,
+  drawId: string
 ): string {
-  const params = new URLSearchParams({ tournament: tournamentId });
-  if (tournamentName) params.set("name", tournamentName);
-  return `${path}?${params.toString()}`;
+  return tournamentRouteHref(path, { tournamentId, tournamentName, drawId });
 }
 
 function stateStyle(state: StepCard["state"]) {
@@ -95,7 +96,8 @@ function phaseDescription(phase: TournamentPhase): string {
 function setupSteps(
   detail: AdminTournamentDetailResponse,
   tournamentId: string,
-  tournamentName: string
+  tournamentName: string,
+  drawId: string
 ): StepCard[] {
   const datesReady = Boolean(
     detail.tournament.start_date && detail.tournament.end_date
@@ -130,7 +132,8 @@ function setupSteps(
       href: selectedHref(
         "/admin/tournaments/setup/basics",
         tournamentId,
-        tournamentName
+        tournamentName,
+        drawId
       ),
       state: basicsReady ? "Complete" : "In progress"
     },
@@ -141,7 +144,8 @@ function setupSteps(
       href: selectedHref(
         "/admin/tournaments/setup/schedule",
         tournamentId,
-        tournamentName
+        tournamentName,
+        drawId
       ),
       state: daysReady ? "Complete" : "Not started"
     },
@@ -152,7 +156,8 @@ function setupSteps(
       href: selectedHref(
         "/admin/tournaments/setup/events",
         tournamentId,
-        tournamentName
+        tournamentName,
+        drawId
       ),
       state: eventsReady ? "Complete" : "Not started",
       note: eventsReady
@@ -166,7 +171,8 @@ function setupSteps(
       href: selectedHref(
         "/admin/tournaments/setup/divisions",
         tournamentId,
-        tournamentName
+        tournamentName,
+        drawId
       ),
       state: divisionsReady ? "Complete" : "Not started",
       note: divisionsReady
@@ -180,7 +186,8 @@ function setupSteps(
       href: selectedHref(
         "/admin/tournaments/setup/pricing",
         tournamentId,
-        tournamentName
+        tournamentName,
+        drawId
       ),
       state: "In progress"
     },
@@ -191,7 +198,8 @@ function setupSteps(
       href: selectedHref(
         "/admin/tournaments/setup/review",
         tournamentId,
-        tournamentName
+        tournamentName,
+        drawId
       ),
       state: reviewReady ? "Ready" : "Blocked",
       note: reviewReady
@@ -205,7 +213,8 @@ function setupSteps(
 function registrationSteps(
   detail: AdminTournamentDetailResponse,
   tournamentId: string,
-  tournamentName: string
+  tournamentName: string,
+  drawId: string
 ): StepCard[] {
   const registrations = detail.summary.registrations || 0;
   const unpaid = Object.entries(detail.summary.by_payment_status || {}).reduce(
@@ -220,7 +229,8 @@ function registrationSteps(
       href: selectedHref(
         "/admin/tournaments/registration/registrants",
         tournamentId,
-        tournamentName
+        tournamentName,
+        drawId
       ),
       state: registrations ? "In progress" : "Not started",
       note: `${registrations} registration${registrations === 1 ? "" : "s"}`
@@ -231,7 +241,8 @@ function registrationSteps(
       href: selectedHref(
         "/admin/tournaments/registration/partners",
         tournamentId,
-        tournamentName
+        tournamentName,
+        drawId
       ),
       state: registrations ? "In progress" : "Not started"
     },
@@ -241,7 +252,8 @@ function registrationSteps(
       href: selectedHref(
         "/admin/tournaments/commerce",
         tournamentId,
-        tournamentName
+        tournamentName,
+        drawId
       ),
       state: unpaid ? "In progress" : registrations ? "Ready" : "Not started",
       note: unpaid ? `${unpaid} unpaid registration${unpaid === 1 ? "" : "s"}` : undefined
@@ -252,7 +264,8 @@ function registrationSteps(
       href: selectedHref(
         "/admin/tournaments/registrations",
         tournamentId,
-        tournamentName
+        tournamentName,
+        drawId
       ),
       state: registrations ? "Ready" : "Not started"
     }
@@ -262,7 +275,8 @@ function registrationSteps(
 function liveSteps(
   detail: AdminTournamentDetailResponse,
   tournamentId: string,
-  tournamentName: string
+  tournamentName: string,
+  drawId: string
 ): StepCard[] {
   const registrations = detail.summary.registrations || 0;
   const coreReady = registrations > 0 && detail.event_options.length > 0;
@@ -273,7 +287,8 @@ function liveSteps(
       href: selectedHref(
         "/admin/tournaments/live-operations/check-in",
         tournamentId,
-        tournamentName
+        tournamentName,
+        drawId
       ),
       state: coreReady ? "In progress" : "Blocked"
     },
@@ -283,7 +298,8 @@ function liveSteps(
       href: selectedHref(
         "/admin/tournaments/ops/draws",
         tournamentId,
-        tournamentName
+        tournamentName,
+        drawId
       ),
       state: coreReady ? "Ready" : "Blocked"
     },
@@ -293,7 +309,8 @@ function liveSteps(
       href: selectedHref(
         "/admin/tournament-live",
         tournamentId,
-        tournamentName
+        tournamentName,
+        drawId
       ),
       state: coreReady ? "In progress" : "Blocked"
     },
@@ -303,7 +320,8 @@ function liveSteps(
       href: selectedHref(
         "/admin/tournaments/status",
         tournamentId,
-        tournamentName
+        tournamentName,
+        drawId
       ),
       state: "Ready"
     },
@@ -313,7 +331,8 @@ function liveSteps(
       href: selectedHref(
         "/admin/tournaments/ops",
         tournamentId,
-        tournamentName
+        tournamentName,
+        drawId
       ),
       state: "Not started"
     }
@@ -323,7 +342,8 @@ function liveSteps(
 function publishSteps(
   detail: AdminTournamentDetailResponse,
   tournamentId: string,
-  tournamentName: string
+  tournamentName: string,
+  drawId: string
 ): StepCard[] {
   const coreReady =
     detail.summary.registrations > 0 && detail.event_options.length > 0;
@@ -334,7 +354,8 @@ function publishSteps(
       href: selectedHref(
         "/admin/tournaments/ops/results",
         tournamentId,
-        tournamentName
+        tournamentName,
+        drawId
       ),
       state: coreReady ? "In progress" : "Blocked"
     },
@@ -344,7 +365,8 @@ function publishSteps(
       href: selectedHref(
         "/admin/tournaments/ops/publish",
         tournamentId,
-        tournamentName
+        tournamentName,
+        drawId
       ),
       state: coreReady ? "Not started" : "Blocked"
     },
@@ -354,7 +376,8 @@ function publishSteps(
       href: selectedHref(
         "/admin/tournaments/publish/closeout",
         tournamentId,
-        tournamentName
+        tournamentName,
+        drawId
       ),
       state: "Not started"
     }
@@ -367,6 +390,7 @@ export default function TournamentLifecycleOverviewPanel({
   status,
   tournamentId,
   tournamentName,
+  drawId = "",
   phase
 }: Props) {
   const { accessToken, loading: sessionLoading } = useAdminSession();
@@ -430,12 +454,12 @@ export default function TournamentLifecycleOverviewPanel({
 
   const steps = detail
     ? phase === "setup"
-      ? setupSteps(detail, tournamentId, tournamentName)
+      ? setupSteps(detail, tournamentId, tournamentName, drawId)
       : phase === "registration"
-        ? registrationSteps(detail, tournamentId, tournamentName)
+        ? registrationSteps(detail, tournamentId, tournamentName, drawId)
         : phase === "live"
-          ? liveSteps(detail, tournamentId, tournamentName)
-          : publishSteps(detail, tournamentId, tournamentName)
+          ? liveSteps(detail, tournamentId, tournamentName, drawId)
+          : publishSteps(detail, tournamentId, tournamentName, drawId)
     : [];
 
   return (

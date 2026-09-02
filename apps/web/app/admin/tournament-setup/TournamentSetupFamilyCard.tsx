@@ -2,6 +2,7 @@
 
 import { useId } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess } from "@/components/interaction";
 import {
   COMPETITION_FORMATS,
   DIVISION_STATUSES,
@@ -9,6 +10,7 @@ import {
   PARTICIPANT_TYPES,
   SCORING_OPTIONS,
   cleanString,
+  editableString,
   eventFamilyName,
   numberInputValue,
   recordBoolean,
@@ -48,6 +50,7 @@ export function TournamentSetupFamilyCard({
   const issueId = useId();
   const value = row.value;
   const name = eventFamilyName(value);
+  const editableName = editableString(value.event_family ?? value.event_family_label);
   const participantType = cleanString(value.participant_type) || "GENDER_DOUBLES";
   const gender = cleanString(value.gender_restriction) || "ANY";
   const format = cleanString(value.default_format) || "ROUND_ROBIN_PLUS_PLAYOFF";
@@ -85,7 +88,10 @@ export function TournamentSetupFamilyCard({
           confirmationText=""
           tone="danger"
           disabled={disabled}
-          onConfirm={onRemove}
+          onConfirm={async () => {
+            onRemove();
+            return actionSuccess("Event removed", "The event defaults were removed from the local draft.");
+          }}
         />
       </div>
       <div className={styles.grid}>
@@ -93,7 +99,7 @@ export function TournamentSetupFamilyCard({
           Event name
           <input
             className={styles.input}
-            value={name}
+            value={editableName}
             disabled={disabled}
             aria-invalid={issues.some((issue) => issue.path.endsWith(".event_family")) || undefined}
             onChange={(event) => onChange(setRecordString(value, ["event_family", "event_family_label"], event.target.value))}

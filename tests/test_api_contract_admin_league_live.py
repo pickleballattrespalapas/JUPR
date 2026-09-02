@@ -85,6 +85,7 @@ def _create(client: TestClient, *, total_rounds: int = 2):
             "current_round": 1,
             "roster": ROSTER,
             "courts": COURTS,
+            "idempotency_key": "create-live-session-test",
             "confirmation_text": "CREATE LIVE SESSION",
         },
     )
@@ -102,6 +103,57 @@ def _plan(client: TestClient, session: dict):
     )
 
 
+def test_round_plan_enforces_saved_fixed_series_and_counts_each_game(monkeypatch):
+    tables = league_live_tables()
+    tables["leagues_metadata"] = [
+        {
+            "club_id": "club",
+            "league_name": "Tuesday Ladder",
+            "rules_config": {
+                "competition": {
+                    "match_structure": {
+                        "kind": "fixed_games",
+                        "games": 2,
+                        "result_counting": "each_game",
+                        "completion": "all_games",
+                    }
+                }
+            },
+        }
+    ]
+    supabase = FakeSupabase(tables)
+    _install_env(monkeypatch, supabase)
+    client = TestClient(app)
+    session = _create(client).json()["session"]
+    games = [
+        {**MATCHES[0], "series_key": "court-1-match-1", "series_kind": "fixed_games", "series_games": 2, "game_number": 1},
+        {**MATCHES[0], "series_key": "court-1-match-1", "series_kind": "fixed_games", "series_games": 2, "game_number": 2},
+    ]
+
+    response = client.post(
+        f"/admin/clubs/club/league-manager/live-sessions/{session['id']}/rounds/1/plan",
+        headers={"Authorization": "Bearer local"},
+        json={"expected_updated_at": session["updated_at"], "matches": games, "courts": COURTS},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["scored_match_count"] == 2
+    assert response.json()["match_structure"] == {
+        "kind": "fixed_games",
+        "games": 2,
+        "result_counting": "each_game",
+        "completion": "all_games",
+    }
+
+    incomplete = client.post(
+        f"/admin/clubs/club/league-manager/live-sessions/{session['id']}/rounds/1/plan",
+        headers={"Authorization": "Bearer local"},
+        json={"expected_updated_at": session["updated_at"], "matches": games[:1], "courts": COURTS},
+    )
+    assert incomplete.status_code == 400
+    assert "requires all 2" in incomplete.json()["detail"]
+
+
 def test_admin_league_live_requires_server_only_supabase_key(monkeypatch):
     supabase = FakeSupabase(league_live_tables())
     _install_env(monkeypatch, supabase, service_role=False)
@@ -113,6 +165,71 @@ def test_admin_league_live_requires_server_only_supabase_key(monkeypatch):
 
     assert response.status_code == 503
     assert "SUPABASE_SERVICE_ROLE_KEY" in response.json()["detail"]
+
+
+def test_admin_league_live_resume_list_is_scoped_to_league_and_unfinished_statuses(monkeypatch):
+    tables = league_live_tables()
+    tables["league_live_sessions"] = [
+        {
+            "id": f"tuesday-{status}",
+            "club_id": "club",
+            "league_name": "Tuesday Ladder",
+            "week_tag": "Week 1",
+            "status": status,
+            "total_rounds": 5,
+            "current_round": 1,
+            "updated_at": f"2026-08-24T10:0{index}:00Z",
+        }
+        for index, status in enumerate(("setup", "active", "paused", "complete", "archived"))
+    ] + [
+        {
+            "id": "wednesday-active",
+            "club_id": "club",
+            "league_name": "Wednesday Ladder",
+            "week_tag": "Week 1",
+            "status": "active",
+            "total_rounds": 5,
+            "current_round": 1,
+            "updated_at": "2026-08-24T11:00:00Z",
+        },
+        {
+            "id": "other-club-active",
+            "club_id": "other-club",
+            "league_name": "Tuesday Ladder",
+            "week_tag": "Week 1",
+            "status": "active",
+            "total_rounds": 5,
+            "current_round": 1,
+            "updated_at": "2026-08-24T12:00:00Z",
+        },
+    ]
+    supabase = FakeSupabase(tables)
+    _install_env(monkeypatch, supabase)
+
+    response = TestClient(app).get(
+        "/admin/clubs/club/league-manager/live-sessions",
+        params={"league_name": "Tuesday Ladder", "resumable_only": "true", "limit": 100},
+        headers={"Authorization": "Bearer local"},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["count"] == 3
+    assert {session["id"] for session in payload["sessions"]} == {
+        "tuesday-setup",
+        "tuesday-active",
+        "tuesday-paused",
+    }
+    assert {session["league_name"] for session in payload["sessions"]} == {"Tuesday Ladder"}
+    assert {session["status"] for session in payload["sessions"]} == {"setup", "active", "paused"}
+
+    missing_league = TestClient(app).get(
+        "/admin/clubs/club/league-manager/live-sessions",
+        params={"resumable_only": "true"},
+        headers={"Authorization": "Bearer local"},
+    )
+    assert missing_league.status_code == 400
+    assert "league_name is required" in missing_league.json()["detail"]
 
 
 def test_admin_league_live_status_fails_closed_without_server_only_key(monkeypatch):
@@ -134,6 +251,8 @@ def test_admin_league_live_status_fails_closed_without_server_only_key(monkeypat
         "roster_suggestion_endpoint",
         "round_plan_endpoint",
         "round_submit_endpoint",
+        "round_movement_endpoint",
+        "round_retry_endpoint",
         "round_reconcile_endpoint",
         "round_compensate_endpoint",
         "guest_endpoint",
@@ -178,6 +297,8 @@ def test_admin_league_live_disabled_status_attests_submit_gate_closed(monkeypatc
         assert payload["submit_enabled"] is False
         for endpoint_key in (
             "round_submit_endpoint",
+            "round_movement_endpoint",
+            "round_retry_endpoint",
             "round_reconcile_endpoint",
             "round_compensate_endpoint",
             "guest_endpoint",
@@ -245,7 +366,10 @@ def test_admin_league_live_create_and_detail_contract(monkeypatch):
     assert payload["session"]["updated_at"]
     assert tables["league_live_sessions"][0]["league_name"] == "Tuesday Ladder"
     assert tables["league_live_courts"][0]["court_number"] == 1
-    assert tables["admin_activity_log"][0]["action_type"] == "create_league_live_session_admin"
+    assert any(
+        row["action_type"] == "create_league_live_session_admin"
+        for row in tables["admin_activity_log"]
+    )
 
     detail = client.get(
         f"/admin/clubs/club/league-manager/live-sessions/{session_id}",
@@ -255,6 +379,90 @@ def test_admin_league_live_create_and_detail_contract(monkeypatch):
     detail_payload = detail.json()
     assert detail_payload["session"]["id"] == session_id
     assert detail_payload["courts"][0]["player_names"] == ["Alex", "Blair", "Casey", "Devon"]
+
+
+def test_admin_league_live_create_exact_retry_replays_without_second_session(monkeypatch):
+    tables = league_live_tables()
+    supabase = FakeSupabase(tables)
+    _install_env(monkeypatch, supabase)
+    client = TestClient(app)
+
+    first = _create(client, total_rounds=3)
+    replay = _create(client, total_rounds=3)
+
+    assert first.status_code == 200
+    assert replay.status_code == 200
+    assert replay.json()["idempotent"] is True
+    assert replay.json()["session"]["id"] == first.json()["session"]["id"]
+    assert len(tables["league_live_sessions"]) == 1
+
+
+def test_admin_league_live_create_reconciles_authoritative_session_after_lost_completion(monkeypatch):
+    tables = league_live_tables()
+    supabase = FakeSupabase(tables)
+    _install_env(monkeypatch, supabase)
+    from services.api import admin_league_manager_routes as routes
+
+    original_update = routes.update_guarded_operation
+    lost_completion = {"raised": False}
+
+    def fail_first_completion(*args, **kwargs):
+        if kwargs.get("status") == "completed" and not lost_completion["raised"]:
+            lost_completion["raised"] = True
+            raise RuntimeError("response lost while completing ledger")
+        return original_update(*args, **kwargs)
+
+    monkeypatch.setattr(routes, "update_guarded_operation", fail_first_completion)
+    client = TestClient(app)
+
+    created = _create(client, total_rounds=3)
+
+    assert created.status_code == 409
+    assert created.json()["detail"]["code"] == "RECOVERY_REQUIRED"
+    assert len(tables["league_live_sessions"]) == 1
+    operation = tables["admin_guarded_operations"][0]
+    assert operation["status"] == "recovery_required"
+
+    reconciled = client.post(
+        "/admin/clubs/club/league-manager/live-operations/create-live-session-test/reconcile",
+        headers={"Authorization": "Bearer local"},
+        json={"confirmation_text": "RECONCILE LIVE SESSION", "source": "test"},
+    )
+
+    assert reconciled.status_code == 200
+    assert reconciled.json()["reconciled"] is True
+    assert reconciled.json()["session"]["id"] == tables["league_live_sessions"][0]["id"]
+    assert operation["status"] == "completed"
+    assert any(row["action_type"] == "reconcile_league_live_session_create" for row in tables["admin_activity_log"])
+
+
+def test_admin_league_live_create_rejects_same_key_for_changed_request(monkeypatch):
+    tables = league_live_tables()
+    supabase = FakeSupabase(tables)
+    _install_env(monkeypatch, supabase)
+    client = TestClient(app)
+
+    first = _create(client, total_rounds=2)
+    changed = _create(client, total_rounds=3)
+
+    assert first.status_code == 200
+    assert changed.status_code == 400
+    assert "different request" in str(changed.json()["detail"])
+    assert len(tables["league_live_sessions"]) == 1
+
+
+def test_admin_league_live_create_fails_closed_when_intent_cannot_persist(monkeypatch):
+    tables = league_live_tables()
+    tables["__failed_insert_tables__"] = {"admin_activity_log"}
+    supabase = FakeSupabase(tables)
+    _install_env(monkeypatch, supabase)
+
+    response = _create(TestClient(app), total_rounds=2)
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "DURABLE_INTENT_UNAVAILABLE"
+    assert tables["league_live_sessions"] == []
+    assert tables["league_live_courts"] == []
 
 
 def test_admin_league_live_snapshot_rejects_stale_state(monkeypatch):

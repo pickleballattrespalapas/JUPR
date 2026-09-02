@@ -11,10 +11,13 @@ const builderModuleUrl = compiledModulePath
 const {
   ageRuleValue,
   appendBuilderRow,
+  comparablePublishedConfigurationPayload,
   configurationPayload,
   draftSignature,
   effectiveGenderRestriction,
   effectiveParticipantType,
+  editableString,
+  expectedGenderFromDivisionName,
   moveBuilderRow,
   newDayRow,
   newEventOptionRow,
@@ -22,16 +25,104 @@ const {
   publishConfigurationPayload,
   removeBuilderRow,
   setAgeRuleNumber,
+  setCanonicalRecordString,
   setEventAgeMode,
   setRecordString,
+  stableSetupJsonStringify,
   validateSetupConfiguration,
   wrapBuilderRows
 } = await import(builderModuleUrl);
 
+test("editable strings preserve typing while canonical aliases normalize at save", () => {
+  assert.equal(editableString("Division "), "Division ");
+  assert.equal(editableString(null), "");
+
+  const edited = setRecordString(
+    { division_name: "Old name", label: "Public composite label", retained: true },
+    ["division_name", "label"],
+    "  New Division Name  "
+  );
+  assert.deepEqual(edited, {
+    division_name: "  New Division Name  ",
+    label: "Public composite label",
+    retained: true
+  });
+
+  const canonical = setCanonicalRecordString(
+    edited,
+    ["division_name", "label"],
+    edited.division_name
+  );
+  assert.deepEqual(canonical, {
+    division_name: "New Division Name",
+    label: "Public composite label",
+    retained: true
+  });
+
+  assert.deepEqual(
+    setCanonicalRecordString({ label: " Old label " }, ["division_name", "label"], " New label "),
+    { label: "New label" }
+  );
+  assert.deepEqual(
+    setCanonicalRecordString({ retained: true }, ["division_name", "label"], " New name "),
+    { retained: true, division_name: "New name" }
+  );
+});
+
+test("configuration payload canonicalizes editable text without merging distinct fields", () => {
+  const payload = configurationPayload({
+    days: wrapBuilderRows([{
+      id: "day-1",
+      label: " Friday ",
+      court_labels: [" Court 1 ", ""],
+      court_notes: " Nets on north wall "
+    }], "day"),
+    eventFamilies: wrapBuilderRows([{
+      event_family: " Gender Doubles ",
+      event_family_label: " Public Gender Doubles "
+    }], "family"),
+    eventOptions: wrapBuilderRows([{
+      division_name: " 3.5 ",
+      label: " Women's Doubles 3.5 ",
+      skill_label: " 3.5 ",
+      age_label: " All Ages "
+    }], "division")
+  });
+
+  assert.deepEqual(payload, {
+    days: [{
+      id: "day-1",
+      label: "Friday",
+      court_labels: ["Court 1", ""],
+      court_notes: "Nets on north wall"
+    }],
+    event_families: [{
+      event_family: "Gender Doubles",
+      event_family_label: "Public Gender Doubles"
+    }],
+    event_options: [{
+      division_name: "3.5",
+      label: "Women's Doubles 3.5",
+      skill_label: "3.5",
+      age_label: "All Ages"
+    }]
+  });
+});
+
 function validConfiguration() {
   return {
     days: wrapBuilderRows([
-      { id: "day-1", label: "Friday", event_date: "2026-11-20", enabled: true, sort_order: 1 }
+      {
+        id: "day-1",
+        label: "Friday",
+        event_date: "2026-11-20",
+        enabled: true,
+        sort_order: 1,
+        court_count: 10,
+        court_labels: Array.from({ length: 10 }, (_, index) => `Court ${index + 1}`),
+        court_open_time: "08:00",
+        court_close_time: "20:00"
+      }
     ], "day"),
     eventFamilies: wrapBuilderRows([
       {
@@ -83,6 +174,8 @@ test("guided rows preserve the API payload exactly until an operator edits them"
       registration_day_id: "day-1",
       event_family_label: "Mixed Doubles",
       division_name: "Open",
+      skill_label: "Open",
+      skill_mode: "OPEN",
       capacity_teams: 16,
       price_usd: 0,
       unknown_backend_field: { value: 42 }
@@ -97,7 +190,14 @@ test("guided rows preserve the API payload exactly until an operator edits them"
   assert.deepEqual(configurationPayload(configuration), source);
   assert.deepEqual(publishConfigurationPayload(configuration), {
     days: source.days,
-    event_options: source.event_options
+    event_options: [{
+      ...source.event_options[0],
+      eligibility_mode: "OPEN",
+      skill_min_rating: null,
+      skill_max_rating: null,
+      combined_rating_cap: null,
+      team_allow_substitutes: false
+    }]
   });
 });
 
@@ -187,6 +287,10 @@ test("publish projection converts a multi-day legacy draft without changing its 
         gender_restriction: "MIXED",
         skill_label: "3.5",
         skill_mode: "SKILL_BRACKET",
+        eligibility_mode: "STANDARD",
+        skill_min_rating: null,
+        skill_max_rating: null,
+        combined_rating_cap: null,
         age_label: "All Ages",
         age_mode: "ALL_AGES",
         age_rules: null,
@@ -215,6 +319,10 @@ test("publish projection converts a multi-day legacy draft without changing its 
         gender_restriction: "ANY",
         skill_label: "Open",
         skill_mode: "OPEN",
+        eligibility_mode: "OPEN",
+        skill_min_rating: null,
+        skill_max_rating: null,
+        combined_rating_cap: null,
         age_label: "50+",
         age_mode: "SPLIT_AGE",
         age_rules: JSON.stringify({
@@ -248,6 +356,101 @@ test("publish projection converts a multi-day legacy draft without changing its 
   assert.deepEqual(configurationPayload(configuration), savedDraftBeforeProjection);
   assert.equal(Object.hasOwn(configuration.eventOptions[0].value, "registration_day_id"), false);
   assert.equal(configuration.eventOptions[1].value.assigned_day, "Saturday");
+});
+
+test("publish projection canonicalizes legacy skill policies and omits Standard's derived ceiling", () => {
+  const configuration = validConfiguration();
+  const base = configuration.eventOptions[0].value;
+  configuration.eventOptions = wrapBuilderRows([
+    {
+      ...base,
+      id: "legacy-minimum",
+      eligibility_mode: "STANDARD",
+      skill_mode: "minimum",
+      skill_label: "3.5+",
+      skill_min_rating: null,
+      skill_max_rating: 6,
+      combined_rating_cap: 9
+    },
+    {
+      ...base,
+      id: "legacy-open",
+      eligibility_mode: "STANDARD",
+      skill_mode: "OPEN",
+      skill_label: "Open",
+      skill_min_rating: 3,
+      skill_max_rating: 4,
+      combined_rating_cap: 8
+    },
+    {
+      ...base,
+      id: "explicit-standard",
+      eligibility_mode: "STANDARD",
+      skill_mode: "STANDARD",
+      skill_label: "4.0",
+      skill_max_rating: 4.5
+    },
+    {
+      ...base,
+      id: "explicit-custom",
+      eligibility_mode: "CUSTOM",
+      skill_mode: "CUSTOM",
+      skill_label: "Custom",
+      skill_min_rating: 3,
+      skill_max_rating: 4
+    },
+    {
+      ...base,
+      id: "custom-with-label-only",
+      eligibility_mode: "CUSTOM",
+      skill_mode: "CUSTOM",
+      skill_label: "3.0–4.0",
+      skill_min_rating: null,
+      skill_max_rating: null
+    }
+  ], "division");
+
+  const published = publishConfigurationPayload(configuration).event_options;
+  assert.deepEqual(
+    published.map((row) => ({
+      eligibility_mode: row.eligibility_mode,
+      skill_min_rating: row.skill_min_rating,
+      skill_max_rating: row.skill_max_rating,
+      combined_rating_cap: row.combined_rating_cap
+    })),
+    [
+      {
+        eligibility_mode: "MINIMUM",
+        skill_min_rating: 3.5,
+        skill_max_rating: null,
+        combined_rating_cap: null
+      },
+      {
+        eligibility_mode: "OPEN",
+        skill_min_rating: null,
+        skill_max_rating: null,
+        combined_rating_cap: null
+      },
+      {
+        eligibility_mode: "STANDARD",
+        skill_min_rating: null,
+        skill_max_rating: null,
+        combined_rating_cap: null
+      },
+      {
+        eligibility_mode: "CUSTOM",
+        skill_min_rating: 3,
+        skill_max_rating: 4,
+        combined_rating_cap: null
+      },
+      {
+        eligibility_mode: "CUSTOM",
+        skill_min_rating: null,
+        skill_max_rating: null,
+        combined_rating_cap: null
+      }
+    ]
+  );
 });
 
 test("structured field changes preserve unrelated and legacy fields", () => {
@@ -489,8 +692,36 @@ test("validation reports bad references and typed numeric errors", () => {
 
   const messages = validateSetupConfiguration(configuration).map((issue) => issue.message);
   assert.ok(messages.includes("Choose an enabled tournament day."));
-  assert.ok(messages.includes("Capacity must be a whole number of at least 1."));
+  assert.ok(messages.includes("Capacity must be a whole number from 4 through 16."));
   assert.ok(messages.includes("Price must be zero or greater."));
+});
+
+test("division gender labels and executable capacity limits fail closed", () => {
+  assert.equal(expectedGenderFromDivisionName("Women's 3.0"), "WOMEN");
+  assert.equal(expectedGenderFromDivisionName("Men’s 4.0+"), "MEN");
+  assert.equal(expectedGenderFromDivisionName("Open 4.0+"), null);
+
+  const wrongGender = validConfiguration();
+  wrongGender.eventOptions[0].value = {
+    ...wrongGender.eventOptions[0].value,
+    division_name: "Women's 3.0",
+    label: "Women's 3.0",
+    event_type: "GENDER_DOUBLES",
+    gender_restriction: "MEN"
+  };
+  assert.ok(
+    validateSetupConfiguration(wrongGender)
+      .map((issue) => issue.message)
+      .includes("Women's divisions must use the matching gender category.")
+  );
+
+  const tooLarge = validConfiguration();
+  tooLarge.eventOptions[0].value.capacity_teams = 17;
+  assert.ok(
+    validateSetupConfiguration(tooLarge)
+      .map((issue) => issue.message)
+      .includes("Capacity must be a whole number from 4 through 16.")
+  );
 });
 
 test("legacy divisions require matching defaults while canonical rows do not", () => {
@@ -586,4 +817,112 @@ test("draft signatures change after guided edits and remain stable otherwise", (
   assert.equal(initial, draftSignature(configuration));
   configuration.eventOptions[0].value.division_name = "Mixed 4.0";
   assert.notEqual(initial, draftSignature(configuration));
+});
+
+test("published comparison ignores representation noise but detects semantic changes", () => {
+  const legacy = validConfiguration();
+  legacy.eventOptions = wrapBuilderRows([{
+    id: "event-1",
+    assigned_day: "Friday",
+    event_family: "Mixed Doubles",
+    division_name: "Mixed Open",
+    label: "Mixed Open",
+    event_type: "MIXED_DOUBLES",
+    gender_restriction: "MIXED",
+    skill_label: "Open",
+    skill_mode: "open",
+    age_label: "All Ages",
+    age_mode: "ALL_AGES",
+    age_rules: { mode: "ALL_AGES", team_age_rule: "YOUNGER" },
+    partner_required: true,
+    capacity_teams: "16",
+    public_partner_board: true,
+    price_usd: "40",
+    event_format_default: "ROUND_ROBIN_PLUS_PLAYOFF",
+    scoring_default: "GAME_TO_15",
+    waitlist_enabled: true,
+    partner_board_enabled: true,
+    enabled: true,
+    sort_order: 1
+  }], "legacy-event");
+
+  const canonical = validConfiguration();
+  canonical.eventOptions = wrapBuilderRows([{
+    id: "event-1",
+    tournament_id: "ignored-tournament-id",
+    registration_day_id: "day-1",
+    scheduled_day_ids: ["day-1", "day-1"],
+    event_family_label: "Mixed Doubles",
+    division_name: "Mixed Open",
+    label: "Mixed Open",
+    event_type: "MIXED_DOUBLES",
+    gender_restriction: "MIXED",
+    skill_label: "Open",
+    skill_mode: "OPEN",
+    eligibility_mode: "OPEN",
+    skill_min_rating: null,
+    skill_max_rating: null,
+    combined_rating_cap: null,
+    age_label: "All Ages",
+    age_mode: "ALL_AGES",
+    age_rules: '{"younger_player_controls_age":true,"team_age_rule":"YOUNGER","mode":"ALL_AGES","higher_skill_player_controls_skill":true,"age_label":"All Ages"}',
+    partner_required: true,
+    capacity_teams: 16,
+    public_partner_board: true,
+    price_usd: 40,
+    event_format_default: "ROUND_ROBIN_PLUS_PLAYOFF",
+    scoring_default: "GAME_TO_15",
+    event_format_override: null,
+    scoring_override: null,
+    competition_format: "STANDARD",
+    team_roster_size: 2,
+    team_gender_rule: "NONE",
+    team_tiebreak_mode: "SINGLES",
+    team_playoff_format: "NONE",
+    team_allow_substitutes: false,
+    waitlist_enabled: true,
+    partner_board_enabled: true,
+    status: "draft",
+    enabled: true,
+    sort_order: 1
+  }], "canonical-event");
+
+  const legacyComparable = comparablePublishedConfigurationPayload(legacy);
+  const canonicalComparable = comparablePublishedConfigurationPayload(canonical);
+  assert.equal(
+    stableSetupJsonStringify(legacyComparable),
+    stableSetupJsonStringify(canonicalComparable)
+  );
+
+  canonical.eventOptions[0].value.capacity_teams = 18;
+  assert.notEqual(
+    stableSetupJsonStringify(legacyComparable),
+    stableSetupJsonStringify(comparablePublishedConfigurationPayload(canonical))
+  );
+});
+
+test("standard substitute flags are forced off while four-player roster policy survives", () => {
+  const payload = configurationPayload({
+    days: [],
+    eventFamilies: wrapBuilderRows([{
+      competition_format: "STANDARD",
+      team_allow_substitutes: true
+    }], "family"),
+    eventOptions: wrapBuilderRows([{
+      competition_format: "FOUR_PLAYER_TEAM",
+      team_allow_substitutes: true
+    }], "event")
+  });
+
+  assert.equal(payload.event_families[0].team_allow_substitutes, false);
+  assert.equal(payload.event_options[0].team_allow_substitutes, true);
+
+  const configuration = validConfiguration();
+  configuration.eventOptions[0].value.competition_format = "STANDARD";
+  configuration.eventOptions[0].value.team_allow_substitutes = true;
+  assert.ok(
+    validateSetupConfiguration(configuration).some(
+      (issue) => issue.path.endsWith("team_allow_substitutes")
+    )
+  );
 });

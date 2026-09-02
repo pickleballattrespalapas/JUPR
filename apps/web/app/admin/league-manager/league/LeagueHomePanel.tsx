@@ -4,11 +4,13 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess, type ActionCompletion } from "@/components/interaction";
 import type {
   AdminLeagueManagerDetailResponse,
   AdminLeagueManagerStatusResponse,
   AdminLeagueManagerWriteResponse
 } from "@/lib/adminLeagueManagerApi";
+import { isTeamLeagueType, leagueRouteHref, normalizeLeagueType } from "@/lib/leagueRouteContext";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { useAdminSession } from "@/lib/useAdminSession";
 import LeagueManagerNav from "../LeagueManagerNav";
@@ -17,6 +19,7 @@ type Props = {
   apiBase: string | null;
   clubId: string;
   status: AdminLeagueManagerStatusResponse;
+  initialLeagueId?: string | null;
   initialLeague: string;
   initialLeagueType?: string | null;
 };
@@ -72,12 +75,56 @@ function lifecycleActionsFor(status: string): LifecycleAction[] {
   return [];
 }
 
-function leagueHref(path: string, leagueName: string, leagueType: string): string {
-  const params = new URLSearchParams({ league: leagueName, mode: leagueType });
-  return `${path}?${params.toString()}`;
+function leagueHref(path: string, leagueId: string, leagueName: string, leagueType: string): string {
+  return leagueRouteHref(path, { leagueId, leagueName, leagueType });
 }
 
-export default function LeagueHomePanel({ apiBase, clubId, status, initialLeague, initialLeagueType }: Props) {
+function moduleDescriptionsFor(status: string) {
+  if (status === "paused") {
+    return {
+      results: "Review standings, records, ratings, and weekly results while league play is paused.",
+      settings: "Review the saved schedule, courts, rules, ratings, and defaults before resuming.",
+      roster: "Review current members before resuming league play.",
+      live: "Review completed rounds and recovery history; new rounds stay paused.",
+      awards: "Review award readiness while league play is paused.",
+      teams: "Review teams, substitutes, schedules, standings, and playoff readiness before resuming.",
+      print: "Print the current schedule, standings, leaders, and roster checklist."
+    };
+  }
+  if (status === "ended") {
+    return {
+      results: "Review final standings, records, ratings, and weekly results.",
+      settings: "Review the final saved schedule, courts, rules, ratings, and defaults.",
+      roster: "Review the final league roster.",
+      live: "Review completed league-night rounds and recovery history.",
+      awards: "Review and finish end-of-league awards before archiving.",
+      teams: "Review final teams, schedules, standings, and playoff results.",
+      print: "Print the final schedule, standings, leaders, and roster checklist."
+    };
+  }
+  if (status === "archived") {
+    return {
+      results: "Review archived standings, records, ratings, and weekly results.",
+      settings: "Review the archived league configuration.",
+      roster: "Review the archived league roster.",
+      live: "Review archived league-night rounds and recovery history.",
+      awards: "Review archived award results and verification history.",
+      teams: "Review archived teams, schedules, standings, and playoff results.",
+      print: "Print the archived schedule, standings, leaders, and roster checklist."
+    };
+  }
+  return {
+    results: "Standings, records, ratings, and weekly results.",
+    settings: "Schedule, courts, rules, ratings, and defaults.",
+    roster: "Search, add, remove, and review league members.",
+    live: "Run and recover league-night scoring.",
+    awards: "Configure, review, mint, and archive awards.",
+    teams: "Registration, teams, substitutes, schedules, standings, and playoffs.",
+    print: "Open the printable schedule, standings, leaders, and roster checklist."
+  };
+}
+
+export default function LeagueHomePanel({ apiBase, clubId, status, initialLeagueId, initialLeague, initialLeagueType }: Props) {
   const router = useRouter();
   const { accessToken, loading: sessionLoading } = useAdminSession();
   const [detail, setDetail] = useState<AdminLeagueManagerDetailResponse | null>(null);
@@ -126,8 +173,8 @@ export default function LeagueHomePanel({ apiBase, clubId, status, initialLeague
     }
   }
 
-  async function transitionLeague(action: LifecycleAction, confirmationText: string) {
-    if (!detail) return;
+  async function transitionLeague(action: LifecycleAction, confirmationText: string): Promise<ActionCompletion> {
+    if (!detail) throw new Error("Load the league before changing its status.");
     const generation = actionRequest.begin();
     setBusy(true);
     setMessage(null);
@@ -143,24 +190,27 @@ export default function LeagueHomePanel({ apiBase, clubId, status, initialLeague
           })
         }
       );
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the league status response was applied.");
       if (payload.detail) setDetail(payload.detail);
       else await loadDetail();
       setMessage(`${lifecycleLabels[action]} completed.`);
+      return actionSuccess("League status updated", `${lifecycleLabels[action]} completed for ${initialLeague}.`);
     } catch (error) {
       if (actionRequest.isCurrent(generation)) {
         setMessage(error instanceof Error ? error.message : "Unable to update league status.");
       }
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
-  async function duplicateLeague(confirmationText: string) {
+  async function duplicateLeague(confirmationText: string): Promise<ActionCompletion> {
     const cleanName = duplicateName.trim();
     if (!cleanName) {
-      setMessage("New draft name is required.");
-      return;
+      const error = new Error("New draft name is required.");
+      setMessage(error.message);
+      throw error;
     }
     const generation = actionRequest.begin();
     setBusy(true);
@@ -177,14 +227,17 @@ export default function LeagueHomePanel({ apiBase, clubId, status, initialLeague
           })
         }
       );
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the duplicated league response was applied.");
+      const createdId = String(payload.league?.league_id || payload.league?.league_name || payload.league_name || cleanName);
       const createdName = payload.league?.league_name || payload.league_name || cleanName;
-      const createdType = String(payload.league?.league_type || detail?.league.league_type || initialLeagueType || "Individual");
-      router.push(leagueHref("/admin/league-manager/league", createdName, createdType));
+      const createdType = normalizeLeagueType(payload.league?.league_type || detail?.league.league_type || initialLeagueType) || "Individual";
+      router.push(leagueHref("/admin/league-manager/league", createdId, createdName, createdType));
+      return actionSuccess("League duplicated", `${createdName} was created as a new draft.`);
     } catch (error) {
       if (actionRequest.isCurrent(generation)) {
         setMessage(error instanceof Error ? error.message : "Unable to duplicate league.");
       }
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
@@ -192,9 +245,29 @@ export default function LeagueHomePanel({ apiBase, clubId, status, initialLeague
 
   useAuthenticatedAutoLoad(status.enabled ? `${accessToken}\u0000${initialLeague}` : "", loadDetail);
 
-  const leagueType = String(detail?.league.league_type || initialLeagueType || "Individual");
+  const leagueType = normalizeLeagueType(detail?.league.league_type || initialLeagueType) || "Individual";
   const leagueName = detail?.league.league_name || initialLeague;
+  const leagueId = String(detail?.league.league_id || initialLeagueId || leagueName).trim();
   const lifecycleActions = detail?.capabilities?.lifecycle_actions || (detail ? lifecycleActionsFor(detail.league.status) : []);
+  const leagueStatus = String(detail?.league.status || "").trim().toLowerCase();
+  const moduleDescriptions = moduleDescriptionsFor(leagueStatus);
+  const hasLifecycleIntegrityError = Boolean(
+    detail?.validation?.errors?.some((item) =>
+      item.toLowerCase().startsWith("league lifecycle state is inconsistent")
+    )
+  );
+  const setupNotesAreHistorical = (leagueStatus === "ended" || leagueStatus === "archived")
+    && !hasLifecycleIntegrityError;
+  const setupAttentionHeading = leagueStatus === "paused"
+    ? "League setup needs attention before play resumes"
+    : setupNotesAreHistorical
+      ? `${leagueStatus === "archived" ? "Archived" : "Saved"} setup notes`
+      : "League setup needs attention";
+  const setupAttentionIntro = leagueStatus === "paused"
+    ? "Review these items before resuming league play."
+    : setupNotesAreHistorical
+      ? `These notes describe the ${leagueStatus} league's saved setup; no lifecycle action is required.`
+      : "Review these items before starting or continuing league play.";
 
   if (!status.enabled) {
     return <article style={{ ...cardStyle, background: "#f8fafc" }}>League Manager is currently unavailable.</article>;
@@ -213,7 +286,7 @@ export default function LeagueHomePanel({ apiBase, clubId, status, initialLeague
 
   return (
     <div style={{ display: "grid", gap: "1rem" }}>
-      <LeagueManagerNav leagueName={leagueName} leagueType={leagueType} />
+      <LeagueManagerNav leagueId={leagueId} leagueName={leagueName} leagueType={leagueType} />
 
       {busy && !detail ? <p role="status">Loading {initialLeague}…</p> : null}
       {message ? <p role="status" style={{ color: /unable|error|required/i.test(message) ? "#b91c1c" : "#166534" }}>{message}</p> : null}
@@ -241,13 +314,13 @@ export default function LeagueHomePanel({ apiBase, clubId, status, initialLeague
           <section aria-label={`${leagueName} modules`}>
             <h2>League tools</h2>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
-              <Link href={leagueHref("/admin/league-manager/results", leagueName, leagueType)} style={moduleStyle}><strong>Results</strong><span style={{ color: "#475569" }}>Standings, records, ratings, and weekly results.</span></Link>
-              <Link href={leagueHref("/admin/league-manager/settings", leagueName, leagueType)} style={moduleStyle}><strong>Settings</strong><span style={{ color: "#475569" }}>Schedule, courts, rules, ratings, and defaults.</span></Link>
-              <Link href={leagueHref("/admin/league-manager/roster", leagueName, leagueType)} style={moduleStyle}><strong>Roster</strong><span style={{ color: "#475569" }}>Search, add, remove, and review league members.</span></Link>
-              <Link href={leagueHref("/admin/league-manager/live", leagueName, leagueType)} style={moduleStyle}><strong>Live rounds</strong><span style={{ color: "#475569" }}>Run and recover league-night scoring.</span></Link>
-              <Link href={leagueHref("/admin/league-manager/awards", leagueName, leagueType)} style={moduleStyle}><strong>Awards</strong><span style={{ color: "#475569" }}>Configure, review, mint, and archive awards.</span></Link>
-              {leagueType === "Team" ? <Link href={leagueHref("/admin/league-manager/teams", leagueName, leagueType)} style={moduleStyle}><strong>Team league</strong><span style={{ color: "#475569" }}>Registration, teams, substitutes, schedules, standings, and playoffs.</span></Link> : null}
-              <Link href={leagueHref("/admin/league-manager/print", leagueName, leagueType)} style={moduleStyle}><strong>League night printout</strong><span style={{ color: "#475569" }}>Open the printable schedule, standings, leaders, and roster checklist.</span></Link>
+              <Link href={leagueHref("/admin/league-manager/results", leagueId, leagueName, leagueType)} style={moduleStyle}><strong>Results</strong><span style={{ color: "#475569" }}>{moduleDescriptions.results}</span></Link>
+              <Link href={leagueHref("/admin/league-manager/settings", leagueId, leagueName, leagueType)} style={moduleStyle}><strong>Settings</strong><span style={{ color: "#475569" }}>{moduleDescriptions.settings}</span></Link>
+              <Link href={leagueHref("/admin/league-manager/roster", leagueId, leagueName, leagueType)} style={moduleStyle}><strong>Roster</strong><span style={{ color: "#475569" }}>{moduleDescriptions.roster}</span></Link>
+              <Link href={leagueHref("/admin/league-manager/live", leagueId, leagueName, leagueType)} style={moduleStyle}><strong>Live rounds</strong><span style={{ color: "#475569" }}>{moduleDescriptions.live}</span></Link>
+              <Link href={leagueHref("/admin/league-manager/awards", leagueId, leagueName, leagueType)} style={moduleStyle}><strong>Awards</strong><span style={{ color: "#475569" }}>{moduleDescriptions.awards}</span></Link>
+              {isTeamLeagueType(leagueType) ? <Link href={leagueHref("/admin/league-manager/teams", leagueId, leagueName, leagueType)} style={moduleStyle}><strong>Team league</strong><span style={{ color: "#475569" }}>{moduleDescriptions.teams}</span></Link> : null}
+              <Link href={leagueHref("/admin/league-manager/print", leagueId, leagueName, leagueType)} style={moduleStyle}><strong>League night printout</strong><span style={{ color: "#475569" }}>{moduleDescriptions.print}</span></Link>
             </div>
           </section>
 
@@ -291,9 +364,17 @@ export default function LeagueHomePanel({ apiBase, clubId, status, initialLeague
           </article>
 
           {detail.validation && !detail.validation.valid ? (
-            <article role="alert" style={{ ...cardStyle, background: "#fef2f2", borderColor: "#fecaca" }}>
-              <h2 style={{ marginTop: 0 }}>League setup needs attention</h2>
-              <ul style={{ color: "#b91c1c" }}>{detail.validation.errors.map((item) => <li key={item}>{item}</li>)}</ul>
+            <article
+              role={setupNotesAreHistorical ? undefined : "alert"}
+              style={{
+                ...cardStyle,
+                background: setupNotesAreHistorical ? "#f8fafc" : leagueStatus === "paused" ? "#fffbeb" : "#fef2f2",
+                borderColor: setupNotesAreHistorical ? "#cbd5e1" : leagueStatus === "paused" ? "#fde68a" : "#fecaca"
+              }}
+            >
+              <h2 style={{ marginTop: 0 }}>{setupAttentionHeading}</h2>
+              <p style={{ color: setupNotesAreHistorical ? "#475569" : leagueStatus === "paused" ? "#92400e" : "#7f1d1d" }}>{setupAttentionIntro}</p>
+              <ul style={{ color: setupNotesAreHistorical ? "#475569" : leagueStatus === "paused" ? "#92400e" : "#b91c1c" }}>{detail.validation.errors.map((item) => <li key={item}>{item}</li>)}</ul>
             </article>
           ) : null}
         </>

@@ -2,6 +2,7 @@ import Link from "next/link";
 import PublicLeagueNav, {
   publicLeagueResultsHref
 } from "@/components/PublicLeagueNav";
+import { LeagueAwardRaceGrid } from "@/components/LeagueAwardRace";
 import { getClubLeagueResults } from "@/lib/api";
 
 type Props = {
@@ -24,11 +25,6 @@ function decodeLeagueName(value: string): string {
   }
 }
 
-function ratingLabel(value?: number | null): string {
-  if (value == null || Number.isNaN(Number(value))) return "—";
-  return Number(value).toFixed(3);
-}
-
 export default async function PublicLeagueHomePage({ params }: Props) {
   const leagueName = decodeLeagueName(params.leagueName);
   const { data, error } = await getClubLeagueResults(
@@ -36,6 +32,9 @@ export default async function PublicLeagueHomePage({ params }: Props) {
     leagueName
   );
   const found = data?.selected_league === leagueName;
+  const leagueView = data?.past_leagues.some((league) => league.name === leagueName)
+    ? "past"
+    : "active";
   const standings = found ? data?.standings || [] : [];
   const weeks = found ? data?.weeks || [] : [];
   const recentWeek = weeks.length ? weeks[weeks.length - 1] : null;
@@ -65,7 +64,7 @@ export default async function PublicLeagueHomePage({ params }: Props) {
         >
           <h2 style={{ marginTop: 0 }}>League unavailable</h2>
           <p style={{ color: "#7f1d1d" }}>
-            {error || "This league is not currently available as an active public league."}
+            {error || "This league is not available as an active or finished public league."}
           </p>
           <Link href={`/clubs/${params.clubSlug}/leagues`}>
             Return to all leagues
@@ -77,9 +76,9 @@ export default async function PublicLeagueHomePage({ params }: Props) {
 
   const modules = [
     {
-      title: "Standings",
+      title: "Awards race & player roster",
       description:
-        "Current league rating, rank, season record, and rating movement.",
+        "Award placement and qualification first, with an unranked player roster below.",
       href: publicLeagueResultsHref(
         params.clubSlug,
         leagueName,
@@ -124,7 +123,7 @@ export default async function PublicLeagueHomePage({ params }: Props) {
       </p>
       <h1 style={{ marginTop: 0 }}>{leagueName}</h1>
       <p style={{ color: "#334155", maxWidth: "820px" }}>
-        Standings, weekly history, player summaries, and public league results
+        Awards-race placement, an unranked player roster, weekly history, player summaries, and public league results
         for this league.
       </p>
 
@@ -132,6 +131,7 @@ export default async function PublicLeagueHomePage({ params }: Props) {
         clubSlug={params.clubSlug}
         leagueName={leagueName}
         active="home"
+        leagueView={leagueView}
       />
 
       <article
@@ -154,20 +154,20 @@ export default async function PublicLeagueHomePage({ params }: Props) {
           <div>
             <h2 style={{ marginTop: 0 }}>{leagueName}</h2>
             <p style={{ marginBottom: 0, color: "#475569" }}>
-              Active public league
+              {leagueView === "past" ? "Finished public league" : "Active public league"}
             </p>
           </div>
           <span
             style={{
-              border: "1px solid #86efac",
+              border: `1px solid ${leagueView === "past" ? "#cbd5e1" : "#86efac"}`,
               borderRadius: "999px",
               padding: "0.25rem 0.6rem",
-              background: "#dcfce7",
-              color: "#166534",
+              background: leagueView === "past" ? "#f1f5f9" : "#dcfce7",
+              color: leagueView === "past" ? "#334155" : "#166534",
               fontWeight: 800
             }}
           >
-            Active
+            {leagueView === "past" ? "Finished" : "Active"}
           </span>
         </div>
         <div
@@ -179,9 +179,9 @@ export default async function PublicLeagueHomePage({ params }: Props) {
           }}
         >
           <div>
-            <strong>Ranked players</strong>
+            <strong>Players with a league rating</strong>
             <br />
-            {standings.filter((row) => row.rank != null).length}
+            {standings.filter((row) => row.rating_jupr != null).length}
           </div>
           <div>
             <strong>Players shown</strong>
@@ -244,9 +244,9 @@ export default async function PublicLeagueHomePage({ params }: Props) {
           }}
         >
           <div>
-            <h2 style={{ marginBottom: "0.25rem" }}>Standings preview</h2>
+            <h2 style={{ marginBottom: "0.25rem" }}>Awards race</h2>
             <p style={{ marginTop: 0, color: "#64748b" }}>
-              The top five currently ranked players.
+              Top five qualified players for every award, with the full eligible field available on the standings page.
             </p>
           </div>
           <Link
@@ -257,41 +257,11 @@ export default async function PublicLeagueHomePage({ params }: Props) {
             )}
             style={{ fontWeight: 800 }}
           >
-            View full standings
+            View awards race and player roster
           </Link>
         </div>
 
-        {standings.length ? (
-          <div style={{ display: "grid", gap: "0.55rem" }}>
-            {standings.slice(0, 5).map((row) => (
-              <article
-                key={String(row.player_id)}
-                style={{
-                  ...cardStyle,
-                  display: "grid",
-                  gridTemplateColumns: "52px minmax(0, 1fr) auto",
-                  gap: "0.75rem",
-                  alignItems: "center"
-                }}
-              >
-                <strong>#{row.rank ?? "—"}</strong>
-                <div>
-                  <strong>{row.player_name}</strong>
-                  <div style={{ color: "#64748b", fontSize: "0.88rem" }}>
-                    {row.wins ?? 0}-{row.losses ?? 0} · {row.matches_played ?? 0} games
-                  </div>
-                </div>
-                <strong>{ratingLabel(row.rating_jupr)}</strong>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <article style={cardStyle}>
-            <p style={{ margin: 0, color: "#64748b" }}>
-              This league does not have public standings yet.
-            </p>
-          </article>
-        )}
+        {data.award_progress.awards.length ? <LeagueAwardRaceGrid progress={data.award_progress} clubSlug={params.clubSlug} /> : <article style={{ ...cardStyle, background: "#f8fafc", marginBottom: "1rem" }}>No player has met the current award qualification criteria yet.</article>}
       </section>
     </section>
   );

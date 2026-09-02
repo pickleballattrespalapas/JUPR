@@ -38,12 +38,32 @@
   text-decoration: none;
 }
 
+.stagingIdentity {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
 .environment {
   padding: 0.15rem 0.42rem;
   border-radius: 5px;
   background: #fef3c7;
   font-size: 0.72rem;
   font-weight: 800;
+}
+
+.buildSha {
+  padding: 0.15rem 0.42rem;
+  border: 1px solid #f59e0b;
+  border-radius: 5px;
+  background: #fffbeb;
+  color: #78350f;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
 }
 
 .nav {

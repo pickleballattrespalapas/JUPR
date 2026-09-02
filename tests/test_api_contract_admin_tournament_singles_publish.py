@@ -4,6 +4,9 @@ from types import SimpleNamespace
 
 from tests.conftest import require_api_dependency
 from tests.test_admin_match_log_service import FakeSupabase
+from tests.test_api_contract_admin_tournament_match_publish import (
+    install_official_publish_prerequisites,
+)
 
 require_api_dependency("fastapi")
 require_api_dependency("supabase")
@@ -93,6 +96,7 @@ def _install_env(monkeypatch, supabase):
 
 def test_admin_tournament_publish_singles_matches_contract(monkeypatch):
     tables = singles_tournament_tables()
+    install_official_publish_prerequisites(tables)
     supabase = FakeSupabase(tables)
     _install_env(monkeypatch, supabase)
     captured: dict[str, object] = {}
@@ -128,6 +132,7 @@ def test_admin_tournament_publish_blocks_mixed_singles_doubles(monkeypatch):
     tables = singles_tournament_tables()
     tables["tournament_teams"][1]["player2_id"] = 3
     tables["players"].append({"club_id": "club", "id": 3, "name": "Casey", "rating": 1200, "singles_rating": 1200})
+    install_official_publish_prerequisites(tables)
     supabase = FakeSupabase(tables)
     _install_env(monkeypatch, supabase)
 

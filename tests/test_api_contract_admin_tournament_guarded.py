@@ -4,6 +4,11 @@ from types import SimpleNamespace
 
 from tests.conftest import require_api_dependency
 from tests.test_api_contract_admin_tournament import FakeSupabase, tournament_tables
+from tests.test_admin_tournament_lifecycle_service import (
+    _publish_draw_with_immutable_evidence,
+    _ready_tables,
+)
+from tests.test_admin_tournament_podium_review_service import podium_review_tables
 
 require_api_dependency("fastapi")
 require_api_dependency("supabase")
@@ -71,37 +76,69 @@ def test_registration_write_has_versioned_audit_lifecycle_and_idempotent_replay(
     ]
 
 
-def test_completed_archive_replays_before_already_archived_preflight(monkeypatch) -> None:
-    tables = tournament_tables()
+def test_ready_completion_fails_closed_when_atomic_rpc_is_unavailable(monkeypatch) -> None:
+    tables, supabase = _ready_tables(monkeypatch)
+    tables["tournaments"][0]["status"] = "ACTIVE"
+    tables["tournaments"][0]["updated_at"] = "2026-03-02T00:00:00Z"
+    _publish_draw_with_immutable_evidence(tables, supabase, "draw-1")
+    _install(monkeypatch, supabase)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_MUTATIONS", "1")
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "tournament-mutations")
+    request = {
+        "action": "complete",
+        "expected_updated_at": "2026-03-02T00:00:00Z",
+        "confirmation_text": "COMPLETE",
+    }
+    client = TestClient(app)
+    audit_count = len(tables["admin_activity_log"])
+
+    response = client.patch(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour-1/status-action",
+        headers={"Authorization": "Bearer local"},
+        json=request,
+    )
+    # A failure after durable intent has an uncertain outcome and must force
+    # reconciliation rather than presenting as an ordinary server error.
+    assert response.status_code == 409, response.text
+    assert "may be partial or response-lost" in response.json()["detail"]
+    terminal_operations = [
+        row for row in tables["tournament_admin_operations"]
+        if row.get("action") == "tournament_complete"
+    ]
+    assert len(terminal_operations) == 1
+    assert terminal_operations[0]["status"] == "recovery_required"
+    assert "atomic tournament closeout snapshot is unavailable" in str(
+        terminal_operations[0].get("error_text") or ""
+    ).lower()
+    assert len(tables["admin_activity_log"]) > audit_count
+    assert tables["tournaments"][0]["status"] == "ACTIVE"
+
+
+def test_incomplete_completion_is_rejected_before_durable_intent(monkeypatch) -> None:
+    tables = podium_review_tables()
+    tables["tournaments"][0]["status"] = "ACTIVE"
+    tables["tournaments"][0]["updated_at"] = "2026-03-02T00:00:00Z"
     tables["tournament_admin_operations"] = []
     supabase = FakeSupabase(tables)
     _install(monkeypatch, supabase)
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_MUTATIONS", "1")
     monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "tournament-mutations")
-    request = {
-        "action": "archive",
-        "expected_updated_at": "2026-03-02T00:00:00Z",
-        "confirmation_text": "ARCHIVE",
-    }
-    client = TestClient(app)
 
-    first = client.patch(
-        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/status-action",
+    response = TestClient(app).patch(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour-1/status-action",
         headers={"Authorization": "Bearer local"},
-        json=request,
-    )
-    replay = client.patch(
-        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/status-action",
-        headers={"Authorization": "Bearer local"},
-        json=request,
+        json={
+            "action": "complete",
+            "expected_updated_at": "2026-03-02T00:00:00Z",
+            "confirmation_text": "COMPLETE",
+        },
     )
 
-    assert first.status_code == 200, first.text
-    assert replay.status_code == 200, replay.text
-    assert first.json()["idempotent_replay"] is False
-    assert replay.json()["idempotent_replay"] is True
-    assert len(tables["tournament_admin_operations"]) == 1
-    assert tables["tournaments"][0]["status"] == "ARCHIVED"
+    assert response.status_code == 400
+    assert "Tournament completion is blocked" in response.json()["detail"]
+    assert tables["tournaments"][0]["status"] == "ACTIVE"
+    assert tables["tournament_admin_operations"] == []
+    assert tables["admin_activity_log"] == []
 
 
 def test_stale_registration_write_has_no_operation_audit_or_domain_write(monkeypatch) -> None:
@@ -136,6 +173,7 @@ def test_imported_draw_refusal_precedes_registration_mutation(monkeypatch) -> No
             "registration_day_id": "day_1",
             "event_option_id": "event_1",
             "source": "REGISTRATION",
+            "source_selection_id": "selection_1",
         }
     )
     supabase = FakeSupabase(tables)
@@ -156,7 +194,11 @@ def test_imported_draw_refusal_precedes_registration_mutation(monkeypatch) -> No
     response = TestClient(app).patch(
         "/admin/clubs/club/tournaments/admin/tournaments/tour_1/registrations/registration_1",
         headers={"Authorization": "Bearer local"},
-        json={"registration_status": "cancelled", "confirmation_text": "SAVE REGISTRATION"},
+        json={
+            "registration_status": "cancelled",
+            "expected_updated_at": "2026-03-03T00:00:00Z",
+            "confirmation_text": "SAVE REGISTRATION",
+        },
     )
 
     assert response.status_code == 400

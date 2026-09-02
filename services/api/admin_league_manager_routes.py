@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from typing import Any
+from uuid import NAMESPACE_URL, uuid5
 
 from fastapi import HTTPException, Query
 from pydantic import BaseModel, Field
@@ -23,12 +24,15 @@ from jupr_app.services.admin_league_awards_service import (
 from jupr_app.services.admin_league_live_service import (
     LeagueLiveConflictError,
     LeagueLivePersistenceError,
+    apply_admin_league_live_round_movement,
     build_admin_league_live_round_plan,
     build_admin_league_live_status,
     create_admin_league_live_session,
     get_admin_league_live_session,
     is_admin_league_live_submit_enabled,
     list_admin_league_live_sessions,
+    prepare_admin_league_live_session_create,
+    reconcile_admin_league_live_session_create,
     save_admin_league_live_round,
     suggest_admin_league_live_roster,
     update_admin_league_live_session_snapshot,
@@ -39,8 +43,10 @@ from jupr_app.services.admin_league_live_submit_service import (
     create_admin_league_live_guest,
     list_admin_league_live_publish_operations,
     reconcile_admin_league_live_round_publish,
+    retry_admin_league_live_round_publish,
     submit_admin_league_live_round_publish,
 )
+from jupr_app.services.admin_league_results_service import build_admin_league_results
 from jupr_app.services.admin_league_manager_create_service import (
     create_admin_league_manager_draft,
     duplicate_admin_league_manager_draft,
@@ -65,6 +71,13 @@ from jupr_app.services.admin_league_manager_update_service import (
     normalize_admin_league_schedule_config,
     update_admin_league_manager_settings,
 )
+from jupr_app.services.admin_guarded_write_service import (
+    GuardedWriteRecoveryRequired,
+    begin_guarded_operation,
+    get_guarded_operation,
+    operation_result,
+    update_guarded_operation,
+)
 from services.api.auth import authenticate_bearer, auth_header
 from services.api.staging_write_guard import require_league_manager_write_or_403
 
@@ -87,6 +100,9 @@ class AdminLeagueManagerCreateRequest(BaseModel):
     league_name: str = Field(min_length=1, max_length=120)
     league_type: str = Field(default="Individual", pattern=r"^(Individual|Team)$")
     match_format: str = Field(default="doubles", pattern=r"^(doubles|singles)$")
+    league_format: str = Field(default="ladder", pattern=r"^(ladder|round_robin|rotating_partner|fixed_team|flex_challenge)$")
+    session_mode: str = Field(default="scheduled_rounds", pattern=r"^(scheduled_rounds|live_court_board|self_scheduled)$")
+    participation_mode: str = Field(default="set", pattern=r"^(flex|set)$")
     description: str = Field(default="", max_length=2000)
     min_games: int = Field(default=6, ge=0, le=1000)
     k_factor: int = Field(default=32, ge=1, le=128)
@@ -113,6 +129,7 @@ class AdminLeagueManagerSchedulePreviewRequest(BaseModel):
 class AdminLeagueManagerRosterMembershipRequest(BaseModel):
     action: str
     starting_rating: float | None = None
+    idempotency_key: str = Field(default="", max_length=160)
     confirmation_text: str = ""
     source: str = "next_league_manager_roster_update"
 
@@ -172,8 +189,18 @@ class AdminLeagueLiveSessionCreateRequest(BaseModel):
     bench_player_ids: list[int] = Field(default_factory=list)
     bench_override_reason: str | None = Field(default=None, max_length=500)
     notes: str | None = None
+    idempotency_key: str = Field(
+        min_length=8,
+        max_length=160,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]+$",
+    )
     confirmation_text: str = ""
     source: str = "next_league_live_session_create"
+
+
+class AdminLeagueLiveCreateReconcileRequest(BaseModel):
+    confirmation_text: str = Field(default="", max_length=80)
+    source: str = "next_league_live_operation_reconcile"
 
 
 class AdminLeagueLiveSessionSnapshotRequest(BaseModel):
@@ -243,16 +270,35 @@ class AdminLeagueLiveRoundPublishRequest(BaseModel):
     bench_player_ids: list[int] = Field(default_factory=list)
     bench_override_reason: str | None = Field(default=None, max_length=500)
     expected_updated_at: str = Field(min_length=1, max_length=120)
-    expected_operation_key: str = Field(min_length=64, max_length=64)
+    expected_operation_key: str | None = Field(default=None, min_length=64, max_length=64)
     idempotency_key: str = Field(min_length=8, max_length=160)
+    unusual_score_acknowledgement: bool = False
     courts: list[dict[str, Any]] = Field(default_factory=list)
     confirmation_text: str = Field(default="", max_length=80)
     source: str = Field(default="next_league_live_round_submit", max_length=120)
 
 
+class AdminLeagueLiveRoundMovementApplyRequest(BaseModel):
+    expected_updated_at: str = Field(min_length=1, max_length=120)
+    expected_operation_key: str = Field(min_length=64, max_length=64)
+    courts: list[dict[str, Any]] = Field(default_factory=list)
+    movement_overrides: list[dict[str, Any]] = Field(default_factory=list)
+    override_reason: str | None = Field(default=None, max_length=500)
+    roster_change: dict[str, Any] | None = None
+    bench_player_ids: list[int] = Field(default_factory=list)
+    bench_override_reason: str | None = Field(default=None, max_length=500)
+    confirmation_text: str = Field(default="", max_length=80)
+    source: str = Field(default="next_league_live_round_movement", max_length=120)
+
+
 class AdminLeagueLiveRoundReconcileRequest(BaseModel):
     confirmation_text: str = Field(default="", max_length=80)
     source: str = Field(default="next_league_live_round_reconcile", max_length=120)
+
+
+class AdminLeagueLiveRoundRetryRequest(BaseModel):
+    confirmation_text: str = Field(default="", max_length=80)
+    source: str = Field(default="next_league_live_round_retry", max_length=120)
 
 
 class AdminLeagueLiveRoundCompensateRequest(BaseModel):
@@ -313,6 +359,17 @@ def _require_league_live_service_role_or_503() -> None:
 
 
 def _handle_common(exc: Exception) -> None:
+    if isinstance(exc, GuardedWriteRecoveryRequired):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "RECOVERY_REQUIRED",
+                "kind": "uncertain",
+                "message": str(exc),
+                "operation_key": exc.operation_key,
+                "recovery_required": True,
+            },
+        ) from exc
     if isinstance(exc, LeagueLiveConflictError):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if isinstance(exc, PermissionError):
@@ -364,6 +421,8 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
                     "round_plan_endpoint": None,
                     "submit_enabled": False,
                     "round_submit_endpoint": None,
+                    "round_movement_endpoint": None,
+                    "round_retry_endpoint": None,
                     "round_reconcile_endpoint": None,
                     "round_compensate_endpoint": None,
                     "guest_endpoint": None,
@@ -404,7 +463,9 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
     @app.get("/admin/clubs/{club_id}/league-manager/live-sessions")
     def get_admin_league_live_sessions(
         club_id: str,
+        league_name: str | None = Query(default=None),
         status: str | None = Query(default=None),
+        resumable_only: bool = Query(default=False),
         limit: int = Query(default=50, ge=1, le=200),
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
@@ -412,7 +473,14 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
         supabase = get_supabase_client()
         _resolve_league_manager_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source="next_league_live_sessions_list")
         try:
-            return list_admin_league_live_sessions(supabase, club_id=str(club_id), status=status, limit=limit)
+            return list_admin_league_live_sessions(
+                supabase,
+                club_id=str(club_id),
+                league_name=league_name,
+                status=status,
+                resumable_only=resumable_only,
+                limit=limit,
+            )
         except Exception as exc:
             _handle_common(exc)
 
@@ -425,8 +493,52 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
         _require_league_live_service_role_or_503()
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_league_manager_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source)
+        operation: dict[str, Any] | None = None
+        idempotent = False
+        mutation_started = False
         try:
-            return create_admin_league_live_session(
+            if str(payload.confirmation_text or "").strip().upper() != "CREATE LIVE SESSION":
+                raise ValueError("Type CREATE LIVE SESSION to create a persisted league live session.")
+            request_payload = _dump_model(payload)
+            session_id = str(uuid5(NAMESPACE_URL, f"jupr:league-live:{club_id}:{payload.idempotency_key}"))
+            prepared_plan = prepare_admin_league_live_session_create(
+                supabase,
+                club_id=str(club_id),
+                session_id=session_id,
+                league_name=payload.league_name,
+                week_tag=payload.week_tag,
+                total_rounds=payload.total_rounds,
+                current_round=payload.current_round,
+                roster=payload.roster,
+                courts=payload.courts,
+                bench_player_ids=payload.bench_player_ids,
+                bench_override_reason=payload.bench_override_reason,
+                notes=payload.notes,
+                actor_email=actor_email,
+            )
+            operation, idempotent = begin_guarded_operation(
+                supabase,
+                club_id=str(club_id),
+                workflow="league_live_session_create",
+                action="create_league_live_session",
+                operation_key=payload.idempotency_key,
+                request_payload=request_payload,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                source=payload.source,
+                before_json={"league_name": payload.league_name, "week_tag": payload.week_tag},
+            )
+            if idempotent:
+                return operation_result(operation)
+            update_guarded_operation(
+                supabase,
+                operation_id=operation.get("id"),
+                operation_key=payload.idempotency_key,
+                status="intent_recorded",
+                result_json={"phase": "preflight", "planned": prepared_plan},
+            )
+            mutation_started = True
+            result = create_admin_league_live_session(
                 supabase,
                 club_id=str(club_id),
                 league_name=payload.league_name,
@@ -441,6 +553,141 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
                 actor_email=actor_email,
                 actor_role=actor_role,
                 confirmation_text=payload.confirmation_text,
+                source=payload.source,
+                session_id=session_id,
+                prepared_plan=prepared_plan,
+            )
+            guarded_result = {
+                **result,
+                "operation_key": payload.idempotency_key,
+                "idempotent_replay": False,
+                "recovery": {
+                    **dict(result.get("recovery") or {}),
+                    "operation_status": f"/admin/clubs/{{club_id}}/league-manager/live-operations/{payload.idempotency_key}",
+                    "operator_rule": "Retry the exact unchanged request with the same idempotency key after an interrupted response.",
+                },
+            }
+            update_guarded_operation(
+                supabase,
+                operation_id=operation.get("id"),
+                operation_key=payload.idempotency_key,
+                status="completed",
+                after_json={"session": result.get("session"), "courts": result.get("courts")},
+                result_json=guarded_result,
+            )
+            return guarded_result
+        except GuardedWriteRecoveryRequired as exc:
+            _handle_common(exc)
+        except Exception as exc:
+            if operation is None and isinstance(exc, RuntimeError):
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "code": "DURABLE_INTENT_UNAVAILABLE",
+                        "kind": "failed",
+                        "message": "League Live session creation did not start because its durable intent could not be recorded.",
+                        "operation_key": payload.idempotency_key,
+                        "recovery_required": False,
+                    },
+                ) from exc
+            try:
+                if operation is not None and not idempotent and mutation_started:
+                    try:
+                        update_guarded_operation(
+                            supabase,
+                            operation_id=operation.get("id"),
+                            operation_key=payload.idempotency_key,
+                            status="recovery_required",
+                            error_text=str(exc),
+                        )
+                    except Exception:
+                        # The durable intent and exact preflight already exist.
+                        # Preserve the key even when the ledger status cannot be advanced.
+                        pass
+                    raise GuardedWriteRecoveryRequired(
+                        payload.idempotency_key,
+                        "League Live session creation did not finish cleanly. Inspect the operation before retrying.",
+                    ) from exc
+                if operation is not None and not idempotent and not mutation_started:
+                    update_guarded_operation(
+                        supabase,
+                        operation_id=operation.get("id"),
+                        operation_key=payload.idempotency_key,
+                        status="failed",
+                        error_text="League Live create stopped before the domain mutation began.",
+                    )
+            except GuardedWriteRecoveryRequired as recovery_exc:
+                _handle_common(recovery_exc)
+            _handle_common(exc)
+
+    @app.get("/admin/clubs/{club_id}/league-manager/live-operations/{operation_key}")
+    def get_admin_league_live_create_operation(
+        club_id: str,
+        operation_key: str,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        _require_league_live_service_role_or_503()
+        supabase = get_supabase_client()
+        _resolve_league_manager_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source="next_league_live_session_create_recovery",
+        )
+        operation = get_guarded_operation(
+            supabase,
+            club_id=str(club_id),
+            workflow="league_live_session_create",
+            operation_key=str(operation_key),
+        )
+        if operation is None:
+            raise HTTPException(status_code=404, detail="League Live creation operation was not found.")
+        result_json = operation.get("result_json") or {}
+        error_text = operation.get("error_text")
+        return {
+            "ok": True,
+            "operation_key": operation.get("operation_key"),
+            "status": operation.get("status"),
+            "result_json": result_json,
+            "error_text": error_text,
+            "result": result_json,
+            "error": error_text,
+            "recovery_required": operation.get("status") in {"intent_recorded", "recovery_required"},
+            "updated_at": operation.get("updated_at"),
+        }
+
+    @app.post("/admin/clubs/{club_id}/league-manager/live-operations/{operation_key}/reconcile")
+    def post_admin_league_live_create_reconcile(
+        club_id: str,
+        operation_key: str,
+        payload: AdminLeagueLiveCreateReconcileRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        _require_league_live_service_role_or_503()
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_league_manager_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        operation = get_guarded_operation(
+            supabase,
+            club_id=str(club_id),
+            workflow="league_live_session_create",
+            operation_key=str(operation_key),
+        )
+        if operation is None:
+            raise HTTPException(status_code=404, detail="League Live creation operation was not found.")
+        try:
+            return reconcile_admin_league_live_session_create(
+                supabase,
+                operation=operation,
+                club_id=str(club_id),
+                operation_key=str(operation_key),
+                confirmation_text=payload.confirmation_text,
+                actor_email=actor_email,
+                actor_role=actor_role,
                 source=payload.source,
             )
         except Exception as exc:
@@ -606,9 +853,48 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
                 bench_player_ids=payload.bench_player_ids,
                 bench_override_reason=payload.bench_override_reason,
                 expected_updated_at=payload.expected_updated_at,
-                expected_operation_key=payload.expected_operation_key,
+                expected_operation_key=payload.expected_operation_key or "",
                 idempotency_key=payload.idempotency_key,
+                unusual_score_acknowledgement=payload.unusual_score_acknowledgement,
                 courts=payload.courts,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
+                source=payload.source,
+            )
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.post("/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}/movement")
+    def post_admin_league_live_round_movement(
+        club_id: str,
+        session_id: str,
+        round_number: int,
+        payload: AdminLeagueLiveRoundMovementApplyRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        _require_league_live_service_role_or_503()
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_league_manager_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        try:
+            return apply_admin_league_live_round_movement(
+                supabase,
+                club_id=str(club_id),
+                session_id=str(session_id),
+                round_number=int(round_number),
+                expected_updated_at=payload.expected_updated_at,
+                expected_operation_key=payload.expected_operation_key,
+                courts=payload.courts,
+                movement_overrides=payload.movement_overrides,
+                override_reason=payload.override_reason,
+                roster_change=payload.roster_change,
+                bench_player_ids=payload.bench_player_ids,
+                bench_override_reason=payload.bench_override_reason,
                 actor_email=actor_email,
                 actor_role=actor_role,
                 confirmation_text=payload.confirmation_text,
@@ -635,6 +921,36 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
         )
         try:
             return reconcile_admin_league_live_round_publish(
+                supabase,
+                club_id=str(club_id),
+                session_id=str(session_id),
+                round_number=int(round_number),
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
+                source=payload.source,
+            )
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.post("/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}/retry")
+    def post_admin_league_live_round_retry(
+        club_id: str,
+        session_id: str,
+        round_number: int,
+        payload: AdminLeagueLiveRoundRetryRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        _require_league_live_service_role_or_503()
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_league_manager_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        try:
+            return retry_admin_league_live_round_publish(
                 supabase,
                 club_id=str(club_id),
                 session_id=str(session_id),
@@ -756,6 +1072,40 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
         except Exception as exc:
             _handle_common(exc)
 
+    @app.get(
+        "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/results"
+    )
+    def get_admin_league_manager_results(
+        club_id: str,
+        league_name: str,
+        week: int | None = Query(default=None, ge=1),
+        player: int | None = Query(default=None, ge=1),
+        weekly_min_games: int = Query(default=4, ge=1, le=20),
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_league_manager_enabled():
+            raise HTTPException(status_code=403, detail="Next League Manager is disabled.")
+        supabase = get_supabase_client()
+        _resolve_league_manager_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source="next_league_manager_results",
+        )
+        try:
+            return build_admin_league_results(
+                supabase,
+                club_id=str(club_id),
+                league_name=str(league_name),
+                week_num=week,
+                player_id=player,
+                weekly_min_games=weekly_min_games,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:
+            _handle_common(exc)
+
     @app.get("/admin/clubs/{club_id}/league-manager/top-players-printable")
     def get_admin_top_players_printable(
         club_id: str,
@@ -807,6 +1157,9 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
                 k_factor=payload.k_factor,
                 match_format=payload.match_format,
                 league_type=payload.league_type,
+                league_format=payload.league_format,
+                session_mode=payload.session_mode,
+                participation_mode=payload.participation_mode,
                 actor_email=actor_email,
                 actor_role=actor_role,
                 confirmation_text=payload.confirmation_text,
@@ -1315,6 +1668,7 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
                 actor_role=actor_role,
                 confirmation_text=payload.confirmation_text,
                 source=payload.source,
+                idempotency_key=payload.idempotency_key,
             )
         except Exception as exc:
             _handle_common(exc)

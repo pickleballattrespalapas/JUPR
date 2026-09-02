@@ -25,7 +25,7 @@ export default function SelectedLeaguePanelScope({ leagueName, children }: Props
           (article as HTMLElement).style.display = "none";
         } else if (headingText === "Choose a league") {
           if (heading) heading.textContent = leagueName;
-        } else if (headingText === "1. Select and recover league") {
+        } else if (headingText === "1. Select and recover league" || headingText === "Select and recover league") {
           if (heading) heading.textContent = "Saved awards workflow";
         }
       }
@@ -41,8 +41,11 @@ export default function SelectedLeaguePanelScope({ leagueName, children }: Props
       if (label) (label as HTMLElement).style.display = "none";
 
       for (const button of Array.from(container.querySelectorAll("button"))) {
-        if ((button.textContent || "").trim() === "Refresh leagues") {
+        const buttonText = (button.textContent || "").trim();
+        if (buttonText === "Refresh leagues") {
           (button as HTMLElement).style.display = "none";
+        } else if (buttonText === "Retry saved state") {
+          button.textContent = "Reload saved awards";
         }
       }
 

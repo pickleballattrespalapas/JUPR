@@ -2,6 +2,7 @@
 
 import { useId, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess } from "@/components/interaction";
 import {
   formatAdvancedConfiguration,
   parseAdvancedConfiguration,
@@ -110,7 +111,10 @@ export function TournamentSetupAdvancedPanel({
             confirmLabel="Yes, apply import"
             confirmationText=""
             disabled={disabled || !importText.trim()}
-            onConfirm={applyImport}
+            onConfirm={async () => {
+              applyImport();
+              return actionSuccess("Imported configuration applied", "The imported configuration replaced the local draft. Review the guided fields before saving.");
+            }}
           />
           <button
             type="button"

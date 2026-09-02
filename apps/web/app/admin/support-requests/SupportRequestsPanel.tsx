@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess } from "@/components/interaction";
 import type { AdminSupportRequest, AdminSupportRequestsListResponse, AdminSupportRequestsStatus, AdminSupportRequestUpdateResponse } from "@/lib/adminSupportRequestsApi";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
@@ -164,7 +165,7 @@ export default function SupportRequestsPanel({ apiBase, clubId, status }: Props)
   async function saveStatus(confirmationText: string) {
     if (!selected) {
       setMessage("Select a request before saving.");
-      return;
+      throw new Error("Select a request before saving.");
     }
     const generation = requestsRequest.begin();
     setBusy(true);
@@ -184,7 +185,8 @@ export default function SupportRequestsPanel({ apiBase, clubId, status }: Props)
           source: "next_admin_support_requests"
         })
       });
-      if (!requestsRequest.isCurrent(generation)) return;
+      const completion = actionSuccess("Support request updated", `The request is now ${payload.request.status.replace(/_/g, " ")}.`);
+      if (!requestsRequest.isCurrent(generation)) return completion;
       setRequests((current) => current.map((request) => request.id === selected.id ? payload.request : request));
       setSelectedId(payload.request.id);
       setEdit({
@@ -196,8 +198,10 @@ export default function SupportRequestsPanel({ apiBase, clubId, status }: Props)
         resolutionEvidence: payload.request.resolution_evidence || ""
       });
       setMessage(`Request updated to ${payload.request.status}.`);
+      return completion;
     } catch (error) {
       if (requestsRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to update request.");
+      throw error;
     } finally {
       if (requestsRequest.isCurrent(generation)) setBusy(false);
     }

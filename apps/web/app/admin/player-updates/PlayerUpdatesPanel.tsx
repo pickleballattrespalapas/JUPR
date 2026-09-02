@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { actionSuccess, actionUncertain } from "@/components/interaction";
 import type {
   AdminPlayerUpdatesStatusResponse,
   CommunicationsActionResponse,
@@ -112,7 +113,7 @@ export default function PlayerUpdatesPanel({ apiBase, clubId, status }: Props) {
     try {
       const query = new URLSearchParams({ start_date: startDate, end_date: endDate, limit: "1000" });
       const payload = await requestJson<CommunicationsWorkspaceResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/player-updates/workspace?${query}`);
-      if (!workspaceRequest.isCurrent(generation)) return;
+      if (!workspaceRequest.isCurrent(generation)) return false;
       setWorkspace(payload);
       setLoadedWorkspaceScope(requestedWorkspaceScope);
       setSelectedOutbox((current) => current.filter((id) => payload.outbox.some((row) => row.id === id)));
@@ -123,11 +124,13 @@ export default function PlayerUpdatesPanel({ apiBase, clubId, status }: Props) {
           : nextActiveSubscriptions[0]?.id || ""
       ));
       if (!silent) { setMessage(`Loaded ${payload.subscriptions.length} subscriptions, ${payload.digests.length} digests, and ${payload.outbox.length} outbox rows.`); setMessageSeverity("success"); }
+      return true;
     } catch (error) {
       if (workspaceRequest.isCurrent(generation)) {
         setMessage(error instanceof Error ? error.message : "Unable to load communications workspace.");
         setMessageSeverity("error");
       }
+      return false;
     } finally {
       if (workspaceRequest.isCurrent(generation)) {
         setWorkspaceLoading(false);
@@ -151,16 +154,34 @@ export default function PlayerUpdatesPanel({ apiBase, clubId, status }: Props) {
     setBusy(true); setMessage(null); setMessageSeverity(null);
     try {
       const result = await requestJson<CommunicationsActionResponse>(path, { method: "POST", body: JSON.stringify(body) });
-      if (!actionRequest.isCurrent(generation)) return;
-      setMessage(success(result));
-      setMessageSeverity(Number(result.errors || 0) + Number(result.stale || 0) + Number(result.uncertain || 0) > 0 ? "error" : "success");
+      const successMessage = success(result);
+      const issueCount = Number(result.errors || 0) + Number(result.stale || 0) + Number(result.uncertain || 0);
+      const operationKeyValue = String(result.operation_key || body.operation_key || "player-updates-operation");
+      const completion = issueCount > 0
+        ? actionUncertain(
+            "Player update action needs review",
+            `${successMessage} Refresh the workspace and review the affected rows before retrying.`,
+            operationKeyValue,
+            "Refresh workspace",
+            async () => {
+              const refreshed = await loadWorkspace(true);
+              if (!refreshed) throw new Error("The authoritative workspace could not be refreshed. Try again before taking another action.");
+              return actionSuccess("Workspace refreshed", "The authoritative player-updates workspace was refreshed. Review the affected rows before taking another action.");
+            }
+          )
+        : actionSuccess("Player update action complete", successMessage);
+      if (!actionRequest.isCurrent(generation)) return completion;
+      setMessage(successMessage);
+      setMessageSeverity(issueCount > 0 ? "error" : "success");
       setSelectedOutbox([]);
       await loadWorkspace(true);
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) {
         setMessage(error instanceof Error ? error.message : "Unable to complete communications action.");
         setMessageSeverity("error");
       }
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
@@ -192,7 +213,7 @@ export default function PlayerUpdatesPanel({ apiBase, clubId, status }: Props) {
   async function queueDigests(confirmationText: string) {
     const key = queueOperationKey || operationKey();
     setQueueOperationKey(key);
-    await runAction(
+    return runAction(
       `/admin/clubs/${encodeURIComponent(clubId)}/player-updates/digests/queue`,
       { start_date: startDate, end_date: endDate, player_id: queuePlayerId ? Number(queuePlayerId) : null, only_players_with_matches: onlyMatches, confirmation_text: confirmationText, operation_key: key, source: "next_player_updates_queue" },
       (result) => { setQueueOperationKey(""); return `Queue operation ${String(result.operation_key || key)} completed.`; }
@@ -203,7 +224,7 @@ export default function PlayerUpdatesPanel({ apiBase, clubId, status }: Props) {
     const pending = selectedRows.filter((row) => row.send_status === "pending");
     const key = sendOperationKey || operationKey();
     setSendOperationKey(key);
-    await runAction(
+    return runAction(
       `/admin/clubs/${encodeURIComponent(clubId)}/player-updates/outbox/send`,
       { items: refs(pending), confirmation_text: confirmationText, operation_key: key, source: "next_player_updates_outbox_send" },
       (result) => { setSendOperationKey(""); return `Attempted ${String(result.attempted || 0)}; sent ${String(result.sent || 0)}, skipped ${String(result.skipped || 0)}, errors ${String(result.errors || 0)}, stale ${String(result.stale || 0)}, uncertain ${String(result.uncertain || 0)}.`; }
@@ -212,7 +233,7 @@ export default function PlayerUpdatesPanel({ apiBase, clubId, status }: Props) {
 
   async function retrySelected(confirmationText: string) {
     const retryable = selectedRows.filter((row) => row.send_status === "error" || row.send_status === "sending");
-    await runAction(
+    return runAction(
       `/admin/clubs/${encodeURIComponent(clubId)}/player-updates/outbox/retry`,
       { items: refs(retryable), confirmation_text: confirmationText, source: "next_player_updates_outbox_retry" },
       (result) => `Reset ${String(result.reset_to_pending || 0)} row(s) to pending; stale ${String(result.stale || 0)}.`
@@ -221,7 +242,7 @@ export default function PlayerUpdatesPanel({ apiBase, clubId, status }: Props) {
 
   async function deleteSelected(confirmationText: string) {
     const pending = selectedRows.filter((row) => row.send_status === "pending");
-    await runAction(
+    return runAction(
       `/admin/clubs/${encodeURIComponent(clubId)}/player-updates/outbox/delete`,
       { items: refs(pending), confirmation_text: confirmationText, source: "next_player_updates_outbox_delete" },
       (result) => `Deleted ${String(result.deleted || 0)} pending row(s); stale ${String(result.stale || 0)}.`
@@ -229,10 +250,10 @@ export default function PlayerUpdatesPanel({ apiBase, clubId, status }: Props) {
   }
 
   async function replaceSubscriber(confirmationText: string) {
-    if (!selectedSubscription) { setMessage("Select an active subscription first."); setMessageSeverity("error"); return; }
+    if (!selectedSubscription) { const text = "Select an active subscription first."; setMessage(text); setMessageSeverity("error"); throw new Error(text); }
     const key = replacementOperationKey || operationKey();
     setReplacementOperationKey(key);
-    await runAction(
+    return runAction(
       `/admin/clubs/${encodeURIComponent(clubId)}/player-updates/subscriptions/${encodeURIComponent(selectedSubscription.id)}/replace`,
       { expected_row_version: selectedSubscription.row_version, new_email: replacementEmail, request_note: replacementNote, confirmation_text: confirmationText, operation_key: key, source: "next_player_updates_replace" },
       () => { setReplacementEmail(""); setReplacementNote(""); setReplacementOperationKey(""); return "Verified subscriber replaced atomically; the prior row remains in history as unsubscribed."; }
@@ -240,8 +261,8 @@ export default function PlayerUpdatesPanel({ apiBase, clubId, status }: Props) {
   }
 
   async function deactivateSubscriber(confirmationText: string) {
-    if (!selectedSubscription) { setMessage("Select an active subscription first."); setMessageSeverity("error"); return; }
-    await runAction(
+    if (!selectedSubscription) { const text = "Select an active subscription first."; setMessage(text); setMessageSeverity("error"); throw new Error(text); }
+    return runAction(
       `/admin/clubs/${encodeURIComponent(clubId)}/player-updates/subscriptions/${encodeURIComponent(selectedSubscription.id)}/deactivate`,
       { expected_row_version: selectedSubscription.row_version, confirmation_text: confirmationText, source: "next_player_updates_deactivate" },
       () => "Verified subscription deactivated; delivery history was retained."

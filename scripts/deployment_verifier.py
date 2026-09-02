@@ -22,12 +22,25 @@ from scripts.staging_write_waves import (
 PRODUCTION_FLY_APP = "juprleagues-api"
 PRODUCTION_FLY_REGION = "dfw"
 PRODUCTION_ENVIRONMENT = "production"
-PRODUCTION_WRITE_POLICY = "read_only"
+PRODUCTION_WRITE_POLICY = "enabled"
 NO_WRITE_WAVE = "none"
 PRODUCTION_WEB_ORIGIN = "https://pickleballclubsandwich.com"
 PRODUCTION_API_ORIGIN = "https://api.juprleagues.com"
 PRODUCTION_FLY_ORIGIN = f"https://{PRODUCTION_FLY_APP}.fly.dev"
 PRODUCTION_PUBLIC_CLUB_SLUG = "tres-palapas"
+PRODUCTION_RELEASE_TRIGGER_PATH = ".github/production-api-release.trigger"
+PRODUCTION_RELEASE_CONFIRMATION = "DEPLOY PRODUCTION API"
+LEGACY_BASELINE_CONFIRMATION = "BOOTSTRAP REVIEWED LEGACY ROLLBACK"
+PRODUCTION_RELEASE_TRIGGER_KEYS = frozenset(
+    {
+        "confirmation",
+        "legacy_baseline_config_sha256",
+        "legacy_baseline_confirmation",
+        "legacy_baseline_image_digest",
+        "release_parent_sha",
+        "schema_version",
+    }
+)
 DEFAULT_MIGRATION_CONTRACT_PATH = Path(
     "config/production_migration_contract.json"
 )
@@ -83,7 +96,56 @@ PRODUCTION_READ_FEATURE_FLAGS = (
     "JUPR_ENABLE_TOURNAMENT_TEAM_COMPETITION",
 )
 PRODUCTION_TOURNAMENT_FEATURE_FLAGS = ("JUPR_ENABLE_TOURNAMENT_WRITES_PRODUCTION",)
-PRODUCTION_FEATURE_FLAGS = tuple(sorted(set(PRODUCTION_READ_FEATURE_FLAGS) | set(PRODUCTION_TOURNAMENT_FEATURE_FLAGS) | set(ALL_STAGING_WRITE_FLAGS) | set(ALWAYS_DISABLED_FLAGS)))
+PRODUCTION_FEATURE_FLAGS = tuple(
+    sorted(
+        set(PRODUCTION_READ_FEATURE_FLAGS)
+        | set(PRODUCTION_TOURNAMENT_FEATURE_FLAGS)
+        | set(ALL_STAGING_WRITE_FLAGS)
+        | set(ALWAYS_DISABLED_FLAGS)
+    )
+)
+
+# This is the reviewed production activation projection already serving live
+# tournament traffic.  Every feature not named here remains explicitly off.
+# Keeping one closed-world mapping prevents a routine API deploy from silently
+# disabling established production workflows or opening an unreviewed surface.
+PRODUCTION_LIVE_BASELINE_ENABLED_FEATURE_FLAGS = frozenset(
+    {
+        "JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS",
+        "JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_IMPORT_HANDOFF",
+        "JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_MUTATIONS",
+        "JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_OFFICIAL_PUBLISH",
+        "JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_OPERATIONS_MUTATIONS",
+        "JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_REGISTRATION_MUTATIONS",
+        "JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_SETUP_MUTATIONS",
+        "JUPR_ENABLE_PUBLIC_LIVE_WRITES",
+        "JUPR_ENABLE_PUBLIC_LIVE_WRITES_PRODUCTION",
+        "JUPR_ENABLE_STAGING_NEXT_ADMIN_TOURNAMENT_LIVE_WRITES",
+        "JUPR_ENABLE_STAGING_PUBLIC_INTAKE_WRITES",
+        "JUPR_ENABLE_STAGING_TOURNAMENT_COMMERCE_WRITES",
+        "JUPR_ENABLE_TOURNAMENT_COMMERCE",
+        "JUPR_ENABLE_TOURNAMENT_TEAM_COMPETITION",
+        "JUPR_ENABLE_TOURNAMENT_WRITES_PRODUCTION",
+    }
+)
+# These three reviewed League gates open only after the candidate image is
+# deployed. A rejected candidate always returns to the exact live baseline.
+PRODUCTION_ENABLED_FEATURE_FLAGS = frozenset(
+    {
+        *PRODUCTION_LIVE_BASELINE_ENABLED_FEATURE_FLAGS,
+        "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_DOMAIN",
+        "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_SUBMIT",
+        "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER",
+    }
+)
+PRODUCTION_FEATURE_PROFILES = {
+    "baseline": PRODUCTION_LIVE_BASELINE_ENABLED_FEATURE_FLAGS,
+    "release": PRODUCTION_ENABLED_FEATURE_FLAGS,
+}
+if not PRODUCTION_ENABLED_FEATURE_FLAGS.issubset(PRODUCTION_FEATURE_FLAGS):
+    raise RuntimeError(
+        "Reviewed production feature flags must belong to the closed-world inventory."
+    )
 PRODUCTION_RUNTIME_SECRET_NAMES = tuple(
     sorted(
         {
@@ -228,6 +290,125 @@ def database_url_project_ref(raw: str | None) -> str | None:
     return None
 
 
+def production_release_trigger_errors(
+    payload: Any,
+    *,
+    head_sha: str,
+    parent_shas: Iterable[str],
+    changed_status_lines: Iterable[str],
+) -> tuple[list[str], dict[str, str]]:
+    """Validate the only push shape authorized to start a production deploy."""
+
+    errors: list[str] = []
+    if not isinstance(payload, dict):
+        return ["Production release trigger must be a JSON object."], {}
+
+    unknown_keys = sorted(set(payload) - PRODUCTION_RELEASE_TRIGGER_KEYS)
+    missing_keys = sorted(
+        {"schema_version", "confirmation", "release_parent_sha"} - set(payload)
+    )
+    if unknown_keys:
+        errors.append(
+            "Production release trigger has unknown keys: "
+            + ", ".join(unknown_keys)
+        )
+    if missing_keys:
+        errors.append(
+            "Production release trigger is missing keys: "
+            + ", ".join(missing_keys)
+        )
+    if type(payload.get("schema_version")) is not int or payload.get(
+        "schema_version"
+    ) != 1:
+        errors.append("Production release trigger must use schema_version=1.")
+
+    string_keys = PRODUCTION_RELEASE_TRIGGER_KEYS - {"schema_version"}
+    for name in sorted(string_keys & set(payload)):
+        if not isinstance(payload.get(name), str):
+            errors.append(f"Production release trigger {name} must be a string.")
+
+    raw_head = str(head_sha or "").strip()
+    clean_head = raw_head.lower()
+    if raw_head != clean_head or not _SHA_RE.fullmatch(clean_head):
+        errors.append("Production trigger HEAD must be an exact lowercase Git SHA.")
+    raw_parents = tuple(str(sha or "").strip() for sha in parent_shas)
+    clean_parents = tuple(sha.lower() for sha in raw_parents)
+    if (
+        len(clean_parents) != 1
+        or not _SHA_RE.fullmatch(clean_parents[0] if clean_parents else "")
+        or raw_parents != clean_parents
+    ):
+        errors.append(
+            "Production trigger commit must have exactly one exact Git parent."
+        )
+    raw_reviewed_parent = str(payload.get("release_parent_sha") or "").strip()
+    reviewed_parent = raw_reviewed_parent.lower()
+    if (
+        raw_reviewed_parent != reviewed_parent
+        or not _SHA_RE.fullmatch(reviewed_parent)
+    ):
+        errors.append("Production trigger release_parent_sha is invalid.")
+    elif len(clean_parents) == 1 and reviewed_parent != clean_parents[0]:
+        errors.append(
+            "Production trigger release_parent_sha does not match its commit parent."
+        )
+
+    status_lines = tuple(str(line).rstrip("\r\n") for line in changed_status_lines)
+    allowed_statuses = {
+        f"A\t{PRODUCTION_RELEASE_TRIGGER_PATH}",
+        f"M\t{PRODUCTION_RELEASE_TRIGGER_PATH}",
+    }
+    if len(status_lines) != 1 or status_lines[0] not in allowed_statuses:
+        errors.append(
+            "Production trigger commit must only add or modify the exact trigger file."
+        )
+
+    confirmation = str(payload.get("confirmation") or "").strip()
+    if confirmation != PRODUCTION_RELEASE_CONFIRMATION:
+        errors.append("Production trigger approval phrase is incorrect.")
+
+    raw_legacy_digest = str(
+        payload.get("legacy_baseline_image_digest") or ""
+    ).strip()
+    legacy_digest = raw_legacy_digest.lower()
+    raw_legacy_config = str(
+        payload.get("legacy_baseline_config_sha256") or ""
+    ).strip()
+    legacy_config = raw_legacy_config.lower()
+    legacy_confirmation = str(
+        payload.get("legacy_baseline_confirmation") or ""
+    ).strip()
+    if legacy_digest or legacy_config or legacy_confirmation:
+        if (
+            raw_legacy_digest != legacy_digest
+            or not re.fullmatch(r"sha256:[0-9a-f]{64}", legacy_digest)
+        ):
+            errors.append(
+                "Production trigger legacy image digest is missing or invalid."
+            )
+        if (
+            raw_legacy_config != legacy_config
+            or not re.fullmatch(r"[0-9a-f]{64}", legacy_config)
+        ):
+            errors.append(
+                "Production trigger legacy config fingerprint is missing or invalid."
+            )
+        if legacy_confirmation != LEGACY_BASELINE_CONFIRMATION:
+            errors.append(
+                "Production trigger legacy baseline approval phrase is incorrect."
+            )
+
+    resolved = {
+        "candidate_sha": clean_head,
+        "confirmation": confirmation,
+        "legacy_baseline_config_sha256": legacy_config,
+        "legacy_baseline_confirmation": legacy_confirmation,
+        "legacy_baseline_image_digest": legacy_digest,
+        "release_parent_sha": reviewed_parent,
+    }
+    return errors, resolved
+
+
 def expected_migration_inventory(
     migrations_dir: Path,
 ) -> tuple[tuple[str, str], ...]:
@@ -304,6 +485,32 @@ def load_migration_contract(
             "Production migration contract ledger names must be unique and sorted"
         )
 
+    deployment_order = payload.get("deployment_order")
+    if not isinstance(deployment_order, list) or not deployment_order:
+        raise ValueError(
+            "Production migration contract has no canonical deployment order"
+        )
+    clean_deployment_order = [
+        str(name).strip() for name in deployment_order
+    ]
+    if any(
+        not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_]*", name)
+        for name in clean_deployment_order
+    ):
+        raise ValueError(
+            "Production migration contract deployment order has an invalid "
+            "ledger name"
+        )
+    if len(clean_deployment_order) != len(set(clean_deployment_order)):
+        raise ValueError(
+            "Production migration contract deployment order must be unique"
+        )
+    if set(clean_deployment_order) != set(clean_required):
+        raise ValueError(
+            "Production migration contract deployment order must contain "
+            "exactly the required ledger names"
+        )
+
     contract_only = payload.get("schema_contract_only_repository_migrations")
     if not isinstance(contract_only, list) or set(contract_only) != set(
         SCHEMA_CONTRACT_ONLY_MIGRATION_NAMES
@@ -330,12 +537,32 @@ def load_migration_contract(
         raise ValueError(
             "Production migration contract must declare allow_additional_ledger_names"
         )
+    allowed_duplicates = payload.get("allowed_duplicate_ledger_names")
+    if not isinstance(allowed_duplicates, list):
+        raise ValueError(
+            "Production migration contract must declare allowed_duplicate_ledger_names"
+        )
+    clean_allowed_duplicates = [
+        str(name).strip() for name in allowed_duplicates
+    ]
+    if (
+        clean_allowed_duplicates != sorted(set(clean_allowed_duplicates))
+        or not set(clean_allowed_duplicates).issubset(clean_required)
+    ):
+        raise ValueError(
+            "Production migration contract duplicate ledger names must be "
+            "unique, sorted, and required"
+        )
     return {
         "profile": profile,
         "required_ledger_names": tuple(clean_required),
+        "deployment_order": tuple(clean_deployment_order),
         "allow_additional_ledger_names": payload[
             "allow_additional_ledger_names"
         ],
+        "allowed_duplicate_ledger_names": tuple(
+            clean_allowed_duplicates
+        ),
         "repository_logical_names": repository_names,
         "repository_migration_content_sha256": repository_fingerprint,
         "schema_contract_only_repository_migrations": tuple(contract_only),
@@ -370,12 +597,30 @@ def parse_remote_migration_ledger(
     return entries, invalid
 
 
+def pending_required_migration_names(
+    deployment_order: Iterable[str],
+    remote_entries: Iterable[tuple[str, str]],
+) -> tuple[str, ...]:
+    """Return missing required migrations in the reviewed dependency order."""
+    remote_names = {
+        str(name).strip()
+        for _, name in remote_entries
+        if str(name).strip()
+    }
+    return tuple(
+        name
+        for raw_name in deployment_order
+        if (name := str(raw_name).strip()) and name not in remote_names
+    )
+
+
 def migration_ledger_errors(
     required_names: Iterable[str],
     remote_entries: Iterable[tuple[str, str]],
     *,
     invalid_remote_rows: Iterable[str] = (),
     allow_additional_names: bool = False,
+    allowed_duplicate_names: Iterable[str] = (),
 ) -> list[str]:
     expected = {
         str(value).strip()
@@ -399,8 +644,14 @@ def migration_ledger_errors(
         )
 
     remote_names = [name for _, name in remote]
+    reviewed_duplicates = {
+        str(name).strip()
+        for name in allowed_duplicate_names
+        if str(name).strip()
+    }
     duplicate_names = sorted(
         {name for name in remote_names if remote_names.count(name) > 1}
+        - reviewed_duplicates
     )
     if duplicate_names:
         errors.append(
@@ -442,7 +693,9 @@ def migration_contract_fingerprint(
     *,
     profile: str,
     required_ledger_names: Iterable[str],
+    deployment_order: Iterable[str],
     repository_migration_content_sha256: str,
+    allowed_duplicate_ledger_names: Iterable[str] = (),
 ) -> str:
     material = [
         f"profile:{profile}",
@@ -451,13 +704,70 @@ def migration_contract_fingerprint(
             f"ledger-name:{name}"
             for name in sorted(set(required_ledger_names))
         ),
+        *(
+            f"deployment-order:{position}:{name}"
+            for position, name in enumerate(deployment_order, start=1)
+        ),
+        *(
+            f"allowed-duplicate-ledger-name:{name}"
+            for name in sorted(set(allowed_duplicate_ledger_names))
+        ),
         *(f"schema-probe:{key}" for key in MIGRATION_SCHEMA_CONTRACT_KEYS),
     ]
     return hashlib.sha256("\n".join(material).encode("utf-8")).hexdigest()
 
 
-def expected_production_feature_flags() -> dict[str, bool]:
-    return {name: False for name in PRODUCTION_FEATURE_FLAGS}
+def expected_production_feature_flags(
+    *, profile: str = "release"
+) -> dict[str, bool]:
+    enabled_flags = PRODUCTION_FEATURE_PROFILES.get(profile)
+    if enabled_flags is None:
+        raise ValueError(f"Unknown production feature profile: {profile}")
+    return {name: name in enabled_flags for name in PRODUCTION_FEATURE_FLAGS}
+
+
+def expected_production_controlled_write_flags(
+    *, profile: str = "release"
+) -> dict[str, bool]:
+    enabled_flags = PRODUCTION_FEATURE_PROFILES.get(profile)
+    if enabled_flags is None:
+        raise ValueError(f"Unknown production feature profile: {profile}")
+    return {name: name in enabled_flags for name in ALL_STAGING_WRITE_FLAGS}
+
+
+def production_feature_profile_from_health(health: Any) -> str | None:
+    """Identify an exact reviewed live profile without accepting flag drift."""
+
+    if not isinstance(health, dict):
+        return None
+    prerequisites = health.get("write_prerequisites")
+    if (
+        health.get("production_business_write_policy") != PRODUCTION_WRITE_POLICY
+        or health.get("write_wave") != NO_WRITE_WAVE
+        or health.get("staging_write_wave") != NO_WRITE_WAVE
+        or health.get("business_data_write_wave_active") is not False
+        or health.get("public_live_writes_enabled") is not True
+        or health.get("public_live_production_override_enabled") is not True
+        or not isinstance(prerequisites, dict)
+        or prerequisites.get("email_mode") != "dry_run"
+        or prerequisites.get("live_player_update_email_enabled") is not False
+    ):
+        return None
+    for profile in PRODUCTION_FEATURE_PROFILES:
+        expected_flags = expected_production_feature_flags(profile=profile)
+        expected_controlled = expected_production_controlled_write_flags(
+            profile=profile
+        )
+        if (
+            health.get("feature_flags") == expected_flags
+            and health.get("feature_flag_fingerprint")
+            == feature_flag_fingerprint(expected_flags)
+            and health.get("controlled_write_flags") == expected_controlled
+            and health.get("controlled_write_flag_fingerprint")
+            == feature_flag_fingerprint(expected_controlled)
+        ):
+            return profile
+    return None
 
 
 def feature_flag_fingerprint(flags: Mapping[str, bool]) -> str:
@@ -502,9 +812,13 @@ def production_fly_config_errors(config_path: Path) -> list[str]:
             errors.append(f"Production Fly config must set {name}={expected!r}.")
     if str(env.get("JUPR_ALLOWED_ORIGIN_REGEX") or "").strip():
         errors.append("Production Fly config must not allow a CORS origin regex.")
-    for name in PRODUCTION_FEATURE_FLAGS:
-        if env.get(name) != "0":
-            errors.append(f"Production Fly config must explicitly disable {name}.")
+    for name, enabled in expected_production_feature_flags().items():
+        expected = "1" if enabled else "0"
+        if env.get(name) != expected:
+            errors.append(
+                "Production Fly config must set the reviewed feature projection "
+                f"{name}={expected!r}."
+            )
 
     http_service = config.get("http_service") or {}
     if http_service.get("force_https") is not True:
@@ -831,6 +1145,9 @@ def predeploy_rollback_snapshot(
     fly_status: Any,
     *,
     fly_config_sha256: str,
+    reviewed_legacy_image_digest: str | None = None,
+    reviewed_legacy_config_sha256: str | None = None,
+    capture_unreviewed_legacy_evidence: bool = False,
 ) -> tuple[list[str], dict[str, Any]]:
     """Build the exact rollback pair before any production runtime mutation."""
 
@@ -853,6 +1170,22 @@ def predeploy_rollback_snapshot(
     immutable_ref = next(iter(immutable_refs), None)
     git_sha = str(health.get("git_commit_sha") or "").strip().lower()
     image_sha = str(health.get("image_build_git_sha") or "").strip().lower()
+    git_identity_is_exact = bool(
+        _SHA_RE.fullmatch(git_sha)
+        and _SHA_RE.fullmatch(image_sha)
+        and git_sha == image_sha
+    )
+    git_identity_is_legacy = (
+        git_sha in {"", "unknown"} and image_sha in {"", "unknown"}
+    )
+    reviewed_digest = str(reviewed_legacy_image_digest or "").strip().lower()
+    reviewed_config = str(reviewed_legacy_config_sha256 or "").strip().lower()
+    legacy_review_requested = bool(reviewed_digest or reviewed_config)
+    live_feature_profile = production_feature_profile_from_health(health)
+    if live_feature_profile is None:
+        errors.append(
+            "Pre-deploy production feature flags do not match a reviewed live profile."
+        )
     expected_identity = {
         "ok": True,
         "service": "jupr-api",
@@ -865,20 +1198,56 @@ def predeploy_rollback_snapshot(
             errors.append(
                 f"Pre-deploy production health identity mismatch for {key}."
             )
-    if not _SHA_RE.fullmatch(git_sha):
-        errors.append("Pre-deploy production health has no exact Git SHA.")
-    if not _SHA_RE.fullmatch(image_sha):
-        errors.append("Pre-deploy production health has no exact image-build Git SHA.")
-    if git_sha and image_sha and git_sha != image_sha:
-        errors.append("Pre-deploy runtime and image-build Git SHAs differ.")
+    identity_mode = "exact-git"
+    if git_identity_is_exact:
+        if legacy_review_requested:
+            errors.append(
+                "Legacy baseline review values are forbidden once production "
+                "reports an exact Git identity."
+            )
+    elif git_identity_is_legacy:
+        if capture_unreviewed_legacy_evidence and not legacy_review_requested:
+            identity_mode = "legacy-unreviewed-evidence"
+        else:
+            identity_mode = "legacy-immutable-bootstrap"
+            if not re.fullmatch(r"sha256:[0-9a-f]{64}", reviewed_digest):
+                errors.append(
+                    "Legacy baseline bootstrap requires the reviewed immutable "
+                    "Fly image digest."
+                )
+            elif reviewed_digest != image_digest:
+                errors.append(
+                    "Live legacy Fly image digest does not match the reviewed baseline."
+                )
+            if not re.fullmatch(r"[0-9a-f]{64}", reviewed_config):
+                errors.append(
+                    "Legacy baseline bootstrap requires the reviewed Fly config "
+                    "fingerprint."
+                )
+            elif reviewed_config != str(fly_config_sha256).strip().lower():
+                errors.append(
+                    "Live legacy Fly config does not match the reviewed baseline."
+                )
+    else:
+        errors.append(
+            "Pre-deploy production health has an inconsistent or invalid Git identity."
+        )
     snapshot = {
         "fly_app": PRODUCTION_FLY_APP,
-        "git_commit_sha": git_sha or None,
-        "image_build_git_sha": image_sha or None,
+        "identity_mode": identity_mode,
+        "feature_profile": live_feature_profile,
+        "git_commit_sha": git_sha if git_identity_is_exact else None,
+        "image_build_git_sha": image_sha if git_identity_is_exact else None,
         "fly_image_ref": image_ref,
         "fly_image_digest": image_digest,
         "fly_immutable_image_ref": immutable_ref,
         "fly_config_sha256": str(fly_config_sha256).strip().lower() or None,
+        "reviewed_legacy_image_digest": (
+            reviewed_digest if identity_mode == "legacy-immutable-bootstrap" else None
+        ),
+        "reviewed_legacy_config_sha256": (
+            reviewed_config if identity_mode == "legacy-immutable-bootstrap" else None
+        ),
     }
     return errors, snapshot
 
@@ -893,6 +1262,8 @@ def runtime_identity_errors(
     expected_migration_profile: str,
     fly_machines: Any,
     fly_secrets: Any,
+    allow_legacy_git_identity: bool = False,
+    feature_profile: str = "release",
 ) -> list[str]:
     if not isinstance(health, dict):
         return ["Production health payload is not a JSON object."]
@@ -915,13 +1286,14 @@ def runtime_identity_errors(
     ):
         errors.append("Expected production migration profile is invalid.")
 
-    expected_flags = expected_production_feature_flags()
+    expected_flags = expected_production_feature_flags(profile=feature_profile)
+    expected_controlled_write_flags = (
+        expected_production_controlled_write_flags(profile=feature_profile)
+    )
     expected_identity: dict[str, Any] = {
         "ok": True,
         "service": "jupr-api",
         "environment": PRODUCTION_ENVIRONMENT,
-        "git_commit_sha": candidate_sha.lower(),
-        "image_build_git_sha": candidate_sha.lower(),
         "fly_app_name": PRODUCTION_FLY_APP,
         "web_origin": PRODUCTION_WEB_ORIGIN,
         "supabase_project_ref": expected_project_ref.lower(),
@@ -933,8 +1305,8 @@ def runtime_identity_errors(
         "business_data_write_wave_active": False,
         "production_business_write_policy": PRODUCTION_WRITE_POLICY,
         "security_denial_audit_logging_required": True,
-        "public_live_writes_enabled": False,
-        "public_live_production_override_enabled": False,
+        "public_live_writes_enabled": True,
+        "public_live_production_override_enabled": True,
         "expected_migration_contract": expected_migration_contract.lower(),
         "expected_migration_head": expected_migration_head,
         "expected_migration_profile": expected_migration_profile,
@@ -942,13 +1314,30 @@ def runtime_identity_errors(
         "cors_allowed_origin_regex": None,
         "feature_flags": expected_flags,
         "feature_flag_fingerprint": feature_flag_fingerprint(expected_flags),
-        "controlled_write_flags": {
-            name: False for name in ALL_STAGING_WRITE_FLAGS
-        },
+        "controlled_write_flags": expected_controlled_write_flags,
         "controlled_write_flag_fingerprint": feature_flag_fingerprint(
-            {name: False for name in ALL_STAGING_WRITE_FLAGS}
+            expected_controlled_write_flags
         ),
     }
+    if allow_legacy_git_identity:
+        legacy_git_sha = str(health.get("git_commit_sha") or "").strip().lower()
+        legacy_image_sha = str(
+            health.get("image_build_git_sha") or ""
+        ).strip().lower()
+        if legacy_git_sha not in {"", "unknown"} or legacy_image_sha not in {
+            "",
+            "unknown",
+        }:
+            errors.append(
+                "Legacy rollback health must retain its reviewed missing Git identity."
+            )
+    else:
+        expected_identity.update(
+            {
+                "git_commit_sha": candidate_sha.lower(),
+                "image_build_git_sha": candidate_sha.lower(),
+            }
+        )
     for key, expected in expected_identity.items():
         actual = health.get(key)
         if key in {
@@ -993,11 +1382,15 @@ def runtime_identity_errors(
     if not isinstance(prerequisites, dict):
         errors.append("Production health identity is missing write_prerequisites.")
     else:
-        for key in ("service_role_configured", "api_audit_required", "worker_run_log_required"):
+        for key in (
+            "service_role_configured",
+            "api_audit_required",
+            "worker_run_log_required",
+        ):
             if prerequisites.get(key) is not True:
                 errors.append(f"Production write prerequisite {key} must be true.")
         if prerequisites.get("email_mode") != "dry_run":
-            errors.append("Production email mode must remain dry_run during read-only promotion.")
+            errors.append("Production email mode must remain dry_run during promotion.")
         if prerequisites.get("live_player_update_email_enabled") is not False:
             errors.append("Production live player-update email delivery must remain disabled.")
 
@@ -1044,8 +1437,22 @@ def final_runtime_errors(
     rollback_configured_ref = str(
         rollback_snapshot.get("fly_image_ref") or ""
     ).strip()
-    if not _SHA_RE.fullmatch(rollback_sha):
+    rollback_identity_mode = str(
+        rollback_snapshot.get("identity_mode") or ""
+    ).strip()
+    rollback_config_sha256 = str(
+        rollback_snapshot.get("fly_config_sha256") or ""
+    ).strip().lower()
+    rollback_feature_profile = str(
+        rollback_snapshot.get("feature_profile") or ""
+    ).strip()
+    legacy_rollback = rollback_identity_mode == "legacy-immutable-bootstrap"
+    if rollback_identity_mode not in {"exact-git", "legacy-immutable-bootstrap"}:
+        errors.append("Rollback snapshot has no recognized identity mode.")
+    if not legacy_rollback and not _SHA_RE.fullmatch(rollback_sha):
         errors.append("Rollback snapshot has no exact image-build Git SHA.")
+    if legacy_rollback and rollback_sha:
+        errors.append("Legacy rollback snapshot must not claim an exact Git SHA.")
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", rollback_digest):
         errors.append("Rollback snapshot has no immutable Fly image digest.")
     if (
@@ -1053,8 +1460,38 @@ def final_runtime_errors(
         or f"@{rollback_digest}" not in rollback_immutable_ref
     ):
         errors.append("Rollback snapshot has no matching immutable Fly image reference.")
+    if not re.fullmatch(r"[0-9a-f]{64}", rollback_config_sha256):
+        errors.append("Rollback snapshot has no exact Fly config fingerprint.")
+    if rollback_feature_profile not in PRODUCTION_FEATURE_PROFILES:
+        errors.append("Rollback snapshot has no reviewed production feature profile.")
+    if legacy_rollback:
+        if (
+            str(
+                rollback_snapshot.get("reviewed_legacy_image_digest") or ""
+            ).strip().lower()
+            != rollback_digest
+        ):
+            errors.append(
+                "Legacy rollback snapshot image digest is not the reviewed baseline."
+            )
+        if (
+            str(
+                rollback_snapshot.get("reviewed_legacy_config_sha256") or ""
+            ).strip().lower()
+            != rollback_config_sha256
+        ):
+            errors.append(
+                "Legacy rollback snapshot config is not the reviewed baseline."
+            )
 
-    expected_sha = candidate_sha if promotion_accepted else rollback_sha
+    expected_sha = (
+        candidate_sha if promotion_accepted or legacy_rollback else rollback_sha
+    )
+    final_feature_profile = "release" if promotion_accepted else (
+        rollback_feature_profile
+        if rollback_feature_profile in PRODUCTION_FEATURE_PROFILES
+        else "baseline"
+    )
     errors.extend(
         runtime_identity_errors(
             health,
@@ -1065,6 +1502,8 @@ def final_runtime_errors(
             expected_migration_profile=expected_migration_profile,
             fly_machines=fly_machines,
             fly_secrets=fly_secrets,
+            allow_legacy_git_identity=(not promotion_accepted and legacy_rollback),
+            feature_profile=final_feature_profile,
         )
     )
 
@@ -1192,9 +1631,13 @@ def _write_github_env(
     contract_fingerprint = migration_contract_fingerprint(
         profile=str(migration_contract["profile"]),
         required_ledger_names=migration_contract["required_ledger_names"],
+        deployment_order=migration_contract["deployment_order"],
         repository_migration_content_sha256=str(
             migration_contract["repository_migration_content_sha256"]
         ),
+        allowed_duplicate_ledger_names=migration_contract[
+            "allowed_duplicate_ledger_names"
+        ],
     )
     with Path(path).open("a", encoding="utf-8") as handle:
         handle.write(f"EXPECTED_MIGRATION_COUNT={len(migrations)}\n")
@@ -1258,6 +1701,7 @@ def _migrations_command(args: argparse.Namespace) -> int:
         remote_entries,
         invalid_remote_rows=invalid_rows,
         allow_additional_names=bool(contract["allow_additional_ledger_names"]),
+        allowed_duplicate_names=contract["allowed_duplicate_ledger_names"],
     )
     errors.extend(
         migration_schema_contract_errors(_read_json(args.schema_contract_json))
@@ -1283,9 +1727,13 @@ def _migrations_command(args: argparse.Namespace) -> int:
     contract_fingerprint = migration_contract_fingerprint(
         profile=str(contract["profile"]),
         required_ledger_names=contract["required_ledger_names"],
+        deployment_order=contract["deployment_order"],
         repository_migration_content_sha256=str(
             contract["repository_migration_content_sha256"]
         ),
+        allowed_duplicate_ledger_names=contract[
+            "allowed_duplicate_ledger_names"
+        ],
     )
     expected_contract = str(
         os.getenv("EXPECTED_MIGRATION_CONTRACT") or ""
@@ -1297,6 +1745,11 @@ def _migrations_command(args: argparse.Namespace) -> int:
         {
             "migration_contract": contract_fingerprint,
             "migration_profile": contract["profile"],
+            "pending_required_ledger_names": list(
+                pending_required_migration_names(
+                    contract["deployment_order"], remote_entries
+                )
+            ),
             "required_ledger_name_count": len(
                 contract["required_ledger_names"]
             ),
@@ -1389,6 +1842,11 @@ def _snapshot_command(args: argparse.Namespace) -> int:
         _read_json(args.health_json),
         _read_json(args.fly_status_json),
         fly_config_sha256=fly_config_sha256,
+        reviewed_legacy_image_digest=args.reviewed_legacy_image_digest,
+        reviewed_legacy_config_sha256=args.reviewed_legacy_config_sha256,
+        capture_unreviewed_legacy_evidence=(
+            args.capture_unreviewed_legacy_evidence
+        ),
     )
     if not errors:
         args.output_json.write_text(
@@ -1396,6 +1854,23 @@ def _snapshot_command(args: argparse.Namespace) -> int:
             encoding="utf-8",
         )
     return _emit(errors, {"rollback_snapshot": snapshot})
+
+
+def _release_trigger_command(args: argparse.Namespace) -> int:
+    errors, resolved = production_release_trigger_errors(
+        _read_json(args.trigger_json),
+        head_sha=args.head_sha,
+        parent_shas=args.parent_sha,
+        changed_status_lines=args.changed_status.read_text(
+            encoding="utf-8"
+        ).splitlines(),
+    )
+    if not errors:
+        args.output_json.write_text(
+            json.dumps(resolved, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    return _emit(errors, {"release_trigger": resolved})
 
 
 def _final_command(args: argparse.Namespace) -> int:
@@ -1527,7 +2002,25 @@ def build_parser() -> argparse.ArgumentParser:
     snapshot.add_argument("--fly-status-json", type=Path, required=True)
     snapshot.add_argument("--fly-config", type=Path, required=True)
     snapshot.add_argument("--output-json", type=Path, required=True)
+    snapshot.add_argument("--reviewed-legacy-image-digest")
+    snapshot.add_argument("--reviewed-legacy-config-sha256")
+    snapshot.add_argument(
+        "--capture-unreviewed-legacy-evidence",
+        action="store_true",
+    )
     snapshot.set_defaults(handler=_snapshot_command)
+
+    release_trigger = subparsers.add_parser("release-trigger")
+    release_trigger.add_argument("--trigger-json", type=Path, required=True)
+    release_trigger.add_argument("--head-sha", required=True)
+    release_trigger.add_argument(
+        "--parent-sha",
+        action="append",
+        default=[],
+    )
+    release_trigger.add_argument("--changed-status", type=Path, required=True)
+    release_trigger.add_argument("--output-json", type=Path, required=True)
+    release_trigger.set_defaults(handler=_release_trigger_command)
 
     final = subparsers.add_parser("final")
     final.add_argument("--health-json", type=Path, required=True)

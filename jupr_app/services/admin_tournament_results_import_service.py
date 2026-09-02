@@ -13,6 +13,11 @@ from jupr_app.domain.tournament_results_import import (
     suggest_player_matches,
 )
 from jupr_app.domain.tournaments import finalize_game
+from jupr_app.domain.tournaments.score_policy import (
+    require_tournament_score,
+    resolve_tournament_scoring_format,
+    review_tournament_score,
+)
 from jupr_app.services.admin_tournament_game_service import _require_reviewed_draw_version
 from jupr_app.services.admin_tournament_guarded_operation import StaleTournamentAdminStateError
 from jupr_app.services.admin_tournament_service import (
@@ -58,6 +63,29 @@ def _fetch_draw(supabase: Any, *, tournament_id: str, draw_id: str) -> dict[str,
     except Exception as exc:
         raise RuntimeError("Could not verify the tournament draw; results import was refused.") from exc
     return rows[0] if rows else None
+
+
+def _fetch_event_scoring(
+    supabase: Any, *, tournament_id: str, event_option_id: str
+) -> dict[str, Any]:
+    try:
+        rows = _safe_rows(
+            supabase.table("tournament_event_options")
+            .select("id,tournament_id,scoring_default,scoring_override,division_scoring")
+            .eq("tournament_id", str(tournament_id))
+            .eq("id", str(event_option_id))
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "Could not verify the configured event scoring format; results import was refused."
+        ) from exc
+    if len(rows) != 1:
+        raise ValueError(
+            "The draw's configured event scoring format is unavailable; results import was refused."
+        )
+    return rows[0]
 
 
 def _club_players(supabase: Any, *, club_id: str) -> list[dict[str, Any]]:
@@ -174,6 +202,32 @@ def build_admin_tournament_results_import_preview(
         match_reviews=reviews,
     )
     errors = [str(error) for error in compiled.get("errors") or []]
+    event = _fetch_event_scoring(
+        supabase,
+        tournament_id=clean_tournament_id,
+        event_option_id=str(draw.get("event_option_id") or ""),
+    )
+    scoring_format = resolve_tournament_scoring_format(event)
+    score_reviews: list[dict[str, Any]] = []
+    score_warnings: list[str] = []
+    for row in compiled.get("matches") or []:
+        if row.get("score_a") is None or row.get("score_b") is None:
+            continue
+        review = review_tournament_score(
+            row.get("score_a"), row.get("score_b"), scoring_format=scoring_format
+        )
+        reviewed_row = {"source_row": row.get("source_row"), **review}
+        score_reviews.append(reviewed_row)
+        if review["status"] == "impossible":
+            errors.append(
+                f"Reviewed match row {row.get('source_row')} has an impossible {scoring_format} final: "
+                + " ".join(review["reasons"])
+            )
+        elif review["status"] == "unusual":
+            score_warnings.append(
+                f"Reviewed match row {row.get('source_row')} has an unusual {scoring_format} final and requires acknowledgement: "
+                + " ".join(review["reasons"])
+            )
 
     existing_ids = {str(row.get("id")) for row in players if row.get("id") not in (None, "")}
     existing_names = {
@@ -266,6 +320,8 @@ def build_admin_tournament_results_import_preview(
         "match_reviews": reviews,
         "podium_refs": reviewed_podium,
         "allow_duplicate_mapping": bool(allow_duplicate_mapping),
+        "scoring_format": scoring_format,
+        "score_reviews": score_reviews,
         "compiled": compiled,
     }
     review_fingerprint = stable_tournament_admin_fingerprint(review_contract)
@@ -287,6 +343,8 @@ def build_admin_tournament_results_import_preview(
         "suggestions": suggestions,
         "mapping_decisions": decisions,
         "matches": list(bundle.get("matches") or []),
+        "scoring_format": scoring_format,
+        "score_reviews": score_reviews,
         "match_reviews": reviews,
         "teams": list(compiled.get("teams") or []),
         "podium_candidates": list(compiled.get("podium_candidates") or []),
@@ -295,10 +353,11 @@ def build_admin_tournament_results_import_preview(
             "imported_players": len(bundle.get("players") or []),
             "teams": len(compiled.get("teams") or []),
             "matches": len(compiled.get("matches") or []),
+            "unusual_scores": sum(row["status"] == "unusual" for row in score_reviews),
             "create_players": len(compiled.get("create_import_keys") or []),
         },
         "errors": errors,
-        "warnings": list(compiled.get("warnings") or []),
+        "warnings": [*list(compiled.get("warnings") or []), *score_warnings],
         "review_contract": review_contract,
     }
 
@@ -332,6 +391,7 @@ def apply_admin_tournament_results_import(
     match_reviews: dict[str, dict[str, Any]],
     podium_refs: dict[str, str | None],
     allow_duplicate_mapping: bool,
+    unusual_scores_acknowledged: bool = False,
     expected_review_fingerprint: str,
     actor_email: str,
     actor_role: str,
@@ -370,6 +430,15 @@ def apply_admin_tournament_results_import(
     expected_confirmation = "REPLACE RESULTS" if mode == "REPLACE" else "IMPORT RESULTS"
     if str(confirmation_text or "").strip().upper() != expected_confirmation:
         raise ValueError(f"Type {expected_confirmation} to commit this reviewed results import.")
+    unusual_reviews = [
+        row
+        for row in preview.get("score_reviews") or []
+        if row.get("status") == "unusual"
+    ]
+    if unusual_reviews and not unusual_scores_acknowledged:
+        raise ValueError(
+            "Unusual imported tournament scores require explicit acknowledgement before commit."
+        )
     if dry_run:
         return {
             "ok": True,
@@ -448,7 +517,21 @@ def apply_admin_tournament_results_import(
         if game.get("score_b") is not None and int(game["score_b"]) < 0:
             raise ValueError(f"Reviewed match row {row.get('source_row')} has a negative score.")
         if game.get("score_a") is not None and game.get("score_b") is not None:
+            score_review = require_tournament_score(
+                game["score_a"],
+                game["score_b"],
+                scoring_format=str(preview.get("scoring_format") or ""),
+                unusual_score_acknowledged=bool(unusual_scores_acknowledged),
+            )
             game.update(finalize_game(game))
+            game.update(
+                {
+                    "result_type": "PLAYED",
+                    "result_note": None,
+                    "result_recorded_by": str(actor_email or "") or None,
+                    "score_review_json": score_review,
+                }
+            )
         game_rows.append(game)
 
     podium_rows: list[dict[str, Any]] = []
@@ -469,7 +552,7 @@ def apply_admin_tournament_results_import(
 
     try:
         response = supabase.rpc(
-            "admin_import_tournament_draw_results_cas",
+            "admin_import_tournament_draw_results_with_metadata_cas",
             {
                 "p_club_id": str(club_id),
                 "p_tournament_id": str(tournament_id),

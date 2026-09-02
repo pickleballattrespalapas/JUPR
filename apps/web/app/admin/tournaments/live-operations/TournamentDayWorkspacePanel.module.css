@@ -1,0 +1,1531 @@
+.root {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: clip;
+}
+
+.scopeBar,
+.workspaceSection,
+.activationCard,
+.recoveryCard,
+.emptyState {
+  min-width: 0;
+  box-sizing: border-box;
+  border: 1px solid #dbe3ef;
+  border-radius: 16px;
+  padding: clamp(0.85rem, 1.8vw, 1.2rem);
+  background: #fff;
+}
+
+.scopeBar {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(220px, 0.8fr) auto;
+  align-items: end;
+  gap: 1rem;
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.scopeBar h2,
+.scopeBar p,
+.workspaceSection h2,
+.activationCard h2,
+.activationCard p,
+.recoveryCard h2,
+.recoveryCard p {
+  margin-top: 0;
+}
+
+.scopeStatus {
+  display: grid;
+  justify-items: start;
+  gap: 0.45rem;
+}
+
+.field,
+.scoreGrid label,
+.outcomeGrid label {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+  color: #0f172a;
+  font-weight: 750;
+}
+
+.field select,
+.field textarea,
+.scoreGrid input,
+.outcomeGrid select {
+  width: 100%;
+  min-height: 44px;
+  box-sizing: border-box;
+  border: 1px solid #94a3b8;
+  border-radius: 9px;
+  padding: 0.55rem 0.65rem;
+  background: #fff;
+  color: #0f172a;
+  font: inherit;
+}
+
+.field textarea {
+  min-height: 104px;
+  resize: vertical;
+}
+
+.eyebrow {
+  margin: 0 0 0.25rem;
+  color: #1d4ed8;
+  font-size: 0.74rem;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.muted {
+  color: #475569;
+}
+
+.viewNav {
+  display: flex;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.viewNav button,
+.primaryButton,
+.secondaryButton {
+  min-height: 44px;
+  box-sizing: border-box;
+  border: 1px solid #0f172a;
+  border-radius: 999px;
+  padding: 0.55rem 0.85rem;
+  background: #0f172a;
+  color: #fff;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.viewNav button[aria-selected="true"] {
+  border-color: #2563eb;
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.navBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.35rem;
+  height: 1.35rem;
+  margin-left: 0.35rem;
+  border-radius: 999px;
+  padding: 0 0.25rem;
+  background: #fbbf24;
+  color: #422006;
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.playoffReadyBanner {
+  display: grid;
+  gap: 0.6rem;
+  min-width: 0;
+  border: 1px solid #f59e0b;
+  border-radius: 14px;
+  padding: 0.65rem 0.75rem;
+  background: linear-gradient(100deg, #fffbeb 0%, #fef3c7 100%);
+  box-shadow: 0 4px 14px rgb(146 64 14 / 10%);
+}
+
+.playoffAlertRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.playoffAlertRow + .playoffAlertRow {
+  border-top: 1px solid #fcd34d;
+  padding-top: 0.6rem;
+}
+
+.playoffReadyBannerCopy {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  min-width: 0;
+}
+
+.playoffReadyBannerCopy > div {
+  min-width: 0;
+}
+
+.playoffReadyBanner h2,
+.playoffReadyBanner h3,
+.playoffReadyBanner p {
+  margin: 0;
+}
+
+.playoffReadyBanner h2,
+.playoffReadyBanner h3 {
+  color: #78350f;
+  font-size: 1rem;
+}
+
+.playoffReadyBanner p {
+  margin-top: 0.12rem;
+  color: #713f12;
+  font-size: 0.9rem;
+}
+
+.playoffReadyActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.playoffReadyActions button,
+.playoffAlertRow > button {
+  flex: 0 0 auto;
+  min-height: 40px;
+  white-space: nowrap;
+}
+
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.secondaryButton {
+  background: #fff;
+  color: #0f172a;
+}
+
+.resultModeSwitch {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.3rem;
+  margin-bottom: 0.2rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  padding: 0.25rem;
+  background: #f1f5f9;
+}
+
+.resultModeSwitch button {
+  min-height: 40px;
+  border: 0;
+  border-radius: 999px;
+  padding: 0.45rem 0.8rem;
+  background: transparent;
+  color: #334155;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.resultModeSwitch button[aria-pressed="true"] {
+  background: #fff;
+  color: #1d4ed8;
+  box-shadow: 0 1px 3px rgb(15 23 42 / 18%);
+}
+
+.viewNav button:focus-visible,
+.primaryButton:focus-visible,
+.secondaryButton:focus-visible,
+.field select:focus-visible,
+.field textarea:focus-visible,
+.scoreGrid input:focus-visible,
+.outcomeGrid select:focus-visible,
+.resultModeSwitch button:focus-visible,
+.root a:focus-visible {
+  outline: 3px solid #60a5fa;
+  outline-offset: 2px;
+}
+
+.viewNav button:disabled,
+.primaryButton:disabled,
+.secondaryButton:disabled,
+.field select:disabled,
+.field textarea:disabled,
+.scoreGrid input:disabled,
+.outcomeGrid select:disabled,
+.resultModeSwitch button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.summaryGrid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.summaryGrid article {
+  min-width: 0;
+  border: 1px solid #dbe3ef;
+  border-radius: 12px;
+  padding: 0.75rem;
+  background: #fff;
+}
+
+.summaryGrid span,
+.summaryGrid strong {
+  display: block;
+}
+
+.summaryGrid span {
+  color: #64748b;
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.summaryGrid strong {
+  margin-top: 0.2rem;
+  font-size: 1.35rem;
+}
+
+.activationCard {
+  border-color: #fbbf24;
+  background: #fffbeb;
+}
+
+.dayCloseoutGuide {
+  min-width: 0;
+  box-sizing: border-box;
+  border: 2px solid #60a5fa;
+  border-radius: 16px;
+  padding: clamp(0.9rem, 2vw, 1.3rem);
+  background: linear-gradient(135deg, #eff6ff 0%, #fff 72%);
+  box-shadow: 0 12px 30px rgb(37 99 235 / 10%);
+}
+
+.dayCloseoutComplete {
+  border-color: #4ade80;
+  background: linear-gradient(135deg, #f0fdf4 0%, #fff 72%);
+  box-shadow: 0 12px 30px rgb(22 163 74 / 10%);
+}
+
+.dayCloseoutHeading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.dayCloseoutHeading > div {
+  min-width: 0;
+}
+
+.dayCloseoutHeading h2,
+.dayCloseoutHeading p,
+.dayCloseoutSteps p {
+  margin-top: 0;
+}
+
+.dayCloseoutHeading p:last-child,
+.dayCloseoutSteps p:last-child {
+  margin-bottom: 0;
+}
+
+.dayCloseoutSteps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dayCloseoutSteps li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-content: start;
+  gap: 0.45rem 0.6rem;
+  min-width: 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  padding: 0.75rem;
+  background: rgb(255 255 255 / 82%);
+}
+
+.dayCloseoutSteps li[data-state="current"] {
+  border-color: #2563eb;
+  background: #dbeafe;
+}
+
+.dayCloseoutSteps li[data-state="done"] {
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+
+.dayCloseoutSteps li[data-state="pending"] {
+  color: #64748b;
+}
+
+.dayCloseoutStepNumber {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.7rem;
+  height: 1.7rem;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #334155;
+  font-weight: 850;
+}
+
+.dayCloseoutSteps li[data-state="current"] .dayCloseoutStepNumber {
+  background: #2563eb;
+  color: #fff;
+}
+
+.dayCloseoutSteps li[data-state="done"] .dayCloseoutStepNumber {
+  background: #16a34a;
+  color: #fff;
+}
+
+.dayCloseoutSteps strong {
+  display: block;
+  color: #0f172a;
+}
+
+.dayCloseoutSteps p {
+  margin-bottom: 0;
+  color: #475569;
+  font-size: 0.86rem;
+}
+
+.dayCloseoutStepStatus {
+  grid-column: 2;
+  justify-self: start;
+  color: #475569;
+  font-size: 0.75rem;
+  font-weight: 850;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.dayCloseoutActions {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+}
+
+.closeoutActionLink {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  box-sizing: border-box;
+  border: 1px solid #0f172a;
+  border-radius: 999px;
+  padding: 0.55rem 0.85rem;
+  background: #0f172a;
+  color: #fff;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.closeoutRecoveryNotice {
+  flex-basis: 100%;
+  margin: 0;
+  border-left: 4px solid #dc2626;
+  padding: 0.65rem 0.75rem;
+  background: #fef2f2;
+  color: #991b1b;
+  font-weight: 750;
+}
+
+.closeoutBlockerDetails {
+  flex-basis: 100%;
+  border-top: 1px solid #bfdbfe;
+  padding-top: 0.7rem;
+}
+
+.closeoutBlockerDetails summary {
+  cursor: pointer;
+  color: #1e3a8a;
+  font-weight: 800;
+}
+
+.sectionHeading,
+.cardHeading,
+.recoveryRow,
+.buttonRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.sectionHeading > *,
+.cardHeading > *,
+.recoveryRow > * {
+  min-width: 0;
+}
+
+.boardHeading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.boardHeading h2,
+.boardHeading p {
+  margin: 0;
+}
+
+.compactQueueCard {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.65rem;
+  min-width: 0;
+  border: 1px solid #93c5fd;
+  border-radius: 12px;
+  padding: 0.5rem 0.6rem;
+  background: #eff6ff;
+}
+
+.compactQueueLead {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 105px;
+}
+
+.compactQueueLead span {
+  color: #1d4ed8;
+  font-size: 0.72rem;
+  font-weight: 850;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.compactQueueLead strong {
+  color: #0f172a;
+  font-size: 1.05rem;
+}
+
+.compactQueueLead small {
+  color: #92400e;
+  font-weight: 750;
+}
+
+.compactQueueList {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0.5rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0 0 0.1rem;
+  overflow-x: auto;
+  list-style: none;
+  scrollbar-width: thin;
+}
+
+.compactQueueList li {
+  display: grid;
+  grid-template-columns: auto minmax(170px, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 0 0 min(520px, calc(100vw - 8rem));
+  min-width: 0;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  padding: 0.4rem 0.5rem;
+  background: #fff;
+}
+
+.compactQueueList .compactReservedItem {
+  border-color: #fbbf24;
+  background: #fffbeb;
+}
+
+.compactQueueList .goldMedalMatch,
+.queueList .goldMedalMatch {
+  border-color: #d79b16;
+  background: linear-gradient(135deg, #fff4b8 0%, #fffbeb 62%, #fef3c7 100%);
+  box-shadow: inset 4px 0 0 #c58a08;
+}
+
+.compactQueueList .bronzeMedalMatch,
+.queueList .bronzeMedalMatch {
+  border-color: #b46b38;
+  background: linear-gradient(135deg, #f7dcc5 0%, #fff7ed 62%, #fed7aa 100%);
+  box-shadow: inset 4px 0 0 #99542d;
+}
+
+.goldMedalMatch .compactPosition,
+.goldMedalMatch .positionBadge {
+  color: #8a5a00;
+}
+
+.bronzeMedalMatch .compactPosition,
+.bronzeMedalMatch .positionBadge {
+  color: #7c3d20;
+}
+
+.compactPosition {
+  color: #1d4ed8;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.compactQueueDetails {
+  display: grid;
+  gap: 0.12rem;
+  min-width: 0;
+}
+
+.compactQueueDetails strong,
+.compactQueueDetails small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compactQueueDetails small {
+  color: #475569;
+}
+
+.medalBadge {
+  display: inline-flex;
+  justify-self: start;
+  width: fit-content;
+  border: 1px solid;
+  border-radius: 999px;
+  padding: 0.12rem 0.42rem;
+  font-size: 0.7rem;
+  font-weight: 900;
+  letter-spacing: 0.035em;
+  line-height: 1.2;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.goldMedalBadge {
+  border-color: #b77905;
+  background: #fde68a;
+  color: #713f12;
+}
+
+.bronzeMedalBadge {
+  border-color: #9a4f2c;
+  background: #edc4a4;
+  color: #6b2f1a;
+}
+
+.queueList .medalBadge {
+  margin: 0 0.45rem 0.35rem 0;
+}
+
+.compactQueueActions {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0.35rem;
+}
+
+.compactQueueActions .primaryButton,
+.compactQueueActions .secondaryButton {
+  min-height: 44px;
+  padding: 0.4rem 0.65rem;
+  white-space: nowrap;
+}
+
+.compactQueueEmpty {
+  margin: 0;
+  color: #475569;
+  font-weight: 700;
+}
+
+.courtBoard {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-top: 0.65rem;
+}
+
+.courtCard,
+.drawCard,
+.exceptionCard,
+.correctionCard,
+.scoreEditor {
+  min-width: 0;
+  box-sizing: border-box;
+  border: 1px solid #dbe3ef;
+  border-radius: 13px;
+  padding: 0.8rem;
+  background: #fff;
+}
+
+.courtCard {
+  display: grid;
+  align-content: start;
+  gap: 0.55rem;
+}
+
+.courtCard h3,
+.courtCard p,
+.drawCard h3,
+.drawCard h4,
+.drawCard p,
+.exceptionCard p {
+  margin: 0;
+}
+
+.availableCourt {
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+
+.occupiedCourt {
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.courtReservation {
+  display: grid;
+  gap: 0.3rem;
+  margin-top: 0.2rem;
+  border-top: 1px solid #93c5fd;
+  padding-top: 0.6rem;
+}
+
+.courtReservation span {
+  color: #1d4ed8;
+  font-size: 0.72rem;
+  font-weight: 850;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.courtReservation strong {
+  overflow-wrap: anywhere;
+}
+
+.courtReservation small {
+  color: #475569;
+}
+
+.courtReservation button {
+  justify-self: start;
+}
+
+.matchup,
+.stage,
+.drawCard,
+.exceptionCard,
+.technicalDetails code {
+  overflow-wrap: anywhere;
+}
+
+.matchup {
+  font-weight: 800;
+}
+
+.stage {
+  color: #475569;
+  font-size: 0.88rem;
+}
+
+.availableText,
+.ready {
+  color: #166534;
+  font-weight: 750;
+}
+
+.scoreEditor {
+  margin-top: 1rem;
+  border: 2px solid #2563eb;
+  background: #f8fbff;
+}
+
+.scoreDialogDescription {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.scoreDialogDescription p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.scoreGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: end;
+  gap: 0.7rem;
+  margin: 0.85rem 0;
+}
+
+.seriesScoreEntry {
+  display: grid;
+  gap: 0.65rem;
+  min-width: 0;
+  margin: 0.85rem 0;
+  border: 1px solid #93c5fd;
+  border-radius: 12px;
+  padding: 0.85rem;
+  background: #f8fbff;
+}
+
+.seriesScoreEntry legend {
+  padding: 0 0.35rem;
+  font-weight: 850;
+}
+
+.seriesScoreEntry > p {
+  margin: 0;
+}
+
+.seriesGameRow {
+  min-width: 0;
+  border-top: 1px solid #dbeafe;
+  padding-top: 0.65rem;
+}
+
+.seriesGameRow h4 {
+  margin: 0;
+}
+
+.seriesGameRow .scoreGrid {
+  margin: 0.45rem 0 0;
+}
+
+.seriesDecision {
+  color: #1d4ed8;
+  font-weight: 750;
+}
+
+.outcomeGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem;
+  margin: 0.85rem 0;
+}
+
+.scoreGrid > span {
+  padding-bottom: 0.7rem;
+  font-size: 1.3rem;
+  font-weight: 850;
+}
+
+.scoreConfirmation {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-top: 0.8rem;
+  border: 1px solid #93c5fd;
+  border-radius: 12px;
+  padding: 0.8rem;
+  background: #eff6ff;
+}
+
+.scoreConfirmation > div:not(.buttonRow) {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.7rem;
+}
+
+.scoreConfirmation > p,
+.scoreConfirmation > .buttonRow,
+.scoreConfirmation > label {
+  grid-column: 1 / -1;
+}
+
+.scoreConfirmation > div > span {
+  font-size: 1.5rem;
+  font-weight: 900;
+}
+
+.lowerGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr);
+  gap: 1rem;
+  min-width: 0;
+}
+
+.queueList {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0.8rem 0 0;
+  padding-left: 2.2rem;
+}
+
+.queueList li {
+  position: relative;
+  min-width: 0;
+  border: 1px solid #dbe3ef;
+  border-radius: 11px;
+  padding: 0.7rem;
+  background: #f8fafc;
+}
+
+.queueList li > div,
+.queueList p,
+.queueList small {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.positionBadge {
+  position: absolute;
+  top: 0.55rem;
+  right: 0.55rem;
+  color: #1d4ed8;
+  font-weight: 850;
+}
+
+.exceptionCard {
+  margin-top: 0.65rem;
+  border-color: #fbbf24;
+  background: #fffbeb;
+}
+
+.drawGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 285px), 1fr));
+  gap: 0.8rem;
+  margin-top: 0.85rem;
+}
+
+.correctionGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  gap: 0.8rem;
+  margin-top: 0.85rem;
+}
+
+.correctionCard {
+  display: grid;
+  align-content: start;
+  gap: 0.65rem;
+}
+
+.correctionCard p,
+.correctionComparison h4,
+.correctionComparison p {
+  margin: 0;
+}
+
+.correctionComparison {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+  margin: 0.85rem 0;
+}
+
+.correctionComparison > section {
+  min-width: 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  padding: 0.8rem;
+  background: #fff;
+}
+
+.operationHistory {
+  min-width: 0;
+  margin-top: 1rem;
+  border-top: 1px solid #dbe3ef;
+  padding-top: 0.85rem;
+}
+
+.operationHistory h3 {
+  margin-top: 0;
+}
+
+.largeScore {
+  margin: 0.45rem 0 !important;
+  font-size: 1.7rem;
+  font-weight: 900;
+}
+
+.drawCard {
+  display: grid;
+  align-content: start;
+  gap: 0.65rem;
+}
+
+.playoffReadyDraw {
+  border: 2px solid #f59e0b;
+  background: linear-gradient(145deg, #fff 0%, #fffbeb 100%);
+  box-shadow: 0 6px 18px rgb(146 64 14 / 12%);
+}
+
+.progressionHeading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.progressionHeading h4 {
+  margin: 0;
+}
+
+.drawCard hr {
+  width: 100%;
+  margin: 0.2rem 0;
+  border: 0;
+  border-top: 1px solid #dbe3ef;
+}
+
+.playoffReviewWorkspace {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.playoffReviewSection {
+  min-width: 0;
+  border: 1px solid #dbe3ef;
+  border-radius: 14px;
+  padding: 0.9rem;
+  background: #f8fafc;
+}
+
+.playoffReviewSection h3,
+.playoffReviewSection h4,
+.playoffReviewSection p {
+  margin-top: 0;
+}
+
+.playoffReviewHeading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.7rem;
+  margin-bottom: 0.55rem;
+}
+
+.playoffReviewHeading h3 {
+  margin-bottom: 0;
+}
+
+.tiebreakAudit {
+  margin: 0 0 0.75rem;
+  border: 1px solid #93c5fd;
+  border-radius: 12px;
+  padding: 0.7rem;
+  background: #eff6ff;
+  color: #172554;
+}
+
+.tiebreakAuditHeading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.65rem;
+}
+
+.tiebreakAuditHeading h4,
+.tiebreakAuditHeading p,
+.tiebreakAuditItem h5,
+.tiebreakAuditItem p {
+  margin: 0;
+}
+
+.tiebreakAuditHeading h4 {
+  font-size: 0.96rem;
+}
+
+.tiebreakAuditHeading p {
+  margin-top: 0.12rem;
+  color: #1e3a8a;
+  font-size: 0.82rem;
+}
+
+.tiebreakAuditList {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0.6rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tiebreakAuditItem {
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  padding: 0.6rem 0.65rem;
+  background: #fff;
+}
+
+.tiebreakAuditItem h5 {
+  color: #0f172a;
+  font-size: 0.9rem;
+}
+
+.tiebreakAuditItem > p {
+  margin-top: 0.16rem;
+  color: #334155;
+  font-size: 0.84rem;
+}
+
+.tiebreakSteps {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0.5rem 0 0;
+  padding-left: 1.25rem;
+  color: #334155;
+  font-size: 0.8rem;
+}
+
+.tiebreakSteps li {
+  padding-left: 0.1rem;
+}
+
+.tiebreakStepHeading {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-right: 0.35rem;
+}
+
+.tiebreakOutcome {
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  padding: 0.05rem 0.35rem;
+  background: #dbeafe;
+  color: #1e40af;
+  font-size: 0.67rem;
+  font-weight: 850;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.standingsTableWrap {
+  min-width: 0;
+  overflow-x: auto;
+  border: 1px solid #cbd5e1;
+  border-radius: 11px;
+  background: #fff;
+}
+
+.standingsTable {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+  color: #0f172a;
+  font-size: 0.88rem;
+}
+
+.standingsTable caption {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.standingsTable th,
+.standingsTable td {
+  border-bottom: 1px solid #e2e8f0;
+  padding: 0.55rem 0.65rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.standingsTable thead th {
+  background: #f1f5f9;
+  color: #475569;
+  font-size: 0.74rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.standingsTable tbody tr:last-child > * {
+  border-bottom: 0;
+}
+
+.standingsTable tbody th span,
+.standingsTable tbody th small {
+  display: block;
+}
+
+.standingsTable tbody th small {
+  margin-top: 0.15rem;
+  color: #64748b;
+  font-weight: 500;
+}
+
+.standingsTable .qualifierRow > * {
+  background: #ecfdf5;
+}
+
+.standingsTable .qualifierLine > * {
+  border-bottom: 3px solid #16a34a;
+}
+
+.standingsTable .retiredStanding > * {
+  background: #f8fafc;
+  color: #64748b;
+  text-decoration-color: #94a3b8;
+}
+
+.playoffSeedGrid,
+.roundScoringGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr));
+  gap: 0.65rem;
+  margin-top: 0.8rem;
+}
+
+.playoffSeedActions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.6rem;
+}
+
+.roundScoringFieldset {
+  min-width: 0;
+  margin: 0.9rem 0 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  padding: 0.75rem;
+  background: #fff;
+}
+
+.roundScoringFieldset legend {
+  padding: 0 0.3rem;
+  color: #0f172a;
+  font-weight: 850;
+}
+
+.roundScoringGrid {
+  margin-top: 0;
+}
+
+.playoffWarning,
+.playoffError {
+  margin: 0.75rem 0 0 !important;
+  border-left: 4px solid #f59e0b;
+  padding: 0.55rem 0.65rem;
+  background: #fffbeb;
+  color: #78350f;
+}
+
+.playoffError {
+  border-left-color: #dc2626;
+  background: #fef2f2;
+  color: #991b1b;
+  font-weight: 750;
+}
+
+.bracketPreview {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.bracketRound {
+  min-width: 0;
+  border-left: 4px solid #2563eb;
+  border-radius: 10px;
+  padding: 0.7rem;
+  background: #eff6ff;
+}
+
+.bracketRound h4,
+.bracketRound > p {
+  margin: 0;
+}
+
+.bracketRound > p {
+  color: #475569;
+  font-size: 0.82rem;
+}
+
+.bracketRound ol {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0.6rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.bracketRound li {
+  display: grid;
+  grid-template-columns: minmax(100px, 0.35fr) minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+  border: 1px solid #bfdbfe;
+  border-radius: 9px;
+  padding: 0.55rem;
+  background: #fff;
+}
+
+.bracketRound li span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.bracketVersus {
+  color: #64748b;
+  font-size: 0.76rem;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.blockers {
+  margin: 0.45rem 0;
+  padding-left: 1.2rem;
+  color: #92400e;
+  font-size: 0.9rem;
+}
+
+.successBadge,
+.activeBadge,
+.neutralBadge,
+.warningBadge,
+.positionBadge {
+  white-space: nowrap;
+}
+
+.successBadge,
+.activeBadge,
+.neutralBadge,
+.warningBadge {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #86efac;
+  border-radius: 999px;
+  padding: 0.18rem 0.48rem;
+  background: #dcfce7;
+  color: #166534;
+  font-size: 0.76rem;
+  font-weight: 850;
+}
+
+.activeBadge {
+  border-color: #93c5fd;
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.neutralBadge {
+  border-color: #cbd5e1;
+  background: #f1f5f9;
+  color: #475569;
+}
+
+.warningBadge {
+  border-color: #fbbf24;
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.recoveryCard {
+  border-color: #f59e0b;
+  background: #fffbeb;
+}
+
+.recoveryRow {
+  margin-top: 0.65rem;
+  border-top: 1px solid #fde68a;
+  padding-top: 0.65rem;
+}
+
+.notice {
+  margin: 0;
+  border: 1px solid #bfdbfe;
+  border-radius: 11px;
+  padding: 0.7rem;
+  background: #eff6ff;
+  color: #1e3a8a;
+  font-weight: 700;
+}
+
+.statusToast {
+  position: fixed;
+  right: clamp(0.75rem, 2vw, 1.5rem);
+  bottom: clamp(0.75rem, 2vw, 1.5rem);
+  z-index: 1000;
+  width: min(420px, calc(100vw - 1.5rem));
+  box-sizing: border-box;
+  box-shadow: 0 14px 36px rgb(15 23 42 / 22%);
+}
+
+.error,
+.errorText {
+  color: #b91c1c;
+}
+
+.error {
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+.forfeitBoundary {
+  border-left: 4px solid #f59e0b;
+  padding-left: 0.65rem;
+}
+
+.textLink {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: #1d4ed8;
+  font-weight: 800;
+}
+
+.disabledLink {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: #64748b;
+  font-weight: 800;
+  opacity: 0.65;
+}
+
+.technicalDetails summary {
+  cursor: pointer;
+  font-weight: 800;
+}
+
+@media (max-width: 1320px) {
+  .courtBoard {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .summaryGrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1050px) {
+  .scopeBar,
+  .lowerGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .dayCloseoutSteps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .courtBoard {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .dayCloseoutHeading {
+    display: grid;
+  }
+
+  .dayCloseoutSteps {
+    grid-template-columns: 1fr;
+  }
+
+  .courtBoard {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .summaryGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .scoreGrid,
+  .outcomeGrid,
+  .scoreConfirmation,
+  .correctionComparison {
+    grid-template-columns: 1fr;
+  }
+
+  .scoreGrid > span {
+    display: none;
+  }
+
+  .scoreConfirmation > p,
+  .scoreConfirmation > .buttonRow,
+  .scoreConfirmation > label {
+    grid-column: auto;
+  }
+
+  .playoffAlertRow,
+  .playoffReadyBannerCopy {
+    align-items: flex-start;
+  }
+
+  .playoffAlertRow {
+    display: grid;
+  }
+
+  .playoffReadyActions {
+    justify-content: flex-start;
+  }
+
+  .bracketRound li {
+    grid-template-columns: 1fr;
+  }
+
+  .bracketVersus {
+    padding-left: 0.35rem;
+  }
+}
+
+@media (max-width: 640px) {
+  .courtBoard,
+  .summaryGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .viewNav {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .resultModeSwitch {
+    width: 100%;
+  }
+
+  .tiebreakAuditHeading {
+    display: grid;
+  }
+
+  .viewNav button,
+  .buttonRow > button,
+  .scopeStatus > button,
+  .playoffReadyActions button,
+  .playoffAlertRow > button,
+  .dayCloseoutActions > button,
+  .dayCloseoutActions > a {
+    width: 100%;
+  }
+
+  .compactQueueCard {
+    grid-template-columns: 90px minmax(0, 1fr);
+  }
+
+  .compactQueueList li {
+    grid-template-columns: auto minmax(150px, 1fr);
+    flex-basis: min(440px, calc(100vw - 3.5rem));
+  }
+
+  .compactQueueActions {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+  }
+}

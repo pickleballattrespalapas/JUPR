@@ -12,6 +12,7 @@ type Props = {
   description: string;
   tournamentId: string;
   tournamentName?: string | null;
+  initialDrawId?: string | null;
 };
 
 export default async function TournamentOpsWorkflowPage({
@@ -20,7 +21,8 @@ export default async function TournamentOpsWorkflowPage({
   title,
   description,
   tournamentId,
-  tournamentName
+  tournamentName,
+  initialDrawId = null
 }: Props) {
   const clubId = "tres_palapas";
   const { data, error } = await getAdminTournamentStatus(clubId);
@@ -48,6 +50,7 @@ export default async function TournamentOpsWorkflowPage({
           status={data}
           workflow={workflow}
           initialTournamentId={tournamentId}
+          initialDrawId={initialDrawId}
         />
       ) : null}
     </section>

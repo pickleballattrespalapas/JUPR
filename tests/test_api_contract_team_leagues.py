@@ -168,6 +168,49 @@ def test_admin_team_league_mutation_denies_production_before_auth_or_service(
     assert called == {"client": False}
 
 
+def test_admin_create_team_route_is_wired_and_staging_only(monkeypatch) -> None:
+    app = FakeApp()
+    called = {"client": False}
+
+    def forbidden_client():
+        called["client"] = True
+        raise AssertionError("client should not load")
+
+    admin_routes.install_admin_team_league_routes(
+        app, get_supabase_client=forbidden_client
+    )
+    route = (
+        "POST",
+        "/admin/clubs/{club_id}/league-manager/team-leagues/"
+        "{league_name}/teams",
+    )
+    assert route in app.routes
+    payload = admin_routes.TeamLeagueCreateTeamRequest(
+        team_name="Forming Aces",
+        captain_player_id=1,
+        captain_contact_email="captain@example.com",
+        initial_primary_player_id=2,
+        expected_roster_version=0,
+        idempotency_key="create:team:production",
+        confirmation_text="CREATE TEAM",
+    )
+    monkeypatch.setenv("JUPR_ENV", "production")
+    monkeypatch.setenv("JUPR_ENABLE_TEAM_LEAGUES", "1")
+    monkeypatch.setenv(
+        "JUPR_ENABLE_STAGING_NEXT_ADMIN_LEAGUE_MANAGER_WRITES", "1"
+    )
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "league-manager")
+
+    try:
+        app.routes[route]("club", "Open", payload, "Bearer ignored")
+    except HTTPException as exc:
+        assert exc.status_code == 403
+        assert "staging-only" in str(exc.detail)
+    else:
+        raise AssertionError("production create-team mutation was not denied")
+    assert called == {"client": False}
+
+
 def test_public_team_league_read_is_disabled_before_club_or_client_in_production(
     monkeypatch,
 ) -> None:

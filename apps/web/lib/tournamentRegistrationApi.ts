@@ -18,6 +18,10 @@ export type PublicTournamentSettings = {
   refund_policy_markdown?: string | null;
   weather_policy_markdown?: string | null;
   sponsor_markdown?: string | null;
+  location_name?: string | null;
+  venue_address?: string | null;
+  venue_directions?: string | null;
+  timezone?: string | null;
 };
 
 export type PublicTournamentChoice = {
@@ -46,6 +50,7 @@ export type PublicRegistrationEvent = {
   age_label?: string | null;
   skill_mode?: string | null;
   age_mode?: string | null;
+  age_rules?: Record<string, unknown> | string | null;
   event_format?: string | null;
   scoring?: string | null;
   capacity_teams?: number | null;
@@ -54,6 +59,8 @@ export type PublicRegistrationEvent = {
   partner_board_enabled?: boolean | null;
   waitlist_enabled?: boolean | null;
   eligibility_mode?: string | null;
+  skill_min_rating?: number | null;
+  skill_max_rating?: number | null;
   combined_rating_cap?: number | null;
   rating_source_policy?: string | null;
   rating_review_timing?: string | null;
@@ -275,6 +282,7 @@ export type PublicRegistrationEditLinkRequestPayload = {
   registration_slug?: string | null;
   email: string;
   website?: string | null;
+  idempotency_key: string;
 };
 
 export type PublicRegistrationEditLinkRequestResponse = {
@@ -324,6 +332,10 @@ export type PublicRegistrationConfirmationResponse = {
     event_family_label: string;
     day_label: string;
     event_date?: string | null;
+    scheduled_days?: Array<{
+      label: string;
+      event_date?: string | null;
+    }> | null;
     skill_label?: string | null;
     age_label?: string | null;
     price_usd?: number | null;

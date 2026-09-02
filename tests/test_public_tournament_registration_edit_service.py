@@ -47,6 +47,7 @@ def _registered_supabase(monkeypatch):
         email="alex@example.com",
         secret="test-registration-edit-secret-32bytes",
     )
+    supabase.rpc_calls.clear()
     return supabase, storage, result["registration_id"], token
 
 
@@ -316,7 +317,12 @@ def test_registration_edit_rpc_failure_leaves_registration_unchanged(monkeypatch
     assert storage == before
 
 
-def test_imported_draw_blocks_get_and_post_without_mutation(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    "team_source", ["REGISTRATION", "REGISTRATION_COMBINED_RATING"]
+)
+def test_imported_draw_blocks_get_and_post_without_mutation(
+    monkeypatch, team_source: str
+) -> None:
     supabase, storage, _registration_id, token = _registered_supabase(monkeypatch)
     second_event = {
         **deepcopy(storage["tournament_event_options"][0]),
@@ -336,14 +342,23 @@ def test_imported_draw_blocks_get_and_post_without_mutation(monkeypatch) -> None
             "sort_order": 2,
         }
     )
+    storage["tournament_event_draws"].append(
+        {
+            "id": "draw-1",
+            "tournament_id": "t1",
+            "registration_day_id": "day1",
+            "event_option_id": "event2",
+        }
+    )
     storage["tournament_teams"].append(
         {
             "id": "team-imported",
             "tournament_id": "t1",
             "draw_id": "draw-1",
-            "registration_day_id": "day1",
-            "event_option_id": "event2",
-            "source": "REGISTRATION",
+            "registration_day_id": None,
+            "event_option_id": None,
+            "source": team_source,
+            "source_selection_id": "sel-second-event",
         }
     )
     before = deepcopy(storage)
@@ -392,6 +407,61 @@ def test_imported_draw_blocks_get_and_post_without_mutation(monkeypatch) -> None
     assert supabase.rpc_calls == []
 
 
+def test_registration_excluded_from_imported_draw_remains_editable(monkeypatch) -> None:
+    supabase, storage, registration_id, token = _registered_supabase(monkeypatch)
+    storage["tournament_event_draws"].append(
+        {
+            "id": "draw-1",
+            "tournament_id": "t1",
+            "registration_day_id": "day1",
+            "event_option_id": "event1",
+        }
+    )
+    storage["tournament_teams"].append(
+        {
+            "id": "other-imported-team",
+            "tournament_id": "t1",
+            "draw_id": "draw-1",
+            "registration_day_id": "stale-day",
+            "event_option_id": "stale-event",
+            "source": "REGISTRATION",
+            "player1_id": 9001,
+            "player2_id": 9002,
+        }
+    )
+
+    page = build_public_tournament_registration_edit_page(
+        supabase,
+        club_id="club-1",
+        edit_token=token,
+        registration_slug="tres-open",
+    )
+    result = submit_public_tournament_registration_edit(
+        supabase,
+        club_id="club-1",
+        edit_token=token,
+        payload={
+            **_edit_versions(storage),
+            "tournament_id": "t1",
+            "registration_slug": "tres-open",
+            "first_name": "Alexis",
+            "last_name": "Rivera",
+            "email": "alex@example.com",
+            "terms_accepted": True,
+            "selections": [
+                {
+                    "event_option_id": "event1",
+                    "partner_mode": "NEEDS_PARTNER",
+                }
+            ],
+        },
+    )
+
+    assert page["registration"]["id"] == registration_id
+    assert result["ok"] is True
+    assert storage["tournament_registrations"][0]["first_name"] == "Alexis"
+
+
 def test_registration_edit_rejects_wrong_club(monkeypatch) -> None:
     supabase, _storage, _registration_id, token = _registered_supabase(monkeypatch)
 
@@ -438,6 +508,31 @@ def test_registration_edit_link_request_sends_email_without_exposing_match(monke
     assert captured["edit_url"].startswith("https://next.example.com/clubs/tres-palapas/tournament-registration/edit?")
     assert "edit_token=" in captured["edit_url"]
     assert "edit_token" not in str(payload)
+
+
+def test_registration_edit_link_exact_retry_does_not_resend(monkeypatch) -> None:
+    supabase, _storage, _registration_id, _token = _registered_supabase(monkeypatch)
+    calls = {"send": 0}
+
+    def fake_send(**_kwargs):
+        calls["send"] += 1
+        return {"status": "dry_run"}
+
+    monkeypatch.setattr(edit_service, "send_tournament_registration_edit_email", fake_send)
+    kwargs = {
+        "club_id": "club-1",
+        "club_slug": "tres-palapas",
+        "registration_slug": "tres-open",
+        "email": "alex@example.com",
+        "idempotency_key": "edit-link-replay-1",
+    }
+
+    first = request_public_tournament_registration_edit_link(supabase, **kwargs)
+    replay = request_public_tournament_registration_edit_link(supabase, **kwargs)
+
+    assert first == replay
+    assert first["accepted"] is True
+    assert calls["send"] == 1
 
 
 def test_registration_edit_link_request_missing_email_does_not_enumerate(monkeypatch) -> None:
@@ -601,10 +696,16 @@ def test_registration_edit_rejects_slug_for_another_open_tournament(monkeypatch)
     supabase, storage, _registration_id, token = _registered_supabase(monkeypatch)
     storage["tournament_registration_settings"][0]["registration_status"] = "closed"
     storage["tournaments"].append(
-        {"id": "t2", "club_id": "club-1", "name": "Other Open", "status": "DRAFT", "created_at": "2026-01-02T00:00:00Z"}
+        {"id": "t2", "club_id": "club-1", "name": "Other Open", "status": "ACTIVE", "created_at": "2026-01-02T00:00:00Z"}
     )
     storage["tournament_registration_settings"].append(
-        {"id": "rs2", "tournament_id": "t2", "registration_slug": "other-open", "registration_status": "open"}
+        {
+            "id": "rs2",
+            "tournament_id": "t2",
+            "registration_slug": "other-open",
+            "registration_status": "open",
+            "builder_draft_json": {"published_at": "2026-08-01T00:00:00Z"},
+        }
     )
 
     with pytest.raises(ValueError, match="different tournament"):

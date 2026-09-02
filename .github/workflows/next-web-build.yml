@@ -54,18 +54,22 @@ jobs:
           assert.equal("NEXT_PUBLIC_SUPABASE_URL" in withoutPreviewAuth.env, false);
           assert.equal("NEXT_PUBLIC_SUPABASE_ANON_KEY" in withoutPreviewAuth.env, false);
           NODE
-      - name: Test Tournament Setup payload builder
+      - name: Test Tournament Setup state helpers
         run: |
           mkdir -p "$RUNNER_TEMP/tournament-setup-builder"
-          npx tsc app/admin/tournament-setup/tournamentSetupBuilder.ts \
+          npx tsc \
+            app/admin/tournament-setup/tournamentSetupBuilder.ts \
+            app/admin/tournaments/setup/tournamentSetupPublicationStatus.ts \
             --target ES2022 \
             --module CommonJS \
             --moduleResolution Node \
             --esModuleInterop \
             --skipLibCheck \
             --outDir "$RUNNER_TEMP/tournament-setup-builder"
-          JUPR_TOURNAMENT_SETUP_BUILDER_MODULE="$RUNNER_TEMP/tournament-setup-builder/tournamentSetupBuilder.js" \
+          JUPR_TOURNAMENT_SETUP_BUILDER_MODULE="$RUNNER_TEMP/tournament-setup-builder/app/admin/tournament-setup/tournamentSetupBuilder.js" \
             node app/admin/tournament-setup/tournamentSetupBuilder.test.mjs
+          JUPR_TOURNAMENT_SETUP_PUBLICATION_STATUS_MODULE="$RUNNER_TEMP/tournament-setup-builder/app/admin/tournaments/setup/tournamentSetupPublicationStatus.js" \
+            node app/admin/tournaments/setup/tournamentSetupPublicationStatus.test.mjs
       - name: Test admin-session storage isolation
         run: |
           mkdir -p "$RUNNER_TEMP/admin-auth-client"

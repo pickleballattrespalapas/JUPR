@@ -133,14 +133,29 @@ def _float(value: Any) -> float | None:
         return None
 
 
-def _player_ids(row: Mapping[str, Any]) -> tuple[list[int], list[int]] | None:
-    team_one = [_int(row.get("t1_p1")), _int(row.get("t1_p2"))]
-    team_two = [_int(row.get("t2_p1")), _int(row.get("t2_p2"))]
+def _match_format(value: Any) -> str:
+    return "singles" if str(value or "").strip().casefold() == "singles" else "doubles"
+
+
+def _player_ids(
+    row: Mapping[str, Any], *, match_format: str = "doubles"
+) -> tuple[list[int], list[int]] | None:
+    if _match_format(match_format) == "singles":
+        team_one = [_int(row.get("t1_p1"))]
+        team_two = [_int(row.get("t2_p1"))]
+    else:
+        team_one = [_int(row.get("t1_p1")), _int(row.get("t1_p2"))]
+        team_two = [_int(row.get("t2_p1")), _int(row.get("t2_p2"))]
     if any(player_id is None for player_id in team_one + team_two):
         return None
     one = [int(player_id) for player_id in team_one if player_id is not None]
     two = [int(player_id) for player_id in team_two if player_id is not None]
-    if len(set(one)) != 2 or len(set(two)) != 2 or set(one) & set(two):
+    expected_side = 1 if _match_format(match_format) == "singles" else 2
+    if (
+        len(set(one)) != expected_side
+        or len(set(two)) != expected_side
+        or set(one) & set(two)
+    ):
         return None
     return one, two
 
@@ -150,7 +165,9 @@ def canonical_league_matches(
     *,
     club_id: str,
     league_name: str,
+    match_format: str = "doubles",
 ) -> CanonicalLeagueMatches:
+    clean_match_format = _match_format(match_format)
     included: list[dict[str, Any]] = []
     excluded: defaultdict[str, int] = defaultdict(int)
     discovered = 0
@@ -173,7 +190,7 @@ def canonical_league_matches(
         if scores[0] == scores[1]:
             excluded["tied_score"] += 1
             continue
-        if _player_ids(row) is None:
+        if _player_ids(row, match_format=clean_match_format) is None:
             excluded["invalid_player_sides"] += 1
             continue
         normalized = dict(row)
@@ -200,7 +217,17 @@ def expected_elo_win_probability(
 
 def _pre_match_team_ratings(
     match: Mapping[str, Any],
+    *,
+    match_format: str = "doubles",
 ) -> tuple[float, float] | None:
+    if _match_format(match_format) == "singles":
+        values = [
+            _float(match.get("t1_p1_r")),
+            _float(match.get("t2_p1_r")),
+        ]
+        if any(value is None for value in values):
+            return None
+        return float(values[0]), float(values[1])
     values = [
         _float(match.get("t1_p1_r")),
         _float(match.get("t1_p2_r")),
@@ -230,12 +257,17 @@ def compute_league_player_analytics(
     league_name: str,
     players: Any = None,
     league_ratings: Any = None,
+    match_format: str = "doubles",
     expected_weeks: int | None = None,
     close_game_margin: int = 2,
     upset_threshold_jupr: float = 0.25,
 ) -> dict[str, Any]:
+    clean_match_format = _match_format(match_format)
     canonical = canonical_league_matches(
-        matches, club_id=str(club_id), league_name=str(league_name)
+        matches,
+        club_id=str(club_id),
+        league_name=str(league_name),
+        match_format=clean_match_format,
     )
     names: dict[int, str] = {}
     current_ratings: dict[int, float] = {}
@@ -285,13 +317,15 @@ def compute_league_player_analytics(
         }
     )
     for match in canonical.included:
-        sides = _player_ids(match)
+        sides = _player_ids(match, match_format=clean_match_format)
         if sides is None:
             continue
         team_one, team_two = sides
         score_one, score_two = int(match["score_t1"]), int(match["score_t2"])
         one_won = score_one > score_two
-        pre_ratings = _pre_match_team_ratings(match)
+        pre_ratings = _pre_match_team_ratings(
+            match, match_format=clean_match_format
+        )
         for team, opponents, won, points_for, points_against in (
             (team_one, team_two, one_won, score_one, score_two),
             (team_two, team_one, not one_won, score_two, score_one),
@@ -313,9 +347,12 @@ def compute_league_player_analytics(
                 if abs(points_for - points_against) <= int(close_game_margin):
                     current["close_games"] += 1
                     current["close_wins"] += int(won)
-                partner_id = next(candidate for candidate in team if candidate != player_id)
-                current["partners"][partner_id]["games"] += 1
-                current["partners"][partner_id]["wins"] += int(won)
+                if len(team) > 1:
+                    partner_id = next(
+                        candidate for candidate in team if candidate != player_id
+                    )
+                    current["partners"][partner_id]["games"] += 1
+                    current["partners"][partner_id]["wins"] += int(won)
                 if pre_ratings is not None:
                     team_rating, opponent_rating = (
                         pre_ratings if team is team_one else pre_ratings[::-1]
@@ -383,7 +420,11 @@ def compute_league_player_analytics(
                 "average_opponent_jupr": round(current["opponent_rating_total"] / current["opponent_rating_games"] / 400.0, 4) if current["opponent_rating_games"] else None,
                 "expected_wins": round(current["expected_wins"], 6) if expected_complete else None,
                 "wins_above_expected": round(current["wins"] - current["expected_wins"], 6) if expected_complete else None,
-                "expected_model": "canonical_elo_pre_match_team_average_v1" if expected_complete else None,
+                "expected_model": (
+                    "canonical_elo_pre_match_singles_v1"
+                    if clean_match_format == "singles"
+                    else "canonical_elo_pre_match_team_average_v1"
+                ) if expected_complete else None,
                 "best_partner_id": best_partner_id,
                 "best_partner_name": names.get(best_partner_id) if best_partner_id else None,
                 "best_partnership_games": int(best_partner["games"]),

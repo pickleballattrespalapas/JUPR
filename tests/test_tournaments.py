@@ -1,9 +1,11 @@
 import pytest
 
 from jupr_app.domain.tournaments import (
+    build_playoff_games,
     build_round_robin_games,
     compute_podium_from_rr,
     compute_round_robin_standings,
+    compute_round_robin_standings_with_tiebreaks,
     resolve_playoff_dependencies,
     validate_podium_placements,
 )
@@ -49,6 +51,239 @@ def test_round_robin_standings_head_to_head():
     assert seeds["t2"] == 2
 
 
+def test_round_robin_head_to_head_precedes_better_overall_differential():
+    teams = [
+        {"id": f"t{team_number}", "team_number": team_number}
+        for team_number in range(1, 5)
+    ]
+    games = [
+        {"team_a_id": "t1", "team_b_id": "t2", "score_a": 11, "score_b": 9},
+        {"team_a_id": "t1", "team_b_id": "t3", "score_a": 11, "score_b": 9},
+        {"team_a_id": "t4", "team_b_id": "t1", "score_a": 11, "score_b": 0},
+        {"team_a_id": "t2", "team_b_id": "t3", "score_a": 11, "score_b": 0},
+        {"team_a_id": "t2", "team_b_id": "t4", "score_a": 11, "score_b": 0},
+    ]
+
+    result = compute_round_robin_standings_with_tiebreaks(teams, games)
+
+    assert [row["team_id"] for row in result["standings"][:2]] == ["t1", "t2"]
+    assert result["standings"][0]["differential"] == -7
+    assert result["standings"][1]["differential"] == 20
+    assert result["tiebreaks"] == [
+        {
+            "wins": 2,
+            "team_ids": ["t1", "t2"],
+            "final_team_ids": ["t1", "t2"],
+            "steps": [
+                {
+                    "criterion": "HEAD_TO_HEAD",
+                    "outcome": "RESOLVED",
+                    "groups_before": [["t1", "t2"]],
+                    "groups_after": [["t1"], ["t2"]],
+                    "complete": True,
+                    "matchups": [
+                        {
+                            "team_a_id": "t1",
+                            "team_b_id": "t2",
+                            "score_a": 11,
+                            "score_b": 9,
+                            "winner_team_id": "t1",
+                            "loser_team_id": "t2",
+                        }
+                    ],
+                    "missing_pairs": [],
+                    "team_values": [
+                        {
+                            "team_id": "t1",
+                            "value": 1,
+                            "wins": 1,
+                            "losses": 0,
+                            "games": 1,
+                        },
+                        {
+                            "team_id": "t2",
+                            "value": 0,
+                            "wins": 0,
+                            "losses": 1,
+                            "games": 1,
+                        },
+                    ],
+                }
+            ],
+        }
+    ]
+
+
+def test_round_robin_three_way_head_to_head_cycle_falls_through_to_differential():
+    teams = [
+        {"id": f"t{team_number}", "team_number": team_number}
+        for team_number in range(1, 5)
+    ]
+    games = [
+        {"team_a_id": "t1", "team_b_id": "t2", "score_a": 11, "score_b": 9},
+        {"team_a_id": "t2", "team_b_id": "t3", "score_a": 11, "score_b": 7},
+        {"team_a_id": "t3", "team_b_id": "t1", "score_a": 11, "score_b": 5},
+        {"team_a_id": "t1", "team_b_id": "t4", "score_a": 11, "score_b": 0},
+        {"team_a_id": "t2", "team_b_id": "t4", "score_a": 11, "score_b": 5},
+        {"team_a_id": "t3", "team_b_id": "t4", "score_a": 11, "score_b": 7},
+    ]
+
+    result = compute_round_robin_standings_with_tiebreaks(teams, games)
+    audit = result["tiebreaks"][0]
+
+    assert [row["team_id"] for row in result["standings"][:3]] == [
+        "t2",
+        "t1",
+        "t3",
+    ]
+    assert audit["team_ids"] == ["t1", "t2", "t3"]
+    assert audit["final_team_ids"] == ["t2", "t1", "t3"]
+    assert [step["criterion"] for step in audit["steps"]] == [
+        "HEAD_TO_HEAD",
+        "POINT_DIFFERENTIAL",
+    ]
+    assert audit["steps"][0]["outcome"] == "UNRESOLVED"
+    assert {
+        row["team_id"]: (row["wins"], row["losses"])
+        for row in audit["steps"][0]["team_values"]
+    } == {"t1": (1, 1), "t2": (1, 1), "t3": (1, 1)}
+    assert audit["steps"][1]["outcome"] == "RESOLVED"
+
+
+def test_round_robin_incomplete_mini_table_does_not_split_on_partial_results():
+    teams = [
+        {"id": f"t{team_number}", "team_number": team_number}
+        for team_number in range(1, 5)
+    ]
+    games = [
+        {"team_a_id": "t1", "team_b_id": "t2", "score_a": 11, "score_b": 9},
+        {"team_a_id": "t2", "team_b_id": "t4", "score_a": 11, "score_b": 0},
+        {"team_a_id": "t3", "team_b_id": "t4", "score_a": 11, "score_b": 7},
+    ]
+
+    result = compute_round_robin_standings_with_tiebreaks(teams, games)
+    audit = result["tiebreaks"][0]
+
+    assert [row["team_id"] for row in result["standings"][:3]] == [
+        "t2",
+        "t3",
+        "t1",
+    ]
+    assert audit["team_ids"] == ["t1", "t2", "t3"]
+    assert audit["steps"][0]["criterion"] == "HEAD_TO_HEAD"
+    assert audit["steps"][0]["outcome"] == "UNRESOLVED"
+    assert audit["steps"][0]["complete"] is False
+    assert audit["steps"][0]["missing_pairs"] == [
+        ["t1", "t3"],
+        ["t2", "t3"],
+    ]
+    assert audit["steps"][1]["criterion"] == "POINT_DIFFERENTIAL"
+    assert audit["steps"][1]["outcome"] == "RESOLVED"
+
+
+def test_round_robin_multi_team_mini_table_can_resolve_tied_wins():
+    teams = [
+        {"id": f"t{team_number}", "team_number": team_number}
+        for team_number in range(1, 7)
+    ]
+
+    def game(winner: str, loser: str) -> dict[str, object]:
+        return {
+            "team_a_id": winner,
+            "team_b_id": loser,
+            "score_a": 11,
+            "score_b": 9,
+        }
+
+    games = [
+        game("t1", "t2"),
+        game("t1", "t3"),
+        game("t2", "t3"),
+        game("t1", "t4"),
+        game("t5", "t1"),
+        game("t6", "t1"),
+        game("t2", "t4"),
+        game("t2", "t5"),
+        game("t6", "t2"),
+        game("t3", "t4"),
+        game("t3", "t5"),
+        game("t3", "t6"),
+        game("t4", "t5"),
+        game("t4", "t6"),
+        game("t5", "t6"),
+    ]
+
+    result = compute_round_robin_standings_with_tiebreaks(teams, games)
+    audit = result["tiebreaks"][0]
+
+    assert [row["team_id"] for row in result["standings"][:3]] == [
+        "t1",
+        "t2",
+        "t3",
+    ]
+    assert audit["wins"] == 3
+    assert audit["steps"][0]["criterion"] == "HEAD_TO_HEAD"
+    assert audit["steps"][0]["outcome"] == "RESOLVED"
+    assert [row["value"] for row in audit["steps"][0]["team_values"]] == [
+        2,
+        1,
+        0,
+    ]
+    assert len(audit["steps"]) == 1
+
+
+def test_round_robin_tiebreak_uses_points_for_then_team_number_as_fallbacks():
+    teams = [
+        {"id": f"t{team_number}", "team_number": team_number}
+        for team_number in range(1, 4)
+    ]
+    points_for_result = compute_round_robin_standings_with_tiebreaks(
+        teams,
+        [
+            {"team_a_id": "t1", "team_b_id": "t2", "score_a": 11, "score_b": 9},
+            {"team_a_id": "t2", "team_b_id": "t3", "score_a": 11, "score_b": 7},
+            {"team_a_id": "t3", "team_b_id": "t1", "score_a": 11, "score_b": 5},
+        ],
+    )
+
+    assert [row["team_id"] for row in points_for_result["standings"]] == [
+        "t2",
+        "t3",
+        "t1",
+    ]
+    assert [
+        (step["criterion"], step["outcome"])
+        for step in points_for_result["tiebreaks"][0]["steps"]
+    ] == [
+        ("HEAD_TO_HEAD", "UNRESOLVED"),
+        ("POINT_DIFFERENTIAL", "PARTIALLY_RESOLVED"),
+        ("POINTS_FOR", "RESOLVED"),
+    ]
+
+    team_number_result = compute_round_robin_standings_with_tiebreaks(
+        teams,
+        [
+            {"team_a_id": "t1", "team_b_id": "t2", "score_a": 11, "score_b": 9},
+            {"team_a_id": "t2", "team_b_id": "t3", "score_a": 11, "score_b": 9},
+            {"team_a_id": "t3", "team_b_id": "t1", "score_a": 11, "score_b": 9},
+        ],
+    )
+
+    assert [row["team_id"] for row in team_number_result["standings"]] == [
+        "t1",
+        "t2",
+        "t3",
+    ]
+    assert [
+        step["criterion"] for step in team_number_result["tiebreaks"][0]["steps"]
+    ] == [
+        "HEAD_TO_HEAD",
+        "POINT_DIFFERENTIAL",
+        "POINTS_FOR",
+        "TEAM_NUMBER",
+    ]
+
+
 def test_round_robin_podium_from_standings():
     teams = [
         {"id": "t1", "team_number": 1},
@@ -64,6 +299,86 @@ def test_round_robin_podium_from_standings():
     podium = compute_podium_from_rr(teams, games)
 
     assert [row["team_id"] for row in podium] == ["t1", "t2", "t3"]
+
+
+def test_retired_team_cannot_advance_to_playoffs():
+    standings = [
+        {"team_id": "t1", "seed": 1, "competition_status": "ACTIVE"},
+        {"team_id": "t2", "seed": 2, "competition_status": "ACTIVE"},
+        {"team_id": "t3", "seed": 3, "competition_status": "ACTIVE"},
+        {
+            "team_id": "t4",
+            "seed": 4,
+            "competition_status": "RETIRED",
+            "retired": True,
+        },
+    ]
+
+    with pytest.raises(ValueError, match="requires 4 active teams"):
+        build_playoff_games(
+            tournament_id="tour1",
+            advance_count=4,
+            standings=standings,
+        )
+
+
+def test_playoff_builder_applies_reviewed_seeds_and_per_round_scoring():
+    standings = [
+        {
+            "team_id": f"t{seed}",
+            "seed": seed,
+            "competition_status": "ACTIVE",
+        }
+        for seed in range(1, 5)
+    ]
+
+    games = build_playoff_games(
+        tournament_id="tour1",
+        advance_count=4,
+        standings=standings,
+        seed_team_ids=["t4", "t1", "t3", "t2"],
+        round_scoring={
+            "SF": "GAME_TO_15",
+            "BRONZE": "GAME_TO_11",
+            "FINAL": "BEST_2_OF_3",
+        },
+    )
+
+    semifinal = next(row for row in games if row["playoff_game_code"] == "P1")
+    final = next(row for row in games if row["playoff_game_code"] == "P3")
+    bronze = next(row for row in games if row["playoff_game_code"] == "P4")
+    assert semifinal["team_a_id"] == "t4"
+    assert semifinal["team_b_id"] == "t2"
+    assert semifinal["scoring_format"] == "GAME_TO_15"
+    assert final["scoring_format"] == "BEST_2_OF_3"
+    assert bronze["scoring_format"] == "GAME_TO_11"
+
+
+def test_playoff_builder_rejects_duplicate_reviewed_seed_or_missing_round_scoring():
+    standings = [
+        {
+            "team_id": f"t{seed}",
+            "seed": seed,
+            "competition_status": "ACTIVE",
+        }
+        for seed in range(1, 5)
+    ]
+
+    with pytest.raises(ValueError, match="more than one playoff seed"):
+        build_playoff_games(
+            tournament_id="tour1",
+            advance_count=4,
+            standings=standings,
+            seed_team_ids=["t1", "t1", "t3", "t4"],
+        )
+
+    with pytest.raises(ValueError, match="cover each applicable bracket round"):
+        build_playoff_games(
+            tournament_id="tour1",
+            advance_count=4,
+            standings=standings,
+            round_scoring={"SF": "GAME_TO_11", "FINAL": "GAME_TO_11"},
+        )
 
 
 def test_validate_podium_rejects_duplicate_teams():

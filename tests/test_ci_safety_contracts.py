@@ -13,6 +13,7 @@ def test_api_contract_runs_new_deployment_and_admin_ux_regressions() -> None:
         "tests/test_authenticated_auto_load_contract.py",
         "tests/test_tournament_setup_request_safety_static.py",
         "tests/test_tournament_setup_selection_ux.py",
+        "tests/test_tournament_draw_child_trigger_postgres_compatibility.py",
         "tests/test_ci_safety_contracts.py",
         "tests/test_staging_evidence_automation.py",
         "tests/test_staging_evidence_automation_workflow.py",
@@ -29,14 +30,22 @@ def test_next_build_runs_builder_contract_on_its_node_20_runtime() -> None:
     builder_test = _read(
         "apps/web/app/admin/tournament-setup/tournamentSetupBuilder.test.mjs"
     )
+    publication_status_test = _read(
+        "apps/web/app/admin/tournaments/setup/tournamentSetupPublicationStatus.test.mjs"
+    )
     storage_test = _read("apps/web/lib/adminAuthClient.storage.test.mjs")
 
     assert "node-version: \"20\"" in workflow
-    assert "npx tsc app/admin/tournament-setup/tournamentSetupBuilder.ts" in workflow
+    assert "npx tsc" in workflow
+    assert "app/admin/tournament-setup/tournamentSetupBuilder.ts" in workflow
+    assert "app/admin/tournaments/setup/tournamentSetupPublicationStatus.ts" in workflow
     assert "JUPR_TOURNAMENT_SETUP_BUILDER_MODULE=" in workflow
     assert 'JUPR_TOURNAMENT_SETUP_BUILDER_MODULE="file://' not in workflow
     assert "node app/admin/tournament-setup/tournamentSetupBuilder.test.mjs" in workflow
     assert "JUPR_TOURNAMENT_SETUP_BUILDER_MODULE" in builder_test
+    assert "JUPR_TOURNAMENT_SETUP_PUBLICATION_STATUS_MODULE=" in workflow
+    assert "node app/admin/tournaments/setup/tournamentSetupPublicationStatus.test.mjs" in workflow
+    assert "JUPR_TOURNAMENT_SETUP_PUBLICATION_STATUS_MODULE" in publication_status_test
     assert "npx tsc lib/adminAuthClient.ts" in workflow
     assert "JUPR_ADMIN_AUTH_CLIENT_MODULE=" in workflow
     assert "node lib/adminAuthClient.storage.test.mjs" in workflow

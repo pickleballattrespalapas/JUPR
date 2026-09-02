@@ -294,3 +294,137 @@ test("focus revalidates authorization and hides a revoked cockpit", async ({
     )
     .toBeNull();
 });
+
+test("commerce evidence OK restores an explicit visible ring to the exact Inspect trigger", async ({
+  page
+}) => {
+  const inspectedOperationIds: string[] = [];
+  const commerceRoot =
+    "/admin/clubs/tres_palapas/tournaments/commerce";
+
+  await page.route("**/admin/auth/capabilities?**", async (route) => {
+    await route.fulfill({ json: capabilities });
+  });
+  await page.route(
+    "**/admin/clubs/tres_palapas/tournaments/commerce/**",
+    async (route) => {
+      const pathname = new URL(route.request().url()).pathname;
+      if (pathname === `${commerceRoot}/status`) {
+        await route.fulfill({
+          json: {
+            ok: true,
+            runtime: { environment: "staging", admin_write_ready: false }
+          }
+        });
+        return;
+      }
+      if (
+        pathname ===
+        `${commerceRoot}/tournaments/focus-test/operations/op-2`
+      ) {
+        inspectedOperationIds.push("op-2");
+        await route.fulfill({
+          json: {
+            recovery_state: "complete",
+            authoritative_mutation_complete: true,
+            safe_retry: true,
+            retry_mode: "same_idempotency_key"
+          }
+        });
+        return;
+      }
+      if (pathname === `${commerceRoot}/tournaments/focus-test`) {
+        await route.fulfill({
+          json: {
+            ok: true,
+            tournament: { id: "focus-test", name: "Focus test" },
+            catalog: {
+              currency: "USD",
+              catalog_revision: 1,
+              catalog_fingerprint: "focus-test-catalog",
+              items: [],
+              variants: [],
+              bundles: [],
+              bundle_components: [],
+              promotions: [],
+              event_options: []
+            },
+            orders: [],
+            fulfillment: [],
+            operations: [
+              {
+                id: "op-1",
+                action: "PAYMENT_UPDATE",
+                status: "COMPLETED",
+                created_at: "2026-08-15T03:00:00+00:00"
+              },
+              {
+                id: "op-2",
+                action: "ORDER_CANCEL",
+                status: "COMPLETED",
+                created_at: "2026-08-15T03:01:00+00:00"
+              }
+            ],
+            audit: [],
+            offline_payment_only: true
+          }
+        });
+        return;
+      }
+      await route.abort("blockedbyclient");
+    }
+  );
+  await page.addInitScript((session) => {
+    window.localStorage.setItem(
+      "jupr_admin_session_v1",
+      JSON.stringify(session)
+    );
+  }, storedSession);
+
+  await page.goto(
+    "/admin/tournaments/commerce?tournament=focus-test&name=Focus%20test",
+    { waitUntil: "domcontentloaded" }
+  );
+  await page
+    .getByRole("button", { name: "Recovery & audit", exact: true })
+    .click();
+
+  const inspectButtons = page.getByRole("button", {
+    name: "Inspect",
+    exact: true
+  });
+  await expect(inspectButtons).toHaveCount(2);
+  const firstInspect = inspectButtons.nth(0);
+  const secondInspect = inspectButtons.nth(1);
+  await secondInspect.click();
+
+  const dialog = page.getByRole("dialog", {
+    name: "Authoritative evidence"
+  });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText("complete");
+  expect(inspectedOperationIds).toEqual(["op-2"]);
+  await dialog.getByRole("button", { name: "OK", exact: true }).click();
+
+  await expect(dialog).toHaveCount(0);
+  await expect(secondInspect).toBeFocused();
+  await expect(firstInspect).not.toBeFocused();
+  await expect
+    .poll(() =>
+      secondInspect.evaluate((element) => {
+        const style = getComputedStyle(element);
+        return {
+          outlineStyle: style.outlineStyle,
+          outlineWidth: style.outlineWidth,
+          outlineColor: style.outlineColor,
+          outlineOffset: style.outlineOffset
+        };
+      })
+    )
+    .toEqual({
+      outlineStyle: "solid",
+      outlineWidth: "3px",
+      outlineColor: "rgb(96, 165, 250)",
+      outlineOffset: "2px"
+    });
+});

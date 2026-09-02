@@ -1,9 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import { ConfirmAction } from "@/components/ConfirmAction";
+import {
+  actionSuccess,
+  actionUncertain,
+  InteractionDialog,
+  type ActionCompletion
+} from "@/components/interaction";
 import {
   adminTournamentCommerceExportUrl,
   AdminTournamentCommerceDetail,
@@ -203,6 +209,25 @@ export default function TournamentCommercePanel({
   >({});
   const [operationEvidence, setOperationEvidence] =
     useState<Record<string, unknown> | null>(null);
+  const [operationEvidenceOpen, setOperationEvidenceOpen] = useState(false);
+  const [operationEvidenceLoading, setOperationEvidenceLoading] = useState(false);
+  const [operationEvidenceError, setOperationEvidenceError] = useState<string | null>(null);
+  const [operationEvidenceId, setOperationEvidenceId] = useState("");
+  const operationEvidenceReturnFocusRef = useRef<HTMLElement | null>(null);
+  const operationKeysRef = useRef(new Map<string, { fingerprint: string; key: string }>());
+
+  function stableOperationKey(scope: string, request: Record<string, unknown>): string {
+    const fingerprint = JSON.stringify(request);
+    const pending = operationKeysRef.current.get(scope);
+    if (pending?.fingerprint === fingerprint) return pending.key;
+    const key = crypto.randomUUID();
+    operationKeysRef.current.set(scope, { fingerprint, key });
+    return key;
+  }
+
+  function clearOperationKey(scope: string, key: string) {
+    if (operationKeysRef.current.get(scope)?.key === key) operationKeysRef.current.delete(scope);
+  }
 
   const runtime = recordValue(status || {}, "runtime");
   const environment = stringValue(runtime, "environment", "local");
@@ -293,6 +318,10 @@ export default function TournamentCommercePanel({
     setDraft(null);
     setCatalogReviewed(false);
     setOperationEvidence(null);
+    setOperationEvidenceOpen(false);
+    setOperationEvidenceLoading(false);
+    setOperationEvidenceError(null);
+    setOperationEvidenceId("");
     if (!tournamentId || !accessToken) return;
     setBusy(true);
     setMessage(null);
@@ -419,6 +448,33 @@ export default function TournamentCommercePanel({
     });
   }
 
+  function addVariantPreset(itemId: string, names: string[]) {
+    const item = draft?.items.find((row) => row.id === itemId);
+    updateDraft((next) => {
+      const existing = new Set(
+        next.variants
+          .filter((variant) => variant.item_id === itemId)
+          .map((variant) => variant.name.trim().toLowerCase())
+      );
+      let sortOrder = next.variants.filter((row) => row.item_id === itemId).length;
+      for (const name of names) {
+        if (existing.has(name.toLowerCase())) continue;
+        next.variants.push({
+          id: crypto.randomUUID(),
+          item_id: itemId,
+          name,
+          sku: "",
+          status: "ACTIVE",
+          price_delta_minor: 0,
+          price_minor: item?.base_price_minor || 0,
+          inventory_limit: null,
+          sort_order: sortOrder
+        });
+        sortOrder += 1;
+      }
+    });
+  }
+
   function removeVariant(variantId: string) {
     updateDraft((next) => {
       next.variants = next.variants.filter(
@@ -500,6 +556,67 @@ export default function TournamentCommercePanel({
     });
   }
 
+  function setBundleEventChoice(
+    bundleId: string,
+    eventOptionId: string,
+    enabled: boolean
+  ) {
+    updateDraft((next) => {
+      const current = next.bundle_components.filter(
+        (row) =>
+          row.bundle_id === bundleId && row.component_type === "EVENT_CHOICE"
+      );
+      const requiredCount = Math.max(1, Number(current[0]?.quantity || 1));
+      next.bundle_components = next.bundle_components.filter(
+        (row) =>
+          !(
+            row.bundle_id === bundleId &&
+            row.component_type === "EVENT_CHOICE" &&
+            row.event_option_id === eventOptionId
+          )
+      );
+      if (enabled) {
+        next.bundle_components.push({
+          id: crypto.randomUUID(),
+          bundle_id: bundleId,
+          component_type: "EVENT_CHOICE",
+          event_option_id: eventOptionId,
+          item_id: null,
+          variant_id: null,
+          quantity: requiredCount
+        });
+      }
+      const eligibleCount = next.bundle_components.filter(
+        (row) =>
+          row.bundle_id === bundleId && row.component_type === "EVENT_CHOICE"
+      ).length;
+      const clamped = Math.max(1, Math.min(requiredCount, eligibleCount || 1));
+      for (const row of next.bundle_components) {
+        if (
+          row.bundle_id === bundleId &&
+          row.component_type === "EVENT_CHOICE"
+        ) {
+          row.quantity = clamped;
+        }
+      }
+      const bundle = next.bundles.find((row) => row.id === bundleId);
+      if (bundle && eligibleCount) bundle.max_per_registration = 1;
+    });
+  }
+
+  function setBundleEventChoiceCount(bundleId: string, value: number) {
+    updateDraft((next) => {
+      const eligible = next.bundle_components.filter(
+        (row) =>
+          row.bundle_id === bundleId && row.component_type === "EVENT_CHOICE"
+      );
+      const count = Math.max(1, Math.min(Math.floor(value || 1), eligible.length || 1));
+      for (const row of eligible) row.quantity = count;
+      const bundle = next.bundles.find((row) => row.id === bundleId);
+      if (bundle && eligible.length) bundle.max_per_registration = 1;
+    });
+  }
+
   function addPromotion() {
     const item = draft?.items[0];
     const variant = draft?.variants[0];
@@ -560,11 +677,24 @@ export default function TournamentCommercePanel({
       }
     }
     for (const bundle of draft.bundles) {
-      if (
-        bundle.status === "ACTIVE" &&
-        !(componentsByBundle.get(bundle.id) || []).length
-      ) {
+      const components = componentsByBundle.get(bundle.id) || [];
+      if (bundle.status === "ACTIVE" && !components.length) {
         return "An active bundle needs at least one event or extra.";
+      }
+      const choices = components.filter(
+        (component) => component.component_type === "EVENT_CHOICE"
+      );
+      if (choices.length) {
+        const requiredCount = Number(choices[0]?.quantity || 1);
+        if (choices.some((choice) => Number(choice.quantity || 1) !== requiredCount)) {
+          return `${bundle.name}: every flexible event must use the same required-event count.`;
+        }
+        if (requiredCount < 1 || requiredCount > choices.length) {
+          return `${bundle.name}: choose-any count must be between 1 and the number of eligible events.`;
+        }
+        if (bundle.max_per_registration !== 1) {
+          return `${bundle.name}: flexible event bundles are limited to one per registration.`;
+        }
       }
     }
     return null;
@@ -599,106 +729,128 @@ export default function TournamentCommercePanel({
     );
   }
 
-  async function saveCatalog(confirmationText: string) {
-    if (!draft || !detail || !selectedTournamentId) return;
+  async function saveCatalog(confirmationText: string): Promise<ActionCompletion> {
+    if (!draft || !detail || !selectedTournamentId) throw new Error("Load and review a tournament catalog before saving.");
     const path = `/admin/clubs/${encodeURIComponent(
       clubId
     )}/tournaments/commerce/tournaments/${encodeURIComponent(
       selectedTournamentId
     )}/catalog`;
+    const request = {
+      expected_catalog_fingerprint: detail.catalog.catalog_fingerprint || "",
+      catalog: draft,
+      confirmation_text: confirmationText,
+      source: "next_tournament_commerce_admin"
+    };
+    const operationScope = `catalog:${selectedTournamentId}`;
+    const idempotencyKey = stableOperationKey(operationScope, request);
     setBusy(true);
     setMessage(null);
     const response = await mutateAdminTournamentCommerce<Record<string, unknown>>(
       path,
       "PUT",
-      {
-        expected_catalog_fingerprint:
-          detail.catalog.catalog_fingerprint || "",
-        catalog: draft,
-        confirmation_text: confirmationText,
-        idempotency_key: crypto.randomUUID(),
-        source: "next_tournament_commerce_admin"
-      },
+      { ...request, idempotency_key: idempotencyKey },
       accessToken
     );
     setBusy(false);
     if (response.error) {
       setMessage(response.error);
-      return;
+      if (response.status == null || response.status >= 500) {
+        return actionUncertain("Catalog save needs verification", response.error, idempotencyKey, "Retry exact catalog save", () => saveCatalog(confirmationText));
+      }
+      throw new Error(response.error);
     }
+    clearOperationKey(operationScope, idempotencyKey);
     await loadDetail(selectedTournamentId);
     setMessage("Tournament extras catalog saved.");
+    return actionSuccess("Tournament catalog saved", "The reviewed extras, bundles, inventory, and promotions catalog was saved.");
   }
 
   async function updatePayment(
     registrationId: string,
-    orderUpdatedAt: string
-  ) {
+    orderUpdatedAt: string,
+    confirmationText: string
+  ): Promise<ActionCompletion> {
     const paymentStatus = paymentChoices[registrationId] || "UNPAID";
     const path = `/admin/clubs/${encodeURIComponent(
       clubId
     )}/tournaments/commerce/tournaments/${encodeURIComponent(
       selectedTournamentId
     )}/orders/${encodeURIComponent(registrationId)}/payment`;
+    const request = {
+      payment_status: paymentStatus,
+      expected_order_updated_at: orderUpdatedAt,
+      confirmation_text: confirmationText,
+      source: "next_tournament_commerce_admin"
+    };
+    const operationScope = `payment:${selectedTournamentId}:${registrationId}`;
+    const idempotencyKey = stableOperationKey(operationScope, request);
     setBusy(true);
     const response = await mutateAdminTournamentCommerce<Record<string, unknown>>(
       path,
       "PATCH",
-      {
-        payment_status: paymentStatus,
-        expected_order_updated_at: orderUpdatedAt,
-        idempotency_key: crypto.randomUUID(),
-        source: "next_tournament_commerce_admin"
-      },
+      { ...request, idempotency_key: idempotencyKey },
       accessToken
     );
     setBusy(false);
     if (response.error) {
       setMessage(response.error);
-      return;
+      if (response.status == null || response.status >= 500) {
+        return actionUncertain("Payment update needs verification", response.error, idempotencyKey, "Retry exact payment update", () => updatePayment(registrationId, orderUpdatedAt, confirmationText));
+      }
+      throw new Error(response.error);
     }
+    clearOperationKey(operationScope, idempotencyKey);
     await loadDetail(selectedTournamentId);
     setMessage(`Payment marked ${paymentStatus.toLowerCase()}.`);
+    return actionSuccess("Payment status saved", `The payment is now ${paymentStatus.toLowerCase()}.`);
   }
 
   async function cancelOrder(
     registrationId: string,
     orderUpdatedAt: string,
     confirmationText: string
-  ) {
+  ): Promise<ActionCompletion> {
     const reason = (cancelReasons[registrationId] || "").trim();
     if (!reason) {
       setMessage("Enter a cancellation reason first.");
-      return;
+      throw new Error("Enter a cancellation reason first.");
     }
     const path = `/admin/clubs/${encodeURIComponent(
       clubId
     )}/tournaments/commerce/tournaments/${encodeURIComponent(
       selectedTournamentId
     )}/orders/${encodeURIComponent(registrationId)}/cancel`;
+    const request = {
+      expected_order_updated_at: orderUpdatedAt,
+      reason,
+      confirmation_text: confirmationText,
+      source: "next_tournament_commerce_admin"
+    };
+    const operationScope = `cancel:${selectedTournamentId}:${registrationId}`;
+    const idempotencyKey = stableOperationKey(operationScope, request);
     setBusy(true);
     const response = await mutateAdminTournamentCommerce<Record<string, unknown>>(
       path,
       "POST",
-      {
-        expected_order_updated_at: orderUpdatedAt,
-        reason,
-        confirmation_text: confirmationText,
-        idempotency_key: crypto.randomUUID(),
-        source: "next_tournament_commerce_admin"
-      },
+      { ...request, idempotency_key: idempotencyKey },
       accessToken
     );
     setBusy(false);
     if (response.error) {
       setMessage(response.error);
-      return;
+      if (response.status == null || response.status >= 500) {
+        return actionUncertain("Order cancellation needs verification", response.error, idempotencyKey, "Retry exact cancellation", () => cancelOrder(registrationId, orderUpdatedAt, confirmationText));
+      }
+      throw new Error(response.error);
     }
+    clearOperationKey(operationScope, idempotencyKey);
     await loadDetail(selectedTournamentId);
     setMessage("Extras order cancelled and inventory released.");
+    return actionSuccess("Extras order cancelled", "The order was cancelled, active inventory was released, and its audit history was retained.");
   }
 
-  async function updateFulfillment(row: Record<string, unknown>) {
+  async function updateFulfillment(row: Record<string, unknown>, confirmationText: string): Promise<ActionCompletion> {
     const id = stringValue(row, "id");
     const currentStatus = stringValue(row, "status", "PENDING").toUpperCase();
     const nextStatus = (fulfillmentStatuses[id] || currentStatus).toUpperCase();
@@ -711,33 +863,41 @@ export default function TournamentCommercePanel({
       setMessage(
         "Add a correction note of at least 8 characters before changing a fulfilled item."
       );
-      return;
+      throw new Error("Add a correction note of at least 8 characters before changing a fulfilled item.");
     }
     const path = `/admin/clubs/${encodeURIComponent(
       clubId
     )}/tournaments/commerce/tournaments/${encodeURIComponent(
       selectedTournamentId
     )}/fulfillment/${encodeURIComponent(id)}`;
+    const request = {
+      status: nextStatus,
+      notes,
+      expected_updated_at: stringValue(row, "updated_at"),
+      confirmation_text: confirmationText,
+      source: "next_tournament_commerce_admin"
+    };
+    const operationScope = `fulfillment:${selectedTournamentId}:${id}`;
+    const idempotencyKey = stableOperationKey(operationScope, request);
     setBusy(true);
     const response = await mutateAdminTournamentCommerce<Record<string, unknown>>(
       path,
       "PATCH",
-      {
-        status: nextStatus,
-        notes,
-        expected_updated_at: stringValue(row, "updated_at"),
-        idempotency_key: crypto.randomUUID(),
-        source: "next_tournament_commerce_admin"
-      },
+      { ...request, idempotency_key: idempotencyKey },
       accessToken
     );
     setBusy(false);
     if (response.error) {
       setMessage(response.error);
-      return;
+      if (response.status == null || response.status >= 500) {
+        return actionUncertain("Fulfillment update needs verification", response.error, idempotencyKey, "Retry exact fulfillment update", () => updateFulfillment(row, confirmationText));
+      }
+      throw new Error(response.error);
     }
+    clearOperationKey(operationScope, idempotencyKey);
     await loadDetail(selectedTournamentId);
     setMessage("Fulfillment status saved.");
+    return actionSuccess("Fulfillment status saved", `The fulfillment item is now ${nextStatus.toLowerCase()}.`);
   }
 
   async function downloadFulfillment() {
@@ -775,6 +935,9 @@ export default function TournamentCommercePanel({
   }
 
   async function inspectOperation(operationId: string) {
+    setOperationEvidenceLoading(true);
+    setOperationEvidenceError(null);
+    setOperationEvidence(null);
     setBusy(true);
     const response = await getAdminTournamentCommerceOperation(
       clubId,
@@ -783,12 +946,27 @@ export default function TournamentCommercePanel({
       accessToken
     );
     setBusy(false);
+    setOperationEvidenceLoading(false);
     if (response.error || !response.data) {
-      setMessage(response.error || "Unable to inspect operation.");
+      setOperationEvidenceError(response.error || "Unable to inspect operation.");
       return;
     }
     setOperationEvidence(response.data);
-    setMessage("Loaded authoritative recovery evidence.");
+  }
+
+  function openOperationEvidence(operationId: string, trigger: HTMLElement) {
+    operationEvidenceReturnFocusRef.current = trigger;
+    setOperationEvidenceId(operationId);
+    setOperationEvidenceOpen(true);
+    void inspectOperation(operationId);
+  }
+
+  function closeOperationEvidence() {
+    if (operationEvidenceLoading) return;
+    setOperationEvidenceOpen(false);
+    setOperationEvidence(null);
+    setOperationEvidenceError(null);
+    setOperationEvidenceId("");
   }
 
   useAuthenticatedAutoLoad(`${accessToken}\u0000${tournamentId}`, loadWorkspace);
@@ -809,9 +987,80 @@ export default function TournamentCommercePanel({
 
   return (
     <section data-commerce-form aria-label={`${tournamentName} payments, extras, and fulfillment`} style={{ display: "grid", gap: "1rem" }}>
-      <style>{`[data-commerce-form] label { min-width: 0; } [data-commerce-form] input, [data-commerce-form] select, [data-commerce-form] textarea, [data-commerce-form] button { box-sizing: border-box; max-width: 100%; } [data-commerce-form] summary { cursor: pointer; }`}</style>
+      <style>{`[data-commerce-form] label { min-width: 0; } [data-commerce-form] input, [data-commerce-form] select, [data-commerce-form] textarea, [data-commerce-form] button { box-sizing: border-box; max-width: 100%; } [data-commerce-form] summary { cursor: pointer; } [data-commerce-form] [data-operation-evidence-trigger]:focus { outline: 3px solid #60a5fa; outline-offset: 2px; }`}</style>
 
-
+      <InteractionDialog
+        open={operationEvidenceOpen}
+        phase={operationEvidenceLoading ? "working" : operationEvidenceError ? "error" : "ready"}
+        title="Authoritative evidence"
+        description="Read-only recovery details for the selected commerce operation."
+        returnFocusRef={operationEvidenceReturnFocusRef}
+        onRequestClose={closeOperationEvidence}
+        actions={operationEvidenceError ? (
+          <>
+            <button type="button" onClick={closeOperationEvidence} style={ghostButtonStyle}>
+              Close
+            </button>
+            <button
+              type="button"
+              onClick={() => void inspectOperation(operationEvidenceId)}
+              style={buttonStyle}
+            >
+              Retry
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            onClick={closeOperationEvidence}
+            disabled={operationEvidenceLoading}
+            style={buttonStyle}
+          >
+            {operationEvidenceLoading ? "Loading…" : "OK"}
+          </button>
+        )}
+      >
+        <div tabIndex={-1} data-dialog-focus>
+          {operationEvidenceLoading ? (
+            <p role="status">Loading authoritative evidence…</p>
+          ) : operationEvidenceError ? (
+            <div role="alert" style={{ color: "#b91c1c" }}>
+              <strong>Evidence could not be loaded.</strong>
+              <p>{operationEvidenceError}</p>
+            </div>
+          ) : operationEvidence ? (
+            <dl
+              style={{
+                display: "grid",
+                gridTemplateColumns:
+                  "repeat(auto-fit, minmax(min(100%, 180px), 1fr))",
+                gap: "0.75rem"
+              }}
+            >
+              <div>
+                <dt>Recovery state</dt>
+                <dd>{stringValue(operationEvidence, "recovery_state", "—")}</dd>
+              </div>
+              <div>
+                <dt>Mutation complete</dt>
+                <dd>
+                  {Boolean(operationEvidence.authoritative_mutation_complete)
+                    ? "Yes"
+                    : "No"}
+                </dd>
+              </div>
+              <div>
+                <dt>Safe retry</dt>
+                <dd>{Boolean(operationEvidence.safe_retry) ? "Yes" : "No"}</dd>
+              </div>
+              <div>
+                <dt>Retry mode</dt>
+                <dd>{stringValue(operationEvidence, "retry_mode", "—")}</dd>
+              </div>
+            </dl>
+          ) : null}
+        </div>
+      </InteractionDialog>
       {detail && draft ? (
         <>
           <nav
@@ -1108,7 +1357,14 @@ export default function TournamentCommercePanel({
                       />
                     </label>
                   ) : null}
-                  <h4>Options</h4>
+                  <h4 style={{ marginBottom: "0.25rem" }}>Options (variants)</h4>
+                  <p style={{ color: "#64748b", margin: "0 0 0.65rem" }}>
+                    Use options when one extra has selectable variants, such as
+                    T-shirt sizes, lodging room types, meal choices, or package
+                    levels. Each option can have its own SKU, price change,
+                    inventory, and status. Leave this section empty when the
+                    extra has no choices.
+                  </p>
                   <div style={{ display: "grid", gap: "0.65rem" }}>
                     {(variantsByItem.get(item.id) || []).map((variant) => (
                       <div
@@ -1224,7 +1480,7 @@ export default function TournamentCommercePanel({
                       </div>
                     ))}
                   </div>
-                  <p>
+                  <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.75rem" }}>
                     <button
                       type="button"
                       onClick={() => addVariant(item.id)}
@@ -1232,7 +1488,29 @@ export default function TournamentCommercePanel({
                     >
                       Add option
                     </button>
-                  </p>
+                    <button
+                      type="button"
+                      onClick={() => addVariantPreset(item.id, ["XS", "S", "M", "L", "XL", "2XL"])}
+                      style={ghostButtonStyle}
+                    >
+                      Add T-shirt sizes
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => addVariantPreset(item.id, ["Chicken", "Vegetarian", "Vegan"])}
+                      style={ghostButtonStyle}
+                    >
+                      Add meal choices
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => addVariantPreset(item.id, ["Standard", "Poolside", "Premium"])}
+                      style={ghostButtonStyle}
+                    >
+                      Add room choices
+                    </button>
+                  </div>
+                  <small style={{ color: "#64748b" }}>Presets add only missing options and never overwrite existing rows.</small>
                 </div>
                 </details>
               ))}
@@ -1261,7 +1539,7 @@ export default function TournamentCommercePanel({
                   {draft.bundles.map((bundle) => (
                     <details key={bundle.id} open={!savedBundleIds.has(bundle.id)} style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem" }}>
                       <summary style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
-                        <span><strong>{bundle.name || "Untitled bundle"}</strong><br /><small>{formatCommerceMoney(bundle.price_minor)} · {bundle.status} · {(componentsByBundle.get(bundle.id) || []).length} required parts</small></span>
+                        <span><strong>{bundle.name || "Untitled bundle"}</strong><br /><small>{formatCommerceMoney(bundle.price_minor)} · {bundle.status} · {(componentsByBundle.get(bundle.id) || []).filter((component) => component.component_type !== "EVENT_CHOICE").length} fixed parts · {(componentsByBundle.get(bundle.id) || []).filter((component) => component.component_type === "EVENT_CHOICE").length} eligible registration divisions</small></span>
                         <span style={{ fontWeight: 800 }}>{savedBundleIds.has(bundle.id) ? "Edit" : "New bundle"}</span>
                       </summary>
                       <section style={{ marginTop: "1rem" }}>
@@ -1421,8 +1699,9 @@ export default function TournamentCommercePanel({
                       </label>
                       <h4>Required parts</h4>
                       <ul>
-                        {(componentsByBundle.get(bundle.id) || []).map(
-                          (component) => (
+                        {(componentsByBundle.get(bundle.id) || [])
+                          .filter((component) => component.component_type !== "EVENT_CHOICE")
+                          .map((component) => (
                             <li key={component.id}>
                               <label>
                                 Quantity{" "}
@@ -1471,8 +1750,82 @@ export default function TournamentCommercePanel({
                           )
                         )}
                       </ul>
-                      <label>
-                        Add an event or extra
+                      <section
+                        style={{
+                          marginTop: "1rem",
+                          padding: "0.85rem",
+                          border: "1px solid #bfdbfe",
+                          borderRadius: "12px",
+                          background: "#eff6ff"
+                        }}
+                      >
+                        <h4 style={{ margin: 0 }}>Flexible event choice</h4>
+                        <p style={{ color: "#475569", margin: "0.35rem 0 0.75rem" }}>
+                          Select the eligible registration divisions—the event/division entries a player can choose during registration—then choose how many of them are required. For example, “any 1 of these divisions” or “any 2 of these divisions.” Fixed extras can still be added below.
+                        </p>
+                        {(() => {
+                          const choiceComponents = (componentsByBundle.get(bundle.id) || []).filter(
+                            (component) => component.component_type === "EVENT_CHOICE"
+                          );
+                          const selectedIds = new Set(
+                            choiceComponents.map((component) => String(component.event_option_id || ""))
+                          );
+                          const requiredCount = Math.max(
+                            1,
+                            Math.min(
+                              Number(choiceComponents[0]?.quantity || 1),
+                              choiceComponents.length || 1
+                            )
+                          );
+                          return (
+                            <>
+                              <label style={{ display: "block", maxWidth: "18rem", marginBottom: "0.75rem" }}>
+                                Divisions required from eligible list
+                                <br />
+                                <input
+                                  type="number"
+                                  min="1"
+                                  max={Math.max(1, choiceComponents.length)}
+                                  value={requiredCount}
+                                  disabled={!choiceComponents.length}
+                                  onChange={(event) =>
+                                    setBundleEventChoiceCount(bundle.id, Number(event.target.value))
+                                  }
+                                  style={inputStyle}
+                                />
+                              </label>
+                              <div style={{ display: "grid", gap: "0.45rem" }}>
+                                {draft.event_options.map((event) => {
+                                  const eventId = stringValue(event, "id");
+                                  return (
+                                    <label key={`${bundle.id}-choice-${eventId}`} style={{ display: "flex", gap: "0.55rem", alignItems: "flex-start" }}>
+                                      <input
+                                        type="checkbox"
+                                        checked={selectedIds.has(eventId)}
+                                        onChange={(change) =>
+                                          setBundleEventChoice(bundle.id, eventId, change.target.checked)
+                                        }
+                                      />
+                                      <span>{eventLabels.get(eventId) || "Tournament event"}</span>
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                              {choiceComponents.length ? (
+                                <p style={{ color: "#1d4ed8", marginBottom: 0, fontWeight: 700 }}>
+                                  Bundle applies when the registration includes any {requiredCount} of {choiceComponents.length} eligible registration division{choiceComponents.length === 1 ? "" : "s"}.
+                                </p>
+                              ) : (
+                                <p style={{ color: "#64748b", marginBottom: 0 }}>
+                                  No flexible registration-division pool configured. The bundle may still use exact required parts below.
+                                </p>
+                              )}
+                            </>
+                          );
+                        })()}
+                      </section>
+                      <label style={{ display: "block", marginTop: "1rem" }}>
+                        Add an exact required event or extra
                         <br />
                         <select
                           key={`${bundle.id}-${draft.variants.length}-${draft.event_options.length}`}
@@ -1941,18 +2294,18 @@ export default function TournamentCommercePanel({
                               <option value="WAIVED">Waived</option>
                               <option value="REFUNDED">Refunded</option>
                             </select>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                void updatePayment(registrationId, updatedAt)
-                              }
+                            <ConfirmAction
+                              triggerLabel="Save payment"
+                              title="Save this payment status?"
+                              description="The payment status change is version-checked and added to the tournament commerce audit trail."
+                              confirmLabel="Yes, save payment status"
+                              confirmationText="SAVE PAYMENT STATUS"
                               disabled={
                                 busy || !adminWriteReady || statusValue === "CANCELLED"
                               }
-                              style={{ ...ghostButtonStyle, marginTop: "0.35rem" }}
-                            >
-                              Save payment
-                            </button>
+                              busy={busy}
+                              onConfirm={(confirmationText) => updatePayment(registrationId, updatedAt, confirmationText)}
+                            />
                           </td>
                           <td>
                             <input
@@ -2127,10 +2480,10 @@ export default function TournamentCommercePanel({
                               title="Save this fulfillment status?"
                               description="The status change is version-checked and added to the tournament commerce audit trail."
                               confirmLabel="Yes, save status"
-                              confirmationText="SAVE FULFILLMENT"
+                              confirmationText="SAVE FULFILLMENT STATUS"
                               disabled={busy || !adminWriteReady}
                               busy={busy}
-                              onConfirm={() => updateFulfillment(row)}
+                              onConfirm={(confirmationText) => updateFulfillment(row, confirmationText)}
                             />
                           </td>
                         </tr>
@@ -2195,8 +2548,13 @@ export default function TournamentCommercePanel({
                             <td>
                               <button
                                 type="button"
-                                onClick={() =>
-                                  void inspectOperation(operationId)
+                                aria-haspopup="dialog"
+                                data-operation-evidence-trigger
+                                onClick={(event) =>
+                                  openOperationEvidence(
+                                    operationId,
+                                    event.currentTarget
+                                  )
                                 }
                                 disabled={busy}
                                 style={ghostButtonStyle}
@@ -2214,49 +2572,6 @@ export default function TournamentCommercePanel({
                   <p>No commerce operations are recorded.</p>
                 ) : null}
               </article>
-
-              {operationEvidence ? (
-                <article style={cardStyle}>
-                  <h2 style={{ marginTop: 0 }}>Authoritative evidence</h2>
-                  <dl
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns:
-                        "repeat(auto-fit, minmax(min(100%, 180px), 1fr))",
-                      gap: "0.75rem"
-                    }}
-                  >
-                    <div>
-                      <dt>Recovery state</dt>
-                      <dd>
-                        {stringValue(operationEvidence, "recovery_state", "—")}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>Mutation complete</dt>
-                      <dd>
-                        {Boolean(
-                          operationEvidence.authoritative_mutation_complete
-                        )
-                          ? "Yes"
-                          : "No"}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>Safe retry</dt>
-                      <dd>
-                        {Boolean(operationEvidence.safe_retry) ? "Yes" : "No"}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>Retry mode</dt>
-                      <dd>
-                        {stringValue(operationEvidence, "retry_mode", "—")}
-                      </dd>
-                    </div>
-                  </dl>
-                </article>
-              ) : null}
 
               <article style={cardStyle}>
                 <h2 style={{ marginTop: 0 }}>Recent audit trail</h2>

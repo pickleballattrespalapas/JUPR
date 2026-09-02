@@ -107,6 +107,31 @@ def test_process_matches_inserts_rows_when_match_insert_succeeds():
     assert len(supabase.inserted_matches) == 1
 
 
+def test_legacy_synthetic_tournament_label_remains_unmanaged():
+    supabase = _FakeSupabase(matches_data=[{"id": "m1"}])
+
+    result = process_matches(
+        [
+            {
+                **_match_payload(),
+                "league": "Tournament Pool A",
+                "match_type": "Tournament",
+                "is_popup": False,
+                "rating_scope": "unrated",
+            }
+        ],
+        supabase=supabase,
+        club_id="club-1",
+        name_to_id={},
+        df_players_all=_players_df(),
+        df_leagues=pd.DataFrame(),
+        df_meta=pd.DataFrame([{"league_name": "Different Managed League"}]),
+    )
+
+    assert result["inserted"] == 1
+    assert len(supabase.inserted_matches) == 1
+
+
 def test_process_matches_winner_bonus_adds_to_winners_without_extra_loser_penalty():
     base_supabase = _FakeSupabase(matches_data=[{"id": "base"}])
     bonus_supabase = _FakeSupabase(matches_data=[{"id": "bonus"}])

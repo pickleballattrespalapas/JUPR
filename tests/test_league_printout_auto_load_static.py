@@ -39,7 +39,10 @@ def test_printout_week_changes_reload_without_a_second_league_selector() -> None
 
 def test_printout_page_requires_selected_league_context() -> None:
     assert "searchParams" in PAGE
-    assert 'first(searchParams?.league)' in PAGE
-    assert 'redirect("/admin/league-manager")' in PAGE
+    assert "readLeagueRouteContext(searchParams)" in PAGE
+    assert 'if (!context.leagueId) redirect("/admin/league-manager")' in PAGE
+    assert "const leagueName = context.leagueName || context.leagueId" in PAGE
     assert "LeagueManagerNav" in PAGE
+    assert "leagueId={context.leagueId}" in PAGE
+    assert "leagueName={leagueName}" in PAGE
     assert "initialLeague={leagueName}" in PAGE

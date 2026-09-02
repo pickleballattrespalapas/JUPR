@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess, type ActionCompletion } from "@/components/interaction";
 import type { AdminLeagueManagerListResponse, AdminLeagueManagerStatusResponse } from "@/lib/adminLeagueManagerApi";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
@@ -21,6 +22,7 @@ type AwardRow = {
   rank?: number;
   is_co_winner?: boolean;
   min_games?: number;
+  minimum_metric?: string;
 };
 type AwardCatalogRow = {
   key: string;
@@ -65,7 +67,6 @@ type TeamAnalyticsRow = {
   point_differential?: number;
   head_to_head_score?: number;
 };
-type AwardConfigDraft = { enabled: boolean; depth: "1" | "2" | "3"; minimum: string };
 type EligiblePlayer = { player_id: number; player_name: string };
 type WizardPreview = { awards?: AwardRow[]; fingerprint?: string; generated_at?: string; award_count?: number };
 type MintState = {
@@ -122,6 +123,8 @@ type AwardsResponse = {
   };
   expected_weeks?: number | null;
   awards_config_version?: number;
+  award_progress?: AwardRow[];
+  award_progress_count?: number;
 };
 type OverrideDraft = { playerId: number; reason: string };
 
@@ -138,6 +141,13 @@ function shortValue(value: unknown): string {
   if (value == null || value === "") return "—";
   if (typeof value === "object") return JSON.stringify(value).slice(0, 160);
   return String(value);
+}
+
+function humanizeAwardWarning(warning: string): string {
+  if (/JUPR_|service.?role|migration|FastAPI|Supabase/i.test(warning)) {
+    return "A server-side prerequisite is not ready, so award changes remain unavailable.";
+  }
+  return warning.replace(/_/g, " ");
 }
 
 function awardKey(award: AwardRow): string {
@@ -164,7 +174,6 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
   const [state, setState] = useState<AwardsResponse | null>(null);
   const [overrideDrafts, setOverrideDrafts] = useState<Record<string, OverrideDraft>>({});
   const [operationKeys, setOperationKeys] = useState<Record<string, string>>({});
-  const [configDrafts, setConfigDrafts] = useState<Record<string, AwardConfigDraft>>({});
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const listRequest = useLatestRequestGuard(accessToken, clearProtectedAwardsState);
@@ -200,19 +209,6 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
       drafts[key] = { playerId: Number(finalAward?.player_id ?? award.player_id), reason: notes[key] || "" };
     }
     setOverrideDrafts(drafts);
-    const leagueConfig = asRecord(payload.league?.awards_config);
-    const categories = asRecord(leagueConfig.categories);
-    const defaultMinimum = Number(leagueConfig.default_min_games ?? payload.league?.min_games ?? 0);
-    const nextConfig: Record<string, AwardConfigDraft> = {};
-    for (const category of payload.award_catalog || []) {
-      const configured = asRecord(categories[category.key]);
-      nextConfig[category.key] = {
-        enabled: typeof configured.enabled === "boolean" ? configured.enabled : Boolean(category.default_enabled),
-        depth: ["1", "2", "3"].includes(String(configured.depth || "")) ? String(configured.depth) as "1" | "2" | "3" : "1",
-        minimum: String(configured.minimum ?? configured.min_games ?? defaultMinimum)
-      };
-    }
-    setConfigDrafts(nextConfig);
   }
 
   function keyFor(action: string): string {
@@ -236,7 +232,6 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
     actionRequest.invalidate();
     setBusy(false); setMessage(null); setLeagues([]); setLeagueName(""); setState(null);
     setOverrideDrafts({}); setOperationKeys({});
-    setConfigDrafts({});
   }
 
   async function loadLeagues() {
@@ -298,10 +293,11 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
     else wizardRequest.invalidate();
   }
 
-  async function runAction(action: "freeze" | "preview" | "mint" | "archive", confirmationText = "") {
+  async function runAction(action: "freeze" | "preview" | "mint" | "archive", confirmationText = ""): Promise<ActionCompletion> {
     if (!leagueName) {
-      setMessage("Select a league first.");
-      return;
+      const error = new Error("Select a league first.");
+      setMessage(error.message);
+      throw error;
     }
     const generation = actionRequest.begin();
     setBusy(true);
@@ -316,63 +312,20 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
           source: `next_league_manager_awards_${action}`
         })
       });
-      if (!actionRequest.isCurrent(generation)) return;
-      hydrate(payload);
-      clearKey(action);
-      setMessage(
+      const successMessage =
         action === "mint"
           ? `Mint verified ${payload.badge_verified_count || 0} of ${payload.badge_expected_count || 0} expected badge row(s).`
-          : `${action[0].toUpperCase()}${action.slice(1)} saved at workflow revision ${payload.wizard.revision || 0}.`
-      );
+          : `${action[0].toUpperCase()}${action.slice(1)} saved at workflow revision ${payload.wizard.revision || 0}.`;
+      const title = action === "freeze" ? "League frozen" : action === "mint" ? "Awards minted and verified" : action === "archive" ? "League archived" : "Award preview saved";
+      const completion = actionSuccess(title, successMessage);
+      if (!actionRequest.isCurrent(generation)) return completion;
+      hydrate(payload);
+      clearKey(action);
+      setMessage(successMessage);
+      return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(`${error instanceof Error ? error.message : `Unable to ${action} awards.`} The same operation key is retained for a safe retry; use Recover saved state first.`);
-    } finally {
-      if (actionRequest.isCurrent(generation)) setBusy(false);
-    }
-  }
-
-  async function saveAwardConfig() {
-    if (!leagueName || !state) {
-      setMessage("Select and recover a league before saving award categories.");
-      return;
-    }
-    if (state.wizard.status !== "not_started") {
-      setMessage("Award categories are locked after the league is frozen.");
-      return;
-    }
-    const categories: Record<string, unknown> = {};
-    for (const category of state.award_catalog || []) {
-      const draft = configDrafts[category.key];
-      if (!draft) continue;
-      const minimum = Number(draft.minimum);
-      if (!Number.isInteger(minimum) || minimum < 0 || minimum > 1000) {
-        setMessage(`${category.label} minimum must be a whole number from 0 to 1000.`);
-        return;
-      }
-      categories[category.key] = {
-        enabled: draft.enabled,
-        depth: Number(draft.depth),
-        minimum
-      };
-    }
-    const generation = actionRequest.begin();
-    setBusy(true);
-    setMessage(null);
-    try {
-      const currentConfig = asRecord(state.league?.awards_config);
-      const payload = await requestJson<AwardsResponse>(leagueAwardsPath("/config"), {
-        method: "PUT",
-        body: JSON.stringify({
-          awards_config: { ...currentConfig, categories },
-          expected_config_version: Number(state.awards_config_version || 0),
-          source: "next_league_manager_awards_category_picker"
-        })
-      });
-      if (!actionRequest.isCurrent(generation)) return;
-      hydrate(payload);
-      setMessage(`Saved ${Object.values(configDrafts).filter((draft) => draft.enabled).length} award category choice(s).`);
-    } catch (error) {
-      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to save award categories.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
@@ -423,13 +376,36 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
   const displayAwards = finalAwards.length ? finalAwards : previewAwards;
   const writeReady = Boolean(state?.writes_enabled && state?.service_role_ready && status.awards_write_enabled !== false);
   const mintReady = Boolean(writeReady && state?.badge_definitions_ready === true);
-  const messageIsError = Boolean(message && /unable|error|disabled|required|stale|failed|not |could not|before/i.test(message));
+  const hasMeasurableResults = Boolean(
+    Number(state?.provenance?.included_count || 0) > 0
+    && ((state?.player_analytics?.length || 0) > 0 || (state?.team_analytics?.length || 0) > 0)
+  );
+  const leagueStatus = String(state?.league?.status || "").toLowerCase();
+  const canOfferFreeze = Boolean(
+    wizard
+    && workflowStatus === "not_started"
+    && hasMeasurableResults
+    && ["active", "paused", "ended"].includes(leagueStatus)
+  );
+  const configuredAwards = (() => {
+    const categories = asRecord(asRecord(state?.league?.awards_config).categories);
+    return (state?.award_catalog || []).flatMap((category) => {
+      const config = asRecord(categories[category.key]);
+      if (config.enabled !== true) return [];
+      return [{
+        ...category,
+        depth: Number(config.depth || 1),
+        minimum: Number(config.minimum ?? config.min_games ?? 0)
+      }];
+    });
+  })();
+  const messageIsError = Boolean(message && /unable|error|disabled|required|stale|failed|could not|before/i.test(message));
 
   if (!status.enabled) {
     return (
       <article style={{ ...cardStyle, background: "#f8fafc" }}>
-        <h2 style={{ marginTop: 0 }}>League Manager is disabled</h2>
-        <p style={{ color: "#475569" }}>Enable the guarded League Manager flag before using awards. Streamlit remains the fallback.</p>
+        <h2 style={{ marginTop: 0 }}>League awards are not available yet</h2>
+        <p style={{ color: "#475569" }}>Award review and publishing remain unavailable in this build.</p>
       </article>
     );
   }
@@ -445,7 +421,7 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
       </article>
 
       <article style={cardStyle}>
-        <h2 style={{ marginTop: 0 }}>1. Select and recover league</h2>
+        <h2 style={{ marginTop: 0 }}>Select and recover league</h2>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
           <label>League<br /><select value={leagueName} onChange={(event) => selectLeague(event.target.value)} disabled={busy || !accessToken} style={inputStyle}><option value="">Select a league</option>{leagues.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
           <button type="button" onClick={loadLeagues} disabled={busy || !accessToken} style={buttonStyle}>{busy ? "Refreshing…" : "Refresh leagues"}</button>
@@ -454,40 +430,24 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
         {!busy && !leagues.length ? <p style={{ color: "#64748b" }}>No leagues are available.</p> : null}
         {message ? <p role="status" style={{ color: messageIsError ? "#b91c1c" : "#166534" }}>{message}</p> : null}
         {wizard ? <p style={{ color: "#475569" }}>Saved step: <strong>{workflowStatus.replace(/_/g, " ")}</strong> · Revision <strong>{wizard.revision || 0}</strong> · League status <strong>{shortValue(state?.league?.status)}</strong></p> : null}
-        {state && !writeReady ? <p style={{ color: "#92400e" }}>Writes are closed. FastAPI must have <code>JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE=1</code> and a server-only service-role key. Use Streamlit fallback until the gate is ready.</p> : null}
+        {state && !writeReady ? <p style={{ color: "#92400e" }}>Awards editing is closed for this staging test. The saved workflow, current award leaders, and measurable results remain available to review.</p> : null}
         {state && state.badge_definitions_ready !== true ? (
-          <p role="alert" style={{ color: "#b91c1c" }}>
-            Badge minting is blocked: found {state.badge_definition_count || 0} of {state.badge_definition_required_count || 4} required definitions.
-            {state.missing_badge_ids?.length ? <> Missing <code>{state.missing_badge_ids.join(", ")}</code>.</> : null}
-            {state.badge_seed_migration ? <> Apply the reviewed deployment equivalent of <code>{state.badge_seed_migration}</code> before the staging write smoke.</> : null}
-          </p>
+          <p role="alert" style={{ color: "#92400e" }}>Badge publishing is unavailable until all required award definitions are ready.</p>
         ) : null}
       </article>
 
       {state && wizard ? (
         <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>2. Choose award categories</h2>
-          <p style={{ color: "#475569" }}>
-            Choose any measurable player or team result, the number of places to recognize, and the minimum sample required. Choices lock when the league is frozen.
-          </p>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))", gap: "0.75rem" }}>
-            {(state.award_catalog || []).map((category) => {
-              const draft = configDrafts[category.key] || { enabled: false, depth: "1" as const, minimum: "0" };
-              const disabled = busy || workflowStatus !== "not_started";
-              return (
-                <fieldset key={category.key} style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: draft.enabled ? "#f0fdf4" : "#f8fafc" }}>
-                  <legend style={{ fontWeight: 800 }}>{category.label}</legend>
-                  <p style={{ color: "#64748b", marginTop: 0 }}>{category.recipient_type === "team" ? "Team award" : "Player award"} · {category.metric.replace(/_/g, " ")}</p>
-                  <label><input type="checkbox" checked={draft.enabled} disabled={disabled} onChange={(event) => setConfigDrafts((current) => ({ ...current, [category.key]: { ...draft, enabled: event.target.checked } }))} /> Enabled</label>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.6rem", marginTop: "0.6rem" }}>
-                    <label><strong>Places</strong><br /><select value={draft.depth} disabled={disabled || !draft.enabled} onChange={(event) => setConfigDrafts((current) => ({ ...current, [category.key]: { ...draft, depth: event.target.value as "1" | "2" | "3" } }))} style={inputStyle}><option value="1">Top 1</option><option value="2">Top 2</option><option value="3">Top 3</option></select></label>
-                    <label><strong>Minimum {String(category.minimum_metric || "games").replace(/_/g, " ")}</strong><br /><input type="number" min={0} max={1000} value={draft.minimum} disabled={disabled || !draft.enabled} onChange={(event) => setConfigDrafts((current) => ({ ...current, [category.key]: { ...draft, minimum: event.target.value } }))} style={inputStyle} /></label>
-                  </div>
-                </fieldset>
-              );
-            })}
-          </div>
-          {workflowStatus === "not_started" ? <p><button type="button" onClick={() => void saveAwardConfig()} disabled={busy || !writeReady || !(state.award_catalog || []).length} style={buttonStyle}>Save award category choices</button></p> : <p style={{ color: "#92400e" }}>Category choices are locked to the frozen evidence snapshot.</p>}
+          <h2 style={{ marginTop: 0 }}>Configured awards</h2>
+          <p style={{ color: "#475569" }}>Award setup is managed before the league starts in the Settings tab. This page is for progress, review, and finalization.</p>
+          {configuredAwards.length ? <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>{configuredAwards.map((category) => <div key={category.key} style={{ border: "1px solid #e2e8f0", borderRadius: "10px", padding: "0.75rem", background: "#f8fafc" }}><strong>{category.label}</strong><br />Top {category.depth} · Minimum {category.minimum} {String(category.minimum_metric || "games").replace(/_/g, " ")}</div>)}</div> : <p style={{ color: "#64748b" }}>No award categories were configured for this league.</p>}
+        </article>
+      ) : null}
+
+      {state ? (
+        <article style={{ ...cardStyle, borderColor: "#bfdbfe", background: "#eff6ff" }}>
+          <h2 style={{ marginTop: 0 }}>Live award progress</h2>
+          {(state.award_progress || []).length ? <div style={{ display: "grid", gap: "0.65rem" }}>{(state.award_progress || []).map((award) => <div key={awardKey(award)} style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: "0.75rem", padding: "0.75rem", borderRadius: "10px", background: "white" }}><div><strong>{award.category_label} #{award.rank || 1}</strong><br />{award.recipient_name || award.team_name || award.player_name || "—"}{award.is_co_winner ? " · co-leader" : ""}</div><div style={{ textAlign: "right" }}>{award.metric_display || "—"}<br /><small>Minimum {award.min_games ?? 0} {String(award.minimum_metric || "games").replace(/_/g, " ")}</small></div></div>)}</div> : <p style={{ color: "#475569", marginBottom: 0 }}>No players or teams have met the configured minimum criteria yet.</p>}
         </article>
       ) : null}
 
@@ -511,9 +471,9 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
         </article>
       ) : null}
 
-      {wizard && workflowStatus === "not_started" ? (
+      {canOfferFreeze ? (
         <article style={{ ...cardStyle, borderColor: "#fed7aa" }}>
-          <h2 style={{ marginTop: 0 }}>3. Freeze league</h2>
+          <h2 style={{ marginTop: 0 }}>Freeze league</h2>
           <p style={{ color: "#7c2d12" }}>Freezing marks the league ended and locks the award snapshot workflow. Match corrections must happen before this step or through Match Log and Replay History.</p>
           <ConfirmAction
             triggerLabel={busy ? "Working…" : "Freeze and save"}
@@ -522,7 +482,7 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
             confirmLabel="Yes, freeze league"
             confirmationText="FREEZE LEAGUE AWARDS"
             tone="danger"
-            disabled={!writeReady}
+            disabled={!writeReady || !hasMeasurableResults}
             busy={busy}
             onConfirm={(confirmationText) => runAction("freeze", confirmationText)}
           />
@@ -531,15 +491,15 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
 
       {wizard && ["frozen", "previewed", "overrides_confirmed"].includes(workflowStatus) && Number(wizard.mint?.attempt_count || 0) === 0 ? (
         <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>4. Persist award preview</h2>
-          <p style={{ color: "#475569" }}>FastAPI recomputes the Python-authoritative top performers and stores the exact rows and fingerprint used by later steps.</p>
-          <button type="button" onClick={() => runAction("preview")} disabled={busy || !writeReady} style={buttonStyle}>{wizard.preview ? "Recompute and replace preview" : "Compute and save preview"}</button>
+          <h2 style={{ marginTop: 0 }}>Save award preview</h2>
+          <p style={{ color: "#475569" }}>Recompute the top performers and save the exact result set used by the remaining review steps.</p>
+          <button type="button" onClick={() => void runAction("preview").catch(() => undefined)} disabled={busy || !writeReady || !hasMeasurableResults} style={buttonStyle}>{wizard.preview ? "Recompute and replace preview" : "Compute and save preview"}</button>
         </article>
       ) : null}
 
       {wizard?.preview ? (
         <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>5. Review and document overrides</h2>
+          <h2 style={{ marginTop: 0 }}>Review and document overrides</h2>
           <p style={{ color: "#475569" }}>Preview fingerprint <code>{wizard.preview.fingerprint?.slice(0, 16)}…</code>. Changing a winner requires a reason of at least eight characters; both are persisted and audit-attributed.</p>
           {displayAwards.length ? (
             <div style={{ display: "grid", gap: "0.75rem" }}>
@@ -553,8 +513,8 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
                     <legend style={{ fontWeight: 800 }}>{award.category_label || award.category_key} #{award.rank || 1}{award.is_co_winner ? " · co-winner" : ""}</legend>
                     <p style={{ color: "#475569" }}>Computed: {award.recipient_name || award.team_name || award.player_name || (award.player_id ? `Player ${award.player_id}` : "—")} · {award.metric_display || "—"} · Minimum sample {award.min_games ?? "—"}</p>
                     {isTeamAward ? <p style={{ color: "#64748b" }}>Team awards follow the frozen team standings and are recorded without a player-badge reassignment.</p> : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "0.75rem" }}>
-                      <label>Winner<br /><select value={draft.playerId} onChange={(event) => setOverrideDrafts((current) => ({ ...current, [key]: { ...draft, playerId: Number(event.target.value) } }))} disabled={Number(wizard.mint?.attempt_count || 0) > 0} style={inputStyle}>{(state?.eligible_players || []).map((player) => <option key={player.player_id} value={player.player_id}>{player.player_name} (#{player.player_id})</option>)}</select></label>
-                      <label>Override reason {changed ? "(required)" : "(not needed)"}<br /><input value={draft.reason} onChange={(event) => setOverrideDrafts((current) => ({ ...current, [key]: { ...draft, reason: event.target.value } }))} disabled={!changed || Number(wizard.mint?.attempt_count || 0) > 0} style={inputStyle} /></label>
+                      <label>Winner<br /><select value={draft.playerId} onChange={(event) => setOverrideDrafts((current) => ({ ...current, [key]: { ...draft, playerId: Number(event.target.value) } }))} disabled={!writeReady || Number(wizard.mint?.attempt_count || 0) > 0} style={inputStyle}>{(state?.eligible_players || []).map((player) => <option key={player.player_id} value={player.player_id}>{player.player_name} (#{player.player_id})</option>)}</select></label>
+                      <label>Override reason {changed ? "(required)" : "(not needed)"}<br /><input value={draft.reason} onChange={(event) => setOverrideDrafts((current) => ({ ...current, [key]: { ...draft, reason: event.target.value } }))} disabled={!writeReady || !changed || Number(wizard.mint?.attempt_count || 0) > 0} style={inputStyle} /></label>
                     </div>}
                   </fieldset>
                 );
@@ -568,14 +528,14 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
 
       {wizard && ["overrides_confirmed", "minting", "mint_failed"].includes(workflowStatus) ? (
         <article style={{ ...cardStyle, borderColor: workflowStatus === "mint_failed" ? "#fecaca" : "#bfdbfe" }}>
-          <h2 style={{ marginTop: 0 }}>6. Mint and verify badges</h2>
-          <p style={{ color: "#334155" }}>A mint is successful only after FastAPI reads back every expected <code>player_badges</code> row. Partial or unavailable writes remain <strong>mint failed</strong> and can be retried with the retained idempotency key.</p>
+          <h2 style={{ marginTop: 0 }}>Publish and verify badges</h2>
+          <p style={{ color: "#334155" }}>Publishing succeeds only after every expected badge is verified. An incomplete attempt remains recoverable and can be retried safely.</p>
           {wizard.mint?.last_error ? <p style={{ color: "#b91c1c" }}>Last verified failure: {wizard.mint.last_error}</p> : null}
           <p style={{ color: "#475569" }}>Attempts: {wizard.mint?.attempt_count || 0} · Expected: {wizard.mint?.expected_count ?? "—"} · Verified: {wizard.mint?.verified_count ?? "—"}</p>
           <ConfirmAction
             triggerLabel={workflowStatus === "mint_failed" || workflowStatus === "minting" ? "Retry mint and verification" : "Mint and verify"}
             title="Mint and verify these league awards?"
-            description={`FastAPI will mint the reviewed award set and verify every expected badge row. Expected rows: ${wizard.mint?.expected_count ?? previewAwards.length}.`}
+            description={`The server will publish the reviewed award set and verify every expected badge record. Expected records: ${wizard.mint?.expected_count ?? previewAwards.length}.`}
             confirmLabel="Yes, mint and verify"
             confirmationText="MINT AWARDS"
             disabled={!mintReady}
@@ -587,7 +547,7 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
 
       {wizard && ["minted", "archived"].includes(workflowStatus) ? (
         <article style={{ ...cardStyle, borderColor: "#bbf7d0" }}>
-          <h2 style={{ marginTop: 0 }}>7. Archive</h2>
+          <h2 style={{ marginTop: 0 }}>Archive</h2>
           <p style={{ color: "#166534" }}>Mint result: <strong>{wizard.mint?.status}</strong> · Verified {wizard.mint?.verified_count || 0} of {wizard.mint?.expected_count || 0} expected row(s).</p>
           {workflowStatus === "archived" ? <p><strong>Archived.</strong> This workflow is read-only and remains recoverable for audit review.</p> : (
             <ConfirmAction
@@ -605,7 +565,7 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
         </article>
       ) : null}
 
-      {state?.warnings?.length ? <article style={{ ...cardStyle, background: "#fffbeb" }}><strong>Warnings</strong><ul>{state.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></article> : null}
+      {state?.warnings?.length ? <article style={{ ...cardStyle, background: "#fffbeb" }}><strong>Warnings</strong><ul>{state.warnings.map((warning, index) => <li key={`${index}:${warning}`}>{humanizeAwardWarning(warning)}</li>)}</ul></article> : null}
     </div>
   );
 }

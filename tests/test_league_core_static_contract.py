@@ -29,7 +29,11 @@ def test_league_printout_renders_true_leaders_and_print_contract() -> None:
     assert "Refresh leagues" not in panel
     assert "Reload printout" in panel
     assert "Load selected" not in panel
-    assert 'disabled={busy || !printout}' in panel
+    assert 'disabled={busy || !hasPrintableData}' in panel
+    assert "Nothing to print yet" in panel
+    assert "Team standings" in panel
+    assert "Shared substitute pool" in panel
+    assert "printout.printable_sections.team_rosters" in panel
     assert "Weekly leaders" in panel
     assert "Season leaders" in panel
     assert "data-print-surface" in panel
@@ -48,10 +52,11 @@ def test_league_core_mutations_require_server_only_supabase_key() -> None:
 
     assert "SUPABASE_SERVICE_ROLE_KEY" in routes
     assert routes.count("_require_league_manager_service_role()") >= 6
-    assert '.eq("club_id", str(club_id))' in roster
-    assert '.eq("league_name", clean_league)' in roster
-    assert "_rollback_roster_membership" in roster
-    assert "validate_admin_league_manager_lifecycle_state" in roster
+    assert "update_admin_league_manager_roster_batch(" in roster
+    assert "CONFIRM_ROSTER_BATCH" in roster
+    assert "player_ids=[pid]" in roster
+    assert "_rollback_roster_membership" not in roster
+    assert "write_admin_activity_log" not in roster
     assert "validate_admin_league_manager_lifecycle_state" in settings
     assert "validate_admin_league_manager_lifecycle_state" in lifecycle
 

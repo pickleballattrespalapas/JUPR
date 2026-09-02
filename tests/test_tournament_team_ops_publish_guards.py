@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from jupr_app.services import admin_tournament_match_publish_service as publish_service
+from jupr_app.services import admin_tournament_team_competition_service as team_service
 from jupr_app.services.admin_tournament_ops_service import (
     get_admin_tournament_ops_snapshot,
 )
@@ -18,6 +19,7 @@ from jupr_app.services.admin_tournament_team_competition_service import (
     get_admin_team_tournament_snapshot,
 )
 from services.api import admin_tournament_routes
+from services.api import admin_tournament_team_competition_routes as team_routes
 from tests.test_admin_match_log_service import FakeSupabase
 
 
@@ -185,6 +187,79 @@ def test_child_publish_service_refuses_disabled_feature_before_child_table_read(
         )
 
 
+def test_protected_child_publish_fails_closed_without_canonical_tournament_readiness(
+    monkeypatch,
+):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    monkeypatch.setattr(
+        publish_service,
+        "is_admin_team_tournament_enabled",
+        lambda: True,
+    )
+    tables = _ops_tables()
+    tables["matches"] = []
+    supabase = TrackingSupabase(tables)
+
+    with pytest.raises(ValueError, match="official publishing is blocked"):
+        publish_service.publish_admin_tournament_draw_matches(
+            supabase,
+            club_id="club-1",
+            tournament_id="tournament-1",
+            draw_id="child-draw",
+            actor_email="owner@example.com",
+            actor_role="club_owner",
+            confirmation_text="PUBLISH MATCHES",
+            source="next_team_tournament_child_publish",
+        )
+
+    assert tables["matches"] == []
+    assert tables.get("tournament_admin_operations", []) == []
+    assert tables.get("admin_activity_log", []) == []
+
+
+def test_protected_child_publish_route_blocks_before_durable_intent(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    monkeypatch.setattr(
+        admin_tournament_routes,
+        "is_admin_tournament_admin_enabled",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        admin_tournament_routes,
+        "is_admin_team_tournament_enabled",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        admin_tournament_routes,
+        "_resolve_tournament_role_or_403",
+        lambda **_kwargs: ("owner@example.com", "club_owner"),
+    )
+    tables = _ops_tables()
+    tables["matches"] = []
+    supabase = TrackingSupabase(tables)
+    app = FastAPI()
+    admin_tournament_routes.install_admin_tournament_routes(
+        app,
+        get_supabase_client=lambda: supabase,
+    )
+
+    response = TestClient(app).post(
+        "/admin/clubs/club-1/tournaments/admin/tournaments/tournament-1/"
+        "draws/child-draw/matches/publish",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "confirmation_text": "PUBLISH MATCHES",
+            "source": "next_team_tournament_child_publish",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "official publishing is blocked" in response.json()["detail"]
+    assert "Standard draw has no tournament games" in response.json()["detail"]
+    assert tables.get("tournament_admin_operations", []) == []
+    assert tables.get("admin_activity_log", []) == []
+
+
 def test_child_publish_route_feature_gate_precedes_database_client(
     monkeypatch,
 ):
@@ -221,6 +296,84 @@ def test_child_publish_route_feature_gate_precedes_database_client(
 
     assert response.status_code == 403
     assert opened == {"database": 0}
+
+
+def test_team_podium_publish_is_retired_before_snapshot_operation_or_rpc(monkeypatch):
+    monkeypatch.setattr(
+        team_service,
+        "require_admin_team_tournament_runtime",
+        lambda: None,
+    )
+
+    class ForbiddenSupabase:
+        def table(self, _name):
+            raise AssertionError("retired team podium publish must not read or write tables")
+
+        def rpc(self, _name, _params):
+            raise AssertionError("retired team podium publish must not call an RPC")
+
+    with pytest.raises(
+        PermissionError,
+        match="TEAM_PODIUM_CANONICAL_REVIEW_UNAVAILABLE",
+    ):
+        team_service.replace_team_podium(
+            ForbiddenSupabase(),
+            club_id="club-1",
+            tournament_id="tournament-1",
+            draw_id="team-parent",
+            expected_draw_updated_at="2026-08-15T13:00:00Z",
+            publish=True,
+            reason="",
+            actor_email="owner@example.com",
+            idempotency_key="team-podium-retired",
+        )
+
+
+def test_team_podium_publish_route_returns_403_without_domain_calls(monkeypatch):
+    monkeypatch.setattr(team_routes, "is_admin_team_tournament_enabled", lambda: True)
+    monkeypatch.setattr(
+        team_service,
+        "require_admin_team_tournament_runtime",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        team_routes,
+        "require_tournament_admin_mutation_runtime",
+        lambda _surface: None,
+    )
+    monkeypatch.setattr(
+        team_routes,
+        "_resolve_manage_role_or_403",
+        lambda **_kwargs: ("owner@example.com", "club_owner"),
+    )
+
+    class ForbiddenSupabase:
+        def table(self, _name):
+            raise AssertionError("retired team podium publish must not read or write tables")
+
+        def rpc(self, _name, _params):
+            raise AssertionError("retired team podium publish must not call an RPC")
+
+    app = FastAPI()
+    team_routes.install_admin_tournament_team_competition_routes(
+        app,
+        get_supabase_client=lambda: ForbiddenSupabase(),
+    )
+    response = TestClient(app).post(
+        "/admin/clubs/club-1/tournaments/admin/tournaments/tournament-1/"
+        "team-competition/draws/team-parent/podium",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "idempotency_key": "team-podium-retired",
+            "confirmation_text": "PUBLISH TEAM PODIUM",
+            "expected_draw_updated_at": "2026-08-15T13:00:00Z",
+            "publish": True,
+            "podium": [],
+        },
+    )
+
+    assert response.status_code == 403
+    assert "TEAM_PODIUM_CANONICAL_REVIEW_UNAVAILABLE" in response.json()["detail"]
 
 
 @pytest.mark.parametrize(

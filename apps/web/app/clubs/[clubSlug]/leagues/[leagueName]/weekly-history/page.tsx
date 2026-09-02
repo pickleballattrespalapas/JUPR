@@ -68,6 +68,9 @@ export default async function PublicLeagueWeeklyHistoryPage({ params, searchPara
     requestedWeek
   );
   const found = data?.selected_league === leagueName;
+  const leagueView = data?.past_leagues.some((league) => league.name === leagueName)
+    ? "past"
+    : "active";
 
   if (error || !data || !found) {
     return (
@@ -79,7 +82,7 @@ export default async function PublicLeagueWeeklyHistoryPage({ params, searchPara
         <article style={{ ...cardStyle, borderColor: "#fecaca", background: "#fef2f2" }}>
           <h2 style={{ marginTop: 0 }}>Weekly history unavailable</h2>
           <p style={{ color: "#7f1d1d" }}>
-            {error || "This league is not currently available as an active public league."}
+            {error || "This league is not available as an active or finished public league."}
           </p>
           <Link href={`/clubs/${params.clubSlug}/leagues`}>Return to all leagues</Link>
         </article>
@@ -103,7 +106,7 @@ export default async function PublicLeagueWeeklyHistoryPage({ params, searchPara
         Week-by-week activity, records, rating movement, and highlights for {leagueName}.
       </p>
 
-      <PublicLeagueNav clubSlug={params.clubSlug} leagueName={leagueName} active="weekly" />
+      <PublicLeagueNav clubSlug={params.clubSlug} leagueName={leagueName} active="weekly" leagueView={leagueView} />
 
       {data.weeks.length ? (
         <nav aria-label="League weeks" style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap", marginBottom: "1rem" }}>

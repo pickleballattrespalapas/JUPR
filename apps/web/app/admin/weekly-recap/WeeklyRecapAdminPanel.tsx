@@ -10,6 +10,7 @@ import type {
   AdminWeeklyRecapWriteResponse
 } from "@/lib/adminWeeklyRecapApi";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess } from "@/components/interaction";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 import AdminWeeklyRecapPreview from "./AdminWeeklyRecapPreview";
@@ -229,17 +230,20 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initial
         method: "POST",
         body: JSON.stringify({ week_start: weekStart, week_end: weekEnd, confirmation_text: confirmationText, expected_row_version: selectedRecap?.week_start === weekStart ? selectedRecap.row_version : null, source: "next_weekly_recap_generate" })
       });
-      if (!writeRequest.isCurrent(generation)) return;
+      const completion = actionSuccess("Weekly recap draft generated", "The draft was generated from current match, social, and tournament data.");
+      if (!writeRequest.isCurrent(generation)) return completion;
       applyDetail(payload);
       await loadRecaps();
-      if (!writeRequest.isCurrent(generation)) return;
+      if (!writeRequest.isCurrent(generation)) return completion;
       setMessage("Draft generated from current match, social, and tournament data.");
       setMessageSeverity("success");
+      return completion;
     } catch (error) {
       if (writeRequest.isCurrent(generation)) {
         setMessage(error instanceof Error ? error.message : "Unable to generate weekly recap draft.");
         setMessageSeverity("error");
       }
+      throw error;
     } finally {
       if (writeRequest.isCurrent(generation)) setBusy(false);
     }
@@ -249,7 +253,7 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initial
     if (!selectedRecap) {
       setMessage("Load or generate a recap before saving edits.");
       setMessageSeverity("error");
-      return;
+      throw new Error("Load or generate a recap before saving edits.");
     }
     const generation = writeRequest.begin();
     setBusy(true);
@@ -260,15 +264,18 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initial
         method: "PATCH",
         body: JSON.stringify({ edits_json: buildEditsPayload(lookingAhead, spotlightEdits), confirmation_text: confirmationText, expected_row_version: selectedRecap.row_version, source: "next_weekly_recap_save" })
       });
-      if (!writeRequest.isCurrent(generation)) return;
+      const completion = actionSuccess("Weekly recap draft saved", "The looking-ahead and spotlight edits were saved to the draft.");
+      if (!writeRequest.isCurrent(generation)) return completion;
       applyDetail(payload);
       setMessage("Draft edits saved.");
       setMessageSeverity("success");
+      return completion;
     } catch (error) {
       if (writeRequest.isCurrent(generation)) {
         setMessage(error instanceof Error ? error.message : "Unable to save weekly recap draft.");
         setMessageSeverity("error");
       }
+      throw error;
     } finally {
       if (writeRequest.isCurrent(generation)) setBusy(false);
     }
@@ -278,7 +285,7 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initial
     if (!selectedRecap) {
       setMessage("Load or generate a recap before publishing.");
       setMessageSeverity("error");
-      return;
+      throw new Error("Load or generate a recap before publishing.");
     }
     const generation = writeRequest.begin();
     setBusy(true);
@@ -289,17 +296,20 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initial
         method: "POST",
         body: JSON.stringify({ action, edits_json: buildEditsPayload(lookingAhead, spotlightEdits), confirmation_text: confirmationText, expected_row_version: selectedRecap.row_version, source: action === "publish" ? "next_weekly_recap_publish" : "next_weekly_recap_unpublish" })
       });
-      if (!writeRequest.isCurrent(generation)) return;
+      const completion = actionSuccess(action === "publish" ? "Weekly recap published" : "Weekly recap unpublished", action === "publish" ? "The recap is now visible on the public Weekly Recap page." : "The recap was removed from the public page and returned to draft.");
+      if (!writeRequest.isCurrent(generation)) return completion;
       applyDetail(payload);
       await loadRecaps();
-      if (!writeRequest.isCurrent(generation)) return;
+      if (!writeRequest.isCurrent(generation)) return completion;
       setMessage(action === "publish" ? "Weekly recap published." : "Weekly recap unpublished and returned to draft.");
       setMessageSeverity("success");
+      return completion;
     } catch (error) {
       if (writeRequest.isCurrent(generation)) {
         setMessage(error instanceof Error ? error.message : `Unable to ${action} weekly recap.`);
         setMessageSeverity("error");
       }
+      throw error;
     } finally {
       if (writeRequest.isCurrent(generation)) setBusy(false);
     }

@@ -12,11 +12,15 @@ import type {
 } from "@/lib/adminTournamentApi";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
+import { tournamentRouteHref } from "@/lib/tournamentRouteContext";
 
 type Props = {
   apiBase: string | null;
   clubId: string;
   status: AdminTournamentStatusResponse;
+  initialTournamentId: string;
+  initialTournamentName: string;
+  initialDrawId: string;
 };
 type ImportHandoff = { ok: boolean; dry_run: true; write_count: 0; state_fingerprint: string; confirmed_registration_count: number; imported_selection_count: number; direct_import_available: false; ops_path: string; required_ops_confirmation: string; integrity_notice: string };
 
@@ -56,10 +60,10 @@ function downloadText(filename: string, content: string, mime = "text/csv;charse
   URL.revokeObjectURL(url);
 }
 
-export default function RegistrationManagementPanel({ apiBase, clubId, status }: Props) {
+export default function RegistrationManagementPanel({ apiBase, clubId, status, initialTournamentId, initialTournamentName, initialDrawId }: Props) {
   const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
   const [tournaments, setTournaments] = useState<AdminTournament[]>([]);
-  const [selectedTournamentId, setSelectedTournamentId] = useState("");
+  const [selectedTournamentId, setSelectedTournamentId] = useState(initialTournamentId);
   const [detail, setDetail] = useState<AdminTournamentDetailResponse | null>(null);
   const [importHandoff, setImportHandoff] = useState<ImportHandoff | null>(null);
   const [busy, setBusy] = useState(false);
@@ -95,7 +99,7 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status }:
   function clearProtectedRegistrationState() {
     detailRequest.invalidate();
     setBusy(false); setMessage(null);
-    setTournaments([]); setSelectedTournamentId(""); setDetail(null); setImportHandoff(null);
+    setTournaments([]); setSelectedTournamentId(initialTournamentId); setDetail(null); setImportHandoff(null);
     setBroadcastSubject(""); setBroadcastMessage(""); setBroadcastPreview(null);
   }
 
@@ -116,7 +120,7 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status }:
       setTournaments(nextTournaments);
       setMessage(nextTournaments.length ? `Loaded ${payload.count ?? nextTournaments.length} tournament(s).` : "No tournaments are available.");
       if (selectionStillAvailable) await loadDetail(selectedBeforeRefresh, true);
-      else setSelectedTournamentId("");
+      else setMessage("The selected tournament is not available to this admin session.");
     } catch (error) {
       if (listRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load tournaments.");
     } finally {
@@ -289,18 +293,8 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status }:
 
       {tournaments.length ? (
         <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>Tournament</h2>
-          <label>
-            <strong>Choose a tournament</strong><br />
-            <select value={selectedTournamentId} onChange={(event) => loadDetail(event.target.value)} disabled={busy} style={inputStyle}>
-              <option value="">Choose a tournament…</option>
-              {tournaments.map((tournament) => (
-                <option key={tournament.id} value={tournament.id}>
-                  {tournament.name} · {tournament.status} · {tournament.registration_count || 0} registrations
-                </option>
-              ))}
-            </select>
-          </label>
+          <h2 style={{ marginTop: 0 }}>Selected tournament</h2>
+          <p><strong>{tournaments.find((tournament) => tournament.id === selectedTournamentId)?.name || initialTournamentName}</strong></p>
         </article>
       ) : <article style={cardStyle}><p style={{ color: "#64748b" }}>{busy ? "Loading tournaments…" : "No tournaments are available."}</p></article>}
 
@@ -310,7 +304,7 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status }:
             <h2 style={{ marginTop: 0 }}>Operations import handoff</h2>
             <p><strong>Registration Admin cannot bypass draw integrity.</strong> This is a read-only handoff, not an import button.</p>
             <p>{importHandoff?.integrity_notice || "Load the handoff before importing registrations."}</p>
-            {importHandoff ? <><p><strong>{importHandoff.confirmed_registration_count}</strong> confirmed registrations · <strong>{importHandoff.imported_selection_count}</strong> entries already represented in a registration-sourced draw.</p><p>This page performs <strong>{importHandoff.write_count} writes</strong>. Tournament Ops owns the separate <code>{importHandoff.required_ops_confirmation}</code> mutation and refuses imports after games exist.</p><Link href={importHandoff.ops_path}>Open guarded Tournament Ops import</Link></> : <p>Handoff unavailable; do not import from this surface.</p>}
+            {importHandoff ? <><p><strong>{importHandoff.confirmed_registration_count}</strong> confirmed registrations · <strong>{importHandoff.imported_selection_count}</strong> entries already represented in a registration-sourced draw.</p><p>This page performs <strong>{importHandoff.write_count} writes</strong>. Tournament Ops owns the separate <code>{importHandoff.required_ops_confirmation}</code> mutation and refuses imports after games exist.</p><Link href={tournamentRouteHref("/admin/tournaments/ops/import", { tournamentId: initialTournamentId, tournamentName: initialTournamentName, drawId: initialDrawId })}>Open guarded Tournament Ops import</Link></> : <p>Handoff unavailable; do not import from this surface.</p>}
           </article>
           <article style={cardStyle}>
             <h2 style={{ marginTop: 0 }}>Filters and CSV export</h2>

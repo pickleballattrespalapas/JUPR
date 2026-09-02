@@ -56,7 +56,12 @@ export type LeaderboardResponse = {
   scopes: LeaderboardScope[];
   selected_scope: string;
   scope: LeaderboardScope;
-  filters: { status: "active" | "inactive" | "all"; search: string; sort: string };
+  filters: {
+    league_view: "active" | "past";
+    status: "active" | "inactive" | "all";
+    search: string;
+    sort: string;
+  };
   summary: {
     ranked_players: number;
     active_players: number;
@@ -235,7 +240,7 @@ export type PlayerProfileResponse = {
   rating_breakdowns: PublicRatingBreakdown[];
   rating_history: PublicRatingHistoryPoint[];
   league_ratings: PublicLeagueRating[];
-  awards: { badge_count: number; badge_award_count: number; prestige_total: number; badges: PublicBadgeAward[]; trophies: PublicTrophy[] };
+  awards: { badge_count: number; badge_award_count: number; trophy_count?: number; prestige_total: number; badges: PublicBadgeAward[]; trophies: PublicTrophy[] };
   relationships: { best_partner?: PublicRelationship | null; rival?: PublicRelationship | null; partners: PublicRelationship[]; rivals: PublicRelationship[] };
   social: PublicSocialProjection;
   recent_matches: PublicMatch[];
@@ -403,11 +408,45 @@ export type MatchExplorerPreviewResponse = {
 
 export type LeagueResultsLeague = {
   name: string;
+  league_type?: string | null;
+  match_format?: "doubles" | "singles" | string | null;
   min_games?: number | null;
   k_factor?: number | null;
   start_week?: number | null;
   end_week?: number | null;
   num_weeks?: number | null;
+};
+
+export type LeagueAwardProgressRow = {
+  category_key: string;
+  category_label: string;
+  recipient_type?: "player" | "team" | string;
+  player_id?: string | number | null;
+  team_id?: string | null;
+  recipient_name?: string | null;
+  metric_value?: number | null;
+  metric_display?: string | null;
+  rank?: number | null;
+  is_co_winner?: boolean | null;
+  min_games?: number | null;
+  minimum_metric?: string | null;
+};
+
+export type LeagueAwardRace = {
+  category_key: string;
+  category_label: string;
+  recipient_type?: "player" | "team" | string | null;
+  min_games?: number | null;
+  minimum_metric?: string | null;
+  eligible_count?: number | null;
+  entries: LeagueAwardProgressRow[];
+};
+
+export type LeagueAwardProgress = {
+  awards: LeagueAwardProgressRow[];
+  award_count: number;
+  races?: LeagueAwardRace[];
+  race_count?: number;
 };
 
 export type LeagueResultsStanding = {
@@ -473,6 +512,7 @@ export type LeagueResultsRecentMatch = {
 export type LeagueResultsResponse = {
   club: { id: string; slug: string; name: string };
   leagues: LeagueResultsLeague[];
+  past_leagues: LeagueResultsLeague[];
   selected_league?: string | null;
   league?: LeagueResultsLeague | null;
   standings: LeagueResultsStanding[];
@@ -488,6 +528,7 @@ export type LeagueResultsResponse = {
   weekly_highlights: LeagueResultsHighlights;
   season_highlights: LeagueResultsHighlights;
   highlights: LeagueResultsHighlights;
+  award_progress: LeagueAwardProgress;
 };
 
 type ApiResult<T> = { data: T | null; error: string | null };
@@ -535,6 +576,7 @@ export async function getClub(clubSlug: string): Promise<ApiResult<ClubSummary>>
 
 export type LeaderboardRequest = {
   leagueName?: string | null;
+  leagueView?: "active" | "past";
   status?: "active" | "inactive" | "all";
   search?: string | null;
   sort?: "rank" | "rating" | "matches" | "win_pct" | "gain" | "name";
@@ -549,6 +591,7 @@ export async function getClubLeaderboard(
 ): Promise<ApiResult<LeaderboardResponse>> {
   const params = new URLSearchParams();
   if (options.leagueName) params.set("league_name", String(options.leagueName));
+  if (options.leagueView) params.set("league_view", options.leagueView);
   if (options.status) params.set("status", options.status);
   if (options.search) params.set("q", String(options.search));
   if (options.sort) params.set("sort", options.sort);
@@ -561,7 +604,7 @@ export async function getClubLeaderboard(
 
 export async function getClubPlayers(
   clubSlug: string,
-  filters: { q?: string | null; status?: "active" | "inactive" | "all" | null; sort?: string | null; limit?: number | null; offset?: number | null } = {}
+  filters: { q?: string | null; status?: "active" | "inactive" | "all" | null; sort?: string | null; limit?: number | null; offset?: number | null; noStore?: boolean } = {}
 ): Promise<ApiResult<PlayersResponse>> {
   const params = new URLSearchParams();
   if (filters.q) params.set("q", filters.q);
@@ -570,7 +613,10 @@ export async function getClubPlayers(
   if (filters.limit != null) params.set("limit", String(filters.limit));
   if (filters.offset != null) params.set("offset", String(filters.offset));
   const query = params.toString();
-  return fetchJson<PlayersResponse>(`/clubs/${clubSlug}/players${query ? `?${query}` : ""}`);
+  return fetchJson<PlayersResponse>(
+    `/clubs/${clubSlug}/players${query ? `?${query}` : ""}`,
+    { noStore: Boolean(filters.noStore) }
+  );
 }
 
 export async function getClubPlayerProfile(

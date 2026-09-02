@@ -886,9 +886,19 @@ def apply_admin_tournament_match_backfill(
     actor_role: str,
     source: str = "next_admin_tools_tournament_match_backfill",
 ) -> dict[str, Any]:
-    """Apply an explicitly reviewed subset of ready legacy tournament games."""
+    """Reject the retired partial-game publication path.
+
+    Official tournament matches must be published as one canonical Tournament
+    Live operation after lifecycle, podium-review, award-plan, and atomic-write
+    preflight checks.  Keeping this guard at the service boundary also closes
+    direct Python and legacy UI callers that bypass the FastAPI route.
+    """
     if not is_admin_tools_enabled():
         raise PermissionError("Next Admin Tools are disabled.")
+    raise PermissionError(
+        "Legacy tournament match backfill is retired. Use the canonical "
+        "Tournament Live official-publish command after lifecycle and podium review."
+    )
     if str(confirmation_text or "").strip().upper() != CONFIRM_TOURNAMENT_MATCH_BACKFILL:
         raise ValueError(
             f"Type {CONFIRM_TOURNAMENT_MATCH_BACKFILL} to apply the tournament match backfill."

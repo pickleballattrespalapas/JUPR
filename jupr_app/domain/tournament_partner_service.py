@@ -226,6 +226,8 @@ def _validate_same_event_pair(selection1: dict[str, Any], selection2: dict[str, 
         raise ValueError("Partner selections must be in the same tournament.")
     if _safe_text(selection1.get("event_option_id")) != _safe_text(selection2.get("event_option_id")):
         raise ValueError("Partner selections must be in the same division.")
+    if _safe_text(selection1.get("registration_id")) == _safe_text(selection2.get("registration_id")):
+        raise ValueError("A registration cannot be paired with another entry from itself.")
 
 
 def _request_targets_same_pending(request: dict[str, Any], *, target_selection_id: str | None, target_player_id: Any | None) -> bool:
@@ -696,6 +698,210 @@ def transition_partner_request_atomic(
         "partner_request_id": _safe_text(request_id),
         "team_link_id": _safe_text((team_link or {}).get("id")) or None,
         "cancelled_request_ids": cancelled_ids,
+    }
+
+
+def _active_team_links_for_selection(
+    supabase,
+    *,
+    tournament_id: str,
+    selection_id: str,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for field in ("selection1_id", "selection2_id"):
+        rows.extend(
+            _safe_data(
+                _table(supabase, "tournament_registration_team_links")
+                .select("*")
+                .eq("tournament_id", _safe_text(tournament_id))
+                .eq(field, _safe_text(selection_id))
+                .execute()
+            )
+        )
+    unique: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if _safe_text(row.get("status")).upper() in CONFIRMED_LINK_STATUSES:
+            unique[_safe_text(row.get("id"))] = row
+    return list(unique.values())
+
+
+def admin_remove_partner_link(
+    supabase,
+    *,
+    tournament_id: str,
+    selection_id: str,
+    unpaired_mode: str = "NEEDS_PARTNER",
+    admin_user_id: str | None = None,
+) -> dict[str, Any]:
+    mode = _safe_text(unpaired_mode).upper() or "NEEDS_PARTNER"
+    if mode not in {"NONE", "NEEDS_PARTNER"}:
+        raise ValueError("Unpaired mode must be NONE or NEEDS_PARTNER.")
+    selection = _get_selection(supabase, selection_id)
+    if _safe_text(selection.get("tournament_id")) != _safe_text(tournament_id):
+        raise ValueError("Selection is not in this tournament.")
+    links = _active_team_links_for_selection(
+        supabase,
+        tournament_id=tournament_id,
+        selection_id=selection_id,
+    )
+    if not links:
+        updated = _update_selection_partner_mode(
+            supabase, selection_id=selection_id, partner_mode=mode
+        )
+        return {
+            "removed": False,
+            "selection": updated,
+            "former_partner_selection_ids": [],
+        }
+
+    former_partner_ids: set[str] = set()
+    cancelled_link_ids: list[str] = []
+    now = _now_iso()
+    for link in links:
+        link_id = _safe_text(link.get("id"))
+        selection1_id = _safe_text(link.get("selection1_id"))
+        selection2_id = _safe_text(link.get("selection2_id"))
+        partner_selection_id = (
+            selection2_id if selection1_id == _safe_text(selection_id) else selection1_id
+        )
+        if partner_selection_id:
+            former_partner_ids.add(partner_selection_id)
+        _table(supabase, "tournament_registration_team_members").update(
+            {"status": "CANCELLED"}
+        ).eq("team_link_id", link_id).eq("status", ACTIVE_MEMBER_STATUS).execute()
+        _table(supabase, "tournament_registration_team_links").update(
+            {
+                "status": "CANCELLED",
+                "updated_at": now,
+            }
+        ).eq("id", link_id).execute()
+        accepted_request_id = _safe_text(link.get("accepted_request_id"))
+        if accepted_request_id:
+            _update_request_status(
+                supabase,
+                request_id=accepted_request_id,
+                status=CANCELLED_STATUS,
+                actor_user_id=admin_user_id,
+            )
+        cancelled_link_ids.append(link_id)
+
+    _update_selection_partner_mode(
+        supabase, selection_id=selection_id, partner_mode=mode
+    )
+    for partner_selection_id in sorted(former_partner_ids):
+        _update_selection_partner_mode(
+            supabase,
+            selection_id=partner_selection_id,
+            partner_mode="NEEDS_PARTNER",
+        )
+    _cancel_competing_pending_requests(
+        supabase,
+        event_option_id=_safe_text(selection.get("event_option_id")),
+        selection_ids={_safe_text(selection_id), *former_partner_ids},
+    )
+    return {
+        "removed": True,
+        "cancelled_team_link_ids": cancelled_link_ids,
+        "former_partner_selection_ids": sorted(former_partner_ids),
+    }
+
+
+def admin_replace_partner_link(
+    supabase,
+    *,
+    tournament_id: str,
+    event_option_id: str,
+    selection_id: str,
+    partner_selection_id: str | None,
+    unpaired_mode: str = "NEEDS_PARTNER",
+    admin_user_id: str | None = None,
+    source: str = "ADMIN_RECONCILIATION",
+) -> dict[str, Any]:
+    selection = _get_selection(supabase, selection_id)
+    if _safe_text(selection.get("tournament_id")) != _safe_text(tournament_id):
+        raise ValueError("Selection is not in this tournament.")
+    if _safe_text(selection.get("event_option_id")) != _safe_text(event_option_id):
+        raise ValueError("Selection is not in this division.")
+
+    existing_links = _active_team_links_for_selection(
+        supabase,
+        tournament_id=tournament_id,
+        selection_id=selection_id,
+    )
+    clean_partner_id = _safe_text(partner_selection_id) or None
+    if clean_partner_id and existing_links:
+        for link in existing_links:
+            partner_id = (
+                _safe_text(link.get("selection2_id"))
+                if _safe_text(link.get("selection1_id")) == _safe_text(selection_id)
+                else _safe_text(link.get("selection1_id"))
+            )
+            if partner_id == clean_partner_id:
+                return {
+                    "outcome": "unchanged",
+                    "team_link": link,
+                    "partner_selection_id": clean_partner_id,
+                }
+
+    partner_selection: dict[str, Any] | None = None
+    if clean_partner_id:
+        # Validate the proposed replacement completely before cancelling the
+        # current team. Guarded admin operations serialize tournament writes,
+        # so a failed validation cannot strand the existing pair.
+        partner_selection = _get_selection(supabase, clean_partner_id)
+        _validate_same_event_pair(selection, partner_selection)
+        partner_registration = _get_registration(
+            supabase, _safe_text(partner_selection.get("registration_id"))
+        )
+        if _safe_text(partner_registration.get("status")).lower() == "cancelled":
+            raise ValueError("A cancelled registration cannot be assigned as a partner.")
+        partner_links = _active_team_links_for_selection(
+            supabase,
+            tournament_id=tournament_id,
+            selection_id=clean_partner_id,
+        )
+        for link in partner_links:
+            other_id = (
+                _safe_text(link.get("selection2_id"))
+                if _safe_text(link.get("selection1_id")) == clean_partner_id
+                else _safe_text(link.get("selection1_id"))
+            )
+            if other_id != _safe_text(selection_id):
+                raise ValueError(
+                    "The selected partner is already assigned to another team in this division."
+                )
+
+    removal = admin_remove_partner_link(
+        supabase,
+        tournament_id=tournament_id,
+        selection_id=selection_id,
+        unpaired_mode=unpaired_mode,
+        admin_user_id=admin_user_id,
+    )
+    if not clean_partner_id:
+        return {
+            "outcome": "unpaired",
+            "team_link": None,
+            "partner_selection_id": None,
+            "removal": removal,
+        }
+
+    assert partner_selection is not None
+    _validate_same_event_pair(selection, partner_selection)
+    link = admin_confirm_partner_link(
+        supabase,
+        tournament_id=tournament_id,
+        event_option_id=event_option_id,
+        selection1_id=selection_id,
+        selection2_id=clean_partner_id,
+        admin_user_id=admin_user_id,
+        source=source,
+    )
+    return {
+        "outcome": "paired",
+        "team_link": link,
+        "partner_selection_id": clean_partner_id,
+        "removal": removal,
     }
 
 

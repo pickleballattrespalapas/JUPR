@@ -10,6 +10,7 @@ import type {
   AdminBadgePlayerOption
 } from "@/lib/adminBadgeDiagnosticsApi";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess, type ActionCompletion } from "@/components/interaction";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
@@ -164,7 +165,7 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
     finally { if (reportRequest.isCurrent(generation)) setBusy(false); }
   }
 
-  async function runRecompute(confirmationText = "") {
+  async function runRecompute(confirmationText = ""): Promise<ActionCompletion> {
     const generation = actionRequest.begin();
     setBusy(true); setMessage(null);
     try {
@@ -187,18 +188,21 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
           operation_key: key
         })
       });
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the badge recompute response was applied.");
       setRepairResult(payload);
       if (recomputeMode !== "dry-run") setRecomputeOperationKey("");
-      setMessage(payload.read_only ? "Read-only badge recompute preview complete; no rows were written." : `Badge recompute ${payload.recompute_mode || recomputeMode} complete.`);
+      const successMessage = payload.read_only ? "Read-only badge recompute preview complete; no rows were written." : `Badge recompute ${payload.recompute_mode || recomputeMode} complete.`;
+      setMessage(successMessage);
+      return actionSuccess(payload.read_only ? "Badge preview complete" : "Badge recompute complete", successMessage);
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to run badge recompute.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
-  async function revokeBadge(confirmationText: string) {
+  async function revokeBadge(confirmationText: string): Promise<ActionCompletion> {
     const generation = actionRequest.begin();
     setBusy(true); setMessage(null);
     try {
@@ -216,19 +220,22 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
           operation_key: key
         })
       });
-      if (!actionRequest.isCurrent(generation)) return;
-      setRepairResult(payload); setRevokeOperationKey(""); setMessage(`Revoked ${payload.revoked_count || 0} badge row(s).`);
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the badge revocation response was applied.");
+      const successMessage = `Revoked ${payload.revoked_count || 0} badge row(s).`;
+      setRepairResult(payload); setRevokeOperationKey(""); setMessage(successMessage);
+      return actionSuccess("Badge revocation complete", successMessage);
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to revoke badge row.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
   }
 
-  async function updateBadgeState(confirmationText: string) {
-    if (!selectedBadge || !selectedBadge.definition_found) { setMessage("Choose a badge definition loaded from the staging badges table."); return; }
-    if (!badgeStateReason.trim()) { setMessage("Enter a reason for the badge state change."); return; }
-    if (selectedBadge.state === badgeStateTarget) { setMessage(`Badge state is already ${badgeStateTarget}.`); return; }
+  async function updateBadgeState(confirmationText: string): Promise<ActionCompletion> {
+    if (!selectedBadge || !selectedBadge.definition_found) { const error = new Error("Choose a badge definition loaded from the staging badges table."); setMessage(error.message); throw error; }
+    if (!badgeStateReason.trim()) { const error = new Error("Enter a reason for the badge state change."); setMessage(error.message); throw error; }
+    if (selectedBadge.state === badgeStateTarget) { const error = new Error(`Badge state is already ${badgeStateTarget}.`); setMessage(error.message); throw error; }
     const generation = actionRequest.begin();
     setBusy(true); setMessage(null);
     try {
@@ -246,14 +253,17 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
           source: "next_badge_definition_state"
         })
       });
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the badge state response was applied.");
       setBadges((current) => current.map((badge) => badge.badge_id === payload.badge.badge_id ? { ...badge, ...payload.badge, definition_found: true } : badge));
       setBadgeStateReason("");
       setBadgeStateForce(false);
       setStateOperationKey("");
-      setMessage(payload.audit_warning ? `Badge state updated with audit warning: ${payload.audit_warning}` : `Badge state updated to ${payload.badge.state}.`);
+      const successMessage = payload.audit_warning ? `Badge state updated with audit warning: ${payload.audit_warning}` : `Badge state updated to ${payload.badge.state}.`;
+      setMessage(successMessage);
+      return actionSuccess("Badge state updated", successMessage);
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to update badge definition state.");
+      throw error;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
@@ -375,7 +385,7 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
         <p style={{ color: "#9a3412" }}>Super-admin repair controls for staging validation. Dry-run previews do not mutate badges; append-only and strict modes write through the Python badge recompute path. Revoke marks matched badge rows as revoked.</p>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
           <label>Recompute mode<br /><select value={recomputeMode} onChange={(event) => { setRecomputeMode(event.target.value); setRecomputeOperationKey(""); }} style={inputStyle}><option value="dry-run">dry-run</option><option value="append-only">append-only</option><option value="strict">strict</option></select></label>
-          {recomputeMode === "dry-run" ? <button type="button" onClick={() => void runRecompute()} disabled={busy} style={buttonStyle}>Run recompute preview</button> : <ConfirmAction
+          {recomputeMode === "dry-run" ? <button type="button" onClick={() => void runRecompute().catch(() => undefined)} disabled={busy} style={buttonStyle}>Run recompute preview</button> : <ConfirmAction
             triggerLabel="Run applying recompute"
             title={`Run ${recomputeMode} badge recompute?`}
             description="This applies badge changes for the selected scope through the guarded recompute service."

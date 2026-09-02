@@ -102,7 +102,14 @@ export default function TeamLeagueRegistrationForm({
   }
 
   if (!detail.registration.open) {
-    return <p style={{ color: "#475569" }}>Registration is closed. The schedule and results remain available below.</p>;
+    return (
+      <section>
+        <h2 style={{ marginBottom: "0.4rem" }}>Registration</h2>
+        <p style={{ color: "#475569" }}>
+          {detail.registration.unavailable_reason || "Registration is closed. The schedule and results remain available below."}
+        </p>
+      </section>
+    );
   }
 
   return (
@@ -112,6 +119,12 @@ export default function TeamLeagueRegistrationForm({
         Payment is handled offline. A team becomes confirmed only after the
         invited partner accepts the private email link.
       </p>
+      {detail.league.allow_substitutes ? (
+        <p style={{ margin: 0, color: "#475569" }}>
+          Approved one-off substitutes are allowed. Contact league staff to
+          arrange a substitution for a scheduled match.
+        </p>
+      ) : null}
       <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
         <label>
           <input type="radio" checked={signupType === "team"} onChange={() => setSignupType("team")} /> Register a team

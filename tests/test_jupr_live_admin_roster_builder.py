@@ -7,6 +7,7 @@ import pandas as pd
 from jupr_app.ui.live.shared import (
     _append_roster_names,
     _default_admin_roster_row,
+    _default_state,
     _create_and_resolve_admin_players,
     _existing_player_rating_jupr,
     _rows_from_admin_editor_df,
@@ -75,6 +76,20 @@ def _ctx(players: list[dict]):
 def test_admin_config_uses_ordered_roster_builder():
     assert ADMIN_CONFIG.requires_roster_resolution is True
     assert ADMIN_CONFIG.use_admin_roster_builder is True
+
+
+def test_admin_roster_state_has_no_silent_new_player_rating():
+    assert _default_state(ADMIN_CONFIG)["default_new_player_rating"] is None
+
+    row = _default_admin_roster_row(
+        _ctx([]),
+        "Zoe",
+        order=1,
+        player_name_to_id={},
+        default_new_player_rating=None,
+    )
+    assert row["resolution_status"] == "create_new_player"
+    assert row["starting_jupr_rating"] is None
 
 
 def test_append_roster_names_preserves_custom_order_and_appends_existing_players():
@@ -200,6 +215,39 @@ def test_create_and_resolve_mixed_existing_and_new_players(monkeypatch):
     assert resolved_ids["Zoe"] >= 100
     assert created_names == ["Zoe"]
     assert created_calls[0]["rating_jupr"] == 3.7
+
+
+def test_create_new_player_requires_explicit_starting_rating(monkeypatch):
+    ctx = _ctx([])
+    created_calls = []
+    monkeypatch.setattr(
+        "jupr_app.ui.live.shared.safe_add_player",
+        lambda **kwargs: created_calls.append(kwargs) or (True, ""),
+    )
+
+    participant_names, resolved_ids, review_messages, created_names = (
+        _create_and_resolve_admin_players(
+            ctx,
+            roster_rows=[
+                {
+                    "order": 1,
+                    "display_name": "Zoe",
+                    "resolution_status": "create_new_player",
+                    "starting_jupr_rating": None,
+                }
+            ],
+            default_new_player_rating=None,
+            player_name_to_id={},
+        )
+    )
+
+    assert participant_names == ["Zoe"]
+    assert resolved_ids == {}
+    assert created_names == []
+    assert created_calls == []
+    assert review_messages == [
+        "Review roster: Zoe needs an explicit Starting JUPR before a new player can be created."
+    ]
 
 
 def test_needs_review_requires_explicit_selection(monkeypatch):

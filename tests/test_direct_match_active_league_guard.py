@@ -46,6 +46,7 @@ def test_active_league_snapshot_contains_full_lifecycle_cas() -> None:
                 "status": "active",
                 "is_active": True,
                 "ended_at": None,
+                "match_format": "doubles",
             },
         }
     ]
@@ -90,5 +91,6 @@ def test_singles_and_doubles_forward_the_same_league_guard_snapshot() -> None:
     assert "league_metadata_expectations" in singles
     assert "df_meta=df_meta" in direct
     assert "df_meta=df_meta" in admin_singles
+    assert "df_leagues=df_leagues" in admin_singles
     assert "JUPR_DIRECT_MATCH_LEAGUE_METADATA_STALE" in migration
     assert "v_match_format = 'singles'" in migration

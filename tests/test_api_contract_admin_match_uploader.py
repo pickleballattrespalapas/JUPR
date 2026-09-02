@@ -4,6 +4,8 @@ from types import SimpleNamespace
 
 from tests.conftest import require_api_dependency
 from tests.test_admin_match_uploader_service import FakeSupabase, fake_load_data, fake_storage
+from jupr_app.services.admin_match_uploader_service import match_uploader_player_batch_fingerprint
+from jupr_app.services.admin_guarded_write_service import GuardedWriteRecoveryRequired
 
 require_api_dependency("fastapi")
 require_api_dependency("supabase")
@@ -164,7 +166,7 @@ def test_match_uploader_preview_gate_does_not_open_uploader_writes(monkeypatch):
     assert client.post(
         "/admin/clubs/club/match-uploader/players",
         headers={"Authorization": "Bearer local"},
-        json={"players": [{"name": "Test", "starting_jupr": 3.5}]},
+        json={"players": [{"name": "Test", "starting_jupr": 3.5}], "reviewed_fingerprint": match_uploader_player_batch_fingerprint([{"name": "Test", "starting_jupr": 3.5}]), "idempotency_key": "preview-player-create", "confirmation_text": "CREATE PLAYERS"},
     ).status_code == 403
 
 
@@ -176,10 +178,11 @@ def test_match_uploader_create_players_contract(monkeypatch):
     monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: FakeSupabase(storage))
     _install_auth(monkeypatch)
 
+    reviewed_players = [{"name": "New Person", "starting_jupr": 3.5}]
     response = TestClient(app).post(
         "/admin/clubs/club/match-uploader/players",
         headers={"Authorization": "Bearer local"},
-        json={"source": "test", "players": [{"name": "New Person", "starting_jupr": 3.5}]},
+        json={"source": "test", "players": reviewed_players, "reviewed_fingerprint": match_uploader_player_batch_fingerprint(reviewed_players), "idempotency_key": "create-player-batch", "confirmation_text": "CREATE PLAYERS"},
     )
 
     assert response.status_code == 200
@@ -187,7 +190,67 @@ def test_match_uploader_create_players_contract(monkeypatch):
     assert payload["ok"] is True
     assert payload["accepted_count"] == 1
     assert payload["players"][0]["name"] == "New Person"
-    assert storage["admin_activity_log"][0]["action_type"] == "create_match_uploader_players"
+    assert any(row["action_type"] == "create_match_uploader_players" for row in storage["admin_activity_log"])
+
+    operation = TestClient(app).get(
+        "/admin/clubs/club/match-uploader/player-operations/create-player-batch",
+        headers={"Authorization": "Bearer local"},
+    )
+    assert operation.status_code == 200
+    assert operation.json()["operation_key"] == "create-player-batch"
+    assert operation.json()["status"] == "completed"
+    assert operation.json()["result_json"]["accepted_count"] == 1
+    assert operation.json()["error_text"] is None
+
+
+def test_match_uploader_player_operation_requires_authentication(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: FakeSupabase(fake_storage()))
+
+    response = TestClient(app).get(
+        "/admin/clubs/club/match-uploader/player-operations/create-player-batch"
+    )
+
+    assert response.status_code == 401
+
+
+def test_match_uploader_ambiguous_player_batch_returns_structured_recovery(monkeypatch):
+    storage = fake_storage()
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_MATCH_UPLOADER", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: FakeSupabase(storage))
+    monkeypatch.setattr(
+        "services.api.admin_match_uploader_routes.create_admin_match_uploader_players",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            GuardedWriteRecoveryRequired("create-player-timeout", "Player batch outcome is uncertain.")
+        ),
+    )
+    _install_auth(monkeypatch)
+    reviewed = [{"name": "José Núñez", "starting_jupr": 3.5}]
+
+    response = TestClient(app).post(
+        "/admin/clubs/club/match-uploader/players",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "source": "test",
+            "players": reviewed,
+            "reviewed_fingerprint": match_uploader_player_batch_fingerprint(reviewed),
+            "idempotency_key": "create-player-timeout",
+            "confirmation_text": "CREATE PLAYERS",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "code": "RECOVERY_REQUIRED",
+        "kind": "uncertain",
+        "message": "Player batch outcome is uncertain.",
+        "operation_key": "create-player-timeout",
+        "recovery_required": True,
+    }
 
 
 def test_match_uploader_submit_contract(monkeypatch):

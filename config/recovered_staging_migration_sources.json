@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "source_project_role": "staging",
+  "source_ledger_table": "supabase_migrations.schema_migrations",
+  "terminal_newline_policy": "Repository SQL files end with one LF. For source statements that did not, hash verification removes only that canonical repository LF.",
+  "migrations": [
+    {
+      "version": "20260716191928",
+      "name": "harden_public_data_api",
+      "source_statement_chars": 4831,
+      "source_statement_sha256": "8aa94a3101828b775bc869d5d0db26f6259076bc0bcd0185eee80023b0430939",
+      "source_statement_ended_with_newline": true
+    },
+    {
+      "version": "20260716192101",
+      "name": "fix_public_function_search_paths",
+      "source_statement_chars": 988,
+      "source_statement_sha256": "6048d994e85b623d60b8b9e11a131ceea68adc902f688dca5b333e2167dc8710",
+      "source_statement_ended_with_newline": true
+    },
+    {
+      "version": "20260716235127",
+      "name": "add_admin_activity_log",
+      "source_statement_chars": 962,
+      "source_statement_sha256": "477e4c5dbc1de49beac41c4b61a28074098edbd8921bf719f508c3e92c981e4e",
+      "source_statement_ended_with_newline": false
+    },
+    {
+      "version": "20260716235131",
+      "name": "add_replay_jobs",
+      "source_statement_chars": 454,
+      "source_statement_sha256": "607d7772b0d4f377c57764906d5dab67e748e573cba11a26559c7d4a302c1a8b",
+      "source_statement_ended_with_newline": false
+    },
+    {
+      "version": "20260716235136",
+      "name": "add_public_leaderboards_view",
+      "source_statement_chars": 1312,
+      "source_statement_sha256": "3a7854d9bb5bd3111a53f416205c8688d42ff462e503302c68d11a95bae6af9a",
+      "source_statement_ended_with_newline": false
+    },
+    {
+      "version": "20260716235140",
+      "name": "add_admin_match_log_duplicate_resolutions",
+      "source_statement_chars": 1681,
+      "source_statement_sha256": "600634e74574f5fd2d7622bda413196e533bf2aa5804f2beae8764e29234e9b7",
+      "source_statement_ended_with_newline": false
+    },
+    {
+      "version": "20260716235253",
+      "name": "add_public_support_requests",
+      "source_statement_chars": 1470,
+      "source_statement_sha256": "cb0950ea41f86e106e40d61c9f8fa9518b02d2eaf77068bcb1472c912f6f4054",
+      "source_statement_ended_with_newline": false
+    },
+    {
+      "version": "20260716235257",
+      "name": "add_league_live_sessions",
+      "source_statement_chars": 3514,
+      "source_statement_sha256": "298b696355433b901f045c6e858c76bd46714d054a458066b69ac9cb5ee2f771",
+      "source_statement_ended_with_newline": false
+    },
+    {
+      "version": "20260716235329",
+      "name": "reharden_staging_feature_objects",
+      "source_statement_chars": 3134,
+      "source_statement_sha256": "dbfcb829a7f3ec138c1cc8038c1423a266141971100b5a011a252000ad9f6611",
+      "source_statement_ended_with_newline": false
+    },
+    {
+      "version": "20260717002154",
+      "name": "repair_next_staging_schema_contract",
+      "source_statement_chars": 4805,
+      "source_statement_sha256": "d2cbbc2f7bdd408c6eba9399c4bfbc11b32cf29d162398bae89c235b326446eb",
+      "source_statement_ended_with_newline": true
+    },
+    {
+      "version": "20260717002606",
+      "name": "restore_matches_soft_delete_contract",
+      "source_statement_chars": 302,
+      "source_statement_sha256": "147cb2b939a4c06a1fa318bd25b2de266056ae89afd43a1a36c9ec8a02fca6f8",
+      "source_statement_ended_with_newline": false
+    },
+    {
+      "version": "20260717003919",
+      "name": "enforce_next_schema_contract",
+      "source_statement_chars": 3291,
+      "source_statement_sha256": "1abdc41b22e85af60509eadbadb5ad608fd06ab9cebd1d006e12a1782638b6b8",
+      "source_statement_ended_with_newline": false
+    },
+    {
+      "version": "20260717015534",
+      "name": "revoke_legacy_public_privileges",
+      "source_statement_chars": 2227,
+      "source_statement_sha256": "fd446764f16cd97fdf35666f549ed8659e9467bf815b859cd9c0621c0475f9b2",
+      "source_statement_ended_with_newline": false
+    }
+  ]
+}

@@ -1,18 +1,9 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import TournamentPhaseNav from "@/components/TournamentPhaseNav";
+import { readTournamentRouteContext, tournamentRouteHref } from "@/lib/tournamentRouteContext";
 
 type Props = { searchParams?: Record<string, string | string[] | undefined> };
-
-function first(value: string | string[] | undefined): string {
-  return Array.isArray(value) ? String(value[0] || "") : String(value || "");
-}
-
-function href(path: string, tournament: string, name: string): string {
-  const params = new URLSearchParams({ tournament });
-  if (name) params.set("name", name);
-  return `${path}?${params.toString()}`;
-}
 
 const cardStyle = {
   border: "1px solid #e2e8f0",
@@ -22,9 +13,14 @@ const cardStyle = {
 };
 
 export default function TournamentPartnersPage({ searchParams }: Props) {
-  const tournamentId = first(searchParams?.tournament).trim();
-  const tournamentName = first(searchParams?.name).trim();
-  if (!tournamentId) redirect("/admin/tournaments");
+  const context = readTournamentRouteContext(searchParams);
+  if (!context.tournamentId) redirect("/admin/tournaments");
+  const partnerBoardParams = new URLSearchParams({
+    tournament_id: context.tournamentId
+  });
+  if (context.drawId) partnerBoardParams.set("draw", context.drawId);
+  const partnerBoardHref =
+    `/clubs/tres-palapas/tournament-partner-board?${partnerBoardParams.toString()}`;
 
   return (
     <section>
@@ -41,7 +37,7 @@ export default function TournamentPartnersPage({ searchParams }: Props) {
         Tournament Manager / Registration
       </p>
       <h1 style={{ marginTop: 0 }}>
-        {tournamentName || "Tournament"} partners and teams
+        {context.tournamentName || "Tournament"} partners and teams
       </h1>
       <TournamentPhaseNav phase="registration" />
       <div
@@ -57,7 +53,7 @@ export default function TournamentPartnersPage({ searchParams }: Props) {
             Review open partner requests, automatic pairing, and incomplete
             doubles entries.
           </p>
-          <Link href="/partner-board">Open Partner Board</Link>
+          <Link href={partnerBoardHref}>Open Partner Board</Link>
         </article>
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>Registration identities</h2>
@@ -66,11 +62,7 @@ export default function TournamentPartnersPage({ searchParams }: Props) {
             registrant.
           </p>
           <Link
-            href={href(
-              "/admin/tournaments/registration/registrants",
-              tournamentId,
-              tournamentName
-            )}
+            href={tournamentRouteHref("/admin/tournaments/registration/registrants", context)}
           >
             Open registrants
           </Link>
@@ -82,11 +74,7 @@ export default function TournamentPartnersPage({ searchParams }: Props) {
             rosters.
           </p>
           <Link
-            href={href(
-              "/admin/tournaments/team-competition",
-              tournamentId,
-              tournamentName
-            )}
+            href={tournamentRouteHref("/admin/tournaments/team-competition", context)}
           >
             Open team play
           </Link>

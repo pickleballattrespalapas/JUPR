@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
-import type { AdminSocialMatchLogResponse, AdminSocialMatchLogRow, AdminMatchLogWriteResult } from "@/lib/adminMatchLogApi";
+import { actionSuccess, actionUncertain, type ActionCompletion } from "@/components/interaction";
+import type { AdminSocialMatchLogResponse, AdminSocialMatchLogRow, AdminMatchLogWriteResult, AdminSocialMatchOperationResponse } from "@/lib/adminMatchLogApi";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
 type MatchLogSocialPanelProps = {
@@ -32,6 +33,39 @@ type LoadRowsOptions = {
   preferredId?: string;
 };
 
+type SocialSaveRequest = {
+  socialMatchId: string;
+  contextKey: string;
+  changedFields: string[];
+  body: Record<string, unknown> & {
+    expected_current: Record<string, unknown>;
+    idempotency_key: string;
+    confirmation_text: string;
+  };
+};
+
+type SocialWriteRecovery = {
+  operationKey: string;
+  socialMatchId: string;
+  changedFields: string[];
+  status: string;
+  message: string;
+};
+
+type StoredSocialWriteRecovery = SocialWriteRecovery & { version: 1 };
+
+class SocialApiRequestError extends Error {
+  readonly status: number;
+  readonly detail: unknown;
+
+  constructor(message: string, status: number, detail: unknown) {
+    super(message);
+    this.name = "SocialApiRequestError";
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 const inputStyle = { width: "100%", padding: "0.55rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
 const buttonStyle = { padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800 };
@@ -43,6 +77,49 @@ function apiUrl(apiBase: string, path: string): string {
 
 function rowId(row: AdminSocialMatchLogRow | null): string {
   return String(row?.social_match_id ?? row?.id ?? "");
+}
+
+function operationKey(action: string, entityId: string): string {
+  const suffix =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `${action}:${entityId}:${suffix}`;
+}
+
+function socialApiErrorMessage(detail: unknown, status: number): string {
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (detail && typeof detail === "object" && "message" in detail) {
+    const message = String((detail as { message?: unknown }).message || "").trim();
+    if (message) return message;
+  }
+  return `API error (${status})`;
+}
+
+function isUncertainSocialError(error: unknown): boolean {
+  if (!(error instanceof SocialApiRequestError)) return true;
+  if (error.detail && typeof error.detail === "object") {
+    const explicit = error.detail as { kind?: unknown; recovery_required?: unknown };
+    if (explicit.kind === "failed" && explicit.recovery_required !== true) return false;
+  }
+  if (error.status >= 500 || [408, 425, 429].includes(error.status)) return true;
+  if (!error.detail || typeof error.detail !== "object") return false;
+  const detail = error.detail as {
+    code?: unknown;
+    kind?: unknown;
+    recovery_required?: unknown;
+  };
+  return (
+    detail.code === "RECOVERY_REQUIRED" ||
+    detail.kind === "uncertain" ||
+    detail.recovery_required === true
+  );
+}
+
+function socialErrorOperationKey(error: unknown, fallback: string): string {
+  if (!(error instanceof SocialApiRequestError) || !error.detail || typeof error.detail !== "object") return fallback;
+  const operationKeyValue = (error.detail as { operation_key?: unknown }).operation_key;
+  return typeof operationKeyValue === "string" && operationKeyValue ? operationKeyValue : fallback;
 }
 
 function dateInput(value?: string | null): string {
@@ -123,6 +200,29 @@ function buildPatch(row: AdminSocialMatchLogRow, edit: SocialEditState): Record<
   return patch;
 }
 
+function expectedCurrentForPatch(
+  row: AdminSocialMatchLogRow,
+  patch: Record<string, unknown>
+): Record<string, unknown> {
+  const expected: Record<string, unknown> = {};
+  for (const field of Object.keys(patch)) {
+    if (field === "event_name") {
+      expected[field] = normalizeEventName(row.event_name);
+    } else if (field === "played_on") {
+      expected[field] = dateInput(row.played_on || row.date);
+    } else if (
+      field === "round_number" ||
+      field === "court_number" ||
+      field === "mini_round_number" ||
+      field === "score_t1" ||
+      field === "score_t2"
+    ) {
+      expected[field] = row[field] == null ? null : Number(row[field]);
+    }
+  }
+  return expected;
+}
+
 function resultMessage(result: AdminMatchLogWriteResult | null): string | null {
   if (!result?.ok) return null;
   if (result.mode === "social_match_updated") return `Updated Club Social match ${result.social_match_id || "row"}.`;
@@ -168,7 +268,52 @@ export default function MatchLogSocialPanel({ apiBase, clubId, enabled }: MatchL
   const [mutationFeedback, setMutationFeedback] = useState<Feedback | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [result, setResult] = useState<AdminMatchLogWriteResult | null>(null);
+  const [writeRecovery, setWriteRecovery] = useState<SocialWriteRecovery | null>(null);
+  const [checkingWriteRecovery, setCheckingWriteRecovery] = useState(false);
   const selectedRow = rows.find((row) => rowId(row) === selectedId) || null;
+  const writeRecoveryStorageKey = `jupr-match-log-social-write-recovery:${clubId}`;
+
+  useEffect(() => {
+    setWriteRecovery(null);
+    try {
+      const raw = globalThis.sessionStorage?.getItem(writeRecoveryStorageKey);
+      if (!raw) return;
+      const stored = JSON.parse(raw) as Partial<StoredSocialWriteRecovery>;
+      if (
+        stored.version === 1
+        && typeof stored.operationKey === "string"
+        && typeof stored.socialMatchId === "string"
+        && Array.isArray(stored.changedFields)
+        && typeof stored.status === "string"
+        && typeof stored.message === "string"
+      ) {
+        setWriteRecovery(stored as StoredSocialWriteRecovery);
+      }
+    } catch {
+      // The in-memory guard remains available if session storage is blocked.
+    }
+  }, [writeRecoveryStorageKey]);
+
+  function retainWriteRecovery(recovery: SocialWriteRecovery) {
+    setWriteRecovery(recovery);
+    try {
+      globalThis.sessionStorage?.setItem(
+        writeRecoveryStorageKey,
+        JSON.stringify({ version: 1, ...recovery } satisfies StoredSocialWriteRecovery),
+      );
+    } catch {
+      // The in-memory state still blocks another write in this page session.
+    }
+  }
+
+  function clearWriteRecovery() {
+    setWriteRecovery(null);
+    try {
+      globalThis.sessionStorage?.removeItem(writeRecoveryStorageKey);
+    } catch {
+      // A conclusive server response remains authoritative if cleanup is blocked.
+    }
+  }
 
   async function loadRows(options: LoadRowsOptions = {}): Promise<boolean> {
     const requestGeneration = loadGenerationRef.current + 1;
@@ -272,47 +417,192 @@ export default function MatchLogSocialPanel({ apiBase, clubId, enabled }: MatchL
     setResult(null);
   }
 
-  async function saveRow() {
-    if (!selectedRow) return;
+  async function fetchSocialOperation<T>(path: string, init: RequestInit = {}): Promise<T> {
     const mutationAccessToken = accessTokenRef.current;
-    const mutationContextKey = contextKeyRef.current;
-    setBusy(true);
+    if (!apiBase) throw new Error("API base URL is not configured.");
+    if (!mutationAccessToken) throw new Error("Sign in before inspecting the retained Club Social operation.");
+    const response = await fetch(apiUrl(apiBase, path), {
+      ...init,
+      headers: {
+        ...(init.body === undefined ? {} : { "Content-Type": "application/json" }),
+        Authorization: `Bearer ${mutationAccessToken}`,
+        ...init.headers,
+      },
+    });
+    const payload = await response.json().catch(() => null) as T | { detail?: unknown } | null;
+    if (!response.ok) {
+      const detail = (payload as { detail?: unknown } | null)?.detail;
+      throw new SocialApiRequestError(socialApiErrorMessage(detail, response.status), response.status, detail);
+    }
+    return payload as T;
+  }
+
+  async function reconcileSocialOperation(
+    retainedRecovery: SocialWriteRecovery | null = writeRecovery,
+  ): Promise<ActionCompletion> {
+    if (!retainedRecovery) throw new Error("No Club Social operation is waiting for recovery.");
+    const path = `/admin/clubs/${encodeURIComponent(clubId)}/match-log/social/operations/${encodeURIComponent(retainedRecovery.operationKey)}`;
+    setCheckingWriteRecovery(true);
     setMutationFeedback(null);
-    setResult(null);
     try {
-      if (!apiBase) throw new Error("API base URL is not configured.");
-      if (!mutationAccessToken || !mutationContextKey) throw new Error("Sign in at /admin/login before editing Club Social rows.");
-      const socialMatchId = rowId(selectedRow);
-      const patch = buildPatch(selectedRow, edit);
-      const changedFields = Object.keys(patch);
-      if (!changedFields.length) throw new Error("No Club Social changes detected for the selected row.");
-      const response = await fetch(apiUrl(apiBase, `/admin/clubs/${encodeURIComponent(clubId)}/match-log/social/${encodeURIComponent(socialMatchId)}`), {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${mutationAccessToken}` },
-        body: JSON.stringify({ ...patch, source: "next_match_log_social_editor" })
-      });
-      const payload = await response.json().catch(() => null) as AdminMatchLogWriteResult | { detail?: unknown } | null;
-      if (!response.ok) throw new Error(String((payload as { detail?: unknown } | null)?.detail || `API error (${response.status})`));
-      const writeResult = payload as AdminMatchLogWriteResult;
-      if (mutationContextKey !== contextKeyRef.current || !enabledRef.current) return;
-      await loadRows({ announce: false, preferredId: socialMatchId });
-      if (mutationContextKey !== contextKeyRef.current || !enabledRef.current) return;
-      setResult(writeResult);
-      setMutationFeedback({
-        tone: "success",
-        text: `${resultMessage(writeResult) || "Saved Club Social row."} Changed ${changedFields.length} ${changedFields.length === 1 ? "field" : "fields"}: ${changedFields.join(", ")}.`
-      });
-    } catch (error) {
-      if (mutationContextKey === contextKeyRef.current && enabledRef.current) {
-        setMutationFeedback({ tone: "error", text: error instanceof Error ? error.message : "Unable to save Club Social row." });
+      const operation = await fetchSocialOperation<AdminSocialMatchOperationResponse>(path);
+      let operationStatus = String(operation.status || "unknown");
+      let recoveryRequired = operation.recovery_required === true;
+      let recovered = operation.result || null;
+
+      if (operationStatus !== "completed" && operationStatus !== "failed") {
+        recovered = await fetchSocialOperation<AdminMatchLogWriteResult>(`${path}/reconcile`, {
+          method: "POST",
+          body: JSON.stringify({
+            confirmation_text: "RECONCILE SOCIAL MATCH",
+            source: "next_match_log_social_operation_reconcile",
+          }),
+        });
+        operationStatus = recovered.ok === false ? String(recovered.status || "failed") : "completed";
+        recoveryRequired = recovered.recovery_required === true;
       }
+
+      if (operationStatus === "completed" && recovered?.ok !== false) {
+        await loadRows({ announce: false, preferredId: retainedRecovery.socialMatchId });
+        const authoritativeResult = recovered || { ok: true, mode: "social_match_updated", social_match_id: retainedRecovery.socialMatchId };
+        setResult(authoritativeResult);
+        clearWriteRecovery();
+        const successMessage = `${resultMessage(authoritativeResult) || "The Club Social edit completed."} The authoritative row was refreshed.`;
+        setMutationFeedback({ tone: "success", text: successMessage });
+        return actionSuccess("Club Social operation reconciled", successMessage);
+      }
+
+      if (operationStatus === "failed" && !recoveryRequired) {
+        clearWriteRecovery();
+        const failedMessage = `Exact Club Social operation ${retainedRecovery.operationKey} is proven failed. Review the current row before submitting a new edit.`;
+        setMutationFeedback({ tone: "success", text: failedMessage });
+        return actionSuccess("Club Social operation checked", failedMessage);
+      }
+
+      const pendingMessage = operation.error || retainedRecovery.message;
+      const pending = { ...retainedRecovery, status: operationStatus, message: pendingMessage };
+      retainWriteRecovery(pending);
+      return actionUncertain(
+        "Club Social operation still needs verification",
+        `Operation ${retainedRecovery.operationKey} is ${operationStatus.replace(/_/g, " ")}. New Club Social writes remain blocked.`,
+        retainedRecovery.operationKey,
+        "Check and reconcile exact operation",
+        () => reconcileSocialOperation(pending),
+      );
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Unable to reconcile the Club Social edit.";
+      const pending = { ...retainedRecovery, status: "recovery_required", message: errorMessage };
+      retainWriteRecovery(pending);
+      setMutationFeedback({ tone: "error", text: `${errorMessage} Operation ${retainedRecovery.operationKey} remains retained; do not submit another edit.` });
+      return actionUncertain(
+        "Club Social operation still needs verification",
+        `${errorMessage} The exact operation reference remains retained.`,
+        retainedRecovery.operationKey,
+        "Check and reconcile exact operation",
+        () => reconcileSocialOperation(pending),
+      );
     } finally {
-      if (mutationContextKey === contextKeyRef.current) setBusy(false);
+      setCheckingWriteRecovery(false);
     }
   }
 
-  async function deleteRow(confirmationText: string) {
-    if (!selectedRow) return;
+  async function executeSocialSave(request: SocialSaveRequest): Promise<ActionCompletion> {
+    const mutationAccessToken = accessTokenRef.current;
+    if (!apiBase) throw new Error("API base URL is not configured.");
+    if (!mutationAccessToken || request.contextKey !== contextKeyRef.current) {
+      throw new Error("Sign in at /admin/login and reload the selected Club Social row before saving.");
+    }
+    if (writeRecovery) throw new Error(`Resolve exact operation ${writeRecovery.operationKey} before saving another Club Social edit.`);
+    setBusy(true);
+    setMutationFeedback(null);
+    setResult(null);
+    let requestSent = false;
+    try {
+      requestSent = true;
+      const response = await fetch(apiUrl(apiBase, `/admin/clubs/${encodeURIComponent(clubId)}/match-log/social/${encodeURIComponent(request.socialMatchId)}`), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${mutationAccessToken}` },
+        body: JSON.stringify(request.body)
+      });
+      const payload = await response.json().catch(() => null) as AdminMatchLogWriteResult | { detail?: unknown } | null;
+      if (!response.ok) {
+        const detail = (payload as { detail?: unknown } | null)?.detail;
+        throw new SocialApiRequestError(
+          socialApiErrorMessage(detail, response.status),
+          response.status,
+          detail
+        );
+      }
+      const writeResult = payload as AdminMatchLogWriteResult;
+      if (!writeResult.ok) throw new Error("The Club Social edit returned without authoritative success.");
+      const successMessage = `${resultMessage(writeResult) || "Saved Club Social row."} Changed ${request.changedFields.length} ${request.changedFields.length === 1 ? "field" : "fields"}: ${request.changedFields.join(", ")}.`;
+      if (request.contextKey === contextKeyRef.current && enabledRef.current) {
+        await loadRows({ announce: false, preferredId: request.socialMatchId });
+        if (request.contextKey === contextKeyRef.current && enabledRef.current) {
+          setResult(writeResult);
+          setMutationFeedback({ tone: "success", text: successMessage });
+        }
+      }
+      return actionSuccess("Club Social match saved", successMessage);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Unable to save Club Social row.";
+      if (requestSent && isUncertainSocialError(error)) {
+        const retainedOperationKey = socialErrorOperationKey(error, request.body.idempotency_key);
+        const recoveryMessage = `${errorMessage} The exact edit is retained as ${retainedOperationKey}; check and reconcile it before making another edit.`;
+        const recovery: SocialWriteRecovery = {
+          operationKey: retainedOperationKey,
+          socialMatchId: request.socialMatchId,
+          changedFields: request.changedFields,
+          status: "uncertain",
+          message: errorMessage,
+        };
+        retainWriteRecovery(recovery);
+        if (request.contextKey === contextKeyRef.current && enabledRef.current) {
+          setMutationFeedback({ tone: "error", text: recoveryMessage });
+        }
+        return actionUncertain(
+          "Club Social edit needs verification",
+          recoveryMessage,
+          retainedOperationKey,
+          "Check and reconcile exact operation",
+          () => reconcileSocialOperation(recovery)
+        );
+      }
+      if (request.contextKey === contextKeyRef.current && enabledRef.current) {
+        setMutationFeedback({ tone: "error", text: errorMessage });
+      }
+      throw error;
+    } finally {
+      if (request.contextKey === contextKeyRef.current) setBusy(false);
+    }
+  }
+
+  function saveRow(confirmationText: string): Promise<ActionCompletion> {
+    if (!selectedRow) throw new Error("Select a Club Social row before saving.");
+    if (writeRecovery) throw new Error(`Resolve exact operation ${writeRecovery.operationKey} before saving another Club Social row.`);
+    const mutationContextKey = contextKeyRef.current;
+    if (!mutationContextKey) throw new Error("Sign in before saving a Club Social row.");
+    const socialMatchId = rowId(selectedRow);
+    const patch = buildPatch(selectedRow, edit);
+    const changedFields = Object.keys(patch);
+    if (!changedFields.length) throw new Error("No Club Social changes detected for the selected row.");
+    return executeSocialSave({
+      socialMatchId,
+      contextKey: mutationContextKey,
+      changedFields,
+      body: {
+        ...patch,
+        expected_current: expectedCurrentForPatch(selectedRow, patch),
+        idempotency_key: operationKey("save-social-match", socialMatchId),
+        confirmation_text: confirmationText,
+        source: "next_match_log_social_editor"
+      }
+    });
+  }
+
+  async function deleteRow(confirmationText: string): Promise<ActionCompletion> {
+    if (!selectedRow) throw new Error("Select a Club Social row before deleting it.");
+    if (writeRecovery) throw new Error(`Resolve exact operation ${writeRecovery.operationKey} before deleting a Club Social row.`);
     const mutationAccessToken = accessTokenRef.current;
     const mutationContextKey = contextKeyRef.current;
     setBusy(true);
@@ -329,15 +619,19 @@ export default function MatchLogSocialPanel({ apiBase, clubId, enabled }: MatchL
       const payload = await response.json().catch(() => null) as AdminMatchLogWriteResult | { detail?: unknown } | null;
       if (!response.ok) throw new Error(String((payload as { detail?: unknown } | null)?.detail || `API error (${response.status})`));
       const writeResult = payload as AdminMatchLogWriteResult;
-      if (mutationContextKey !== contextKeyRef.current || !enabledRef.current) return;
+      if (!writeResult.ok) throw new Error("The Club Social delete did not complete.");
+      if (mutationContextKey !== contextKeyRef.current || !enabledRef.current) throw new Error("The admin session changed before the deleted row response was applied.");
       await loadRows({ announce: false });
-      if (mutationContextKey !== contextKeyRef.current || !enabledRef.current) return;
+      if (mutationContextKey !== contextKeyRef.current || !enabledRef.current) throw new Error("The admin session changed before Club Social rows could be refreshed.");
       setResult(writeResult);
-      setMutationFeedback({ tone: "success", text: resultMessage(writeResult) || "Deleted Club Social row." });
+      const successMessage = resultMessage(writeResult) || "Deleted Club Social row.";
+      setMutationFeedback({ tone: "success", text: successMessage });
+      return actionSuccess("Club Social row deleted", successMessage);
     } catch (error) {
       if (mutationContextKey === contextKeyRef.current && enabledRef.current) {
         setMutationFeedback({ tone: "error", text: error instanceof Error ? error.message : "Unable to delete Club Social row." });
       }
+      throw error;
     } finally {
       if (mutationContextKey === contextKeyRef.current) setBusy(false);
     }
@@ -371,6 +665,17 @@ export default function MatchLogSocialPanel({ apiBase, clubId, enabled }: MatchL
       </p>
       {loadFeedback ? <p role={loadFeedback.tone === "error" ? "alert" : "status"} style={{ color: feedbackColor(loadFeedback), fontWeight: 700 }}>{loadFeedback.text}</p> : null}
       {warnings.length ? <ul style={{ color: "#92400e", paddingLeft: "1.25rem" }}>{warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
+      {writeRecovery ? (
+        <section aria-live="polite" style={{ border: "1px solid #f59e0b", borderRadius: "12px", padding: "0.75rem", background: "#fffbeb", marginBottom: "1rem" }}>
+          <h3 style={{ marginTop: 0 }}>Club Social edit needs exact-operation recovery</h3>
+          <p style={{ color: "#92400e" }}>Do not save or delete another Club Social row until this exact operation is reconciled.</p>
+          <p><strong>Operation key:</strong> <code style={{ overflowWrap: "anywhere" }}>{writeRecovery.operationKey}</code><br /><strong>Last known status:</strong> {writeRecovery.status.replace(/_/g, " ")}</p>
+          <p>{writeRecovery.message}</p>
+          <button type="button" onClick={() => void reconcileSocialOperation()} disabled={checkingWriteRecovery || !accessToken} style={secondaryButtonStyle}>
+            {checkingWriteRecovery ? "Checking and reconciling…" : "Check and reconcile exact operation"}
+          </button>
+        </section>
+      ) : null}
       {rows.length ? (
         <div style={{ display: "grid", gap: "0.75rem" }}>
           <label><strong>Club Social row</strong><br />
@@ -399,7 +704,17 @@ export default function MatchLogSocialPanel({ apiBase, clubId, enabled }: MatchL
             <label><strong>Team 2 score</strong><br /><input type="number" min="0" step="1" value={edit.scoreT2} onChange={(event) => setEdit((current) => ({ ...current, scoreT2: event.target.value }))} style={inputStyle} /></label>
           </div>
           <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-            <button type="button" onClick={saveRow} disabled={busy || !accessToken || !selectedRow} style={buttonStyle}>{busy ? "Working…" : "Save Club Social row"}</button>
+            <ConfirmAction
+              triggerLabel="Save Club Social row"
+              title="Save this Club Social match?"
+              description="This compares every changed field with the exact values you loaded, then records the reviewed edit through one durable operation."
+              preview={selectedRow ? <p style={{ margin: 0 }}><strong>Match:</strong> {playerLabel(selectedRow)} · {selectedRow.score_t1 ?? 0}-{selectedRow.score_t2 ?? 0}</p> : undefined}
+              confirmLabel="Yes, save match"
+              confirmationText="SAVE SOCIAL MATCH"
+              disabled={busy || !accessToken || !selectedRow || Boolean(writeRecovery)}
+              busy={busy}
+              onConfirm={saveRow}
+            />
             <button type="button" onClick={resetFields} disabled={busy || !selectedRow} style={secondaryButtonStyle}>Reset fields</button>
           </p>
           {mutationFeedback ? <p role={mutationFeedback.tone === "error" ? "alert" : "status"} style={{ color: feedbackColor(mutationFeedback), fontWeight: 700 }}>{mutationFeedback.text}</p> : null}
@@ -415,7 +730,7 @@ export default function MatchLogSocialPanel({ apiBase, clubId, enabled }: MatchL
               confirmLabel="Yes, delete row"
               confirmationText="DELETE"
               tone="danger"
-              disabled={busy || !accessToken || !selectedRow}
+              disabled={busy || !accessToken || !selectedRow || Boolean(writeRecovery)}
               busy={busy}
               onConfirm={deleteRow}
             />

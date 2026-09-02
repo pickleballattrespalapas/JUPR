@@ -1,9 +1,14 @@
 import Link from "next/link";
+import { LeagueAwardRaceGrid } from "@/components/LeagueAwardRace";
 import { getPublicTeamLeague, teamLeagueApiBaseUrl } from "@/lib/teamLeagueApi";
 import TeamLeagueRegistrationForm from "./TeamLeagueRegistrationForm";
 
 type Props = { params: { clubSlug: string; leagueName: string } };
 const card = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white", minWidth: 0 };
+
+function categoryLabel(category: string): string {
+  return ({ mens: "Men's", womens: "Women's", mixed: "Mixed", open: "Open" } as Record<string, string>)[category] || "Open";
+}
 
 export default async function TeamLeagueDetailPage({ params }: Props) {
   const leagueName = decodeURIComponent(params.leagueName);
@@ -25,6 +30,7 @@ export default async function TeamLeagueDetailPage({ params }: Props) {
         <h1>{data.league.league_name}</h1>
         <p style={{ color: "#475569" }}>
           {data.league.venue || "Venue to be announced"} ·{" "}
+          {categoryLabel(data.league.team_category)} · {data.league.team_size}-player primary roster ·{" "}
           {data.league.allow_substitutes ? "Substitutes allowed" : "No substitutes"} ·{" "}
           {data.league.playoff_format === "none" ? "Round robin season" : "Round robin plus playoffs"}
         </p>
@@ -38,14 +44,24 @@ export default async function TeamLeagueDetailPage({ params }: Props) {
           {data.teams.map((team) => (
             <div key={team.id} style={{ padding: "0.75rem", borderRadius: "10px", background: "#f8fafc", minWidth: 0, overflowWrap: "anywhere" }}>
               <strong>{team.team_name}</strong>
-              <div style={{ color: "#475569" }}>{team.players.map((player) => player.player_name).join(" & ")}</div>
+              <div style={{ color: "#475569" }}>
+                {team.players.map((player) => `${player.player_name}${player.role === "alternate" ? " (alternate)" : ""}`).join(", ")}
+              </div>
             </div>
           ))}
         </div>
-        {!data.teams.length ? <p>No partner-confirmed teams yet.</p> : null}
+        {!data.teams.length ? <p>No confirmed teams yet.</p> : null}
+      </article>
+      <article style={{ ...card, background: "#eff6ff", borderColor: "#bfdbfe" }} data-testid="team-league-awards">
+        <h2 style={{ marginTop: 0 }}>Awards race</h2>
+        {data.award_progress.awards.length ? <>
+          <p style={{ color: "#475569" }}>Top five qualified teams are shown for each award. Expand a race to see every eligible team.</p>
+          <LeagueAwardRaceGrid progress={data.award_progress} clubSlug={params.clubSlug} />
+        </> : <p style={{ color: "#475569", marginBottom: 0 }}>No team has met the current award qualification criteria yet.</p>}
       </article>
       <article style={card}>
-        <h2 style={{ marginTop: 0 }}>Standings</h2>
+        <h2 style={{ marginTop: 0 }}>Team standings</h2>
+        <p style={{ color: "#475569" }}>This record table is separate from the current awards race.</p>
         <div style={{ overflowX: "auto", maxWidth: "100%", minWidth: 0 }}>
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "520px" }}>
             <thead><tr><th align="left">Rank</th><th align="left">Team</th><th>Played</th><th>Wins</th><th>Losses</th><th>Point diff.</th></tr></thead>

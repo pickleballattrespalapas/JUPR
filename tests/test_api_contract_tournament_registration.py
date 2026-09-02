@@ -230,7 +230,7 @@ def test_public_tournament_registration_integrity_errors_are_api_400(integrity_c
     )
     assert untrusted_player_link.status_code == 200
     mallory = next(row for row in storage["tournament_registrations"] if row["email"] == "mallory@example.com")
-    assert mallory["player_id"] is None
+    assert mallory["player_id"] not in {None, 11}
 
     duplicate_family = api.post(
         "/clubs/tres-palapas/tournament-registration",

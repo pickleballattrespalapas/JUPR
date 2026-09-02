@@ -17,6 +17,7 @@ import {
   useLatestRequestGuard
 } from "@/lib/useAuthenticatedAutoLoad";
 import { useAdminSession } from "@/lib/useAdminSession";
+import { tournamentRouteHref } from "@/lib/tournamentRouteContext";
 
 type Props = {
   apiBase: string | null;
@@ -24,6 +25,7 @@ type Props = {
   status: AdminTournamentStatusResponse;
   tournamentId: string;
   tournamentName: string;
+  drawId: string;
 };
 
 type RegistrationSummary = {
@@ -96,11 +98,10 @@ function numberValue(
 function selectedHref(
   path: string,
   tournamentId: string,
-  tournamentName: string
+  tournamentName: string,
+  drawId: string
 ): string {
-  const params = new URLSearchParams({ tournament: tournamentId });
-  if (tournamentName) params.set("name", tournamentName);
-  return `${path}?${params.toString()}`;
+  return tournamentRouteHref(path, { tournamentId, tournamentName, drawId });
 }
 
 function orderForRegistration(
@@ -139,7 +140,8 @@ export default function TournamentRegistrantListPanel({
   clubId,
   status,
   tournamentId,
-  tournamentName
+  tournamentName,
+  drawId
 }: Props) {
   const { accessToken, loading: sessionLoading } = useAdminSession();
   const [detail, setDetail] = useState<AdminTournamentDetailResponse | null>(null);
@@ -299,7 +301,8 @@ export default function TournamentRegistrantListPanel({
                       registration.id
                     )}`,
                     tournamentId,
-                    tournamentName
+                    tournamentName,
+                    drawId
                   )}
                   style={{ display: "inline-block", padding: "0.5rem 0.8rem", borderRadius: "999px", border: "1px solid #0f172a", textDecoration: "none", color: "#0f172a", fontWeight: 800 }}
                 >

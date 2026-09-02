@@ -10,8 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Explain permanent staging mode
+      - name: Explain persistent staging write mode
         run: |
           echo "Issue-driven staging evidence orchestration is retired."
-          echo "Staging remains permanently writable for acceptance testing."
+          echo "Staging remains open for ongoing acceptance testing with write_wave=open."
           echo "Read-only checks can run directly without changing the staging write posture."

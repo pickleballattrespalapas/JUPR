@@ -11,21 +11,24 @@ def read(path: str) -> str:
 def test_guided_setup_order_and_policy_merge() -> None:
     nav = read("components/TournamentSetupWizardNav.tsx")
     panel = read("app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")
-    assert 'label: "Tournament basics and policies"' in nav
+    assert 'label: "Tournament"' in nav
     assert 'key: "schedule"' in nav
     assert nav.index('key: "schedule"') < nav.index('key: "events"') < nav.index('key: "divisions"')
     assert '"registration-rules"' not in nav
-    assert "Step {definition.number} of 6" in panel
+    assert "Domain {domainDefinition.number} of 4" in panel
     assert "TournamentSetupPolicies" in panel
     assert 'goTo("schedule")' in panel
     assert 'saveDraftAndContinue("events")' in panel
-    assert 'saveDraftAndContinue("divisions")' in panel
-    assert 'saveDraftAndContinue("pricing")' in panel
+    assert 'goTo("divisions")' in panel
+    assert 'goTo("pricing")' in panel
+    assert "Continue to Divisions" in panel
+    assert "Continue to Commerce" in panel
 
 
 def test_lifecycle_overview_and_phase_nav_match_refined_setup_flow() -> None:
     overview = read("app/admin/tournaments/TournamentLifecycleOverviewPanel.tsx")
     phase_nav = read("components/TournamentPhaseNav.tsx")
+    nav = read("components/TournamentSetupWizardNav.tsx")
     for label in (
         "1. Tournament basics and policies",
         "2. Schedule and courts",
@@ -35,15 +38,12 @@ def test_lifecycle_overview_and_phase_nav_match_refined_setup_flow() -> None:
         "6. Review and open registration",
     ):
         assert label in overview
-    for label in (
-        "1. Basics & policies",
-        "2. Schedule & courts",
-        "3. Events",
-        "4. Divisions",
-        "5. Pricing & extras",
-        "6. Review & open",
-    ):
-        assert label in phase_nav
+    for label in ("Tournament", "Competition", "Commerce", "Review"):
+        assert f'label: "{label}"' in phase_nav
+    assert 'label: "Venue and tournament days"' in nav
+    assert 'label: "Events and event policies"' in nav
+    assert 'label: "Fees, extras, bundles, and giveaways"' in nav
+    assert 'label: "Preview, conflicts, publish, and registration"' in nav
     assert '"registration-rules"' not in phase_nav
     assert overview.index("1. Tournament basics and policies") < overview.index("2. Schedule and courts")
     assert overview.index("2. Schedule and courts") < overview.index("3. Events") < overview.index("4. Divisions")
@@ -51,9 +51,8 @@ def test_lifecycle_overview_and_phase_nav_match_refined_setup_flow() -> None:
 
 def test_legacy_registration_rules_route_redirects_to_basics() -> None:
     route = read("app/admin/tournaments/setup/registration-rules/page.tsx")
-    assert 'redirect(`/admin/tournaments/setup/basics?' in route
-    assert 'params.set("tournament", tournament)' in route
-    assert 'params.set("name", name)' in route
+    assert "readTournamentRouteContext(searchParams)" in route
+    assert 'redirect(tournamentRouteHref("/admin/tournaments/setup/basics", context))' in route
 
 
 def test_policy_templates_and_weather_policy_are_required() -> None:
@@ -81,16 +80,30 @@ def test_add_division_uses_dialog_instead_of_appending_hidden_row() -> None:
     dialog = read("app/admin/tournaments/setup/TournamentSetupDivisionDialog.tsx")
     division_card = read("app/admin/tournaments/setup/TournamentSetupDivisionCard.tsx")
     assert "TournamentSetupDivisionDialog" in panel
-    assert 'onClick={() => setDivisionDialogOpen(true)}' in panel
-    assert 'role="dialog"' in dialog
-    assert 'Add division' in dialog
-    assert 'onConfirm(draft)' in dialog
-    assert 'scrollIntoView' in panel
-    assert 'confirmationText=""' in division_card
+    assert "FormDialog" in dialog
+    assert 'from "@/components/interaction"' in dialog
+    assert '<FormDialog' in dialog
+    assert 'onClick={() => setDivisionDialogKey(null)}' in panel
+    assert 'mode={divisionDialogKey === null ? "add" : "edit"}' in panel
+    assert 'onEdit={() => setDivisionDialogKey(row.key)}' in panel
+    assert '? "Add division"' in dialog
+    assert '`Edit ${cleanString(draft.division_name ?? draft.label) || "division"}`' in dialog
+    assert 'dialogMode === "add" ? "Add division" : "Save division"' in dialog
+    assert "const canonicalDraft = setCanonicalRecordString(" in dialog
+    assert "return onConfirm({" in dialog
+    assert "gender_restriction: divisionGender" in dialog
+    assert 'setDivisionDialogKey(undefined)' in panel
+    assert 'onClick={onEdit}' in division_card
+    assert '>Edit<' not in division_card  # JSX includes line breaks around the label.
+    assert 'Edit' in division_card
+    assert '<input' not in division_card
+    assert '<select' not in division_card
 
 
 def test_event_and_division_schedules_support_multiple_days() -> None:
     builder = read("app/admin/tournament-setup/tournamentSetupBuilder.ts")
+    event_dialog = read("app/admin/tournaments/setup/TournamentSetupEventFamilyDialog.tsx")
+    division_dialog = read("app/admin/tournaments/setup/TournamentSetupDivisionDialog.tsx")
     event_card = read("app/admin/tournaments/setup/TournamentSetupEventFamilyCard.tsx")
     division_card = read("app/admin/tournaments/setup/TournamentSetupDivisionCard.tsx")
     service = (ROOT / "jupr_app/services/admin_tournament_setup_service.py").read_text()
@@ -99,9 +112,11 @@ def test_event_and_division_schedules_support_multiple_days() -> None:
     assert "eventDayReferences" in builder
     assert "setEventDayReferences" in builder
     assert "scheduled_day_ids" in builder
-    assert "Select every day on which this event may be played" in event_card
-    assert "Use every day selected for the parent event" in division_card
-    assert "Choose specific event days" in division_card
+    assert "Select every day on which this event may be played" in event_dialog
+    assert "Use every day selected for the parent event" in division_dialog
+    assert "Choose specific event days" in division_dialog
+    assert "No tournament days" in event_card
+    assert "No tournament days" in division_card
     assert '"scheduled_day_ids"' in service
     assert '"scheduled_day_ids"' in repo
     assert "scheduled_day_ids jsonb" in migration
@@ -120,13 +135,15 @@ def test_multi_day_projection_preserves_existing_single_day_contracts() -> None:
     assert 'scheduled_day_ids: ["day-saturday"]' in payload_tests
 
 
-def test_public_registration_displays_required_weather_policy() -> None:
+def test_public_tournament_home_displays_required_weather_policy() -> None:
     public_api = read("lib/tournamentRegistrationApi.ts")
-    public_page = read("app/clubs/[clubSlug]/tournament-registration/page.tsx")
+    registration_page = read("app/clubs/[clubSlug]/tournament-registration/page.tsx")
+    tournament_home = read("app/clubs/[clubSlug]/tournaments/page.tsx")
     assert "weather_policy_markdown?: string | null" in public_api
     assert "scheduled_day_ids?: string[] | null" in public_api
-    assert "settings?.weather_policy_markdown" in public_page
-    assert ">Weather policy<" in public_page
+    assert "settings?.weather_policy_markdown" not in registration_page
+    assert "settings?.weather_policy_markdown" in tournament_home
+    assert ">Weather policy<" in tournament_home
 
 
 def test_public_services_project_weather_and_multi_day_fields() -> None:

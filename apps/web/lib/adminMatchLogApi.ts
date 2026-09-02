@@ -183,6 +183,16 @@ export type AdminSocialMatchLogResponse = {
   warnings?: string[];
 };
 
+export type AdminSocialMatchOperationResponse = {
+  ok: boolean;
+  operation_key: string;
+  status: string;
+  result?: AdminMatchLogWriteResult | null;
+  error?: string | null;
+  recovery_required?: boolean;
+  updated_at?: string | null;
+};
+
 export type AdminMatchLogWriteResult = {
   ok: boolean;
   mode?: string;
@@ -207,6 +217,7 @@ export type AdminMatchLogWriteResult = {
   replay_error?: string | null;
   atomic?: boolean | null;
   operation_id?: string | null;
+  operation_key?: string | null;
   operation_status?: string | null;
   status?: string | null;
   recovery_stage?: string | null;
@@ -215,6 +226,9 @@ export type AdminMatchLogWriteResult = {
   replay_status?: string | null;
   replay_result?: Record<string, unknown> | null;
   operation?: AdminMatchExclusionOperation | null;
+  result?: Record<string, unknown> | null;
+  recovery_required?: boolean | null;
+  reconciled?: boolean | null;
 };
 
 type ApiResult<T> = { data: T | null; error: string | null };
