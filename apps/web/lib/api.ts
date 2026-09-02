@@ -449,6 +449,27 @@ export type LeagueAwardProgress = {
   race_count?: number;
 };
 
+export function normalizeLeagueAwardProgress(
+  progress?: Partial<LeagueAwardProgress> | null
+): LeagueAwardProgress {
+  const awards = Array.isArray(progress?.awards) ? progress.awards : [];
+  const normalized: LeagueAwardProgress = {
+    awards,
+    award_count:
+      typeof progress?.award_count === "number"
+        ? progress.award_count
+        : awards.length
+  };
+  if (Array.isArray(progress?.races)) {
+    normalized.races = progress.races;
+    normalized.race_count =
+      typeof progress.race_count === "number"
+        ? progress.race_count
+        : progress.races.length;
+  }
+  return normalized;
+}
+
 export type LeagueResultsStanding = {
   rank?: number | null;
   player_id: string | number;
@@ -529,6 +550,14 @@ export type LeagueResultsResponse = {
   season_highlights: LeagueResultsHighlights;
   highlights: LeagueResultsHighlights;
   award_progress: LeagueAwardProgress;
+};
+
+type LeagueResultsWireResponse = Omit<
+  LeagueResultsResponse,
+  "past_leagues" | "award_progress"
+> & {
+  past_leagues?: LeagueResultsLeague[] | null;
+  award_progress?: Partial<LeagueAwardProgress> | null;
 };
 
 type ApiResult<T> = { data: T | null; error: string | null };
@@ -668,5 +697,18 @@ export async function getClubLeagueResults(
   if (player) params.set("player", String(player));
   if (weeklyMinGames) params.set("weekly_min_games", String(weeklyMinGames));
   const query = params.toString();
-  return fetchJson<LeagueResultsResponse>(`/clubs/${clubSlug}/league-results${query ? `?${query}` : ""}`);
+  const result = await fetchJson<LeagueResultsWireResponse>(
+    `/clubs/${clubSlug}/league-results${query ? `?${query}` : ""}`
+  );
+  if (!result.data) return { data: null, error: result.error };
+  return {
+    data: {
+      ...result.data,
+      past_leagues: Array.isArray(result.data.past_leagues)
+        ? result.data.past_leagues
+        : [],
+      award_progress: normalizeLeagueAwardProgress(result.data.award_progress)
+    },
+    error: result.error
+  };
 }
