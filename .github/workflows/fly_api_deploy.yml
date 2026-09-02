@@ -680,7 +680,11 @@ jobs:
               jq -er '.fly_config_sha256' \
                 "$RUNNER_TEMP/production-rollback-snapshot.json"
             )"
-            ACTUAL_CONFIG_SHA="$(sha256sum "$PREDEPLOY_CONFIG" | awk '{print $1}')"
+            ACTUAL_CONFIG_SHA="$(
+              python -c \
+                'import sys; from pathlib import Path; from scripts.deployment_verifier import predeploy_fly_config_fingerprint; print(predeploy_fly_config_fingerprint(Path(sys.argv[1])))' \
+                "$PREDEPLOY_CONFIG"
+            )"
             if [[ ! "$PREDEPLOY_IMMUTABLE_IMAGE" =~ ^registry\.fly\.io/juprleagues-api@sha256:[0-9a-f]{64}$ ]]; then
               echo "::error title=Rollback identity rejected::The saved rollback image is not an immutable image for the exact production app."
               exit 2

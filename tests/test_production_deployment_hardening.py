@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -160,7 +161,80 @@ def test_production_fly_config_is_exact_reviewed_live_policy() -> None:
     } == set(verifier.PRODUCTION_ENABLED_FEATURE_FLAGS)
 
 
-def test_predeploy_fly_config_fingerprint_binds_exact_production_config(
+def _saved_fly_config(*, generated_at: str, region: str = "dfw") -> bytes:
+    return (
+        "# fly.toml app configuration file generated for "
+        f"{verifier.PRODUCTION_FLY_APP} on {generated_at}\n"
+        f'app = "{verifier.PRODUCTION_FLY_APP}"\n'
+        f'primary_region = "{region}"\n'
+    ).encode("utf-8")
+
+
+def test_predeploy_fly_config_fingerprint_ignores_generated_at_timestamp(
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "first.toml"
+    second = tmp_path / "second.toml"
+    first_raw = _saved_fly_config(generated_at="2026-09-02T15:08:41Z")
+    second_raw = _saved_fly_config(generated_at="2026-09-02T15:33:04Z")
+    first.write_bytes(first_raw)
+    second.write_bytes(second_raw)
+
+    expected = hashlib.sha256(
+        first_raw.replace(b"2026-09-02T15:08:41Z", b"<generated-at>", 1)
+    ).hexdigest()
+    assert verifier.predeploy_fly_config_fingerprint(first) == expected
+    assert verifier.predeploy_fly_config_fingerprint(second) == expected
+
+
+def test_predeploy_fly_config_fingerprint_binds_other_config_bytes(
+    tmp_path: Path,
+) -> None:
+    original = tmp_path / "original.toml"
+    changed = tmp_path / "changed.toml"
+    changed_comment = tmp_path / "changed-comment.toml"
+    original.write_bytes(
+        _saved_fly_config(generated_at="2026-09-02T15:08:41Z")
+    )
+    changed.write_bytes(
+        _saved_fly_config(
+            generated_at="2026-09-02T15:33:04Z",
+            region="iad",
+        )
+    )
+    changed_comment.write_bytes(
+        _saved_fly_config(generated_at="2026-09-02T15:33:04Z")
+        + b"# reviewed operator note\n"
+    )
+
+    original_fingerprint = verifier.predeploy_fly_config_fingerprint(original)
+    assert original_fingerprint != verifier.predeploy_fly_config_fingerprint(changed)
+    assert original_fingerprint != verifier.predeploy_fly_config_fingerprint(
+        changed_comment
+    )
+
+
+def test_predeploy_fly_config_fingerprint_normalizes_only_exact_leading_header(
+    tmp_path: Path,
+) -> None:
+    exact = tmp_path / "exact.toml"
+    nonleading = tmp_path / "nonleading.toml"
+    malformed = tmp_path / "malformed.toml"
+    exact_raw = _saved_fly_config(generated_at="2026-09-02T15:08:41Z")
+    nonleading_raw = b"# operator note\n" + exact_raw
+    malformed_raw = _saved_fly_config(generated_at="not-a-timestamp")
+    exact.write_bytes(exact_raw)
+    nonleading.write_bytes(nonleading_raw)
+    malformed.write_bytes(malformed_raw)
+
+    exact_fingerprint = verifier.predeploy_fly_config_fingerprint(exact)
+    assert exact_fingerprint != verifier.predeploy_fly_config_fingerprint(nonleading)
+    assert verifier.predeploy_fly_config_fingerprint(malformed) == hashlib.sha256(
+        malformed_raw
+    ).hexdigest()
+
+
+def test_predeploy_fly_config_fingerprint_rejects_foreign_app(
     tmp_path: Path,
 ) -> None:
     fingerprint = verifier.predeploy_fly_config_fingerprint(ROOT / "fly.toml")
@@ -1375,6 +1449,8 @@ def test_production_workflow_verifies_database_runtime_cors_and_final_write_poli
     assert "flyctl config save" in workflow
     assert "fly_config_sha256" in workflow
     assert '--config "$PREDEPLOY_CONFIG"' in workflow
+    assert "predeploy_fly_config_fingerprint" in workflow
+    assert 'sha256sum "$PREDEPLOY_CONFIG"' not in workflow
     assert '&& [ "$DEPLOY_OUTCOME" != "skipped" ]; then' in workflow
     assert workflow.index("--no-pending-only") < workflow.index("flyctl secrets set")
     assert workflow.count("flyctl ssh console") == 3
