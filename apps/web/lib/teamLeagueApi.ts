@@ -1,4 +1,7 @@
-import type { LeagueAwardProgress } from "./api";
+import {
+  normalizeLeagueAwardProgress,
+  type LeagueAwardProgress
+} from "./api";
 
 export type TeamLeagueSettings = {
   league_name: string;
@@ -73,6 +76,13 @@ export type PublicTeamLeagueDetail = {
   }>;
 };
 
+type PublicTeamLeagueWireDetail = Omit<
+  PublicTeamLeagueDetail,
+  "award_progress"
+> & {
+  award_progress?: Partial<LeagueAwardProgress> | null;
+};
+
 type ApiResult<T> = { data: T | null; error: string | null };
 
 export function teamLeagueApiBaseUrl(): string | null {
@@ -127,7 +137,15 @@ export async function getPublicTeamLeague(
   clubSlug: string,
   leagueName: string
 ): Promise<ApiResult<PublicTeamLeagueDetail>> {
-  return fetchJson(
+  const result = await fetchJson<PublicTeamLeagueWireDetail>(
     `/clubs/${encodeURIComponent(clubSlug)}/team-leagues/${encodeURIComponent(leagueName)}`
   );
+  if (!result.data) return { data: null, error: result.error };
+  return {
+    data: {
+      ...result.data,
+      award_progress: normalizeLeagueAwardProgress(result.data.award_progress)
+    },
+    error: result.error
+  };
 }

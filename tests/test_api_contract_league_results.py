@@ -107,6 +107,7 @@ def test_public_league_results_contract(client):
     payload = response.json()
     assert payload["club"] == {"id": "club-1", "slug": "tres-palapas", "name": "Tres Palapas"}
     assert payload["selected_league"] == "Open"
+    assert payload["past_leagues"] == []
     assert payload["league"] == {
         "name": "Open",
         "league_type": "Individual",
@@ -142,6 +143,9 @@ def test_public_league_results_contract(client):
         payload["player_summary"]["losses"],
     ) == (4, 3, 1)
     assert payload["recent_matches"]
+    assert payload["award_progress"]["award_count"] == len(
+        payload["award_progress"]["awards"]
+    )
 
     assert "admin_notes" not in payload["club"]
     assert "admin_notes" not in payload["standings"][0]
