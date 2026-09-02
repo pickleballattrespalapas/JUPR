@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "action": "quiesce",
-  "confirmation": "QUIESCE PRODUCTION FOR SCHEMA MIGRATION",
-  "release_parent_sha": "5bd40a7c925d99e985b84d13a9306c9c8d52bd54"
+  "action": "restore_baseline",
+  "confirmation": "RESTORE PRODUCTION TO LIVE TOURNAMENT BASELINE",
+  "release_parent_sha": "2f26b6d167781545e7935505a1c61bc6405a7b77"
 }
