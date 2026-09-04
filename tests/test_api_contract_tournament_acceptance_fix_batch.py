@@ -27,12 +27,16 @@ def test_basics_supports_sponsor_reordering_and_draft_publication_clarity() -> N
 
 def test_publish_result_stays_visible_in_the_confirmation_dialog() -> None:
     panel = read_web("app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")
+    route = read_root("services/api/admin_tournament_setup_routes.py")
 
     assert 'import { actionSuccess, type ActionSuccess } from "@/components/interaction";' in panel
     assert "return actionSuccess(" in panel
-    assert 'actionSuccess(\n        "Tournament published"' in panel
-    assert "The reviewed tournament setup is now published." in panel
+    assert "const publishResult = await requestJson<WriteResponse>" in panel
+    assert '"Tournament published and activated"' in panel
+    assert "The reviewed setup is published, and the tournament is now active on the public site." in panel
     assert "Registration status was left unchanged." in panel
+    assert "On first publish, a Draft tournament becomes Active" in panel
+    assert '"activate_draft_on_publish": True' in route
     assert '"Done"' in panel
     assert "throw publishError" in panel
 
