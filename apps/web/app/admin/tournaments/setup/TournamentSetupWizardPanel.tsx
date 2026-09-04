@@ -125,6 +125,8 @@ type WriteResponse = {
   reconciled?: boolean;
   operation_key?: string;
   request_fingerprint?: string;
+  tournament_status?: string;
+  activated_from_draft?: boolean;
 };
 
 type ImpactResponse = {
@@ -2186,7 +2188,7 @@ async function saveResolutionDraft() {
       );
       const draft = publishConfigurationPayload(normalized);
       const builderDraft = configurationPayload(normalized);
-      await requestJson<WriteResponse>(
+      const publishResult = await requestJson<WriteResponse>(
         `/admin/clubs/${encodeURIComponent(
           clubId
         )}/tournaments/setup/tournaments/${encodeURIComponent(
@@ -2207,16 +2209,25 @@ async function saveResolutionDraft() {
           })
         }
       );
+      const registrationWasOpen = safeString(settings.registration_status).toLowerCase() === "open";
       const completion = actionSuccess(
-        "Tournament published",
-        "The reviewed tournament setup is now published. Registration status was left unchanged.",
+        publishResult.activated_from_draft
+          ? "Tournament published and activated"
+          : "Tournament published",
+        publishResult.activated_from_draft
+          ? "The reviewed setup is published, and the tournament is now active on the public site. Registration status was left unchanged."
+          : "The reviewed tournament setup is now published. Its existing lifecycle and registration status were left unchanged.",
         "Done"
       );
       if (!actionRequest.isCurrent(generation)) return completion;
       setSetupPublishedThisSession(true);
       await loadDetail();
       if (actionRequest.isCurrent(generation)) {
-        setMessage("Tournament setup published. Registration can now be opened.");
+        setMessage(
+          publishResult.activated_from_draft
+            ? `Tournament setup published and tournament activated. Registration ${registrationWasOpen ? "remains open." : "can now be opened."}`
+            : `Tournament setup published. Registration ${registrationWasOpen ? "remains open." : "can now be opened."}`
+        );
       }
       return completion;
     } catch (error) {
@@ -3742,10 +3753,13 @@ function renderDivisions() {
           <p style={{ color: "#475569" }}>
             Publish the exact reviewed Tournament, Competition, and Commerce setup. Existing registrations remain protected; hard conflicts require completed registration resolutions, while registration-preserving changes require a saved communication acknowledgement.
           </p>
+          <p style={{ color: "#475569" }}>
+            On first publish, a Draft tournament becomes Active and appears on the public site. Republishing preserves an existing Active, Paused, Inactive, Completed, or Archived lifecycle state. Registration status remains a separate action.
+          </p>
           <ConfirmAction
             triggerLabel={busy ? "Publishing…" : "Publish reviewed tournament"}
             title="Publish this reviewed tournament?"
-            description="Apply the exact reviewed draft to the published tournament. Registration status remains a separate action. Registration resolutions and communication acknowledgements are written to the audit record."
+            description="Apply the exact reviewed draft to the published tournament. A new Draft becomes Active on first publish; every other lifecycle state is preserved. Registration status remains a separate action. Registration resolutions and communication acknowledgements are written to the audit record."
             confirmLabel="Yes, publish tournament"
             confirmationText={publishConfirmation}
             disabled={!impactReview || reviewedDraftSignature !== fullDraftSignature(basics, settings, configuration) || unresolvedBlockers.length > 0 || unresolvedCommunications.length > 0 || resolutionDraftDirty}
