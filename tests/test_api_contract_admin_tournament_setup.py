@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from tests.conftest import require_api_dependency
 
 require_api_dependency("fastapi")
@@ -11,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from jupr_app.domain.tournament_registration_repo import EVENT_CONFIGURATION_WRITE_FIELDS
 from jupr_app.services.admin_tournament_setup_service import _event_option_payload
+from jupr_app.services.public_tournament_results_service import build_public_tournament_index
 from services.api.main import app
 
 
@@ -312,6 +315,14 @@ def test_tournament_setup_draft_and_publish(monkeypatch):
     )
     assert published.status_code == 200
     assert published.json()["publish_result"]["mode"] == "replace"
+    assert published.json()["tournament_status"] == "ACTIVE"
+    assert published.json()["activated_from_draft"] is True
+    assert published.json()["lifecycle_transition"] == {
+        "from_status": "DRAFT",
+        "to_status": "ACTIVE",
+        "changed": True,
+    }
+    assert supabase.storage["tournaments"][0]["status"] == "ACTIVE"
     assert supabase.storage["tournament_registration_settings"][0]["registration_status"] == "open"
     assert supabase.storage["tournament_registration_settings"][0]["registration_slug"] == "setup-smoke"
     assert supabase.storage["tournament_registration_settings"][0]["venue_directions"] == "Enter at the south gate."
@@ -337,6 +348,114 @@ def test_tournament_setup_draft_and_publish(monkeypatch):
     assert event_detail["public_partner_board"] is True
     assert event_detail["event_format_override"] == "ROUND_ROBIN_PLUS_PLAYOFF"
     assert event_detail["scoring_override"] == "GAME_TO_15"
+    current = build_public_tournament_index(supabase, club_id="club", view="current")
+    assert [row["name"] for row in current["tournaments"]] == ["Fall Classic"]
+    publish_audit = next(
+        row
+        for row in supabase.storage["admin_activity_log"]
+        if row["action_type"] == "tournament_setup_publish"
+    )
+    assert publish_audit["after_json"]["value"]["lifecycle_transition"] == {
+        "from_status": "DRAFT",
+        "to_status": "ACTIVE",
+        "changed": True,
+    }
+
+
+@pytest.mark.parametrize(
+    "status",
+    ["ACTIVE", "PAUSED", "INACTIVE", "COMPLETED", "ARCHIVED"],
+)
+def test_tournament_setup_republish_preserves_existing_lifecycle(
+    monkeypatch,
+    status,
+):
+    supabase = FakeSupabase()
+    supabase.storage["tournaments"][0]["status"] = status
+    install_env(monkeypatch, supabase)
+    client = TestClient(app)
+
+    published = client.post(
+        "/admin/clubs/club/tournaments/setup/tournaments/t1/publish",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "days": [],
+            "event_options": [],
+            "confirmation_text": "PUBLISH SETUP",
+        },
+    )
+
+    assert published.status_code == 200
+    assert published.json()["tournament_status"] == status
+    assert published.json()["activated_from_draft"] is False
+    assert published.json()["lifecycle_transition"] == {
+        "from_status": status,
+        "to_status": status,
+        "changed": False,
+    }
+    assert supabase.storage["tournaments"][0]["status"] == status
+
+
+def test_tournament_setup_publish_does_not_activate_before_snapshot_persists(
+    monkeypatch,
+):
+    supabase = FakeSupabase()
+    install_env(monkeypatch, supabase)
+    client = TestClient(app)
+
+    def fail_snapshot(*_args, **_kwargs):
+        raise RuntimeError("snapshot write failed")
+
+    monkeypatch.setattr(
+        "jupr_app.services.admin_tournament_setup_service.save_builder_draft",
+        fail_snapshot,
+    )
+
+    published = client.post(
+        "/admin/clubs/club/tournaments/setup/tournaments/t1/publish",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "days": [],
+            "event_options": [],
+            "confirmation_text": "PUBLISH SETUP",
+        },
+    )
+
+    assert published.status_code == 500
+    assert supabase.storage["tournaments"][0]["status"] == "DRAFT"
+
+
+def test_tournament_setup_publish_does_not_overwrite_a_concurrent_draft_edit(
+    monkeypatch,
+):
+    supabase = FakeSupabase()
+    supabase.storage["tournaments"][0]["updated_at"] = "2026-01-01T00:00:00Z"
+    install_env(monkeypatch, supabase)
+    client = TestClient(app)
+
+    def concurrent_snapshot(*_args, **_kwargs):
+        supabase.storage["tournaments"][0]["updated_at"] = "2026-01-02T00:00:00Z"
+        return {"published_at": "2026-01-02T00:00:01Z"}
+
+    monkeypatch.setattr(
+        "jupr_app.services.admin_tournament_setup_service.save_builder_draft",
+        concurrent_snapshot,
+    )
+
+    published = client.post(
+        "/admin/clubs/club/tournaments/setup/tournaments/t1/publish",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "days": [],
+            "event_options": [],
+            "confirmation_text": "PUBLISH SETUP",
+        },
+    )
+
+    assert published.status_code == 500
+    assert "could not be activated" in published.json()["detail"]
+    assert supabase.storage["tournaments"][0]["status"] == "DRAFT"
+    assert supabase.storage["tournaments"][0]["updated_at"] == "2026-01-02T00:00:00Z"
 
 
 def test_setup_event_detail_projects_every_publishable_event_field() -> None:

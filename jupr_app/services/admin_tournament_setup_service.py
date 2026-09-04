@@ -130,6 +130,69 @@ def _get_tournament_for_club(supabase: Any, *, club_id: str, tournament_id: str)
     return tournament
 
 
+def _activate_tournament_after_first_publish(
+    supabase: Any,
+    *,
+    club_id: str,
+    tournament_id: str,
+    tournament: dict[str, Any],
+) -> dict[str, Any]:
+    """Activate only a newly published DRAFT tournament shell.
+
+    The status comparison makes this a narrow first-publication transition.
+    Republishing must never reactivate a tournament that an operator paused,
+    deactivated, completed, or archived.
+    """
+
+    raw_status = tournament.get("status")
+    status_before = _clean(raw_status, limit=40).upper()
+    if status_before != "DRAFT":
+        return {
+            "from_status": status_before,
+            "to_status": status_before,
+            "changed": False,
+        }
+
+    update_query = (
+        supabase.table("tournaments")
+        .update(
+            {
+                "status": "ACTIVE",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        .eq("id", str(tournament_id))
+        .eq("club_id", str(club_id))
+        .eq("status", raw_status)
+    )
+    if tournament.get("updated_at") not in (None, ""):
+        update_query = update_query.eq("updated_at", tournament.get("updated_at"))
+    response = update_query.execute()
+    rows = _safe_rows(response)
+    if rows:
+        status_after = _clean(rows[0].get("status") or "ACTIVE", limit=40).upper()
+    else:
+        # A concurrent lifecycle action may have moved the tournament out of
+        # DRAFT. Preserve that newer decision instead of forcing it back to
+        # ACTIVE; fail only when the requested transition did not happen.
+        current = _get_tournament_for_club(
+            supabase,
+            club_id=str(club_id),
+            tournament_id=str(tournament_id),
+        )
+        status_after = _clean(current.get("status"), limit=40).upper()
+        if status_after == "DRAFT":
+            raise RuntimeError(
+                "Tournament setup was published, but the tournament could not be activated."
+            )
+
+    return {
+        "from_status": status_before,
+        "to_status": status_after,
+        "changed": status_after == "ACTIVE",
+    }
+
+
 def _settings_payload(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": row.get("id"),
@@ -1271,7 +1334,11 @@ def publish_admin_tournament_setup(
         event_families=event_families,
         builder_event_options=builder_event_options,
     )
-    _get_tournament_for_club(supabase, club_id=str(club_id), tournament_id=str(tournament_id))
+    tournament = _get_tournament_for_club(
+        supabase,
+        club_id=str(club_id),
+        tournament_id=str(tournament_id),
+    )
     impact = analyze_registration_publish_impact(
         supabase,
         tournament_id=str(tournament_id),
@@ -1336,8 +1403,10 @@ def publish_admin_tournament_setup(
             .eq("club_id", str(club_id))
             .execute()
         )
-        if not _safe_rows(response):
+        published_tournament_rows = _safe_rows(response)
+        if not published_tournament_rows:
             raise RuntimeError("Tournament basics were not published.")
+        tournament = {**tournament, **published_tournament_rows[0]}
 
     clean_settings = dict(settings or {})
     before_settings = get_registration_settings(supabase, str(tournament_id))
@@ -1397,6 +1466,16 @@ def publish_admin_tournament_setup(
         published_event_families=list(event_families or []),
         published_at=datetime.now(timezone.utc).isoformat(),
     )
+    if not _clean(published_builder_draft.get("published_at"), limit=80):
+        raise RuntimeError(
+            "Tournament setup publication did not persist a publication timestamp."
+        )
+    lifecycle_transition = _activate_tournament_after_first_publish(
+        supabase,
+        club_id=str(club_id),
+        tournament_id=str(tournament_id),
+        tournament=tournament,
+    )
     warnings = _audit(
         supabase,
         club_id=str(club_id),
@@ -1408,6 +1487,7 @@ def publish_admin_tournament_setup(
             "impact": impact,
             "forced_resolution_summary": forced_resolution_summary,
             "communication_acknowledgement_summary": communication_acknowledgement_summary,
+            "lifecycle_status": lifecycle_transition["from_status"],
         },
         after_json={
             "result": result,
@@ -1418,6 +1498,7 @@ def publish_admin_tournament_setup(
             "forced_resolution_summary": forced_resolution_summary,
             "communication_acknowledgement_summary": communication_acknowledgement_summary,
             "published_builder_draft": published_builder_draft,
+            "lifecycle_transition": lifecycle_transition,
         },
         source=source,
     )
@@ -1429,6 +1510,9 @@ def publish_admin_tournament_setup(
         "forced_resolution_summary": forced_resolution_summary,
         "communication_acknowledgement_summary": communication_acknowledgement_summary,
         "published_builder_draft": published_builder_draft,
+        "lifecycle_transition": lifecycle_transition,
+        "tournament_status": lifecycle_transition["to_status"],
+        "activated_from_draft": lifecycle_transition["changed"],
         "days": [_day_payload(row) for row in list_registration_days(supabase, str(tournament_id))],
         "event_options": [_event_option_payload(row) for row in list_event_options(supabase, str(tournament_id))],
         "warnings": [*warnings, *list(result.get("warnings") or [])],
