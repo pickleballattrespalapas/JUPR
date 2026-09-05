@@ -11,6 +11,7 @@ import {
 } from "@/lib/tournamentRegistrationApi";
 import PairingInterestPanel from "./PairingInterestPanel";
 import PartnerRequestReviewPanel from "./PartnerRequestReviewPanel";
+import { groupPartnerEntries } from "@/lib/tournamentPartnerBoard";
 
 type Props = {
   params: { clubSlug: string };
@@ -148,7 +149,7 @@ export default async function TournamentPartnerBoardPage({
   if (!selectionMatches || !tournament) {
     return (
       <section>
-        <h1>Partner Board unavailable</h1>
+        <h1>Players Needing Partners unavailable</h1>
         <p style={{ color: "#475569" }}>
           The selected tournament is unavailable or no longer published.
         </p>
@@ -168,6 +169,8 @@ export default async function TournamentPartnerBoardPage({
   const visibleEntries = selectedEvent
     ? partnerEntries.filter((entry) => eventKey(entry) === selectedEvent)
     : partnerEntries;
+  const playerGroups = groupPartnerEntries(partnerEntries);
+  const visiblePlayerGroups = groupPartnerEntries(visibleEntries);
   const selectedQuery = boardQuery({
     tournamentId: tournament.id,
     registrationSlug: settings?.registration_slug
@@ -192,7 +195,7 @@ export default async function TournamentPartnerBoardPage({
         tournamentId={tournament.id}
         registrationSlug={settings?.registration_slug || null}
         active="partner-board"
-        kicker="Tournament Partner Board"
+        kicker="Players Needing Partners"
         description="Find players who opted into public partner requests. Contact details stay private, and pairing actions require a secure registration edit link."
       />
 
@@ -206,7 +209,7 @@ export default async function TournamentPartnerBoardPage({
             background: "#fef2f2"
           }}
         >
-          <h2 style={{ marginTop: 0 }}>Partner Board temporarily unavailable</h2>
+          <h2 style={{ marginTop: 0 }}>Players Needing Partners temporarily unavailable</h2>
           <p style={{ color: "#7f1d1d" }}>{error}</p>
         </article>
       ) : null}
@@ -243,7 +246,7 @@ export default async function TournamentPartnerBoardPage({
           }}
         >
           <div>
-            <h2 style={{ marginTop: 0 }}>Open partner requests</h2>
+            <h2 style={{ marginTop: 0 }}>Players needing partners</h2>
             <p style={{ marginBottom: 0, color: "#475569" }}>
               Browse by event, then use your private registration edit link to
               send or accept interest.
@@ -261,7 +264,7 @@ export default async function TournamentPartnerBoardPage({
               fontWeight: 800
             }}
           >
-            {settings?.partner_board_enabled ? "Board open" : "Board disabled"}
+            {settings?.partner_board_enabled ? "Listings open" : "Listings disabled"}
           </span>
         </div>
         <div
@@ -272,10 +275,10 @@ export default async function TournamentPartnerBoardPage({
             marginTop: "1rem"
           }}
         >
-          <div><strong>Open requests</strong><br />{partnerEntries.length}</div>
-          <div><strong>Showing</strong><br />{visibleEntries.length}</div>
+          <div><strong>Players</strong><br />{playerGroups.length}</div>
+          <div><strong>Division listings</strong><br />{partnerEntries.length}</div>
+          <div><strong>Showing players</strong><br />{visiblePlayerGroups.length}</div>
           <div><strong>Registrations</strong><br />{data?.summary?.total_registrations ?? 0}</div>
-          <div><strong>Roster players</strong><br />{data?.summary?.total_players ?? 0}</div>
         </div>
       </article>
 
@@ -320,7 +323,7 @@ export default async function TournamentPartnerBoardPage({
 
       {partnerEntries.length ? (
         <nav
-          aria-label="Partner Board event filters"
+          aria-label="Players Needing Partners event filters"
           style={{
             display: "flex",
             gap: "0.5rem",
@@ -377,23 +380,24 @@ export default async function TournamentPartnerBoardPage({
 
       {!settings?.partner_board_enabled ? (
         <article style={{ ...cardStyle, background: "#f8fafc" }}>
-          <h2 style={{ marginTop: 0 }}>Partner Board is disabled</h2>
+          <h2 style={{ marginTop: 0 }}>Players Needing Partners is disabled</h2>
           <p style={{ color: "#475569" }}>
             The tournament administrator has not enabled public partner requests.
           </p>
         </article>
-      ) : visibleEntries.length ? (
+      ) : visiblePlayerGroups.length ? (
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))",
+            gridTemplateColumns:
+              "repeat(auto-fit, minmax(min(100%, 320px), 1fr))",
             gap: "0.85rem"
           }}
         >
-          {visibleEntries.map((entry) => (
+          {visiblePlayerGroups.map((group) => (
             <article
-              key={entry.board_entry_key || String(entry.player_name)}
-              id={entryAnchor(entry)}
+              key={group.playerKey}
+              data-testid="partner-player-card"
               style={{
                 ...cardStyle,
                 display: "grid",
@@ -401,62 +405,71 @@ export default async function TournamentPartnerBoardPage({
                 alignContent: "start"
               }}
             >
-              <div>
-                <h2 style={{ margin: "0 0 0.3rem", fontSize: "1.1rem" }}>
-                  {entry.player_name}
+              <header>
+                <h2 style={{ margin: "0 0 0.2rem", fontSize: "1.15rem" }}>
+                  {group.playerName}
                 </h2>
-                <p style={{ margin: 0, color: "#1d4ed8", fontWeight: 700 }}>
-                  {eventLabel(entry)}
+                <p style={{ margin: 0, color: "#64748b" }}>
+                  {group.entries.length} division{group.entries.length === 1 ? "" : "s"} needing a partner
                 </p>
+              </header>
+              <div style={{ display: "grid", gap: "0.65rem" }}>
+                {group.entries.map((entry) => (
+                  <section
+                    key={entry.board_entry_key || eventKey(entry)}
+                    id={entryAnchor(entry)}
+                    data-testid="partner-division-listing"
+                    style={{
+                      border: "1px solid #e2e8f0",
+                      borderRadius: "10px",
+                      padding: "0.75rem",
+                      background: "#f8fafc",
+                      scrollMarginTop: "1rem"
+                    }}
+                  >
+                    <h3 style={{ margin: "0 0 0.2rem", fontSize: "1rem" }}>
+                      {entry.division || "Division"}
+                    </h3>
+                    <p style={{ margin: 0, color: "#1d4ed8", fontWeight: 700 }}>
+                      {entry.event_day_label || "Day"} · {entry.event_family || "Event"}
+                    </p>
+                    <p style={{ margin: "0.35rem 0 0", color: "#475569" }}>
+                      Skill {entry.skill || "not listed"} · Age {entry.age_bracket || "open"}
+                    </p>
+                    {entry.note ? (
+                      <p style={{ margin: "0.45rem 0 0", color: "#475569" }}>
+                        <strong>Note:</strong> {entry.note}
+                      </p>
+                    ) : null}
+                    <p style={{ margin: "0.45rem 0 0" }}>
+                      <Link
+                        href={`/clubs/${params.clubSlug}/tournament-partner-board${queryWithEdit}#${entryAnchor(
+                          entry
+                        )}`}
+                        style={{ fontWeight: 800 }}
+                      >
+                        Link to this division
+                      </Link>
+                    </p>
+                    {editToken && editResponse.data ? (
+                      <PairingInterestPanel
+                        apiBase={apiBase}
+                        clubSlug={params.clubSlug}
+                        tournamentId={tournament.id}
+                        registrationSlug={settings?.registration_slug || null}
+                        editToken={editToken}
+                        requesterSelections={requesterSelectionsForEntry(
+                          entry,
+                          editResponse.data.selections || [],
+                          data?.events || [],
+                          data?.days || []
+                        )}
+                        boardEntries={[entry]}
+                      />
+                    ) : null}
+                  </section>
+                ))}
               </div>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-                  gap: "0.6rem"
-                }}
-              >
-                <div>
-                  <strong>Skill</strong><br />
-                  {entry.skill || "Not listed"}
-                </div>
-                <div>
-                  <strong>Age bracket</strong><br />
-                  {entry.age_bracket || "Open"}
-                </div>
-              </div>
-              {entry.note ? (
-                <div>
-                  <strong>Player note</strong>
-                  <p style={{ margin: "0.25rem 0 0", color: "#475569" }}>
-                    {entry.note}
-                  </p>
-                </div>
-              ) : null}
-              <Link
-                href={`/clubs/${params.clubSlug}/tournament-partner-board${queryWithEdit}#${entryAnchor(
-                  entry
-                )}`}
-                style={{ fontWeight: 800 }}
-              >
-                Link to this request
-              </Link>
-              {editToken && editResponse.data ? (
-                <PairingInterestPanel
-                  apiBase={apiBase}
-                  clubSlug={params.clubSlug}
-                  tournamentId={tournament.id}
-                  registrationSlug={settings?.registration_slug || null}
-                  editToken={editToken}
-                  requesterSelections={requesterSelectionsForEntry(
-                    entry,
-                    editResponse.data.selections || [],
-                    data?.events || [],
-                    data?.days || []
-                  )}
-                  boardEntries={[entry]}
-                />
-              ) : null}
             </article>
           ))}
         </div>
@@ -470,7 +483,7 @@ export default async function TournamentPartnerBoardPage({
           <p style={{ color: "#475569" }}>
             {partnerEntries.length
               ? "Select All events to clear the current filter."
-              : "No players have opted into the public Partner Board for this tournament."}
+              : "No players have opted into Players Needing Partners for this tournament."}
           </p>
           {selectedEvent ? (
             <Link

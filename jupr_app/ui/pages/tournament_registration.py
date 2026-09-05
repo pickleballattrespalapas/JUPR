@@ -354,40 +354,6 @@ def _selection_ids_in_confirmed_teams(registration_state: dict[str, Any], event_
     return confirmed
 
 
-def _partner_board_targets_for_event(
-    registration_state: dict[str, Any],
-    event_option_id: str,
-    *,
-    exclude_player_id: Any | None = None,
-    exclude_selection_id: Any | None = None,
-) -> list[dict[str, Any]]:
-    exclude_player = _safe_text(exclude_player_id)
-    exclude_selection = _safe_text(exclude_selection_id)
-    rows: list[dict[str, Any]] = []
-    for roster in registration_state.get("event_rosters") or []:
-        if _safe_text(roster.get("event_option_id")) != _safe_text(event_option_id):
-            continue
-        for entry in roster.get("entries") or []:
-            if _safe_text(entry.get("status")).upper() != "NEEDS_PARTNER":
-                continue
-            member = (entry.get("members") or [{}])[0] or {}
-            selection_id = _safe_text(member.get("selection_id") or entry.get("selection_id"))
-            player_id = _safe_text(member.get("player_id") or entry.get("player_id"))
-            if (exclude_selection and selection_id == exclude_selection) or (exclude_player and player_id == exclude_player):
-                continue
-            rows.append(
-                {
-                    "target_selection_id": selection_id,
-                    "target_registration_id": _safe_text(member.get("registration_id") or entry.get("registration_id")),
-                    "target_player_id": player_id,
-                    "event_option_id": _safe_text(event_option_id),
-                    "display_name": _safe_text(member.get("display_name") or entry.get("display_name")),
-                    "partner_note": _safe_text(entry.get("partner_note")),
-                }
-            )
-    return rows
-
-
 def _registered_partner_target_for_player(registration_state: dict[str, Any], event_option_id: str, player_id: Any) -> dict[str, Any] | None:
     pid = _safe_text(player_id)
     if not pid:
@@ -2046,7 +2012,7 @@ def render(ctx):
             if mode == "NEEDS_PARTNER":
                 board_enabled = bool(event.get("show_partner_board", event.get("partner_board_enabled", True)))
                 event_payload["show_on_partner_board"] = st.checkbox(
-                    "Show me on the public partner board for this division",
+                    "Show me in Players Needing Partners for this division",
                     value=bool(existing.get("show_on_partner_board", board_enabled)),
                     disabled=not board_enabled,
                     key=f"wizard_partner_board_{event_id}",
@@ -2089,30 +2055,6 @@ def render(ctx):
                                     "profile_search_query": search_query,
                                     "partner_skill": _player_current_overall_jupr(player),
                                     "partner_age": _coerce_int(player.get("age")),
-                                }
-                            )
-                            partner_details[event_id] = event_payload
-                            wizard["step4"] = {"partner_details": partner_details}
-                            st.rerun()
-                st.markdown("**Players looking for partners in this division**")
-                targets = _partner_board_targets_for_event(partner_registration_state, event_id, exclude_player_id=current_player_id)
-                if not targets:
-                    st.caption("No one is currently listed as needing a partner for this division.")
-                for target in targets[:20]:
-                    cols = st.columns([3, 1])
-                    with cols[0]:
-                        st.markdown(f"**{_safe_text(target.get('display_name')) or 'Registered player'}**")
-                        if _safe_text(target.get("partner_note")):
-                            st.caption(_safe_text(target.get("partner_note")))
-                    with cols[1]:
-                        if st.button("Request as Partner", key=f"wizard_partner_board_request_{event_id}_{target.get('target_selection_id')}"):
-                            event_payload.update(
-                                {
-                                    "target_selection_id": _safe_text(target.get("target_selection_id")),
-                                    "target_registration_id": _safe_text(target.get("target_registration_id")),
-                                    "target_player_id": _safe_text(target.get("target_player_id")),
-                                    "target_display_name_snapshot": _safe_text(target.get("display_name")),
-                                    "partner_request_source": "NEEDS_PARTNER_LIST",
                                 }
                             )
                             partner_details[event_id] = event_payload

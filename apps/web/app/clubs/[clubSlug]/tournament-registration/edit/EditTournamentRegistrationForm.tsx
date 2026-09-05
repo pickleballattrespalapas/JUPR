@@ -632,7 +632,7 @@ export default function EditTournamentRegistrationForm({
                     defaultChecked={Boolean(prior?.show_on_partner_board)}
                     disabled={!eventOption.partner_board_enabled}
                     onChange={(event) => updateSelectionDraft(editingEventId, { show_on_partner_board: event.target.checked })}
-                  /> Show me on the public partner board for this event
+                  /> Show me on the public Players Needing Partners page for this event
                 </label>
               ) : null}
               <label>Partner note<br /><textarea defaultValue={prior?.partner_note || ""} onChange={(event) => updateSelectionDraft(editingEventId, { partner_note: event.target.value })} rows={2} style={{ width: "100%" }} /></label>
@@ -658,7 +658,7 @@ export default function EditTournamentRegistrationForm({
         <h2 style={{ marginTop: 0 }}>Notes and policies</h2>
         <label>Notes for organizers<br /><textarea name="notes" defaultValue={registration.notes || ""} rows={4} style={{ width: "100%" }} /></label>
         <label style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginTop: "0.75rem" }}>
-          <input name="wants_partner_board_contact" type="checkbox" defaultChecked={Boolean(registration.wants_partner_board_contact)} /> Organizers may use my contact info for partner-board coordination.
+          <input name="wants_partner_board_contact" type="checkbox" defaultChecked={Boolean(registration.wants_partner_board_contact)} /> Organizers may use my contact info for Players Needing Partners coordination.
         </label>
         <label style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginTop: "0.75rem" }}>
           <input name="terms_accepted" type="checkbox" required /> I confirm these registration changes are accurate and agree to tournament policies.

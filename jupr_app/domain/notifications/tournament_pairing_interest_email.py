@@ -35,12 +35,12 @@ def build_pairing_interest_html(
     recipient_kind: str,
     accept_url: str | None = None,
 ) -> str:
-    intro = "A player sent pairing interest from the public tournament board."
+    intro = "A player sent pairing interest from Players Needing Partners."
     action_url = _safe_text(accept_url) or _safe_text(board_url)
-    action_label = "Open tournament board"
+    action_label = "Open Players Needing Partners"
     next_step = "Organizers should review pending pairing interest before final tournament operations."
     if recipient_kind == "player":
-        intro = "Another player sent interest in pairing with you from the public tournament board."
+        intro = "Another player sent interest in pairing with you from Players Needing Partners."
         action_label = "Review and accept request"
         next_step = "If you accept this request, JUPR will automatically pair both registrations for that division."
     return f"""<!doctype html><html><body style=\"font-family:Arial,sans-serif;color:#1f2937\">
@@ -49,10 +49,10 @@ def build_pairing_interest_html(
 <p><strong>Tournament:</strong> {escape(_safe_text(tournament_name))}<br>
 <strong>Division:</strong> {escape(_safe_text(division_name))}<br>
 <strong>Interested player:</strong> {escape(_safe_text(requester_name))}<br>
-<strong>Board entry:</strong> {escape(_safe_text(target_name))}</p>
+<strong>Player listing:</strong> {escape(_safe_text(target_name))}</p>
 <p><a href=\"{escape(action_url)}\" style=\"background:#2563eb;color:white;padding:10px 14px;text-decoration:none;border-radius:6px\">{escape(action_label)}</a></p>
 <p>{escape(next_step)}</p>
-<p><a href=\"{escape(_safe_text(board_url))}\">Open full partner board</a></p>
+<p><a href=\"{escape(_safe_text(board_url))}\">Open Players Needing Partners</a></p>
 </body></html>"""
 
 
@@ -66,20 +66,20 @@ def build_pairing_interest_text(
     recipient_kind: str,
     accept_url: str | None = None,
 ) -> str:
-    intro = "A player sent pairing interest from the public tournament board."
+    intro = "A player sent pairing interest from Players Needing Partners."
     action_url = _safe_text(accept_url) or _safe_text(board_url)
     next_step = "Organizers should review pending pairing interest before final tournament operations."
     if recipient_kind == "player":
-        intro = "Another player sent interest in pairing with you from the public tournament board."
+        intro = "Another player sent interest in pairing with you from Players Needing Partners."
         next_step = "If you accept this request, JUPR will automatically pair both registrations for that division."
     return "\n".join([
         intro,
         f"Tournament: {_safe_text(tournament_name)}",
         f"Division: {_safe_text(division_name)}",
         f"Interested player: {_safe_text(requester_name)}",
-        f"Board entry: {_safe_text(target_name)}",
+        f"Player listing: {_safe_text(target_name)}",
         f"Review request: {action_url}",
-        f"Open tournament board: {_safe_text(board_url)}",
+        f"Open Players Needing Partners: {_safe_text(board_url)}",
         next_step,
     ])
 
@@ -199,19 +199,19 @@ def _pairing_status_copy(*, action: str, recipient_kind: str) -> tuple[str, str]
     if clean_action == "declined":
         return (
             "The requested player declined the partner request. No team was created.",
-            "Review partner requests",
+            "Open Players Needing Partners",
         )
     if clean_action == "cancelled":
         if recipient_kind == "target":
             return (
                 "The interested player cancelled the pending partner request. No team was created.",
-                "Review partner requests",
+                "Open Players Needing Partners",
             )
         return (
             "The pending partner request was cancelled. No team was created.",
-            "Review partner requests",
+            "Open Players Needing Partners",
         )
-    return ("The partner request status changed.", "Review partner requests")
+    return ("The partner request status changed.", "Open Players Needing Partners")
 
 
 def build_pairing_status_html(
@@ -255,7 +255,7 @@ def build_pairing_status_text(
             f"Division: {_safe_text(division_name)}",
             f"Requester: {_safe_text(requester_name)}",
             f"Requested player: {_safe_text(target_name)}",
-            f"Review partner requests: {_safe_text(board_url)}",
+            f"Open Players Needing Partners: {_safe_text(board_url)}",
             "Contact details remain private; use the secure registration link for any further action.",
         ]
     )

@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import pytest
 
+from jupr_app.domain.notifications.tournament_pairing_interest_email import (
+    build_pairing_interest_html,
+    build_pairing_interest_text,
+)
 from jupr_app.domain.tournament_public_references import build_public_tournament_reference
 from jupr_app.domain.tournament_registration_edit_tokens import build_registration_edit_token
 from jupr_app.services import public_tournament_partner_request_service as pairing_service
@@ -27,6 +31,25 @@ def _submit(supabase, *, first_name: str, email: str, mode: str = "NONE", board:
     )
     selection = next(row for row in supabase.storage["tournament_registration_selections"] if row["registration_id"] == result["registration_id"])
     return result["registration_id"], selection["id"]
+
+
+def test_pairing_interest_email_uses_players_needing_partners_name() -> None:
+    kwargs = {
+        "tournament_name": "Tres Open",
+        "division_name": "Mixed 4.0",
+        "requester_name": "Alex Player",
+        "target_name": "Casey Player",
+        "board_url": "https://example.test/tournament-partner-board",
+        "recipient_kind": "player",
+    }
+
+    html = build_pairing_interest_html(**kwargs)
+    text = build_pairing_interest_text(**kwargs)
+
+    assert "Players Needing Partners" in html
+    assert "Players Needing Partners" in text
+    assert "public tournament board" not in html
+    assert "public tournament board" not in text
 
 
 def test_public_pairing_interest_emails_player_and_organizer(monkeypatch) -> None:
@@ -253,7 +276,7 @@ def test_disabled_partner_board_refuses_request_before_write_or_email(monkeypatc
         lambda **_kwargs: calls.update(count=calls["count"] + 1),
     )
 
-    with pytest.raises(ValueError, match="partner board is not available"):
+    with pytest.raises(ValueError, match="Players Needing Partners page is not available"):
         create_public_tournament_partner_request(
             supabase,
             club_id="club-1",

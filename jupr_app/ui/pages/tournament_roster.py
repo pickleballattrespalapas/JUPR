@@ -176,6 +176,9 @@ def _target_selection_id_from_row(row: dict[str, Any]) -> str:
     direct = _safe_text(row.get("selection_id"))
     if direct:
         return direct
+    public_board_entry_key = _safe_text(row.get("board_entry_key"))
+    if public_board_entry_key:
+        return public_board_entry_key
     source_selection_ids = row.get("source_selection_ids") or []
     if source_selection_ids:
         return _safe_text(source_selection_ids[0])
@@ -238,15 +241,14 @@ def _compact_roster_line(row: dict[str, Any], *, tournament_id: str, registratio
     return f"- **{_md(_team_names(members))}** — {_status_with_request_link(row, tournament_id=tournament_id, registration_slug=registration_slug)}{suffix}"
 
 
-def _compact_partner_line(row: dict[str, Any], *, tournament_id: str, registration_slug: str) -> str:
-    player_name = _request_player_name(row)
+def _compact_partner_division_line(row: dict[str, Any], *, tournament_id: str, registration_slug: str) -> str:
     target_selection_id = _target_selection_id_from_row(row)
-    details = [
+    division = _safe_text(row.get("division") or row.get("event_label") or "Division")
+    context = [
         _safe_text(row.get("event_day_label")),
         _safe_text(row.get("event_family")),
-        _safe_text(row.get("division")),
     ]
-    detail_text = " / ".join(part for part in details if part)
+    context_text = " · ".join(part for part in context if part)
     extras = []
     if row.get("skill") not in (None, ""):
         extras.append(f"Skill {_format_skill(row.get('skill'))}")
@@ -260,7 +262,24 @@ def _compact_partner_line(row: dict[str, Any], *, tournament_id: str, registrati
     if target_selection_id:
         request_link = f" · [request partner]({_partner_request_url(tournament_id=tournament_id, registration_slug=registration_slug, target_selection_id=target_selection_id)})"
     extras_text = f" · {_md(' · '.join(extras))}" if extras else ""
-    return f"- **{_md(player_name)}** — {_md(detail_text)}{extras_text}{request_link}"
+    context_suffix = f" — {_md(context_text)}" if context_text else ""
+    return f"- **{_md(division)}**{context_suffix}{extras_text}{request_link}"
+
+
+def _group_partner_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for index, row in enumerate(rows):
+        player_entry_key = _safe_text(row.get("player_entry_key"))
+        board_entry_key = _safe_text(row.get("board_entry_key"))
+        group_key = player_entry_key or (f"entry:{board_entry_key}" if board_entry_key else f"row:{index}")
+        if group_key not in grouped:
+            grouped[group_key] = {
+                "player_entry_key": player_entry_key or None,
+                "player_name": _request_player_name(row),
+                "entries": [],
+            }
+        grouped[group_key]["entries"].append(row)
+    return sorted(grouped.values(), key=lambda group: _safe_text(group.get("player_name")).casefold())
 
 
 def _filter_options(rows: list[dict[str, Any]], field: str) -> list[str]:
@@ -346,7 +365,7 @@ def _render_roster_tab(registrations: list[dict[str, Any]], *, tournament_id: st
 
 
 def _render_partner_tab(partner_rows: list[dict[str, Any]], *, tournament_id: str, registration_slug: str) -> None:
-    st.markdown("### Looking for Partners")
+    st.markdown("### Players Needing Partners")
     if not partner_rows:
         st.info("No players are currently looking for a partner.")
         return
@@ -369,15 +388,30 @@ def _render_partner_tab(partner_rows: list[dict[str, Any]], *, tournament_id: st
         st.info("No partner-needed entries match the selected filters.")
         return
 
-    for row in sorted(filtered, key=lambda row: (_safe_text(row.get("event_day_label")), _safe_text(row.get("event_family")), _safe_text(row.get("division")), _request_player_name(row))):
-        st.markdown(_compact_partner_line(row, tournament_id=tournament_id, registration_slug=registration_slug))
+    for player in _group_partner_rows(filtered):
+        with st.container(border=True):
+            st.markdown(f"#### {_md(player.get('player_name') or 'Player')}")
+            for row in player.get("entries") or []:
+                st.markdown(
+                    _compact_partner_division_line(
+                        row,
+                        tournament_id=tournament_id,
+                        registration_slug=registration_slug,
+                    )
+                )
 
 
 def render(ctx, *, focus_partners: bool = False, legacy_partner_board: bool = False):
     mode_label = "Public" if bool(getattr(ctx, "public_mode", False)) else "Admin"
+    page_title = "🤝 Players Needing Partners" if focus_partners else "📋 Tournament Roster"
+    page_description = (
+        "Find players who have consented to receive partner requests."
+        if focus_partners
+        else "See registered players and teams."
+    )
     page_shell(
-        "📋 Tournament Roster",
-        "See registered players, teams, and players looking for partners.",
+        page_title,
+        page_description,
         mode_label=mode_label,
     )
 
@@ -396,13 +430,12 @@ def render(ctx, *, focus_partners: bool = False, legacy_partner_board: bool = Fa
 
     qp_tournament_id = _safe_text(st.query_params.get("tournament_id"))
     qp_slug = _safe_text(st.query_params.get("tournament"))
-    tournament, settings, days, event_options = _select_public_tournament(ctx, supabase, page_key="tournament_roster")
+    page_key = "tournament_partner_board" if focus_partners else "tournament_roster"
+    tournament, settings, days, event_options = _select_public_tournament(ctx, supabase, page_key=page_key)
     if not tournament:
         st.info("No open tournament registrations are currently published.")
         st.stop()
 
-    if legacy_partner_board:
-        st.info("Partner listings now live inside the Tournament Roster.")
     if qp_tournament_id and str(tournament.get("id")) != qp_tournament_id:
         st.warning("The requested tournament_id is unavailable. Showing the selected open tournament instead.")
     elif qp_slug and _safe_text(settings.get("registration_slug")) != qp_slug:
@@ -431,22 +464,18 @@ def render(ctx, *, focus_partners: bool = False, legacy_partner_board: bool = Fa
                 nav_params["tournament"] = registration_slug
             navigate_same_tab(page="tournament_registration", params=nav_params, public_mode=True)
 
-    summary = state.get("summary") or {}
     registrations = state.get("registrations_by_event") or []
-    partner_rows = state.get("players_needing_partners") or []
+    partner_rows = (state.get("partner_board_entries") or []) if focus_partners else []
     event_count = len({(_safe_text(r.get("event_day_label")), _safe_text(r.get("event_family")), _safe_text(r.get("division"))) for r in registrations})
 
-    metric_cols = st.columns(3)
-    metric_cols[0].metric("Registered entries", len(registrations))
-    metric_cols[1].metric("Events", event_count or len(event_options or []))
-    metric_cols[2].metric("Looking for partners", int(summary.get("players_needing_partners") or len(partner_rows)))
-
-    tab_labels = ["Looking for Partners", "Roster"] if focus_partners else ["Roster", "Looking for Partners"]
-    tabs = dict(zip(tab_labels, st.tabs(tab_labels)))
-    with tabs["Roster"]:
-        _render_roster_tab(registrations, tournament_id=tournament_id, registration_slug=registration_slug)
-    with tabs["Looking for Partners"]:
-        _render_partner_tab(partner_rows, tournament_id=tournament_id, registration_slug=registration_slug)
-
     if focus_partners:
-        st.caption("Opened from the legacy Partner Board link; partner-needed entries are now part of the tournament roster.")
+        player_count = len(_group_partner_rows(partner_rows))
+        metric_cols = st.columns(2)
+        metric_cols[0].metric("Players needing partners", player_count)
+        metric_cols[1].metric("Division requests", len(partner_rows))
+        _render_partner_tab(partner_rows, tournament_id=tournament_id, registration_slug=registration_slug)
+    else:
+        metric_cols = st.columns(2)
+        metric_cols[0].metric("Registered entries", len(registrations))
+        metric_cols[1].metric("Events", event_count or len(event_options or []))
+        _render_roster_tab(registrations, tournament_id=tournament_id, registration_slug=registration_slug)

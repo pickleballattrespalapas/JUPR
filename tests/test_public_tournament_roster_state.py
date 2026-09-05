@@ -1,3 +1,5 @@
+import json
+
 from jupr_app.domain import tournament_registration_repo as repo
 from jupr_app.domain.tournament_public_references import build_public_tournament_reference
 
@@ -139,42 +141,178 @@ def test_public_roster_includes_all_registered_statuses_and_needs_partner_only_l
     assert needs_partner_row["division"] == "3.5"
     assert needs_partner_row["status"] == "Needs Partner"
 
-    assert state["players_needing_partners"] == [
-        {
-            "player_name": "Joe Baumann",
-            "board_entry_key": build_public_tournament_reference(
-                tournament_id="t-1",
-                namespace="partner-board-selection",
-                source_id="sel-joe",
-            ),
-            "event_day_label": "Day 3",
-            "event_family": "Men's Doubles",
-            "division": "3.5",
-            "event_label": "Men's Doubles 3.5",
-            "skill": "3.5",
-            "age_bracket": "40+",
-            "note": "Can play either side",
-        },
-        {
-            "player_name": "Mixed Needs Partner",
-            "board_entry_key": build_public_tournament_reference(
-                tournament_id="t-1",
-                namespace="partner-board-selection",
-                source_id="sel-mixed",
-            ),
-            "event_day_label": "Day 4/5",
-            "event_family": "Mixed Doubles",
-            "division": "4.0",
-            "event_label": "Mixed Doubles 4.0",
-            "skill": None,
-            "age_bracket": None,
-            "note": "",
-        },
-    ]
+    assert state["players_needing_partners"] == []
+    assert state["summary"]["players_needing_partners"] == 0
     assert state["summary"]["waitlist"] == 1
     assert [row["members"][0]["display_name"] for row in state["confirmed_teams"]] == ["Confirmed Player"]
     assert state["pending_partner_requests"] == []
     assert [row["members"][0]["display_name"] for row in state["unresolved_partner_entries"]] == ["Review Player", "Partner Missing Player", "Unknown State Player"]
+
+
+def test_partner_board_player_identity_groups_divisions_without_merging_same_names(monkeypatch):
+    compiled_state = {
+        "settings": {"partner_board_enabled": True},
+        "event_options": [
+            {
+                "id": "event-womens",
+                "event_family_label": "Women's Doubles",
+                "division_name": "4.0",
+                "enabled": True,
+                "partner_board_enabled": True,
+                "status": "open",
+            },
+            {
+                "id": "event-mixed",
+                "event_family_label": "Mixed Doubles",
+                "division_name": "4.0",
+                "enabled": True,
+                "partner_board_enabled": True,
+                "status": "open",
+            },
+        ],
+        "registrations": [
+            {
+                "id": "reg-alex-primary",
+                "display_name": "Alex Smith",
+                "email": "primary.private@example.com",
+                "phone": "555-010-1000",
+                "wants_partner_board_contact": True,
+                "status": "CONFIRMED",
+            },
+            {
+                "id": "reg-alex-distinct",
+                "display_name": "Alex Smith",
+                "email": "distinct.private@example.com",
+                "phone": "555-010-2000",
+                "wants_partner_board_contact": True,
+                "status": "CONFIRMED",
+            },
+        ],
+        "partner_board": [
+            {
+                "selection_id": "sel-primary-womens",
+                "registration_id": "reg-alex-primary",
+                "event_option_id": "event-womens",
+            },
+            {
+                "selection_id": "sel-primary-mixed",
+                "registration_id": "reg-alex-primary",
+                "event_option_id": "event-mixed",
+            },
+            {
+                "selection_id": "sel-distinct-womens",
+                "registration_id": "reg-alex-distinct",
+                "event_option_id": "event-womens",
+            },
+        ],
+        "event_rosters": [
+            {
+                "event_option_id": "event-womens",
+                "event_day_label": "Thursday",
+                "event_label": "Women's Doubles 4.0",
+                "entries": [
+                    {
+                        "status": "NEEDS_PARTNER",
+                        "members": [
+                            {
+                                "registration_id": "reg-alex-primary",
+                                "selection_id": "sel-primary-womens",
+                                "display_name": "Alex Smith",
+                                "skill": "4.0",
+                            }
+                        ],
+                        "source_registration_ids": ["reg-alex-primary"],
+                        "source_selection_ids": ["sel-primary-womens"],
+                        "notes": "Prefer the left side",
+                    },
+                    {
+                        "status": "NEEDS_PARTNER",
+                        "members": [
+                            {
+                                "registration_id": "reg-alex-distinct",
+                                "selection_id": "sel-distinct-womens",
+                                "display_name": "Alex Smith",
+                                "skill": "4.0",
+                            }
+                        ],
+                        "source_registration_ids": ["reg-alex-distinct"],
+                        "source_selection_ids": ["sel-distinct-womens"],
+                        "notes": "Prefer the right side",
+                    },
+                ],
+            },
+            {
+                "event_option_id": "event-mixed",
+                "event_day_label": "Saturday",
+                "event_label": "Mixed Doubles 4.0",
+                "entries": [
+                    {
+                        "status": "NEEDS_PARTNER",
+                        "members": [
+                            {
+                                "registration_id": "reg-alex-primary",
+                                "selection_id": "sel-primary-mixed",
+                                "display_name": "Alex Smith",
+                                "skill": "4.0",
+                            }
+                        ],
+                        "source_registration_ids": ["reg-alex-primary"],
+                        "source_selection_ids": ["sel-primary-mixed"],
+                        "notes": "Available Saturday afternoon",
+                    }
+                ],
+            },
+        ],
+        "summary": {"total_registrations": 2},
+    }
+    monkeypatch.setattr(repo, "build_registration_state", lambda *_args, **_kwargs: compiled_state)
+
+    state = repo.build_public_tournament_roster_state(None, {"id": "t-1"}, {}, [], [])
+    board_entries = state["partner_board_entries"]
+    by_note = {row["note"]: row for row in board_entries}
+    primary_womens = by_note["Prefer the left side"]
+    primary_mixed = by_note["Available Saturday afternoon"]
+    distinct_womens = by_note["Prefer the right side"]
+
+    assert len(board_entries) == 3
+    assert primary_womens["player_entry_key"] == primary_mixed["player_entry_key"]
+    assert primary_womens["player_entry_key"] != distinct_womens["player_entry_key"]
+    assert primary_womens["player_entry_key"] == build_public_tournament_reference(
+        tournament_id="t-1",
+        namespace="partner-board-registration",
+        source_id="reg-alex-primary",
+    )
+    assert distinct_womens["player_entry_key"] == build_public_tournament_reference(
+        tournament_id="t-1",
+        namespace="partner-board-registration",
+        source_id="reg-alex-distinct",
+    )
+    assert {
+        primary_womens["board_entry_key"],
+        primary_mixed["board_entry_key"],
+        distinct_womens["board_entry_key"],
+    } == {
+        build_public_tournament_reference(
+            tournament_id="t-1",
+            namespace="partner-board-selection",
+            source_id=selection_id,
+        )
+        for selection_id in (
+            "sel-primary-womens",
+            "sel-primary-mixed",
+            "sel-distinct-womens",
+        )
+    }
+    assert state["summary"]["players_needing_partners"] == 2
+    assert state["summary"]["partner_board_entries"] == 3
+
+    serialized = json.dumps(board_entries, sort_keys=True)
+    assert "reg-alex-primary" not in serialized
+    assert "reg-alex-distinct" not in serialized
+    assert "primary.private@example.com" not in serialized
+    assert "distinct.private@example.com" not in serialized
+    assert "555-010-1000" not in serialized
+    assert "555-010-2000" not in serialized
 
 
 def test_public_roster_null_state_and_email_fallback_fail_closed(monkeypatch):
@@ -266,8 +404,9 @@ def test_partner_board_projection_requires_display_and_contact_consent(monkeypat
 
     state = repo.build_public_tournament_roster_state(None, {"id": "t-1"}, {}, [], [])
 
-    assert [row["player_name"] for row in state["players_needing_partners"]] == ["Visible Player", "Private Player"]
+    assert [row["player_name"] for row in state["players_needing_partners"]] == ["Visible Player"]
     assert [row["player_name"] for row in state["partner_board_entries"]] == ["Visible Player"]
+    assert state["summary"]["players_needing_partners"] == 1
     assert state["summary"]["partner_board_entries"] == 1
     assert "email" not in str(state["partner_board_entries"]).lower()
     assert "phone" not in str(state["partner_board_entries"]).lower()

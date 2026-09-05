@@ -298,7 +298,7 @@ def create_public_tournament_partner_request(
     settings = bundle.get("settings") or {}
     selections = bundle.get("selections") or []
     if not _safe_bool(settings.get("partner_board_enabled")):
-        raise ValueError("The tournament partner board is not available.")
+        raise ValueError("The Players Needing Partners page is not available.")
     requester_selection_id = _clean_text(requester_selection_id, limit=160)
     public_target_key = _clean_text(target_public_entry_key, limit=80)
     if public_target_key:
@@ -308,7 +308,7 @@ def create_public_tournament_partner_request(
             board_entry_key=public_target_key,
         )
         if not public_target:
-            raise ValueError("Target partner-board entry was not found.")
+            raise ValueError("That Players Needing Partners entry was not found.")
         target_selection_id = str(public_target.get("id") or "")
     target_selection_id = _clean_text(target_selection_id, limit=160)
     if not requester_selection_id or not target_selection_id:
@@ -326,7 +326,7 @@ def create_public_tournament_partner_request(
 
     target_selection = _selection_by_id(supabase, target_selection_id)
     if not target_selection:
-        raise ValueError("Target partner-board entry was not found.")
+        raise ValueError("That Players Needing Partners entry was not found.")
     if str(target_selection.get("tournament_id") or "") != tid:
         raise ValueError("Partner selections must be in the same tournament.")
     if str(requester_selection.get("event_option_id") or "") != str(target_selection.get("event_option_id") or ""):
@@ -334,13 +334,13 @@ def create_public_tournament_partner_request(
 
     event = _event_by_id(supabase, str(target_selection.get("event_option_id") or ""))
     if not _is_public_partner_board_target(target_selection, event):
-        raise ValueError("Target partner-board entry is no longer available.")
+        raise ValueError("That Players Needing Partners entry is no longer available.")
 
     target_registration = _registration_by_id(supabase, str(target_selection.get("registration_id") or ""))
     if not target_registration or not _registration_is_active(target_registration):
-        raise ValueError("Target partner-board entry is no longer available.")
+        raise ValueError("That Players Needing Partners entry is no longer available.")
     if not _safe_bool(target_registration.get("wants_partner_board_contact")):
-        raise ValueError("Target partner-board entry is no longer available.")
+        raise ValueError("That Players Needing Partners entry is no longer available.")
     target_name = _display_name(target_registration)
     requester_name = _display_name(registration)
     created = create_partner_request_atomic(

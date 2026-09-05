@@ -114,7 +114,7 @@ export default function TournamentSetupDivisionCard({
         <div><dt style={{ fontWeight: 800 }}>Capacity</dt><dd style={{ margin: 0 }}>{numberInputValue(value.capacity_teams) || "—"}</dd></div>
         <div><dt style={{ fontWeight: 800 }}>Entry fee</dt><dd style={{ margin: 0 }}>${Number(value.price_usd || 0).toFixed(2)}</dd></div>
         <div><dt style={{ fontWeight: 800 }}>Waitlist</dt><dd style={{ margin: 0 }}>{recordBoolean(value.waitlist_enabled, true) ? "Enabled" : "Disabled"}</dd></div>
-        <div><dt style={{ fontWeight: 800 }}>Partner Board</dt><dd style={{ margin: 0 }}>{participantType !== "SINGLES" && recordBoolean(value.partner_board_enabled, true) ? "Enabled" : "Disabled"}</dd></div>
+        <div><dt style={{ fontWeight: 800 }}>Players Needing Partners</dt><dd style={{ margin: 0 }}>{participantType !== "SINGLES" && recordBoolean(value.partner_board_enabled, true) ? "Enabled" : "Disabled"}</dd></div>
         <div><dt style={{ fontWeight: 800 }}>Draw format</dt><dd style={{ margin: 0 }}>{optionLabel(resolvedDraw)}{drawOverride ? " (division override)" : " (from event)"}</dd></div>
         <div><dt style={{ fontWeight: 800 }}>Scoring</dt><dd style={{ margin: 0 }}>{optionLabel(resolvedScoring)}{scoringOverride ? " (division override)" : " (from event)"}</dd></div>
       </dl>

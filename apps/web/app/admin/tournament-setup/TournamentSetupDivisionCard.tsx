@@ -349,7 +349,7 @@ export function TournamentSetupDivisionCard({
             disabled={disabled}
             onChange={(event) => onChange({ ...value, partner_board_enabled: event.target.checked })}
           />
-          Partner Board enabled
+          Players Needing Partners enabled
         </label>
         <label className={styles.checkbox}>
           <input

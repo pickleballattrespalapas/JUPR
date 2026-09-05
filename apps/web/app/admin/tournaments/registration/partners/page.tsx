@@ -48,12 +48,12 @@ export default function TournamentPartnersPage({ searchParams }: Props) {
         }}
       >
         <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>Partner Board</h2>
+          <h2 style={{ marginTop: 0 }}>Players Needing Partners</h2>
           <p style={{ color: "#475569" }}>
             Review open partner requests, automatic pairing, and incomplete
             doubles entries.
           </p>
-          <Link href={partnerBoardHref}>Open Partner Board</Link>
+          <Link href={partnerBoardHref}>Open Players Needing Partners</Link>
         </article>
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>Registration identities</h2>

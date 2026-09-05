@@ -37,7 +37,7 @@ const routeGroups = [
       ["Tournament Home", "/clubs/tres-palapas/tournaments"],
       ["Registration", "/clubs/tres-palapas/tournament-registration"],
       ["Roster", "/clubs/tres-palapas/tournament-roster"],
-      ["Partner Board", "/clubs/tres-palapas/tournament-partner-board"],
+      ["Players Needing Partners", "/clubs/tres-palapas/tournament-partner-board"],
       ["Team results", "/clubs/tres-palapas/tournament-team-results"]
     ]
   },

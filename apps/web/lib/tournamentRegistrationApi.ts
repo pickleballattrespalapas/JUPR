@@ -151,6 +151,7 @@ export type PublicTournamentRosterEntry = {
 
 export type PublicTournamentNeedsPartnerEntry = {
   player_name?: string | null;
+  player_entry_key?: string | null;
   board_entry_key?: string | null;
   event_day_label?: string | null;
   event_family?: string | null;

@@ -61,7 +61,7 @@ def render(ctx) -> None:  # noqa: ARG001
             </a>
             <a class="jupr-home-card jupr-card jupr-card--hover jupr-home-card-link" href="?page=tournament_registration" aria-label="View tournament registration and updates">
               <h3 class="jupr-home-card-title">Tournaments &amp; Updates</h3>
-              <p class="jupr-home-card-body">Tournament registration, weekly recaps, partner boards, and player notifications.</p>
+              <p class="jupr-home-card-body">Tournament registration, weekly recaps, Players Needing Partners, and player notifications.</p>
               <div class="jupr-home-card-cta">See tournaments →</div>
             </a>
             <a class="jupr-home-card jupr-card jupr-card--hover jupr-home-card-link" href="?page=rating_rules" aria-label="Read the rating rules">

@@ -280,8 +280,8 @@ export default async function TournamentRegistrationPage({
           <div>
             <h2 style={{ margin: 0 }}>Need tournament details?</h2>
             <p style={{ color: "#475569", margin: "0.35rem 0 0" }}>
-              Review the venue, rules, policies, public roster, and Partner Board
-              without losing your place in registration.
+              Review the venue, rules, policies, public roster, and the Players
+              Needing Partners page without losing your place in registration.
             </p>
           </div>
           <span style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>

@@ -5,12 +5,14 @@ from typing import Any
 import streamlit as st
 
 from jupr_app.domain.notifications.tournament_partner_request_email import send_tournament_partner_request_email
+from jupr_app.domain.tournament_public_references import public_tournament_reference_matches
 from jupr_app.domain.tournament_registration_repo import get_public_tournament_bundle, registration_feature_available
 from jupr_app.ui.layout import page_shell
 from jupr_app.ui.public_links import navigate_same_tab
 
 
-_CANCELLED_REGISTRATION_STATUSES = {"cancelled", "canceled"}
+_INACTIVE_REGISTRATION_STATUSES = {"cancelled", "canceled", "withdrawn"}
+_PUBLIC_PARTNER_EVENT_STATUSES = {"open", "tentative", "confirmed", "published", "active"}
 
 
 def _safe_text(value: Any) -> str:
@@ -40,8 +42,18 @@ def _valid_email(value: Any) -> bool:
     return "@" in text and "." in text.rsplit("@", 1)[-1]
 
 
-def _registration_is_cancelled(registration: dict[str, Any]) -> bool:
-    return _safe_text(registration.get("status")).lower() in _CANCELLED_REGISTRATION_STATUSES
+def _safe_bool(value: Any, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return _safe_text(value).lower() in {"1", "true", "t", "yes", "y", "on"}
+
+
+def _registration_is_active(registration: dict[str, Any]) -> bool:
+    return _safe_text(registration.get("status") or "confirmed").lower() not in _INACTIVE_REGISTRATION_STATUSES
 
 
 def _display_name(registration: dict[str, Any]) -> str:
@@ -55,14 +67,21 @@ def _display_name(registration: dict[str, Any]) -> str:
 def _load_target_selection(supabase, *, tournament_id: str, target_selection_id: str) -> dict[str, Any] | None:
     if not target_selection_id:
         return None
-    return _safe_first(
+    rows = _safe_data(
         supabase.table("tournament_registration_selections")
         .select("*")
         .eq("tournament_id", tournament_id)
-        .eq("id", target_selection_id)
-        .limit(1)
         .execute()
     )
+    for row in rows:
+        if public_tournament_reference_matches(
+            target_selection_id,
+            tournament_id=tournament_id,
+            namespace="partner-board-selection",
+            source_id=_safe_text(row.get("id")),
+        ):
+            return row
+    return None
 
 
 def _load_registration(supabase, *, tournament_id: str, registration_id: str) -> dict[str, Any] | None:
@@ -86,6 +105,30 @@ def _day_lookup(days: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return {str(row.get("id")): row for row in days}
 
 
+def _target_is_publicly_available(
+    *,
+    settings: dict[str, Any],
+    selection: dict[str, Any],
+    event: dict[str, Any] | None,
+    registration: dict[str, Any] | None,
+) -> bool:
+    if not _safe_bool(settings.get("partner_board_enabled")):
+        return False
+    if _safe_text(selection.get("partner_mode")).upper() != "NEEDS_PARTNER":
+        return False
+    if not _safe_bool(selection.get("show_on_partner_board")):
+        return False
+    if not event or not _safe_bool(event.get("enabled"), default=True):
+        return False
+    if not _safe_bool(event.get("partner_board_enabled", event.get("public_partner_board"))):
+        return False
+    if _safe_text(event.get("status") or "draft").lower() not in _PUBLIC_PARTNER_EVENT_STATUSES:
+        return False
+    if not registration or not _registration_is_active(registration):
+        return False
+    return _safe_bool(registration.get("wants_partner_board_contact"))
+
+
 def _roster_params(*, tournament_id: str, registration_slug: str) -> dict[str, str]:
     params = {"tournament_id": tournament_id}
     if registration_slug:
@@ -93,9 +136,9 @@ def _roster_params(*, tournament_id: str, registration_slug: str) -> dict[str, s
     return params
 
 
-def _back_to_roster_button(*, tournament_id: str, registration_slug: str, label: str = "Back to tournament roster", primary: bool = False) -> None:
+def _back_to_partner_board_button(*, tournament_id: str, registration_slug: str, label: str = "Back to Players Needing Partners", primary: bool = False) -> None:
     if st.button(label, type="primary" if primary else "secondary"):
-        navigate_same_tab(page="tournament_roster", params=_roster_params(tournament_id=tournament_id, registration_slug=registration_slug), public_mode=True)
+        navigate_same_tab(page="tournament_partner_board", params=_roster_params(tournament_id=tournament_id, registration_slug=registration_slug), public_mode=True)
 
 
 def _resolve_tournament(ctx, supabase, *, tournament_id: str, slug: str):
@@ -133,28 +176,31 @@ def render(ctx) -> None:
 
     if not target_selection_id:
         st.error("This partner request link is missing the requested player.")
-        _back_to_roster_button(tournament_id=tournament_id, registration_slug=registration_slug)
+        _back_to_partner_board_button(tournament_id=tournament_id, registration_slug=registration_slug)
         st.stop()
 
     selection = _load_target_selection(supabase, tournament_id=tournament_id, target_selection_id=target_selection_id)
     if not selection:
         st.error("The requested player entry could not be found.")
-        _back_to_roster_button(tournament_id=tournament_id, registration_slug=registration_slug)
-        st.stop()
-    if _safe_text(selection.get("partner_mode")).upper() != "NEEDS_PARTNER":
-        st.warning("This player is no longer marked as looking for a partner in this division.")
-        _back_to_roster_button(tournament_id=tournament_id, registration_slug=registration_slug)
+        _back_to_partner_board_button(tournament_id=tournament_id, registration_slug=registration_slug)
         st.stop()
 
-    registration = _load_registration(supabase, tournament_id=tournament_id, registration_id=_safe_text(selection.get("registration_id"))) or {}
-    if _registration_is_cancelled(registration):
-        st.warning("This player is no longer available for partner requests because their registration was cancelled.")
-        _back_to_roster_button(tournament_id=tournament_id, registration_slug=registration_slug)
+    registration = _load_registration(supabase, tournament_id=tournament_id, registration_id=_safe_text(selection.get("registration_id")))
+    event = _event_lookup(event_options).get(_safe_text(selection.get("event_option_id")))
+    if not _target_is_publicly_available(
+        settings=settings or {},
+        selection=selection,
+        event=event,
+        registration=registration,
+    ):
+        st.warning("This Players Needing Partners entry is no longer available.")
+        _back_to_partner_board_button(tournament_id=tournament_id, registration_slug=registration_slug)
         st.stop()
 
+    registration = registration or {}
     target_email = _normalize_email(registration.get("email"))
     target_name = _display_name(registration)
-    event = _event_lookup(event_options).get(_safe_text(selection.get("event_option_id"))) or {}
+    event = event or {}
     day = _day_lookup(days).get(_safe_text(selection.get("registration_day_id"))) or {}
     event_label = _safe_text(event.get("event_family_label") or event.get("label") or "Event")
     division_label = _safe_text(event.get("division_name") or event.get("label") or "Division")
@@ -166,13 +212,13 @@ def render(ctx) -> None:
 
     if not target_email:
         st.error("This player does not have an email address on their registration, so the request cannot be sent automatically.")
-        _back_to_roster_button(tournament_id=tournament_id, registration_slug=registration_slug)
+        _back_to_partner_board_button(tournament_id=tournament_id, registration_slug=registration_slug)
         st.stop()
 
     sent_key = f"partner_request_sent_{tournament_id}_{target_selection_id}"
     if st.session_state.get(sent_key):
         st.success("Your partner request was sent. The requested player can contact you using the information you provided.")
-        _back_to_roster_button(tournament_id=tournament_id, registration_slug=registration_slug, primary=True)
+        _back_to_partner_board_button(tournament_id=tournament_id, registration_slug=registration_slug, primary=True)
         return
 
     with st.form(f"partner_request_form_{tournament_id}_{target_selection_id}"):
@@ -214,9 +260,9 @@ def render(ctx) -> None:
                 st.success("Partner request prepared. Email sending is currently in dry-run mode.")
             else:
                 st.success("Partner request sent. The requested player can contact you using the information you provided.")
-            _back_to_roster_button(tournament_id=tournament_id, registration_slug=registration_slug, primary=True)
+            _back_to_partner_board_button(tournament_id=tournament_id, registration_slug=registration_slug, primary=True)
             return
         except Exception as exc:
             st.error(f"Could not send partner request: {exc}")
 
-    _back_to_roster_button(tournament_id=tournament_id, registration_slug=registration_slug, label="Cancel / Back to roster")
+    _back_to_partner_board_button(tournament_id=tournament_id, registration_slug=registration_slug, label="Cancel / Back to Players Needing Partners")

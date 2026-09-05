@@ -3952,8 +3952,14 @@ def build_public_tournament_roster_state(
                     namespace="partner-board-selection",
                     source_id=source_selection_id,
                 )
+                player_entry_key = build_public_tournament_reference(
+                    tournament_id=str(tournament.get("id") or ""),
+                    namespace="partner-board-registration",
+                    source_id=source_registration_id,
+                )
                 needs_partner_row = {
                     "player_name": primary.get("display_name"),
+                    "player_entry_key": player_entry_key or None,
                     "board_entry_key": board_entry_key or None,
                     "event_day_label": event_row["event_day_label"],
                     "event_family": event_row["event_family"],
@@ -3963,12 +3969,23 @@ def build_public_tournament_roster_state(
                     "age_bracket": primary.get("age_bracket"),
                     "note": _public_note(entry.get("notes")),
                 }
-                players_needing_partners.append(needs_partner_row)
                 if (
                     source_selection_id in board_selection_ids
                     and source_registration_id in contact_registration_ids
                 ):
+                    players_needing_partners.append(dict(needs_partner_row))
                     partner_board_entries.append(dict(needs_partner_row))
+
+    unique_partner_player_keys: set[tuple[str, str]] = set()
+    for index, row in enumerate(players_needing_partners):
+        player_entry_key = str(row.get("player_entry_key") or "").strip()
+        board_entry_key = str(row.get("board_entry_key") or "").strip()
+        if player_entry_key:
+            unique_partner_player_keys.add(("player", player_entry_key))
+        elif board_entry_key:
+            unique_partner_player_keys.add(("entry", board_entry_key))
+        else:
+            unique_partner_player_keys.add(("row", str(index)))
 
     return {
         "registrations_by_event": registrations_by_event,
@@ -3980,7 +3997,7 @@ def build_public_tournament_roster_state(
         "summary": {
             "total_registrations": int(state.get("summary", {}).get("total_registrations") or 0),
             "total_players": len(unique_players),
-            "players_needing_partners": len(players_needing_partners),
+            "players_needing_partners": len(unique_partner_player_keys),
             "partner_board_entries": len(partner_board_entries),
             "waitlist": int(state.get("summary", {}).get("waitlist_entries") or 0),
         },

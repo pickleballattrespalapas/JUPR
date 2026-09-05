@@ -127,7 +127,7 @@ export default async function PublicTournamentsPage({
         <h1 style={{ marginTop: 0 }}>Choose a tournament</h1>
         <p style={{ color: "#334155", maxWidth: "820px" }}>
           Select a tournament to open its Tournament Home, registration, roster,
-          and Partner Board.
+          and the Players Needing Partners page.
         </p>
         <p>
           <Link
@@ -349,7 +349,7 @@ export default async function PublicTournamentsPage({
               module: "roster" as const
             },
             {
-              label: "Partner Board",
+              label: "Players Needing Partners",
               description: "Find players who opted into public partner requests.",
               module: "partner-board" as const
             },

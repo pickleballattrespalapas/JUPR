@@ -80,7 +80,7 @@ def test_public_tournament_selection_is_separate_from_selected_workspace() -> No
     assert 'active="overview"' in hub
     assert '["registration", "Register"]' in nav
     assert '["roster", "Roster"]' in nav
-    assert '["partner-board", "Partner Board"]' in nav
+    assert '["partner-board", "Players Needing Partners"]' in nav
     assert "registrationSlug" in nav
     assert "tournamentId" in nav
     assert "PublicTournamentNav" in registration
