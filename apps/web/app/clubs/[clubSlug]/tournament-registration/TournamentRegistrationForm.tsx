@@ -816,7 +816,7 @@ export default function TournamentRegistrationForm({
               Singles skill<br />
               <input aria-label="Singles skill" type="number" min="1" max="7" step="0.01" aria-describedby="singles-skill-help" value={profile.singlesSkill} onChange={(event) => updateProfile("singlesSkill", event.target.value)} style={inputStyle} />
               <span id="singles-skill-help" style={{ display: "block", color: "#64748b", fontSize: "0.9rem", marginTop: "0.35rem" }}>
-                No JUPR singles rating yet? Enter the level you play at for singles. This is used for tournament placement only and does not create an official JUPR rating.
+                No singles rating? Enter your current level or leave it blank.
               </span>
             </label>
           </div>

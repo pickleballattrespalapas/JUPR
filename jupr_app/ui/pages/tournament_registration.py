@@ -1947,10 +1947,7 @@ def render(ctx):
             )
             if not singles_self_rating_valid:
                 st.error("Singles skill must be between 1 and 7, or left blank.")
-            st.caption(
-                "No JUPR singles rating yet? Enter the level you play at for singles. "
-                "This is used for tournament placement only and does not create an official JUPR rating."
-            )
+            st.caption("No singles rating? Enter your current level or leave it blank.")
             wizard["step2"] = {
                 **step2,
                 "singles_skill": clean_singles_self_rating,

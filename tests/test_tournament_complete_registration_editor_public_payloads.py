@@ -175,13 +175,13 @@ def test_public_skill_inputs_match_the_server_one_through_seven_contract() -> No
     assert 'aria-label="Singles skill" type="number" min="1" max="7"' in create
     assert "Doubles not set" in create
     assert "Singles not set" in create
-    assert "No JUPR singles rating yet?" in create
+    assert "No singles rating? Enter your current level or leave it blank." in create
     assert "partner skill`} type=\"number\" min=\"1\" max=\"7\"" in create
     assert 'name="doubles_skill"' in edit and 'type="number" min="1" max="7"' in edit
     assert 'name="singles_skill"' in edit and edit.count('type="number" min="1" max="7"') >= 3
     assert "disabled={linkedPlayer?.doubles_skill != null}" in edit
     assert "disabled={linkedPlayer?.singles_skill != null}" in edit
-    assert "No JUPR singles rating yet?" in edit
+    assert "No singles rating? Enter your current level or leave it blank." in edit
 
 
 def test_legacy_registration_collects_missing_official_singles_rating() -> None:
@@ -191,7 +191,7 @@ def test_legacy_registration_collects_missing_official_singles_rating() -> None:
 
     assert '"Singles skill (optional)"' in legacy
     assert '"singles_skill": clean_singles_self_rating' in legacy
-    assert "does not create an official JUPR rating" in legacy
+    assert "No singles rating? Enter your current level or leave it blank." in legacy
     assert "disabled=not singles_self_rating_valid" in legacy
 
 
