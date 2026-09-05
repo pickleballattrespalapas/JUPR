@@ -71,11 +71,11 @@ def test_public_tournament_selection_is_separate_from_selected_workspace() -> No
     assert "const explicitSelection = Boolean(registrationSlug || tournamentId)" in hub
     assert "if (!explicitSelection)" in hub
     assert "Choose a tournament" in hub
-    assert "Select a tournament to open its Tournament Home" in hub
+    assert "Choose a tournament to register" in hub
     assert "if (!tournament)" in hub
     assert "← Choose another tournament" in hub
     assert "Tournament Home" in hub
-    assert "Tournament pages" in hub
+    assert "What would you like to do?" in hub
     assert "PublicTournamentNav" in hub
     assert 'active="overview"' in hub
     assert '["registration", "Register"]' in nav
@@ -107,7 +107,7 @@ def test_leagues_hub_lists_active_leagues_and_opens_league_home() -> None:
     assert "publicLeagueHomeHref" in leagues
     assert "Open League Home" in leagues
     assert "PublicLeagueNav" in league_home
-    assert "League pages" in league_home
+    assert "Explore this league" in league_home
     assert "Team Leagues" not in leagues
     assert "Club Leaderboards" not in leagues
     assert 'title: "Leagues"' in club

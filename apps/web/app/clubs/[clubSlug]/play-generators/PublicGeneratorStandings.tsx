@@ -47,6 +47,31 @@ function playFormatLabel(value: string): string {
   return "Doubles";
 }
 
+function sessionStatusLabel(status: string): string {
+  return status === "completed" ? "Complete" : "In progress";
+}
+
+class UserFacingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UserFacingError";
+  }
+}
+
+function requestFailureMessage(error: unknown, fallback: string): string {
+  return error instanceof UserFacingError ? error.message : fallback;
+}
+
+function requestErrorMessage(status: number, detail?: unknown): string {
+  if (detail === "Score entry is temporarily unavailable.") return "This play tool is temporarily unavailable.";
+  if (detail === "Live sessions are temporarily unavailable. Please try again later.") return "This play tool is temporarily unavailable.";
+  if (status === 403) return "This organizer link can’t make changes to this session.";
+  if (status === 404) return "We couldn’t find this session.";
+  if (status === 409) return "This session changed. Refresh the page and try again.";
+  if (status === 429) return "Please wait a moment and try again.";
+  return "We couldn’t complete that request. Please try again.";
+}
+
 export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey }: Props) {
   const router = useRouter();
   const [editToken, setEditToken] = useState("");
@@ -55,19 +80,22 @@ export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey }
   const [busy, setBusy] = useState(false);
 
   async function loadSession(): Promise<void> {
-    if (!apiBase) return;
+    if (!apiBase) {
+      setMessage("Standings are temporarily unavailable. Please try again.");
+      return;
+    }
     try {
       const response = await fetch(
         apiUrl(apiBase, `/clubs/${encodeURIComponent(clubId)}/play-generators/sessions/${encodeURIComponent(sessionKey)}`),
         { cache: "no-store" }
       );
       const payload = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(String(payload?.detail || `API error (${response.status})`));
-      if (payload?.session?.generator_kind !== "round_robin") throw new Error("Standings are available for Round-Robin Generator sessions.");
+      if (!response.ok) throw new UserFacingError(requestErrorMessage(response.status, payload?.detail));
+      if (payload?.session?.generator_kind !== "round_robin") throw new UserFacingError("This session doesn’t include round-robin standings.");
       setSession(payload.session as Session);
       setMessage("");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load standings.");
+      setMessage(requestFailureMessage(error, "We couldn’t load the standings. Please try again."));
     }
   }
 
@@ -94,9 +122,9 @@ export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey }
         }
       );
       const payload = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(String(payload?.detail || `API error (${response.status})`));
+      if (!response.ok) throw new UserFacingError(requestErrorMessage(response.status, payload?.detail));
       const next = payload?.session as Session | undefined;
-      if (!next) throw new Error("Session advanced without a refreshed session.");
+      if (!next) throw new UserFacingError("We couldn’t confirm the next round. Refresh the page and try again.");
       setSession(next);
       if (next.status === "completed") {
         setMessage("Session completed.");
@@ -106,7 +134,7 @@ export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey }
       router.push(`/clubs/${clubId}/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${nextRound}`);
       router.refresh();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to continue the session.");
+      setMessage(requestFailureMessage(error, "We couldn’t continue the session. Please try again."));
     } finally {
       setBusy(false);
     }
@@ -131,7 +159,7 @@ export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey }
       <article style={{ ...cardStyle, background: "#f8fafc" }}>
         <p style={{ margin: "0 0 0.4rem" }}><Link href={`/clubs/${clubId}/round-robin-generator`}>← Round-Robin Generator</Link></p>
         <h1 style={{ margin: "0 0 0.35rem" }}>{session.title} standings</h1>
-        <p style={{ margin: 0, color: "#475569" }}>{playFormatLabel(session.play_format)} · {standingsSortLabel(sortMode)} · {session.status}</p>
+        <p style={{ margin: 0, color: "#475569" }}>{playFormatLabel(session.play_format)} · {standingsSortLabel(sortMode)} · {sessionStatusLabel(session.status)}</p>
       </article>
       <nav aria-label="Round-Robin session navigation" style={{ ...cardStyle, display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
         <Link href={`/clubs/${clubId}/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${currentRound}`} style={linkButton}>Current round</Link>
@@ -140,16 +168,16 @@ export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey }
       <PlayGeneratorStandingsTable rows={session.standings || []} sortMode={sortMode} />
       {session.status === "completed" ? (
         <article style={{ ...cardStyle, background: "#ecfdf5", borderColor: "#86efac" }}>
-          <h2 style={{ marginTop: 0 }}>Session complete</h2>
+          <h2 style={{ marginTop: 0 }}>Final standings</h2>
           <p style={{ marginBottom: 0, color: "#166534" }}>
-            The final cumulative standings are preserved above.
+            All scheduled rounds are complete.
           </p>
         </article>
       ) : null}
       {canContinue ? (
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>{currentRound >= totalRounds ? "Finish the session" : `Continue to Round ${currentRound + 1}`}</h2>
-          <p style={{ color: "#475569" }}>The completed round results are included above. Continue when the organizer is ready for the next round.</p>
+          <p style={{ color: "#475569" }}>Round {currentRound} is included. Continue when you’re ready.</p>
           <button type="button" onClick={() => void continueSession()} disabled={busy} style={primaryButton}>{busy ? "Continuing…" : currentRound >= totalRounds ? "Finish session" : `Continue to Round ${currentRound + 1}`}</button>
         </article>
       ) : null}

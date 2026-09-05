@@ -49,7 +49,7 @@ export default function LeaguePlayerRoster({ standings, clubSlug }: { standings:
     [sort, standings]
   );
 
-  if (!rows.length) return <p>No public players are available for this league yet.</p>;
+  if (!rows.length) return <p>No players are listed for this league yet.</p>;
 
   return (
     <div data-testid="league-player-roster">

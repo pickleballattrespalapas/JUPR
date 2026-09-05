@@ -9,7 +9,7 @@ const cardStyle = {
 
 const routeGroups = [
   {
-    heading: "Club public pages",
+    heading: "Club pages",
     routes: [
       ["Club home", "/clubs/tres-palapas"],
       ["Leagues", "/clubs/tres-palapas/leagues"],
@@ -24,7 +24,7 @@ const routeGroups = [
     ]
   },
   {
-    heading: "League pages",
+    heading: "Leagues and play",
     routes: [
       ["League Results", "/clubs/tres-palapas/league-results"],
       ["Team Leagues", "/clubs/tres-palapas/team-leagues"],
@@ -32,7 +32,7 @@ const routeGroups = [
     ]
   },
   {
-    heading: "Tournament pages",
+    heading: "Tournaments",
     routes: [
       ["Tournament Home", "/clubs/tres-palapas/tournaments"],
       ["Registration", "/clubs/tres-palapas/tournament-registration"],
@@ -42,7 +42,7 @@ const routeGroups = [
     ]
   },
   {
-    heading: "Support, privacy, and account links",
+    heading: "Help, privacy, and email",
     routes: [
       ["Ratings explainer", "/how-ratings-work"],
       ["FAQ", "/faq"],
@@ -57,7 +57,7 @@ const routeGroups = [
     ]
   },
   {
-    heading: "Staff access",
+    heading: "Staff",
     routes: [
       ["Staff sign-in", "/admin/login"],
       ["Reset password", "/admin/reset-password"]
@@ -80,11 +80,10 @@ export default function SiteMapPage() {
       >
         Site map
       </p>
-      <h1 style={{ marginTop: 0 }}>Pickleball Club Sandwich route map</h1>
+      <h1 style={{ marginTop: 0 }}>Site map</h1>
       <p style={{ color: "#334155", maxWidth: "820px" }}>
-        A click-through map for public club, league, tournament, support, and
-        staff sign-in pages. Protected administrative tools are intentionally
-        not listed on the public route map.
+        Find club, league, tournament, support, and staff sign-in pages in one
+        place.
       </p>
       <div style={{ display: "grid", gap: "1.25rem" }}>
         {routeGroups.map((group) => (
@@ -102,16 +101,6 @@ export default function SiteMapPage() {
                   <strong>
                     <Link href={href}>{label}</Link>
                   </strong>
-                  <p
-                    style={{
-                      margin: "0.35rem 0 0",
-                      color: "#64748b",
-                      fontSize: "0.85rem",
-                      overflowWrap: "anywhere"
-                    }}
-                  >
-                    {href}
-                  </p>
                 </article>
               ))}
             </div>

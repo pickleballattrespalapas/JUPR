@@ -11,12 +11,59 @@ function number(value: unknown): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function matchupStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    COMPLETE: "Final",
+    COMPLETED: "Final",
+    FINAL: "Final",
+    LIVE: "In progress",
+    IN_PROGRESS: "In progress",
+    READY: "Ready",
+    LINEUPS_PENDING: "Awaiting lineups",
+    TIEBREAK_REQUIRED: "Tiebreak needed",
+    CORRECTION_REQUIRED: "Result under review",
+    SCHEDULED: "Upcoming",
+    PENDING: "Upcoming",
+    BYE: "Bye",
+    VOID: "No result"
+  };
+  return labels[String(status || "").trim().toUpperCase()] || "Status unavailable";
+}
+
+function rosterSpotLabel(slot: string): string {
+  const labels: Record<string, string> = {
+    MAN_1: "Men’s roster spot 1",
+    MAN_2: "Men’s roster spot 2",
+    WOMAN_1: "Women’s roster spot 1",
+    WOMAN_2: "Women’s roster spot 2"
+  };
+  return labels[String(slot || "").trim().toUpperCase()] || "Roster spot";
+}
+
+function matchupTitle(matchup: { playoff_game_code?: string | null; round_number: number; slot_number: number }): string {
+  const code = String(matchup.playoff_game_code || "").trim().toUpperCase();
+  const labels: Record<string, string> = {
+    F: "Final",
+    FINAL: "Final",
+    B: "Bronze medal match",
+    BRONZE: "Bronze medal match",
+    SF1: "Semifinal 1",
+    SF2: "Semifinal 2",
+    QF1: "Quarterfinal 1",
+    QF2: "Quarterfinal 2",
+    QF3: "Quarterfinal 3",
+    QF4: "Quarterfinal 4"
+  };
+  return labels[code] || `Round ${matchup.round_number} · Match ${matchup.slot_number}`;
+}
+
 export default async function TournamentTeamResultsDetail({ params }: Props) {
-  const { data, error } = await getPublicTeamTournamentResults(
+  const { data, error, status } = await getPublicTeamTournamentResults(
     params.clubSlug,
     params.tournamentId,
     params.drawId
   );
+  const missing = status === 404;
   const teamNames = new Map(
     (data?.teams || []).map((team) => [team.id, team.name])
   );
@@ -26,10 +73,14 @@ export default async function TournamentTeamResultsDetail({ params }: Props) {
       <p style={{ color: "#2563eb", fontWeight: 800, marginBottom: "0.4rem" }}>
         {data?.tournament.name || "Team tournament"}
       </p>
-      <h1 style={{ marginTop: 0 }}>{data?.draw.name || "Published results"}</h1>
+      <h1 style={{ marginTop: 0 }}>
+        {data?.draw.name || (missing ? "Team results not found" : "Team tournament results")}
+      </h1>
       {error ? (
         <p role="alert" style={{ color: "#b91c1c" }}>
-          These results are unavailable. {error}
+          {missing
+            ? "We couldn’t find these team results. They may no longer be public."
+            : "These team results are unavailable right now. Please try again shortly."}
         </p>
       ) : null}
 
@@ -37,7 +88,7 @@ export default async function TournamentTeamResultsDetail({ params }: Props) {
         <>
           <section className={styles.card}>
             <h2>Standings</h2>
-            <div className={styles.tableWrap}>
+            {data.standings.length ? <div className={styles.tableWrap}>
               <table className={styles.table}>
                 <thead>
                   <tr>
@@ -64,7 +115,7 @@ export default async function TournamentTeamResultsDetail({ params }: Props) {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </div> : <p>Standings will appear after play begins.</p>}
           </section>
 
           <section className={styles.card} style={{ marginTop: "1rem" }}>
@@ -74,7 +125,7 @@ export default async function TournamentTeamResultsDetail({ params }: Props) {
                 {data.bracket.map((matchup) => (
                   <article className={styles.slot} key={matchup.id}>
                     <strong>
-                      {matchup.playoff_game_code || `Round ${matchup.round_number}`}
+                      {matchupTitle(matchup)}
                     </strong>
                     <p>
                       {teamNames.get(String(matchup.team_a_id || "")) || "TBD"}{" "}
@@ -83,17 +134,17 @@ export default async function TournamentTeamResultsDetail({ params }: Props) {
                       {teamNames.get(String(matchup.team_b_id || "")) || "TBD"}{" "}
                       {matchup.team_b_game_wins ?? "—"}
                     </p>
-                    <small>{matchup.status}</small>
+                    <small>{matchupStatusLabel(matchup.status)}</small>
                   </article>
                 ))}
               </div>
             ) : (
-              <p>No playoff bracket is configured for this division.</p>
+              <p>The playoff bracket will appear when it’s ready.</p>
             )}
           </section>
 
           <section className={styles.card} style={{ marginTop: "1rem" }}>
-            <h2>Podium</h2>
+            <h2>Medalists</h2>
             {data.podium.length ? (
               <ol>
                 {data.podium.map((place) => (
@@ -103,13 +154,13 @@ export default async function TournamentTeamResultsDetail({ params }: Props) {
                 ))}
               </ol>
             ) : (
-              <p>The podium will appear after final results are published.</p>
+              <p>Medal winners will appear after the final matches.</p>
             )}
           </section>
 
           <section className={styles.card} style={{ marginTop: "1rem" }}>
             <h2>Team rosters</h2>
-            <div className={styles.grid}>
+            {data.teams.length ? <div className={styles.grid}>
               {data.teams.map((team) => (
                 <article className={styles.slot} key={team.id}>
                   <h3>{team.name}</h3>
@@ -117,13 +168,13 @@ export default async function TournamentTeamResultsDetail({ params }: Props) {
                     {team.members.map((member) => (
                       <li key={member.id}>
                         {member.display_name || member.display_name_snapshot || "Player"} ·{" "}
-                        {member.slot.replace("_", " ").toLowerCase()}
+                        {rosterSpotLabel(member.slot)}
                       </li>
                     ))}
                   </ul>
                 </article>
               ))}
-            </div>
+            </div> : <p>No team rosters are available yet.</p>}
           </section>
         </>
       ) : null}

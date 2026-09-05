@@ -29,6 +29,16 @@ const button = {
   cursor: "pointer"
 };
 
+function rosterSpotLabel(slot?: string): string {
+  const labels: Record<string, string> = {
+    MAN_1: "Men’s spot 1",
+    MAN_2: "Men’s spot 2",
+    WOMAN_1: "Women’s spot 1",
+    WOMAN_2: "Women’s spot 2"
+  };
+  return labels[String(slot || "").trim().toUpperCase()] || "Team spot";
+}
+
 export default function TeamInvitationReview({ clubSlug }: Props) {
   const token = useRef("");
   const idempotencyKeys = useRef(new Map<string, string>());
@@ -44,7 +54,7 @@ export default function TeamInvitationReview({ clubSlug }: Props) {
       `${window.location.pathname}${window.location.search}`
     );
     if (!raw) {
-      setMessage("This invitation link is missing or has already been cleared.");
+      setMessage("This invitation link is incomplete. Open the original link from your invitation email.");
       return;
     }
     try {
@@ -52,7 +62,7 @@ export default function TeamInvitationReview({ clubSlug }: Props) {
         raw.startsWith("token=") ? raw.slice("token=".length) : raw
       );
     } catch {
-      setMessage("This invitation link is invalid.");
+      setMessage("This invitation link is incomplete. Open the original link from your invitation email.");
       return;
     }
     void (async () => {
@@ -62,7 +72,7 @@ export default function TeamInvitationReview({ clubSlug }: Props) {
       );
       if (response.error || !response.data) {
         token.current = "";
-        setMessage(response.error || "This invitation is unavailable.");
+        setMessage("This invitation is unavailable. It may have expired or already been answered.");
         return;
       }
       setInvitation(response.data as Invitation);
@@ -73,7 +83,7 @@ export default function TeamInvitationReview({ clubSlug }: Props) {
   async function respond(action: "ACCEPT" | "DECLINE") {
     const registrationId = invitation?.registration?.id;
     if (!token.current || !registrationId) {
-      setMessage("This invitation can no longer be completed.");
+      setMessage("This invitation has expired or has already been answered.");
       return;
     }
     const key =
@@ -90,7 +100,7 @@ export default function TeamInvitationReview({ clubSlug }: Props) {
     });
     setPending(false);
     if (response.error) {
-      setMessage(response.error);
+      setMessage("We couldn’t update this invitation. Please try again.");
       return;
     }
     token.current = "";
@@ -98,7 +108,7 @@ export default function TeamInvitationReview({ clubSlug }: Props) {
     setInvitation(null);
     setMessage(
       action === "ACCEPT"
-        ? "You joined the team. Tournament staff can now confirm the roster."
+        ? "You joined the team. The organizer can now confirm the roster."
         : "You declined the invitation."
     );
   }
@@ -125,9 +135,7 @@ export default function TeamInvitationReview({ clubSlug }: Props) {
           </p>
           <p>
             Roster spot:{" "}
-            {String(invitation.invitation?.slot || "")
-              .replace("_", " ")
-              .toLowerCase()}
+            {rosterSpotLabel(invitation.invitation?.slot)}
           </p>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.65rem" }}>
             <button

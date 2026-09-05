@@ -86,13 +86,13 @@ def _normalize_event_type(value: Any) -> str:
         return "league_ladder"
     if clean in {"round_robin", "roundrobin"}:
         return "round_robin"
-    raise PublicLiveSessionError("Public JUPR Live supports Round Robin or League / Ladder events.")
+    raise PublicLiveSessionError("Choose Round Robin or League Ladder.")
 
 
 def _normalize_live_mode(value: Any) -> str:
     clean = str(value or "quick").strip().lower().replace(" ", "_")
     if clean not in SUPPORTED_LIVE_MODES:
-        raise PublicLiveSessionError("Public JUPR Live mode must be Quick Session or Club Social.")
+        raise PublicLiveSessionError("Choose Quick Session or Club Social.")
     return clean
 
 
@@ -114,9 +114,7 @@ def normalize_public_participant_names(names: list[Any]) -> list[str]:
 def _token_secret(explicit: str | None = None) -> str:
     secret = str(explicit or os.getenv("JUPR_PUBLIC_LIVE_TOKEN_SECRET", "")).strip()
     if len(secret) < 32:
-        raise RuntimeError(
-            "JUPR_PUBLIC_LIVE_TOKEN_SECRET must be a stable server-only secret of at least 32 characters."
-        )
+        raise RuntimeError("Score entry is temporarily unavailable.")
     return secret
 
 
@@ -239,7 +237,7 @@ def _event_for_create(
         if len(names) < MIN_PUBLIC_RR_PLAYERS:
             raise PublicLiveSessionError("Enter at least 4 unique player names.")
         if len(names) > MAX_PUBLIC_RR_PLAYERS:
-            raise PublicLiveSessionError("Public JUPR Live supports up to 20 players.")
+            raise PublicLiveSessionError("Enter no more than 20 players.")
         return create_round_robin_event(name=title, participant_names=names, resolved_ids=resolved_ids)
     if len(names) < 4 or len(names) > MAX_PUBLIC_RR_PLAYERS:
         raise PublicLiveSessionError("League / Ladder supports 4 to 20 unique players.")
@@ -278,7 +276,7 @@ def _resolve_public_participant_ids(
             .execute()
         )
     except Exception as exc:
-        raise RuntimeError("Current-player validation is unavailable; no live session was created.") from exc
+        raise RuntimeError("We couldn’t check the players. Please try again.") from exc
     players_by_id = {
         int(row["id"]): row
         for row in player_rows
@@ -293,7 +291,7 @@ def _resolve_public_participant_ids(
             player = players_by_id.get(int(requested_id))
             if player is None or _normalize_name(player.get("name")).casefold() != normalized:
                 raise PublicLiveSessionError(
-                    f"The selected current-player profile for '{name}' is stale. Search and select it again."
+                    f"Choose {name} from the player list again."
                 )
             resolved[name] = int(requested_id)
             continue
@@ -301,8 +299,8 @@ def _resolve_public_participant_ids(
             duplicates = _find_strong_duplicate_candidates(ctx, display_name=name)
             if duplicates:
                 raise PublicLiveSessionError(
-                    f"'{name}' closely matches current player '{duplicates[0].get('name')}'. "
-                    "Add that player through current-player search before creating Club Social."
+                    f"{name} looks like {duplicates[0].get('name')}, who is already in the club list. "
+                    "Choose that player from the list before continuing."
                 )
     return resolved
 
@@ -329,7 +327,7 @@ def create_public_live_session(
     normalized_mode = _normalize_live_mode(live_mode)
     clean_host = _normalize_name(host_name)[:160]
     if normalized_mode == "club_social" and not clean_host:
-        raise PublicLiveSessionError("Host / Submitter Name is required for Club Social.")
+        raise PublicLiveSessionError("Enter the organizer’s name for Club Social.")
     levels = normalize_skill_levels(skill_levels, default_all=normalized_mode == "club_social")
     title = _normalize_name(event_name)[:160] or (
         "JUPR Live League" if normalized_type == "league_ladder" else "JUPR Live Round Robin"
@@ -385,7 +383,8 @@ def create_public_live_session(
         return {**result, "idempotent_replay": bool(existed)}
     if existed and completed_operation_result(operation) is not None:
         raise PublicLiveRecoveryRequiredError(
-            "The create operation completed but its session row is unavailable. Stop and contact an administrator."
+            "It looks like this session started, but we can’t open it. "
+            "Don’t start another one; contact club staff."
         )
 
     try:
@@ -464,10 +463,14 @@ def create_public_live_session(
                 error_text=str(exc),
             )
             raise PublicLiveRecoveryRequiredError(
-                "JUPR Live creation did not return a verified outcome. Retry the same create request to reconcile it."
+                "We couldn’t confirm that the session started. "
+                "Retry the same request before starting a new session."
             ) from exc
     if created is None:
-        raise PublicLiveRecoveryRequiredError("JUPR Live creation returned no recoverable session row.")
+        raise PublicLiveRecoveryRequiredError(
+            "The session may have started, but we can’t open it. "
+            "Don’t start another one; contact club staff."
+        )
     result = {"edit_token": edit_token, "session": public_live_session_detail(created)}
     update_public_live_operation(
         supabase,
@@ -510,11 +513,11 @@ def create_public_round_robin_session(
 
 def _validate_edit_token(row: dict[str, Any] | None, *, edit_token: str) -> dict[str, Any]:
     if not row:
-        raise PublicLiveSessionError("Live session not found.")
+        raise PublicLiveSessionError("We couldn’t find this session.")
     if not is_public_live_session_row(row):
-        raise PublicLiveSessionError("This live session is not available for public editing.")
+        raise PublicLiveSessionError("This session can’t be edited from this page.")
     if not edit_token_matches(edit_token, str(row.get("edit_token_hash") or "")):
-        raise PermissionError("Invalid edit token for this public live session.")
+        raise PermissionError("This organizer link is no longer valid.")
     return row
 
 
@@ -522,7 +525,8 @@ def _validate_editable_row(row: dict[str, Any] | None, *, edit_token: str) -> di
     validated = _validate_edit_token(row, edit_token=edit_token)
     if str(validated.get("pending_operation_key") or ""):
         raise PublicLiveRecoveryRequiredError(
-            "This live session has an unfinished completion. Retry that completion before making another change."
+            "A previous attempt to complete this session is still pending. "
+            "Retry that same Complete session action before making another change."
         )
     return validated
 
@@ -561,14 +565,15 @@ def _update_row_with_cas(
         if updated and str(updated.get("last_operation_key") or "") == operation_key:
             return updated
         raise PublicLiveRecoveryRequiredError(
-            "The live-session write may have completed. Reload and retry with the same operation key."
+            "We couldn’t confirm the last change. "
+            "Retry the same action before making another change."
         ) from exc
     if updated is not None:
         return updated
     current = get_public_live_session_row(supabase, club_id=club_id, session_key=session_key)
     if current and str(current.get("last_operation_key") or "") == operation_key:
         return current
-    raise PublicLiveConflictError("This live session changed while it was being saved. Reload before retrying.")
+    raise PublicLiveConflictError("This session changed. Refresh before continuing.")
 
 
 def _run_session_mutation(
@@ -636,7 +641,7 @@ def _run_session_mutation(
             status="rejected",
             error_text="session is not active",
         )
-        raise PublicLiveSessionError("This live session is complete and cannot be edited.")
+        raise PublicLiveSessionError("This session is complete, so it can’t be edited.")
     if int(row.get("version") or 1) != int(expected_version):
         update_public_live_operation(
             supabase,
@@ -645,7 +650,7 @@ def _run_session_mutation(
             status="rejected",
             error_text="stale authoritative version",
         )
-        raise PublicLiveConflictError("This live session changed after it was loaded. Reload it before continuing.")
+        raise PublicLiveConflictError("This session changed. Refresh before continuing.")
 
     update_public_live_operation(
         supabase,
@@ -663,7 +668,7 @@ def _run_session_mutation(
             status="rejected",
             error_text="session has no recoverable event state",
         )
-        raise PublicLiveSessionError("This live session has no recoverable event state.")
+        raise PublicLiveSessionError("We couldn’t load this session. Refresh and try again.")
     try:
         extra = mutate(state, event, row) or {}
     except (PublicLiveSessionError, ValueError) as exc:
@@ -711,7 +716,8 @@ def _run_session_mutation(
             if isinstance(exc, (PublicLiveSessionError, PermissionError)):
                 raise
             raise PublicLiveRecoveryRequiredError(
-                "The JUPR Live write did not return a verified result. Retry the identical request to reconcile it."
+                "We couldn’t confirm the last change. "
+                "Retry the same action before making another change."
             ) from exc
     result = {"session": public_live_session_detail(updated), **{key: value for key, value in extra.items() if key not in {"status", "completed_at"}}}
     operation_result = {
@@ -765,7 +771,7 @@ def update_public_live_scores(
             if match is None:
                 raise PublicLiveSessionError("One or more score rows no longer belong to this session.")
             if event_type == "league" and score["match_id"] not in current_match_ids:
-                raise PublicLiveSessionError("Earlier league rounds are locked after court movement. Reload the current round.")
+                raise PublicLiveSessionError("Earlier rounds can’t be changed. Refresh the current round.")
             set_match_score(match, score["score_a"], score["score_b"])
         return {"changed_scores": len(normalized_scores)}
 
@@ -856,7 +862,7 @@ def substitute_public_live_participant(
     clean_scope = str(scope or "round").strip().lower()
     clean_name = _normalize_name(substitute_name)[:80]
     if clean_scope not in {"round", "game"}:
-        raise PublicLiveSessionError("Substitution scope must be round or game.")
+        raise PublicLiveSessionError("Choose whether this substitution applies to the round or one game.")
     if not clean_name:
         raise PublicLiveSessionError("Substitute name is required.")
     request_payload = {
@@ -873,7 +879,7 @@ def substitute_public_live_participant(
         social = _state.get("social") if isinstance(_state.get("social"), dict) else {}
         if bool(social.get("enabled")):
             raise PublicLiveSessionError(
-                "Club Social substitutions are not supported because moderation must preserve the original participant identities. Create a new event with the correct roster."
+                "To change players in a Club Social event, create a new event."
             )
         common = {
             "round_number": int(round_number),
@@ -924,7 +930,7 @@ def _submit_social_event(supabase: Any, *, club_id: str, state: dict[str, Any], 
             supabase.table("players").select("*").eq("club_id", str(club_id)).execute()
         )
     except Exception as exc:
-        raise RuntimeError("Club Social player resolution is unavailable.") from exc
+        raise RuntimeError("We couldn’t check the players. Please try again.") from exc
     social = state.get("social") if isinstance(state.get("social"), dict) else {}
     ctx = SimpleNamespace(
         supabase=supabase,
@@ -999,7 +1005,8 @@ def complete_public_live_session(
             error_text="another completion is unfinished",
         )
         raise PublicLiveRecoveryRequiredError(
-            "Another completion is unfinished for this live session. Resume it with its original operation key."
+            "Another attempt to complete this session is still pending. "
+            "Retry the original Complete session action before doing anything else."
         )
     if str(row.get("status") or "") == "completed":
         if str(row.get("last_operation_key") or "") != operation_key:
@@ -1010,7 +1017,7 @@ def complete_public_live_session(
                 status="rejected",
                 error_text="session is already complete",
             )
-            raise PublicLiveSessionError("This live session is already complete.")
+            raise PublicLiveSessionError("This session is already complete.")
         state = _state(row)
         social = state.get("social") if isinstance(state.get("social"), dict) else {}
         result = {
@@ -1036,7 +1043,7 @@ def complete_public_live_session(
                 status="rejected",
                 error_text="not all scores are complete",
             )
-            raise PublicLiveSessionError("Complete every scheduled score before closing this live session.")
+            raise PublicLiveSessionError("Enter every scheduled score before finishing this session.")
 
     claim_public_live_completion_executor(
         supabase,
@@ -1053,7 +1060,7 @@ def complete_public_live_session(
                 status="rejected",
                 error_text="stale authoritative version",
             )
-            raise PublicLiveConflictError("This live session changed after it was loaded. Reload it before continuing.")
+            raise PublicLiveConflictError("This session changed. Refresh before continuing.")
         initial_event = _event_from_state(_state(row))
         if not initial_event or not _event_complete(initial_event):
             update_public_live_operation(
@@ -1063,7 +1070,7 @@ def complete_public_live_session(
                 status="rejected",
                 error_text="not all scores are complete",
             )
-            raise PublicLiveSessionError("Complete every scheduled score before closing this live session.")
+            raise PublicLiveSessionError("Enter every scheduled score before finishing this session.")
         reserved = _update_row_with_cas(
             supabase,
             row=row,
@@ -1086,7 +1093,7 @@ def complete_public_live_session(
             or str(row.get("last_request_fingerprint") or "") != fingerprint
         ):
             raise PublicLiveRecoveryRequiredError(
-                "The pending completion marker does not match its recovery request. Stop and contact an administrator."
+                "We can’t safely finish this session. Don’t try again; contact club staff."
             )
         reserved = row
         update_public_live_operation(
@@ -1102,7 +1109,8 @@ def complete_public_live_session(
         event = _event_from_state(state)
         if not event or not _event_complete(event):
             raise PublicLiveRecoveryRequiredError(
-                "The reserved completion no longer has a complete score state. Stop and contact an administrator."
+                "We can’t safely finish this session because its scores no longer match. "
+                "Don’t try again; contact club staff."
             )
         social = state.get("social") if isinstance(state.get("social"), dict) else {}
         if bool(social.get("enabled")):
@@ -1141,7 +1149,8 @@ def complete_public_live_session(
             if isinstance(exc, PublicLiveRecoveryRequiredError):
                 raise
             raise PublicLiveRecoveryRequiredError(
-                "Completion is reserved but did not return a verified result. Retry the identical completion request to reconcile it."
+                "We couldn’t confirm that the session finished. "
+                "Retry the same Complete session action."
             ) from exc
 
     result = {"session": public_live_session_detail(updated), "social_submission": submission}
@@ -1169,7 +1178,7 @@ def build_public_live_export(
 ) -> dict[str, Any]:
     row = get_public_live_session_row(supabase, club_id=str(club_id), session_key=str(session_key))
     if row is None or not is_public_live_session_row(row):
-        raise PublicLiveSessionError("Live session not found.")
+        raise PublicLiveSessionError("We couldn’t find this session.")
     session = public_live_session_detail(row)
     clean_format = str(export_format or "csv").strip().lower()
     if clean_format == "json":

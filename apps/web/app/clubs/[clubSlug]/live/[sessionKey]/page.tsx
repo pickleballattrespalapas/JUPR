@@ -12,18 +12,18 @@ function apiBase(): string {
 
 export default async function ClubLiveSessionPage({ params }: LiveSessionPageProps) {
   const { clubSlug, sessionKey } = params;
-  const { data, error } = await getClubLiveSession(clubSlug, sessionKey);
+  const { data } = await getClubLiveSession(clubSlug, sessionKey);
   const clubName = data?.club?.name ?? clubSlug;
   const session = data?.session;
 
-  if (error || !session) {
+  if (!session) {
     return (
       <section style={{ maxWidth: "760px" }}>
         <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
-          Play Generators
+          Play session
         </p>
         <h1>Play session unavailable</h1>
-        <p style={{ color: "#b91c1c" }}>We could not load this live session. {error}</p>
+        <p style={{ color: "#b91c1c" }}>We couldn&apos;t load this session. Check the link or try again.</p>
         <p><Link href={`/clubs/${clubSlug}/live`}>Back to play sessions</Link></p>
       </section>
     );
@@ -32,7 +32,7 @@ export default async function ClubLiveSessionPage({ params }: LiveSessionPagePro
   return (
     <section>
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
-        {clubName} · Play Generators
+        {clubName} · Play session
       </p>
       <LiveSessionRunner
         apiBase={apiBase()}

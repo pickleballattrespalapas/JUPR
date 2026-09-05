@@ -276,14 +276,14 @@ test("badge codex: authoritative buckets, filters, anchors, and trophy room", as
   expect(response?.status()).toBeLessThan(400);
   await expect(page.getByRole("heading", { name: /badge codex/i })).toBeVisible();
   await expect(page.locator("[data-badge-bucket]")).toHaveCount(4);
-  await expect(page.getByText(/Complete definitions/)).toBeVisible();
+  await expect(page.getByText(/Badge earners/)).toBeVisible();
   await expect(page.getByRole("heading", { name: "Recent trophy room" })).toBeVisible();
 
   const firstBadge = page.locator("[data-badge-id]").first();
   await expect(firstBadge).toBeVisible();
   const badgeId = await firstBadge.getAttribute("data-badge-id");
   expect(badgeId).toBeTruthy();
-  const directHref = await firstBadge.getByRole("link", { name: "Link directly to this badge" }).getAttribute("href");
+  const directHref = await firstBadge.getByRole("link", { name: "Share this badge" }).getAttribute("href");
   expect(directHref).toContain(`badge=${badgeId}`);
   expect(directHref).toContain(`#badge-${badgeId}`);
   await page.goto(String(directHref), { waitUntil: "domcontentloaded" });
@@ -307,7 +307,7 @@ test("challenge ladder: Python eligibility, deep links, rulebook, and status leg
   await expect(playerLink).toBeVisible();
   await playerLink.click();
   await expect(page.locator('[data-python-eligibility="python"]')).toBeVisible();
-  await expect(page.getByText(/Python ladder policy/i)).toBeVisible();
+  await expect(page.getByText(/currently within your challenge range/i)).toBeVisible();
 
   response = await page.goto(`/clubs/${clubSlug}/challenge-ladder?section=challenges&status=Recently%20Completed`, { waitUntil: "domcontentloaded" });
   expect(response?.status()).toBeLessThan(400);
@@ -326,11 +326,11 @@ test("challenge ladder: Python eligibility, deep links, rulebook, and status leg
   const challengerTeam = playedResult.locator("p").filter({ hasText: "Challenger team:" });
   await expect(challengerTeam.getByRole("link", { name: "Devon Dink" })).toBeVisible();
   await expect(completed.locator('[data-result-details="available"][data-result-completeness="partial"]')).toBeVisible();
-  await expect(completed).toContainText("Verified legacy Match A: 22–17");
+  await expect(completed).toContainText("Recorded match A: 22–17");
   await expect(completed).toContainText("Games: 11–8, 11–9");
   await expect(completed.getByRole("link", { name: "Blake Baseline" })).toBeVisible();
-  await expect(completed).toContainText("1 of 2 verified legacy match records");
-  await expect(completed).toContainText(/partner assignment that conflicts/i);
+  await expect(completed).toContainText("Details are available for 1 of 2 matches");
+  await expect(completed).toContainText(/partner information.*may be incorrect/i);
 });
 
 for (const surface of adminSurfaces) {

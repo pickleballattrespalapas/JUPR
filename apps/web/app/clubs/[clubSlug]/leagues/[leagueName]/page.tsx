@@ -64,7 +64,7 @@ export default async function PublicLeagueHomePage({ params }: Props) {
         >
           <h2 style={{ marginTop: 0 }}>League unavailable</h2>
           <p style={{ color: "#7f1d1d" }}>
-            {error || "This league is not available as an active or finished public league."}
+            {error || "We couldn't find this league."}
           </p>
           <Link href={`/clubs/${params.clubSlug}/leagues`}>
             Return to all leagues
@@ -78,7 +78,7 @@ export default async function PublicLeagueHomePage({ params }: Props) {
     {
       title: "Awards race & player roster",
       description:
-        "Award placement and qualification first, with an unranked player roster below.",
+        "See who's leading each award, then browse all league players.",
       href: publicLeagueResultsHref(
         params.clubSlug,
         leagueName,
@@ -88,7 +88,7 @@ export default async function PublicLeagueHomePage({ params }: Props) {
     {
       title: "Weekly History",
       description:
-        "Week-by-week results, activity, rating movement, and weekly highlights.",
+        "Review each week's results, rating changes, and highlights.",
       href: publicLeagueResultsHref(
         params.clubSlug,
         leagueName,
@@ -98,7 +98,7 @@ export default async function PublicLeagueHomePage({ params }: Props) {
     {
       title: "Player Summaries",
       description:
-        "Open a player’s league record, weekly trend, and recent matches.",
+        "Choose a player to see their record, rating changes, and recent matches.",
       href: publicLeagueResultsHref(
         params.clubSlug,
         leagueName,
@@ -123,8 +123,7 @@ export default async function PublicLeagueHomePage({ params }: Props) {
       </p>
       <h1 style={{ marginTop: 0 }}>{leagueName}</h1>
       <p style={{ color: "#334155", maxWidth: "820px" }}>
-        Awards-race placement, an unranked player roster, weekly history, player summaries, and public league results
-        for this league.
+        Follow the award races, browse players, and review weekly results.
       </p>
 
       <PublicLeagueNav
@@ -154,7 +153,7 @@ export default async function PublicLeagueHomePage({ params }: Props) {
           <div>
             <h2 style={{ marginTop: 0 }}>{leagueName}</h2>
             <p style={{ marginBottom: 0, color: "#475569" }}>
-              {leagueView === "past" ? "Finished public league" : "Active public league"}
+              {leagueView === "past" ? "Finished league" : "League in progress"}
             </p>
           </div>
           <span
@@ -184,7 +183,7 @@ export default async function PublicLeagueHomePage({ params }: Props) {
             {standings.filter((row) => row.rating_jupr != null).length}
           </div>
           <div>
-            <strong>Players shown</strong>
+            <strong>Players</strong>
             <br />
             {standings.length}
           </div>
@@ -207,7 +206,7 @@ export default async function PublicLeagueHomePage({ params }: Props) {
       </article>
 
       <section style={{ marginBottom: "1.25rem" }}>
-        <h2>League pages</h2>
+        <h2>Explore this league</h2>
         <div
           style={{
             display: "grid",
@@ -246,7 +245,7 @@ export default async function PublicLeagueHomePage({ params }: Props) {
           <div>
             <h2 style={{ marginBottom: "0.25rem" }}>Awards race</h2>
             <p style={{ marginTop: 0, color: "#64748b" }}>
-              Top five qualified players for every award, with the full eligible field available on the standings page.
+              The top five players for each award are shown here. See standings for everyone else.
             </p>
           </div>
           <Link
@@ -261,7 +260,7 @@ export default async function PublicLeagueHomePage({ params }: Props) {
           </Link>
         </div>
 
-        {data.award_progress.awards.length ? <LeagueAwardRaceGrid progress={data.award_progress} clubSlug={params.clubSlug} /> : <article style={{ ...cardStyle, background: "#f8fafc", marginBottom: "1rem" }}>No player has met the current award qualification criteria yet.</article>}
+        {data.award_progress.awards.length ? <LeagueAwardRaceGrid progress={data.award_progress} clubSlug={params.clubSlug} /> : <article style={{ ...cardStyle, background: "#f8fafc", marginBottom: "1rem" }}>No one qualifies for an award yet.</article>}
       </section>
     </section>
   );

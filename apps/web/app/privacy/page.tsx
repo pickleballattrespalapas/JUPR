@@ -22,7 +22,7 @@ export default function PrivacyPage() {
       <div style={{ display: "grid", gap: "1rem" }}>
         <article id="operator" style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Who operates the service</h2>
-          <p style={{ color: "#475569" }}>{SERVICE_OPERATOR} operates Pickleball Club Sandwich for {SERVICE_LOCATION}. Club staff use private administrative views to maintain operational and results integrity.</p>
+          <p style={{ color: "#475569" }}>{SERVICE_OPERATOR} operates Pickleball Club Sandwich for {SERVICE_LOCATION}. Club staff use private tools to keep player and match information accurate.</p>
         </article>
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Information we collect</h2>
@@ -32,18 +32,18 @@ export default function PrivacyPage() {
         </article>
         <article id="aliases" style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Public aliases and private identity</h2>
-          <p style={{ color: "#475569" }}>An approved public alias may replace a player&apos;s display name on public pages. Authorized staff views may retain the player&apos;s verified identity where needed for operations, corrections, ratings, disputes, and audit history.</p>
+          <p style={{ color: "#475569" }}>An approved public alias may replace a player&apos;s display name on public pages. Club staff may still see the player&apos;s verified name when needed to manage club activities, ratings, corrections, disputes, or records of changes.</p>
         </article>
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>How we use information</h2>
           <p style={{ color: "#475569" }}>
-            We use information to run club and tournament workflows, display public player and event pages, calculate and maintain ratings and standings, send registration and account-related messages, support organizers, investigate data corrections, prevent abuse, and improve the service.
+            We use information to manage clubs and tournaments, display public player and event pages, calculate and maintain ratings and standings, send registration and account-related messages, support organizers, investigate data corrections, prevent abuse, and improve the service.
           </p>
         </article>
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Public information</h2>
           <p style={{ color: "#475569" }}>
-            Public pages may display player names, ratings, match history, badges, league results, tournament divisions, public roster entries, partner-board entries, challenge-ladder status, weekly recaps, and event results. Public tournament roster and board views are designed not to expose private contact details such as phone numbers or email addresses.
+            Public pages may display player names, ratings, match history, badges, league results, tournament divisions, public roster entries, partner-board entries, challenge-ladder status, weekly recaps, and event results. Tournament rosters and partner listings do not show phone numbers or email addresses.
           </p>
         </article>
         <article style={cardStyle}>
@@ -55,13 +55,13 @@ export default function PrivacyPage() {
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Security and retention</h2>
           <p style={{ color: "#475569" }}>
-            We use administrative access controls, server-side write paths, audit logging for sensitive staff operations, and hosted infrastructure controls to protect operational data. We retain information for as long as reasonably needed for club operations, rating history, dispute resolution, legal compliance, and service improvement.
+            We limit staff access, record sensitive changes, and use security controls provided by our hosting partners to protect your information. We retain information for as long as reasonably needed for club operations, rating history, dispute resolution, legal compliance, and service improvement.
           </p>
         </article>
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Your choices</h2>
           <p style={{ color: "#475569" }}>
-            You may request correction, review, or removal of information by contacting support. Some rating, match, tournament, and audit records may need to be retained for operational integrity, dispute resolution, and legal compliance.
+            You may request correction, review, or removal of information by contacting support. Some match, tournament, rating, and change records may need to remain on file to keep results accurate, resolve disputes, or meet legal requirements.
           </p>
           <p><Link href="/data-corrections">Open data correction instructions</Link></p>
           <p><Link href="/profile-privacy">Request profile privacy review</Link></p>
@@ -70,7 +70,7 @@ export default function PrivacyPage() {
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Contact</h2>
           <p style={{ color: "#475569" }}>
-            Privacy questions and requests can be sent to <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a> or submitted through the durable <Link href="/support#general-support-form">support form</Link>.
+            Privacy questions and requests can be sent to <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a> or submitted through the <Link href="/support#general-support-form">support form</Link>.
           </p>
         </article>
       </div>

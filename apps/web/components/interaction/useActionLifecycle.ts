@@ -46,7 +46,7 @@ export function useActionLifecycle(): ActionLifecycle {
       const result = await action();
       if (!isActionCompletion(result)) {
         throw new InteractionActionError(
-          "The request returned without a confirmed result. Your work has been preserved; review the authoritative record before trying again."
+          "We couldn’t confirm what happened. Your changes are still here; check the page before trying again."
         );
       }
       setCompletion(result);
@@ -72,7 +72,7 @@ export function useActionLifecycle(): ActionLifecycle {
       const result = await action();
       if (!isActionCompletion(result)) {
         throw new InteractionActionError(
-          "The operation check returned without a confirmed result. Use the same operation reference to check again."
+          "We still couldn’t confirm the result. Check again before repeating the action."
         );
       }
       setCompletion(result);

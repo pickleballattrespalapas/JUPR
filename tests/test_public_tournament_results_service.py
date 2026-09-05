@@ -435,37 +435,34 @@ def test_public_results_explain_three_way_cycle_through_points_scored() -> None:
         {
             "title": "Three-way tie at 1\u20131",
             "summary": (
-                "Head-to-head did not fully separate these teams. Total points "
-                "scored completed the order: Blair Backhand \u2192 Casey Counter "
-                "\u2192 Alex Ace."
+                "Point differential and total points scored decided the order: "
+                "Blair Backhand, Casey Counter, then Alex Ace."
             ),
             "steps": [
                 {
                     "criterion": "HEAD_TO_HEAD",
                     "outcome": "UNRESOLVED",
                     "detail": (
-                        "Head-to-head mini-table: Alex Ace 1\u20131; Blair Backhand "
-                        "1\u20131; Casey Counter 1\u20131. Head-to-head did not "
-                        "separate these teams."
+                        "Head-to-head records: Alex Ace 1\u20131; Blair Backhand "
+                        "1\u20131; Casey Counter 1\u20131. The teams were still tied "
+                        "after head-to-head."
                     ),
                 },
                 {
                     "criterion": "POINT_DIFFERENTIAL",
                     "outcome": "PARTIALLY_RESOLVED",
                     "detail": (
-                        "Point differential for the remaining tied teams: Blair "
-                        "Backhand +2; Casey Counter +2; Alex Ace -4. Point "
-                        "differential separated some teams, but Blair Backhand and "
-                        "Casey Counter remained tied."
+                        "Point differential: Blair Backhand +2; Casey Counter +2; "
+                        "Alex Ace -4. Point differential ranked some teams, but "
+                        "Blair Backhand and Casey Counter were still tied."
                     ),
                 },
                 {
                     "criterion": "POINTS_FOR",
                     "outcome": "RESOLVED",
                     "detail": (
-                        "Total points scored for the remaining tied teams: Blair "
-                        "Backhand 20; Casey Counter 18. Total points scored resolved "
-                        "the remaining tie."
+                        "Total points scored: Blair Backhand 20; Casey Counter 18. "
+                        "Total points scored broke the tie."
                     ),
                 },
             ],
@@ -563,17 +560,16 @@ def test_incomplete_tie_ignores_unfinalized_draft_scores_and_names_missing_games
         "Alex Ace",
     ]
     explanation = draw["tiebreak_explanations"][0]
-    assert explanation["title"] == "Three-way tie at 1 wins"
+    assert explanation["title"] == "Three-way tie at 1 win"
     assert explanation["summary"] == (
-        "A complete head-to-head comparison was unavailable, so point "
-        "differential completed the order: Blair Backhand \u2192 Casey Counter "
-        "\u2192 Alex Ace."
+        "Not every head-to-head matchup had a final score, so point differential "
+        "decided the order: Blair Backhand, Casey Counter, then Alex Ace."
     )
     assert explanation["steps"][0]["detail"] == (
-        "Available head-to-head records: Alex Ace 1\u20130; Blair Backhand 0\u20131; "
-        "Casey Counter 0\u20130. The complete comparison was unavailable because "
-        "these matchups had no scored result: Alex Ace vs Casey Counter and "
-        "Blair Backhand vs Casey Counter. Head-to-head was not applied."
+        "Head-to-head records so far: Alex Ace 1\u20130; Blair Backhand 0\u20131; "
+        "Casey Counter 0\u20130. Not every matchup had a final score: Alex Ace vs "
+        "Casey Counter and Blair Backhand vs Casey Counter. Head-to-head could "
+        "not decide the tie."
     )
     serialized = json.dumps(draw)
     standings_by_name = {row["team_name"]: row for row in draw["standings"]}

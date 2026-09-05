@@ -266,7 +266,7 @@ def test_roster_order_rejects_duplicate_participants():
         court_count=2,
     )
 
-    with pytest.raises(ValueError, match="exactly once"):
+    with pytest.raises(ValueError, match="Put every player in the order once"):
         mutate_generator_roster(
             event,
             action="reorder",

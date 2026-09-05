@@ -52,10 +52,35 @@ function apiUrl(apiBase: string, path: string): string {
 }
 
 function requestLabel(row: PartnerRequestRow): string {
-  const requester = row.requester?.display_name || "Requester";
-  const target = row.target?.display_name || "you";
-  const division = row.requester?.division_name || row.target?.division_name || "Division";
-  return `${requester} → ${target} · ${division}`;
+  const requester = row.requester?.display_name || "Another player";
+  const target = row.target?.display_name || "another player";
+  const division = row.requester?.division_name || row.target?.division_name || "this division";
+  if (row.direction === "incoming") return `${requester} wants to partner with you in ${division}.`;
+  if (row.direction === "outgoing") return `You asked ${target} to partner with you in ${division}.`;
+  return `${requester} and ${target} · ${division}`;
+}
+
+function requestStatusLabel(status?: string | null): string {
+  switch (String(status || "").toUpperCase()) {
+    case "PENDING":
+      return "Pending";
+    case "ACCEPTED":
+      return "Paired";
+    case "DECLINED":
+      return "Declined";
+    case "CANCELLED":
+    case "CANCELED":
+      return "Canceled";
+    default:
+      return "Updated";
+  }
+}
+
+function actionSuccessMessage(action: "accept" | "decline" | "cancel", idempotent?: boolean | null): string {
+  if (idempotent) return "This request was already updated.";
+  if (action === "accept") return "You’re now partners for this event.";
+  if (action === "decline") return "Request declined.";
+  return "Request canceled.";
 }
 
 export default function PartnerRequestReviewPanel({ apiBase, clubSlug, tournamentId, registrationSlug, editToken, focusRequestId }: PartnerRequestReviewPanelProps) {
@@ -70,7 +95,7 @@ export default function PartnerRequestReviewPanel({ apiBase, clubSlug, tournamen
   const loadRequests = useCallback(async () => {
     setError(null);
     if (!apiBase) {
-      setError("API base URL is not configured.");
+      setError("Partner requests are unavailable right now. Please try again shortly.");
       return;
     }
     setLoading(true);
@@ -78,14 +103,14 @@ export default function PartnerRequestReviewPanel({ apiBase, clubSlug, tournamen
       const query = new URLSearchParams({ edit_token: editToken, tournament_id: tournamentId });
       if (registrationSlug) query.set("registration_slug", registrationSlug);
       const response = await fetch(apiUrl(apiBase, `/clubs/${encodeURIComponent(clubSlug)}/tournament-registration/pairing-requests?${query.toString()}`), { cache: "no-store" });
-      const payload = await response.json().catch(() => null) as PartnerRequestPayload | { detail?: unknown } | null;
-      if (!response.ok) throw new Error(String((payload as { detail?: unknown } | null)?.detail || `API error (${response.status})`));
+      const payload = await response.json().catch(() => null) as PartnerRequestPayload | null;
+      if (!response.ok) throw new Error("Partner requests are unavailable right now.");
       setIncoming((payload as PartnerRequestPayload).incoming || []);
       setOutgoing((payload as PartnerRequestPayload).outgoing || []);
-    } catch (err) {
+    } catch {
       setIncoming([]);
       setOutgoing([]);
-      setError(err instanceof Error ? err.message : "Unable to load partner requests.");
+      setError("We couldn’t load your partner requests. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -109,13 +134,13 @@ export default function PartnerRequestReviewPanel({ apiBase, clubSlug, tournamen
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ tournament_id: tournamentId, registration_slug: registrationSlug || null, edit_token: editToken })
       });
-      const payload = await response.json().catch(() => null) as WritePayload | { detail?: unknown } | null;
-      if (!response.ok) throw new Error(String((payload as { detail?: unknown } | null)?.detail || `API error (${response.status})`));
+      const payload = await response.json().catch(() => null) as WritePayload | null;
+      if (!response.ok) throw new Error("We couldn’t update this partner request.");
       await loadRequests();
-      setMessage((payload as WritePayload)?.message || `Partner request ${action} completed.`);
+      setMessage(actionSuccessMessage(action, payload?.idempotent));
       setConfirmAction(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : `Unable to ${action} partner request.`);
+    } catch {
+      setError("We couldn’t update this partner request. Please try again.");
     } finally {
       setPendingAction(null);
     }
@@ -140,10 +165,11 @@ export default function PartnerRequestReviewPanel({ apiBase, clubSlug, tournamen
     const actionKey = `${row.id}:${action}`;
     const confirming = confirmAction === actionKey;
     const pending = pendingAction === actionKey;
+    const confirmLabel = action === "accept" ? "Confirm pairing" : action === "decline" ? "Confirm decline" : "Confirm cancellation";
     return (
       <span key={action} style={{ display: "inline-flex", gap: "0.35rem", alignItems: "center" }}>
         <button type="button" onClick={() => void transitionRequest(row, action)} disabled={Boolean(pendingAction)} style={{ ...buttonStyle, background: action === "accept" ? "#166534" : action === "decline" ? "#9f1239" : "#475569" }}>
-          {pending ? `${label}…` : confirming ? `Confirm ${label.toLowerCase()}` : label}
+          {pending ? `${label}…` : confirming ? confirmLabel : label}
         </button>
         {confirming && !pending ? <button type="button" onClick={() => setConfirmAction(null)} style={{ ...buttonStyle, background: "white", color: "#0f172a" }}>Back</button> : null}
       </span>
@@ -154,7 +180,7 @@ export default function PartnerRequestReviewPanel({ apiBase, clubSlug, tournamen
     <article style={{ ...cardStyle, marginBottom: "1rem", borderColor: focusRequestId ? "#93c5fd" : "#e2e8f0" }}>
       <h2 style={{ marginTop: 0 }}>Your partner requests</h2>
       <p style={{ color: "#475569" }}>
-        Review incoming requests sent to your registration. Accepting confirms the pairing atomically; declining or cancelling leaves both players unpaired.
+        Accept a request to become partners for this event, or decline if it isn’t a match.
       </p>
       <p><button type="button" onClick={() => void loadRequests()} disabled={loading || !apiBase} style={buttonStyle}>{loading ? "Loading…" : "Refresh requests"}</button></p>
       {relevantIncoming.length ? (
@@ -162,7 +188,7 @@ export default function PartnerRequestReviewPanel({ apiBase, clubSlug, tournamen
           {relevantIncoming.map((row) => (
             <div key={row.id} id={`request-${row.id}`} style={{ border: "1px solid #cbd5e1", borderRadius: "12px", padding: "0.75rem", background: row.id === focusRequestId ? "#eff6ff" : "white" }}>
               <strong>{requestLabel(row)}</strong>
-              <p style={{ color: "#475569", margin: "0.35rem 0" }}>Status: {row.status || "PENDING"}</p>
+              <p style={{ color: "#475569", margin: "0.35rem 0" }}>Status: {requestStatusLabel(row.status)}</p>
               <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
                 {actionButton(row, "accept", "Accept & pair")}
                 {actionButton(row, "decline", "Decline")}
@@ -170,20 +196,20 @@ export default function PartnerRequestReviewPanel({ apiBase, clubSlug, tournamen
             </div>
           ))}
         </div>
-      ) : <p style={{ color: "#64748b" }}>No pending incoming partner requests for this registration.</p>}
+      ) : <p style={{ color: "#64748b" }}>You don’t have any new partner requests.</p>}
       {pendingOutgoing.length ? (
         <div style={{ display: "grid", gap: "0.75rem", marginTop: "1rem" }}>
           <h3 style={{ marginBottom: 0 }}>Requests you sent</h3>
           {pendingOutgoing.map((row) => (
             <div key={row.id} style={{ border: "1px solid #cbd5e1", borderRadius: "12px", padding: "0.75rem", background: "white" }}>
               <strong>{requestLabel(row)}</strong>
-              <p style={{ color: "#475569", margin: "0.35rem 0" }}>Status: {row.status || "PENDING"}</p>
+              <p style={{ color: "#475569", margin: "0.35rem 0" }}>Status: {requestStatusLabel(row.status)}</p>
               {actionButton(row, "cancel", "Cancel request")}
             </div>
           ))}
         </div>
-      ) : <p style={{ color: "#64748b" }}>No pending requests sent from this registration.</p>}
-      {completed.length ? <p style={{ color: "#64748b" }}>Recent completed requests: {completed.map((row) => `${row.target?.display_name || row.requester?.display_name || row.id} (${row.status})`).join(", ")}.</p> : null}
+      ) : <p style={{ color: "#64748b" }}>You haven’t sent any open requests.</p>}
+      {completed.length ? <p style={{ color: "#64748b" }}>Recent requests: {completed.map((row) => `${row.target?.display_name || row.requester?.display_name || "Partner"} — ${requestStatusLabel(row.status)}`).join(", ")}.</p> : null}
       {message ? <p role="status" style={{ color: "#166534", marginBottom: 0 }}>{message}</p> : null}
       {error ? <p role="alert" style={{ color: "#b91c1c", marginBottom: 0 }}>{error}</p> : null}
     </article>

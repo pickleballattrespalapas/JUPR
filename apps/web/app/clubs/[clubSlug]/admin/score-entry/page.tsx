@@ -17,14 +17,14 @@ export default async function ScoreEntryPage({ params }: ScoreEntryPageProps) {
     return (
       <section>
         <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
-          Admin score entry
+          Staff score entry
         </p>
-        <h1 style={{ marginTop: 0 }}>Score entry is disabled</h1>
+        <h1 style={{ marginTop: 0 }}>Score entry isn’t available here</h1>
         <p style={{ color: "#475569" }}>
-          This guarded workflow is available only in explicitly enabled staff environments.
+          Use one of the staff options below to enter scores.
         </p>
-        <p><Link href="/admin/match-uploader">Use guarded Match Uploader</Link> · <a href={process.env.JUPR_STREAMLIT_FALLBACK_URL || "https://juprtrespalapas.streamlit.app"}>Open Streamlit fallback</a></p>
-        <p><Link href="/admin">Return to the operations cockpit</Link></p>
+        <p><Link href="/admin/match-uploader">Open Match Uploader</Link> · <a href={process.env.JUPR_STREAMLIT_FALLBACK_URL || "https://juprtrespalapas.streamlit.app"}>Open backup score entry</a></p>
+        <p><Link href="/admin">Return to staff home</Link></p>
       </section>
     );
   }
@@ -40,13 +40,12 @@ export default async function ScoreEntryPage({ params }: ScoreEntryPageProps) {
     const fallback = readiness.data?.fallback;
     return (
       <section>
-        <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>Admin score entry</p>
-        <h1 style={{ marginTop: 0 }}>Score entry is in fallback mode</h1>
-        <p style={{ color: "#475569" }}>The browser flag is on, but FastAPI has not confirmed both its write flag and server-only Supabase service role. The write form remains hidden.</p>
+        <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>Staff score entry</p>
+        <h1 style={{ marginTop: 0 }}>Score entry isn’t ready here</h1>
+        <p style={{ color: "#475569" }}>Use one of the staff options below to enter scores.</p>
         {readiness.error ? <p style={{ color: "#b91c1c" }}>{readiness.error}</p> : null}
-        {readiness.data?.warnings?.length ? <ul style={{ color: "#92400e" }}>{readiness.data.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
-        <p><Link href={fallback?.match_uploader_route || "/admin/match-uploader"}>Use guarded Match Uploader</Link> · <a href={fallback?.streamlit_url || process.env.JUPR_STREAMLIT_FALLBACK_URL || "https://juprtrespalapas.streamlit.app"}>Open Streamlit fallback</a></p>
-        <p><Link href="/admin">Return to the operations cockpit</Link></p>
+        <p><Link href={fallback?.match_uploader_route || "/admin/match-uploader"}>Open Match Uploader</Link> · <a href={fallback?.streamlit_url || process.env.JUPR_STREAMLIT_FALLBACK_URL || "https://juprtrespalapas.streamlit.app"}>Open backup score entry</a></p>
+        <p><Link href="/admin">Return to staff home</Link></p>
       </section>
     );
   }
@@ -54,11 +53,11 @@ export default async function ScoreEntryPage({ params }: ScoreEntryPageProps) {
   return (
     <section>
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
-        Admin score entry MVP
+        Staff score entry
       </p>
       <h1 style={{ marginTop: 0 }}>{club?.name ?? clubSlug} score entry</h1>
       <p style={{ color: "#475569" }}>
-        This is the first Next/Vercel score-entry surface for the core JUPR loop: save a score, update ratings, refresh leaderboards, and reflect the result on player profiles.
+        Enter one match at a time. Saved scores update ratings, leaderboards, and player profiles.
       </p>
       {error ? <p style={{ color: "#b91c1c" }}>Player lookup is unavailable. {error}</p> : null}
       {!error && players.length === 0 ? <p>No players are available for score entry yet.</p> : null}

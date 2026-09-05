@@ -30,7 +30,7 @@ export function ActionFeedback({
     return (
       <section className={`${styles.feedback} ${styles.feedbackWorking}`} aria-live="polite">
         <h3 className={styles.feedbackTitle}>{workingLabel}</h3>
-        <p className={styles.feedbackDescription}>Keep this dialog open while the request is confirmed.</p>
+        <p className={styles.feedbackDescription}>Keep this window open while we finish.</p>
       </section>
     );
   }
@@ -81,11 +81,13 @@ export function ActionFeedback({
           data-dialog-focus
         >
           <div className={styles.feedbackDescription}>{completion.description}</div>
-          <p className={styles.operationReference}><strong>Operation reference:</strong> <code>{completion.operationKey}</code></p>
+          {completion.showOperationReference !== false ? (
+            <p className={styles.operationReference}><strong>Reference number:</strong> <code>{completion.operationKey}</code></p>
+          ) : null}
         </section>
         {error ? (
           <section className={`${styles.feedback} ${styles.feedbackError}`} role="alert">
-            <h3 className={styles.feedbackTitle}>The operation check did not complete</h3>
+            <h3 className={styles.feedbackTitle}>We couldn’t check the result</h3>
             <p className={styles.feedbackDescription}>{error.message}</p>
           </section>
         ) : null}

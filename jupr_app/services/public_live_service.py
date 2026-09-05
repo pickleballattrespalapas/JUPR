@@ -130,10 +130,17 @@ def _public_match(
     team_b = _participant_names(event, match_id, [str(x) for x in (match.get("teamB") or [])])
     score_a = _score(match.get("scoreA"))
     score_b = _score(match.get("scoreB"))
+    fallback_label = (
+        f"Court {court_number}, game {mini_round_number}"
+        if court_number is not None and mini_round_number is not None
+        else f"Court {court_number}"
+        if court_number is not None
+        else f"Round {round_number} match"
+    )
     payload: dict[str, Any] = {
         "id": match_id,
         "round_number": int(round_number),
-        "label": str(match.get("desc") or match.get("name") or match_id),
+        "label": str(match.get("desc") or match.get("name") or fallback_label),
         "team_a": team_a,
         "team_b": team_b,
         "score_a": score_a,

@@ -537,36 +537,22 @@ function baseUrl(): string | null {
   return process.env.JUPR_API_BASE_URL || process.env.NEXT_PUBLIC_JUPR_API_BASE_URL || null;
 }
 
-async function apiErrorMessage(response: Response): Promise<string> {
-  const fallback = `API error (${response.status}).`;
-  let bodyText = "";
-  try {
-    bodyText = await response.text();
-  } catch {
-    return fallback;
-  }
-  if (!bodyText) return fallback;
-  try {
-    const payload = JSON.parse(bodyText) as { detail?: unknown; message?: unknown; error?: unknown };
-    const detail = payload.detail ?? payload.message ?? payload.error;
-    if (Array.isArray(detail)) return `${fallback} ${detail.map((item) => JSON.stringify(item)).join("; ")}`;
-    if (detail) return `${fallback} ${String(detail)}`;
-  } catch {
-    // Fall through to short text excerpt below.
-  }
-  return `${fallback} ${bodyText.slice(0, 240)}`;
+const PUBLIC_LOAD_ERROR = "We couldn't load this information. Please try again.";
+
+async function apiErrorMessage(_response: Response): Promise<string> {
+  return PUBLIC_LOAD_ERROR;
 }
 
 async function fetchJson<T>(path: string, options: { noStore?: boolean } = {}): Promise<ApiResult<T>> {
   const apiBase = baseUrl();
-  if (!apiBase) return { data: null, error: "Missing JUPR API base URL environment variable." };
+  if (!apiBase) return { data: null, error: PUBLIC_LOAD_ERROR };
   const url = `${apiBase.replace(/\/$/, "")}${path}`;
   try {
     const response = await fetch(url, options.noStore ? { cache: "no-store" } : { next: { revalidate: 60 } });
     if (!response.ok) return { data: null, error: await apiErrorMessage(response) };
     return { data: (await response.json()) as T, error: null };
-  } catch (error) {
-    return { data: null, error: `Unable to reach API: ${error instanceof Error ? error.message : "Unknown error"}` };
+  } catch {
+    return { data: null, error: PUBLIC_LOAD_ERROR };
   }
 }
 

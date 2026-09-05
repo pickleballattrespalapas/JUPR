@@ -90,6 +90,28 @@ function challengeAnchor(challengeId?: string | number | null): string {
   return `ladder-challenge-${encodeURIComponent(String(challengeId ?? "unknown"))}`;
 }
 
+function challengeStatusLabel(value: string): string {
+  const normalized = String(value || "").trim().toUpperCase();
+  const labels: Record<string, string> = {
+    ACCEPTED: "Accepted",
+    ACCEPTED_SCHEDULING: "Scheduling",
+    AWAITING_VERIFICATION: "Awaiting score review",
+    CANCELLED: "Canceled",
+    CANCELED: "Canceled",
+    COMPLETED: "Completed",
+    EXPIRED_ACCEPTANCE: "Response deadline passed",
+    FORFEITED: "Forfeit",
+    IN_PROGRESS: "In progress",
+    OVERDUE_PLAY: "Past play deadline",
+    PENDING_ACCEPTANCE: "Awaiting acceptance"
+  };
+  if (labels[normalized]) return labels[normalized];
+  return normalized
+    .toLowerCase()
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
 function flattenPlayers(tiers: PublicLadderTier[]): FlatPlayer[] {
   return tiers.flatMap((tier) => tier.players.map((player) => ({ ...player, tier_id: tier.tier_id, tier_label: tier.label })));
 }
@@ -182,7 +204,7 @@ function ChallengeCard({ challenge, clubSlug, selected }: { challenge: PublicLad
     <article id={anchor} aria-labelledby={headingId} style={{ ...cardStyle, marginBottom: "0.75rem", borderColor: selected ? "#2563eb" : "#e2e8f0", boxShadow: selected ? "0 0 0 3px rgba(37,99,235,0.12)" : "none" }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap" }}>
         <h4 id={headingId} style={{ margin: 0, fontSize: "1rem" }}><Link href={pageHref({ clubSlug, section: "challenges", challenge: challenge.id, anchor })}>Challenge #{challenge.id ?? "—"}</Link></h4>
-        <span style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.12rem 0.45rem", fontSize: "0.78rem" }}>{challenge.status}</span>
+        <span style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.12rem 0.45rem", fontSize: "0.78rem" }}>{challengeStatusLabel(challenge.status)}</span>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.65rem", margin: "0.75rem 0" }}>
         <ChallengeParticipant label="Challenger" player={challenge.challenger} clubSlug={clubSlug} />
@@ -202,13 +224,13 @@ function ChallengeCard({ challenge, clubSlug, selected }: { challenge: PublicLad
       {isCompleted ? (
         <>
           <p style={{ margin: "0.65rem 0 0", color: "#64748b", fontSize: "0.82rem" }}>
-            Current positions and ratings are live ladder values; they do not by themselves attribute a rank or rating change to this challenge.
+            These rankings are current, so they may have changed since this challenge.
           </p>
           {challenge.result_details ? <ChallengeLadderResultDetails challenge={challenge} details={challenge.result_details} clubSlug={clubSlug} /> : (
             <p data-result-details="unavailable" style={{ margin: "0.4rem 0 0", color: "#64748b", fontSize: "0.82rem" }}>
               {challenge.status === "FORFEITED"
-                ? "Resolved by forfeit; played-match scores, swing partners, rating changes, and match links are not expected."
-                : "Detailed scores, swing partners, rating changes, and match links are unavailable for this result. Older or imported records may not have linked match details."}
+                ? "This challenge ended by forfeit, so there are no match scores or rating changes."
+                : "Match details aren't available for this result, especially for older records."}
             </p>
           )}
         </>
@@ -223,7 +245,7 @@ function PlayerChallengePanel({ player, clubSlug }: { player: FlatPlayer; clubSl
     return (
       <article style={{ ...cardStyle, borderColor: "#f59e0b", marginBottom: "1rem" }}>
         <h2 style={{ marginTop: 0 }}>{player.player_name} challenge window</h2>
-        <p style={{ color: "#92400e", marginBottom: 0 }}>Eligibility hints are temporarily unavailable. Staff remains the authority for official challenges.</p>
+        <p style={{ color: "#92400e", marginBottom: 0 }}>We can&apos;t show available opponents right now. Ask club staff for help.</p>
       </article>
     );
   }
@@ -235,7 +257,7 @@ function PlayerChallengePanel({ player, clubSlug }: { player: FlatPlayer; clubSl
         Rank {player.rank ?? "—"} in {player.tier_label}; current status is <strong>{player.status_short || player.status}</strong>.
       </p>
       {!eligibility.can_initiate ? (
-        <p style={{ color: "#b45309" }}>{eligibility.hint} Staff still owns final official eligibility decisions.</p>
+        <p style={{ color: "#b45309" }}>{eligibility.hint} Ask club staff to confirm.</p>
       ) : null}
       {eligibility.can_initiate && !opponents.length ? <p style={{ color: "#64748b" }}>{eligibility.hint}</p> : null}
       {opponents.length ? (
@@ -248,7 +270,7 @@ function PlayerChallengePanel({ player, clubSlug }: { player: FlatPlayer; clubSl
           ))}
         </div>
       ) : null}
-      <p style={{ marginBottom: 0, color: "#64748b", fontSize: "0.9rem" }}>Opponent hints are computed by the Python ladder policy from public status, tier, rank, and the configured range. Official challenges must still be recorded by staff.</p>
+      <p style={{ marginBottom: 0, color: "#64748b", fontSize: "0.9rem" }}>These players are currently within your challenge range. Ask staff to start the challenge.</p>
     </article>
   );
 }
@@ -274,20 +296,20 @@ export default async function ChallengeLadderPage({ params, searchParams }: Chal
       </p>
       <h1 style={{ marginTop: 0 }}>{data?.club.name ?? clubSlug} challenge ladder</h1>
       <p style={{ color: "#334155", maxWidth: "820px" }}>
-        Public ladder standings, player status, challenge activity, recent results, and quick rules. Challenge creation, notices, score entry, forfeits, passes, and rank changes remain staff-managed.
+        See the ladder, active challenges, recent results, and rules. Contact staff to start or update a challenge.
       </p>
 
-      {error ? <p style={{ color: "#b91c1c" }}>Challenge Ladder is temporarily unavailable. {error}</p> : null}
+      {error ? <p style={{ color: "#b91c1c" }}>We couldn&apos;t load the challenge ladder. Please try again.</p> : null}
       {!error && data && data.summary.active_player_count === 0 ? <p>No active ladder roster is available yet.</p> : null}
 
       {data ? (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
             <article style={cardStyle}><strong>Active ladder players</strong><br />{data.summary.active_player_count}</article>
-            <article style={cardStyle}><strong>Populated tiers</strong><br />{data.summary.populated_tier_count} / {data.summary.tier_count}</article>
+            <article style={cardStyle}><strong>Tiers with players</strong><br />{data.summary.populated_tier_count} / {data.summary.tier_count}</article>
             <article style={cardStyle}><strong>Active challenges</strong><br />{data.summary.active_challenge_count}</article>
             <article style={cardStyle}><strong>Challenge range</strong><br />Up to {data.settings.challenge_range} ranks</article>
-            <article style={cardStyle}><strong>Eligible public pairings</strong><br />{data.summary.eligible_pair_count ?? 0}</article>
+            <article style={cardStyle}><strong>Possible challenges</strong><br />{data.summary.eligible_pair_count ?? 0}</article>
           </div>
 
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
@@ -326,9 +348,9 @@ export default async function ChallengeLadderPage({ params, searchParams }: Chal
           {section === "challenges" ? (
             <>
               <h2>Challenges & results</h2>
-              {!hasChallenges ? <p style={{ color: "#64748b" }}>No public challenge activity yet.</p> : null}
+              {!hasChallenges ? <p style={{ color: "#64748b" }}>No challenges yet.</p> : null}
               <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
-                <Link href={pageHref({ clubSlug, section: "challenges", challenge: selectedChallengeId })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.35rem 0.65rem", background: !selectedStatus ? "#dcfce7" : "white", color: "#0f172a", textDecoration: "none", fontWeight: !selectedStatus ? 800 : 600 }}>All buckets</Link>
+                <Link href={pageHref({ clubSlug, section: "challenges", challenge: selectedChallengeId })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.35rem 0.65rem", background: !selectedStatus ? "#dcfce7" : "white", color: "#0f172a", textDecoration: "none", fontWeight: !selectedStatus ? 800 : 600 }}>All challenges</Link>
                 {data.challenge_sections.map((challengeSection) => {
                   const active = challengeSection.name === selectedStatus;
                   return (
@@ -354,7 +376,7 @@ export default async function ChallengeLadderPage({ params, searchParams }: Chal
           {section === "rules" ? (
             <>
               <h2>Quick rules</h2>
-              <p style={{ color: "#475569" }}>The complete public rulebook below is generated by the same Python service that computes ladder status and eligible-opponent hints.</p>
+              <p style={{ color: "#475569" }}>Here are the full challenge-ladder rules.</p>
               <div style={{ display: "grid", gap: "1rem" }} data-rulebook-authority={data.eligibility_authority || "unavailable"}>
                 {(data.rulebook ?? []).map((section) => (
                   <article key={section.title} style={cardStyle}>
@@ -377,7 +399,7 @@ export default async function ChallengeLadderPage({ params, searchParams }: Chal
                     <h3 style={{ marginTop: 0 }}>{item.short}</h3>
                     <p style={{ margin: "0 0 0.35rem", fontWeight: 700 }}>{item.status}</p>
                     <p style={{ color: "#475569", marginBottom: "0.35rem" }}>{item.meaning}</p>
-                    <p style={{ color: "#64748b", marginBottom: 0, fontSize: "0.85rem" }}>Initiate: {item.can_initiate ? "yes" : "no"} · Receive: {item.can_receive ? "yes" : "no"}</p>
+                    <p style={{ color: "#64748b", marginBottom: 0, fontSize: "0.85rem" }}>Can challenge: {item.can_initiate ? "Yes" : "No"} · Can be challenged: {item.can_receive ? "Yes" : "No"}</p>
                   </article>
                 ))}
               </div>

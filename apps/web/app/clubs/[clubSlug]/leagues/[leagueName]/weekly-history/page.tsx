@@ -82,7 +82,7 @@ export default async function PublicLeagueWeeklyHistoryPage({ params, searchPara
         <article style={{ ...cardStyle, borderColor: "#fecaca", background: "#fef2f2" }}>
           <h2 style={{ marginTop: 0 }}>Weekly history unavailable</h2>
           <p style={{ color: "#7f1d1d" }}>
-            {error || "This league is not available as an active or finished public league."}
+            {error || "We couldn't find this league."}
           </p>
           <Link href={`/clubs/${params.clubSlug}/leagues`}>Return to all leagues</Link>
         </article>
@@ -137,7 +137,7 @@ export default async function PublicLeagueWeeklyHistoryPage({ params, searchPara
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
         <article style={cardStyle}><strong>Selected week</strong><br />{selectedWeek ? `Week ${selectedWeek}` : "No results"}</article>
         <article style={cardStyle}><strong>Players active</strong><br />{weeklyRows.length}</article>
-        <article style={cardStyle}><strong>Player-games recorded</strong><br />{totalGames}</article>
+        <article style={cardStyle}><strong>Player appearances</strong><br />{totalGames}</article>
         <article style={cardStyle}><strong>Weeks available</strong><br />{data.weeks.length}</article>
       </div>
 
@@ -177,7 +177,7 @@ export default async function PublicLeagueWeeklyHistoryPage({ params, searchPara
               ))}
           </div>
         ) : (
-          <article style={cardStyle}>No public results are available for the selected week.</article>
+          <article style={cardStyle}>No results are available for this week.</article>
         )}
       </section>
 

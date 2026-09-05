@@ -42,7 +42,7 @@ function dateLabel(value?: string | null): string {
 }
 
 function dateTimeLabel(value?: string | null): string {
-  if (!value) return "Not scheduled";
+  if (!value) return "To be announced";
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return String(value).slice(0, 24);
   return new Intl.DateTimeFormat("en-US", {
@@ -73,30 +73,31 @@ function orderedChoices(values: Array<string | null | undefined>): string[] {
 }
 
 function groupLabel(entry: PublicTournamentRosterEntry): string {
-  return [
-    entry.event_day_label || "Day",
-    entry.event_family || "Event",
-    entry.division || "Division"
-  ].join(" · ");
+  const family = String(entry.event_family || "Event").trim();
+  const division = String(entry.division || "Division").trim();
+  const event = division.toLocaleLowerCase().startsWith(family.toLocaleLowerCase())
+    ? division
+    : `${family} · ${division}`;
+  return `${entry.event_day_label || "Day"} · ${event}`;
 }
 
 function statusLabel(entry: PublicTournamentRosterEntry): string {
   const value = String(entry.status || "").trim().toLowerCase();
   if (value === "registered") return "Registered";
-  if (value === "waitlist") return "Waitlist";
-  if (value === "needs partner") return "Needs Partner";
-  if (value === "pending partner request") return "Pending Partner Request";
-  return value ? value.replace(/\b\w/g, (letter) => letter.toUpperCase()) : "Review";
+  if (value === "waitlist") return "Waitlisted";
+  if (value === "needs partner") return "Needs a partner";
+  if (value === "pending partner request") return "Partner request pending";
+  return "Under review";
 }
 
 function statusStyle(status: string) {
   if (status === "Registered") {
     return { background: "#dcfce7", borderColor: "#86efac", color: "#166534" };
   }
-  if (status === "Needs Partner" || status === "Pending Partner Request") {
+  if (status === "Needs a partner" || status === "Partner request pending") {
     return { background: "#fef3c7", borderColor: "#fde68a", color: "#92400e" };
   }
-  if (status === "Waitlist") {
+  if (status === "Waitlisted") {
     return { background: "#dbeafe", borderColor: "#93c5fd", color: "#1d4ed8" };
   }
   return { background: "#f1f5f9", borderColor: "#cbd5e1", color: "#475569" };
@@ -104,7 +105,7 @@ function statusStyle(status: string) {
 
 function memberLabel(member: PublicTournamentRosterMember): string {
   const details = [
-    member.skill ? `Skill ${member.skill}` : null,
+    member.skill ? `Rating ${member.skill}` : null,
     member.age_bracket || null
   ].filter(Boolean);
   return details.length
@@ -126,7 +127,7 @@ export default async function TournamentRosterPage({
   const selectedEvent = firstParam(searchParams, "event");
   const selectedDivision = firstParam(searchParams, "division");
   const selectedStatus = firstParam(searchParams, "status") || "all";
-  const { data, error } = await getClubTournamentRoster(params.clubSlug, {
+  const { data, error, status } = await getClubTournamentRoster(params.clubSlug, {
     registrationSlug,
     tournamentId
   });
@@ -140,11 +141,14 @@ export default async function TournamentRosterPage({
   );
 
   if (!selectionMatches || !tournament) {
+    const unavailable = Boolean(error && status !== 404);
     return (
       <section>
-        <h1>Tournament roster unavailable</h1>
+        <h1>{unavailable ? "Tournament roster unavailable" : "Tournament not found"}</h1>
         <p style={{ color: "#475569" }}>
-          The selected tournament is unavailable or no longer published.
+          {unavailable
+            ? "We couldn’t load the roster right now. Please try again shortly."
+            : "We couldn’t find that tournament. It may no longer be public."}
         </p>
         <Link href={`/clubs/${params.clubSlug}/tournaments`}>
           Return to tournament selection
@@ -189,7 +193,7 @@ export default async function TournamentRosterPage({
         registrationSlug={settings?.registration_slug || null}
         active="roster"
         kicker="Tournament Roster"
-        description="Browse public-safe registrations by day, event, division, and status. Private contact information remains hidden."
+        description="See who's playing in each event and division. Contact details are only visible to organizers."
       />
 
       {error ? (
@@ -203,7 +207,7 @@ export default async function TournamentRosterPage({
           }}
         >
           <h2 style={{ marginTop: 0 }}>Roster temporarily unavailable</h2>
-          <p style={{ color: "#7f1d1d" }}>{error}</p>
+          <p style={{ color: "#7f1d1d" }}>Please try again shortly.</p>
         </article>
       ) : null}
 
@@ -230,18 +234,6 @@ export default async function TournamentRosterPage({
               {dateLabel(tournament.start_date)} – {dateLabel(tournament.end_date)}
             </p>
           </div>
-          <span
-            style={{
-              border: "1px solid #93c5fd",
-              borderRadius: "999px",
-              padding: "0.25rem 0.6rem",
-              background: "white",
-              color: "#1d4ed8",
-              fontWeight: 800
-            }}
-          >
-            Read only
-          </span>
         </div>
         <div
           style={{
@@ -251,11 +243,11 @@ export default async function TournamentRosterPage({
             marginTop: "1rem"
           }}
         >
-          <div><strong>Registrations</strong><br />{data?.summary?.total_registrations ?? 0}</div>
+          <div><strong>Sign-ups</strong><br />{data?.summary?.total_registrations ?? 0}</div>
           <div><strong>Players</strong><br />{data?.summary?.total_players ?? 0}</div>
-          <div><strong>Registered entries</strong><br />{registeredEntries}</div>
-          <div><strong>Needs partner</strong><br />{data?.summary?.players_needing_partners ?? 0}</div>
-          <div><strong>Registration closes</strong><br />{dateTimeLabel(settings?.registration_close_at)}</div>
+          <div><strong>Confirmed entries</strong><br />{registeredEntries}</div>
+          <div><strong>Looking for partners</strong><br />{data?.summary?.players_needing_partners ?? 0}</div>
+          <div><strong>Registration deadline</strong><br />{dateTimeLabel(settings?.registration_close_at)}</div>
         </div>
       </article>
 
@@ -323,7 +315,7 @@ export default async function TournamentRosterPage({
             </button>
             <Link href={`/clubs/${params.clubSlug}/tournament-roster${queryPrefix}`}>Clear filters</Link>
             <span aria-live="polite" style={{ color: "#475569" }}>
-              Showing {filteredEntries.length} of {entries.length} public entries.
+              Showing {filteredEntries.length} of {entries.length} entries.
             </span>
           </div>
         </form>
@@ -344,7 +336,7 @@ export default async function TournamentRosterPage({
               >
                 <h2 style={{ margin: 0 }}>{label}</h2>
                 <span style={{ color: "#64748b" }}>
-                  {rows.length} entr{rows.length === 1 ? "y" : "ies"}
+                  {rows.length === 1 ? "1 entry" : `${rows.length} entries`}
                 </span>
               </div>
               <div
@@ -407,11 +399,19 @@ export default async function TournamentRosterPage({
         </div>
       ) : (
         <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>No matching roster entries</h2>
-          <p style={{ color: "#475569" }}>Try clearing one or more filters.</p>
-          <Link href={`/clubs/${params.clubSlug}/tournament-roster${queryPrefix}`}>
-            Clear filters
-          </Link>
+          <h2 style={{ marginTop: 0 }}>
+            {entries.length ? "No players match these filters" : "No players are listed yet"}
+          </h2>
+          <p style={{ color: "#475569" }}>
+            {entries.length
+              ? "Try changing or clearing your filters."
+              : "Check back as players register."}
+          </p>
+          {entries.length ? (
+            <Link href={`/clubs/${params.clubSlug}/tournament-roster${queryPrefix}`}>
+              Clear filters
+            </Link>
+          ) : null}
         </article>
       )}
     </section>

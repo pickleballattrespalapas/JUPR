@@ -41,5 +41,7 @@ def test_partner_review_exposes_all_owned_transitions_with_confirmation():
     for action in ("accept", "decline", "cancel"):
         assert f'/{action}")' in routes
     assert "confirmAction" in review
-    assert "Confirm ${label.toLowerCase()}" in review
+    assert '"Confirm pairing"' in review
+    assert '"Confirm decline"' in review
+    assert '"Confirm cancellation"' in review
     assert "status_code=409" in routes

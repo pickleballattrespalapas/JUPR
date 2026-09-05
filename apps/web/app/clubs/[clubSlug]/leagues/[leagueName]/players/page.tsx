@@ -81,7 +81,7 @@ export default async function PublicLeaguePlayerSummariesPage({ params, searchPa
         <article style={{ ...cardStyle, borderColor: "#fecaca", background: "#fef2f2" }}>
           <h2 style={{ marginTop: 0 }}>Player summaries unavailable</h2>
           <p style={{ color: "#7f1d1d" }}>
-            {error || "This league is not available as an active or finished public league."}
+            {error || "We couldn't find this league."}
           </p>
           <Link href={`/clubs/${params.clubSlug}/leagues`}>Return to all leagues</Link>
         </article>
@@ -100,7 +100,7 @@ export default async function PublicLeaguePlayerSummariesPage({ params, searchPa
       </p>
       <h1 style={{ marginTop: 0 }}>{leagueName} player summaries</h1>
       <p style={{ color: "#334155", maxWidth: "820px" }}>
-        Open any player’s league record, weekly trend, rating movement, and recent matches.
+        Choose a player to see their record, rating changes, and recent matches.
       </p>
 
       <PublicLeagueNav clubSlug={params.clubSlug} leagueName={leagueName} active="player" leagueView={leagueView} />
@@ -164,7 +164,7 @@ export default async function PublicLeaguePlayerSummariesPage({ params, searchPa
                 ))}
               </div>
             ) : (
-              <article style={cardStyle}>No weekly snapshots are available for this player yet.</article>
+              <article style={cardStyle}>No weekly results yet for this player.</article>
             )}
           </section>
 

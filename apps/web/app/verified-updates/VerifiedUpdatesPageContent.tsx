@@ -11,17 +11,17 @@ export default async function VerifiedUpdatesPageContent({ clubSlug, initialPlay
   return (
     <section>
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
-        {clubName} · Verified Updates Request
+        {clubName} · Verified player updates
       </p>
-      <h1 style={{ marginTop: 0 }}>Subscribe to verified player updates</h1>
+      <h1 style={{ marginTop: 0 }}>Get updates for a player</h1>
       <p style={{ color: "#334155", maxWidth: "820px" }}>
-        Request admin-approved update emails for a player profile. These are sent after completed batch uploads such as league sessions, round robins, or tournament publishing.
+        Get an email when club staff publish new league, round-robin, or tournament results for this player.
       </p>
-      {error ? <article style={{ ...cardStyle, background: "#fff7ed", color: "#9a3412" }}>Unable to load player options. {error}</article> : null}
+      {error ? <article style={{ ...cardStyle, background: "#fff7ed", color: "#9a3412" }}>We couldn&apos;t load player profiles right now. Please try again later.</article> : null}
       {data?.players?.length ? (
         <VerifiedUpdatesRequestForm apiBase={verifiedUpdatesApiBaseUrl()} clubSlug={clubSlug} players={data.players} initialPlayerId={initialPlayerId} />
       ) : !error ? (
-        <article style={cardStyle}>No player options are available yet.</article>
+        <article style={cardStyle}>No player profiles are available yet.</article>
       ) : null}
       <p style={{ marginTop: "1rem" }}><Link href={`/clubs/${encodeURIComponent(clubSlug)}/players`}>Back to player search</Link> · <Link href="/email-preferences">Email preferences</Link></p>
     </section>

@@ -14,7 +14,10 @@ from jupr_app.config import (
 )
 from jupr_app.domain.notifications.smtp_mailer import send_email_with_inline_chart
 
-PAYMENT_NOTE = "Payment will be taken on site at Tres Palapas, or an invoice will be sent to the registered email address."
+PAYMENT_NOTE = (
+    "Pay on site at Tres Palapas, or watch for an invoice at the email address "
+    "you used to register."
+)
 
 
 def _safe_text(value: Any) -> str:
@@ -172,7 +175,7 @@ def build_tournament_registration_confirmation_html(view_model: dict) -> str:
             f"<td>{escape(_partner_display(event))}</td>",
             f"<td>{escape(format_money(event.get('price_usd')))}</td>",
         ]) + "</tr>")
-    rows_html = "".join(rows) if rows else '<tr><td colspan="5">No event selections were found. Contact tournament staff if this is unexpected.</td></tr>'
+    rows_html = "".join(rows) if rows else '<tr><td colspan="5">No events are listed. If that doesn’t look right, contact tournament staff.</td></tr>'
     commerce_rows = []
     for line in view_model.get("commerce_lines") or []:
         label = _safe_text(line.get("label"))
@@ -205,14 +208,14 @@ def build_tournament_registration_confirmation_html(view_model: dict) -> str:
     discount_html = ""
     if _coerce_money(view_model.get("commerce_discount_usd")) > 0:
         discount_html = (
-            "<p><strong>Bundle and giveaway savings: "
+            "<p><strong>Total savings: "
             f"{escape(format_money(view_model.get('commerce_discount_usd')))}"
             "</strong></p>"
         )
     url = _safe_text(view_model.get("confirmation_url"))
     link = f'<p><a href="{escape(url)}">View your registration confirmation</a></p>' if url else ""
     roster_url = _safe_text(view_model.get("roster_url"))
-    roster_link = f'<p><a href="{escape(roster_url)}">View the public tournament roster</a></p>' if roster_url else ""
+    roster_link = f'<p><a href="{escape(roster_url)}">View the tournament roster</a></p>' if roster_url else ""
     sender = ""
     if _safe_text(view_model.get("sender_from_email")):
         sender = f"<p>This email was sent from {escape(_safe_text(view_model.get('sender_from_name')))} &lt;{escape(_safe_text(view_model.get('sender_from_email')))}&gt;.</p>"
@@ -221,7 +224,7 @@ def build_tournament_registration_confirmation_html(view_model: dict) -> str:
 <p>Your registration for <strong>{escape(_safe_text(view_model.get('tournament_name')))}</strong> is confirmed.</p>
 <p><strong>Registrant:</strong> {escape(_safe_text(view_model.get('display_name')))}<br><strong>Email:</strong> {escape(_safe_text(view_model.get('email')))}</p>
 <table cellpadding=\"8\" cellspacing=\"0\" border=\"1\" style=\"border-collapse:collapse;width:100%\"><thead><tr><th>Day</th><th>Event</th><th>Division</th><th>Partner</th><th>Price</th></tr></thead><tbody>{rows_html}</tbody></table>{commerce_html}{discount_html}
-<p><strong>Total due: {escape(format_money(view_model.get('total_price_usd')))}</strong> (offline payment)</p>
+<p><strong>Total due: {escape(format_money(view_model.get('total_price_usd')))}</strong> — this is an offline payment, handled separately from this website.</p>
 <p>{escape(_safe_text(view_model.get('payment_note')))}</p>{link}{roster_link}{sender}
 </body></html>"""
 
@@ -237,7 +240,7 @@ def build_tournament_registration_confirmation_text(view_model: dict) -> str:
     for event in view_model.get("selected_events") or []:
         lines.append(f"- {_safe_text(event.get('day_label'))} | {_safe_text(event.get('family_label'))} | {_division_display(event)} | {_partner_display(event)} | {format_money(event.get('price_usd'))}")
     if not (view_model.get("selected_events") or []):
-        lines.append("- No event selections were found. Contact tournament staff if this is unexpected.")
+        lines.append("- No events are listed. If that doesn’t look right, contact tournament staff.")
     if view_model.get("commerce_lines"):
         lines.append("Tournament extras and bundles:")
         for line in view_model.get("commerce_lines") or []:
@@ -253,10 +256,14 @@ def build_tournament_registration_confirmation_text(view_model: dict) -> str:
                 lines.append(f"  Includes: {_safe_text(component)}")
     if _coerce_money(view_model.get("commerce_discount_usd")) > 0:
         lines.append(
-            "Bundle and giveaway savings: "
+            "Total savings: "
             f"{format_money(view_model.get('commerce_discount_usd'))}"
         )
-    lines.extend([f"Total due: {format_money(view_model.get('total_price_usd'))} (offline payment)", _safe_text(view_model.get("payment_note"))])
+    lines.extend([
+        f"Total due: {format_money(view_model.get('total_price_usd'))} "
+        "(offline payment, handled separately from this website)",
+        _safe_text(view_model.get("payment_note")),
+    ])
     if _safe_text(view_model.get("confirmation_url")):
         lines.append(f"Confirmation page: {_safe_text(view_model.get('confirmation_url'))}")
     if _safe_text(view_model.get("roster_url")):

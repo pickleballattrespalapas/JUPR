@@ -140,7 +140,7 @@ function HighlightList({ title, rows, clubSlug }: { title: string; rows: LeagueR
   return (
     <article style={cardStyle}>
       <h3 style={{ marginTop: 0 }}>{title}</h3>
-      {rows.length === 0 ? <p style={{ color: "#64748b" }}>No data yet.</p> : null}
+      {rows.length === 0 ? <p style={{ color: "#64748b" }}>No results yet.</p> : null}
       <ol style={{ marginBottom: 0, paddingLeft: "1.25rem" }}>
         {rows.map((row) => (
           <li key={`${row.week_num ?? "all"}-${row.player_id}-${title}`}>
@@ -195,7 +195,7 @@ function RecentMatchesTable({ rows, clubSlug }: { rows: LeagueResultsRecentMatch
   );
 }
 
-function BarList({ title, rows, emptyText = "No chart data yet." }: { title: string; rows: BarRow[]; emptyText?: string }) {
+function BarList({ title, rows, emptyText = "Nothing to show yet." }: { title: string; rows: BarRow[]; emptyText?: string }) {
   const max = Math.max(...rows.map((row) => Math.abs(row.value)), 0);
   return (
     <article style={cardStyle}>
@@ -223,7 +223,7 @@ function BarList({ title, rows, emptyText = "No chart data yet." }: { title: str
 }
 
 function StatTable({ rows, clubSlug, title }: { rows: LeagueResultsStatRow[]; clubSlug: string; title: string }) {
-  if (!rows.length) return <p style={{ color: "#64748b" }}>No {title.toLowerCase()} data yet.</p>;
+  if (!rows.length) return <p style={{ color: "#64748b" }}>No {title.toLowerCase()} results yet.</p>;
   return (
     <div style={{ overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: "14px", background: "white" }}>
       <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "640px" }}>
@@ -299,7 +299,7 @@ function PlayerTrend({ rows, playerName }: { rows: LeagueResultsStatRow[]; playe
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "1rem", marginTop: "1rem" }}>
-      <BarList title={`${playerName} — rating rank by week`} rows={rankRows} emptyText="Weekly rank snapshots are unavailable." />
+      <BarList title={`${playerName} — rating rank by week`} rows={rankRows} emptyText="No weekly rankings are available." />
       <BarList title={`${playerName} — games by week`} rows={gamesRows} />
       <BarList title={`${playerName} — win % by week`} rows={winRows} />
       <BarList title={`${playerName} — weekly rating Δ`} rows={deltaRows} />
@@ -359,11 +359,11 @@ export default async function LeagueResultsPage({ params, searchParams }: League
       </p>
       <h1 style={{ marginTop: 0 }}>{data?.club.name ?? clubSlug} league results</h1>
       <p style={{ color: "#334155", maxWidth: "760px" }}>
-        Awards-race placement, an unranked player roster, weekly results, and season performance. This page is read-only and uses public-safe FastAPI summaries.
+        See award races, player stats, weekly results, and season highlights.
       </p>
 
-      {error ? <p style={{ color: "#b91c1c" }}>League Results are temporarily unavailable. {error}</p> : null}
-      {!error && !data?.leagues?.length ? <p>No public leagues are available yet.</p> : null}
+      {error ? <p style={{ color: "#b91c1c" }}>We couldn&apos;t load league results. Please try again.</p> : null}
+      {!error && !data?.leagues?.length ? <p>No leagues are available yet.</p> : null}
 
       {data?.leagues?.length ? (
         <div className="no-print" style={{ display: "grid", gap: "0.75rem", marginBottom: "1rem" }}>
@@ -396,7 +396,11 @@ export default async function LeagueResultsPage({ params, searchParams }: League
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
             <article style={cardStyle}><strong>League</strong><br />{selectedLeague}</article>
             <article style={cardStyle}><strong>Minimum games</strong><br />{data.league?.min_games ?? 0}</article>
-            <article style={cardStyle}><strong>K-factor</strong><br />{data.league?.k_factor ?? "Default"}</article>
+            <article style={cardStyle}>
+              <strong>Rating sensitivity</strong><br />
+              {data.league?.k_factor ?? "Default"}<br />
+              <small style={{ color: "#64748b" }}>Higher values mean larger rating changes.</small>
+            </article>
             <article style={cardStyle}><strong>Weeks with results</strong><br />{data.weeks.length}</article>
           </div>
 
@@ -404,9 +408,9 @@ export default async function LeagueResultsPage({ params, searchParams }: League
             <section style={sectionStyle} data-testid="league-results-awards-race">
               <h2>Awards race</h2>
               {data.award_progress.awards.length ? <>
-                <p style={{ color: "#64748b" }}>Top five qualified players are shown for each award. Expand a race to see every eligible player.</p>
+                <p style={{ color: "#64748b" }}>Showing the top five for each award. Expand an award to see everyone who qualifies.</p>
                 <LeagueAwardRaceGrid progress={data.award_progress} clubSlug={clubSlug} />
-              </> : <article style={{ ...cardStyle, background: "#f8fafc", marginBottom: "1rem" }}>No player has met the current award qualification criteria yet.</article>}
+              </> : <article style={{ ...cardStyle, background: "#f8fafc", marginBottom: "1rem" }}>No one qualifies for an award yet.</article>}
             </section>
           ) : null}
 
@@ -414,7 +418,7 @@ export default async function LeagueResultsPage({ params, searchParams }: League
             <section style={sectionStyle}>
               <h2>Player roster</h2>
               <p style={{ color: "#64748b" }}>
-                An unranked reference roster for the league&apos;s official record. Sort by the measure you need; award placement is shown above.
+                All league players are listed below. Choose how you&apos;d like to sort them.
               </p>
               <LeaguePlayerRoster standings={data.standings} clubSlug={clubSlug} />
 
@@ -428,7 +432,7 @@ export default async function LeagueResultsPage({ params, searchParams }: League
             <section style={sectionStyle}>
               <h2>Weekly results{selectedWeek ? ` — Week ${selectedWeek}` : ""}</h2>
               <p style={{ color: "#64748b" }}>
-                Weekly results come from active, non-deleted match records; standings use the league&apos;s official rated record.
+                Weekly results show recorded matches. Season standings include all official league results.
               </p>
               {data.weeks.length ? (
                 <div className="no-print" style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap", marginBottom: "1rem" }}>
@@ -443,7 +447,7 @@ export default async function LeagueResultsPage({ params, searchParams }: League
                 </div>
               ) : null}
               <div className="no-print" style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap", alignItems: "center", marginBottom: "1rem" }}>
-                <strong>Best win % qualification:</strong>
+                <strong>Minimum games for win percentage:</strong>
                 {[1, 2, 4, 6, 8].map((minimum) => (
                   <Link key={minimum} href={pageHref({ clubSlug, league: selectedLeague, section: "weekly", week: selectedWeek, player: selectedPlayerId, weeklyMinGames: minimum })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.3rem 0.6rem", background: minimum === weeklyMinGames ? "#dcfce7" : "white", color: "#0f172a", textDecoration: "none", fontWeight: minimum === weeklyMinGames ? 800 : 600 }}>
                     {minimum}+ {minimum === 1 ? "game" : "games"}
@@ -457,7 +461,7 @@ export default async function LeagueResultsPage({ params, searchParams }: League
               </div>
               <StatTable title="Weekly" rows={recentWeeklyRows.slice(0, 40)} clubSlug={clubSlug} />
               <h3>Week {selectedWeek ?? "—"} highlights</h3>
-              <p style={{ color: "#64748b" }}>These cards are scoped only to the selected week.</p>
+              <p style={{ color: "#64748b" }}>Highlights for this week.</p>
               <HighlightGrid highlights={data.weekly_highlights} clubSlug={clubSlug} />
             </section>
           ) : null}
@@ -466,7 +470,7 @@ export default async function LeagueResultsPage({ params, searchParams }: League
             <section style={sectionStyle}>
               <h2>Player summary — {selectedPlayerName}</h2>
               <p style={{ color: "#64748b" }}>
-                The summary uses the official rated season record. Weekly and recent activity comes from active, non-deleted matches.
+                Season stats include official league results; recent activity shows the latest matches.
               </p>
               <div className="no-print" style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap", marginBottom: "1rem" }}>
                 {playerCandidates.map((row) => {
@@ -479,7 +483,7 @@ export default async function LeagueResultsPage({ params, searchParams }: League
                 })}
               </div>
               <p>
-                <Link href={playerHref(clubSlug, selectedPlayerId)}>Open full public player profile</Link>
+                <Link href={playerHref(clubSlug, selectedPlayerId)}>Open player profile</Link>
               </p>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0.75rem" }}>
                 <article style={cardStyle}><strong>Rank</strong><br />{data.player_summary?.rank ?? "—"}</article>
@@ -488,8 +492,8 @@ export default async function LeagueResultsPage({ params, searchParams }: League
                 <article style={cardStyle}><strong>Win %</strong><br />{percentLabel(data.player_summary?.win_pct)}</article>
               </div>
               <PlayerTrend rows={playerWeeklyRows} playerName={selectedPlayerName} />
-              <h3>Player weekly rows</h3>
-              <StatTable title="Player weekly" rows={playerWeeklyRows} clubSlug={clubSlug} />
+              <h3>Weekly results</h3>
+              <StatTable title="Weekly" rows={playerWeeklyRows} clubSlug={clubSlug} />
               <h3>Recent matches</h3>
               <RecentMatchesTable rows={data.recent_matches} clubSlug={clubSlug} />
             </section>

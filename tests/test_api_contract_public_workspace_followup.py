@@ -20,7 +20,7 @@ def test_public_leagues_open_dedicated_league_home() -> None:
     assert "Open League Home" in hub
     assert "PublicLeagueNav" in home
     assert 'active="home"' in home
-    assert "League pages" in home
+    assert "Explore this league" in home
     assert "Awards race" in home
     assert "Awards race & player roster" in home
     assert "All leagues" in nav
@@ -59,7 +59,7 @@ def test_partner_board_is_a_selected_tournament_workspace() -> None:
     assert "groupPartnerEntries" in page
     assert "visiblePlayerGroups.map" in page
     assert "group.entries.map" in page
-    assert "Want to contact or accept a player?" in page
+    assert "Want to connect with a player?" in page
     assert "PartnerRequestReviewPanel" in page
     assert "PairingInterestPanel" in page
     assert "data.tournaments.map" not in page

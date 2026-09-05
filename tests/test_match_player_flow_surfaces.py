@@ -84,5 +84,5 @@ def test_score_entry_hides_write_form_until_api_is_ready() -> None:
 
     assert "getAdminScoreEntryStatus" in page
     assert "readiness.data?.ready" in page
-    assert "Score entry is in fallback mode" in page
-    assert "Streamlit fallback" in page
+    assert "Score entry isn’t ready here" in page
+    assert "Open backup score entry" in page

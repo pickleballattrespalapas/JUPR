@@ -23,11 +23,11 @@ def test_generator_setup_uses_player_count_and_previous_picker_pattern() -> None
 
     assert "Number of players" in component
     assert "Automatic setup" in component
-    assert "Search current players" in component
+    assert "Search club players" in component
     assert "Type at least 2 letters, then add a player" in component
-    assert "Names or roster entry" in component
+    assert "Players ({participantNames.length} of {targetCount})" in component
     assert "One player per line, in starting order" in component
-    assert "Roster line order controls starting order and bye priority" in component
+    assert "The order below sets the starting order and who gets the first bye" in component
 
 
 def test_generator_setup_has_deterministic_auto_shape_rules() -> None:

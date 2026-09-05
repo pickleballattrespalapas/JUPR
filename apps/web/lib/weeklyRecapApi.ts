@@ -66,40 +66,31 @@ export type WeeklyRecapsResponse = {
 
 type ApiResult<T> = { data: T | null; error: string | null };
 
+const PUBLIC_RECAP_LOAD_ERROR = "We couldn’t load weekly recaps right now. Please try again.";
+
 function baseUrl(): string | null {
   return process.env.JUPR_API_BASE_URL || process.env.NEXT_PUBLIC_JUPR_API_BASE_URL || null;
 }
 
-async function apiErrorMessage(response: Response): Promise<string> {
-  const fallback = `API error (${response.status}).`;
-  let bodyText = "";
-  try {
-    bodyText = await response.text();
-  } catch {
-    return fallback;
-  }
-  if (!bodyText) return fallback;
-  try {
-    const payload = JSON.parse(bodyText) as { detail?: unknown; message?: unknown; error?: unknown };
-    const detail = payload.detail ?? payload.message ?? payload.error;
-    if (Array.isArray(detail)) return `${fallback} ${detail.map((item) => JSON.stringify(item)).join("; ")}`;
-    if (detail) return `${fallback} ${String(detail)}`;
-  } catch {
-    // Fall through to a short text excerpt below.
-  }
-  return `${fallback} ${bodyText.slice(0, 240)}`;
+function apiErrorMessage(response: Response): string {
+  console.error(`[weeklyRecapApi] Request failed with status ${response.status}.`);
+  return PUBLIC_RECAP_LOAD_ERROR;
 }
 
 async function fetchJson<T>(path: string): Promise<ApiResult<T>> {
   const apiBase = baseUrl();
-  if (!apiBase) return { data: null, error: "Missing JUPR API base URL environment variable." };
+  if (!apiBase) {
+    console.error("[weeklyRecapApi] JUPR API base URL is not configured.");
+    return { data: null, error: PUBLIC_RECAP_LOAD_ERROR };
+  }
   const url = `${apiBase.replace(/\/$/, "")}${path}`;
   try {
     const response = await fetch(url, { next: { revalidate: 60 } });
-    if (!response.ok) return { data: null, error: await apiErrorMessage(response) };
+    if (!response.ok) return { data: null, error: apiErrorMessage(response) };
     return { data: (await response.json()) as T, error: null };
   } catch (error) {
-    return { data: null, error: `Unable to reach API: ${error instanceof Error ? error.message : "Unknown error"}` };
+    console.error("[weeklyRecapApi] Request failed.", error);
+    return { data: null, error: PUBLIC_RECAP_LOAD_ERROR };
   }
 }
 

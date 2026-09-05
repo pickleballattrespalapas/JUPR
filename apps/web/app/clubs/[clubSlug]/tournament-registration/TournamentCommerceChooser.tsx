@@ -17,6 +17,7 @@ type TournamentCommerceChooserProps = {
   tournamentId: string;
   registrationId?: string | null;
   eventOptionIds: string[];
+  timeZone?: string | null;
   catalog: TournamentCommerceCatalog;
   initialSelections?: TournamentCommerceSelection[];
   disabled?: boolean;
@@ -56,14 +57,25 @@ function initialQuantityMap(
 
 function dateWindow(
   start?: string | null,
-  end?: string | null
+  end?: string | null,
+  timeZone?: string | null
 ): string | null {
   if (!start && !end) return null;
-  const format = (value: string) =>
-    new Intl.DateTimeFormat("en-US", {
+  let formatter: Intl.DateTimeFormat;
+  try {
+    formatter = new Intl.DateTimeFormat("en-US", {
       dateStyle: "medium",
-      timeStyle: "short"
-    }).format(new Date(value));
+      timeStyle: "short",
+      timeZone: timeZone || "UTC"
+    });
+  } catch {
+    formatter = new Intl.DateTimeFormat("en-US", {
+      dateStyle: "medium",
+      timeStyle: "short",
+      timeZone: "UTC"
+    });
+  }
+  const format = (value: string) => formatter.format(new Date(value));
   if (start && end) return `Available ${format(start)} through ${format(end)}`;
   return start ? `Available from ${format(start)}` : `Available through ${format(end!)}`;
 }
@@ -90,6 +102,7 @@ export default function TournamentCommerceChooser({
   tournamentId,
   registrationId,
   eventOptionIds,
+  timeZone,
   catalog,
   initialSelections,
   disabled = false,
@@ -171,7 +184,7 @@ export default function TournamentCommerceChooser({
       : 0;
     setQuantities((current) => ({ ...current, [variantId]: next }));
     setQuote(null);
-    setMessage("Review the updated extras before continuing.");
+    setMessage("Update your total before continuing.");
     const nextSelections = Object.entries({ ...quantities, [variantId]: next })
       .filter(([, quantity]) => Number(quantity) > 0)
       .map(([variant_id, quantity]) => ({
@@ -195,15 +208,15 @@ export default function TournamentCommerceChooser({
     if (response.error || !response.data?.quote) {
       setQuote(null);
       onReviewChange(selections, null);
-      setMessage(response.error || "Unable to review extras right now.");
+      setMessage(response.error || "We couldn’t update your total right now. Please try again.");
       return;
     }
     setQuote(response.data.quote);
     onReviewChange(selections, response.data.quote);
     setMessage(
       selections.length
-        ? "Extras and savings are ready for your registration review."
-        : "Your registration total is ready for review."
+        ? "Your extras and total are updated."
+        : "Your total is updated."
     );
   }
 
@@ -246,7 +259,8 @@ export default function TournamentCommerceChooser({
           const itemVariants = variantsByItem.get(item.id) || [];
           const availability = dateWindow(
             item.available_from,
-            item.available_until
+            item.available_until,
+            timeZone
           );
           return (
             <article
@@ -335,10 +349,10 @@ export default function TournamentCommerceChooser({
             background: "#eff6ff"
           }}
         >
-          <h4 style={{ margin: 0 }}>Bundle savings available</h4>
+          <h4 style={{ margin: 0 }}>Bundle savings</h4>
           <p style={{ color: "#475569", margin: "0.35rem 0 0.65rem" }}>
-            Savings are applied automatically when your selected events and
-            extras match a bundle.
+            You’ll automatically get the best bundle price for the events and
+            extras you choose.
           </p>
           <ul style={{ margin: 0, paddingLeft: "1.25rem" }}>
             {catalog.bundles.map((bundle) => (
@@ -366,8 +380,7 @@ export default function TournamentCommerceChooser({
 
       {catalog.promotions.length ? (
         <p style={{ margin: 0, color: "#166534" }}>
-          Eligible early-registration and first-registrant giveaways are
-          applied automatically while supplies last.
+          If you qualify for a giveaway, we’ll add it while supplies last.
         </p>
       ) : null}
 
@@ -378,7 +391,7 @@ export default function TournamentCommerceChooser({
           disabled={disabled || busy}
           style={buttonStyle}
         >
-          {busy ? "Reviewing…" : "Review extras and total"}
+          {busy ? "Updating…" : "Update total"}
         </button>
       </div>
 
@@ -426,25 +439,27 @@ export default function TournamentCommerceChooser({
             </p>
           ) : null}
           <p style={{ fontSize: "1.1rem", margin: "0.25rem 0" }}>
-            <strong>Total due: {formatCommerceMoney(quote.total_minor)}</strong>
+            <strong>
+              Amount due to organizer: {formatCommerceMoney(quote.total_minor)}
+            </strong>
           </p>
           <p style={{ color: "#475569", marginBottom: 0 }}>
-            Payment is handled offline by tournament staff. No card is charged
-            on this page.
+            You’ll pay the tournament organizer separately; we won’t charge you
+            here.
           </p>
         </section>
       ) : null}
 
       <p
         aria-live="polite"
-        role={message?.startsWith("Unable") ? "alert" : "status"}
+        role={message?.startsWith("We couldn’t") ? "alert" : "status"}
         style={{
-          color: message?.startsWith("Unable") ? "#b91c1c" : "#475569",
+          color: message?.startsWith("We couldn’t") ? "#b91c1c" : "#475569",
           margin: 0
         }}
       >
         {message ||
-          "Review your selections to lock the current price and availability."}
+          "Update your total before continuing. Prices and availability may change."}
       </p>
     </section>
   );

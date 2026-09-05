@@ -733,7 +733,7 @@ def test_confirmation_link_requires_explicit_next_web_origin(monkeypatch) -> Non
 
     assert result["confirmation_token"]
     assert result["email_delivery"]["status"] == "failed"
-    assert "link is not configured" in result["email_delivery"]["message"]
+    assert "couldn’t send the confirmation email" in result["email_delivery"]["message"]
     assert any(row["email"] == "saved-no-origin@example.com" for row in storage["tournament_registrations"])
 
 
@@ -790,7 +790,7 @@ def test_duplicate_email_refuses_second_write_and_requires_recovery() -> None:
     }
     submit_public_tournament_registration(supabase, club_id="club-1", payload=payload)
 
-    with pytest.raises(DuplicateTournamentRegistrationError, match="secure edit-link"):
+    with pytest.raises(DuplicateTournamentRegistrationError, match="edit link"):
         submit_public_tournament_registration(supabase, club_id="club-1", payload=payload)
 
     assert len(storage["tournament_registrations"]) == 1

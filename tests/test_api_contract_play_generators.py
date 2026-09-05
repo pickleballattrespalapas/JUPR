@@ -49,10 +49,9 @@ def test_generator_preview_and_round_runner_contracts() -> None:
 
 
 def test_skip_round_preserves_acknowledgement_and_partial_advance_recovery() -> None:
-    runners = (
-        read("apps/web/app/admin/play-generators/GeneratorRoundRunner.tsx"),
-        read("apps/web/app/clubs/[clubSlug]/play-generators/PublicGeneratorRoundRunner.tsx"),
-    )
+    admin_runner = read("apps/web/app/admin/play-generators/GeneratorRoundRunner.tsx")
+    public_runner = read("apps/web/app/clubs/[clubSlug]/play-generators/PublicGeneratorRoundRunner.tsx")
+    runners = (admin_runner, public_runner)
 
     for runner in runners:
         # The root-owned confirmation snapshots onAcknowledge when it opens.
@@ -62,15 +61,21 @@ def test_skip_round_preserves_acknowledgement_and_partial_advance_recovery() -> 
         assert "skipDestinationRef.current = nextRound" in runner
         assert "const destination = skipDestinationRef.current" in runner
 
-        # Skip and automatic advance are two durable writes. Once the first is
+        # Skip and automatic advance are separate writes. Once the first is
         # confirmed, any error in the second stage is a partial/uncertain result
-        # and recovery must retain both exact identities.
+        # and recovery must retain the same request details internally.
         assert "let skipCommitted = false" in runner
         assert "skipCommitted = true" in runner
         assert "skipCommitted || isUncertainRequestError(error)" in runner
-        assert "Both exact operation keys are retained" in runner
+        assert "request.skipBody.idempotency_key" in runner
         assert "request.advanceIdempotencyKey" in runner
         assert "() => executeSkipRound(request)" in runner
+
+    assert "Both exact operation keys are retained" in admin_runner
+    assert "Both exact operation keys are retained" not in public_runner
+    assert '"Update not confirmed"' in public_runner
+    assert '"Try again"' in public_runner
+    assert "false\n        );" in public_runner
 
 
 def test_generator_backend_routes_and_adaptive_engine_are_installed() -> None:

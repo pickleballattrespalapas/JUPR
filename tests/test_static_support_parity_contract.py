@@ -16,7 +16,7 @@ def test_rating_rules_and_faq_are_cross_linked_and_regression_guarded():
         "How ratings move",
         "What counts as rated",
         "What stays unrated",
-        "Corrections, exclusions, and replay",
+        "Correcting a result",
         "How badges are awarded",
         "Why JUPR can differ",
         'href="/faq"',

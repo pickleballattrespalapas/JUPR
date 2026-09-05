@@ -17,8 +17,10 @@ def test_directory_has_visible_search_active_default_privacy_states_and_stable_l
     assert 'data-testid="players-row"' in source
     assert 'data-testid="players-filter-empty-state"' in source
     assert 'data-testid="players-error-state"' in source
-    assert "stable row link" in source
-    assert "No private player data was exposed" in source
+    assert "Share ${player.name}" in source
+    assert "Player profiles are unavailable right now" in source
+    assert "stable row link" not in source
+    assert "No private player data was exposed" not in source
     assert "{error}" not in source
 
 
@@ -42,14 +44,16 @@ def test_profile_renders_every_parity_projection_and_format_label():
         "player-history-all",
     ):
         assert test_id in source
-    assert "Request verified player updates" in source
+    assert "Request player updates" in source
     assert "Request an alias or privacy review" in source
     assert "Singles" in source
     assert "Doubles" in source
-    assert "Contact details, legal names, social identity keys, and subscription records are never included" in source
+    assert "Contact information and other private details are not shown" in source
     assert 'data-rating-series={item.format}' in source
     assert 'data-rating-point={item.format}' in source
     assert "Each format has its own line" in source
+    assert "publicSocialEventTypeLabel(event.event_type)" in source
+    assert "publicBadgeRarityLabel(badge.rarity)" in source
     assert "coordinates.filter(({ point }) => point.match_format === definition.format)" in source
     assert "Leaderboard snapshot" not in source
     assert "Badge codex" not in source

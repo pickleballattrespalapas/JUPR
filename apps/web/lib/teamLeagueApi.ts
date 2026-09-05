@@ -90,18 +90,18 @@ async function fetchJson<T>(path: string): Promise<ApiResult<T>> {
     const response = await fetch(`${base.replace(/\/$/, "")}${path}`, {
       next: { revalidate: 30 }
     });
-    const body = await response.json().catch(() => null);
     if (!response.ok) {
       return {
         data: null,
-        error: String(body?.detail || `API error (${response.status})`)
+        error: "We couldn't load team leagues right now. Please try again."
       };
     }
+    const body = await response.json().catch(() => null);
     return { data: body as T, error: null };
-  } catch (error) {
+  } catch {
     return {
       data: null,
-      error: error instanceof Error ? error.message : "Unable to reach the API."
+      error: "We couldn't load team leagues right now. Please try again."
     };
   }
 }

@@ -20,7 +20,7 @@ test("Match Explorer hydrates a share link and reacts through Python projections
 
   // The initial projection proves React hydration and the debounced preview have
   // settled before Playwright changes the controlled selects.
-  await expect(page.getByTestId("match-explorer-summary")).toContainText("Expected win rate");
+  await expect(page.getByTestId("match-explorer-summary")).toContainText("Your team's win chance");
 
   await me.selectOption(playerIds[0]);
   await partner.selectOption(playerIds[0]);
@@ -33,7 +33,7 @@ test("Match Explorer hydrates a share link and reacts through Python projections
   await page.getByLabel("Your points").fill("11");
   await page.getByLabel("Opponent points").fill("7");
 
-  await expect(page.getByTestId("match-explorer-summary")).toContainText("Expected win rate");
+  await expect(page.getByTestId("match-explorer-summary")).toContainText("Your team's win chance");
   await expect(page.getByTestId("match-explorer-player-impact").locator("tbody tr")).toHaveCount(4);
   await expect(page.getByTestId("match-explorer-impact-chart")).toContainText("Actual 11–7");
 

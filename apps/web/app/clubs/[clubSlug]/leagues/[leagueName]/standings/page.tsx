@@ -54,7 +54,7 @@ export default async function PublicLeagueStandingsPage({ params }: Props) {
         <article style={{ ...cardStyle, borderColor: "#fecaca", background: "#fef2f2" }}>
           <h2 style={{ marginTop: 0 }}>Standings unavailable</h2>
           <p style={{ color: "#7f1d1d" }}>
-            {error || "This league is not available as an active or finished public league."}
+            {error || "We couldn't find this league."}
           </p>
           <Link href={`/clubs/${params.clubSlug}/leagues`}>Return to all leagues</Link>
         </article>
@@ -85,14 +85,14 @@ export default async function PublicLeagueStandingsPage({ params }: Props) {
       </p>
       <h1 style={{ marginTop: 0 }}>{leagueName} awards race</h1>
       <p style={{ color: "#334155", maxWidth: "820px" }}>
-        Awards-race placement and qualification come first. An unranked player roster remains available below as a reference.
+        See the award leaders first, followed by the full player list.
       </p>
 
       <PublicLeagueNav clubSlug={params.clubSlug} leagueName={leagueName} active="overall" leagueView={leagueView} />
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
         <article style={cardStyle}><strong>Players with a league rating</strong><br />{ratedPlayers}</article>
-        <article style={cardStyle}><strong>Players shown</strong><br />{data.standings.length}</article>
+        <article style={cardStyle}><strong>Players</strong><br />{data.standings.length}</article>
         <article style={cardStyle}><strong>Minimum games</strong><br />{data.league?.min_games ?? 0}</article>
         <article style={cardStyle}><strong>Weeks with results</strong><br />{resultWeeks}</article>
       </div>
@@ -105,16 +105,16 @@ export default async function PublicLeagueStandingsPage({ params }: Props) {
         <h2>Awards race</h2>
         {data.award_progress.awards.length ? (
           <>
-            <p style={{ color: "#64748b" }}>Top five qualified players are shown for each award. Expand a race to see every eligible player.</p>
+            <p style={{ color: "#64748b" }}>Showing the top five for each award. Expand an award to see everyone who qualifies.</p>
             <LeagueAwardRaceGrid progress={data.award_progress} clubSlug={params.clubSlug} />
           </>
-        ) : <article style={{ ...cardStyle, background: "#f8fafc" }}>No player has met the current award qualification criteria yet.</article>}
+        ) : <article style={{ ...cardStyle, background: "#f8fafc" }}>No one qualifies for an award yet.</article>}
       </section>
 
       <section>
         <h2>Player roster</h2>
         <p style={{ color: "#64748b" }}>
-          This is an unranked reference roster. Sort it by the measure you need; award placement is shown above.
+          All league players are listed below. Choose how you&apos;d like to sort them.
         </p>
         <LeaguePlayerRoster standings={data.standings} clubSlug={params.clubSlug} />
       </section>

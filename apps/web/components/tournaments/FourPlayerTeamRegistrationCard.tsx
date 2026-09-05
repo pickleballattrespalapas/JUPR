@@ -1,6 +1,7 @@
 "use client";
 
 import type { PublicRegistrationEvent } from "@/lib/tournamentRegistrationApi";
+import { publicTournamentEventLabel } from "@/lib/tournamentRegistrationEligibility";
 import styles from "./TournamentTeamCompetition.module.css";
 
 export const TEAM_SLOTS = [
@@ -20,11 +21,15 @@ export type TeamRegistrationDraft = {
 };
 
 const slotLabels: Record<TeamSlot, string> = {
-  MAN_1: "Man 1",
-  MAN_2: "Man 2",
-  WOMAN_1: "Woman 1",
-  WOMAN_2: "Woman 2"
+  MAN_1: "Men’s spot 1",
+  MAN_2: "Men’s spot 2",
+  WOMAN_1: "Women’s spot 1",
+  WOMAN_2: "Women’s spot 2"
 };
+
+export function teamSlotLabel(slot: string): string {
+  return slotLabels[slot as TeamSlot] || "Roster spot";
+}
 
 export function defaultCaptainSlot(gender: string): TeamSlot | "" {
   const normalized = String(gender || "").toLowerCase();
@@ -66,7 +71,7 @@ export function validateTeamRegistrationDraft(
   if (!draft.captainSlot) return "Choose your roster spot.";
   const expectedCaptainSlot = defaultCaptainSlot(captainGender);
   if (!expectedCaptainSlot) {
-    return "This event requires the captain to register in a men's or women's roster spot.";
+    return "Choose Men or Women in your player details before setting up this team.";
   }
   if (
     (expectedCaptainSlot.startsWith("MAN_") &&
@@ -74,7 +79,7 @@ export function validateTeamRegistrationDraft(
     (expectedCaptainSlot.startsWith("WOMAN_") &&
       !draft.captainSlot.startsWith("WOMAN_"))
   ) {
-    return "Choose the roster spot that matches the captain's registration gender.";
+    return "Choose the men’s or women’s spot that matches your selection above.";
   }
   const emails = [captainEmail.trim().toLowerCase()];
   for (const slot of TEAM_SLOTS) {
@@ -104,7 +109,6 @@ export default function FourPlayerTeamRegistrationCard({
   event,
   captainName,
   captainEmail,
-  captainGender,
   value,
   onChange
 }: Props) {
@@ -127,7 +131,7 @@ export default function FourPlayerTeamRegistrationCard({
         <div>
           <h4>Four-player team roster</h4>
           <p className={styles.hint}>
-            {event.event_family_label} — {event.division_name}
+            {publicTournamentEventLabel(event.event_family_label, event.division_name)}
           </p>
         </div>
         <strong>2 men · 2 women</strong>
@@ -174,16 +178,11 @@ export default function FourPlayerTeamRegistrationCard({
             <article className={styles.slot} key={slot}>
               <h5>{slotLabels[slot]}</h5>
               {captain ? (
-                <>
-                  <p>
-                    <strong>{captainName || "Team captain"}</strong>
-                    <br />
-                    {captainEmail}
-                  </p>
-                  <small>
-                    Captain gender on this registration: {captainGender || "not set"}
-                  </small>
-                </>
+                <p>
+                  <strong>{captainName || "Team captain"}</strong>
+                  <br />
+                  {captainEmail}
+                </p>
               ) : (
                 <>
                   <label className={styles.field}>
@@ -217,8 +216,8 @@ export default function FourPlayerTeamRegistrationCard({
       </div>
 
       <ul className={styles.rules}>
-        <li>Each teammate registers with the same email, then accepts their private invitation.</li>
-        <li>Match order is women&apos;s, men&apos;s, mixed 1, mixed 2, then the configured tiebreak only if needed.</li>
+        <li>We’ll invite each teammate at the email you enter. They should register using that address.</li>
+        <li>Match order is women&apos;s, men&apos;s, mixed 1, mixed 2, then a tiebreaker if needed.</li>
         <li>
           Substitutes: {event.team_allow_substitutes ? "allowed with organizer approval" : "not allowed after play starts"}.
         </li>

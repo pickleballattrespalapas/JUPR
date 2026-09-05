@@ -23,10 +23,10 @@ export default async function ClubPage({ params }: ClubPageProps) {
       <section>
         <h1>Club: {clubSlug}</h1>
         <p style={{ color: "#b91c1c" }}>
-          We could not load this club right now. {error}
+          We couldn&apos;t load this club right now. Please try again shortly.
         </p>
         <p>
-          <Link href={`${base}/leaderboards`}>Try the public leaderboards</Link>
+          <Link href={`${base}/leaderboards`}>View the leaderboards instead</Link>
         </p>
       </section>
     );
@@ -48,11 +48,11 @@ export default async function ClubPage({ params }: ClubPageProps) {
       label: "Open tournaments"
     },
     {
-      title: "Live events",
+      title: "Play tools",
       description:
-        "Open public JUPR Live sessions with rounds, scores, standings, and brackets.",
-      href: `${base}/live`,
-      label: "Open JUPR Live"
+        "Create schedules and score live games.",
+      href: `${base}/play`,
+      label: "Open play tools"
     },
     {
       title: "Leaderboards",
@@ -63,34 +63,34 @@ export default async function ClubPage({ params }: ClubPageProps) {
     {
       title: "Match Explorer",
       description:
-        "Preview rating impact for potential doubles combinations using public-safe projections.",
+        "See how different doubles matchups could affect each player’s rating.",
       href: `${base}/match-explorer`,
       label: "Open Match Explorer"
     },
     {
       title: "Players",
       description:
-        "Browse the public player directory and profiles with ratings, records, and recent matches.",
+        "Browse player profiles with ratings, records, awards, and recent matches.",
       href: `${base}/players`,
       label: "Open players"
     },
     {
       title: "Match history",
-      description: "Review recorded matches and public-safe rating snapshots.",
+      description: "Browse scores and see how ratings changed after each match.",
       href: `${base}/matches`,
       label: "View matches"
     },
     {
       title: "Weekly Recap",
       description:
-        "Read published club highlights, spotlight reels, podiums, and looking-ahead notes.",
+        "Catch up on club highlights, standout players, tournament finishes, and what’s next.",
       href: `${base}/weekly-recap`,
       label: "Open Weekly Recap"
     },
     {
       title: "Badge Codex",
       description:
-        "Browse badges, unlock paths, prestige, and recent badge earners.",
+        "Explore club badges, learn how to earn them, and see recent earners.",
       href: `${base}/badge-codex`,
       label: "Open Badge Codex"
     },

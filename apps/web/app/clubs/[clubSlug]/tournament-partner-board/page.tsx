@@ -44,12 +44,17 @@ function slugify(value: string): string {
   );
 }
 
+function eventName(familyValue?: string | null, divisionValue?: string | null): string {
+  const family = String(familyValue || "Event").trim();
+  const division = String(divisionValue || "Division").trim();
+  const event = division.toLocaleLowerCase().startsWith(family.toLocaleLowerCase())
+    ? division
+    : `${family} · ${division}`;
+  return event;
+}
+
 function eventLabel(entry: PublicTournamentNeedsPartnerEntry): string {
-  return [
-    entry.event_day_label || "Day",
-    entry.event_family || "Event",
-    entry.division || "Division"
-  ].join(" · ");
+  return [entry.event_day_label || "Day", eventName(entry.event_family, entry.division)].join(" · ");
 }
 
 function eventKey(entry: PublicTournamentNeedsPartnerEntry): string {
@@ -77,8 +82,7 @@ function requesterSelectionsForEntry(
       slugify(
         [
           day?.label || "Day",
-          event.event_family_label || "Event",
-          event.division_name || "Division"
+          eventName(event.event_family_label, event.division_name)
         ].join(" · ")
       ) === targetKey
     );
@@ -124,7 +128,7 @@ export default async function TournamentPartnerBoardPage({
     searchParams,
     "partner_request_id"
   );
-  const [{ data, error }, editResponse] = await Promise.all([
+  const [{ data, error, status }, editResponse] = await Promise.all([
     getClubTournamentRoster(params.clubSlug, {
       registrationSlug,
       tournamentId
@@ -147,11 +151,14 @@ export default async function TournamentPartnerBoardPage({
   );
 
   if (!selectionMatches || !tournament) {
+    const unavailable = Boolean(error && status !== 404);
     return (
       <section>
-        <h1>Players Needing Partners unavailable</h1>
+        <h1>{unavailable ? "Partner listings unavailable" : "Tournament not found"}</h1>
         <p style={{ color: "#475569" }}>
-          The selected tournament is unavailable or no longer published.
+          {unavailable
+            ? "We couldn’t load partner listings right now. Please try again shortly."
+            : "We couldn’t find that tournament. It may no longer be public."}
         </p>
         <Link href={`/clubs/${params.clubSlug}/tournaments`}>
           Return to tournament selection
@@ -196,7 +203,7 @@ export default async function TournamentPartnerBoardPage({
         registrationSlug={settings?.registration_slug || null}
         active="partner-board"
         kicker="Players Needing Partners"
-        description="Find players who opted into public partner requests. Contact details stay private, and pairing actions require a secure registration edit link."
+        description="Looking for a doubles partner? Browse players below, then use your registration link to connect."
       />
 
       {error ? (
@@ -210,7 +217,7 @@ export default async function TournamentPartnerBoardPage({
           }}
         >
           <h2 style={{ marginTop: 0 }}>Players Needing Partners temporarily unavailable</h2>
-          <p style={{ color: "#7f1d1d" }}>{error}</p>
+          <p style={{ color: "#7f1d1d" }}>Please try again shortly.</p>
         </article>
       ) : null}
       {editResponse.error ? (
@@ -224,7 +231,9 @@ export default async function TournamentPartnerBoardPage({
           }}
         >
           <h2 style={{ marginTop: 0 }}>Edit link could not be verified</h2>
-          <p style={{ color: "#7f1d1d" }}>{editResponse.error}</p>
+          <p style={{ color: "#7f1d1d" }}>
+            Request a new edit link from the registration page.
+          </p>
         </article>
       ) : null}
 
@@ -248,8 +257,8 @@ export default async function TournamentPartnerBoardPage({
           <div>
             <h2 style={{ marginTop: 0 }}>Players needing partners</h2>
             <p style={{ marginBottom: 0, color: "#475569" }}>
-              Browse by event, then use your private registration edit link to
-              send or accept interest.
+              Choose an event, then use your registration link to contact a
+              player or reply to a request.
             </p>
           </div>
           <span
@@ -264,7 +273,7 @@ export default async function TournamentPartnerBoardPage({
               fontWeight: 800
             }}
           >
-            {settings?.partner_board_enabled ? "Listings open" : "Listings disabled"}
+            {settings?.partner_board_enabled ? "Open" : "Unavailable"}
           </span>
         </div>
         <div
@@ -275,10 +284,10 @@ export default async function TournamentPartnerBoardPage({
             marginTop: "1rem"
           }}
         >
-          <div><strong>Players</strong><br />{playerGroups.length}</div>
-          <div><strong>Division listings</strong><br />{partnerEntries.length}</div>
-          <div><strong>Showing players</strong><br />{visiblePlayerGroups.length}</div>
-          <div><strong>Registrations</strong><br />{data?.summary?.total_registrations ?? 0}</div>
+          <div><strong>Looking for partners</strong><br />{playerGroups.length}</div>
+          <div><strong>Events</strong><br />{eventChoices.length}</div>
+          <div><strong>Players shown</strong><br />{visiblePlayerGroups.length}</div>
+          <div><strong>Tournament players</strong><br />{data?.summary?.total_players ?? 0}</div>
         </div>
       </article>
 
@@ -295,10 +304,10 @@ export default async function TournamentPartnerBoardPage({
           }}
         >
           <div>
-            <h2 style={{ margin: 0 }}>Want to contact or accept a player?</h2>
+            <h2 style={{ margin: 0 }}>Want to connect with a player?</h2>
             <p style={{ margin: "0.35rem 0 0", color: "#475569" }}>
-              Request your secure registration edit link. Public pages never
-              expose email addresses or phone numbers.
+              Request your registration link. We&apos;ll keep your contact details
+              private until you connect.
             </p>
           </div>
           <Link
@@ -380,9 +389,9 @@ export default async function TournamentPartnerBoardPage({
 
       {!settings?.partner_board_enabled ? (
         <article style={{ ...cardStyle, background: "#f8fafc" }}>
-          <h2 style={{ marginTop: 0 }}>Players Needing Partners is disabled</h2>
+          <h2 style={{ marginTop: 0 }}>Partner matching unavailable</h2>
           <p style={{ color: "#475569" }}>
-            The tournament administrator has not enabled public partner requests.
+            Partner matching isn&apos;t available for this tournament.
           </p>
         </article>
       ) : visiblePlayerGroups.length ? (
@@ -410,7 +419,7 @@ export default async function TournamentPartnerBoardPage({
                   {group.playerName}
                 </h2>
                 <p style={{ margin: 0, color: "#64748b" }}>
-                  {group.entries.length} division{group.entries.length === 1 ? "" : "s"} needing a partner
+                  Looking in {group.entries.length} division{group.entries.length === 1 ? "" : "s"}
                 </p>
               </header>
               <div style={{ display: "grid", gap: "0.65rem" }}>
@@ -434,7 +443,7 @@ export default async function TournamentPartnerBoardPage({
                       {entry.event_day_label || "Day"} · {entry.event_family || "Event"}
                     </p>
                     <p style={{ margin: "0.35rem 0 0", color: "#475569" }}>
-                      Skill {entry.skill || "not listed"} · Age {entry.age_bracket || "open"}
+                      Rating {entry.skill || "not listed"} · {entry.age_bracket || "Any age"}
                     </p>
                     {entry.note ? (
                       <p style={{ margin: "0.45rem 0 0", color: "#475569" }}>
@@ -448,7 +457,7 @@ export default async function TournamentPartnerBoardPage({
                         )}`}
                         style={{ fontWeight: 800 }}
                       >
-                        Link to this division
+                        Share this listing
                       </Link>
                     </p>
                     {editToken && editResponse.data ? (
@@ -477,13 +486,13 @@ export default async function TournamentPartnerBoardPage({
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>
             {partnerEntries.length
-              ? "No requests match this event"
-              : "No open partner requests"}
+              ? "No players are listed for this event"
+              : "No one is looking for a partner yet"}
           </h2>
           <p style={{ color: "#475569" }}>
             {partnerEntries.length
               ? "Select All events to clear the current filter."
-              : "No players have opted into Players Needing Partners for this tournament."}
+              : "Check back as more players register."}
           </p>
           {selectedEvent ? (
             <Link

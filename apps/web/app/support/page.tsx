@@ -19,7 +19,7 @@ export default function SupportPage() {
       </p>
       <h1 style={{ marginTop: 0 }}>Contact Pickleball Club Sandwich support</h1>
       <p style={{ color: "#334155" }}>
-        Use this route for support, player-profile questions, correction routing, and operational help with the public website.
+        Get help with player profiles, corrections, or anything else on the website.
       </p>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "1rem" }}>
@@ -40,8 +40,8 @@ export default function SupportPage() {
         </article>
       </div>
       <article id="general-support-form" style={{ ...cardStyle, marginTop: "1rem" }}>
-        <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Create a support request</h2>
-        <p style={{ color: "#475569" }}>This durable form creates a club-scoped staff queue item. Repeated requests are deduplicated, and no player, match, rating, or tournament data changes from this form.</p>
+        <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Send a support request</h2>
+        <p style={{ color: "#475569" }}>Send your question to the club&apos;s support team. Submitting this form will not change player, match, rating, or tournament information.</p>
         <SupportRequestForm />
       </article>
       <article id="operator" style={{ ...cardStyle, marginTop: "1rem", background: "#f8fafc" }}>

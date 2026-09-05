@@ -30,7 +30,7 @@ export default async function TeamLeagueDetailPage({ params }: Props) {
         <h1>{data.league.league_name}</h1>
         <p style={{ color: "#475569" }}>
           {data.league.venue || "Venue to be announced"} ·{" "}
-          {categoryLabel(data.league.team_category)} · {data.league.team_size}-player primary roster ·{" "}
+          {categoryLabel(data.league.team_category)} · {data.league.team_size} players per team ·{" "}
           {data.league.allow_substitutes ? "Substitutes allowed" : "No substitutes"} ·{" "}
           {data.league.playoff_format === "none" ? "Round robin season" : "Round robin plus playoffs"}
         </p>
@@ -55,13 +55,13 @@ export default async function TeamLeagueDetailPage({ params }: Props) {
       <article style={{ ...card, background: "#eff6ff", borderColor: "#bfdbfe" }} data-testid="team-league-awards">
         <h2 style={{ marginTop: 0 }}>Awards race</h2>
         {data.award_progress.awards.length ? <>
-          <p style={{ color: "#475569" }}>Top five qualified teams are shown for each award. Expand a race to see every eligible team.</p>
+          <p style={{ color: "#475569" }}>Showing the top five for each award. Expand an award to see every team that qualifies.</p>
           <LeagueAwardRaceGrid progress={data.award_progress} clubSlug={params.clubSlug} />
-        </> : <p style={{ color: "#475569", marginBottom: 0 }}>No team has met the current award qualification criteria yet.</p>}
+        </> : <p style={{ color: "#475569", marginBottom: 0 }}>No team qualifies for an award yet.</p>}
       </article>
       <article style={card}>
         <h2 style={{ marginTop: 0 }}>Team standings</h2>
-        <p style={{ color: "#475569" }}>This record table is separate from the current awards race.</p>
+        <p style={{ color: "#475569" }}>Season results for every team.</p>
         <div style={{ overflowX: "auto", maxWidth: "100%", minWidth: 0 }}>
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "520px" }}>
             <thead><tr><th align="left">Rank</th><th align="left">Team</th><th>Played</th><th>Wins</th><th>Losses</th><th>Point diff.</th></tr></thead>

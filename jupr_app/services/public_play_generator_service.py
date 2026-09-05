@@ -111,7 +111,7 @@ def _normalize_names(values: list[Any]) -> list[str]:
 def _token_secret(explicit: str | None = None) -> str:
     secret = str(explicit or os.getenv("JUPR_PUBLIC_LIVE_TOKEN_SECRET", "")).strip()
     if len(secret) < 32:
-        raise RuntimeError("Public generator edit-token protection is not configured.")
+        raise RuntimeError("This play tool is temporarily unavailable.")
     return secret
 
 
@@ -243,7 +243,7 @@ def _player_ids_for_names(
     if not requested_by_name:
         return []
     if any(name.casefold() not in requested_by_name for name in names):
-        raise PublicPlayGeneratorError("Link every entered player or leave all player links blank.")
+        raise PublicPlayGeneratorError("Choose every player from the club list, or enter every name manually.")
     ids = [requested_by_name[name.casefold()] for name in names]
     try:
         rows = _safe_rows(
@@ -254,12 +254,12 @@ def _player_ids_for_names(
             .execute()
         )
     except Exception as exc:
-        raise RuntimeError("Current-player validation is unavailable; nothing was written.") from exc
+        raise RuntimeError("We couldn’t check the players. Please try again.") from exc
     by_id = {int(row["id"]): row for row in rows if row.get("id") is not None}
     for name, player_id in zip(names, ids):
         row = by_id.get(int(player_id))
         if row is None or _clean(row.get("name")).casefold() != name.casefold():
-            raise PublicPlayGeneratorError(f"The linked player for {name} is stale. Select the player again.")
+            raise PublicPlayGeneratorError(f"Choose {name} from the player list again.")
     return ids
 
 
@@ -360,7 +360,7 @@ def create_public_play_generator_session(
     preview = preview_result["preview"]
     supplied = str(preview_fingerprint or "").strip()
     if supplied and supplied != str(preview.get("previewFingerprint") or ""):
-        raise PublicPlayGeneratorError("The roster or settings changed after preview. Preview again before starting.")
+        raise PublicPlayGeneratorError("Your setup changed. Preview the schedule again before starting.")
     request_payload = {
         "event_type": str(preview.get("generatorKind") or ""),
         "play_format": str(preview.get("playFormat") or ""),
@@ -404,7 +404,10 @@ def create_public_play_generator_session(
             "idempotent_replay": bool(existed),
         }
     if existed and completed_operation_result(operation) is not None:
-        raise PublicLiveRecoveryRequiredError("The completed create operation has no recoverable session row.")
+        raise PublicLiveRecoveryRequiredError(
+            "It looks like this session started, but we can’t open it. "
+            "Don’t start another one; contact club staff."
+        )
 
     event = start_generator_event(preview)
     now = _now_iso()
@@ -444,10 +447,14 @@ def create_public_play_generator_session(
                 error_text=str(exc),
             )
             raise PublicLiveRecoveryRequiredError(
-                "The generator may have been created. Retry the identical request to reconcile it."
+                "We couldn’t confirm that the session started. "
+                "Retry the same request before starting a new session."
             ) from exc
     if created is None:
-        raise PublicLiveRecoveryRequiredError("The generator returned no recoverable session row.")
+        raise PublicLiveRecoveryRequiredError(
+            "The session may have started, but we can’t open it. "
+            "Don’t start another one; contact club staff."
+        )
     update_public_live_operation(
         supabase,
         club_id=str(club_id),
@@ -494,7 +501,7 @@ def build_public_play_generator_status(
         "enabled": True,
         "writes_enabled": bool(writes_enabled),
         "status": "ready_for_public_play_generators" if writes_enabled else "read_only",
-        "warnings": [] if writes_enabled else ["Public generator creation and editing are paused."],
+        "warnings": [] if writes_enabled else ["Creating and editing play sessions is paused."],
         "counts": counts,
         "official_publish": False,
     }
@@ -537,7 +544,7 @@ def _get_row(supabase: Any, *, club_id: str, session_key: str) -> dict[str, Any]
         .execute()
     )
     if row is None or not _is_generator_row(row) or not _not_expired(row):
-        raise PublicPlayGeneratorError("Generator session not found.")
+        raise PublicPlayGeneratorError("We couldn’t find this session.")
     return row
 
 
@@ -557,11 +564,14 @@ def get_public_play_generator_session(
 
 def _validate_editable(row: dict[str, Any], *, edit_token: str) -> None:
     if not edit_token_matches(edit_token, str(row.get("edit_token_hash") or "")):
-        raise PermissionError("Invalid organizer edit token.")
+        raise PermissionError("This organizer link is no longer valid.")
     if str(row.get("status") or "") != "active":
-        raise PublicPlayGeneratorError("This generator session is complete and view-only.")
+        raise PublicPlayGeneratorError("This session is complete, so it can’t be edited.")
     if str(row.get("pending_operation_key") or ""):
-        raise PublicLiveRecoveryRequiredError("This session has an unfinished operation. Retry that preserved action first.")
+        raise PublicLiveRecoveryRequiredError(
+            "A previous change is still pending. "
+            "Retry that same action before making another change."
+        )
 
 
 def _update_cas(
@@ -599,7 +609,8 @@ def _update_cas(
         if str(current.get("last_operation_key") or "") == operation_key:
             return current
         raise PublicLiveRecoveryRequiredError(
-            "The write may have completed. Retry the identical preserved request to reconcile it."
+            "We couldn’t confirm the last change. "
+            "Retry the same action before making another change."
         ) from exc
     if updated is not None:
         return updated
@@ -610,7 +621,7 @@ def _update_cas(
     )
     if str(current.get("last_operation_key") or "") == operation_key:
         return current
-    raise PublicLiveConflictError("This generator session changed. Reload it before continuing.")
+    raise PublicLiveConflictError("This session changed. Refresh before continuing.")
 
 
 def _run_mutation(
@@ -677,7 +688,7 @@ def _run_mutation(
             status="rejected",
             error_text="stale version",
         )
-        raise PublicLiveConflictError("This generator session changed. Reload it before continuing.")
+        raise PublicLiveConflictError("This session changed. Refresh before continuing.")
     update_public_live_operation(
         supabase,
         club_id=str(club_id),

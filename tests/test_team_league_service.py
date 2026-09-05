@@ -561,7 +561,7 @@ def test_partner_confirmation_is_bound_to_the_route_club(monkeypatch) -> None:
     monkeypatch.setenv("JUPR_ENV", "test")
     supabase = _PartnerConfirmationSupabase()
 
-    with pytest.raises(ValueError, match="not found"):
+    with pytest.raises(ValueError, match="couldn't find"):
         confirm_public_team_league_partner(
             supabase,
             club_id="club-b",
@@ -726,7 +726,7 @@ def test_partner_token_rejects_short_fallback_secret(monkeypatch) -> None:
     monkeypatch.delenv("JUPR_PUBLIC_REGISTRATION_TOKEN_SECRET", raising=False)
     monkeypatch.setenv("JUPR_REGISTRATION_EDIT_SECRET", "too-short")
 
-    with pytest.raises(PermissionError, match="at least 32"):
+    with pytest.raises(PermissionError, match="temporarily unavailable"):
         partner_token_hash("token-with-at-least-twenty-four-characters")
 
 

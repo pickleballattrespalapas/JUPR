@@ -61,35 +61,35 @@ PUBLIC_STATUS_LEGEND = [
         "short": "Ready",
         "can_initiate": True,
         "can_receive": True,
-        "meaning": "Normal ladder mode: may initiate and receive an otherwise eligible challenge.",
+        "meaning": "Can challenge another eligible player and be challenged.",
     },
     {
         "status": "Protected",
         "short": "Protected",
         "can_initiate": True,
         "can_receive": False,
-        "meaning": "May initiate, but cannot be challenged during the post-win protection window.",
+        "meaning": "Can challenge, but cannot be challenged yet after a win.",
     },
     {
         "status": "Cooldown",
         "short": "Cooldown",
         "can_initiate": False,
         "can_receive": True,
-        "meaning": "May receive, but cannot initiate during the post-result cooldown window.",
+        "meaning": "Can be challenged, but cannot start a challenge yet.",
     },
     {
         "status": "Locked",
         "short": "Locked",
         "can_initiate": False,
         "can_receive": False,
-        "meaning": "Already involved in an open challenge; cannot start or receive another.",
+        "meaning": "Already in an open challenge and cannot join another one yet.",
     },
     {
         "status": "Pass Hold",
         "short": "Pass Hold",
         "can_initiate": False,
         "can_receive": False,
-        "meaning": "A monthly pass was used and ladder activity is paused for the configured hold.",
+        "meaning": "A monthly pass is in effect, so challenges are paused for now.",
     },
     {
         "status": "Vacation",
@@ -103,7 +103,7 @@ PUBLIC_STATUS_LEGEND = [
         "short": "Reinstate",
         "can_initiate": False,
         "can_receive": False,
-        "meaning": "Staff-managed reinstatement is required before normal ladder activity resumes.",
+        "meaning": "Club staff must reinstate this player before they can join challenges again.",
     },
     {
         "status": "Inactive",
@@ -157,11 +157,11 @@ def _public_status_detail(status_name: str, raw_detail: Any) -> str:
     """Project computed status context without exposing operator-entered notes."""
 
     if status_name == "Reinstate Required":
-        return "Staff review required before ladder activity."
+        return "Ask club staff to reinstate this player."
     if status_name == "Vacation":
         return "Temporarily unavailable."
     if status_name == "Pass Hold":
-        return "Monthly pass timing hold."
+        return "Monthly pass in effect."
     detail = str(raw_detail or "").replace("<", "").replace(">", "").strip()
     return detail[:240]
 
@@ -689,6 +689,7 @@ def _legacy_public_result_details(
         match_no = _safe_int(row.get("match_no"))
         if match_no not in {1, 2} or match_no in seen_match_numbers:
             continue
+        match_label = "A" if match_no == 1 else "B"
         games: list[dict[str, int]] = []
         for game_no in (1, 2, 3):
             challenger_score = _safe_int(row.get(f"g{game_no}_chal"))
@@ -709,18 +710,18 @@ def _legacy_public_result_details(
 
         def partner_payload(player_id: int | None, *, side: str) -> dict[str, Any] | None:
             if player_id is None:
-                warnings.append(f"Verified legacy Match {match_no} has no recorded {side} swing partner.")
+                warnings.append(f"Partner information is missing for Match {match_label} ({side} team).")
                 return None
             if player_id in ranked_ids:
                 warnings.append(
-                    f"Verified legacy Match {match_no} has a {side} partner assignment that conflicts "
-                    "with the ranked participants; it is hidden pending staff review."
+                    f"Partner information for Match {match_label} ({side} team) may be incorrect "
+                    "and is hidden while club staff reviews it."
                 )
                 return None
             if player_id not in id_to_name:
                 warnings.append(
-                    f"Verified legacy Match {match_no} has a {side} partner who is not "
-                    "a current club player; the assignment is hidden pending staff review."
+                    f"The partner listed for Match {match_label} ({side} team) is no longer "
+                    "on the club roster, so the name is hidden while club staff reviews it."
                 )
                 return None
             return {
@@ -756,8 +757,8 @@ def _legacy_public_result_details(
         "rank_change": None,
         "matches": matches,
         "notice": (
-            f"{len(matches)} of 2 verified legacy match records are available. "
-            "Official match links, rating snapshots, and challenge-attributed rank movement are unavailable."
+            f"Details are available for {len(matches)} of 2 matches. "
+            "Ratings and rank changes are not available for this older result."
         ),
         "warnings": warnings,
     }
@@ -858,7 +859,7 @@ def _quick_rules(settings: dict[str, int]) -> list[str]:
         "One active challenge at a time: players in an open challenge are locked until it resolves.",
         f"Defenders have {int(settings.get('accept_window_hours', 48))} hours to accept and {int(settings.get('play_window_days', 7))} days after acceptance to play.",
         f"After a completed challenge, winners are protected and non-winners cool down for {int(settings.get('protected_hours', 72))} hours.",
-        "Official challenge creation, score entry, forfeits, passes, and rank movement remain staff-managed.",
+        "Club staff handles challenges, scores, forfeits, passes, and rank changes.",
     ]
 
 
@@ -874,7 +875,7 @@ def _rulebook(settings: dict[str, int]) -> list[dict[str, Any]]:
             "rules": [
                 {
                     "title": "Check both statuses",
-                    "body": "Your computed public status controls whether you may initiate or receive a challenge. Staff owns the final official decision.",
+                    "body": "Your status shows whether you can challenge or be challenged. Ask club staff to confirm.",
                 },
                 {
                     "title": "Pick an eligible opponent",
@@ -882,15 +883,15 @@ def _rulebook(settings: dict[str, int]) -> list[dict[str, Any]]:
                 },
                 {
                     "title": "Make it official",
-                    "body": "A challenge becomes official only after authorized staff records it in the Challenge Ledger.",
+                    "body": "Ask club staff to record the challenge before you play.",
                 },
                 {
                     "title": "Defender response",
-                    "body": f"The defender has {accept_hours} hours to accept. No response without a recorded monthly pass may become a forfeit.",
+                    "body": f"The defender has {accept_hours} hours to accept. If they do not respond and have not used a monthly pass, club staff may record a forfeit.",
                 },
                 {
                     "title": "Play and report",
-                    "body": f"Once accepted, complete the match within {play_days} days and submit scores to staff for ledger verification.",
+                    "body": f"Once accepted, play within {play_days} days and send the scores to club staff.",
                 },
             ],
         },
@@ -903,11 +904,11 @@ def _rulebook(settings: dict[str, int]) -> list[dict[str, Any]]:
                 },
                 {
                     "title": "Monthly pass",
-                    "body": f"A defender may use one pass per calendar month without losing rank when staff records it during the acceptance window; the configured hold is {int(settings.get('pass_hold_hours', 72))} hours.",
+                    "body": f"A defender may use one pass each month without losing rank. Club staff must record it before the response deadline, and challenges are then paused for {int(settings.get('pass_hold_hours', 72))} hours.",
                 },
                 {
                     "title": "Missed deadlines",
-                    "body": "No response can become a forfeit. A missed play deadline can require a staff-determined outcome based on good-faith scheduling and the official ledger.",
+                    "body": "If the defender does not respond, club staff may record a forfeit. If the match is not played by the deadline, staff will review scheduling attempts and decide what happens.",
                 },
                 {
                     "title": "Post-result timers",
@@ -933,15 +934,15 @@ def _rulebook(settings: dict[str, int]) -> list[dict[str, Any]]:
             ],
         },
         {
-            "title": "Staff-managed exceptions",
+            "title": "Help from club staff",
             "rules": [
                 {
                     "title": "Vacation and reinstatement",
-                    "body": "Staff manages vacation status and reinstatement requirements. Returning players may need a reinstatement match before normal activity resumes.",
+                    "body": "Club staff manages vacation status and reinstatement. Returning players may need to play a reinstatement match before joining challenges again.",
                 },
                 {
                     "title": "Disputes and enforcement",
-                    "body": "Authorized ladder staff resolves disputes and enforces timing, pass, forfeit, and result rules using the Challenge Ledger as the official record.",
+                    "body": "Club staff resolves disputes and applies the ladder rules for deadlines, passes, forfeits, and results.",
                 },
             ],
         },

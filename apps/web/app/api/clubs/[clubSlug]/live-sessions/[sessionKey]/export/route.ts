@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { publicLiveErrorResponse } from "@/lib/publicLiveProxy";
 
 function baseUrl(): string | null {
   return process.env.JUPR_API_BASE_URL || process.env.NEXT_PUBLIC_JUPR_API_BASE_URL || null;
@@ -6,13 +7,17 @@ function baseUrl(): string | null {
 
 export async function GET(request: Request, { params }: { params: { clubSlug: string; sessionKey: string } }) {
   const base = baseUrl();
-  if (!base) return NextResponse.json({ detail: "JUPR API base URL is not configured." }, { status: 500 });
+  if (!base) return publicLiveErrorResponse(500);
   const format = new URL(request.url).searchParams.get("format") === "json" ? "json" : "csv";
   try {
     const response = await fetch(
       `${base.replace(/\/$/, "")}/clubs/${encodeURIComponent(params.clubSlug)}/live-sessions/${encodeURIComponent(params.sessionKey)}/export?format=${format}`,
       { method: "GET", cache: "no-store" }
     );
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as { detail?: unknown } | null;
+      return publicLiveErrorResponse(response.status, payload?.detail);
+    }
     const body = await response.arrayBuffer();
     return new NextResponse(body, {
       status: response.status,
@@ -22,7 +27,7 @@ export async function GET(request: Request, { params }: { params: { clubSlug: st
         "cache-control": "no-store"
       }
     });
-  } catch (error) {
-    return NextResponse.json({ detail: error instanceof Error ? error.message : "Unable to export JUPR Live." }, { status: 502 });
+  } catch {
+    return publicLiveErrorResponse();
   }
 }

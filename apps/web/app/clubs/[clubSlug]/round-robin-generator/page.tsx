@@ -23,12 +23,12 @@ export default async function PublicGeneratorPage({ params }: Props) {
   return (
     <section>
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
-        Public play tools
+        Play tools
       </p>
       <h1 style={{ marginTop: 0 }}>Round-Robin Generator</h1>
-      <p style={{ color: "#334155", maxWidth: "900px" }}>Build singles, doubles, or mixed doubles-and-singles schedules; preview every planned matchup and bye, download a paper schedule, and run one round at a time.</p>
+      <p style={{ color: "#334155", maxWidth: "900px" }}>Build a singles, doubles, or mixed schedule. Preview every matchup and bye, download a printable copy, then record one round at a time.</p>
       <p style={{ color: "#475569", maxWidth: "900px" }}>
-        Public sessions are unrated. Keep the organizer link private; share the clean page URL as the view-only scoreboard.
+        These games won&apos;t affect ratings. Keep the organizer link private and share the regular page link with players.
       </p>
       <PublicGeneratorWorkspace generatorKind="round_robin" apiBase={serverApiBase()} clubId={params.clubSlug} status={status} />
     </section>

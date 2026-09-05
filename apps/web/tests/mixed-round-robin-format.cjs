@@ -19,7 +19,8 @@ assert.match(roster, /Doubles courts/);
 assert.match(roster, /Singles courts/);
 assert.match(roster, /recommendedMixedCourtSetup/);
 assert.match(roster, /mixedRoundCount/);
-assert.match(roster, /singles games, doubles games, partners, opponents, and byes balanced/);
+assert.match(roster, /const roundLabel =/);
+assert.match(roster, /roundLabel} of singles and doubles, balancing partners, opponents, and byes/);
 
 assert.match(draft, /version: 2/);
 assert.match(draft, /doublesCourtCount/);
@@ -38,9 +39,11 @@ for (const workspace of [adminWorkspace, publicWorkspace]) {
 for (const runner of [adminRunner, publicRunner]) {
   assert.match(runner, /Doubles \+ Singles Mix/);
   assert.match(runner, /matchFormatLabel\(match, event\.playFormat\)/);
-  assert.match(runner, /Round Played/);
   assert.match(runner, /View standings and continue/);
 }
+
+assert.match(adminRunner, /Round Played/);
+assert.match(publicRunner, /Mark round played/);
 
 assert.match(adminRunner, /Singles games publish\s+to singles ratings, and doubles games publish to doubles ratings/);
 assert.match(adminStandings, /Doubles \+ Singles Mix/);

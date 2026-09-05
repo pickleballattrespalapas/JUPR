@@ -103,7 +103,7 @@ export default function DataCorrectionForm({ clubSlug = "tres-palapas" }: { club
       <label>Evidence or screenshot link, optional<br /><input type="url" value={state.evidenceUrl} onChange={(event) => update("evidenceUrl", event.target.value)} placeholder="https://…" style={inputStyle} /></label>
       <label style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start" }}>
         <input type="checkbox" checked={state.consent} onChange={(event) => update("consent", event.target.checked)} />
-        <span>I understand this creates a staff-review request only, and staff may contact me about this correction.</span>
+        <span>I understand that staff will review my request before making changes and may contact me with questions.</span>
       </label>
       <button type="submit" disabled={pending} style={buttonStyle}>{pending ? "Submitting…" : "Submit correction request"}</button>
       {message ? <p role="status" style={{ color: "#166534", margin: 0 }}>{message}</p> : null}

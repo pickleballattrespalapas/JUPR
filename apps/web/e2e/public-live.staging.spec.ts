@@ -48,13 +48,13 @@ test("mobile Quick Round Robin survives refresh and completes without leaking it
   }
   await page.getByRole("button", { name: "Save scores" }).click();
   await expect(page.getByText("Scores saved.")).toBeVisible();
-  await page.getByRole("button", { name: "Refresh durable state" }).click();
-  await expect(page.getByText("Session refreshed from durable state.")).toBeVisible();
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(page.getByText("Session updated.")).toBeVisible();
   await expect(page.getByText(`${matchCount}/${matchCount}`, { exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "Export CSV" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Export JSON" })).toBeVisible();
 
   await page.getByRole("button", { name: "Complete session" }).click();
   await expect(page.getByText("Session completed.")).toBeVisible();
-  await expect(page.getByText("completed", { exact: true })).toBeVisible();
+  await expect(page.getByText("Complete", { exact: true })).toBeVisible();
 });

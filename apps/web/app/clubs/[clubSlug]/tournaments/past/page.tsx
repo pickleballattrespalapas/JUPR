@@ -51,13 +51,13 @@ export default async function PastTournamentsPage({ params }: Props) {
       </p>
       <h1 style={{ marginTop: 0 }}>Past tournaments</h1>
       <p style={{ color: "#475569", maxWidth: "52rem" }}>
-        Officially completed tournaments with published scores, brackets,
-        standings, and podiums.
+        Final scores, standings, brackets, and medal winners from past
+        tournaments.
       </p>
 
       {error ? (
         <p role="alert" style={{ color: "#b91c1c" }}>
-          Past tournaments are temporarily unavailable. {error}
+          Past tournaments are temporarily unavailable. Please try again shortly.
         </p>
       ) : null}
 
@@ -89,10 +89,9 @@ export default async function PastTournamentsPage({ params }: Props) {
 
       {!error && !data?.tournaments.length ? (
         <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>No published past tournaments</h2>
+          <h2 style={{ marginTop: 0 }}>No past tournaments yet</h2>
           <p style={{ color: "#475569", marginBottom: 0 }}>
-            Completed tournaments will appear here after their results are
-            officially published.
+            Completed tournament results will appear here.
           </p>
         </article>
       ) : null}

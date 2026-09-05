@@ -223,7 +223,7 @@ def test_adaptive_roster_change_preserves_completed_mixed_round_and_rebalances_f
         assert round_row["formatCounts"] == {"doubles": 1, "singles": 1}
         assert len(_matches(round_row)) == 2
         assert len(round_row["byeParticipantIds"]) == 1
-        assert any("active roster supports" in warning for warning in round_row["warnings"])
+        assert any("available players don’t fit the original setup" in warning for warning in round_row["warnings"])
         playing = [
             participant_id
             for match in _matches(round_row)

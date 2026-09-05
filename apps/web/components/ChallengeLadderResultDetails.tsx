@@ -126,7 +126,7 @@ export default function ChallengeLadderResultDetails({
                   {match.score_challenger_team}–{match.score_defender_team}
                 </Link>
               ) : (
-                `Verified legacy Match ${match.slot.toUpperCase()}: ${match.score_challenger_team}–${match.score_defender_team}`
+                `Recorded match ${match.slot.toUpperCase()}: ${match.score_challenger_team}–${match.score_defender_team}`
               )}
             </h6>
             <p
@@ -217,7 +217,7 @@ export default function ChallengeLadderResultDetails({
                 </ul>
               ) : (
                 <p style={{ color: "#64748b", fontSize: "0.82rem" }}>
-                  Rating snapshots are unavailable for this match.
+                  Ratings before and after this match aren&apos;t available.
                 </p>
               )}
             </details>

@@ -101,6 +101,10 @@ type StartResponse = {
   session?: GeneratorSession;
 };
 
+type PendingStartPayload = Record<string, unknown> & {
+  idempotency_key: string;
+};
+
 type StatusResponse = {
   enabled: boolean;
   writes_enabled?: boolean;
@@ -189,6 +193,67 @@ function operationKey(): string {
   return `generator-${newKey()}`;
 }
 
+class ApiRequestError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.status = status;
+  }
+}
+
+class GeneratorSetupError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GeneratorSetupError";
+  }
+}
+
+function workspaceErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof ApiRequestError || error instanceof GeneratorSetupError
+    ? error.message
+    : fallback;
+}
+
+function readPendingStartPayload(storageKey: string): PendingStartPayload | null {
+  let raw: string | null = null;
+  try {
+    raw = sessionStorage.getItem(storageKey);
+  } catch {
+    return null;
+  }
+  if (!raw) return null;
+  try {
+    const payload = JSON.parse(raw) as Record<string, unknown> | null;
+    if (
+      payload &&
+      typeof payload === "object" &&
+      typeof payload.idempotency_key === "string" &&
+      payload.idempotency_key
+    ) {
+      return payload as PendingStartPayload;
+    }
+  } catch {
+    // A partial or old browser record cannot be retried safely.
+  }
+  clearPendingStartPayload(storageKey);
+  return null;
+}
+
+function clearPendingStartPayload(storageKey: string): boolean {
+  try {
+    sessionStorage.removeItem(storageKey);
+    return sessionStorage.getItem(storageKey) === null;
+  } catch {
+    return false;
+  }
+}
+
+function isDefinitiveStartRejection(error: unknown): error is ApiRequestError {
+  return error instanceof ApiRequestError && [400, 403, 409, 422].includes(error.status);
+}
+
 function flattenMatches(round: RoundRow): MatchRow[] {
   if (round.matches?.length) return round.matches;
   return (round.courts || []).flatMap((court) => court.matches || []);
@@ -228,6 +293,12 @@ function formatTimestamp(value?: string | null): string {
   return date.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
 }
 
+function sessionStatusLabel(status: string): string {
+  if (status === "completed") return "Complete";
+  if (status === "active") return "In progress";
+  return "Ready";
+}
+
 export default function GeneratorWorkspace({
   generatorKind,
   apiBase,
@@ -252,8 +323,14 @@ export default function GeneratorWorkspace({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [draftHydrated, setDraftHydrated] = useState(false);
+  const [pendingStart, setPendingStart] = useState(false);
+  const [startSucceeded, setStartSucceeded] = useState(false);
   const draftKey = useMemo(
     () => `public-play-generator-draft:${clubId}:${generatorKind}`,
+    [clubId, generatorKind]
+  );
+  const startOperationStorageKey = useMemo(
+    () => `public-play-generator-create:${clubId}:${generatorKind}`,
     [clubId, generatorKind]
   );
   const writesEnabled = status?.writes_enabled === true;
@@ -274,7 +351,9 @@ export default function GeneratorWorkspace({
   );
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
-    if (!apiBase) throw new Error("Missing API base URL.");
+    if (!apiBase) {
+      throw new ApiRequestError("This play tool is temporarily unavailable. Please try again.", 503);
+    }
     const headers = new Headers(options?.headers);
     if (options?.body) headers.set("Content-Type", "application/json");
     const response = await fetch(apiUrl(apiBase, path), {
@@ -284,7 +363,13 @@ export default function GeneratorWorkspace({
     });
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
-      throw new Error(String(payload?.detail || `API error (${response.status})`));
+      if (
+        payload?.detail === "Score entry is temporarily unavailable." ||
+        payload?.detail === "Live sessions are temporarily unavailable. Please try again later."
+      ) {
+        throw new ApiRequestError("This play tool is temporarily unavailable.", response.status);
+      }
+      throw new ApiRequestError("We couldn't complete that request. Please try again.", response.status);
     }
     return payload as T;
   }
@@ -296,12 +381,13 @@ export default function GeneratorWorkspace({
         `/clubs/${encodeURIComponent(clubId)}/play-generators/sessions?generator_kind=${generatorKind}&limit=100`
       );
       setSessions(payload.sessions || []);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load sessions.");
+    } catch {
+      setMessage("We couldn't load saved sessions. Please try again.");
     }
   }
 
   useEffect(() => {
+    setStartSucceeded(false);
     setDraftHydrated(false);
     const stored = readPlayGeneratorDraft<PreviewEvent>(draftKey);
     if (stored) {
@@ -322,6 +408,10 @@ export default function GeneratorWorkspace({
     }
     setDraftHydrated(true);
   }, [draftKey]);
+
+  useEffect(() => {
+    setPendingStart(Boolean(readPendingStartPayload(startOperationStorageKey)));
+  }, [startOperationStorageKey]);
 
   useEffect(() => {
     if (!draftHydrated) return;
@@ -364,10 +454,10 @@ export default function GeneratorWorkspace({
 
   function requestBody(): Record<string, unknown> {
     if (!rosterReady) {
-      throw new Error(`Add exactly ${targetCount} unique players before previewing.`);
+      throw new GeneratorSetupError(`Add exactly ${targetCount} unique players before previewing.`);
     }
     if (!mixedSetupValid) {
-      throw new Error("Choose a doubles and singles court mix that fits the selected player count.");
+      throw new GeneratorSetupError("Choose a doubles and singles court mix that fits the selected player count.");
     }
     const participantPlayerIds = Object.fromEntries(
       participantNames.flatMap((name) => {
@@ -402,35 +492,71 @@ export default function GeneratorWorkspace({
       setPreview(payload.preview);
       setMessage(
         generatorKind === "round_robin"
-          ? `Previewed ${payload.preview.rounds.length} planned round(s).`
-          : "Previewed Round 1. Later ladder rounds are generated from results."
+          ? `Preview ready: ${payload.preview.rounds.length} round${payload.preview.rounds.length === 1 ? "" : "s"}.`
+          : "Round 1 is ready. Each later round will be based on the saved scores."
       );
     } catch (error) {
       setPreview(null);
-      setMessage(error instanceof Error ? error.message : "Unable to preview the schedule.");
+      setMessage(workspaceErrorMessage(error, "We couldn't preview the schedule. Please try again."));
     } finally {
       setBusy(false);
     }
   }
 
   async function startSession(): Promise<void> {
-    if (!preview) return;
+    if (startSucceeded) return;
+    let requestPayload = readPendingStartPayload(startOperationStorageKey);
+    const isRecoveryAttempt = Boolean(requestPayload);
+    if (!requestPayload && !preview) return;
+    if (!apiBase) {
+      setPendingStart(Boolean(requestPayload));
+      setMessage("This play tool is temporarily unavailable. Please try again later.");
+      return;
+    }
+
+    if (!requestPayload && preview) {
+      try {
+        requestPayload = {
+          ...requestBody(),
+          preview_fingerprint: preview.previewFingerprint,
+          idempotency_key: operationKey()
+        };
+      } catch (error) {
+        setMessage(
+          workspaceErrorMessage(
+            error,
+            "We couldn't prepare the session. Please check the setup and try again."
+          )
+        );
+        return;
+      }
+      try {
+        sessionStorage.setItem(startOperationStorageKey, JSON.stringify(requestPayload));
+      } catch {
+        setMessage("Your browser couldn't save this start attempt, so no session was started. Please try again.");
+        return;
+      }
+    }
+    if (!requestPayload) return;
+
+    setPendingStart(isRecoveryAttempt);
     setBusy(true);
     setMessage(null);
+    let sessionConfirmed = false;
     try {
-      const body = {
-        ...requestBody(),
-        preview_fingerprint: preview.previewFingerprint,
-        idempotency_key: operationKey()
-      };
       const payload = await requestJson<StartResponse>(
         `/clubs/${encodeURIComponent(clubId)}/play-generators/sessions`,
-        { method: "POST", body: JSON.stringify(body) }
+        { method: "POST", body: JSON.stringify(requestPayload) }
       );
       const session = payload.session;
       const editToken = String(payload.edit_token || "");
-      if (!session?.session_key || !editToken) throw new Error("The session was created without a private organizer link.");
+      if (!session?.session_key || !editToken) {
+        throw new Error("The session start response was incomplete.");
+      }
       sessionStorage.setItem(`public-generator-edit:${clubId}:${session.session_key}`, editToken);
+      sessionConfirmed = true;
+      setStartSucceeded(true);
+      setPendingStart(!clearPendingStartPayload(startOperationStorageKey));
       clearPlayGeneratorDraft(draftKey);
       const path = `/clubs/${clubId}/${generatorSlug(generatorKind)}/sessions/${encodeURIComponent(
         session.session_key
@@ -438,7 +564,19 @@ export default function GeneratorWorkspace({
       router.push(`${path}#edit=${encodeURIComponent(editToken)}`);
       router.refresh();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to start the session.");
+      if (sessionConfirmed) {
+        setStartSucceeded(true);
+        setPendingStart(!clearPendingStartPayload(startOperationStorageKey));
+        setMessage("The session started, but it didn't open automatically. Open it from Recent sessions.");
+      } else if (isDefinitiveStartRejection(error)) {
+        setPendingStart(!clearPendingStartPayload(startOperationStorageKey));
+        setMessage(error.message);
+      } else {
+        setPendingStart(true);
+        setMessage(
+          "We couldn't confirm that the session started. Try again here before creating another one; we'll resend the same setup."
+        );
+      }
     } finally {
       setBusy(false);
     }
@@ -548,9 +686,9 @@ export default function GeneratorWorkspace({
     const blob = doc.output("blob");
     openPdfBlobInNewTab(blob, filename, pdfWindow);
     setMessage("Opened the PDF in a new tab. Your unsaved schedule remains here.");
-    } catch (error) {
+    } catch {
       closePreparedPdfWindow(pdfWindow);
-      setMessage(error instanceof Error ? error.message : "Unable to open the schedule PDF.");
+      setMessage("We couldn't open the schedule PDF. Please try again.");
     }
   }
 
@@ -560,8 +698,8 @@ export default function GeneratorWorkspace({
     <div style={{ display: "grid", gap: "1rem" }}>
       {!status?.enabled ? (
         <article style={{ ...cardStyle, background: "#fff7ed", color: "#9a3412" }}>
-          <strong>{generatorTitle(generatorKind)} is disabled.</strong>
-          <p>{status?.warnings?.[0] || "Enable the generator backend before testing."}</p>
+          <strong>This play tool is temporarily unavailable.</strong>
+          <p>Please try again later.</p>
         </article>
       ) : null}
 
@@ -654,7 +792,7 @@ export default function GeneratorWorkspace({
                     <option value="differential">Point differential</option>
                   </select>
                   <small style={{ display: "block", marginTop: "0.35rem", color: "#64748b" }}>
-                    This primary ranking applies to the full session standings.
+                    Standings will be ranked by this stat.
                   </small>
                 </label>
               ) : null}
@@ -683,7 +821,7 @@ export default function GeneratorWorkspace({
           <button
             type="button"
             onClick={() => void generatePreview()}
-            disabled={busy || !rosterReady || !mixedSetupValid}
+            disabled={busy || pendingStart || startSucceeded || !rosterReady || !mixedSetupValid}
             style={primaryButton}
           >
             {busy ? "Generating…" : "Preview matchups"}
@@ -693,12 +831,30 @@ export default function GeneratorWorkspace({
           <p
             role="status"
             aria-live="polite"
-            style={{ color: /unable|error|must|requires|changed/i.test(message) ? "#b91c1c" : "#166534" }}
+            style={{ color: /couldn|unable|error|must|requires|changed/i.test(message) ? "#b91c1c" : "#166534" }}
           >
             {message}
           </p>
         ) : null}
       </article>
+
+      {pendingStart && !startSucceeded ? (
+        <article style={{ ...cardStyle, background: "#fff7ed", color: "#9a3412" }}>
+          <h2 style={{ marginTop: 0 }}>Session start not confirmed</h2>
+          <p>
+            Try again here before starting another session. We’ll resend the same setup so you
+            don’t create a duplicate.
+          </p>
+          <button
+            type="button"
+            onClick={() => void startSession()}
+            disabled={busy || !writesEnabled}
+            style={primaryButton}
+          >
+            {busy ? "Trying again…" : "Try starting again"}
+          </button>
+        </article>
+      ) : null}
 
       {preview ? (
         <article style={cardStyle}>
@@ -707,7 +863,7 @@ export default function GeneratorWorkspace({
             {generatorKind === "ladder"
               ? "Only Round 1 is shown. Round 2 and later are generated from saved results."
               : scoringMode === "unscored"
-                ? "Review every planned round, matchup, and bye. During play, use Round Played to move directly to the next round."
+                ? "Review every planned round, matchup, and bye. During play, use Mark round played to move directly to the next round."
                 : "Review every planned round, matchup, and bye. Change the roster order above and regenerate when needed."}
           </p>
           <div style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap", marginBottom: "1rem" }}>
@@ -717,14 +873,16 @@ export default function GeneratorWorkspace({
             <button type="button" onClick={() => void downloadPdf()} style={secondaryButton}>
               Download one-sheet PDF (opens new tab)
             </button>
-            <button
-              type="button"
-              onClick={() => void startSession()}
-              disabled={busy || !writesEnabled}
-              style={primaryButton}
-            >
-              {busy ? "Starting…" : "Start session"}
-            </button>
+            {!pendingStart && !startSucceeded ? (
+              <button
+                type="button"
+                onClick={() => void startSession()}
+                disabled={busy || !writesEnabled}
+                style={primaryButton}
+              >
+                {busy ? "Starting…" : "Start session"}
+              </button>
+            ) : null}
           </div>
 
           <div style={{ display: "grid", gap: "0.85rem" }}>
@@ -792,7 +950,7 @@ export default function GeneratorWorkspace({
       <article style={cardStyle}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
           <div>
-            <h2 style={{ marginTop: 0 }}>Existing {generatorTitle(generatorKind)} sessions</h2>
+            <h2 style={{ marginTop: 0 }}>Recent sessions</h2>
             <p style={{ color: "#475569" }}>Resume an active round or review a completed session.</p>
           </div>
           <button type="button" onClick={() => void loadSessions()} disabled={busy} style={secondaryButton}>
@@ -811,7 +969,7 @@ export default function GeneratorWorkspace({
                     <strong>{session.title}</strong>
                     <p style={{ margin: "0.25rem 0 0", color: "#475569" }}>
                       {playFormatLabel(session.play_format)} · Round {session.current_round_number || 1} of {session.total_rounds || "?"}
-                      {" · "}{session.status}
+                      {" · "}{sessionStatusLabel(session.status)}
                     </p>
                   </div>
                   <Link
@@ -830,7 +988,7 @@ export default function GeneratorWorkspace({
             ))}
           </div>
         ) : (
-          <p style={{ color: "#64748b" }}>No generator sessions yet.</p>
+          <p style={{ color: "#64748b" }}>No saved sessions yet.</p>
         )}
       </article>
     </div>

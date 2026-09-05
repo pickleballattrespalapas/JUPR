@@ -129,7 +129,7 @@ function SpotlightCard({ item }: { item: WeeklyRecapSpotlight }) {
         <ul style={{ margin: 0, paddingLeft: "1.25rem" }}>
           {item.players.map((player) => <li key={`${item.label}-${player}`}>{player}</li>)}
         </ul>
-      ) : <p style={{ color: "#64748b" }}>No spotlight players listed.</p>}
+      ) : <p style={{ color: "#64748b" }}>No players were selected for this spotlight.</p>}
     </article>
   );
 }
@@ -147,7 +147,7 @@ function AroundCard({ title, rows, tone }: { title: string; rows: string[]; tone
         <ul style={{ marginBottom: 0, paddingLeft: "1.25rem" }}>
           {rows.map((row) => <li key={`${title}-${row}`}>{row}</li>)}
         </ul>
-      ) : <p style={{ color: "#64748b" }}>No highlights listed.</p>}
+      ) : <p style={{ color: "#64748b" }}>No highlights this week.</p>}
     </article>
   );
 }
@@ -188,7 +188,7 @@ function RecapBody({ recap, activeSection }: { recap: WeeklyRecapJson; activeSec
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "1rem" }}>
               {spotlight.map((item) => <SpotlightCard key={`${item.key ?? item.label}-${item.order ?? 0}`} item={item} />)}
             </div>
-          ) : <p style={{ color: "#64748b" }}>No spotlight reel published for this week.</p>}
+          ) : <p style={{ color: "#64748b" }}>No player spotlights this week.</p>}
         </section>
       ) : null}
 
@@ -199,7 +199,7 @@ function RecapBody({ recap, activeSection }: { recap: WeeklyRecapJson; activeSec
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "1rem" }}>
               {visibleAroundCards.map((item) => <AroundCard key={`${item.tone}-${item.title}`} title={item.title} rows={item.rows} tone={item.tone} />)}
             </div>
-          ) : <p style={{ color: "#64748b" }}>No around-the-club highlights published for this week.</p>}
+          ) : <p style={{ color: "#64748b" }}>No club highlights this week.</p>}
         </section>
       ) : null}
 
@@ -210,7 +210,7 @@ function RecapBody({ recap, activeSection }: { recap: WeeklyRecapJson; activeSec
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "1rem" }}>
               {recap.tournaments.map((tournament) => <Podium key={tournament.tournament_name} tournament={tournament} />)}
             </div>
-          ) : <p style={{ color: "#64748b" }}>No tournament podiums published for this week.</p>}
+          ) : <p style={{ color: "#64748b" }}>No tournament finishes this week.</p>}
         </section>
       ) : null}
 
@@ -262,16 +262,16 @@ export default async function WeeklyRecapPage({ params, searchParams }: WeeklyRe
           </p>
           <h1 style={{ marginTop: 0 }}>{data?.club.name ?? clubSlug} weekly recap</h1>
           <p style={{ color: "#334155", maxWidth: "820px" }}>
-            Published club-wide highlights, weekly numbers, spotlight reels, tournament podiums, and looking-ahead notes.
+            Catch up on this week&apos;s matches, standout players, tournament finishes, and what&apos;s coming next.
           </p>
         </>
       ) : null}
 
-      {error ? <p style={{ color: "#b91c1c" }}>Weekly Recap is temporarily unavailable. {error}</p> : null}
+      {error ? <p role="alert" style={{ color: "#b91c1c" }}>Weekly Recap is unavailable right now. Please try again shortly.</p> : null}
       {!error && !data?.recaps?.length ? (
         pagination?.has_previous ? (
-          <p>No published recaps on this page. <Link href={pageHref({ clubSlug, section: activeSection })}>View newest recaps</Link>.</p>
-        ) : <p>No published weekly recaps yet.</p>
+          <p>There are no recaps on this page. <Link href={pageHref({ clubSlug, section: activeSection })}>View the newest recaps</Link>.</p>
+        ) : <p>No weekly recaps have been posted yet.</p>
       ) : null}
 
       {!printMode && data?.recaps?.length ? (

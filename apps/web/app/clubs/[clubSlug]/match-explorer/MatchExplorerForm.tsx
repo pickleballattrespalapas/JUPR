@@ -41,6 +41,11 @@ function deltaLabel(value?: number | null): string {
   return `${delta >= 0 ? "+" : ""}${delta.toFixed(4)}`;
 }
 
+function contextLabel(value?: string | null): string {
+  const label = String(value || "").trim();
+  return label.toUpperCase() === "OVERALL" ? "Overall" : label || "Overall";
+}
+
 function playerName(players: PublicPlayer[], id: string): string {
   return players.find((player) => String(player.id) === String(id))?.name ?? "";
 }
@@ -61,11 +66,11 @@ function beatExpectationLabel(preview: MatchExplorerPreview): { value: string; c
   const share = preview.score.you_share;
   const beatPp = preview.score.beat_expectation_pp;
   if (share == null || beatPp == null) {
-    return { value: "—", caption: "No movement on ties / empty scores." };
+    return { value: "—", caption: "Enter a final score to compare it with the prediction." };
   }
   return {
-    value: `${beatPp >= 0 ? "+" : ""}${beatPp.toFixed(0)} pp`,
-    caption: `Your share ${(share * 100).toFixed(1)}% vs expected ${(preview.expected.you * 100).toFixed(1)}%`
+    value: `${beatPp >= 0 ? "+" : ""}${beatPp.toFixed(0)} percentage points`,
+    caption: `Your team won ${(share * 100).toFixed(1)}% of the points; the ratings predicted ${(preview.expected.you * 100).toFixed(1)}%.`
   };
 }
 
@@ -80,7 +85,7 @@ function TeamSummary({ title, team }: { title: string; team: MatchExplorerPrevie
         {team.players.map((player) => (
           <li key={String(player.id)}>
             {player.name}: {ratingLabel(player.context_rating)}
-            {Math.round(player.context_rating) !== Math.round(player.overall_rating) ? ` context / ${ratingLabel(player.overall_rating)} overall` : ""}
+            {Math.round(player.context_rating) !== Math.round(player.overall_rating) ? ` here / ${ratingLabel(player.overall_rating)} overall` : ""}
           </li>
         ))}
       </ul>
@@ -94,26 +99,26 @@ function SummaryCards({ preview }: { preview: MatchExplorerPreview }) {
   return (
     <div data-testid="match-explorer-summary" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
       <article style={{ border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "#f8fafc" }}>
-        <h3 style={{ marginTop: 0 }}>Expected win rate</h3>
+        <h3 style={{ marginTop: 0 }}>Your team&apos;s win chance</h3>
         <p style={{ fontSize: "2rem", fontWeight: 800, margin: 0 }}>{percentLabel(preview.expected.you)}</p>
         <p style={{ margin: 0, color: "#475569" }}>
-          {preview.expected.label} • expected {preview.expected.score_to_11.label} • {preview.context.name}
+          {preview.expected.label} • predicted score {preview.expected.score_to_11.label} • {contextLabel(preview.context.name)} ratings
         </p>
       </article>
       <article style={{ border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "#f8fafc" }}>
-        <h3 style={{ marginTop: 0 }}>Beat expectation</h3>
+        <h3 style={{ marginTop: 0 }}>Score vs. prediction</h3>
         <p style={{ fontSize: "2rem", fontWeight: 800, margin: 0 }}>{beat.value}</p>
         <p style={{ margin: 0, color: "#475569" }}>{beat.caption}</p>
       </article>
       <article style={{ border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "#f8fafc" }}>
-        <h3 style={{ marginTop: 0 }}>Your / partner delta</h3>
+        <h3 style={{ marginTop: 0 }}>Your team&apos;s rating change</h3>
         <p style={{ fontSize: "2rem", fontWeight: 800, margin: 0 }}>{deltaLabel(preview.rating_delta.you_team_elo)}</p>
-        <p style={{ margin: 0, color: "#475569" }}>Same team-based update.</p>
+        <p style={{ margin: 0, color: "#475569" }}>You and your partner receive the same change.</p>
       </article>
       <article style={{ border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "#f8fafc" }}>
-        <h3 style={{ marginTop: 0 }}>Opponents delta</h3>
+        <h3 style={{ marginTop: 0 }}>Opponents&apos; rating change</h3>
         <p style={{ fontSize: "2rem", fontWeight: 800, margin: 0 }}>{deltaLabel(preview.rating_delta.opponent_team_elo)}</p>
-        <p style={{ margin: 0, color: "#475569" }}>K-factor {preview.context.k_factor}</p>
+        <p style={{ margin: 0, color: "#475569" }}>Based on {contextLabel(preview.context.name).toLowerCase()} ratings.</p>
       </article>
     </div>
   );
@@ -128,8 +133,8 @@ function PlayerImpactTable({ preview }: { preview: MatchExplorerPreview }) {
             <th style={{ padding: "0.75rem", borderBottom: "1px solid #e2e8f0" }}>Role</th>
             <th style={{ padding: "0.75rem", borderBottom: "1px solid #e2e8f0" }}>Player</th>
             <th style={{ padding: "0.75rem", borderBottom: "1px solid #e2e8f0" }}>Current JUPR</th>
-            <th style={{ padding: "0.75rem", borderBottom: "1px solid #e2e8f0" }}>Projected JUPR</th>
-            <th style={{ padding: "0.75rem", borderBottom: "1px solid #e2e8f0" }}>Δ JUPR</th>
+            <th style={{ padding: "0.75rem", borderBottom: "1px solid #e2e8f0" }}>Possible JUPR</th>
+            <th style={{ padding: "0.75rem", borderBottom: "1px solid #e2e8f0" }}>Change</th>
           </tr>
         </thead>
         <tbody>
@@ -176,12 +181,12 @@ function RatingImpactChart({ preview }: { preview: MatchExplorerPreview }) {
 
   return (
     <article data-testid="match-explorer-impact-chart" style={{ border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "#ffffff", marginTop: "1rem" }}>
-      <h3 style={{ marginTop: 0 }}>Rating Impact Predictor</h3>
+      <h3 style={{ marginTop: 0 }}>Possible rating changes</h3>
       <p style={{ color: "#475569", marginTop: "-0.35rem" }}>
-        The curve mirrors the Streamlit predictor: x-axis is score share translated to an 11-point score, and y-axis is projected JUPR change for your team.
+        See how different final scores could change your team&apos;s JUPR rating.
       </p>
       <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-labelledby="mx-impact-title" style={{ width: "100%", height: "auto", display: "block" }}>
-        <title id="mx-impact-title">Projected JUPR change by score share</title>
+        <title id="mx-impact-title">Possible JUPR change by final score</title>
         <line x1={margin.left} y1={y(0)} x2={width - margin.right} y2={y(0)} stroke="#cbd5e1" strokeDasharray="4 4" />
         {yTicks.map((tick) => (
           <g key={`y-${tick}`}>
@@ -206,8 +211,8 @@ function RatingImpactChart({ preview }: { preview: MatchExplorerPreview }) {
         ) : null}
         <line x1={margin.left} y1={height - margin.bottom} x2={width - margin.right} y2={height - margin.bottom} stroke="#94a3b8" />
         <line x1={margin.left} y1={margin.top} x2={margin.left} y2={height - margin.bottom} stroke="#94a3b8" />
-        <text x={margin.left + innerWidth / 2} y={height - 14} textAnchor="middle" fontSize="12" fill="#334155">Score share, shown as equivalent score to 11</text>
-        <text x="16" y={margin.top + innerHeight / 2} textAnchor="middle" fontSize="12" fill="#334155" transform={`rotate(-90 16 ${margin.top + innerHeight / 2})`}>Projected Δ JUPR</text>
+        <text x={margin.left + innerWidth / 2} y={height - 14} textAnchor="middle" fontSize="12" fill="#334155">Final score, shown as a game to 11</text>
+        <text x="16" y={margin.top + innerHeight / 2} textAnchor="middle" fontSize="12" fill="#334155" transform={`rotate(-90 16 ${margin.top + innerHeight / 2})`}>Possible JUPR change</text>
       </svg>
     </article>
   );
@@ -264,7 +269,7 @@ export default function MatchExplorerForm({ apiBase, clubSlug, players, contexts
 
   const runPreview = useCallback(async (optionsOverride: { syncUrl?: boolean; signal?: AbortSignal } = {}) => {
     if (!apiBase) {
-      setMessage("API base URL is not configured.");
+      setMessage("We couldn’t build this preview. Please try again.");
       return;
     }
     const selected = [me, partner, opp1, opp2];
@@ -298,9 +303,9 @@ export default function MatchExplorerForm({ apiBase, clubSlug, players, contexts
         method: "GET",
         signal: optionsOverride.signal
       });
-      const payload = (await response.json().catch(() => null)) as MatchExplorerPreviewResponse | { detail?: string } | null;
+      const payload = (await response.json().catch(() => null)) as MatchExplorerPreviewResponse | null;
       if (!response.ok) {
-        throw new Error(String((payload as { detail?: string } | null)?.detail || `API error (${response.status})`));
+        throw new Error("Preview request failed.");
       }
       if (requestId === requestSequence.current) {
         setPreview((payload as MatchExplorerPreviewResponse).preview);
@@ -308,7 +313,7 @@ export default function MatchExplorerForm({ apiBase, clubSlug, players, contexts
     } catch (error) {
       if (optionsOverride.signal?.aborted || (error instanceof DOMException && error.name === "AbortError")) return;
       if (requestId === requestSequence.current) {
-        setMessage(error instanceof Error ? error.message : "Unable to build Match Explorer preview.");
+        setMessage("We couldn’t build this preview. Please try again.");
       }
     } finally {
       if (requestId === requestSequence.current) setLoading(false);
@@ -361,11 +366,11 @@ export default function MatchExplorerForm({ apiBase, clubSlug, players, contexts
     <section data-testid="match-explorer-form" style={{ border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" }}>
       <h2 style={{ marginTop: 0 }}>Preview a doubles matchup</h2>
       <p style={{ color: "#475569", marginTop: "-0.25rem" }}>
-        Selections are shareable through the URL. Use the same `ctx`, `me`, `partner`, `opp1`, `opp2`, `sy`, and `so` deep-link fields as the Streamlit page.
+        Choose the players and a possible final score. You can copy a link to share this matchup.
       </p>
       <div style={{ display: "grid", gap: "0.85rem" }}>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem" }}>
-          <label style={labelStyle}>Rating context<select value={context} onChange={(event) => setContext(event.target.value)} style={selectStyle}>{contexts.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+          <label style={labelStyle}>Rating group<select value={context} onChange={(event) => setContext(event.target.value)} style={selectStyle}>{contexts.map((item) => <option key={item} value={item}>{contextLabel(item)}</option>)}</select></label>
           <label style={labelStyle}>Your points<input value={scoreYou} onChange={(event) => setScoreYou(event.target.value)} type="number" min={0} max={99} style={selectStyle} /></label>
           <label style={labelStyle}>Opponent points<input value={scoreOpp} onChange={(event) => setScoreOpp(event.target.value)} type="number" min={0} max={99} style={selectStyle} /></label>
         </div>
@@ -401,7 +406,7 @@ export default function MatchExplorerForm({ apiBase, clubSlug, players, contexts
 
           {preview.context.name !== "OVERALL" ? (
             <p style={{ border: "1px solid #bfdbfe", borderRadius: "12px", padding: "0.75rem", background: "#eff6ff", color: "#1e3a8a" }}>
-              Graph and projected movement are computed using league ratings only. Overall ratings in the team cards remain visible for reference.
+              This preview uses league ratings. Overall ratings are also shown in the team cards for comparison.
             </p>
           ) : null}
 

@@ -243,8 +243,8 @@ def evaluate_selection_skill_eligibility(
                 "status": "INELIGIBLE",
                 "issue_type": "SKILL_NOT_ELIGIBLE",
                 "issue": (
-                    f"Known rating {_format_skill(highest)} cannot fit a combined-rating cap "
-                    f"strictly below {_format_skill(cap)}."
+                    f"Rating {_format_skill(highest)} cannot be used in a division "
+                    f"with a combined rating below {_format_skill(cap)}."
                 ),
                 "combined_rating_cap": cap,
             }
@@ -271,8 +271,8 @@ def evaluate_selection_skill_eligibility(
                 "status": "INELIGIBLE",
                 "issue_type": "SKILL_NOT_ELIGIBLE",
                 "issue": (
-                    f"Combined rating {_format_skill(combined)} is not strictly below "
-                    f"the {_format_skill(cap)} cap."
+                    f"Combined rating {_format_skill(combined)} must be below "
+                    f"{_format_skill(cap)}."
                 ),
                 "combined_rating_cap": cap,
                 "combined_rating": combined,

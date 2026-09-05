@@ -14,11 +14,11 @@ const faqItems = [
   },
   {
     question: "How do I get a rating?",
-    answer: "You get a rating after recorded eligible matches. Your first recorded results may move your rating more quickly while the system learns your level."
+    answer: "You get a rating after your first club-approved matches. Your rating may move more quickly at first while JUPR gets a clearer picture of your level."
   },
   {
     question: "What matches count?",
-    answer: "Official ladders, round robins, league matches, and tournaments with official score entry can count. Open play, drills, clinics, and social play do not count unless explicitly recorded as eligible."
+    answer: "Ladders, round robins, league matches, and tournaments can count when club staff mark the results as rated. Open play, drills, clinics, and social play do not count unless the club marks them as rated."
   },
   {
     question: "What affects rating movement?",
@@ -38,19 +38,19 @@ const faqItems = [
   },
   {
     question: "What is the difference between overall and league ratings?",
-    answer: "Overall rating reflects recorded eligible play across the club. League rating reflects a specific league or series when that context is shown."
+    answer: "Your overall rating reflects rated matches across the club. A league rating reflects only matches from that league or series."
   },
   {
     question: "What if a score was entered wrong?",
-    answer: "Report the issue to the organizer or use the data-correction page. Corrections are reviewed by staff; the public site does not directly mutate rating data."
+    answer: "Report the issue to the organizer or use the data-correction page. Staff will review your request before making any changes, so submitting it does not change your rating immediately."
   },
   {
     question: "How should I use my JUPR rating?",
-    answer: "Use it to choose leveled sessions, seed ladders and tournaments fairly, follow progress, and create competitive matches. It reflects recorded club performance, not a guarantee of any single result."
+    answer: "Use it to choose leveled sessions, seed ladders and tournaments fairly, follow progress, and create competitive matches. It reflects your official club results, not a guarantee of any single result."
   },
   {
     question: "Why can JUPR differ from DUPR or my bracket level?",
-    answer: "JUPR uses the official matches recorded in this club system. Other ratings and brackets use different data, eligibility rules, scales, and update policies."
+    answer: "JUPR uses official results from this club. Other ratings and brackets may use different matches, rules, and scales."
   }
 ];
 
@@ -66,9 +66,9 @@ export default function FaqPage() {
       </p>
       <h1 style={{ marginTop: 0 }}>Rating FAQs</h1>
       <p style={{ color: "#334155", maxWidth: "760px" }}>
-        Answers about ratings, recorded play, player movement, and how to request a correction.
+        Answers about ratings, matches, rating changes, and how to request a correction.
       </p>
-      <p><Link href="/how-ratings-work">Read the canonical Rating Rules</Link></p>
+      <p><Link href="/how-ratings-work">Read the full rating guide</Link></p>
 
       <div style={{ display: "grid", gap: "1rem" }}>
         {faqItems.map((item) => (
@@ -82,7 +82,7 @@ export default function FaqPage() {
       <article style={{ ...cardStyle, marginTop: "1rem", background: "#f8fafc" }}>
         <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Need a data correction?</h2>
         <p style={{ color: "#475569" }}>
-          Wrong score, partner, opponent, or event context should be reviewed by staff before ratings are recomputed.
+          If a score, partner, opponent, or event is wrong, staff will review it and update any affected ratings.
         </p>
         <Link href="/data-corrections">Open data-correction instructions</Link>
       </article>

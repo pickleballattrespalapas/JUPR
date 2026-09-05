@@ -19,8 +19,21 @@ const cardStyle = {
 function dateLabel(value?: string | null): string | null {
   if (!value) return null;
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value).slice(0, 10);
-  return date.toISOString().slice(0, 10);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Intl.DateTimeFormat("en-US", {
+    dateStyle: "medium",
+    timeZone: "UTC"
+  }).format(date);
+}
+
+function timeZoneLabel(value: string): string {
+  const city = value.split("/").at(-1)?.replaceAll("_", " ") || "local";
+  const labels: Record<string, string> = {
+    Mazatlan: "Mazatlán",
+    Cancun: "Cancún",
+    "Mexico City": "Mexico City"
+  };
+  return labels[city] || city;
 }
 
 export default async function TournamentRegistrationPage({
@@ -62,21 +75,22 @@ export default async function TournamentRegistrationPage({
         {tournament?.name ?? "Tournament registration"}
       </h1>
       <p style={{ color: "#334155", maxWidth: "820px" }}>
-        Choose your divisions and submit your entry. Tournament details,
-        policies, roster, and partner information remain available from
-        Tournament Home.
+        Choose your events and complete the form below. Need details? Visit
+        Tournament Home anytime.
       </p>
 
       {error ? (
         <p style={{ color: "#b91c1c" }}>
-          Tournament registration is temporarily unavailable. {error}
+          Tournament registration is temporarily unavailable. Please try again.
         </p>
       ) : null}
       {data?.setup_error ? (
-        <p style={{ color: "#b91c1c" }}>{data.setup_error}</p>
+        <p style={{ color: "#b91c1c" }}>
+          Tournament registration is temporarily unavailable.
+        </p>
       ) : null}
-      {!error && data && !tournament ? (
-        <p>No tournament registration is currently published.</p>
+      {!error && data && !data.setup_error && !tournament ? (
+        <p>There isn’t an open tournament registration right now.</p>
       ) : null}
 
       {data?.tournaments?.length ? (
@@ -125,7 +139,7 @@ export default async function TournamentRegistrationPage({
         />
       ) : null}
 
-      {tournament ? (
+      {tournament && data?.registration_open ? (
         <article
           style={{
             ...cardStyle,
@@ -135,36 +149,31 @@ export default async function TournamentRegistrationPage({
             gap: "1rem",
             alignItems: "center",
             justifyContent: "space-between",
-            background: data?.registration_open ? "#eff6ff" : "#f8fafc",
-            borderColor: data?.registration_open ? "#93c5fd" : "#cbd5e1"
+            background: "#eff6ff",
+            borderColor: "#93c5fd"
           }}
         >
           <div>
-            <h2 style={{ margin: 0 }}>
-              {data?.registration_open ? "Ready to register?" : "Registration is closed"}
-            </h2>
+            <h2 style={{ margin: 0 }}>Ready to register?</h2>
             <p style={{ color: "#475569", margin: "0.35rem 0 0" }}>
-              {data?.registration_open
-                ? `Complete the form below for ${selectableCount} open division${selectableCount === 1 ? "" : "s"}.`
-                : data?.registration_closed_reason || "Registration is not currently open."}
+              Choose from {selectableCount} open division
+              {selectableCount === 1 ? "" : "s"} below.
             </p>
           </div>
-          {data?.registration_open ? (
-            <a
-              href="#registration-form"
-              style={{
-                display: "inline-block",
-                padding: "0.7rem 1rem",
-                borderRadius: "999px",
-                background: "#0f172a",
-                color: "white",
-                textDecoration: "none",
-                fontWeight: 800
-              }}
-            >
-              Register now
-            </a>
-          ) : null}
+          <a
+            href="#registration-form"
+            style={{
+              display: "inline-block",
+              padding: "0.7rem 1rem",
+              borderRadius: "999px",
+              background: "#0f172a",
+              color: "white",
+              textDecoration: "none",
+              fontWeight: 800
+            }}
+          >
+            Register now
+          </a>
         </article>
       ) : null}
 
@@ -180,12 +189,12 @@ export default async function TournamentRegistrationPage({
           <article style={cardStyle}>
             <strong>Start</strong>
             <br />
-            {dateLabel(tournament.start_date) ?? "TBD"}
+            {dateLabel(tournament.start_date) ?? "To be announced"}
           </article>
           <article style={cardStyle}>
-            <strong>Status</strong>
+            <strong>Registration</strong>
             <br />
-            {settings?.registration_status ?? "draft"}
+            {data?.registration_open ? "Open" : "Closed"}
           </article>
           <article style={cardStyle}>
             <strong>Open divisions</strong>
@@ -200,7 +209,11 @@ export default async function TournamentRegistrationPage({
           <h2 style={{ marginTop: 0 }}>Venue</h2>
           {settings?.location_name ? <p><strong>{settings.location_name}</strong></p> : null}
           {settings?.venue_address ? <p>{settings.venue_address}</p> : null}
-          {settings?.timezone ? <p style={{ color: "#475569" }}>Tournament time zone: {settings.timezone}</p> : null}
+          {settings?.timezone ? (
+            <p style={{ color: "#475569" }}>
+              All times are shown in {timeZoneLabel(settings.timezone)} time.
+            </p>
+          ) : null}
           <p>
             <a
               href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(venueMapQuery)}`}
@@ -219,18 +232,6 @@ export default async function TournamentRegistrationPage({
         </article>
       ) : null}
 
-      {tournament && !data?.registration_open ? (
-        <article style={{ ...cardStyle, marginBottom: "1rem" }}>
-          <h2 style={{ marginTop: 0 }}>Registration is closed</h2>
-          <p style={{ color: "#475569" }}>
-            {data?.registration_closed_reason ||
-              "Registration is not currently open."}{" "}
-            Existing registrants can still request a secure edit link below.
-          </p>
-          <Link href="/support">Contact support</Link>
-        </article>
-      ) : null}
-
       {tournament ? (
         <div id="registration-form" style={{ scrollMarginTop: "1rem" }}>
           <TournamentRegistrationForm
@@ -239,6 +240,7 @@ export default async function TournamentRegistrationPage({
             registrationSlug={settings?.registration_slug ?? null}
             registrationOpen={Boolean(data?.registration_open)}
             registrationClosedReason={data?.registration_closed_reason ?? null}
+            timeZone={settings?.timezone ?? null}
             days={data.days ?? []}
             events={data.events ?? []}
             commerce={data.commerce ?? null}
@@ -253,9 +255,8 @@ export default async function TournamentRegistrationPage({
         >
           <h2 style={{ marginTop: 0 }}>Manage an existing registration</h2>
           <p style={{ color: "#475569" }}>
-            Request a secure link to edit an event, change partner details, or
-            add another event. For privacy, the response is the same whether or
-            not a matching registration exists.
+            Enter the email you registered with and we’ll send you a private
+            edit link.
           </p>
           <EditLinkRequestForm
             clubSlug={clubSlug}
@@ -280,8 +281,8 @@ export default async function TournamentRegistrationPage({
           <div>
             <h2 style={{ margin: 0 }}>Need tournament details?</h2>
             <p style={{ color: "#475569", margin: "0.35rem 0 0" }}>
-              Review the venue, rules, policies, public roster, and the Players
-              Needing Partners page without losing your place in registration.
+              Need the venue, rules, or player list? Visit the tournament pages
+              before you submit.
             </p>
           </div>
           <span style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
@@ -289,19 +290,19 @@ export default async function TournamentRegistrationPage({
               href={`/clubs/${clubSlug}/tournaments${tournamentQuery ? `?${tournamentQuery}` : ""}`}
               style={{ fontWeight: 800 }}
             >
-              Tournament Home
+              Tournament home
             </Link>
             <Link
               href={`/clubs/${clubSlug}/tournament-roster${tournamentQuery ? `?${tournamentQuery}` : ""}`}
               style={{ fontWeight: 800 }}
             >
-              Tournament Roster
+              View roster
             </Link>
             <Link
               href={`/clubs/${clubSlug}/tournament-team-results`}
               style={{ fontWeight: 800 }}
             >
-              Four-player Team Results
+              Team results
             </Link>
           </span>
         </article>

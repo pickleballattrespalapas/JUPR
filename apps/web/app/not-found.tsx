@@ -15,11 +15,11 @@ export default function NotFound() {
       </p>
       <h1 style={{ marginTop: 0 }}>We could not find that page.</h1>
       <p style={{ color: "#334155" }}>
-        The route may have moved while the Next/Vercel site is being assembled. Use one of the main public links below.
+        The page may have moved, or the link may be out of date. Try one of these pages instead.
       </p>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "1rem" }}>
         <article style={cardStyle}><strong><Link href="/">Home</Link></strong><p style={{ color: "#475569" }}>Return to the Pickleball Club Sandwich homepage.</p></article>
-        <article style={cardStyle}><strong><Link href="/site-map">Site map</Link></strong><p style={{ color: "#475569" }}>Open the public route map.</p></article>
+        <article style={cardStyle}><strong><Link href="/site-map">Site map</Link></strong><p style={{ color: "#475569" }}>Browse all available pages.</p></article>
         <article style={cardStyle}><strong><Link href="/clubs/tres-palapas">Tres Palapas</Link></strong><p style={{ color: "#475569" }}>Open the club home.</p></article>
         <article style={cardStyle}><strong><Link href="/support">Support</Link></strong><p style={{ color: "#475569" }}>Get help or report a broken link.</p></article>
       </div>

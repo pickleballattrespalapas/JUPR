@@ -1565,7 +1565,7 @@ def test_completed_round_robin_projects_playoff_review_and_operator_alert() -> N
     assert first_standing["participant_names"] == ["Player 1", "Player 2"]
     assert draw["round_robin_summary"]["tiebreak_explanations"] == []
     assert draw["round_robin_summary"]["ranking_policy"] == {
-        "description": "Rank active teams by wins. When teams are tied on wins, compare their record against the other tied teams first. If head-to-head does not fully separate them, resolve the remaining tie by point differential, then total points scored, then original team number. Retired teams remain visible after active teams and cannot advance.",
+        "description": "Teams are ranked by wins. Ties are decided by head-to-head record, point differential, total points scored, then team number. Teams that withdraw remain listed but cannot advance.",
         "criteria": [
             "WINS",
             "HEAD_TO_HEAD",
@@ -1666,17 +1666,17 @@ def test_completed_round_robin_projects_playoff_review_and_operator_alert() -> N
     ] == [
         {
             "title": "Three-way tie at 2\u20131",
-            "summary": "Head-to-head did not fully separate these teams. Point differential completed the order: Player 5 / Player 6 \u2192 Player 1 / Player 2 \u2192 Player 3 / Player 4.",
+            "summary": "Head-to-head did not break the tie, so point differential decided the order: Player 5 / Player 6, Player 1 / Player 2, then Player 3 / Player 4.",
             "steps": [
                 {
                     "criterion": "HEAD_TO_HEAD",
                     "outcome": "UNRESOLVED",
-                    "detail": "Head-to-head mini-table: Player 1 / Player 2 1\u20131; Player 3 / Player 4 1\u20131; Player 5 / Player 6 1\u20131. Head-to-head did not separate these teams.",
+                    "detail": "Head-to-head records: Player 1 / Player 2 1\u20131; Player 3 / Player 4 1\u20131; Player 5 / Player 6 1\u20131. The teams were still tied after head-to-head.",
                 },
                 {
                     "criterion": "POINT_DIFFERENTIAL",
                     "outcome": "RESOLVED",
-                    "detail": "Point differential for the remaining tied teams: Player 5 / Player 6 +6; Player 1 / Player 2 +5; Player 3 / Player 4 +1. Point differential resolved the remaining tie.",
+                    "detail": "Point differential: Player 5 / Player 6 +6; Player 1 / Player 2 +5; Player 3 / Player 4 +1. Point differential broke the tie.",
                 },
             ],
         }
@@ -1771,15 +1771,14 @@ def test_incomplete_head_to_head_audit_names_missing_matchups() -> None:
     )
 
     assert explanations[0]["summary"] == (
-        "A complete head-to-head comparison was unavailable, so point "
-        "differential completed the order: Bravo / Birch \u2192 Charlie / Cedar "
-        "\u2192 Alpha / Ace."
+        "Not every head-to-head matchup had a final score, so point differential "
+        "decided the order: Bravo / Birch, Charlie / Cedar, then Alpha / Ace."
     )
     assert explanations[0]["steps"][0]["detail"] == (
-        "Available head-to-head records: Alpha / Ace 1\u20130; Bravo / Birch "
-        "0\u20131; Charlie / Cedar 0\u20130. The complete comparison was unavailable "
-        "because these matchups had no scored result: Alpha / Ace vs Charlie / "
-        "Cedar and Bravo / Birch vs Charlie / Cedar. Head-to-head was not applied."
+        "Head-to-head records so far: Alpha / Ace 1\u20130; Bravo / Birch 0\u20131; "
+        "Charlie / Cedar 0\u20130. Not every matchup had a final score: Alpha / Ace "
+        "vs Charlie / Cedar and Bravo / Birch vs Charlie / Cedar. Head-to-head "
+        "could not decide the tie."
     )
 
 

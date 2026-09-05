@@ -16,7 +16,7 @@ export default function ProfilePrivacyPage() {
       </p>
       <h1 style={{ marginTop: 0 }}>Request a profile privacy review</h1>
       <p style={{ color: "#334155" }}>
-        Players may request staff review of public profile display, display names, or privacy-sensitive information. This request does not immediately hide rating, match, tournament, or leaderboard records; staff review is required so public history remains consistent and auditable.
+        Ask us to review your display name or other information shown on your public profile. Submitting a request does not immediately hide ratings, matches, tournament results, or leaderboard records; staff will review it first.
       </p>
 
       <div style={{ display: "grid", gap: "1rem" }}>
@@ -24,10 +24,10 @@ export default function ProfilePrivacyPage() {
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>How privacy review works</h2>
           <ul style={{ color: "#475569", paddingLeft: "1.25rem" }}>
             <li>Staff verify that the requester is connected to the affected player profile.</li>
-            <li>Match and tournament records may need to remain in history for ratings, disputes, audit trails, and event results.</li>
-            <li>When approved, staff can adjust public display details without silently changing official match history.</li>
+            <li>Match and tournament records may need to remain in history because they affect ratings and event results or may be needed to resolve disputes.</li>
+            <li>Approved privacy changes will not alter official match results.</li>
             <li>Contact details such as email and phone are not shown on public roster or partner-board pages by default.</li>
-            <li>A request cannot be marked resolved until identity is verified, the approved action is completed through an authorized workflow, and staff record which public projections they checked.</li>
+            <li>Staff close a request only after verifying your identity, making the approved change, and checking that it appears correctly on public pages.</li>
             <li>Do not attach identity documents to the form; staff will arrange an appropriate verification method.</li>
           </ul>
         </article>

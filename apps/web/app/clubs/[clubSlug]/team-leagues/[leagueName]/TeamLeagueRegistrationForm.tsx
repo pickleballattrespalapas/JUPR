@@ -28,6 +28,38 @@ function operationKey(): string {
   return `teamleague:${Date.now()}:${Math.random().toString(16).slice(2)}`;
 }
 
+function publicRegistrationError(status: number, payload: unknown): string {
+  const detail = payload && typeof payload === "object"
+    ? (payload as { detail?: unknown }).detail
+    : null;
+  const detailObject = detail && typeof detail === "object"
+    ? detail as { message?: unknown; recovery_required?: unknown }
+    : null;
+  const message = typeof detail === "string"
+    ? detail
+    : detailObject
+      ? String(detailObject.message || "")
+      : "";
+  const recoveryRequired = detailObject?.recovery_required === true;
+  const savedTeamMessage = "Your team was saved, but we couldn't send the invitation. Please contact league staff.";
+  if (status === 503 && recoveryRequired) {
+    return message === savedTeamMessage
+      ? savedTeamMessage
+      : "We couldn't confirm your registration. Try again before submitting anything new.";
+  }
+  const safeMessages = [
+    "Enter a valid email address.",
+    "Registration is not open for this team league.",
+    "Choose your player profile.",
+    "Choose a different partner profile.",
+    "Enter a team name."
+  ];
+  if (status < 500 && safeMessages.includes(message)) return message;
+  if (status < 500 && /^(A (Men's|Women's|Mixed) team needs|We couldn't confirm the gender for)/.test(message)) return message;
+  if (status === 403) return "Registration is unavailable right now.";
+  return "We couldn't submit your registration. Please try again.";
+}
+
 export default function TeamLeagueRegistrationForm({
   apiBase,
   clubSlug,
@@ -84,17 +116,15 @@ export default function TeamLeagueRegistrationForm({
       );
       const payload = await response.json().catch(() => null);
       if (!response.ok) {
-        const detailText =
-          typeof payload?.detail === "object"
-            ? payload.detail.message
-            : payload?.detail;
-        throw new Error(String(detailText || `Registration failed (${response.status}).`));
+        setMessage(publicRegistrationError(response.status, payload));
+        setMessageTone("error");
+        return;
       }
       setMessage(String(payload.message || "Registration saved."));
       setMessageTone("success");
       setKey(operationKey());
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to register.");
+    } catch {
+      setMessage("We couldn't submit your registration. Please try again.");
       setMessageTone("error");
     } finally {
       setBusy(false);
@@ -116,13 +146,12 @@ export default function TeamLeagueRegistrationForm({
     <section style={{ display: "grid", gap: "0.8rem" }}>
       <h2 style={{ marginBottom: 0 }}>Register</h2>
       <p style={{ margin: 0, color: "#475569" }}>
-        Payment is handled offline. A team becomes confirmed only after the
-        invited partner accepts the private email link.
+        You&apos;ll pay the organizer separately. Your team is confirmed after your
+        partner accepts the email invitation.
       </p>
       {detail.league.allow_substitutes ? (
         <p style={{ margin: 0, color: "#475569" }}>
-          Approved one-off substitutes are allowed. Contact league staff to
-          arrange a substitution for a scheduled match.
+          Need a substitute for one match? Ask league staff.
         </p>
       ) : null}
       <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>

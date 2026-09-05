@@ -220,7 +220,7 @@ def _generic_honeypot_response() -> dict[str, Any]:
         "ok": True,
         "mode": "public_partner_request",
         "status": "accepted",
-        "message": "Partner request submitted.",
+        "message": "Request sent.",
     }
 
 
@@ -400,9 +400,9 @@ def create_public_tournament_partner_request(
         "idempotent": idempotent,
         "notification_status": _notification_statuses(notifications),
         "message": (
-            "This partner request is already pending; no duplicate notification was sent."
+            "You’ve already sent this request."
             if idempotent
-            else "Partner request submitted. If accepted, both registrations will automatically be paired."
+            else "Request sent. If they accept, you’ll be partners for this event."
         ),
     }
 
@@ -533,9 +533,8 @@ def _transition_public_tournament_partner_request(
         action=clean_action,
     )
     if _clean_text(transition.get("outcome"), limit=40).lower() == "stale":
-        current = _clean_text(transition.get("status") or request.get("status"), limit=40).upper()
         raise PartnerRequestStaleError(
-            f"This partner request is no longer pending (current status: {current or 'UNKNOWN'}). Refresh before trying another action."
+            "This request has already changed. Refresh the page to see its latest status."
         )
 
     idempotent = bool(transition.get("idempotent"))
@@ -584,12 +583,12 @@ def _transition_public_tournament_partner_request(
             notifications = _notification_failure_status(expected_keys, exc)
 
     messages = {
-        "accept": "Partner request accepted. Both registrations are now automatically paired.",
-        "decline": "Partner request declined. No team was created.",
-        "cancel": "Partner request cancelled. No team was created.",
+        "accept": "You’re now partners for this event.",
+        "decline": "Request declined.",
+        "cancel": "Request canceled.",
     }
     if idempotent:
-        messages[clean_action] = f"Partner request was already {desired_status.lower()}; no duplicate notification was sent."
+        messages[clean_action] = "This request was already updated."
     return {
         "ok": True,
         "mode": f"public_partner_request_{clean_action}",

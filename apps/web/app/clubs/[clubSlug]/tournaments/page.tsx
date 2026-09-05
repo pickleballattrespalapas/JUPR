@@ -53,9 +53,46 @@ function dateLabel(value?: string | null): string {
 }
 
 function eventLabel(event: PublicRegistrationEvent): string {
-  return [event.event_family_label, event.division_name]
-    .filter(Boolean)
-    .join(" · ");
+  const family = String(event.event_family_label || "").trim();
+  const division = String(event.division_name || "").trim();
+  if (family && division.toLocaleLowerCase().startsWith(family.toLocaleLowerCase())) {
+    return division;
+  }
+  return [family, division].filter(Boolean).join(" · ");
+}
+
+function priceLabel(value: number): string {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: Number.isInteger(value) ? 0 : 2,
+    maximumFractionDigits: 2
+  }).format(value);
+}
+
+function dayHeading(label: string, eventDate?: string | null): string {
+  const formattedDate = dateLabel(eventDate);
+  if (!eventDate) return label;
+  const parsed = new Date(`${String(eventDate).slice(0, 10)}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) return `${label} · ${formattedDate}`;
+  const shortDate = new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC"
+  }).format(parsed);
+  const normalize = (value: string) =>
+    value.toLocaleLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return normalize(label).includes(normalize(shortDate))
+    ? label
+    : `${label} · ${formattedDate}`;
+}
+
+function registrationStatusLabel(status?: string | null): string {
+  const normalized = String(status || "").trim().toLocaleLowerCase();
+  if (normalized === "open") return "Registration open";
+  if (normalized === "closed") return "Registration closed";
+  if (normalized === "waitlist") return "Waitlist open";
+  return "Registration not open";
 }
 
 function markdownish(text?: string | null) {
@@ -77,7 +114,7 @@ export default async function PublicTournamentsPage({
   const registrationSlug = firstParam(searchParams, "tournament");
   const tournamentId = firstParam(searchParams, "tournament_id");
   const explicitSelection = Boolean(registrationSlug || tournamentId);
-  const { data, error } = await getClubTournamentRegistration(params.clubSlug, {
+  const { data, error, status } = await getClubTournamentRegistration(params.clubSlug, {
     registrationSlug,
     tournamentId
   });
@@ -126,8 +163,8 @@ export default async function PublicTournamentsPage({
         </p>
         <h1 style={{ marginTop: 0 }}>Choose a tournament</h1>
         <p style={{ color: "#334155", maxWidth: "820px" }}>
-          Select a tournament to open its Tournament Home, registration, roster,
-          and the Players Needing Partners page.
+          Choose a tournament to register, see who&apos;s playing, find a partner,
+          or follow results.
         </p>
         <p>
           <Link
@@ -149,7 +186,7 @@ export default async function PublicTournamentsPage({
             }}
           >
             <h2 style={{ marginTop: 0 }}>Tournaments are temporarily unavailable</h2>
-            <p style={{ color: "#7f1d1d" }}>{error}</p>
+            <p style={{ color: "#7f1d1d" }}>Please try again shortly.</p>
           </article>
         ) : null}
 
@@ -179,16 +216,16 @@ export default async function PublicTournamentsPage({
                     : ""}
                 </p>
                 <p style={{ margin: "0.35rem 0 0", color: "#64748b" }}>
-                  Registration: {choice.settings.registration_status || "draft"}
+                  {registrationStatusLabel(choice.settings.registration_status)}
                 </p>
               </Link>
             ))}
           </div>
         ) : !error ? (
           <article style={cardStyle}>
-            <h2 style={{ marginTop: 0 }}>No published tournaments</h2>
+            <h2 style={{ marginTop: 0 }}>No tournaments yet</h2>
             <p style={{ color: "#475569" }}>
-              There is no public tournament workspace available for this club yet.
+              This club hasn&apos;t published any tournaments yet.
             </p>
           </article>
         ) : null}
@@ -197,6 +234,7 @@ export default async function PublicTournamentsPage({
   }
 
   if (!tournament) {
+    const unavailable = Boolean(error && status !== 404);
     return (
       <section>
         <p
@@ -211,9 +249,13 @@ export default async function PublicTournamentsPage({
         >
           Tournaments
         </p>
-        <h1 style={{ marginTop: 0 }}>Tournament not found</h1>
+        <h1 style={{ marginTop: 0 }}>
+          {unavailable ? "Tournament unavailable" : "Tournament not found"}
+        </h1>
         <p style={{ color: "#334155" }}>
-          The selected tournament is unavailable or is no longer published.
+          {unavailable
+            ? "We couldn’t load this tournament right now. Please try again shortly."
+            : "We couldn’t find that tournament. It may no longer be public."}
         </p>
         <p>
           <Link href={`/clubs/${params.clubSlug}/tournaments`}>
@@ -245,8 +287,8 @@ export default async function PublicTournamentsPage({
       </p>
       <h1 style={{ marginTop: 0 }}>{tournament.name}</h1>
       <p style={{ color: "#334155", maxWidth: "820px" }}>
-        Registration, roster, partner requests, events, and public tournament
-        information for this tournament.
+        Everything you need to register, find a partner, and follow the
+        tournament.
       </p>
 
       <PublicTournamentNav
@@ -275,7 +317,7 @@ export default async function PublicTournamentsPage({
           }}
         >
           <div>
-            <h2 style={{ marginTop: 0 }}>{tournament.name}</h2>
+            <strong>Tournament dates</strong>
             <p style={{ marginBottom: 0, color: "#475569" }}>
               {dateLabel(tournament.start_date)} – {dateLabel(tournament.end_date)}
             </p>
@@ -289,7 +331,7 @@ export default async function PublicTournamentsPage({
               fontWeight: 800
             }}
           >
-            {settings?.registration_status || "draft"}
+            {registrationStatusLabel(settings?.registration_status)}
           </span>
         </div>
       </article>
@@ -325,7 +367,7 @@ export default async function PublicTournamentsPage({
       </div>
 
       <section style={{ marginBottom: "1.25rem" }}>
-        <h2>Tournament pages</h2>
+        <h2>What would you like to do?</h2>
         <div
           style={{
             display: "grid",
@@ -337,26 +379,27 @@ export default async function PublicTournamentsPage({
             {
               label: "Register",
               description: data?.registration_open
-                ? "Choose divisions, submit registration, and manage extras."
-                : data?.registration_closed_reason ||
-                  "Registration is not currently open.",
+                ? "Sign up for your events and add any extras."
+                : "Registration is not currently open.",
+              cta: "Register",
               module: "registration" as const
             },
             {
               label: "Roster",
-              description:
-                "Browse public-safe registrations by day, event, division, and status.",
+              description: "See who's playing in each event and division.",
+              cta: "View roster",
               module: "roster" as const
             },
             {
               label: "Players Needing Partners",
-              description: "Find players who opted into public partner requests.",
+              description: "Find a partner for your doubles event.",
+              cta: "Find a partner",
               module: "partner-board" as const
             },
             {
               label: "Live & Results",
-              description:
-                "Follow completed scores, standings, playoff brackets, and medalists.",
+              description: "See live scores, standings, brackets, and medal winners.",
+              cta: "View results",
               module: "results" as const
             }
           ].map((item) => (
@@ -372,7 +415,7 @@ export default async function PublicTournamentsPage({
                 )}
                 style={{ fontWeight: 800 }}
               >
-                Open {item.label}
+                {item.cta}
               </Link>
             </article>
           ))}
@@ -380,12 +423,12 @@ export default async function PublicTournamentsPage({
       </section>
 
       <section style={{ marginBottom: "1.25rem" }}>
-        <h2>Events and days</h2>
+        <h2>Schedule and events</h2>
         <div style={{ display: "grid", gap: "0.75rem" }}>
           {eventsByDay.map(({ day, events }) => (
             <article key={day.id} style={cardStyle}>
               <h3 style={{ marginTop: 0 }}>
-                {day.label} · {dateLabel(day.event_date)}
+                {dayHeading(day.label, day.event_date)}
               </h3>
               {events.length ? (
                 <ul style={{ marginBottom: 0 }}>
@@ -393,14 +436,14 @@ export default async function PublicTournamentsPage({
                     <li key={event.id}>
                       {eventLabel(event)}
                       {event.price_usd != null
-                        ? ` · $${Number(event.price_usd).toFixed(2)}`
+                        ? ` · ${priceLabel(Number(event.price_usd))}`
                         : ""}
                     </li>
                   ))}
                 </ul>
               ) : (
                 <p style={{ marginBottom: 0, color: "#64748b" }}>
-                  No public events are assigned to this day.
+                  No events are listed for this day yet.
                 </p>
               )}
             </article>
@@ -495,11 +538,11 @@ export default async function PublicTournamentsPage({
             currentSlug
           )}
         >
-          View singles and doubles live results
+          Singles &amp; doubles results
         </Link>
         {" · "}
         <Link href={`/clubs/${params.clubSlug}/tournament-team-results`}>
-          View published four-player team results
+          Team results
         </Link>
       </p>
     </section>

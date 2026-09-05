@@ -153,7 +153,7 @@ def test_public_challenge_ladder_builds_tiers_status_and_challenge_buckets() -> 
     adv = next(tier for tier in payload["tiers"] if tier["tier_id"] == "ADV")
     assert [player["player_name"] for player in adv["players"]] == ["Casey"]
     assert adv["players"][0]["status"] == "Reinstate Required"
-    assert adv["players"][0]["detail"] == "Staff review required before ladder activity."
+    assert adv["players"][0]["detail"] == "Ask club staff to reinstate this player."
     assert "Needs admin review" not in str(payload)
 
     pending = next(section for section in payload["challenge_sections"] if section["name"] == "Pending Acceptance")
@@ -187,7 +187,7 @@ def test_public_challenge_ladder_builds_tiers_status_and_challenge_buckets() -> 
         "How to make a challenge",
         "Eligibility and timing",
         "Swing Partner Swap format",
-        "Staff-managed exceptions",
+        "Help from club staff",
     }
     assert "private" not in str(payload).lower()
 
@@ -473,8 +473,9 @@ def test_verified_legacy_result_projects_partial_score_without_inferred_links() 
             "rating_changes": [],
         }
     ]
-    assert "1 of 2 verified legacy match records" in details["notice"]
-    assert "conflicts with the ranked participants" in details["warnings"][0]
+    assert "Details are available for 1 of 2 matches" in details["notice"]
+    assert "Match A" in details["warnings"][0]
+    assert "may be incorrect" in details["warnings"][0]
     assert "verified_at" not in str(details)
     assert "private" not in str(details)
 
@@ -512,7 +513,7 @@ def test_verified_legacy_result_hides_partner_outside_the_club_player_map() -> N
         "player_id": 2,
         "player_name": "Blair",
     }
-    assert "not a current club player" in details["warnings"][0]
+    assert "no longer on the club roster" in details["warnings"][0]
     assert "999" not in str(details)
 
 

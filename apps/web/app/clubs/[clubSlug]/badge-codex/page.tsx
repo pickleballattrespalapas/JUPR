@@ -65,6 +65,76 @@ function dateLabel(value?: string | null): string | null {
   return date.toISOString().slice(0, 10);
 }
 
+function humanizeLabel(value?: string | null): string {
+  const text = String(value || "").trim().replace(/[_-]+/g, " ");
+  if (!text) return "Other";
+  return text.replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function badgeAvailabilityLabel(badge: PublicBadge): string {
+  const lifecycle = String(badge.lifecycle_state || badge.state || "").trim().toLowerCase();
+  const status = String(badge.badge_status || "").trim().toLowerCase();
+  const timing = String(badge.badge_award_timing || "").trim().toLowerCase();
+  if (["draft", "planned", "upcoming"].includes(lifecycle)) return "Coming soon";
+  if (["deprecated", "retired"].includes(lifecycle) || ["deprecated", "retired"].includes(status)) return "Retired";
+  if (lifecycle === "frozen" || ["tracked", "disabled", "frozen"].includes(status) || timing === "disabled") return "Not currently awarded";
+  return "Available now";
+}
+
+function badgeScopeLabel(value?: string | null): string {
+  const scope = String(value || "").trim().toLowerCase();
+  if (scope === "overall") return "All results";
+  if (scope === "lifetime") return "Club career";
+  if (scope === "week") return "One week";
+  if (scope === "month") return "One month";
+  if (scope === "season") return "This season";
+  if (scope === "league") return "This league";
+  if (scope === "tournament") return "This tournament";
+  if (scope === "event") return "One event";
+  if (scope === "match") return "One match";
+  if (scope === "club") return "Club play";
+  if (scope === "opponent") return "Club career";
+  return "Other club activity";
+}
+
+function badgeTimingLabel(value?: string | null): string {
+  const timing = String(value || "live").trim().toLowerCase();
+  if (timing === "live") return "As results are posted";
+  if (timing === "manual" || timing === "curated") return "By club staff";
+  if (timing === "on_league_close") return "When the league ends";
+  if (timing === "seasonal") return "When the season ends";
+  if (timing === "disabled") return "No longer awarded";
+  return "When the requirements are met";
+}
+
+function bucketLabel(value: string): string {
+  if (value === "Live Now") return "Earn as you play";
+  if (value === "Seasonal / League Close") return "League and season awards";
+  if (value === "Manual / Curated") return "Special awards";
+  if (value === "Tracked / Disabled") return "Not currently awarded";
+  return humanizeLabel(value);
+}
+
+function bucketDescription(value: string): string {
+  if (value === "Live Now") return "Earned automatically when posted results meet the requirements.";
+  if (value === "Seasonal / League Close") return "Awarded after final league or season results are posted.";
+  if (value === "Manual / Curated") return "Awarded by club staff for tournament finishes, sportsmanship, or community contributions.";
+  if (value === "Tracked / Disabled") return "These badges aren’t currently awarded, but previous earners remain listed.";
+  return "Browse badges in this group.";
+}
+
+function badgeDescription(badge: PublicBadge): string {
+  const description = String(badge.description || "").trim();
+  if (!description || /definition available|public unlock rules/i.test(description)) return "More details are coming soon.";
+  return description;
+}
+
+function badgeRequirements(badge: PublicBadge): string {
+  const requirements = String(badge.requirements || "").trim();
+  if (!requirements || /^requirements?\s*(tbd|coming soon)?\.?$/i.test(requirements)) return "Details coming soon.";
+  return requirements;
+}
+
 function parsePositiveInt(value: string | null, fallback: number, maximum: number): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
@@ -192,21 +262,21 @@ function BadgeCard({
           <h3 style={{ margin: "0.35rem 0 0", lineHeight: 1.2 }}>{badge.name}</h3>
         </div>
         <span style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.15rem 0.45rem", fontSize: "0.75rem", color: "#475569" }}>
-          {badge.availability || badge.lifecycle_state || badge.state || "Definition available"}
+          {badgeAvailabilityLabel(badge)}
         </span>
       </div>
-      <p style={{ margin: 0, color: "#475569" }}>{badge.description}</p>
-      <p style={{ margin: 0, color: "#334155", fontSize: "0.9rem" }}><strong>Unlock:</strong> {badge.requirements}</p>
+      <p style={{ margin: 0, color: "#475569" }}>{badgeDescription(badge)}</p>
+      <p style={{ margin: 0, color: "#334155", fontSize: "0.9rem" }}><strong>How to earn it:</strong> {badgeRequirements(badge)}</p>
       <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", fontSize: "0.82rem", color: "#475569" }}>
         <span style={{ border: "1px solid #e2e8f0", borderRadius: "999px", padding: "0.2rem 0.5rem" }}>Prestige {Number(badge.prestige || 0)}</span>
-        <span style={{ border: "1px solid #e2e8f0", borderRadius: "999px", padding: "0.2rem 0.5rem" }}>{badge.earners_count ?? 0} earners</span>
-        {badge.rarity ? <span style={{ border: "1px solid #e2e8f0", borderRadius: "999px", padding: "0.2rem 0.5rem" }}>{badge.rarity}</span> : null}
-        {badge.badge_scope ? <span style={{ border: "1px solid #e2e8f0", borderRadius: "999px", padding: "0.2rem 0.5rem" }}>Scope: {badge.badge_scope}</span> : null}
-        <span style={{ border: "1px solid #e2e8f0", borderRadius: "999px", padding: "0.2rem 0.5rem" }}>Timing: {String(badge.badge_award_timing || "live").replace(/_/g, " ")}</span>
+        <span style={{ border: "1px solid #e2e8f0", borderRadius: "999px", padding: "0.2rem 0.5rem" }}>{badge.earners_count ?? 0} {(badge.earners_count ?? 0) === 1 ? "earner" : "earners"}</span>
+        {badge.rarity ? <span style={{ border: "1px solid #e2e8f0", borderRadius: "999px", padding: "0.2rem 0.5rem" }}>{humanizeLabel(badge.rarity)}</span> : null}
+        {badge.badge_scope ? <span style={{ border: "1px solid #e2e8f0", borderRadius: "999px", padding: "0.2rem 0.5rem" }}>Counts toward: {badgeScopeLabel(badge.badge_scope)}</span> : null}
+        <span style={{ border: "1px solid #e2e8f0", borderRadius: "999px", padding: "0.2rem 0.5rem" }}>Awarded: {badgeTimingLabel(badge.badge_award_timing)}</span>
       </div>
       <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: "0.6rem" }}>
         <strong style={{ fontSize: "0.9rem" }}>Recent earners</strong>
-        {!badge.recent_earners?.length ? <p style={{ color: "#64748b", margin: "0.35rem 0 0" }}>No public earners yet.</p> : null}
+        {!badge.recent_earners?.length ? <p style={{ color: "#64748b", margin: "0.35rem 0 0" }}>No one has earned this badge yet.</p> : null}
         <ul style={{ margin: "0.35rem 0 0", paddingLeft: "1.25rem" }}>
           {(badge.recent_earners ?? []).map((earner) => (
             <li key={`${badge.badge_id}-${earner.player_id}-${earner.earned_at ?? ""}`}>
@@ -218,14 +288,14 @@ function BadgeCard({
         {Number(badge.earners_count || 0) > 0 ? (
           <p style={{ marginBottom: 0 }}>
             <Link href={pageHref({ clubSlug, bucket, category, scope, badge: badge.badge_id, badgeLimit, earners: badge.badge_id, earnersLimit: DEFAULT_EARNERS_LIMIT, anchor: `earners-${anchor}` })}>
-              Browse all earners
+              See all earners
             </Link>
           </p>
         ) : null}
       </div>
       <div style={{ marginTop: "auto", borderTop: "1px solid #f1f5f9", paddingTop: "0.55rem" }}>
         <Link href={pageHref({ clubSlug, bucket: badge.catalog_bucket, category: badge.category, scope: badge.badge_scope, badge: badge.badge_id, badgeLimit: "all", anchor })}>
-          Link directly to this badge
+          Share this badge
         </Link>
       </div>
     </article>
@@ -237,15 +307,15 @@ function TrophyRoom({ entries, clubSlug }: { entries: BadgeTrophyRoomEntry[]; cl
     <section id="trophy-room" style={{ marginTop: "1.5rem" }}>
       <h2>Recent trophy room</h2>
       <p style={{ color: "#475569", maxWidth: "760px" }}>
-        Public badge collections ranked by prestige from recorded awards. Repeated stackable awards count toward prestige; private award context is never shown here.
+        See recent badge earners, ranked by total prestige. Badges earned more than once add to the total.
       </p>
-      {!entries.length ? <p style={{ color: "#64748b" }}>No recent trophy-room activity yet.</p> : null}
+      {!entries.length ? <p style={{ color: "#64748b" }}>No badges have been earned recently.</p> : null}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "1rem" }}>
         {entries.map((entry) => (
           <article key={String(entry.player_id)} style={cardStyle} data-trophy-player={entry.player_id}>
             <h3 style={{ marginTop: 0 }}><Link href={`/clubs/${clubSlug}/players/${entry.player_id}`}>{entry.player_name}</Link></h3>
             <p style={{ margin: "0 0 0.35rem", color: "#475569" }}>{entry.prestige_total} prestige · {entry.unique_badge_count} badge type{entry.unique_badge_count === 1 ? "" : "s"}</p>
-            <p style={{ margin: "0 0 0.35rem", color: "#64748b" }}>{entry.award_count} recorded award{entry.award_count === 1 ? "" : "s"}{dateLabel(entry.latest_earned_at) ? ` · latest ${dateLabel(entry.latest_earned_at)}` : ""}</p>
+            <p style={{ margin: "0 0 0.35rem", color: "#64748b" }}>{entry.award_count} badge{entry.award_count === 1 ? "" : "s"} earned{dateLabel(entry.latest_earned_at) ? ` · latest ${dateLabel(entry.latest_earned_at)}` : ""}</p>
             <p style={{ marginBottom: 0 }}>{entry.latest_badges.map((badge) => badge.badge_name).join(" · ")}</p>
           </article>
         ))}
@@ -276,13 +346,13 @@ function EarnersPanel({
   return (
     <section id={anchor} style={{ ...cardStyle, margin: "1.5rem 0", borderColor: error ? "#fecaca" : "#93c5fd" }} data-badge-earners-panel>
       <h2 style={{ marginTop: 0 }}>{result ? `${result.badge?.name || result.badge_id} earners` : "Badge earners"}</h2>
-      {error ? <p style={{ color: "#b91c1c" }}>Couldn’t load earners. {error}</p> : null}
+      {error ? <p style={{ color: "#b91c1c" }}>We couldn&apos;t load badge earners. Please try again.</p> : null}
       {result ? (
         <>
           <p style={{ color: "#475569" }}>
-            Showing {result.earners.length ? result.offset + 1 : 0}–{result.offset + result.earners.length} of {result.total} public earners.
+            Showing {result.earners.length ? result.offset + 1 : 0}–{result.offset + result.earners.length} of {result.total} earners.
           </p>
-          {!result.earners.length ? <p>No public earners are available for this page.</p> : null}
+          {!result.earners.length ? <p>No earners are listed on this page.</p> : null}
           <ol start={result.offset + 1}>
             {result.earners.map((earner) => (
               <li key={`${earner.player_id}-${earner.earned_at ?? ""}`} style={{ marginBottom: "0.35rem" }}>
@@ -326,7 +396,7 @@ export default async function BadgeCodexPage({ params, searchParams }: BadgeCode
   const earnersLimit = parsePositiveInt(firstParam(searchParams, "earners_limit"), DEFAULT_EARNERS_LIMIT, 100);
 
   const { data, error } = await getClubBadgeCodex(clubSlug);
-  const buckets = data?.catalog_buckets ?? (data?.sections?.length ? [{ name: "Live Now", description: "Badge definitions currently available.", badge_count: data.summary.badge_count, sections: data.sections }] : []);
+  const buckets = data?.catalog_buckets ?? (data?.sections?.length ? [{ name: "Live Now", description: "Badges you can earn now.", badge_count: data.summary.badge_count, sections: data.sections }] : []);
   const badges = allBadges(buckets);
   const directBadge = selectedBadge ? badges.find((badge) => badge.badge_id === selectedBadge) ?? null : null;
   const bucket = requestedBucket || directBadge?.catalog_bucket || "Live Now";
@@ -350,32 +420,31 @@ export default async function BadgeCodexPage({ params, searchParams }: BadgeCode
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>Badge Codex</p>
       <h1 style={{ marginTop: 0 }}>{data?.club.name ?? clubSlug} badge codex</h1>
       <p style={{ color: "#334155", maxWidth: "800px" }}>
-        The complete public badge ledger: authoritative unlock definitions, availability and award timing, public earners, and the recent trophy room. Badge computation remains in the Python badge engine.
+        Explore every badge, learn how to earn it, and see recent earners.
       </p>
 
-      {error ? <p style={{ color: "#b91c1c" }}>Badge Codex is temporarily unavailable. {error}</p> : null}
-      {!error && data && !badges.length ? <p>No public badges are available yet.</p> : null}
+      {error ? <p role="alert" style={{ color: "#b91c1c" }}>Badge Codex is unavailable right now. Please try again shortly.</p> : null}
+      {!error && data && !badges.length ? <p>No badges are available yet.</p> : null}
 
       {data ? (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
             <article style={cardStyle}><strong>Badges</strong><br />{data.summary.badge_count}</article>
-            <article style={cardStyle}><strong>Complete definitions</strong><br />{data.summary.complete_definition_count ?? 0} / {data.summary.badge_count}</article>
             <article style={cardStyle}><strong>Earned badge types</strong><br />{data.summary.earned_badge_count}</article>
-            <article style={cardStyle}><strong>Total public earners</strong><br />{data.summary.total_unique_earners_by_badge}</article>
+            <article style={cardStyle}><strong>Badge earners</strong><br />{data.summary.total_unique_earners_by_badge}</article>
           </div>
 
-          <nav aria-label="Badge availability" style={{ marginBottom: "1rem" }}>
-            <strong>Availability and timing</strong>
+          <nav aria-label="When badges are awarded" style={{ marginBottom: "1rem" }}>
+            <strong>When badges are awarded</strong>
             <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.5rem" }}>
-              <Link href={pageHref({ clubSlug, bucket: "all", category: selectedCategory, scope: selectedScope, badgeLimit })} style={filterLinkStyle(bucket === "all")}>All buckets</Link>
+              <Link href={pageHref({ clubSlug, bucket: "all", category: selectedCategory, scope: selectedScope, badgeLimit })} style={filterLinkStyle(bucket === "all")}>All badges</Link>
               {buckets.map((item) => (
                 <Link key={item.name} href={pageHref({ clubSlug, bucket: item.name, category: selectedCategory, scope: selectedScope, badgeLimit })} style={filterLinkStyle(bucket === item.name)} data-badge-bucket={item.name}>
-                  {item.name} ({item.badge_count})
+                  {bucketLabel(item.name)} ({item.badge_count})
                 </Link>
               ))}
             </div>
-            {bucket !== "all" ? <p style={{ color: "#64748b", marginBottom: 0 }}>{buckets.find((item) => item.name === bucket)?.description}</p> : null}
+            {bucket !== "all" ? <p style={{ color: "#64748b", marginBottom: 0 }}>{bucketDescription(bucket)}</p> : null}
           </nav>
 
           <nav aria-label="Badge category" style={{ marginBottom: "1rem" }}>
@@ -388,12 +457,12 @@ export default async function BadgeCodexPage({ params, searchParams }: BadgeCode
             </div>
           </nav>
 
-          <nav aria-label="Badge scope" style={{ marginBottom: "1rem" }}>
-            <strong>Scope</strong>
+          <nav aria-label="What badge activity counts" style={{ marginBottom: "1rem" }}>
+            <strong>Counts toward</strong>
             <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.5rem" }}>
-              <Link href={pageHref({ clubSlug, bucket, category: selectedCategory, badgeLimit })} style={filterLinkStyle(!selectedScope)}>All scopes</Link>
+              <Link href={pageHref({ clubSlug, bucket, category: selectedCategory, badgeLimit })} style={filterLinkStyle(!selectedScope)}>All play</Link>
               {scopes.map((scope) => (
-                <Link key={scope} href={pageHref({ clubSlug, bucket, category: selectedCategory, scope, badgeLimit })} style={filterLinkStyle(selectedScope === scope)}>{scope}</Link>
+                <Link key={scope} href={pageHref({ clubSlug, bucket, category: selectedCategory, scope, badgeLimit })} style={filterLinkStyle(selectedScope === scope)}>{badgeScopeLabel(scope)}</Link>
               ))}
             </div>
           </nav>
@@ -415,7 +484,7 @@ export default async function BadgeCodexPage({ params, searchParams }: BadgeCode
       ) : null}
 
       {data && !filteredBadges.length ? (
-        <p style={{ ...cardStyle, color: "#64748b" }} data-badge-empty-state>No badges match the selected availability, category, and scope filters.</p>
+        <p style={{ ...cardStyle, color: "#64748b" }} data-badge-empty-state>No badges match these filters.</p>
       ) : null}
 
       {visibleSections.map((section) => {
@@ -425,7 +494,7 @@ export default async function BadgeCodexPage({ params, searchParams }: BadgeCode
         return (
           <section key={section.name} style={{ marginTop: "1.5rem" }} data-badge-category={section.name}>
             <h2>{section.name}</h2>
-            <p style={{ color: "#64748b" }}>{section.badges.length} badge type{section.badges.length === 1 ? "" : "s"} in this filtered section.</p>
+            <p style={{ color: "#64748b" }}>{section.badges.length} badge{section.badges.length === 1 ? "" : "s"} in this category.</p>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "1rem" }}>
               {shownBadges.map((badge) => (
                 <BadgeCard

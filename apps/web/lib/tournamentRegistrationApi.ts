@@ -368,7 +368,7 @@ function baseUrl(): string | null {
 async function apiErrorDetails(
   response: Response
 ): Promise<{ message: string; currentQuote: TournamentCommerceQuote | null }> {
-  const fallback = `API error (${response.status}).`;
+  const fallback = publicRegistrationErrorMessage(response.status);
   let bodyText = "";
   try {
     bodyText = await response.text();
@@ -383,18 +383,22 @@ async function apiErrorDetails(
       error?: unknown;
     };
     const detail = payload.detail ?? payload.message ?? payload.error;
-    if (Array.isArray(detail)) {
-      return {
-        message: `${fallback} ${detail
-          .map((item) => JSON.stringify(item))
-          .join("; ")}`,
-        currentQuote: null
-      };
-    }
+    const detailMessage =
+      typeof detail === "string"
+        ? detail
+        : detail &&
+            typeof detail === "object" &&
+            !Array.isArray(detail) &&
+            typeof (detail as Record<string, unknown>).message === "string"
+          ? String((detail as Record<string, unknown>).message)
+          : "";
     if (detail && typeof detail === "object") {
       const record = detail as Record<string, unknown>;
       return {
-        message: String(record.message || fallback),
+        message: publicRegistrationErrorMessage(
+          response.status,
+          detailMessage
+        ),
         currentQuote:
           record.current_quote &&
           typeof record.current_quote === "object"
@@ -402,24 +406,124 @@ async function apiErrorDetails(
             : null
       };
     }
-    if (detail) {
-      return {
-        message: `${fallback} ${String(detail)}`,
-        currentQuote: null
-      };
-    }
+    return {
+      message: publicRegistrationErrorMessage(response.status, detailMessage),
+      currentQuote: null
+    };
   } catch {
-    // Fall through to short text excerpt below.
+    // The response body is intentionally not exposed to the public page.
   }
-  return {
-    message: `${fallback} ${bodyText.slice(0, 240)}`,
-    currentQuote: null
-  };
+  return { message: fallback, currentQuote: null };
+}
+
+function safeRegistrationValidation(detail: string): string | null {
+  const message = detail.trim();
+  if (!message || message.length > 400 || /[<>\u0000-\u001f]/.test(message)) return null;
+  if (/\b(?:database|supabase|credential|runtime|stack|traceback|exception|rpc|sql|uuid|fingerprint|idempotency|atomic)\b|JUPR_|status=|enabled=|\bexpected_\w+\b|\b[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}\b/i.test(message)) {
+    return null;
+  }
+  if (!/\b(?:registration|division|event|partner|email|name|age|gender|rating|skill|profile|policy|policies|select|choose|required|open|closed|available|limit|number)\b/i.test(message)) {
+    return null;
+  }
+  return message;
+}
+
+function publicRegistrationErrorMessage(
+  status?: number | null,
+  detail = ""
+): string {
+  const normalized = detail.trim().toLowerCase();
+  if (/already registered|registration already exists|duplicate registration/.test(normalized)) {
+    return "You’re already registered with this email. Request an edit link to make changes.";
+  }
+  if (normalized.includes("edit link")) {
+    if (normalized.includes("expired")) {
+      return "This edit link has expired. Request a new one to continue.";
+    }
+    if (/invalid|different (?:club|tournament|registration|email)/.test(normalized)) {
+      return "This edit link isn’t valid for this registration. Request a new one to continue.";
+    }
+  }
+  if (/imported into a draw|already (?:part of|in) (?:a |the )?draw/.test(normalized)) {
+    return "This registration is already in the tournament draw. Contact the organizer to make changes.";
+  }
+  if (/active partner relationship|relationship.*locked/.test(normalized)) {
+    return "This event has an active partner connection. Contact the organizer before changing it.";
+  }
+  if (/changed after it was loaded|changed since|stale|event entry changed/.test(normalized)) {
+    return "This registration changed since you opened it. Refresh the page and try again.";
+  }
+  if (/pricing changed|quote changed|total changed|extras.*changed/.test(normalized)) {
+    return "The total changed. Review the updated price and try again.";
+  }
+  if (/selected division.*no longer available|division.*not open for public registration|selected event.*no longer open|division.*enabled registration day/.test(normalized)) {
+    return "A division you selected is no longer open. Review your events and try again.";
+  }
+  if (/registration (?:is )?not configured/.test(normalized)) {
+    return "Registration isn’t available for this tournament yet.";
+  }
+  if (/each event selection must be an object|registration selection.*invalid|selected event.*doesn’t match/.test(normalized)) {
+    return "Review the events you selected and try again.";
+  }
+  if (/same (?:registration )?selection.*more than once|same division.*more than once/.test(normalized)) {
+    return "Choose each division only once.";
+  }
+  if (normalized.includes("invalid partner status")) {
+    return "Choose whether you already have a partner or need one.";
+  }
+  if (/linked jupr player profile.*cannot be changed/.test(normalized)) {
+    return "The player profile linked to this registration can’t be changed from an edit link. Contact the organizer.";
+  }
+  if (normalized.includes("contact consent is required")) {
+    return "Please agree to share your contact information before joining Players Needing Partners.";
+  }
+  if (/finite whole number.*between 1 and 120/.test(normalized)) {
+    return "Enter an age from 1 to 120.";
+  }
+  if (/finite number.*between 1 and 7/.test(normalized)) {
+    return "Enter a rating from 1 to 7.";
+  }
+  if (normalized.includes("selected jupr player profile")) {
+    return normalized.includes("not active")
+      ? "The player profile you selected isn’t active in this club."
+      : "The player profile you selected wasn’t found in this club.";
+  }
+  if (/not open|registration (?:is )?closed/.test(normalized)) {
+    return safeRegistrationValidation(detail) || "Registration is closed for this tournament.";
+  }
+  if (status === 401) {
+    return "This registration link is no longer valid. Request a new link and try again.";
+  }
+  if (status === 403) {
+    return "This change isn’t available from this link. Contact the tournament organizer.";
+  }
+  if (status === 404) {
+    return "We couldn’t find that tournament registration.";
+  }
+  if (status === 429) {
+    return "Too many attempts were made. Wait a moment and try again.";
+  }
+  if (status === 400 || status === 422) {
+    return (
+      safeRegistrationValidation(detail) ||
+      "Check your registration information and try again."
+    );
+  }
+  if (status === 409) {
+    return "This registration changed since you opened it. Refresh the page and try again.";
+  }
+  return "Tournament registration is temporarily unavailable. Please try again.";
 }
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<ApiResult<T>> {
   const apiBase = baseUrl();
-  if (!apiBase) return { data: null, error: "Missing JUPR API base URL environment variable.", status: null };
+  if (!apiBase) {
+    return {
+      data: null,
+      error: publicRegistrationErrorMessage(null),
+      status: null
+    };
+  }
   const url = `${apiBase.replace(/\/$/, "")}${path}`;
   try {
     const response = await fetch(url, init ?? { next: { revalidate: 60 } });
@@ -433,8 +537,12 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<ApiResult
       };
     }
     return { data: (await response.json()) as T, error: null, status: response.status };
-  } catch (error) {
-    return { data: null, error: `Unable to reach API: ${error instanceof Error ? error.message : "Unknown error"}`, status: null };
+  } catch {
+    return {
+      data: null,
+      error: publicRegistrationErrorMessage(null),
+      status: null
+    };
   }
 }
 

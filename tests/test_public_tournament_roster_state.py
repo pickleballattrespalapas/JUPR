@@ -616,3 +616,16 @@ def test_registration_feature_unavailable_when_core_table_missing():
 
     assert available is False
     assert "tournament_registration_selections" in detail
+
+
+def test_public_registration_error_scope_sanitizes_schema_cause_and_resets():
+    supabase = _SchemaSupabase(_core_storage(include_core_selection_table=False))
+
+    with repo.public_registration_error_scope():
+        available, public_detail = repo.registration_feature_available(supabase)
+
+    _, admin_detail = repo.registration_feature_available(supabase)
+    assert available is False
+    assert public_detail == "Tournament registration is temporarily unavailable."
+    assert "tournament_registration_selections" not in public_detail
+    assert "tournament_registration_selections" in admin_detail

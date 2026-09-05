@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import { actionSuccess, actionUncertain, type ActionCompletion } from "@/components/interaction";
+import { publicLiveErrorText } from "@/lib/publicLiveErrorText";
 import { swapRosterPositions } from "@/lib/playGeneratorRoster.mjs";
 
 type GeneratorKind = "round_robin" | "ladder";
@@ -109,6 +110,19 @@ class ApiRequestError extends Error {
   }
 }
 
+class UserFacingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UserFacingError";
+  }
+}
+
+function requestFailureMessage(error: unknown, fallback: string): string {
+  return error instanceof ApiRequestError || error instanceof UserFacingError
+    ? error.message
+    : fallback;
+}
+
 type Props = {
   apiBase: string | null;
   clubId: string;
@@ -187,13 +201,16 @@ function operationKey(action: string): string {
   return `${action}-${suffix}`;
 }
 
-function apiErrorMessage(detail: unknown, status: number): string {
-  if (typeof detail === "string" && detail.trim()) return detail;
-  if (detail && typeof detail === "object" && "message" in detail) {
-    const message = String((detail as { message?: unknown }).message || "").trim();
-    if (message) return message;
-  }
-  return `API error (${status})`;
+function apiErrorMessage(status: number, detail?: unknown): string {
+  return publicLiveErrorText(status, detail);
+}
+
+function roundStatusLabel(status: string): string {
+  if (status === "saved") return "Scores saved";
+  if (status === "played") return "Played";
+  if (status === "skipped") return "Skipped";
+  if (status === "preview") return "Preview";
+  return "In progress";
 }
 
 function isUncertainRequestError(error: unknown): boolean {
@@ -343,7 +360,13 @@ export default function GeneratorRoundRunner({
   const skipDestinationRef = useRef<number | "completed" | null>(null);
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
-    if (!apiBase) throw new ApiRequestError("Missing API base URL.", 400, "local_configuration");
+    if (!apiBase) {
+      throw new ApiRequestError(
+        "This play tool is temporarily unavailable. Please try again.",
+        503,
+        "local_configuration"
+      );
+    }
     const headers = new Headers(options?.headers);
     if (options?.body) headers.set("Content-Type", "application/json");
     const response = await fetch(apiUrl(apiBase, path), {
@@ -354,7 +377,7 @@ export default function GeneratorRoundRunner({
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
       const detail = payload?.detail;
-      throw new ApiRequestError(apiErrorMessage(detail, response.status), response.status, detail);
+      throw new ApiRequestError(apiErrorMessage(response.status, detail), response.status, detail);
     }
     return payload as T;
   }
@@ -387,7 +410,7 @@ export default function GeneratorRoundRunner({
         )}`
       );
       if (payload.session.generator_kind !== generatorKind) {
-        throw new Error("This session belongs to the other generator module.");
+        throw new UserFacingError("This link opens in the other play generator.");
       }
       applySession(payload.session);
       const hasRequested = payload.session.event.rounds.some((row) => row.number === roundNumber);
@@ -402,7 +425,7 @@ export default function GeneratorRoundRunner({
         );
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load the session.");
+      setMessage(requestFailureMessage(error, "We couldn’t load this session. Please try again."));
     } finally {
       setBusy(false);
     }
@@ -460,7 +483,7 @@ export default function GeneratorRoundRunner({
         idempotency_key: operationKey(String(body.action || path.split("/").pop() || "mutation"))
       })
     });
-    if (!payload.session) throw new Error("The operation completed without a refreshed session.");
+    if (!payload.session) throw new UserFacingError("We couldn’t load the latest session. Refresh the page and check whether your change was saved.");
     applySession(payload.session);
     return payload.session;
   }
@@ -493,11 +516,11 @@ export default function GeneratorRoundRunner({
           })
         }
       );
-      if (!payload.session) throw new Error("Scores saved without a refreshed session.");
+      if (!payload.session) throw new UserFacingError("We couldn’t load the latest session. Refresh the page and check whether your change was saved.");
       applySession(payload.session);
       setMessage(`Round ${roundNumber} scores saved.`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to save the round.");
+      setMessage(requestFailureMessage(error, "We couldn’t save the scores. Please try again."));
     } finally {
       setBusy(false);
     }
@@ -522,7 +545,7 @@ export default function GeneratorRoundRunner({
         }
       );
       if (!playedPayload.session) {
-        throw new Error("Round marked played without a refreshed session.");
+        throw new UserFacingError("We couldn’t load the latest session. Refresh the page and check whether your change was saved.");
       }
       applySession(playedPayload.session);
       if (playedPayload.session.status === "completed") {
@@ -534,7 +557,7 @@ export default function GeneratorRoundRunner({
       router.push(roundPath(generatorKind, clubId, sessionKey, nextRound));
       router.refresh();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to mark the round played.");
+      setMessage(requestFailureMessage(error, "We couldn’t update the round. Please try again."));
     } finally {
       setBusy(false);
     }
@@ -555,7 +578,7 @@ export default function GeneratorRoundRunner({
           body: JSON.stringify(request.skipBody)
         }
       );
-      if (!payload.session) throw new Error("Round skipped without a refreshed session.");
+      if (!payload.session) throw new UserFacingError("We couldn’t load the latest session. Refresh the page and check whether your change was saved.");
       skipCommitted = true;
       applySession(payload.session);
       if (generatorKind === "round_robin" && !scoredSession) {
@@ -572,7 +595,7 @@ export default function GeneratorRoundRunner({
             })
           }
         );
-        if (!advancedPayload.session) throw new Error("Skipped round advanced without a refreshed session.");
+        if (!advancedPayload.session) throw new UserFacingError("We couldn’t load the latest session. Refresh the page and check whether your change was saved.");
         applySession(advancedPayload.session);
         if (advancedPayload.session.status === "completed") {
           setMessage("Session completed.");
@@ -594,18 +617,19 @@ export default function GeneratorRoundRunner({
       setMessage(successMessage);
       return actionSuccess("Round skipped", successMessage);
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Unable to skip the round.";
+      const errorMessage = requestFailureMessage(error, "We couldn’t skip the round. Please try again.");
       if (skipCommitted || isUncertainRequestError(error)) {
         const recoveryMessage = skipCommitted
-          ? `${errorMessage} The round skip completed as ${request.skipBody.idempotency_key}, but automatic advance ${request.advanceIdempotencyKey} was not confirmed. Both exact operation keys are retained; resume this exact skip-and-advance flow before starting another action.`
-          : `${errorMessage} The exact skip request is retained as ${request.skipBody.idempotency_key}; retry it here before starting another action.`;
+          ? "The round was skipped, but we couldn’t load the next one. Try again before making another change."
+          : "We couldn’t confirm the update. Try again before making another change.";
         setMessage(recoveryMessage);
         return actionUncertain(
-          skipCommitted ? "Round advance needs verification" : "Round skip needs verification",
+          "Update not confirmed",
           recoveryMessage,
           request.skipBody.idempotency_key,
-          skipCommitted ? "Resume exact skip and advance" : "Retry exact skip request",
-          () => executeSkipRound(request)
+          "Try again",
+          () => executeSkipRound(request),
+          false
         );
       }
       setMessage(errorMessage);
@@ -616,7 +640,7 @@ export default function GeneratorRoundRunner({
   }
 
   function skipRound(): Promise<ActionCompletion> {
-    if (!session || !round) throw new Error("Reload the session before skipping this round.");
+    if (!session || !round) throw new UserFacingError("Reload the session before skipping this round.");
     skipDestinationRef.current = null;
     return executeSkipRound({
       skipBody: {
@@ -650,7 +674,7 @@ export default function GeneratorRoundRunner({
         {}
       );
       if (next.status === "completed") {
-        setMessage("Session completed. You can review or publish the saved matches.");
+        setMessage("Session complete. You can review the saved matches.");
         router.refresh();
         return;
       }
@@ -658,7 +682,7 @@ export default function GeneratorRoundRunner({
       router.push(roundPath(generatorKind, clubId, sessionKey, nextRound));
       router.refresh();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to advance the round.");
+      setMessage(requestFailureMessage(error, "We couldn’t continue to the next round. Please try again."));
     } finally {
       setBusy(false);
     }
@@ -718,10 +742,10 @@ export default function GeneratorRoundRunner({
       setNewPlayerId("");
       setMessage(
         rosterAction === "substitute"
-          ? "Substitution saved. Completed rounds remain unchanged."
+          ? "Player changed. Completed rounds stay the same."
           : rosterAction === "swap"
-            ? "Player positions swapped. Completed rounds remain unchanged; future matchups were regenerated when applicable."
-          : "Roster updated. Future matchups were regenerated when applicable."
+            ? "Players swapped. Completed rounds are unchanged, and upcoming matchups have been updated."
+          : "Roster updated. Upcoming matchups have been adjusted."
       );
       const current = next.current_round_number || roundNumber;
       if (current !== roundNumber) {
@@ -730,7 +754,7 @@ export default function GeneratorRoundRunner({
         router.refresh();
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to update the roster.");
+      setMessage(requestFailureMessage(error, "We couldn’t update the players. Please try again."));
     } finally {
       setBusy(false);
     }
@@ -768,15 +792,15 @@ export default function GeneratorRoundRunner({
         <h1 style={{ margin: "0 0 0.4rem" }}>{session.title}</h1>
         <p style={{ margin: 0, color: "#475569" }}>
           {playFormatLabel(session.play_format)} · Round {roundNumber} of{" "}
-          {event.totalRounds} · {scoredSession ? "Scored" : "Unscored"} · {round.status} · Unrated public session
+          {event.totalRounds} · {scoredSession ? "Scores on" : "Scores off"} · {roundStatusLabel(round.status)} · Won’t affect ratings
         </p>
-        {!editToken ? <p style={{ color: "#64748b" }}>View-only link. The private organizer link enables scores and roster changes.</p> : null}
+        {!editToken ? <p style={{ color: "#64748b" }}>Only the organizer can enter scores or change players.</p> : null}
       </article>
 
       {session.status === "completed" ? (
         <article style={{ ...cardStyle, background: "#ecfdf5", borderColor: "#86efac" }}>
           <h2 style={{ marginTop: 0 }}>Session complete</h2>
-          <p style={{ marginBottom: 0, color: "#166534" }}>All scheduled rounds are complete. This public session remains unrated.</p>
+          <p style={{ marginBottom: 0, color: "#166534" }}>All scheduled rounds are complete. These games won’t affect ratings.</p>
         </article>
       ) : null}
 
@@ -906,7 +930,7 @@ export default function GeneratorRoundRunner({
                 </button>
               ) : (
                 <button type="button" onClick={() => void markRoundPlayed()} disabled={busy} style={primaryButton}>
-                  {busy ? "Saving…" : "Round Played"}
+                  {busy ? "Saving…" : "Mark round played"}
                 </button>
               )}
               <input
@@ -1015,7 +1039,7 @@ export default function GeneratorRoundRunner({
 
       {isCurrent && session.status === "active" && Boolean(editToken) ? (
         <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>Adaptive roster</h2>
+          <h2 style={{ marginTop: 0 }}>Change players</h2>
           <p style={{ color: "#475569" }}>
             Completed rounds never change. If this round has no saved scores, roster changes can regenerate it.
             Otherwise, changes take effect in the next round.
@@ -1126,7 +1150,7 @@ export default function GeneratorRoundRunner({
                   />
                 </label>
                 <label>
-                  Official player ID optional
+                  Club player ID (optional)
                   <br />
                   <input
                     value={newPlayerId}
@@ -1140,7 +1164,7 @@ export default function GeneratorRoundRunner({
 
             {rosterAction === "substitute" ? (
               <label>
-                Substitute scope
+                Apply substitution to
                 <br />
                 <select
                   value={substituteScope}
@@ -1215,9 +1239,9 @@ export default function GeneratorRoundRunner({
       ) : null}
 
       <article style={cardStyle}>
-        <h2 style={{ marginTop: 0 }}>Ratings and official results</h2>
+        <h2 style={{ marginTop: 0 }}>Ratings</h2>
         <p style={{ color: "#475569" }}>
-          Public generator sessions are unrated. Share this page for viewing and score entry; staff can publish controlled official matches from the administrative generators.
+          These games won’t affect ratings. Share this page with players or download the results below.
         </p>
         <a href={`/api/clubs/${clubId}/play-generators/sessions/${sessionKey}/export?format=csv`}>
           Download session CSV
@@ -1228,7 +1252,7 @@ export default function GeneratorRoundRunner({
         <p
           role="status"
           aria-live="polite"
-          style={{ color: /unable|error|must|requires|changed|not found/i.test(message) ? "#b91c1c" : "#166534" }}
+          style={{ color: /couldn|unable|error|must|requires|changed|not found/i.test(message) ? "#b91c1c" : "#166534" }}
         >
           {message}
         </p>

@@ -204,7 +204,7 @@ function baseUrl(): string | null {
   );
 }
 
-async function errorMessage(response: Response): Promise<string> {
+async function adminErrorMessage(response: Response): Promise<string> {
   const fallback = `API error (${response.status}).`;
   try {
     const payload = (await response.json()) as { detail?: unknown };
@@ -214,20 +214,24 @@ async function errorMessage(response: Response): Promise<string> {
   }
 }
 
-async function fetchJson<T>(
+async function fetchAdminJson<T>(
   path: string,
   init?: RequestInit
 ): Promise<ApiResult<T>> {
   const apiBase = baseUrl();
   if (!apiBase) {
-    return { data: null, error: "Tournament team features are unavailable." };
+    return {
+      data: null,
+      error: "Tournament team features are unavailable.",
+      status: null
+    };
   }
   try {
     const response = await fetch(`${apiBase.replace(/\/$/, "")}${path}`, init);
     if (!response.ok) {
       return {
         data: null,
-        error: await errorMessage(response),
+        error: await adminErrorMessage(response),
         status: response.status
       };
     }
@@ -246,6 +250,148 @@ async function fetchJson<T>(
   }
 }
 
+type PublicTeamRequest =
+  | "results-index"
+  | "results-detail"
+  | "create-team"
+  | "recover-team"
+  | "resolve-invitation"
+  | "respond-invitation";
+
+function safeTeamValidation(detail: string): string | null {
+  const message = detail.trim();
+  if (!message || message.length > 350 || /[<>\u0000-\u001f]/.test(message)) return null;
+  if (/\b(?:database|supabase|credential|runtime|stack|traceback|exception|rpc|sql|fingerprint|idempotency|operation bound)\b|JUPR_|\b\w+_id\b/i.test(message)) {
+    return null;
+  }
+  if (!/\b(?:team|captain|invitation|player|registration|roster|slot|email|accept|decline|event)\b/i.test(message)) {
+    return null;
+  }
+  return message;
+}
+
+function publicTeamError(
+  status: number | null | undefined,
+  detail: string,
+  request: PublicTeamRequest
+): string {
+  const normalized = detail.trim().toLowerCase();
+  const invitationRequest =
+    request === "resolve-invitation" || request === "respond-invitation";
+
+  if (invitationRequest) {
+    if (normalized.includes("feature not found")) {
+      return "Team invitations aren’t available for this tournament.";
+    }
+    if (normalized.includes("expired")) return "This invitation has expired.";
+    if (/already (?:been )?(?:resolved|answered)/.test(normalized)) {
+      return "This invitation has already been answered.";
+    }
+    if (/no longer current|replaced by a newer invitation/.test(normalized)) {
+      return "This invitation has been replaced. Open the newest invitation email.";
+    }
+    if (/different email|identity does not match|single confirmed registration/.test(normalized)) {
+      return "This invitation doesn’t match the registered player. Contact the organizer.";
+    }
+    if (/different (?:club|tournament|team)|does not match this team/.test(normalized)) {
+      return "This invitation doesn’t match this tournament. Open the original invitation link.";
+    }
+    if (normalized.includes("invalid team invitation")) {
+      return "This invitation link isn’t valid.";
+    }
+    if (normalized.includes("no longer available") || normalized.includes("not found")) {
+      return "This invitation is no longer available.";
+    }
+    if (normalized.includes("must be accept or decline")) {
+      return "Choose Accept or Decline.";
+    }
+    if (status === 401) return "This invitation link isn’t valid.";
+    if (status === 403) {
+      if (/disabled|staging|write|wave|acceptance/.test(normalized)) {
+        return "Team invitations can’t be changed right now.";
+      }
+      return "You don’t have permission to use this invitation.";
+    }
+    if (status === 409) {
+      return "This invitation is no longer current. Open the newest invitation email.";
+    }
+    if (status === 429) return "Too many attempts were made. Wait a moment and try again.";
+    if (status != null && status < 500) {
+      return safeTeamValidation(detail) || "This invitation can’t be used.";
+    }
+    return "Team invitations are temporarily unavailable. Please try again.";
+  }
+
+  if (request === "results-index") {
+    if (normalized.includes("feature not found")) {
+      return "Team tournament results are unavailable right now.";
+    }
+    return status === 404
+      ? "Team tournament results haven’t been published yet."
+      : "Team tournament results are unavailable right now.";
+  }
+  if (request === "results-detail") {
+    if (normalized.includes("feature not found")) {
+      return "These team results are unavailable right now.";
+    }
+    if (/not published/.test(normalized)) {
+      return "These team results haven’t been published yet.";
+    }
+    return status === 404
+      ? "We couldn’t find those team results."
+      : "These team results are unavailable right now.";
+  }
+
+  if (/confirmation (?:link|token).*expired|confirmation link has expired/.test(normalized)) {
+    return "Your registration confirmation link has expired.";
+  }
+  if (/invalid registration confirmation|valid captain confirmation token/.test(normalized)) {
+    return "Your registration confirmation link isn’t valid.";
+  }
+  if (normalized.includes("registration confirmation is no longer available")) {
+    return "This registration confirmation is no longer available.";
+  }
+  if (normalized.includes("registration confirmation is for a different club")) {
+    return "This registration confirmation belongs to a different club.";
+  }
+  if (status === 401) return "Your registration confirmation link isn’t valid.";
+  if (status === 403) {
+    if (/disabled|staging|write|wave|acceptance/.test(normalized)) {
+      return "Four-player team registration isn’t available right now.";
+    }
+    return "You don’t have permission to change this team.";
+  }
+  if (status === 409) {
+    return "This team changed since you opened it. Refresh the page and try again.";
+  }
+  if (status === 429) return "Too many attempts were made. Wait a moment and try again.";
+  if (status != null && status < 500) {
+    return (
+      safeTeamValidation(detail) ||
+      (request === "recover-team"
+        ? "We couldn’t open this team setup. Check the confirmation link and try again."
+        : "Check the team information and try again.")
+    );
+  }
+  return request === "recover-team"
+    ? "We couldn’t open this team setup. Please try again or contact the organizer."
+    : "We couldn’t save this team. Please try again or contact the organizer.";
+}
+
+async function fetchPublicJson<T>(
+  path: string,
+  init: RequestInit | undefined,
+  request: PublicTeamRequest
+): Promise<ApiResult<T>> {
+  const result = await fetchAdminJson<T>(path, init);
+  return result.error
+    ? {
+        ...result,
+        error: publicTeamError(result.status, result.error, request)
+      }
+    : result;
+}
+
 function adminHeaders(accessToken: string): HeadersInit {
   return {
     "Content-Type": "application/json",
@@ -261,7 +407,7 @@ export async function listAdminTeamTournaments(
     tournaments: Array<{ id: string; name: string; status?: string }>;
   }>
 > {
-  return fetchJson(
+  return fetchAdminJson(
     `/admin/clubs/${encodeURIComponent(
       clubId
     )}/tournaments/admin/tournaments`,
@@ -274,7 +420,7 @@ export async function getAdminTeamCompetitionSnapshot(
   tournamentId: string,
   accessToken: string
 ): Promise<ApiResult<TeamCompetitionSnapshot>> {
-  return fetchJson(
+  return fetchAdminJson(
     `/admin/clubs/${encodeURIComponent(
       clubId
     )}/tournaments/admin/tournaments/${encodeURIComponent(
@@ -289,7 +435,7 @@ export async function mutateAdminTeamCompetition<T>(
   payload: Record<string, unknown>,
   accessToken: string
 ): Promise<ApiResult<T>> {
-  return fetchJson(path, {
+  return fetchAdminJson(path, {
     method: "POST",
     headers: adminHeaders(accessToken),
     body: JSON.stringify(payload)
@@ -299,9 +445,10 @@ export async function mutateAdminTeamCompetition<T>(
 export async function getPublicTeamTournamentIndex(
   clubSlug: string
 ): Promise<ApiResult<PublicTeamTournamentIndex>> {
-  return fetchJson(
+  return fetchPublicJson(
     `/clubs/${encodeURIComponent(clubSlug)}/tournament-team-results`,
-    { next: { revalidate: 30 } }
+    { next: { revalidate: 30 } },
+    "results-index"
   );
 }
 
@@ -310,13 +457,14 @@ export async function getPublicTeamTournamentResults(
   tournamentId: string,
   drawId: string
 ): Promise<ApiResult<PublicTeamTournamentResults>> {
-  return fetchJson(
+  return fetchPublicJson(
     `/clubs/${encodeURIComponent(
       clubSlug
     )}/tournament-team-results/${encodeURIComponent(
       tournamentId
     )}/${encodeURIComponent(drawId)}`,
-    { next: { revalidate: 15 } }
+    { next: { revalidate: 15 } },
+    "results-detail"
   );
 }
 
@@ -324,7 +472,7 @@ export async function createPublicFourPlayerTeam(
   clubSlug: string,
   payload: Record<string, unknown>
 ): Promise<ApiResult<Record<string, unknown>>> {
-  return fetchJson(
+  return fetchPublicJson(
     `/clubs/${encodeURIComponent(
       clubSlug
     )}/tournament-registration/four-player-team`,
@@ -332,7 +480,8 @@ export async function createPublicFourPlayerTeam(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
-    }
+    },
+    "create-team"
   );
 }
 
@@ -340,7 +489,7 @@ export async function recoverPublicFourPlayerTeamSetup(
   clubSlug: string,
   confirmationToken: string
 ): Promise<ApiResult<PublicFourPlayerTeamSetupRecovery>> {
-  return fetchJson(
+  return fetchPublicJson(
     `/clubs/${encodeURIComponent(
       clubSlug
     )}/tournament-registration/four-player-team/recover`,
@@ -352,7 +501,8 @@ export async function recoverPublicFourPlayerTeamSetup(
         website: ""
       }),
       cache: "no-store"
-    }
+    },
+    "recover-team"
   );
 }
 
@@ -360,13 +510,14 @@ export async function resolvePublicTeamInvitation(
   clubSlug: string,
   token: string
 ): Promise<ApiResult<Record<string, unknown>>> {
-  return fetchJson(
+  return fetchPublicJson(
     `/clubs/${encodeURIComponent(clubSlug)}/tournament-team-invitation/resolve`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token })
-    }
+    },
+    "resolve-invitation"
   );
 }
 
@@ -374,12 +525,13 @@ export async function respondPublicTeamInvitation(
   clubSlug: string,
   payload: Record<string, unknown>
 ): Promise<ApiResult<Record<string, unknown>>> {
-  return fetchJson(
+  return fetchPublicJson(
     `/clubs/${encodeURIComponent(clubSlug)}/tournament-team-invitation/respond`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
-    }
+    },
+    "respond-invitation"
   );
 }

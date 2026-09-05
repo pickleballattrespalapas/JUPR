@@ -94,6 +94,10 @@ function nextIncompleteMatchup(session: TeamMatchSession, afterId: string): Team
   return ordered.find((matchup) => !matchupResult(matchup).complete) || null;
 }
 
+function rotationPosition(index: number): string {
+  return ["First", "Second", "Third", "Fourth"][index] || `Position ${index + 1}`;
+}
+
 function TeamScoreEntry({
   game,
   teamA,
@@ -255,7 +259,7 @@ export default function TeamMatchSessionRunner({ clubId, sessionKey }: { clubId:
   useEffect(() => {
     const stored = readSession(clubId, sessionKey);
     if (!stored) {
-      setError("This Team Match session was not found in this browser. Return to setup and generate it again.");
+      setError("We couldn’t find this session on this device. Return to setup to create it again.");
     } else {
       const firstOpen = stored.matchups.find((matchup) => !matchupResult(matchup).complete);
       if (!stored.activeMatchupId && firstOpen) stored.activeMatchupId = firstOpen.id;
@@ -347,11 +351,11 @@ export default function TeamMatchSessionRunner({ clubId, sessionKey }: { clubId:
   function saveMixedLineups(): void {
     if (!activeMatchup || !teamA || !teamB || !lineupA || !lineupB) return;
     if (!teamA.women.includes(lineupA.woman) || !teamA.men.includes(lineupA.man)) {
-      setError(`Choose ${teamA.name} players from its roster.`);
+      setError(`Choose both players from ${teamA.name}’s roster.`);
       return;
     }
     if (!teamB.women.includes(lineupB.woman) || !teamB.men.includes(lineupB.man)) {
-      setError(`Choose ${teamB.name} players from its roster.`);
+      setError(`Choose both players from ${teamB.name}’s roster.`);
       return;
     }
     const nextMatchup = applyMixedLineups(activeMatchup, teamA, teamB, lineupA, lineupB);
@@ -361,7 +365,7 @@ export default function TeamMatchSessionRunner({ clubId, sessionKey }: { clubId:
   function saveDreamBreakerOrders(): void {
     if (!activeMatchup || !teamA || !teamB) return;
     if (!validDreamBreakerOrder(orderA, teamA) || !validDreamBreakerOrder(orderB, teamB)) {
-      setError("Each DreamBreaker order must contain all four team players exactly once.");
+      setError("Choose each player once for the DreamBreaker order.");
       return;
     }
     replaceMatchup(
@@ -513,7 +517,7 @@ export default function TeamMatchSessionRunner({ clubId, sessionKey }: { clubId:
 
           {!editingGameKey && step?.kind === "mixed_lineups" && lineupA && lineupB ? (
             <div style={{ ...card, borderColor: "#bfdbfe" }}>
-              <p style={{ margin: "0 0 0.35rem", color: "#2563eb", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em", fontSize: "0.78rem" }}>After gender doubles</p>
+              <p style={{ margin: "0 0 0.35rem", color: "#2563eb", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em", fontSize: "0.78rem" }}>Next: Mixed Doubles</p>
               <h2 style={{ marginTop: 0 }}>Choose Mixed Doubles lineups</h2>
               <p style={{ color: "#475569" }}>Each team chooses the woman and man for Mixed Doubles 1. The remaining woman and man automatically play Mixed Doubles 2.</p>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "1rem" }}>
@@ -572,7 +576,7 @@ export default function TeamMatchSessionRunner({ clubId, sessionKey }: { clubId:
                     <h3 style={{ marginTop: 0 }}>{team.name}</h3>
                     {order.map((value, index) => (
                       <label key={`${side}-${index}`} style={{ display: "grid", gridTemplateColumns: "70px 1fr", gap: "0.5rem", alignItems: "center", marginTop: index ? "0.55rem" : 0, fontWeight: 700 }}>
-                        Slot {index + 1}
+                        {rotationPosition(index)}
                         <select
                           value={value}
                           onChange={(event) => {

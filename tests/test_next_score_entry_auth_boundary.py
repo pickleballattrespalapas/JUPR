@@ -79,7 +79,8 @@ def test_score_entry_ui_is_hidden_unless_browser_flag_is_enabled() -> None:
     for page in (LEGACY_PAGE, CANONICAL_PAGE):
         source = page.read_text(encoding="utf-8")
         assert "isNextAdminScoreEntryEnabled" in source
-        assert "Score entry is disabled" in source
+    assert "Score entry is disabled" in LEGACY_PAGE.read_text(encoding="utf-8")
+    assert "Score entry isn’t available here" in CANONICAL_PAGE.read_text(encoding="utf-8")
 
 
 def test_score_entry_requires_backend_readiness_and_keeps_recovery_paths_visible() -> None:
@@ -88,13 +89,47 @@ def test_score_entry_requires_backend_readiness_and_keeps_recovery_paths_visible
 
     assert "getAdminScoreEntryStatus" in page_source
     assert "readiness.data?.ready" in page_source
-    assert "Score entry is in fallback mode" in page_source
+    assert "Score entry isn’t ready here" in page_source
     assert "/admin/match-uploader" in page_source
-    assert "Streamlit fallback" in page_source
+    assert "Open backup score entry" in page_source
     assert "directMatchIdempotencyKey" in form_source
     assert "idempotency_key" in form_source
     assert "duplicate protection is active" in form_source
     assert "match_write_committed" not in form_source  # server decides commit state
+
+
+def test_publicly_addressable_score_entry_hides_internal_readiness_details() -> None:
+    helper_source = SCORE_ENTRY_FLAG.read_text(encoding="utf-8")
+    page_source = CANONICAL_PAGE.read_text(encoding="utf-8")
+
+    assert "SCORE_ENTRY_READINESS_ERROR" in helper_source
+    assert "error.message" not in helper_source
+    assert "Unknown error" not in helper_source
+    assert "API base URL is not configured" not in helper_source
+    assert "Score-entry readiness check failed" not in helper_source
+    assert "warnings" not in helper_source
+    assert "readiness.data?.warnings" not in page_source
+
+    for internal_phrase in (
+        "guarded workflow",
+        "browser flag",
+        "FastAPI",
+        "Supabase service role",
+        "MVP",
+        "core JUPR loop",
+        "operations cockpit",
+        "Streamlit fallback",
+    ):
+        assert internal_phrase not in page_source
+
+    for public_phrase in (
+        "Staff score entry",
+        "Score entry isn’t ready here",
+        "Open Match Uploader",
+        "Open backup score entry",
+        "Return to staff home",
+    ):
+        assert public_phrase in page_source
 
 
 def test_direct_match_retry_key_survives_blocked_browser_storage() -> None:

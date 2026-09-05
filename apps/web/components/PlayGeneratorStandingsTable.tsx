@@ -24,9 +24,9 @@ export function standingsSortLabel(mode: StandingsSort): string {
 }
 
 function tieBreakText(mode: StandingsSort): string {
-  if (mode === "points") return "Ties: wins, point differential, then starting roster order.";
-  if (mode === "differential") return "Ties: wins, total points, then starting roster order.";
-  return "Ties: point differential, total points, then starting roster order.";
+  if (mode === "points") return "Ties are broken by wins, then point difference, then starting order.";
+  if (mode === "differential") return "Ties are broken by wins, then total points, then starting order.";
+  return "Ties are broken by point difference, then total points, then starting order.";
 }
 
 const primaryCell = {
@@ -45,7 +45,7 @@ export default function PlayGeneratorStandingsTable({ rows, sortMode }: Props) {
       }}
     >
       <div style={{ marginBottom: "0.85rem" }}>
-        <h2 style={{ margin: "0 0 0.3rem" }}>Full standings</h2>
+        <h2 style={{ margin: "0 0 0.3rem" }}>Standings</h2>
         <p style={{ margin: 0, color: "#475569" }}>
           Ranked by <strong>{standingsSortLabel(sortMode)}</strong>. {tieBreakText(sortMode)}
           {" "}Skipped and unplayed rounds do not affect the table.
@@ -56,14 +56,14 @@ export default function PlayGeneratorStandingsTable({ rows, sortMode }: Props) {
         <table style={{ width: "100%", minWidth: 680, borderCollapse: "collapse" }}>
           <thead>
             <tr style={{ borderBottom: "2px solid #cbd5e1" }}>
-              <th align="center" style={{ padding: "0.55rem" }}>Rank</th>
+              <th align="center" style={{ padding: "0.55rem" }}>Place</th>
               <th align="left" style={{ padding: "0.55rem" }}>Player</th>
-              <th align="center" style={{ padding: "0.55rem" }}>GP</th>
-              <th align="center" style={{ padding: "0.55rem", ...(sortMode === "wins" ? primaryCell : {}) }}>W</th>
-              <th align="center" style={{ padding: "0.55rem" }}>L</th>
+              <th align="center" style={{ padding: "0.55rem" }}>Games</th>
+              <th align="center" style={{ padding: "0.55rem", ...(sortMode === "wins" ? primaryCell : {}) }}>Wins</th>
+              <th align="center" style={{ padding: "0.55rem" }}>Losses</th>
               <th align="center" style={{ padding: "0.55rem", ...(sortMode === "points" ? primaryCell : {}) }}>Points</th>
-              <th align="center" style={{ padding: "0.55rem" }}>Against</th>
-              <th align="center" style={{ padding: "0.55rem", ...(sortMode === "differential" ? primaryCell : {}) }}>Diff</th>
+              <th align="center" style={{ padding: "0.55rem" }}>Points against</th>
+              <th align="center" style={{ padding: "0.55rem", ...(sortMode === "differential" ? primaryCell : {}) }}>Point difference</th>
             </tr>
           </thead>
           <tbody>

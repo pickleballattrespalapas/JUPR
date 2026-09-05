@@ -54,8 +54,8 @@ export default async function PublicLeaguesPage({ params, searchParams }: Props)
       </h1>
       <p style={{ color: "#334155", maxWidth: "820px" }}>
         {view === "past"
-          ? "Open a finished public league to review its final standings, weekly history, and player summaries."
-          : "Open an active league to enter its League Home, standings, weekly history, and player summaries."}
+          ? "Choose a past league to see its final standings and results."
+          : "Choose a league to see standings, weekly results, and player stats."}
       </p>
 
       <nav
@@ -125,7 +125,7 @@ export default async function PublicLeaguesPage({ params, searchParams }: Props)
               <p style={{ margin: 0, color: "#475569" }}>
                 {league.num_weeks
                   ? `${league.num_weeks} scheduled weeks`
-                  : "Season schedule available inside"}
+                  : "View season schedule"}
               </p>
               <p style={{ margin: "0.35rem 0 0", color: "#64748b" }}>
                 Minimum games: {league.min_games ?? 0}
@@ -143,8 +143,8 @@ export default async function PublicLeaguesPage({ params, searchParams }: Props)
           </h2>
           <p style={{ color: "#475569" }}>
             {view === "past"
-              ? "No finished public leagues have been published yet."
-              : "There are no public active leagues available for this club right now."}
+              ? "No past leagues yet."
+              : "No active leagues right now."}
           </p>
         </article>
       ) : null}

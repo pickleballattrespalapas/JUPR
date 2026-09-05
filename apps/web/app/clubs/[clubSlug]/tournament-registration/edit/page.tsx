@@ -17,13 +17,13 @@ const cardStyle = {
 export default async function EditTournamentRegistrationPage({ params, searchParams }: EditTournamentRegistrationPageProps) {
   const { clubSlug } = params;
   const editToken = searchParams?.edit_token || "";
-  const { data, error } = editToken
+  const { data, error, status } = editToken
     ? await getClubTournamentRegistrationEdit(clubSlug, {
         editToken,
         registrationSlug: searchParams?.tournament ?? null,
         tournamentId: searchParams?.tournament_id ?? null
       })
-    : { data: null, error: "Missing edit token." };
+    : { data: null, error: "missing_edit_link", status: null };
 
   const tournament = data?.tournament;
   const settings = data?.settings;
@@ -35,23 +35,31 @@ export default async function EditTournamentRegistrationPage({ params, searchPar
       </p>
       <h1 style={{ marginTop: 0 }}>{tournament?.name ?? "Edit registration"}</h1>
       <p style={{ color: "#334155", maxWidth: "820px" }}>
-        Securely update an existing tournament registration. The edit link must be valid, unexpired, and tied to the original registration email.
+        Use the link we emailed you to update your registration.
       </p>
 
       {error ? (
         <article style={{ ...cardStyle, background: "#fef2f2", borderColor: "#fecaca" }}>
           <h2 style={{ marginTop: 0 }}>Edit link unavailable</h2>
-          <p style={{ color: "#991b1b" }}>{error}</p>
+          <p style={{ color: "#991b1b" }}>
+            {!editToken
+              ? "This edit link is incomplete or no longer valid. Request a new one."
+              : status === 409
+                ? "This registration can’t be changed here. Contact the organizer for help."
+                : status != null && status >= 500
+                  ? "Registration changes are temporarily unavailable. Please try again later."
+                  : "This edit link is invalid or expired. Request a new one."}
+          </p>
           <Link href={`/clubs/${clubSlug}/tournament-registration`}>Back to tournament registration</Link>
         </article>
       ) : null}
 
-      {data?.setup_error ? <p style={{ color: "#b91c1c" }}>{data.setup_error}</p> : null}
-      {data && !tournament ? <p>No tournament registration is currently published.</p> : null}
+      {data?.setup_error ? <p style={{ color: "#b91c1c" }}>Tournament registration is temporarily unavailable.</p> : null}
+      {data && !tournament ? <p>We couldn’t find that tournament registration.</p> : null}
 
       {data && tournament && !data.registration_open ? (
         <article style={{ ...cardStyle, marginBottom: "1rem" }}>
-          <h2 style={{ marginTop: 0 }}>Registration editing is closed</h2>
+          <h2 style={{ marginTop: 0 }}>Registration changes are closed</h2>
           <p style={{ color: "#475569" }}>{data.registration_closed_reason || "Registration is not currently open."}</p>
           <Link href={`/clubs/${clubSlug}/tournament-registration`}>Back to tournament registration</Link>
         </article>
@@ -63,6 +71,7 @@ export default async function EditTournamentRegistrationPage({ params, searchPar
           clubSlug={clubSlug}
           tournamentId={tournament.id}
           registrationSlug={settings?.registration_slug ?? searchParams?.tournament ?? null}
+          timeZone={settings?.timezone ?? null}
           editToken={editToken}
           registration={data.registration}
           selections={data.selections ?? []}

@@ -17,6 +17,17 @@ function categoryLabel(category: string): string {
   return ({ mens: "Men's", womens: "Women's", mixed: "Mixed", open: "Open" } as Record<string, string>)[category] || "Open";
 }
 
+function leagueStatusLabel(status: string): string {
+  return ({
+    registration_open: "Registration open",
+    registration_closed: "Registration closed",
+    scheduled: "Schedule published",
+    active: "Season in progress",
+    playoffs: "Playoffs",
+    complete: "Complete"
+  } as Record<string, string>)[status] || "League available";
+}
+
 function selectedView(searchParams: Props["searchParams"]): LeagueView {
   const raw = searchParams?.view;
   const value = Array.isArray(raw) ? raw[0] : raw;
@@ -35,8 +46,8 @@ export default async function TeamLeaguesPage({ params, searchParams }: Props) {
       <h1>Team leagues</h1>
       <p style={{ color: "#475569", maxWidth: "760px" }}>
         {view === "past"
-          ? "Review finished public team leagues, final standings, schedules, and results."
-          : "Register a season roster, play scheduled team matches, and face every other team before optional playoffs."}
+          ? "See final standings and results from past team leagues."
+          : "Register a team, view the schedule, and follow the season."}
       </p>
       <nav aria-label="Team league collections" data-testid="public-team-league-view-toggle" style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
         {(["active", "past"] as LeagueView[]).map((option) => {
@@ -59,13 +70,13 @@ export default async function TeamLeaguesPage({ params, searchParams }: Props) {
           <article key={league.league_name} style={card}>
             <h2 style={{ marginTop: 0 }}>{league.league_name}</h2>
             <p>{league.venue || "Venue to be announced"}</p>
-            <p>{categoryLabel(league.team_category)} · {league.team_size}-player primary roster{league.max_alternates ? ` · up to ${league.max_alternates} alternate${league.max_alternates === 1 ? "" : "s"}` : ""}</p>
+            <p>{categoryLabel(league.team_category)} · {league.team_size} players per team{league.max_alternates ? ` · up to ${league.max_alternates} alternate${league.max_alternates === 1 ? "" : "s"}` : ""}</p>
             <p>
               {league.registration_open
                 ? "Registration open"
                 : league.registration_configured_open && !league.online_team_registration_supported
-                  ? "Staff registration"
-                : league.status.replaceAll("_", " ")}
+                  ? "Contact staff to register"
+                : leagueStatusLabel(league.status)}
               {" · "}
               {league.allow_substitutes ? "Substitutes allowed" : "No substitutes"}
             </p>
@@ -76,7 +87,7 @@ export default async function TeamLeaguesPage({ params, searchParams }: Props) {
         ))}
       </div>
       {!error && !data?.leagues?.length ? (
-        <p>{view === "past" ? "No finished public team leagues have been published yet." : "No active team leagues are published right now."}</p>
+        <p>{view === "past" ? "No past team leagues yet." : "No active team leagues right now."}</p>
       ) : null}
       <p style={{ marginTop: "1rem" }}>
         <Link href={`/clubs/${params.clubSlug}`}>Club home</Link>

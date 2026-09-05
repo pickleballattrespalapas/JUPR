@@ -58,8 +58,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             <main style={{ minWidth: 0 }}>{children}</main>
             <footer style={footerStyle}>
               <span style={{ color: "#475569" }}>
-                {productName} is the live ratings and event layer for pickleball
-                clubs.
+                Follow your club’s ratings, matches, leagues, and events.
               </span>
               <nav
                 style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}
@@ -68,7 +67,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                 <Link href="/clubs/tres-palapas/leagues">Leagues</Link>
                 <Link href="/clubs/tres-palapas/tournaments">Tournaments</Link>
                 <Link href="/admin/login">Staff sign in</Link>
-                <Link href="/site-map">Site Map</Link>
+                <Link href="/site-map">Site map</Link>
                 <Link href="/clubs/tres-palapas/badge-codex">Badge Codex</Link>
                 <Link href="/clubs/tres-palapas/matches">Matches</Link>
                 <Link href="/how-ratings-work">How ratings work</Link>

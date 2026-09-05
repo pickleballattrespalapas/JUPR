@@ -8,7 +8,7 @@ export default function LeaderboardsLoading() {
     <section aria-busy="true" aria-live="polite" data-testid="leaderboard-loading-state">
       <p style={{ color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>Leaderboards</p>
       <h1>Loading leaderboards…</h1>
-      <p style={{ color: "#475569" }}>Loading public-safe standings, qualification, and badge context.</p>
+      <p style={{ color: "#475569" }}>Getting the latest standings, qualification progress, and badges.</p>
       <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", margin: "1rem 0" }}>
         {[1, 2, 3, 4].map((item) => <span key={item} style={{ ...skeleton, width: "7rem", height: "2.1rem" }} />)}
       </div>

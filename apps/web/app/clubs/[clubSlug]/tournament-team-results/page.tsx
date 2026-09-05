@@ -12,6 +12,15 @@ const card = {
   background: "white"
 };
 
+function divisionLabel(eventFamily?: string | null, divisionName?: string | null): string {
+  const family = String(eventFamily || "").trim();
+  const division = String(divisionName || "").trim();
+  if (!family) return division;
+  if (!division) return family;
+  if (division.toLocaleLowerCase().startsWith(family.toLocaleLowerCase())) return division;
+  return `${family} · ${division}`;
+}
+
 export default async function TournamentTeamResultsIndex({ params }: Props) {
   const { data, error } = await getPublicTeamTournamentIndex(params.clubSlug);
 
@@ -29,13 +38,13 @@ export default async function TournamentTeamResultsIndex({ params }: Props) {
       >
         Team tournaments
       </p>
-      <h1 style={{ marginTop: 0 }}>Follow four-player team standings</h1>
+      <h1 style={{ marginTop: 0 }}>Four-player team results</h1>
       <p style={{ color: "#475569", maxWidth: "52rem" }}>
-        Published round-robin standings, playoff brackets, rosters, and podiums.
+        Follow standings, brackets, rosters, and medal winners.
       </p>
       {error ? (
         <p role="alert" style={{ color: "#b91c1c" }}>
-          Team tournament results are temporarily unavailable. {error}
+          Team tournament results are unavailable right now. Please try again shortly.
         </p>
       ) : null}
       <div
@@ -52,12 +61,10 @@ export default async function TournamentTeamResultsIndex({ params }: Props) {
             </p>
             <h2>{draw.name}</h2>
             <p style={{ color: "#475569" }}>
-              {[draw.event_family_label, draw.division_name]
-                .filter(Boolean)
-                .join(" · ")}
+              {divisionLabel(draw.event_family_label, draw.division_name)}
             </p>
             <p>
-              <strong>{draw.team_count}</strong> active teams
+              <strong>{draw.team_count}</strong> {draw.team_count === 1 ? "team competing" : "teams competing"}
             </p>
             <Link
               href={`/clubs/${params.clubSlug}/tournament-team-results/${encodeURIComponent(
@@ -71,7 +78,7 @@ export default async function TournamentTeamResultsIndex({ params }: Props) {
         ))}
       </div>
       {!error && !data?.draws?.length ? (
-        <p>No four-player team results have been published yet.</p>
+        <p>No team results yet.</p>
       ) : null}
     </section>
   );
