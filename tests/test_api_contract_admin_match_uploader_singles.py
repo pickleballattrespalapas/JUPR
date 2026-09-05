@@ -17,12 +17,14 @@ class AtomicSinglesSupabase(FakeSupabase):
     def __init__(self, tables):
         super().__init__(tables)
         self.receipts: dict[tuple[str, str], dict] = {}
+        self.rpc_payloads: list[dict] = []
 
     def rpc(self, name, payload):
         if name != "admin_apply_direct_match_entry_atomic_v1":
             raise AssertionError(f"Unexpected RPC: {name}")
 
         def execute():
+            self.rpc_payloads.append(payload)
             lookup = (
                 str(payload["p_club_id"]),
                 str(payload["p_idempotency_key"]),
@@ -47,6 +49,13 @@ class AtomicSinglesSupabase(FakeSupabase):
                         == str(payload["p_club_id"])
                         and int(player.get("id")) == int(update["player_id"])
                     ):
+                        for key, expected in update["expected"].items():
+                            actual = player.get(key)
+                            if actual != expected:
+                                raise RuntimeError(
+                                    "JUPR_DIRECT_MATCH_PLAYER_STALE: "
+                                    f"{key} expected {expected!r}, found {actual!r}"
+                                )
                         player.update(update["after"])
             receipt = {
                 "ok": True,
@@ -308,7 +317,7 @@ def test_admin_match_uploader_unrated_singles_records_without_rating_change(monk
     assert tables["players"] == before
 
 
-def test_admin_match_uploader_first_singles_uses_preserved_seed_and_keeps_latest_date(
+def test_admin_match_uploader_first_singles_uses_neutral_independent_seed_and_keeps_latest_date(
     monkeypatch,
 ):
     tables = singles_tables()
@@ -318,7 +327,7 @@ def test_admin_match_uploader_first_singles_uses_preserved_seed_and_keeps_latest
             "singles_rating": None,
             "singles_last_game_at": "2026-06-01T12:00:00+00:00",
             "singles_replay_baseline": {
-                "rating": 1400,
+                "rating": 1200,
                 "wins": 0,
                 "losses": 0,
                 "matches_played": 0,
@@ -332,7 +341,7 @@ def test_admin_match_uploader_first_singles_uses_preserved_seed_and_keeps_latest
             "singles_rating": None,
             "singles_last_game_at": "2026-06-01T12:00:00+00:00",
             "singles_replay_baseline": {
-                "rating": 1300,
+                "rating": 1200,
                 "wins": 0,
                 "losses": 0,
                 "matches_played": 0,
@@ -361,8 +370,18 @@ def test_admin_match_uploader_first_singles_uses_preserved_seed_and_keeps_latest
     )
 
     assert response.status_code == 200
-    assert tables["matches"][0]["t1_p1_r"] == 1400
-    assert tables["matches"][0]["t2_p1_r"] == 1300
+    assert tables["players"][0]["rating"] == 1800
+    assert tables["players"][1]["rating"] == 1700
+    assert tables["matches"][0]["t1_p1_r"] == 1200
+    assert tables["matches"][0]["t2_p1_r"] == 1200
+    player_updates = supabase.rpc_payloads[-1]["p_player_updates"]
+    assert all(
+        update["expected"]["singles_rating"] is None
+        for update in player_updates
+    )
+    assert tables["players"][0]["singles_rating"] > 1200
+    assert tables["players"][1]["singles_rating"] < 1200
+    assert all(player["singles_matches_played"] == 1 for player in tables["players"])
     assert (
         tables["players"][0]["singles_last_game_at"]
         == "2026-06-01T12:00:00+00:00"

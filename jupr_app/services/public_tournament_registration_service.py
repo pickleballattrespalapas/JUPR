@@ -138,20 +138,42 @@ def _player_is_active(row: dict[str, Any]) -> bool:
     return True
 
 
-def _canonical_player_skills(row: dict[str, Any]) -> tuple[float | None, float | None]:
-    """Return the same canonical registration ratings used by the Streamlit flow."""
+def _canonical_registration_skill(
+    rating_value: Any,
+    legacy_skill_value: Any,
+) -> float | None:
+    """Normalize one discipline without borrowing the other discipline's rating."""
 
-    overall = _safe_float(row.get("rating"))
-    if overall is not None:
-        # JUPR stores its club rating as Elo (roughly 1,200 == 3.0 skill).
-        canonical = overall / 400.0 if overall > 10 else overall
+    rating = _safe_float(rating_value)
+    if rating is not None:
+        # JUPR stores official ratings as Elo (roughly 1,200 == 3.0 skill).
+        canonical = rating / 400.0 if rating > 10 else rating
         if 1.0 <= canonical <= 7.0:
-            return canonical, canonical
-    doubles = _safe_float(row.get("doubles_skill"))
-    singles = _safe_float(row.get("singles_skill"))
+            return canonical
+    legacy_skill = _safe_float(legacy_skill_value)
+    if legacy_skill is not None and 1.0 <= legacy_skill <= 7.0:
+        return legacy_skill
+    return None
+
+
+def _has_official_singles_history(row: dict[str, Any]) -> bool:
+    matches_played = _safe_int(row.get("singles_matches_played"))
+    return matches_played is not None and matches_played > 0
+
+
+def _canonical_player_skills(row: dict[str, Any]) -> tuple[float | None, float | None]:
+    """Return independent doubles and singles ratings for registration."""
+
     return (
-        doubles if doubles is not None and 1.0 <= doubles <= 7.0 else None,
-        singles if singles is not None and 1.0 <= singles <= 7.0 else None,
+        _canonical_registration_skill(row.get("rating"), row.get("doubles_skill")),
+        _canonical_registration_skill(
+            (
+                row.get("singles_rating")
+                if _has_official_singles_history(row)
+                else None
+            ),
+            None,
+        ),
     )
 
 
@@ -1119,14 +1141,9 @@ def validate_and_clean_tournament_selection(
             registered_doubles = _validated_rating(
                 registered_partner.get("doubles_skill"), label="Partner doubles skill"
             )
-            registered_singles = _validated_rating(
-                registered_partner.get("singles_skill"), label="Partner singles skill"
-            )
-            resolved_skill = (
+            resolved_doubles_skill = (
                 registered_doubles
                 if registered_doubles is not None
-                else registered_singles
-                if registered_singles is not None
                 else submitted_skill
             )
             registered_age = _validated_age(registered_partner.get("age"), label="Partner age")
@@ -1134,18 +1151,18 @@ def validate_and_clean_tournament_selection(
             resolved_age = registered_age if registered_age is not None else submitted_age
             partner_gender = registered_partner.get("gender") or partner_gender
             partner_profile = {
-                "doubles_skill": registered_doubles if registered_doubles is not None else resolved_skill,
-                "singles_skill": registered_singles if registered_singles is not None else resolved_skill,
+                "doubles_skill": resolved_doubles_skill,
+                "singles_skill": None,
                 "age": resolved_age,
                 "gender": _clean_text(partner_gender, limit=40),
             }
-            clean_selection["partner_skill"] = resolved_skill
+            clean_selection["partner_skill"] = resolved_doubles_skill
             clean_selection["partner_age"] = resolved_age
         else:
             partner_skill = _validated_rating(clean_selection.get("partner_skill"), label="Partner skill")
             partner_profile = {
                 "doubles_skill": partner_skill,
-                "singles_skill": partner_skill,
+                "singles_skill": None,
                 "age": _validated_age(clean_selection.get("partner_age"), label="Partner age"),
                 "gender": _clean_text(partner_gender, limit=40),
             }
