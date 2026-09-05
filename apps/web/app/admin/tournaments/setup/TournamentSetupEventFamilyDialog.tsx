@@ -422,7 +422,7 @@ export default function TournamentSetupEventFamilyDialog({
               disabled={participantType === "SINGLES"}
               onChange={(event) => setDraft((current) => ({ ...current, default_partner_board: event.target.checked }))}
             />
-            Partner Board enabled by default
+            Players Needing Partners enabled by default
           </label>
         </div>
     </FormDialog>

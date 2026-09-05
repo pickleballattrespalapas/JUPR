@@ -405,7 +405,7 @@ def _validate_admin_selection_candidate(
         and not _safe_bool(registration.get("wants_partner_board_contact"))
     ):
         raise ValueError(
-            "Registrant consent is required before showing this entry on the Partner Board."
+            "Registrant consent is required before showing this entry in Players Needing Partners."
         )
     if str(validated.get("partner_mode") or "").upper() == "HAS_PARTNER":
         validated["partner_gender"] = _clean_text(

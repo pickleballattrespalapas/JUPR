@@ -39,7 +39,8 @@ def test_roster_is_a_selected_tournament_workspace() -> None:
     assert "PublicTournamentModuleHeader" in page
     assert 'active="roster"' in page
     assert "Roster overview" in page
-    assert "Players looking for partners" in page
+    assert "Players looking for partners" not in page
+    assert "players_needing_partners.map" not in page
     assert "groupedEntries" in page
     assert "Apply filters" in page
     assert "data.tournaments.map" not in page
@@ -53,7 +54,11 @@ def test_partner_board_is_a_selected_tournament_workspace() -> None:
 
     assert "PublicTournamentModuleHeader" in page
     assert 'active="partner-board"' in page
-    assert "Open partner requests" in page
+    assert 'kicker="Players Needing Partners"' in page
+    assert "Players needing partners" in page
+    assert "groupPartnerEntries" in page
+    assert "visiblePlayerGroups.map" in page
+    assert "group.entries.map" in page
     assert "Want to contact or accept a player?" in page
     assert "PartnerRequestReviewPanel" in page
     assert "PairingInterestPanel" in page

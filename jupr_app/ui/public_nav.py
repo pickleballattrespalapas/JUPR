@@ -18,7 +18,7 @@ PUBLIC_LABEL_BY_KEY: dict[str, str] = {
     "challenge_ladder": "Challenge Ladder",
     "jupr_live": "JUPR Live",
     "tournament_registration": "Tournaments",
-    "tournament_partner_board": "Partner Board",
+    "tournament_partner_board": "Players Needing Partners",
     "rating_rules": "Rating Rules",
     "weekly_recap": "Weekly Recap",
     "faqs": "FAQs",

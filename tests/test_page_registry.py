@@ -39,11 +39,19 @@ def test_existing_public_pages_remain_in_shared_public_nav():
         "🪜 Challenge Ladder",
         "🔴 JUPR Live",
         "📝 Tournament Registration",
-        "🤝 Partner Board",
+        "🤝 Players Needing Partners",
         "Rating Rules",
         "🗞️ Weekly Recap",
         "❓ FAQs",
     ]
+
+
+def test_streamlit_dispatch_uses_registered_players_needing_partners_label():
+    app = Path("streamlit_app.py").read_text(encoding="utf-8")
+    label = PAGE_KEY_TO_LABEL["tournament_partner_board"]
+
+    assert f'"{label}": tournament_partner_board' in app
+    assert '"🤝 Partner Board": tournament_partner_board' not in app
 
 
 def test_restored_public_route_keys_are_visible_in_public_nav():

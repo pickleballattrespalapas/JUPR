@@ -837,7 +837,7 @@ def test_partner_required_and_partner_board_consent_integrity() -> None:
             },
         )
 
-    with pytest.raises(ValueError, match="Partner-board contact consent"):
+    with pytest.raises(ValueError, match="Players Needing Partners contact consent"):
         submit_public_tournament_registration(
             FakeSupabase(storage),
             club_id="club-1",

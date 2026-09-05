@@ -34,7 +34,7 @@ const REGISTRATION_RULE_TEMPLATES: PolicyTemplate[] = [
     key: "COMMUNITY",
     label: "Community and recreational",
     text:
-      "Players should choose the division that best matches their current playing level. The tournament director may combine small divisions, move teams for fair play, or modify formats when participation requires it. Doubles entries should have a confirmed partner by the registration deadline unless the Partner Board is being used."
+      "Players should choose the division that best matches their current playing level. The tournament director may combine small divisions, move teams for fair play, or modify formats when participation requires it. Doubles entries should have a confirmed partner by the registration deadline unless Players Needing Partners is being used."
   }
 ];
 
@@ -257,7 +257,7 @@ export default function TournamentSetupPolicies({
               onChange({ ...settings, partner_board_enabled: event.target.checked })
             }
           />
-          Partner Board enabled
+          Players Needing Partners enabled
         </label>
       </div>
 

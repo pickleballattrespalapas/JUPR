@@ -1088,7 +1088,7 @@ def _render_event_family_form(
             )
             default_waitlist = st.checkbox("Default waitlist", value=bool(defaults.get("default_waitlist", True)), disabled=disabled)
             default_partner_board = st.checkbox(
-                "Default partner board",
+                "Default Players Needing Partners",
                 value=bool(defaults.get("default_partner_board", True)),
                 disabled=disabled,
             )
@@ -1189,7 +1189,7 @@ def _render_event_generation_form(
             )
             waitlist_enabled = st.checkbox("Waitlist enabled", value=bool(event_defaults.get("default_waitlist", True)), disabled=disabled)
             partner_board_enabled = st.checkbox(
-                "Partner board enabled",
+                "Players Needing Partners enabled",
                 value=bool(event_defaults.get("default_partner_board", True)),
                 disabled=disabled,
             )
@@ -1314,7 +1314,7 @@ def _render_division_form(
             price_usd = st.number_input("Price USD", min_value=0.0, step=1.0, value=float(price_default or 0.0), disabled=disabled)
             waitlist_enabled = st.checkbox("Waitlist enabled", value=bool(defaults.get("waitlist_enabled", True)), disabled=disabled)
             partner_board_enabled = st.checkbox(
-                "Partner board enabled",
+                "Players Needing Partners enabled",
                 value=bool(defaults.get("partner_board_enabled", True)),
                 disabled=disabled,
             )
@@ -1822,7 +1822,7 @@ def render(ctx):
                     "default_format": "Default Format",
                     "default_scoring": "Default Scoring",
                     "default_waitlist": "Default Waitlist",
-                    "default_partner_board": "Default Partner Board",
+                    "default_partner_board": "Default Players Needing Partners",
                     "default_capacity_teams": "Default Capacity",
                     "default_price_usd": "Default Price",
                     "default_status": "Default Status",
@@ -2099,7 +2099,7 @@ def render(ctx):
             nav_params["tournament"] = slug
         if st.button("Public registration form"):
             navigate_same_tab(page="tournament_registration", params=nav_params, public_mode=True)
-        if st.button("Public partner board"):
+        if st.button("Public Players Needing Partners"):
             navigate_same_tab(page="tournament_partner_board", params=nav_params, public_mode=True)
         st.caption("Publish registration changes before sharing links when days, events, or divisions have changed.")
 

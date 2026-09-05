@@ -163,47 +163,16 @@ def test_no_private_get_submission_result_reference():
     assert "_get_submission_result" not in Path("jupr_app/ui/pages/tournament_registration.py").read_text()
 
 
-def test_partner_board_targets_include_durable_ids_and_exclude_current_player():
-    from jupr_app.ui.pages.tournament_registration import _partner_board_targets_for_event
+def test_registration_does_not_embed_partner_board_discovery():
+    from pathlib import Path
 
-    state = {
-        "event_rosters": [
-            {
-                "event_option_id": "event_1",
-                "entries": [
-                    {
-                        "status": "NEEDS_PARTNER",
-                        "partner_note": "Available Saturday",
-                        "members": [
-                            {
-                                "display_name": "Elizabeth Whelan",
-                                "selection_id": "sel_elizabeth",
-                                "registration_id": "reg_elizabeth",
-                                "player_id": 22,
-                            }
-                        ],
-                    },
-                    {
-                        "status": "NEEDS_PARTNER",
-                        "members": [{"display_name": "Mary Bauman", "selection_id": "sel_mary", "registration_id": "reg_mary", "player_id": 11}],
-                    },
-                ],
-            }
-        ]
-    }
+    source = Path("jupr_app/ui/pages/tournament_registration.py").read_text(
+        encoding="utf-8"
+    )
 
-    rows = _partner_board_targets_for_event(state, "event_1", exclude_player_id=11)
-
-    assert rows == [
-        {
-            "target_selection_id": "sel_elizabeth",
-            "target_registration_id": "reg_elizabeth",
-            "target_player_id": "22",
-            "event_option_id": "event_1",
-            "display_name": "Elizabeth Whelan",
-            "partner_note": "Available Saturday",
-        }
-    ]
+    assert "_partner_board_targets_for_event" not in source
+    assert "Players looking for partners in this division" not in source
+    assert "wizard_partner_board_request" not in source
 
 
 def test_partner_request_ready_requires_durable_target_not_legacy_text():

@@ -212,7 +212,7 @@ export function TournamentSetupFamilyCard({
             disabled={disabled}
             onChange={(event) => onChange({ ...value, default_partner_board: event.target.checked })}
           />
-          Partner Board by default
+          Players Needing Partners by default
         </label>
       </div>
       {issues.length ? (
