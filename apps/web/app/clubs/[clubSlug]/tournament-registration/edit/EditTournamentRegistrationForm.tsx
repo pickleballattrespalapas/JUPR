@@ -431,8 +431,7 @@ export default function EditTournamentRegistrationForm({
         </p>
         {linkedPlayer ? (
           <p style={{ color: "#475569" }}>
-            Verified JUPR ratings can’t be changed here. If your singles rating
-            is blank, enter the level you play at for this tournament.
+            Verified JUPR ratings can’t be changed here.
           </p>
         ) : null}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
@@ -448,7 +447,7 @@ export default function EditTournamentRegistrationForm({
             <input name="singles_skill" aria-label="Singles skill" aria-describedby={linkedPlayer?.singles_skill == null ? "edit-singles-skill-help" : undefined} value={linkedPlayer?.singles_skill ?? singlesSkill} onChange={(event) => setSinglesSkill(event.target.value)} disabled={linkedPlayer?.singles_skill != null} type="number" min="1" max="7" step="0.01" style={{ width: "100%" }} />
             {linkedPlayer?.singles_skill == null ? (
               <span id="edit-singles-skill-help" style={{ display: "block", color: "#64748b", fontSize: "0.9rem", marginTop: "0.35rem" }}>
-                No JUPR singles rating yet? Enter the level you play at for singles. This is used for tournament placement only.
+                No singles rating? Enter your current level or leave it blank.
               </span>
             ) : null}
           </label>
