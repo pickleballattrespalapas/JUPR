@@ -163,10 +163,7 @@ def confirmed_roster_fingerprint(
 def _operation_key(value: Any) -> str:
     key = _text(value, 160)
     if not IDEMPOTENCY_KEY_RE.fullmatch(key):
-        raise ValueError(
-            "idempotency_key must be 8–160 letters, numbers, dots, colons, "
-            "underscores, or hyphens."
-        )
+        raise ValueError("We couldn't submit this request. Please try again.")
     return key
 
 
@@ -190,17 +187,14 @@ def partner_token_secret() -> str:
     if not secret:
         secret = os.getenv("JUPR_REGISTRATION_EDIT_SECRET", "").strip()
     if len(secret) < 32:
-        raise PermissionError(
-            "Configure JUPR_TEAM_LEAGUE_PARTNER_TOKEN_SECRET (or the public "
-            "registration/edit token fallback) with at least 32 characters."
-        )
+        raise PermissionError("Partner confirmations are temporarily unavailable.")
     return secret
 
 
 def partner_token_hash(token: str) -> str:
     clean = str(token or "").strip()
     if len(clean) < 24:
-        raise ValueError("The partner invitation token is invalid.")
+        raise ValueError("This partner invitation is invalid or expired.")
     return hmac.new(
         partner_token_secret().encode("utf-8"),
         f"team-league-partner:v1:{clean}".encode("utf-8"),
@@ -231,21 +225,20 @@ def _rpc(supabase: Any, name: str, params: Mapping[str, Any]) -> dict[str, Any]:
             )
         ):
             raise TeamLeagueConflictError(
-                "Team-league data changed. Reload before trying again."
+                "This league changed while you were viewing it. Refresh and try again."
             ) from exc
         if "RECOVERY_REQUIRED" in detail or "DELIVERY_IN_PROGRESS" in detail:
             raise TeamLeagueRecoveryRequiredError(
-                "This operation needs recovery before another attempt."
+                "We couldn't confirm the previous update. Try again before submitting anything new."
             ) from exc
         if "NOT_FOUND" in detail:
-            raise ValueError("The requested team-league record was not found.") from exc
+            raise ValueError("We couldn't find that team or invitation.") from exc
         if "CLOSED" in detail or "EXPIRED" in detail:
             raise ValueError("Registration or this invitation is closed.") from exc
         raise
     if not result:
         raise TeamLeagueRecoveryRequiredError(
-            "The server returned no durable receipt. Retry only with the exact "
-            "same request and idempotency key."
+            "We couldn't confirm the previous update. Try again before submitting anything new."
         )
     return result
 
@@ -337,7 +330,20 @@ def _enforce_team_category(
             "womens": "Women's",
             "mixed": "Mixed",
         }.get(clean_category, "Team")
-        raise ValueError(f"{label} team eligibility: {exc}") from exc
+        message = str(exc)
+        if "cannot verify the gender for" in message:
+            names = message.split("cannot verify the gender for", 1)[1].strip().rstrip(".")
+            raise ValueError(
+                f"We couldn't confirm the gender for {names}. Update the player profile and try again."
+            ) from exc
+        requirement = {
+            "mens": "two men",
+            "womens": "two women",
+            "mixed": "one man and one woman",
+        }.get(clean_category)
+        if requirement:
+            raise ValueError(f"A {label} team needs {requirement}.") from exc
+        raise ValueError(message) from exc
 
 
 def _online_team_registration_supported(settings: Mapping[str, Any]) -> bool:
@@ -351,8 +357,8 @@ def _registration_unavailable_reason(settings: Mapping[str, Any]) -> str | None:
         return "Registration is closed. The schedule and results remain available below."
     if not _online_team_registration_supported(settings):
         return (
-            f"Online registration for {_team_size(settings)}-player team rosters "
-            "is not available yet. Contact league staff to register the full roster."
+            f"Online registration isn't available for {_team_size(settings)}-player teams. "
+            "Contact league staff to sign up."
         )
     return None
 
@@ -746,8 +752,8 @@ def register_public_team_league(
         raise ValueError("Registration is not open for this team league.")
     if not _online_team_registration_supported(settings):
         raise ValueError(
-            f"Online registration for {_team_size(settings)}-player team rosters "
-            "is not available yet. Contact league staff to register the full roster."
+            f"Online registration isn't available for {_team_size(settings)}-player teams. "
+            "Contact league staff to sign up."
         )
     clean_type = _text(signup_type, 20).lower()
     if clean_type not in {"team", "solo"}:
@@ -777,8 +783,7 @@ def register_public_team_league(
         ]
         if any(row is None for row in player_rows):
             raise ValueError(
-                "Team eligibility could not load both player profiles. "
-                "Choose active club players and try again."
+                "We couldn't verify both players. Choose them again and try once more."
             )
         _enforce_team_category(
             settings.get("team_category"),
@@ -936,8 +941,8 @@ def register_public_team_league(
             },
         )
         raise TeamLeagueRecoveryRequiredError(
-            "The team was saved, but the partner invitation needs a safe "
-            "delivery retry.",
+            "Your team was saved, but we couldn't send the invitation. "
+            "Please contact league staff.",
             operation_id=str(result.get("operation_id") or operation_id),
         ) from exc
     return {
@@ -963,7 +968,7 @@ def confirm_public_team_league_partner(
         "team_league_teams",
         filters={"id": str(team_id), "club_id": str(club_id)},
     ):
-        raise ValueError("The requested team-league record was not found.")
+        raise ValueError("We couldn't find that team or invitation.")
     request = {"team_id": str(team_id), "accept": bool(accept)}
     return _rpc(
         supabase,

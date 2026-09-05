@@ -98,7 +98,7 @@ def _stable_edit_secret() -> str:
         return get_explicit_registration_edit_token_secret()
     except ValueError as exc:
         raise PublicRegistrationEditUnavailableError(
-            "Public registration editing is temporarily unavailable because its stable signing secret is not configured."
+            "Registration changes are temporarily unavailable. Please try again later."
         ) from exc
 
 
@@ -166,7 +166,7 @@ def _generic_edit_link_response() -> dict[str, Any]:
         "ok": True,
         "mode": "registration_edit_link_request",
         "accepted": True,
-        "message": "If a matching registration exists, an edit link will be sent to that email address.",
+        "message": "If that email matches a registration, we’ll send the edit link there.",
     }
 
 
@@ -241,7 +241,7 @@ def _versioned_edit_selections(
         if candidate:
             candidate_event = events.get(str(candidate.get("event_option_id") or "")) or {}
             if _event_family_key(candidate_event) != target_family:
-                raise ValueError("Registration selection identity does not match the selected event family.")
+                raise ValueError("The selected event doesn’t match this registration entry.")
         elif requested_id:
             raise TournamentRegistrationEditConflictError(
                 "Registration changed after it was loaded. Refresh the edit link and try again."

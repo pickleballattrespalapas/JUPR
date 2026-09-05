@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { getClubLeaderboard } from "@/lib/api";
 import type { LeaderboardBadge, LeaderboardEntry } from "@/lib/api";
+import { publicBadgeRarityLabel } from "@/lib/badgeApi";
 
 type LeaderboardPageProps = {
   params: { clubSlug: string };
@@ -134,7 +135,7 @@ function BadgeStrip({ clubSlug, entry }: { clubSlug: string; entry: LeaderboardE
         <Link
           key={badge.badge_id}
           href={badgeHref(clubSlug, badge)}
-          title={`${badge.name}${badge.rarity ? ` · ${badge.rarity}` : ""}`}
+          title={`${badge.name}${badge.rarity ? ` · ${publicBadgeRarityLabel(badge.rarity)}` : ""}`}
           style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.15rem 0.45rem", textDecoration: "none", whiteSpace: "nowrap" }}
         >
           🏆 {badge.name}
@@ -220,8 +221,8 @@ export default async function ClubLeaderboardPage({ params, searchParams }: Lead
         <p style={{ color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>Leaderboards</p>
         <h1>{clubName} leaderboards</h1>
         <div role="alert" style={{ ...cardStyle, borderColor: "#fecaca", background: "#fef2f2" }}>
-          <strong>Leaderboard data is temporarily unavailable.</strong>
-          <p style={{ marginBottom: 0, color: "#7f1d1d" }}>Try again in a moment. No private player data was loaded.</p>
+          <strong>Leaderboards are unavailable right now.</strong>
+          <p style={{ marginBottom: 0, color: "#7f1d1d" }}>Please try again shortly.</p>
         </div>
         <p><Link href={`/clubs/${encodeURIComponent(clubSlug)}/leaderboards`}>Retry leaderboards</Link> · <Link href={`/clubs/${encodeURIComponent(clubSlug)}`}>Return to club home</Link></p>
       </section>
@@ -251,8 +252,8 @@ export default async function ClubLeaderboardPage({ params, searchParams }: Lead
       <h1 style={{ marginTop: 0 }}>{clubName} leaderboards</h1>
       <p style={{ color: "#475569", maxWidth: "780px" }}>
         {state.leagueView === "past"
-          ? "Review final standings for finished public leagues. Active players are shown by default."
-          : "Overall and active-league standings use the same rating, qualification, and badge projections as the club app. Active players are shown by default."}
+          ? "See final standings for finished leagues. Active players are shown by default."
+          : "See overall and league standings, qualification progress, and earned badges. Active players are shown by default."}
       </p>
       <p style={{ color: "#475569" }}><Link href={`/clubs/${encodeURIComponent(clubSlug)}/players`}>Browse all player profiles</Link></p>
 
@@ -277,7 +278,7 @@ export default async function ClubLeaderboardPage({ params, searchParams }: Lead
         })}
       </nav>
 
-      <nav aria-label="Leaderboard scope" data-testid="leaderboard-scope-tabs" style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
+      <nav aria-label="Leaderboard groups" data-testid="leaderboard-scope-tabs" style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
         {data.scopes.map((scope) => {
           const active = scope.name === selectedLeague;
           return (
@@ -341,7 +342,7 @@ export default async function ClubLeaderboardPage({ params, searchParams }: Lead
         <article style={cardStyle}><strong>Ranked players</strong><br />{data.summary.ranked_players}</article>
         <article style={cardStyle}><strong>Active players</strong><br />{data.summary.active_players}</article>
         <article style={cardStyle}><strong>Inactive players</strong><br />{data.summary.inactive_players}</article>
-        <article style={cardStyle}><strong>Leaderboard scopes</strong><br />{data.summary.leaderboard_scopes}</article>
+        <article style={cardStyle}><strong>Leaderboard groups</strong><br />{data.summary.leaderboard_scopes}</article>
       </div>
 
       {selectedLeague && !overall ? (
@@ -355,11 +356,11 @@ export default async function ClubLeaderboardPage({ params, searchParams }: Lead
           <span id="player-snapshot" />
           <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
             <div>
-              <p style={{ margin: 0, color: "#1d4ed8", fontWeight: 800, textTransform: "uppercase", fontSize: "0.75rem", letterSpacing: "0.08em" }}>Player snapshot</p>
+              <p style={{ margin: 0, color: "#1d4ed8", fontWeight: 800, textTransform: "uppercase", fontSize: "0.75rem", letterSpacing: "0.08em" }}>Player summary</p>
               <h2 style={{ margin: "0.2rem 0" }}>{data.snapshot.player_name}</h2>
               <p style={{ margin: 0 }}><Link href={playerHref(clubSlug, data.snapshot.player_id)}>Open full player profile</Link></p>
             </div>
-            <Link href={pageHref(clubSlug, state, { player: String(data.snapshot.player_id ?? "") }, "player-snapshot")}>Link to this snapshot</Link>
+            <Link href={pageHref(clubSlug, state, { player: String(data.snapshot.player_id ?? "") }, "player-snapshot")}>Share this player</Link>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: "0.65rem", marginTop: "0.85rem" }}>
             <div><strong>Rank</strong><br />#{data.snapshot.rank ?? "—"}</div>
@@ -384,9 +385,9 @@ export default async function ClubLeaderboardPage({ params, searchParams }: Lead
 
       {data.summary.ranked_players === 0 ? (
         <div style={cardStyle} data-testid="leaderboard-empty-state">
-          <strong>{state.leagueView === "past" && !selectedLeague ? "No past leagues have been published yet." : "No leaderboard data is currently available."}</strong>
+          <strong>{state.leagueView === "past" && !selectedLeague ? "No past leagues have been published yet." : "No leaderboard results are available yet."}</strong>
           <p style={{ marginBottom: 0, color: "#475569" }}>
-            {state.leagueView === "past" && !selectedLeague ? "Finished public leagues will appear here." : "Recorded matches will populate this scope."}
+            {state.leagueView === "past" && !selectedLeague ? "Finished leagues will appear here." : "Standings will appear after matches are recorded."}
           </p>
         </div>
       ) : entries.length === 0 ? (
@@ -409,7 +410,7 @@ export default async function ClubLeaderboardPage({ params, searchParams }: Lead
                     <td style={tdStyle}>#{entry.rank ?? entry.rank_position ?? "—"}</td>
                     <td style={tdStyle}>
                       <strong>{entry.player_id != null ? <Link href={playerHref(clubSlug, entry.player_id)}>{entry.player_name}</Link> : entry.player_name}</strong>
-                      {snapshotLink ? <><br /><Link href={snapshotLink} style={{ fontSize: "0.8rem" }}>player snapshot</Link></> : null}
+                      {snapshotLink ? <><br /><Link href={snapshotLink} style={{ fontSize: "0.8rem" }}>view summary</Link></> : null}
                     </td>
                     <td style={tdStyle}>{ratingLabel(entry.rating_jupr)}</td>
                     <td style={{ ...tdStyle, color: Number(entry.rating_gain_jupr ?? 0) < 0 ? "#b91c1c" : "#166534" }}>{signedRatingLabel(entry.rating_gain_jupr)}</td>

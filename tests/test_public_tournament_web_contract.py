@@ -18,7 +18,7 @@ def test_current_chooser_has_separate_past_archive_and_results_navigation() -> N
     assert "Past tournaments" in home
     assert "/tournaments/past" in home
     assert 'getPublicTournamentResultsIndex(\n    params.clubSlug,\n    "past"' in past
-    assert "Officially completed tournaments" in past
+    assert "Final scores, standings, brackets, and medal winners" in past
     assert '["results", "Live & Results"]' in nav
     assert 'results: `${base}/tournament-results`' in nav
 
@@ -28,7 +28,7 @@ def test_standard_results_page_renders_all_patron_result_surfaces() -> None:
     api = read("lib/tournamentResultsApi.ts")
 
     for label in (
-        "Podium and medals",
+        "Medalists",
         "Standings",
         "Playoff bracket",
         "Completed scores",
@@ -83,8 +83,11 @@ def test_public_tiebreak_explanation_is_compact_collapsed_and_server_authored() 
     assert 'aria-label={`How tied teams were ranked in ${draw.name}`}' in page
     assert 'aria-label={`Tie-break steps for ${explanation.title} in ${draw.name}`}' in page
     assert "rankingPolicyDescription" in page
-    assert "rankingCriteria.map(tiebreakCriterionLabel)" in page
-    assert "Final round-robin order." in page
+    assert 'criterion).trim().toUpperCase() !== "WINS"' in page
+    assert "tiebreakCriteria.map(tiebreakCriterionLabel)" in page
+    assert "Ties are decided by:" in page
+    assert "!rankingPolicyDescription && tiebreakCriteria.length" in page
+    assert "These are the final round-robin standings." in page
     assert "Provisional — this order may change until round-robin play is complete." in page
     assert page.index("<table") < page.index("<details")
     assert page.index("<details") < page.index("Playoff bracket")
@@ -103,6 +106,30 @@ def test_current_public_draws_render_as_url_backed_tabs() -> None:
     assert "selectedCurrentDraw ? <DrawResults draw={selectedCurrentDraw} /> : null" in page
     assert "Completed draws" in page
     assert "Upcoming draws" in page
+
+
+def test_public_team_results_and_invitations_map_machine_values() -> None:
+    detail = read(
+        "app/clubs/[clubSlug]/tournament-team-results/"
+        "[tournamentId]/[drawId]/page.tsx"
+    )
+    invitation = read(
+        "app/clubs/[clubSlug]/tournament-team-invitation/"
+        "TeamInvitationReview.tsx"
+    )
+
+    for label in (
+        "Awaiting lineups",
+        "Tiebreak needed",
+        "Result under review",
+        "No result",
+        "Status unavailable",
+    ):
+        assert label in detail
+    assert "Men’s spot 1" in invitation
+    assert "Women’s spot 2" in invitation
+    assert '.replace("_", " ").toLowerCase()' not in detail
+    assert '.replace("_", " ").toLowerCase()' not in invitation
 
 
 def test_registration_and_edit_render_multiday_event_once_with_schedule_detail() -> None:
@@ -133,7 +160,7 @@ def test_confirmation_and_secure_edit_use_per_event_actions() -> None:
     )
 
     assert "Edit this event" in confirmation
-    assert "+ Add Event" in confirmation
+    assert "Add an event" in confirmation
     assert "selection.scheduled_days?.length" in confirmation
     assert 'id="manage-registration"' in registration
     assert "EditLinkRequestForm" in registration
@@ -141,8 +168,8 @@ def test_confirmation_and_secure_edit_use_per_event_actions() -> None:
     assert "Edit event" in edit
     assert "InteractionDialog" in edit
     assert "Apply event changes" in edit
-    assert "+ Add Event" in edit
-    assert "Changes are staged until" in edit
+    assert "Add event" in edit
+    assert "Edit any event below" in edit
 
 
 def test_secure_edit_recomputes_event_eligibility_from_the_live_age_draft() -> None:

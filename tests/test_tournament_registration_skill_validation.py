@@ -196,4 +196,4 @@ def test_combined_rating_cap_is_strict_and_uses_both_partners() -> None:
         partner=_player(4.0),
     )
     assert eligible is False
-    assert "not strictly below" in str(message)
+    assert "must be below" in str(message)

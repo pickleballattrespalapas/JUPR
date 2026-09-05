@@ -17,7 +17,15 @@ import {
   TournamentCommerceQuote,
   TournamentCommerceSelection
 } from "@/lib/tournamentCommerceApi";
-import { publicEventEligibilityReason, publicEventFamilyKey } from "@/lib/tournamentRegistrationEligibility";
+import {
+  publicEventEligibilityReason,
+  publicEventCapacityLabel,
+  publicEventFamilyKey,
+  publicEventFormatLabel,
+  publicScoringLabel,
+  publicTournamentDayLabel,
+  publicTournamentEventLabel
+} from "@/lib/tournamentRegistrationEligibility";
 import { InteractionDialog } from "@/components/interaction";
 import TournamentCommerceChooser from "../TournamentCommerceChooser";
 
@@ -25,6 +33,7 @@ type EditTournamentRegistrationFormProps = {
   clubSlug: string;
   tournamentId: string;
   registrationSlug?: string | null;
+  timeZone?: string | null;
   editToken: string;
   registration: PublicRegistrationEditRegistration;
   selections: PublicRegistrationEditSelection[];
@@ -58,12 +67,26 @@ function textValue(formData: FormData, key: string): string {
   return String(formData.get(key) ?? "").trim();
 }
 
+function partnerStatusLabel(
+  value: "NONE" | "HAS_PARTNER" | "NEEDS_PARTNER"
+): string {
+  if (value === "HAS_PARTNER") return "Has a partner";
+  if (value === "NEEDS_PARTNER") return "Looking for a partner";
+  return "No partner needed";
+}
+
 function eventMeta(event: PublicRegistrationEvent): string {
-  const pieces = [event.skill_label, event.age_label, event.event_format, event.scoring]
+  const pieces = [
+    event.skill_label,
+    event.age_label,
+    publicEventFormatLabel(event.event_format),
+    publicScoringLabel(event.scoring)
+  ]
     .filter((item) => item && String(item).trim())
     .map(String);
   if (event.price_usd != null) pieces.push(`$${Number(event.price_usd).toFixed(2)}`);
-  if (event.capacity_teams != null) pieces.push(`Cap ${event.capacity_teams}`);
+  const capacity = publicEventCapacityLabel(event);
+  if (capacity) pieces.push(capacity);
   return pieces.join(" • ");
 }
 
@@ -78,7 +101,7 @@ function scheduledDaysLabel(
     .map((dayId) => daysById.get(dayId))
     .filter(Boolean)
     .map((day) =>
-      day?.event_date ? `${day.label} · ${day.event_date}` : day?.label
+      day ? publicTournamentDayLabel(day.label, day.event_date) : null
     )
     .join(" · ");
 }
@@ -93,6 +116,7 @@ export default function EditTournamentRegistrationForm({
   clubSlug,
   tournamentId,
   registrationSlug,
+  timeZone,
   editToken,
   registration,
   selections,
@@ -287,7 +311,7 @@ export default function EditTournamentRegistrationForm({
     }
     if (commerce?.available && !commerceQuote) {
       setError(
-        "Review extras and the current total before saving. You can choose zero extras."
+        "Update your total before saving. You can choose zero extras."
       );
       return;
     }
@@ -362,16 +386,15 @@ export default function EditTournamentRegistrationForm({
         setCommerceSelections(nextQuote.request.item_selections || []);
         setCommerceQuote(nextQuote);
         setError(
-          response.error ||
-            "The total changed. Review the updated price before saving."
+          "The total changed. Review the updated price before saving."
         );
         return;
       }
-      setError(response.error || "Unable to save registration changes.");
+      setError(response.error || "We couldn’t save your changes. Please try again.");
       return;
     }
     if (!response.data.confirmation_token) {
-      setError(response.data.email_delivery?.message || "Your changes were saved, but secure confirmation access is unavailable. Please contact tournament staff before submitting again.");
+      setError("We saved your changes but couldn’t open the confirmation page. Contact the organizer before trying again.");
       return;
     }
 
@@ -388,11 +411,9 @@ export default function EditTournamentRegistrationForm({
       <section style={{ ...cardStyle, background: "#f0fdf4", borderColor: "#bbf7d0" }}>
         <h2 style={{ marginTop: 0 }}>Registration changes saved</h2>
         <p style={{ color: "#166534" }}>
-          {success.deliveryStatus === "sent" || success.deliveryStatus === "staging_redirect"
-            ? "An updated confirmation was sent."
-            : success.deliveryStatus === "dry_run"
-              ? "Confirmation email delivery is in dry-run mode."
-              : "The confirmation email could not be delivered. Contact tournament staff if you need a copy."}
+          {success.deliveryStatus === "failed"
+            ? "Your changes were saved, but we couldn’t send the confirmation email."
+            : "Your changes were saved."}
         </p>
         <Link href={`/clubs/${clubSlug}/tournament-registration/confirmation?${query.toString()}`}>View updated registration</Link>
       </section>
@@ -405,10 +426,13 @@ export default function EditTournamentRegistrationForm({
 
       <section style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Player information</h2>
-        <p style={{ color: "#475569" }}>Email is locked for security. Request a new registration if the email address needs to change.</p>
+        <p style={{ color: "#475569" }}>
+          To change your email, contact the tournament organizer.
+        </p>
         {registration.player_id != null ? (
           <p style={{ color: "#475569" }}>
-            Linked JUPR profile: <strong>{linkedPlayer?.display_name || `Player ${registration.player_id}`}</strong>. The linked profile and its verified rating are locked by this edit link.
+            Your verified JUPR rating can’t be changed here. Contact the
+            organizer if it looks wrong.
           </p>
         ) : null}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
@@ -428,8 +452,7 @@ export default function EditTournamentRegistrationForm({
       <section style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Registered events</h2>
         <p style={{ color: "#475569" }}>
-          Each event has its own edit action for division and partner details.
-          Changes are staged until you save the full registration below.
+          Edit any event below, then save your changes.
         </p>
         <div style={{ display: "grid", gap: "0.65rem" }}>
           {selectedIds.map((eventId) => {
@@ -457,13 +480,13 @@ export default function EditTournamentRegistrationForm({
               >
                 <div>
                   <strong>
-                    {eventOption.event_family_label} — {eventOption.division_name}
+                    {publicTournamentEventLabel(eventOption.event_family_label, eventOption.division_name)}
                   </strong>
                   <p style={{ color: "#64748b", margin: "0.3rem 0" }}>
                     {schedule || "Schedule TBD"} · {eventMeta(eventOption)}
                   </p>
                   <span style={{ color: "#475569" }}>
-                    Partner: {mode.replaceAll("_", " ").toLowerCase()}
+                    Partner: {partnerStatusLabel(mode)}
                   </span>
                   {eligibilityReason ? <p role="alert" style={{ color: "#b91c1c", marginBottom: 0 }}>{eligibilityReason} Update the player details or choose another division before saving.</p> : null}
                 </div>
@@ -505,7 +528,7 @@ export default function EditTournamentRegistrationForm({
             fontWeight: 800
           }}
         >
-          + Add Event
+          Add event
         </button>
         <p><strong>Estimated total:</strong> ${totalPrice.toFixed(2)}</p>
       </section>
@@ -514,8 +537,8 @@ export default function EditTournamentRegistrationForm({
         <InteractionDialog
           open={addEventOpen}
           phase="ready"
-          title="Add Event"
-          description="Choose an available division. Choosing another division in the same event family replaces the current division."
+          title="Add event"
+          description="Choose one division for each event on a given day. Picking another division will replace your earlier choice."
           onRequestClose={() => setAddEventOpen(false)}
           actions={(
             <button type="button" onClick={() => setAddEventOpen(false)}>
@@ -533,7 +556,7 @@ export default function EditTournamentRegistrationForm({
             if (!available.length) return null;
             return (
               <section key={day.id}>
-                <h3>{day.label}{day.event_date ? ` · ${day.event_date}` : ""}</h3>
+                <h3>{publicTournamentDayLabel(day.label, day.event_date)}</h3>
                 <div style={{ display: "grid", gap: "0.5rem" }}>
                   {available.map((eventOption) => (
                     <button
@@ -552,7 +575,7 @@ export default function EditTournamentRegistrationForm({
                         background: "white"
                       }}
                     >
-                      <strong>{eventOption.event_family_label} — {eventOption.division_name}</strong>
+                      <strong>{publicTournamentEventLabel(eventOption.event_family_label, eventOption.division_name)}</strong>
                       <br />
                       <span style={{ color: "#64748b" }}>{scheduledDaysLabel(eventOption, dayById) || "Schedule TBD"}<br />{eventMeta(eventOption)}</span>
                     </button>
@@ -575,7 +598,7 @@ export default function EditTournamentRegistrationForm({
             open={Boolean(editingEventId)}
             phase="ready"
             title="Edit event"
-            description={`${eventOption.event_family_label} — ${eventOption.division_name}`}
+            description={publicTournamentEventLabel(eventOption.event_family_label, eventOption.division_name)}
             onRequestClose={() => setEditingEventId(null)}
             actions={(
               <>
@@ -595,7 +618,7 @@ export default function EditTournamentRegistrationForm({
               </>
             )}
           >
-            <h3>{eventOption.event_family_label} — {eventOption.division_name}</h3>
+            <h3>{publicTournamentEventLabel(eventOption.event_family_label, eventOption.division_name)}</h3>
             <p style={{ color: "#475569" }}>{scheduledDaysLabel(eventOption, dayById) || "Schedule TBD"}<br />{eventMeta(eventOption)}</p>
             <div style={{ display: "grid", gap: "0.6rem" }}>
               <label>Partner status<br />
@@ -632,7 +655,7 @@ export default function EditTournamentRegistrationForm({
                     defaultChecked={Boolean(prior?.show_on_partner_board)}
                     disabled={!eventOption.partner_board_enabled}
                     onChange={(event) => updateSelectionDraft(editingEventId, { show_on_partner_board: event.target.checked })}
-                  /> Show me on the public Players Needing Partners page for this event
+                  /> List me as looking for a partner in this event
                 </label>
               ) : null}
               <label>Partner note<br /><textarea defaultValue={prior?.partner_note || ""} onChange={(event) => updateSelectionDraft(editingEventId, { partner_note: event.target.value })} rows={2} style={{ width: "100%" }} /></label>
@@ -648,6 +671,7 @@ export default function EditTournamentRegistrationForm({
           registrationId={registration.id}
           eventOptionIds={selectedIds}
           catalog={commerce}
+          timeZone={timeZone}
           initialSelections={commerceSelections}
           disabled={pending}
           onReviewChange={updateCommerceReview}
@@ -658,10 +682,10 @@ export default function EditTournamentRegistrationForm({
         <h2 style={{ marginTop: 0 }}>Notes and policies</h2>
         <label>Notes for organizers<br /><textarea name="notes" defaultValue={registration.notes || ""} rows={4} style={{ width: "100%" }} /></label>
         <label style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginTop: "0.75rem" }}>
-          <input name="wants_partner_board_contact" type="checkbox" defaultChecked={Boolean(registration.wants_partner_board_contact)} /> Organizers may use my contact info for Players Needing Partners coordination.
+          <input name="wants_partner_board_contact" type="checkbox" defaultChecked={Boolean(registration.wants_partner_board_contact)} /> The organizers may contact me about finding a partner.
         </label>
         <label style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginTop: "0.75rem" }}>
-          <input name="terms_accepted" type="checkbox" required /> I confirm these registration changes are accurate and agree to tournament policies.
+          <input name="terms_accepted" type="checkbox" required /> My information is correct, and I agree to the tournament rules and refund policy.
         </label>
       </section>
 

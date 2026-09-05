@@ -114,7 +114,9 @@ def test_league_creation_and_player_positions_follow_award_race_rules() -> None:
     assert "Rating position" not in profile
     assert "eligible_count" in profile
     assert "Sort roster by" in roster
-    assert "View all eligible players" in race
+    assert "View everyone who qualifies" in race
+    assert "View every team that qualifies" in race
+    assert '"team qualifies"' in race
 
 
 def test_print_css_hides_admin_sidebar_and_uses_full_width() -> None:

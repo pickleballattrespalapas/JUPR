@@ -47,14 +47,34 @@ def test_public_modules_mirror_generator_functionality_without_official_publish(
     assert "Download one-sheet PDF" in workspace
     assert "Preview matchups" in workspace
     assert "Start session" in workspace
+    assert "public-play-generator-create:${clubId}:${generatorKind}" in workspace
+    assert "readPendingStartPayload(startOperationStorageKey)" in workspace
+    assert "sessionStorage.setItem(startOperationStorageKey, JSON.stringify(requestPayload))" in workspace
+    assert 'body: JSON.stringify(requestPayload)' in workspace
+    assert workspace.count("idempotency_key: operationKey()") == 1
+    assert "[400, 403, 409, 422].includes(error.status)" in workspace
+    assert "const isRecoveryAttempt = Boolean(requestPayload)" in workspace
+    assert "setPendingStart(isRecoveryAttempt)" in workspace
+    assert "setPendingStart(true)" in workspace
+    assert "if (startSucceeded) return" in workspace
+    assert "setStartSucceeded(true)" in workspace
+    assert "{pendingStart && !startSucceeded ?" in workspace
+    assert "{!pendingStart && !startSucceeded ?" in workspace
+    assert "disabled={busy || pendingStart || startSucceeded || !rosterReady || !mixedSetupValid}" in workspace
+    assert "Try starting again" in workspace
+    assert "we'll resend the same setup" in workspace
     assert "Save round scores" in runner
     assert "Skip round" in runner
-    assert "Adaptive roster" in runner
+    assert "Change players" in runner
     assert "Substitute player" in runner
     assert "Swap players" in runner
     assert "swapRosterPositions" in runner
-    assert "View-only link" in runner
-    assert "Public generator sessions are unrated" in runner
+    assert "Club player ID (optional)" in runner
+    assert runner.count("body.player_id = newPlayerId ? Number(newPlayerId) : null") == 2
+    assert "Only the organizer can enter scores or change players." in runner
+    assert "These games won’t affect ratings." in runner
+    assert "View-only link" not in runner
+    assert "Public generator sessions are unrated" not in runner
     assert "Publish official matches" not in runner
     assert "redirect(`/clubs/${params.clubSlug}/play`)" in live
 

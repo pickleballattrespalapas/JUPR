@@ -30,8 +30,82 @@ const stateColors: Record<string, { color: string; background: string }> = {
   SCHEDULED: { color: "#475569", background: "#f1f5f9" }
 };
 
+function drawStateLabel(state: string): string {
+  const labels: Record<string, string> = {
+    COMPLETE: "Final",
+    LIVE: "Live",
+    READY: "Ready",
+    SCHEDULED: "Upcoming"
+  };
+  const normalized = String(state || "").trim().toUpperCase();
+  return labels[normalized] || "Upcoming";
+}
+
+function gameStateLabel(state: string): string {
+  const labels: Record<string, string> = {
+    FINAL: "Final",
+    READY: "Ready",
+    PENDING: "Upcoming"
+  };
+  const normalized = String(state || "").trim().toUpperCase();
+  return labels[normalized] || "Upcoming";
+}
+
+function drawDivisionLabel(draw: PublicTournamentDrawResult): string {
+  const family = String(draw.event_family_label || "").trim();
+  const division = String(draw.division_name || "").trim();
+  if (!family) return division;
+  if (!division) return family;
+  if (division.toLocaleLowerCase().startsWith(family.toLocaleLowerCase())) return division;
+  return `${family} · ${division}`;
+}
+
+function scheduledDayLabel(day: PublicTournamentDrawResult["scheduled_days"][number]): string {
+  const label = String(day.label || "").trim();
+  const eventDate = String(day.event_date || "").trim();
+  if (!eventDate) return label;
+  const parsed = new Date(`${eventDate.slice(0, 10)}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) return label.includes(eventDate) ? label : `${label} · ${eventDate}`;
+  const shortDate = new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC"
+  }).format(parsed);
+  const fullDate = new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC"
+  }).format(parsed);
+  const normalize = (value: string) => value.toLocaleLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return normalize(label).includes(normalize(shortDate)) ? label : `${label} · ${fullDate}`;
+}
+
+function dateLabel(value?: string | null): string {
+  if (!value) return "Date to be announced";
+  const parsed = new Date(`${String(value).slice(0, 10)}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) return "Date to be announced";
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC"
+  }).format(parsed);
+}
+
 function gameTitle(game: PublicTournamentGameResult): string {
-  if (game.playoff_round) return game.playoff_round;
+  const playoffRounds: Record<string, string> = {
+    QF: "Quarterfinal",
+    QUARTERFINAL: "Quarterfinal",
+    SF: "Semifinal",
+    SEMIFINAL: "Semifinal",
+    BRONZE: "Bronze medal match",
+    FINAL: "Final"
+  };
+  if (game.playoff_round) {
+    const round = String(game.playoff_round).trim();
+    return playoffRounds[round.toUpperCase()] || "Playoff";
+  }
   if (game.round_number) return `Round ${game.round_number}`;
   return game.stage === "PLAYOFF" ? "Playoff" : "Match";
 }
@@ -45,7 +119,7 @@ function scoreText(game: PublicTournamentGameResult): string {
   if (game.score_a != null && game.score_b != null) {
     return `${game.score_a}–${game.score_b}`;
   }
-  return game.state === "FINAL" ? "Final" : game.state.toLowerCase();
+  return gameStateLabel(game.state);
 }
 
 function seriesGameScoresText(game: PublicTournamentGameResult): string | null {
@@ -64,25 +138,25 @@ function tiebreakCriterionLabel(criterion: string): string {
     HEAD_TO_HEAD: "Head-to-head",
     POINT_DIFFERENTIAL: "Point differential",
     POINTS_FOR: "Total points scored",
-    TEAM_NUMBER: "Original team number"
+    TEAM_NUMBER: "Team number"
   };
   const normalized = String(criterion || "").trim().toUpperCase();
-  return labels[normalized] || normalized.replaceAll("_", " ").toLowerCase();
+  return labels[normalized] || "Tiebreak";
 }
 
 function tiebreakOutcomeLabel(outcome: string, detail: string): string {
-  if (/not applied/i.test(detail)) return "Not applied";
+  if (/not applied/i.test(detail)) return "Skipped";
   const labels: Record<string, string> = {
-    RESOLVED: "Resolved",
-    PARTIAL: "Partially resolved",
-    PARTIALLY_RESOLVED: "Partially resolved",
+    RESOLVED: "Tie broken",
+    PARTIAL: "Some teams ranked",
+    PARTIALLY_RESOLVED: "Some teams ranked",
     UNRESOLVED: "Still tied",
-    NOT_APPLIED: "Not applied",
-    SKIPPED: "Not applied",
-    FALLBACK: "Final fallback"
+    NOT_APPLIED: "Skipped",
+    SKIPPED: "Skipped",
+    FALLBACK: "Team-number tiebreak"
   };
   const normalized = String(outcome || "").trim().toUpperCase();
-  return labels[normalized] || normalized.replaceAll("_", " ").toLowerCase();
+  return labels[normalized] || "Tiebreak";
 }
 
 function DrawResults({ draw }: { draw: PublicTournamentDrawResult }) {
@@ -90,6 +164,9 @@ function DrawResults({ draw }: { draw: PublicTournamentDrawResult }) {
   const tiebreakExplanations = draw.tiebreak_explanations || [];
   const rankingPolicyDescription = draw.ranking_policy?.description?.trim() || null;
   const rankingCriteria = draw.ranking_policy?.criteria || [];
+  const tiebreakCriteria = rankingCriteria.filter(
+    (criterion) => String(criterion).trim().toUpperCase() !== "WINS"
+  );
   return (
     <article style={{ ...cardStyle, marginBottom: "1rem" }}>
       <div
@@ -103,14 +180,12 @@ function DrawResults({ draw }: { draw: PublicTournamentDrawResult }) {
       >
         <div>
           <p style={{ color: "#2563eb", fontWeight: 800, margin: 0 }}>
-            {draw.event_family_label} · {draw.division_name}
+            {drawDivisionLabel(draw)}
           </p>
           <h2 style={{ margin: "0.25rem 0" }}>{draw.name}</h2>
           <p style={{ color: "#64748b", margin: 0 }}>
             {draw.scheduled_days
-              .map((day) =>
-                day.event_date ? `${day.label} · ${day.event_date}` : day.label
-              )
+              .map(scheduledDayLabel)
               .join(" · ") || "Schedule to be announced"}
           </p>
         </div>
@@ -123,13 +198,13 @@ function DrawResults({ draw }: { draw: PublicTournamentDrawResult }) {
             background: badge.background
           }}
         >
-          {draw.state}
+          {drawStateLabel(draw.state)}
         </span>
       </div>
 
       {draw.podium.length ? (
         <section aria-label={`${draw.name} medalists`}>
-          <h3>Podium and medals</h3>
+          <h3>Medalists</h3>
           <ol style={{ display: "grid", gap: "0.4rem", paddingLeft: "1.5rem" }}>
             {draw.podium.map((entry) => (
               <li key={`${entry.placement}:${entry.team_name}`}>
@@ -147,8 +222,8 @@ function DrawResults({ draw }: { draw: PublicTournamentDrawResult }) {
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr>
-                  {['Rank', 'Team / player', 'W', 'L', 'PF', 'PA', '+/−'].map((label) => (
-                    <th key={label} scope="col" style={{ textAlign: label === 'Team / player' ? 'left' : 'right', padding: "0.45rem", borderBottom: "1px solid #cbd5e1" }}>{label}</th>
+                  {["Rank", "Team / player", "Wins", "Losses", "Points for", "Points against", "Difference"].map((label) => (
+                    <th key={label} scope="col" style={{ textAlign: label === "Team / player" ? "left" : "right", padding: "0.45rem", borderBottom: "1px solid #cbd5e1" }}>{label}</th>
                   ))}
                 </tr>
               </thead>
@@ -157,7 +232,7 @@ function DrawResults({ draw }: { draw: PublicTournamentDrawResult }) {
                   <tr key={row.public_team_key}>
                     <td style={{ textAlign: "right", padding: "0.45rem" }}>{row.rank ?? "—"}</td>
                     <th scope="row" style={{ textAlign: "left", padding: "0.45rem" }}>
-                      {row.team_name}{row.retired ? " · Retired" : ""}
+                      {row.team_name}{row.retired ? " · Withdrawn" : ""}
                     </th>
                     <td style={{ textAlign: "right", padding: "0.45rem" }}>{row.wins ?? 0}</td>
                     <td style={{ textAlign: "right", padding: "0.45rem" }}>{row.losses ?? 0}</td>
@@ -208,14 +283,15 @@ function DrawResults({ draw }: { draw: PublicTournamentDrawResult }) {
                     {rankingPolicyDescription}
                   </p>
                 ) : null}
-                {rankingCriteria.length ? (
+                {!rankingPolicyDescription && tiebreakCriteria.length ? (
                   <p style={{ margin: "0 0 0.35rem", color: "#334155", fontSize: "0.82rem" }}>
-                    <strong>Rule order:</strong> {rankingCriteria.map(tiebreakCriterionLabel).join(" → ")}
+                    <strong>Ties are decided by:</strong>{" "}
+                    {tiebreakCriteria.map(tiebreakCriterionLabel).join(", then ")}.
                   </p>
                 ) : null}
                 <p style={{ margin: "0 0 0.15rem", color: "#334155", fontSize: "0.82rem", fontWeight: 700 }}>
                   {draw.round_robin_complete
-                    ? "Final round-robin order."
+                    ? "These are the final round-robin standings."
                     : "Provisional — this order may change until round-robin play is complete."}
                 </p>
                 {tiebreakExplanations.map((explanation, explanationIndex) => (
@@ -303,7 +379,7 @@ function DrawResults({ draw }: { draw: PublicTournamentDrawResult }) {
             ))}
           </div>
         ) : (
-          <p style={{ color: "#64748b" }}>No scores have been published yet.</p>
+          <p style={{ color: "#64748b" }}>No scores yet.</p>
         )}
       </section>
     </article>
@@ -322,36 +398,43 @@ export default async function TournamentResultsPage({ params, searchParams }: Pr
     return (
       <section>
         <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>Tournament results</p>
-        <h1 style={{ marginTop: 0 }}>Choose tournament results</h1>
+        <h1 style={{ marginTop: 0 }}>Choose a tournament</h1>
         <p style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
           <Link href={`/clubs/${params.clubSlug}/tournament-results`}>Current tournaments</Link>
           <Link href={`/clubs/${params.clubSlug}/tournament-results?view=past`}>Past tournaments</Link>
           <Link href={`/clubs/${params.clubSlug}/tournaments`}>Tournament Home</Link>
         </p>
-        {error ? <p role="alert" style={{ color: "#b91c1c" }}>{error}</p> : null}
+        {error ? <p role="alert" style={{ color: "#b91c1c" }}>Tournament results are unavailable right now. Please try again shortly.</p> : null}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "0.75rem" }}>
           {(data?.tournaments || []).map((tournament) => (
             <article key={tournament.id} style={cardStyle}>
               <h2 style={{ marginTop: 0 }}>{tournament.name}</h2>
-              <p style={{ color: "#475569" }}>{tournament.start_date || "Date TBD"}{tournament.end_date ? ` – ${tournament.end_date}` : ""}</p>
-              <Link href={`/clubs/${params.clubSlug}/tournament-results?tournament_id=${encodeURIComponent(tournament.id)}${view === "past" ? "&view=past" : ""}`} style={{ fontWeight: 800 }}>Open live scores and results</Link>
+              <p style={{ color: "#475569" }}>{dateLabel(tournament.start_date)}{tournament.end_date ? ` – ${dateLabel(tournament.end_date)}` : ""}</p>
+              <Link href={`/clubs/${params.clubSlug}/tournament-results?tournament_id=${encodeURIComponent(tournament.id)}${view === "past" ? "&view=past" : ""}`} style={{ fontWeight: 800 }}>View results</Link>
             </article>
           ))}
         </div>
-        {!error && !data?.tournaments.length ? <p>No {view} tournament results are published.</p> : null}
+        {!error && !data?.tournaments.length ? (
+          <p>{view === "past" ? "No past tournament results yet." : "No current tournament results yet."}</p>
+        ) : null}
       </section>
     );
   }
 
-  const { data, error } = await getPublicTournamentResults(
+  const { data, error, status } = await getPublicTournamentResults(
     params.clubSlug,
     tournamentId
   );
   if (error || !data) {
+    const missing = status === 404;
     return (
       <section>
-        <h1>Tournament results not found</h1>
-        <p role="alert" style={{ color: "#b91c1c" }}>{error || "This tournament is not publicly available."}</p>
+        <h1>{missing ? "Tournament results not found" : "Tournament results unavailable"}</h1>
+        <p role="alert" style={{ color: "#b91c1c" }}>
+          {missing
+            ? "We couldn’t find those tournament results. They may no longer be public."
+            : "We couldn’t load those tournament results. Please try again shortly."}
+        </p>
         <Link href={`/clubs/${params.clubSlug}/tournament-results${view === "past" ? "?view=past" : ""}`}>Choose another tournament</Link>
       </section>
     );
@@ -382,7 +465,7 @@ export default async function TournamentResultsPage({ params, searchParams }: Pr
       </p>
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>Live & Results</p>
       <h1 style={{ marginTop: 0 }}>{data.tournament.name}</h1>
-      <p style={{ color: "#475569", maxWidth: "52rem" }}>Patron-safe live progress, completed scores, round-robin standings, playoff brackets, and official medalists.</p>
+      <p style={{ color: "#475569", maxWidth: "52rem" }}>Follow live scores, standings, brackets, and medal winners.</p>
       <PublicTournamentNav
         clubSlug={params.clubSlug}
         tournamentName={data.tournament.name}
@@ -428,9 +511,9 @@ export default async function TournamentResultsPage({ params, searchParams }: Pr
                     boxShadow: selected ? "0 0 0 2px rgb(37 99 235 / 10%)" : "none"
                   }}
                 >
-                  <strong>{draw.event_family_label} · {draw.division_name}</strong>
+                  <strong>{drawDivisionLabel(draw)}</strong>
                   <span style={{ color: "#475569", fontSize: "0.9rem" }}>{draw.name}</span>
-                  <span style={{ color: badge.color, fontSize: "0.78rem", fontWeight: 850 }}>{draw.state}</span>
+                  <span style={{ color: badge.color, fontSize: "0.78rem", fontWeight: 850 }}>{drawStateLabel(draw.state)}</span>
                 </Link>
               );
             })}
@@ -450,7 +533,7 @@ export default async function TournamentResultsPage({ params, searchParams }: Pr
           {upcomingDraws.map((draw) => <DrawResults key={draw.public_draw_key} draw={draw} />)}
         </section>
       ) : null}
-      {!data.draws.length ? <article style={cardStyle}><h2 style={{ marginTop: 0 }}>No standard draw results yet</h2><p style={{ color: "#475569", marginBottom: 0 }}>Singles and doubles draws will appear here after tournament staff publish them.</p></article> : null}
+      {!data.draws.length ? <article style={cardStyle}><h2 style={{ marginTop: 0 }}>No results yet</h2><p style={{ color: "#475569", marginBottom: 0 }}>Singles and doubles results will appear after organizers publish them.</p></article> : null}
       <p><Link href={`/clubs/${params.clubSlug}/tournament-team-results`}>Four-player team results</Link></p>
     </section>
   );

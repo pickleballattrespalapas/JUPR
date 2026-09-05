@@ -177,7 +177,7 @@ def test_public_tournament_registration_duplicate_email_returns_recovery_conflic
     duplicate = client.post("/clubs/tres-palapas/tournament-registration", json=payload)
 
     assert duplicate.status_code == 409
-    assert "secure edit-link flow" in duplicate.json()["detail"]
+    assert "Request an edit link" in duplicate.json()["detail"]
 
 
 def test_public_tournament_registration_submit_requires_age_and_gender(client):

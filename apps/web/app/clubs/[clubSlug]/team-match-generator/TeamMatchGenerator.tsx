@@ -150,7 +150,7 @@ export default function TeamMatchGenerator({ clubId }: { clubId: string }) {
     window.localStorage.removeItem(legacyTeamMatchDraftKey(clubId));
     setTitle(`Team Match ${new Date().toISOString().slice(0, 10)}`);
     setTeams([blankTeam(0), blankTeam(1)]);
-    setMessage("Draft cleared.");
+    setMessage("Your draft was cleared.");
   }
 
   return (
@@ -237,14 +237,14 @@ export default function TeamMatchGenerator({ clubId }: { clubId: string }) {
         <ConfirmAction
           triggerLabel="Clear draft"
           title="Clear this Team Match draft?"
-          description="This removes the setup roster from this browser. Previously generated sessions remain available by their session URLs."
+          description="This clears the teams you entered. Existing sessions won’t be deleted."
           confirmLabel="Yes, clear draft"
           cancelLabel="No, keep draft"
           confirmationText=""
           tone="danger"
           onConfirm={async () => {
             clearDraft();
-            return actionSuccess("Draft cleared", "The Team Match setup draft was removed from this browser.");
+            return actionSuccess("Draft cleared", "Your draft was cleared.");
           }}
         />
         {lastSessionId ? (

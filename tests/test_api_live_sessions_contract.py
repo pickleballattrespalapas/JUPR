@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 fastapi = pytest.importorskip("fastapi")
@@ -8,7 +10,7 @@ pytest.importorskip("supabase")
 from fastapi.testclient import TestClient
 
 from jupr_app.domain.live_beta_engine import create_round_robin_event, update_round_robin_score
-from services.api.main import app
+from services.api.main import _is_public_registration_path, app
 from tests.test_public_live_write_service import FakeSupabase as FakeWriteSupabase
 
 
@@ -101,6 +103,18 @@ class FakeLegacyLiveSessionsSupabase:
         return FakeLegacyLiveSessionsQuery(str(table_name), self.rows)
 
 
+class FakeUnavailableOperationLedgerQuery(FakeQuery):
+    def execute(self):
+        raise RuntimeError("relation public_live_operations does not exist")
+
+
+class FakeUnavailableOperationLedgerSupabase(FakeSupabase):
+    def table(self, table_name):
+        if str(table_name) == "public_live_operations":
+            return FakeUnavailableOperationLedgerQuery(str(table_name), [])
+        return super().table(table_name)
+
+
 def _row() -> dict:
     event = create_round_robin_event(
         name="API Live Test",
@@ -191,7 +205,8 @@ def test_live_sessions_requires_service_role_for_private_projection(monkeypatch)
     response = TestClient(app).get("/clubs/test-club/live-sessions")
 
     assert response.status_code == 503
-    assert "SUPABASE_SERVICE_ROLE_KEY" in response.json()["detail"]
+    assert response.json()["detail"] == "Live sessions are temporarily unavailable. Please try again later."
+    assert "SUPABASE_SERVICE_ROLE_KEY" not in response.json()["detail"]
 
 
 def test_live_sessions_list_reports_schema_unavailable(monkeypatch):
@@ -205,7 +220,8 @@ def test_live_sessions_list_reports_schema_unavailable(monkeypatch):
     response = TestClient(app).get("/clubs/test-club/live-sessions")
 
     assert response.status_code == 503
-    assert "live_sessions" in response.json()["detail"]
+    assert response.json()["detail"] == "Live sessions are temporarily unavailable. Please try again later."
+    assert "live_sessions" not in response.json()["detail"]
 
 
 def test_live_session_detail_reports_schema_unavailable(monkeypatch):
@@ -219,6 +235,69 @@ def test_live_session_detail_reports_schema_unavailable(monkeypatch):
     response = TestClient(app).get("/clubs/test-club/live-sessions/public-session")
 
     assert response.status_code == 503
+
+
+def test_live_session_health_keeps_safe_reason_and_logs_query_failure(monkeypatch, caplog):
+    _patch_service_role(monkeypatch)
+    monkeypatch.setattr(
+        "services.api.main.get_supabase_client",
+        lambda: FakeUnavailableLiveSessionsSupabase(),
+    )
+
+    with caplog.at_level(logging.ERROR, logger="services.api.main"):
+        response = TestClient(app).get("/health/live-sessions")
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["reason"] == "live_sessions_query_failed"
+    assert payload["detail"] == "The live-session data check failed. Review the API logs."
+    assert "state" not in payload["detail"]
+    assert "Could not find the 'state' column" in caplog.text
+
+
+def test_live_session_health_distinguishes_durability_schema(monkeypatch, caplog):
+    _patch_service_role(monkeypatch)
+    monkeypatch.setattr(
+        "services.api.main.get_supabase_client",
+        lambda: FakeLegacyLiveSessionsSupabase([_row()]),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="services.api.main"):
+        response = TestClient(app).get("/health/live-sessions")
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["reason"] == "durability_schema_missing"
+    assert payload["live_sessions_query_ok"] is True
+    assert payload["durability_schema_ready"] is False
+    assert payload["detail"] == "Apply the public live durability migration before enabling writes."
+    assert "Could not find the 'version' column" in caplog.text
+
+
+def test_live_session_health_distinguishes_operation_ledger_failure(monkeypatch, caplog):
+    _patch_service_role(monkeypatch)
+    monkeypatch.setattr(
+        "services.api.main.get_supabase_client",
+        lambda: FakeUnavailableOperationLedgerSupabase([_row()]),
+    )
+
+    with caplog.at_level(logging.ERROR, logger="services.api.main"):
+        response = TestClient(app).get("/health/live-sessions")
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["reason"] == "operation_ledger_query_failed"
+    assert payload["live_sessions_query_ok"] is True
+    assert payload["operation_ledger_query_ok"] is False
+    assert "public_live_operations" not in payload["detail"]
+    assert "relation public_live_operations does not exist" in caplog.text
+
+
+def test_public_registration_error_scope_only_wraps_public_routes():
+    assert _is_public_registration_path("/clubs/test/tournament-registration")
+    assert _is_public_registration_path("/clubs/test/tournament-registration/edit")
+    assert _is_public_registration_path("/clubs/test/tournament-roster")
+    assert not _is_public_registration_path("/admin/clubs/test/tournament-registration")
 
 
 def test_live_session_reads_fall_back_view_only_before_durability_migration(monkeypatch):

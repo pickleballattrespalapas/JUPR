@@ -21,9 +21,5 @@ def require_team_leagues_enabled_or_403() -> None:
     if not team_leagues_enabled():
         raise HTTPException(
             status_code=403,
-            detail=(
-                "Team leagues are disabled. Enable "
-                f"{TEAM_LEAGUES_FEATURE_FLAG} only on the isolated staging "
-                "candidate."
-            ),
+            detail="Team leagues are temporarily unavailable.",
         )

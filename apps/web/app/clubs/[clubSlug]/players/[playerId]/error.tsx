@@ -4,7 +4,7 @@ export default function PlayerProfileError({ reset }: { error: Error & { digest?
   return (
     <section data-testid="player-profile-route-error-state" role="alert">
       <h1>Player profile unavailable</h1>
-      <p>No private player data was exposed. Try loading the public profile again.</p>
+      <p>We couldn&apos;t load this player profile. Please try again.</p>
       <button type="button" onClick={() => reset()}>Try again</button>
     </section>
   );

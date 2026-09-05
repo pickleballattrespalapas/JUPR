@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 import json
+import logging
 import math
 import re
 import uuid
@@ -33,6 +37,31 @@ PARTNER_MODE_OPTIONS = ["NONE", "HAS_PARTNER", "NEEDS_PARTNER"]
 ADMIN_REGISTRATION_STATUS_OPTIONS = ["confirmed", "waitlist", "cancelled"]
 ADMIN_PAYMENT_STATUS_OPTIONS = ["unpaid", "paid", "waived", "refunded"]
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+LOGGER = logging.getLogger(__name__)
+PUBLIC_REGISTRATION_UNAVAILABLE_MESSAGE = (
+    "Tournament registration is temporarily unavailable."
+)
+_PUBLIC_REGISTRATION_ERROR_SCOPE: ContextVar[bool] = ContextVar(
+    "public_registration_error_scope",
+    default=False,
+)
+
+
+@contextmanager
+def public_registration_error_scope() -> Iterator[None]:
+    """Sanitize schema diagnostics while building a public API response."""
+
+    token = _PUBLIC_REGISTRATION_ERROR_SCOPE.set(True)
+    try:
+        yield
+    finally:
+        _PUBLIC_REGISTRATION_ERROR_SCOPE.reset(token)
+
+
+def _registration_availability_detail(diagnostic: str) -> str:
+    if _PUBLIC_REGISTRATION_ERROR_SCOPE.get():
+        return PUBLIC_REGISTRATION_UNAVAILABLE_MESSAGE
+    return diagnostic
 
 
 class SelectionWriteConflict(RuntimeError):
@@ -422,7 +451,11 @@ def _tables_available(supabase, required_tables: list[str]) -> tuple[bool, str |
         except Exception as exc:
             failures.append(f"{table_name}: {exc}")
     if failures:
-        return False, "Registration tables unavailable: " + " | ".join(failures)
+        diagnostic = "Registration tables unavailable: " + " | ".join(failures)
+        LOGGER.warning(
+            "Tournament registration table check failed: %s", diagnostic
+        )
+        return False, _registration_availability_detail(diagnostic)
     return True, None
 
 
@@ -434,7 +467,8 @@ def registration_feature_available(supabase) -> tuple[bool, str | None]:
     try:
         assert_registration_schema_contract(supabase, required_tables=CORE_REGISTRATION_SCHEMA_TABLES)
     except ValueError as exc:
-        return False, str(exc)
+        LOGGER.warning("Tournament registration schema check failed: %s", exc)
+        return False, _registration_availability_detail(str(exc))
     return True, None
 
 
@@ -449,7 +483,8 @@ def partner_link_schema_available(supabase) -> tuple[bool, str | None]:
             required_tables=["tournament_registrations.player_id", *PARTNER_LINK_SCHEMA_TABLES],
         )
     except ValueError as exc:
-        return False, str(exc)
+        LOGGER.warning("Tournament registration partner schema check failed: %s", exc)
+        return False, _registration_availability_detail(str(exc))
     return True, None
 
 
@@ -3197,7 +3232,7 @@ def save_registration(
             raise ValueError("Expected registration does not match the registered email.")
         registration_id = str(expected_registration_id)
     elif existing and commerce_transaction is None:
-        raise ValueError("A registration already exists for this email. Please use the secure edit link flow.")
+        raise ValueError("You’re already registered with this email. Request an edit link to make changes.")
     else:
         registration_id = str(
             payload.get("_registration_id") or _uid("reg")
@@ -3471,8 +3506,7 @@ def save_registration(
                 exc, "JUPR_TOURNAMENT_COMMERCE_REGISTRATION_DUPLICATE"
             ):
                 raise ValueError(
-                    "A registration already exists for this email. Please use "
-                    "the secure edit-link flow."
+                    "You’re already registered with this email. Request an edit link to make changes."
                 ) from exc
             if any(
                 _database_error_contains(exc, marker)
@@ -3558,7 +3592,7 @@ def save_registration(
             exc, "JUPR_TOURNAMENT_REGISTRATION_DUPLICATE"
         ):
             raise ValueError(
-                "A registration already exists for this email. Please use the secure edit-link flow."
+                "You’re already registered with this email. Request an edit link to make changes."
             ) from exc
         raise RuntimeError(
             "Tournament registration was not saved."

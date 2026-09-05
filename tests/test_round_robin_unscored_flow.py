@@ -192,8 +192,9 @@ def test_public_and_staff_component_navigation_contracts() -> None:
         assert "/advance" not in block
         assert "current_round_number" in block
 
+    assert "Round Played" in admin_runner
+    assert "Mark round played" in public_runner
     for runner in (admin_runner, public_runner):
-        assert "Round Played" in runner
         assert "View standings and continue" in runner
         assert "Session complete" in runner
 

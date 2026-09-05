@@ -1,6 +1,10 @@
 import Link from "next/link";
 import { getClubTournamentRegistrationConfirmation } from "@/lib/tournamentRegistrationApi";
 import { formatCommerceMoney } from "@/lib/tournamentCommerceApi";
+import {
+  publicTournamentDayLabel,
+  publicTournamentEventLabel
+} from "@/lib/tournamentRegistrationEligibility";
 import { recoverPublicFourPlayerTeamSetup } from "@/lib/tournamentTeamCompetitionApi";
 import FourPlayerTeamSetupRecovery from "./FourPlayerTeamSetupRecovery";
 
@@ -23,14 +27,82 @@ const cardStyle = {
 function dateLabel(value?: string | null): string | null {
   if (!value) return null;
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value).slice(0, 10);
-  return date.toISOString().slice(0, 10);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Intl.DateTimeFormat("en-US", {
+    dateStyle: "medium",
+    timeZone: "UTC"
+  }).format(date);
+}
+
+function scheduleLabel(label: string, value?: string | null): string {
+  return publicTournamentDayLabel(label, value);
+}
+
+function registrationStatusLabel(status?: string | null): string {
+  switch (String(status || "").toUpperCase()) {
+    case "CONFIRMED":
+      return "Confirmed";
+    case "WAITLIST":
+    case "WAITLISTED":
+      return "On the waitlist";
+    case "CANCELLED":
+    case "CANCELED":
+      return "Canceled";
+    case "WITHDRAWN":
+      return "Withdrawn";
+    default:
+      return "Received";
+  }
+}
+
+function registrationSummary(status?: string | null): string {
+  switch (String(status || "").toUpperCase()) {
+    case "CONFIRMED":
+      return "You’re registered. Save this page, and the organizer will follow up about payment and scheduling.";
+    case "WAITLIST":
+    case "WAITLISTED":
+      return "You’re on the waitlist. Save this page, and the organizer will follow up if a spot opens.";
+    case "CANCELLED":
+    case "CANCELED":
+      return "This registration is canceled. Contact the organizer if you have questions.";
+    case "WITHDRAWN":
+      return "This registration has been withdrawn. Contact the organizer if you have questions.";
+    default:
+      return "We received your registration. Save this page, and the organizer will follow up.";
+  }
+}
+
+function paymentStatusLabel(status?: string | null): string {
+  switch (String(status || "").toUpperCase()) {
+    case "PAID":
+      return "Paid";
+    case "PARTIALLY_PAID":
+      return "Partially paid";
+    case "REFUNDED":
+      return "Refunded";
+    case "WAIVED":
+      return "No payment needed";
+    default:
+      return "Payment due";
+  }
+}
+
+function partnerStatusLabel(status?: string | null): string | null {
+  switch (String(status || "").toUpperCase()) {
+    case "HAS_PARTNER":
+      return "Has a partner";
+    case "NEEDS_PARTNER":
+      return "Looking for a partner";
+    case "NONE":
+      return null;
+    default:
+      return null;
+  }
 }
 
 function deliveryMessage(status?: string): { text: string; color: string; background: string } | null {
-  if (status === "failed") return { text: "Your registration was saved, but the confirmation email could not be sent. Tournament staff can still see it.", color: "#991b1b", background: "#fef2f2" };
-  if (status === "dry_run") return { text: "Your registration was saved. Email delivery was safely dry-run in this environment.", color: "#92400e", background: "#fffbeb" };
-  if (status === "staging_redirect") return { text: "Your registration was saved. The email was sent to the staging redirect address.", color: "#166534", background: "#f0fdf4" };
+  if (status === "failed") return { text: "Your registration was saved, but we couldn’t send the confirmation email. The organizer can still see your registration.", color: "#991b1b", background: "#fef2f2" };
+  if (status === "dry_run" || status === "staging_redirect") return { text: "Your registration was saved.", color: "#166534", background: "#f0fdf4" };
   if (status === "sent") return { text: "Your registration was saved and the confirmation email was sent.", color: "#166534", background: "#f0fdf4" };
   return null;
 }
@@ -44,7 +116,7 @@ export default async function TournamentRegistrationConfirmationPage({ params, s
         recoverPublicFourPlayerTeamSetup(clubSlug, confirmationToken)
       ])
     : [
-        { data: null, error: "Missing secure confirmation token." },
+        { data: null, error: "missing_confirmation_link" },
         { data: null, error: null }
       ];
   const { data, error } = confirmationResult;
@@ -68,20 +140,26 @@ export default async function TournamentRegistrationConfirmationPage({ params, s
       </p>
       <h1 style={{ marginTop: 0 }}>{data?.tournament.name ?? "Tournament registration"}</h1>
 
-      {error ? <p style={{ color: "#b91c1c" }}>{error}</p> : null}
+      {error ? (
+        <p style={{ color: "#b91c1c" }}>
+          {confirmationToken
+            ? "We couldn’t open this confirmation. Try the link in your email again or contact the organizer."
+            : "This confirmation link is incomplete. Open the link in your email or contact the organizer."}
+        </p>
+      ) : null}
       {data ? (
         <>
           {delivery ? <p role="status" style={{ color: delivery.color, background: delivery.background, borderRadius: "10px", padding: "0.75rem" }}>{delivery.text}</p> : null}
           <article style={{ ...cardStyle, marginBottom: "1rem" }}>
             <h2 style={{ marginTop: 0 }}>Thanks, {data.registration.display_name}</h2>
             <p style={{ color: "#475569" }}>
-              Your registration has been received. Save this page for your records; staff will manage payment status, draw import, seeding, and tournament operations.
+              {registrationSummary(data.registration.status)}
             </p>
             <dl style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", margin: 0 }}>
               <div><dt style={{ fontWeight: 700 }}>Submitted</dt><dd style={{ margin: 0 }}>{dateLabel(data.registration.submitted_at) ?? "—"}</dd></div>
-              <div><dt style={{ fontWeight: 700 }}>Status</dt><dd style={{ margin: 0 }}>{data.registration.status ?? "confirmed"}</dd></div>
-              <div><dt style={{ fontWeight: 700 }}>Payment</dt><dd style={{ margin: 0 }}>{data.registration.payment_status ?? "unpaid"}</dd></div>
-              <div><dt style={{ fontWeight: 700 }}>Total due offline</dt><dd style={{ margin: 0 }}>{commerceQuote ? formatCommerceMoney(commerceQuote.total_minor) : `$${Number(data.total_price_usd || 0).toFixed(2)}`}</dd></div>
+              <div><dt style={{ fontWeight: 700 }}>Status</dt><dd style={{ margin: 0 }}>{registrationStatusLabel(data.registration.status)}</dd></div>
+              <div><dt style={{ fontWeight: 700 }}>Payment</dt><dd style={{ margin: 0 }}>{paymentStatusLabel(data.registration.payment_status)}</dd></div>
+              <div><dt style={{ fontWeight: 700 }}>Amount due to organizer</dt><dd style={{ margin: 0 }}>{commerceQuote ? formatCommerceMoney(commerceQuote.total_minor) : `$${Number(data.total_price_usd || 0).toFixed(2)}`}</dd></div>
             </dl>
           </article>
 
@@ -89,22 +167,18 @@ export default async function TournamentRegistrationConfirmationPage({ params, s
           <div style={{ display: "grid", gap: "0.75rem" }}>
             {data.selections.map((selection, index) => (
               <article key={`${selection.day_label}-${selection.event_family_label}-${selection.event_label}-${index}`} style={cardStyle}>
-                <strong>{selection.event_family_label} — {selection.event_label}</strong>
+                <strong>{publicTournamentEventLabel(selection.event_family_label, selection.event_label)}</strong>
                 <p style={{ margin: "0.35rem 0 0", color: "#64748b" }}>
                   {(selection.scheduled_days?.length
                     ? selection.scheduled_days
-                        .map((day) =>
-                          day.event_date
-                            ? `${day.label} · ${dateLabel(day.event_date)}`
-                            : day.label
-                        )
+                        .map((day) => scheduleLabel(day.label, day.event_date))
                         .join(" · ")
-                    : `${selection.day_label}${selection.event_date ? ` · ${dateLabel(selection.event_date)}` : ""}`)}
+                    : scheduleLabel(selection.day_label, selection.event_date))}
                 </p>
                 <p style={{ margin: "0.35rem 0 0", color: "#475569" }}>
                   {[selection.skill_label, selection.age_label].filter(Boolean).join(" · ") || "Open division"} · ${Number(selection.price_usd || 0).toFixed(2)}
                 </p>
-                {selection.partner_mode ? <p style={{ margin: "0.35rem 0 0", color: "#475569" }}>Partner status: {selection.partner_mode}{selection.partner_name ? ` · ${selection.partner_name}` : ""}</p> : null}
+                {partnerStatusLabel(selection.partner_mode) ? <p style={{ margin: "0.35rem 0 0", color: "#475569" }}>Partner: {partnerStatusLabel(selection.partner_mode)}{selection.partner_name ? ` · ${selection.partner_name}` : ""}</p> : null}
                 <p style={{ margin: "0.75rem 0 0" }}>
                   <Link href={manageRegistrationHref} style={{ fontWeight: 800 }}>
                     Edit this event
@@ -112,11 +186,11 @@ export default async function TournamentRegistrationConfirmationPage({ params, s
                 </p>
               </article>
             ))}
-            {!data.selections.length ? <p style={{ color: "#92400e", background: "#fffbeb", borderRadius: "10px", padding: "0.75rem" }}>No event selections were found. Contact tournament staff if this is unexpected.</p> : null}
+            {!data.selections.length ? <p style={{ color: "#92400e", background: "#fffbeb", borderRadius: "10px", padding: "0.75rem" }}>We couldn’t load your events. Please contact the organizer.</p> : null}
           </div>
           <p>
             <Link href={manageRegistrationHref} style={{ fontWeight: 800 }}>
-              + Add Event
+              Add an event
             </Link>
           </p>
 
@@ -163,7 +237,7 @@ export default async function TournamentRegistrationConfirmationPage({ params, s
               </div>
               {commerceQuote && commerceQuote.discount_minor > 0 ? (
                 <p style={{ color: "#166534" }}>
-                  Total bundle and giveaway savings:{" "}
+                  Total savings:{" "}
                   <strong>
                     {formatCommerceMoney(commerceQuote.discount_minor)}
                   </strong>
@@ -189,23 +263,23 @@ export default async function TournamentRegistrationConfirmationPage({ params, s
                 padding: "0.75rem"
               }}
             >
-              Your registration is saved, but team setup recovery is
-              temporarily unavailable. Contact tournament staff and do not
-              submit a second registration.
+              Your registration is saved, but we couldn’t finish your team.
+              Contact the organizer instead of registering again.
             </p>
           ) : null}
 
           <article style={{ ...cardStyle, marginTop: "1rem" }}>
-            <h2 style={{ marginTop: 0 }}>Payment and email</h2>
+            <h2 style={{ marginTop: 0 }}>What happens next</h2>
             <p>
-              Payment is handled offline by tournament staff. {data.payment_note}
+              You’ll pay the tournament organizer separately; we won’t charge
+              you here. {data.payment_note}
             </p>
             {data.notification_sender?.from_email ? (
-              <p style={{ color: "#475569" }}>Your confirmation email comes from {data.notification_sender.from_name || "JUPR Notifications"} &lt;{data.notification_sender.from_email}&gt;. Check spam or junk if it is not in your inbox.</p>
+              <p style={{ color: "#475569" }}>Look for a confirmation email from {data.notification_sender.from_name || "JUPR Notifications"}. Check spam or junk if you don’t see it.</p>
             ) : (
-              <p style={{ color: "#475569" }}>Your confirmation email comes from the tournament registration address. Check spam or junk if it is not in your inbox.</p>
+              <p style={{ color: "#475569" }}>Look for a confirmation email from the tournament organizer. Check spam or junk if you don’t see it.</p>
             )}
-            <p><Link href={`/clubs/${clubSlug}/tournament-roster${rosterQuery.toString() ? `?${rosterQuery.toString()}` : ""}`}>View the public tournament roster</Link></p>
+            <p><Link href={`/clubs/${clubSlug}/tournament-roster${rosterQuery.toString() ? `?${rosterQuery.toString()}` : ""}`}>View tournament roster</Link></p>
           </article>
 
           <p style={{ marginTop: "1rem" }}>

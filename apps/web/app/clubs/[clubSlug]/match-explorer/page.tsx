@@ -45,11 +45,11 @@ export default async function MatchExplorerPage({ params, searchParams }: MatchE
       </p>
       <h1 style={{ marginTop: 0 }}>{club?.name ?? clubSlug} matchup preview</h1>
       <p style={{ color: "#334155", maxWidth: "760px" }}>
-        Preview doubles win odds and projected rating movement before anything is saved. This page calls the public FastAPI preview service and keeps the rating formula in Python.
+        Choose four players to see each team&apos;s win odds and how the result could affect their ratings. Nothing is saved.
       </p>
 
-      {error ? <p style={{ color: "#b91c1c" }}>Match Explorer data is temporarily unavailable. {error}</p> : null}
-      {!error && players.length < 4 ? <p>At least four public players are required to preview a doubles matchup.</p> : null}
+      {error ? <p role="alert" style={{ color: "#b91c1c" }}>Match Explorer is unavailable right now. Please try again shortly.</p> : null}
+      {!error && players.length < 4 ? <p>At least four active players are needed to preview a doubles matchup.</p> : null}
 
       {players.length >= 4 ? (
         <MatchExplorerForm apiBase={apiBase()} clubSlug={clubSlug} players={players} contexts={contexts} initialSelection={initialSelection} />

@@ -124,7 +124,7 @@ async function fetchTournamentJson<T>(
 ): Promise<TournamentResultsApiResult<T>> {
   const apiBase = apiBaseUrl();
   if (!apiBase) {
-    return { data: null, error: "Tournament results are unavailable." };
+    return { data: null, error: "Tournament results are unavailable right now." };
   }
   try {
     const response = await fetch(`${apiBase.replace(/\/$/, "")}${path}`, init);
@@ -133,8 +133,8 @@ async function fetchTournamentJson<T>(
         data: null,
         error:
           response.status === 404
-            ? "Tournament results were not found."
-            : `Tournament results API error (${response.status}).`,
+            ? "We couldn’t find those tournament results."
+            : "Tournament results are unavailable right now.",
         status: response.status
       };
     }
@@ -143,11 +143,10 @@ async function fetchTournamentJson<T>(
       error: null,
       status: response.status
     };
-  } catch (error) {
+  } catch {
     return {
       data: null,
-      error:
-        error instanceof Error ? error.message : "Unable to reach the API.",
+      error: "Tournament results are unavailable right now.",
       status: null
     };
   }

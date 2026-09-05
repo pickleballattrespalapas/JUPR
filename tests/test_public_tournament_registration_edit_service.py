@@ -501,7 +501,7 @@ def test_registration_edit_link_request_sends_email_without_exposing_match(monke
         "ok": True,
         "mode": "registration_edit_link_request",
         "accepted": True,
-        "message": "If a matching registration exists, an edit link will be sent to that email address.",
+        "message": "If that email matches a registration, we’ll send the edit link there.",
     }
     assert captured["registered_email"] == "alex@example.com"
     assert captured["tournament_name"] == "Tres Palapas Open"
@@ -580,7 +580,7 @@ def test_public_edit_api_requires_explicit_stable_secret(monkeypatch) -> None:
     monkeypatch.delenv("JUPR_REGISTRATION_EDIT_SECRET", raising=False)
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "rotatable-service-role-key")
 
-    with pytest.raises(PublicRegistrationEditUnavailableError, match="stable signing secret"):
+    with pytest.raises(PublicRegistrationEditUnavailableError, match="temporarily unavailable"):
         request_public_tournament_registration_edit_link(
             FakeSupabase(fake_storage()),
             club_id="club-1",

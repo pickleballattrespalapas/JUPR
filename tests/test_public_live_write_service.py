@@ -217,6 +217,60 @@ def test_public_create_retry_recovers_same_session_and_token():
     assert len(supabase.tables["live_sessions"]) == 1
 
 
+def test_completed_create_without_session_stops_before_a_duplicate():
+    supabase = FakeSupabase()
+    _create_round_robin(supabase, key="completed-create-missing-session")
+    supabase.tables["live_sessions"] = []
+
+    with pytest.raises(PublicLiveRecoveryRequiredError) as caught:
+        _create_round_robin(supabase, key="completed-create-missing-session")
+
+    message = str(caught.value)
+    assert "contact club staff" in message
+    assert "Don’t start another one" in message
+    assert "Retry the same request" not in message
+
+
+def test_uncertain_create_tells_player_to_retry_the_same_request(monkeypatch):
+    supabase = FakeSupabase()
+    original_execute = FakeQuery.execute
+
+    def fail_live_session_insert(query):
+        if query.table_name == "live_sessions" and query.action == "insert":
+            raise RuntimeError("simulated response loss")
+        return original_execute(query)
+
+    monkeypatch.setattr(FakeQuery, "execute", fail_live_session_insert)
+
+    with pytest.raises(PublicLiveRecoveryRequiredError) as caught:
+        _create_round_robin(supabase, key="uncertain-create-response")
+
+    message = str(caught.value)
+    assert "Retry the same request" in message
+    assert "contact club staff" not in message
+    assert supabase.tables["public_live_operations"][-1]["status"] == "recovery_required"
+
+
+def test_empty_create_result_stops_before_a_duplicate(monkeypatch):
+    supabase = FakeSupabase()
+    original_execute = FakeQuery.execute
+
+    def return_no_created_session(query):
+        if query.table_name == "live_sessions" and query.action == "insert":
+            return FakeResponse([])
+        return original_execute(query)
+
+    monkeypatch.setattr(FakeQuery, "execute", return_no_created_session)
+
+    with pytest.raises(PublicLiveRecoveryRequiredError) as caught:
+        _create_round_robin(supabase, key="empty-create-result")
+
+    message = str(caught.value)
+    assert "contact club staff" in message
+    assert "Don’t start another one" in message
+    assert "Retry the same request" not in message
+
+
 def test_public_create_ledger_fingerprints_names_without_retaining_them():
     supabase = FakeSupabase()
     _create_round_robin(supabase, key="privacy-safe-create-ledger")
@@ -233,7 +287,7 @@ def test_public_create_ledger_fingerprints_names_without_retaining_them():
 def test_invalid_create_fails_before_persisting_intent():
     supabase = FakeSupabase()
 
-    with pytest.raises(PublicLiveSessionError, match="Host / Submitter Name"):
+    with pytest.raises(PublicLiveSessionError, match="organizer’s name"):
         create_public_live_session(
             supabase,
             club_id="tres_palapas",
@@ -282,7 +336,7 @@ def test_club_social_links_selected_current_player_and_rejects_unresolved_duplic
 
     fresh = FakeSupabase()
     fresh.tables["players"] = [{"id": 101, "club_id": "tres_palapas", "name": "Amy"}]
-    with pytest.raises(PublicLiveSessionError, match="current-player search"):
+    with pytest.raises(PublicLiveSessionError, match="already in the club list"):
         create_public_live_session(
             fresh,
             club_id="tres_palapas",
@@ -360,6 +414,36 @@ def test_public_score_response_loss_reconciles_from_row_marker():
     )
     assert replay["idempotent_replay"] is True
     assert replay["session"]["version"] == 2
+
+
+def test_unconfirmed_mutation_tells_player_to_retry_the_same_action(monkeypatch):
+    supabase = FakeSupabase()
+    created = _create_round_robin(supabase, key="mutation-recovery-create")
+    match_id = created["session"]["rounds"][0]["matches"][0]["id"]
+    original_execute = FakeQuery.execute
+
+    def fail_live_session_update(query):
+        if query.table_name == "live_sessions" and query.action == "update":
+            raise RuntimeError("simulated write response loss")
+        return original_execute(query)
+
+    monkeypatch.setattr(FakeQuery, "execute", fail_live_session_update)
+
+    with pytest.raises(PublicLiveRecoveryRequiredError) as caught:
+        update_public_round_robin_scores(
+            supabase,
+            club_id="tres_palapas",
+            session_key=created["session"]["session_key"],
+            edit_token=created["edit_token"],
+            expected_version=created["session"]["version"],
+            idempotency_key="mutation-recovery-score",
+            requester_hash=REQUESTER_HASH,
+            scores=[{"match_id": match_id, "score_a": 11, "score_b": 7}],
+        )
+
+    message = str(caught.value)
+    assert "Retry the same action" in message
+    assert "contact club staff" not in message
 
 
 def test_public_league_scores_advance_and_guest_substitution():
@@ -450,7 +534,7 @@ def test_invalid_mutation_is_rejected_without_changing_session():
 def test_incomplete_completion_is_rate_limited_and_rejected_without_session_write():
     supabase = FakeSupabase()
     created = _create_round_robin(supabase, key="incomplete-completion-create")
-    with pytest.raises(PublicLiveSessionError, match="Complete every scheduled score"):
+    with pytest.raises(PublicLiveSessionError, match="Enter every scheduled score"):
         complete_public_live_session(
             supabase,
             club_id="tres_palapas",
@@ -470,7 +554,7 @@ def test_stale_mutation_is_recorded_as_rejected():
     created = _create_round_robin(supabase, key="stale-rejected-create")
     match_id = created["session"]["rounds"][0]["matches"][0]["id"]
 
-    with pytest.raises(PublicLiveConflictError, match="changed after it was loaded"):
+    with pytest.raises(PublicLiveConflictError, match="session changed"):
         update_public_round_robin_scores(
             supabase,
             club_id="tres_palapas",
@@ -546,7 +630,7 @@ def test_public_live_export_rejects_rows_hidden_from_public_detail(row_patch, re
     created = _create_round_robin(supabase, key=f"hidden-export-{reason.replace(' ', '-')}")
     supabase.tables["live_sessions"][0].update(row_patch)
 
-    with pytest.raises(PublicLiveSessionError, match="Live session not found"):
+    with pytest.raises(PublicLiveSessionError, match="couldn’t find this session"):
         build_public_live_export(
             supabase,
             club_id="tres_palapas",
@@ -560,7 +644,7 @@ def test_club_social_rejects_substitution_before_moderation_attribution_can_dive
     created = _create_round_robin(supabase, key="social-no-substitution", mode="club_social")
     participant_id = created["session"]["participants"][0]["id"]
 
-    with pytest.raises(PublicLiveSessionError, match="Club Social substitutions are not supported"):
+    with pytest.raises(PublicLiveSessionError, match="To change players in a Club Social event"):
         substitute_public_live_participant(
             supabase,
             club_id="tres_palapas",
@@ -591,7 +675,7 @@ def test_club_social_completion_reservation_blocks_other_writes_and_same_key_rec
             raise RuntimeError("simulated moderation response loss")
         return {"status": "pending", "saved_rounds": ["rr"], "event_id": "social-recovered"}
 
-    with pytest.raises(PublicLiveRecoveryRequiredError):
+    with pytest.raises(PublicLiveRecoveryRequiredError) as completion_recovery:
         complete_public_live_session(
             supabase,
             club_id="tres_palapas",
@@ -602,10 +686,11 @@ def test_club_social_completion_reservation_blocks_other_writes_and_same_key_rec
             requester_hash=REQUESTER_HASH,
             social_submitter=flaky_submitter,
         )
+    assert "Retry the same Complete session action" in str(completion_recovery.value)
     reserved = supabase.tables["live_sessions"][0]
     assert reserved["pending_operation_action"] == "complete"
     match_id = scored["session"]["rounds"][0]["matches"][0]["id"]
-    with pytest.raises(PublicLiveRecoveryRequiredError):
+    with pytest.raises(PublicLiveRecoveryRequiredError) as blocked_change:
         update_public_round_robin_scores(
             supabase,
             club_id="tres_palapas",
@@ -616,6 +701,19 @@ def test_club_social_completion_reservation_blocks_other_writes_and_same_key_rec
             requester_hash=REQUESTER_HASH,
             scores=[{"match_id": match_id, "score_a": 11, "score_b": 9}],
         )
+    assert "Retry that same Complete session action" in str(blocked_change.value)
+    with pytest.raises(PublicLiveRecoveryRequiredError) as wrong_completion:
+        complete_public_live_session(
+            supabase,
+            club_id="tres_palapas",
+            session_key=created["session"]["session_key"],
+            edit_token=created["edit_token"],
+            expected_version=scored["session"]["version"],
+            idempotency_key="different-completion-attempt",
+            requester_hash=REQUESTER_HASH,
+            social_submitter=flaky_submitter,
+        )
+    assert "Retry the original Complete session action" in str(wrong_completion.value)
     recovered = complete_public_live_session(
         supabase,
         club_id="tres_palapas",
@@ -629,6 +727,45 @@ def test_club_social_completion_reservation_blocks_other_writes_and_same_key_rec
     assert recovered["session"]["status"] == "completed"
     assert supabase.tables["live_sessions"][0]["pending_operation_key"] is None
     assert attempts["count"] == 2
+
+
+def test_completion_state_mismatch_stops_and_sends_player_to_staff():
+    supabase = FakeSupabase()
+    created = _create_round_robin(supabase, key="completion-mismatch-create", mode="club_social")
+    scored = _score_all(supabase, created, key="completion-mismatch-scores")
+
+    def unavailable_submitter(_supabase, **_kwargs):
+        raise RuntimeError("simulated response loss")
+
+    with pytest.raises(PublicLiveRecoveryRequiredError):
+        complete_public_live_session(
+            supabase,
+            club_id="tres_palapas",
+            session_key=created["session"]["session_key"],
+            edit_token=created["edit_token"],
+            expected_version=scored["session"]["version"],
+            idempotency_key="completion-mismatch-attempt",
+            requester_hash=REQUESTER_HASH,
+            social_submitter=unavailable_submitter,
+        )
+
+    supabase.tables["live_sessions"][0]["last_request_fingerprint"] = "unexpected"
+    with pytest.raises(PublicLiveRecoveryRequiredError) as caught:
+        complete_public_live_session(
+            supabase,
+            club_id="tres_palapas",
+            session_key=created["session"]["session_key"],
+            edit_token=created["edit_token"],
+            expected_version=scored["session"]["version"],
+            idempotency_key="completion-mismatch-attempt",
+            requester_hash=REQUESTER_HASH,
+            social_submitter=unavailable_submitter,
+        )
+
+    message = str(caught.value)
+    assert "contact club staff" in message
+    assert "Don’t try again" in message
+    assert "Retry the same" not in message
 
 
 def test_club_social_completion_allows_only_one_concurrent_executor():
@@ -653,7 +790,7 @@ def test_club_social_completion_allows_only_one_concurrent_executor():
         club_id="tres_palapas",
         operation_key_value=operation["operation_key"],
     )
-    with pytest.raises(PublicLiveRecoveryRequiredError, match="already being reconciled"):
+    with pytest.raises(PublicLiveRecoveryRequiredError, match="couldn’t confirm that the session finished"):
         claim_public_live_completion_executor(
             supabase,
             club_id="tres_palapas",

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { PublicLiveMatch, PublicLiveSessionDetail } from "@/lib/api";
+import { publicLiveErrorText } from "@/lib/publicLiveErrorText";
 
 type LiveSessionRunnerProps = {
   apiBase: string | null;
@@ -11,6 +12,17 @@ type LiveSessionRunnerProps = {
 };
 
 type PendingMutationPayload = Record<string, unknown> & { idempotency_key: string };
+
+class UserFacingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UserFacingError";
+  }
+}
+
+function requestFailureMessage(error: unknown, fallback: string): string {
+  return error instanceof UserFacingError ? error.message : fallback;
+}
 
 const thStyle = { textAlign: "left" as const, borderBottom: "1px solid #cbd5e1", padding: "0.5rem", whiteSpace: "nowrap" as const };
 const tdStyle = { borderBottom: "1px solid #e2e8f0", padding: "0.5rem", whiteSpace: "nowrap" as const };
@@ -23,13 +35,24 @@ function apiUrl(apiBase: string, path: string): string {
 function formatTimestamp(value?: string | null): string {
   if (!value) return "—";
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
+  if (Number.isNaN(date.getTime())) return "—";
   return date.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
 }
 
 function eventTypeLabel(value?: string | null): string {
-  const normalized = String(value || "").replace(/_/g, " ").trim();
-  return normalized ? normalized.replace(/\b\w/g, (char) => char.toUpperCase()) : "Play Session";
+  if (value === "club_social") return "Club Social";
+  if (value === "league" || value === "league_ladder") return "League play";
+  if (value === "round_robin") return "Round robin";
+  if (value === "ladder") return "Ladder play";
+  return "Play session";
+}
+
+function sessionStatusLabel(status: string): string {
+  return status === "completed" ? "Complete" : "In progress";
+}
+
+function requestErrorMessage(status: number, action: string, detail?: unknown): string {
+  return publicLiveErrorText(status, detail, `We couldn’t ${action}. Please try again.`);
 }
 
 function teamLabel(names: string[]): string {
@@ -182,19 +205,19 @@ export default function LiveSessionRunner({ apiBase, clubSlug, initialSession }:
       setMessage(`${label} copied.`);
       setMessageTone("success");
     } catch {
-      setMessage(`Unable to copy ${label.toLowerCase()}.`);
+      setMessage(`We couldn’t copy ${label.toLowerCase()}.`);
       setMessageTone("error");
     }
   }
 
   async function saveScores() {
     if (!apiBase) {
-      setMessage("The public API base URL is not configured for this deployment.");
+      setMessage("Score entry is temporarily unavailable. Please try again.");
       setMessageTone("error");
       return;
     }
     if (!editToken) {
-      setMessage("This link is view-only. Use the original edit link to enter scores.");
+      setMessage("Only the organizer link can be used to enter scores.");
       setMessageTone("error");
       return;
     }
@@ -225,14 +248,15 @@ export default function LiveSessionRunner({ apiBase, clubSlug, initialSession }:
       const payload = await response.json().catch(() => null);
       if (!response.ok) {
         if ([400, 403, 409, 422].includes(response.status)) clearOperation(action);
-        throw new Error(String(payload?.detail || `API error (${response.status})`));
+        throw new UserFacingError(requestErrorMessage(response.status, "save the scores", payload?.detail));
       }
+      if (!payload?.session) throw new UserFacingError("We couldn’t confirm the saved scores. Refresh the page and try again.");
       applySession(payload.session);
       clearOperation(action);
       setMessage("Scores saved.");
       setMessageTone("success");
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Unable to save scores.");
+      setMessage(requestFailureMessage(err, "We couldn’t save the scores. Please try again."));
       setMessageTone("error");
     } finally {
       setSaving(false);
@@ -247,12 +271,13 @@ export default function LiveSessionRunner({ apiBase, clubSlug, initialSession }:
     try {
       const response = await fetch(apiUrl(apiBase, `/clubs/${clubSlug}/live-sessions/${session.session_key}`), { cache: "no-store" });
       const payload = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(String(payload?.detail || `API error (${response.status})`));
+      if (!response.ok) throw new UserFacingError(requestErrorMessage(response.status, "refresh the session", payload?.detail));
+      if (!payload?.session) throw new UserFacingError("We couldn’t refresh the session. Please try again.");
       applySession(payload.session);
-      setMessage("Session refreshed from durable state.");
+      setMessage("Session updated.");
       setMessageTone("success");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to refresh session.");
+      setMessage(requestFailureMessage(error, "We couldn’t refresh the session. Please try again."));
       setMessageTone("error");
     } finally {
       setSaving(false);
@@ -277,14 +302,21 @@ export default function LiveSessionRunner({ apiBase, clubSlug, initialSession }:
       const payload = await response.json().catch(() => null);
       if (!response.ok) {
         if ([400, 403, 409, 422].includes(response.status)) clearOperation(action);
-        throw new Error(String(payload?.detail || `API error (${response.status})`));
+        throw new UserFacingError(requestErrorMessage(response.status, action === "advance" ? "open the next round" : "finish the session", payload?.detail));
       }
+      if (!payload?.session) throw new UserFacingError("We couldn’t confirm the update. Refresh the page and try again.");
       applySession(payload.session);
       clearOperation(action);
-      setMessage(action === "advance" ? `Advanced to round ${payload.advanced_to_round || payload.session.current_round}.` : (payload.social_submission ? "Session completed and sent to Club Social moderation." : "Session completed."));
+      setMessage(
+        action === "advance"
+          ? `Round ${payload.advanced_to_round || payload.session.current_round} is ready.`
+          : payload.social_submission
+            ? "Session complete. The results were sent to club staff for review."
+            : "Session complete."
+      );
       setMessageTone("success");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : `Unable to ${action} session.`);
+      setMessage(requestFailureMessage(error, "We couldn’t update the session. Please try again."));
       setMessageTone("error");
     } finally {
       setSaving(false);
@@ -316,15 +348,20 @@ export default function LiveSessionRunner({ apiBase, clubSlug, initialSession }:
       const payload = await response.json().catch(() => null);
       if (!response.ok) {
         if ([400, 403, 409, 422].includes(response.status)) clearOperation(action);
-        throw new Error(String(payload?.detail || `API error (${response.status})`));
+        throw new UserFacingError(requestErrorMessage(response.status, "save the substitution", payload?.detail));
       }
+      if (!payload?.session) throw new UserFacingError("We couldn’t confirm the substitution. Refresh the page and try again.");
       applySession(payload.session);
       clearOperation(action);
       setSubstituteName("");
-      setMessage("Substitution saved for remaining unscored play.");
+      setMessage(
+        requestPayload.scope === "game"
+          ? "Substitution saved for this game."
+          : "Substitution saved for the remaining games in this round."
+      );
       setMessageTone("success");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to save substitution.");
+      setMessage(requestFailureMessage(error, "We couldn’t save the substitution. Please try again."));
       setMessageTone("error");
     } finally {
       setSaving(false);
@@ -381,13 +418,13 @@ export default function LiveSessionRunner({ apiBase, clubSlug, initialSession }:
           <p style={{ margin: "0.35rem 0 0", color: "#64748b", fontSize: "0.9rem" }}>
             Last updated {formatTimestamp(session.updated_at ?? session.last_seen_at)}
           </p>
-          {!canEdit ? <p style={{ color: "#64748b" }}>{editToken ? "This scoreboard is complete; score fields are locked." : "View-only scoreboard. The edit link is only shown to the person who created this event."}</p> : null}
+          {!canEdit ? <p style={{ color: "#64748b" }}>{editToken ? "This session is complete, so scores can’t be changed." : "Only the organizer can enter scores."}</p> : null}
         </div>
         <span style={{ border: "1px solid #bfdbfe", borderRadius: "999px", padding: "0.25rem 0.75rem", color: "#1d4ed8", background: "#eff6ff", fontSize: "0.85rem", fontWeight: 800 }}>
-          {session.status}
+          {sessionStatusLabel(session.status)}
         </span>
         <button type="button" onClick={refreshSession} disabled={saving} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.45rem 0.75rem", background: "white", fontWeight: 800, cursor: saving ? "default" : "pointer" }}>
-          Refresh durable state
+          Refresh
         </button>
       </div>
 
@@ -400,11 +437,11 @@ export default function LiveSessionRunner({ apiBase, clubSlug, initialSession }:
 
       <div style={{ ...cardStyle, marginBottom: "1rem", background: "#f8fafc" }}>
         <strong>Share links</strong>
-        <p style={{ color: "#475569" }}>Share the public link with players. Keep the edit link private for score entry.</p>
+        <p style={{ color: "#475569" }}>Share the public link with players. Keep the organizer link private.</p>
         <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
           <Link href={publicPath}>Open public view</Link>
           <button type="button" onClick={() => copyPath(publicPath, "Public link")} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.45rem 0.75rem", background: "white", fontWeight: 800, cursor: "pointer" }}>Copy public link</button>
-          {canEdit ? <button type="button" onClick={() => copyPath(editPath, "Edit link")} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.45rem 0.75rem", background: "white", fontWeight: 800, cursor: "pointer" }}>Copy edit link</button> : null}
+          {canEdit ? <button type="button" onClick={() => copyPath(editPath, "Organizer link")} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.45rem 0.75rem", background: "white", fontWeight: 800, cursor: "pointer" }}>Copy organizer link</button> : null}
           <a href={`/api/clubs/${clubSlug}/live-sessions/${session.session_key}/export?format=csv`}>Export CSV</a>
           <a href={`/api/clubs/${clubSlug}/live-sessions/${session.session_key}/export?format=json`}>Export JSON</a>
         </div>
@@ -412,11 +449,10 @@ export default function LiveSessionRunner({ apiBase, clubSlug, initialSession }:
 
       {!canEdit && canRecoverCompletion ? (
         <div style={{ ...cardStyle, marginBottom: "1rem", background: "#fff7ed", borderColor: "#fdba74" }}>
-          <strong>Completion reconciliation is still pending.</strong>
-          <p style={{ color: "#9a3412" }}>Retry the preserved completion request to reconcile its durable operation record. Do not clear browser session data or create a new operation key.</p>
-          <code style={{ display: "block", overflowWrap: "anywhere", marginBottom: "0.65rem" }}>{operationKeys.complete}</code>
+          <strong>We couldn’t confirm that the session finished.</strong>
+          <p style={{ color: "#9a3412" }}>Try again before making another change.</p>
           <button type="button" onClick={() => runAction("complete")} disabled={saving} style={{ border: 0, borderRadius: "999px", padding: "0.65rem 1rem", background: "#9a3412", color: "white", fontWeight: 800 }}>
-            {saving ? "Reconciling…" : "Retry preserved completion"}
+            {saving ? "Trying again…" : "Try again"}
           </button>
           {message ? <p style={{ color: messageTone === "success" ? "#166534" : "#b91c1c" }}>{message}</p> : null}
         </div>
@@ -424,11 +460,10 @@ export default function LiveSessionRunner({ apiBase, clubSlug, initialSession }:
 
       {canEdit ? (
         <div style={{ ...cardStyle, marginBottom: "1rem", background: "#eff6ff", borderColor: "#bfdbfe" }}>
-          <strong>Score entry enabled.</strong> Save as you go. The private edit token is held in this browser session and omitted from the public URL.
+          <strong>Organizer controls.</strong> You can enter scores here. Save as you go, and keep this organizer page private.
           {Object.keys(operationKeys).length ? (
             <div style={{ marginTop: "0.65rem", color: "#92400e" }}>
-              <strong>Unresolved request retained.</strong> Retry the same action before changing it; JUPR will send the exact preserved payload and operation key.
-              {Object.entries(operationKeys).map(([action, key]) => <code key={action} style={{ display: "block", overflowWrap: "anywhere" }}>{action}: {key}</code>)}
+              <strong>We couldn’t confirm the last change.</strong> Try it again before making another change.
             </div>
           ) : null}
           <div style={{ marginTop: "0.75rem", display: "flex", gap: "0.65rem", flexWrap: "wrap", alignItems: "center" }}>
@@ -455,8 +490,8 @@ export default function LiveSessionRunner({ apiBase, clubSlug, initialSession }:
 
       {canEdit && session.live_mode !== "club_social" ? (
         <section style={{ ...cardStyle, marginBottom: "1rem" }}>
-          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Substitute for remaining play</h2>
-          <p style={{ color: "#475569" }}>Substitutions affect only unscored matches. Scored matches remain locked.</p>
+          <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Substitute for remaining games</h2>
+          <p style={{ color: "#475569" }}>The change applies only to games without scores. Games already scored won’t change.</p>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.65rem" }}>
             <label style={{ display: "grid", gap: "0.25rem", fontWeight: 700 }}>
               Original player
@@ -470,7 +505,7 @@ export default function LiveSessionRunner({ apiBase, clubSlug, initialSession }:
               <input value={substituteName} onChange={(event) => setSubstituteName(event.target.value)} disabled={Boolean(operationKeys.substitute)} maxLength={80} style={{ padding: "0.5rem", border: "1px solid #cbd5e1", borderRadius: "8px" }} />
             </label>
             <label style={{ display: "grid", gap: "0.25rem", fontWeight: 700 }}>
-              Scope
+              Apply substitution to
               <select value={subScope} onChange={(event) => setSubScope(event.target.value as "round" | "game")} disabled={Boolean(operationKeys.substitute)} style={{ padding: "0.5rem", border: "1px solid #cbd5e1", borderRadius: "8px" }}>
                 <option value="round">Current round</option>
                 <option value="game">One game</option>
@@ -487,9 +522,13 @@ export default function LiveSessionRunner({ apiBase, clubSlug, initialSession }:
             ) : null}
           </div>
           <button type="button" onClick={saveSubstitution} disabled={saving || (!operationKeys.substitute && (!subOriginalId || !substituteName.trim() || (subScope === "game" && !subMatchId)))} style={{ marginTop: "0.75rem", border: 0, borderRadius: "999px", padding: "0.55rem 0.9rem", background: "#0f766e", color: "white", fontWeight: 800 }}>
-            {operationKeys.substitute ? "Retry preserved substitution" : "Save substitution"}
+            {operationKeys.substitute ? "Try substitution again" : "Save substitution"}
           </button>
-          {session.substitutions.length ? <p style={{ color: "#475569" }}>{session.substitutions.length} substitution record(s) are retained with this session.</p> : null}
+          {session.substitutions.length ? (
+            <p style={{ color: "#475569" }}>
+              {session.substitutions.length} substitution{session.substitutions.length === 1 ? "" : "s"} saved.
+            </p>
+          ) : null}
         </section>
       ) : null}
 
@@ -497,8 +536,8 @@ export default function LiveSessionRunner({ apiBase, clubSlug, initialSession }:
         <div style={{ display: "grid", gap: "1rem" }}>
           {session.rounds.length === 0 ? (
             <div style={cardStyle}>
-              <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>No public match state yet</h2>
-              <p style={{ color: "#475569" }}>This session exists, but the event schedule is not ready yet.</p>
+              <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>No matches yet</h2>
+              <p style={{ color: "#475569" }}>The schedule isn’t ready yet. Check again soon.</p>
             </div>
           ) : null}
 

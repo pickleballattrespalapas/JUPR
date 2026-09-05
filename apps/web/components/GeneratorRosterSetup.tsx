@@ -241,20 +241,20 @@ export function recommendedGeneratorSetup(
 function explanation(
   generatorKind: GeneratorKind,
   playFormat: PlayFormat,
-  targetCount: number,
   courtCount: number,
   totalRounds: number
 ): string {
+  const roundLabel = `${totalRounds} round${totalRounds === 1 ? "" : "s"}`;
   if (generatorKind === "ladder") {
-    return `${targetCount} players create ${courtCount} balanced ladder court${courtCount === 1 ? "" : "s"} and ${totalRounds} result-driven rounds.`;
+    return `This setup uses ${courtCount} court${courtCount === 1 ? "" : "s"} for ${totalRounds} ladder round${totalRounds === 1 ? "" : "s"}. Each new round is based on the last result.`;
   }
   if (playFormat === "singles") {
-    return `${targetCount} players create ${courtCount} court${courtCount === 1 ? "" : "s"} and a complete ${totalRounds}-round singles rotation.`;
+    return `This setup uses ${courtCount} court${courtCount === 1 ? "" : "s"} for a ${totalRounds}-round singles rotation.`;
   }
   if (playFormat === "doubles_singles") {
-    return `${targetCount} players rotate through ${courtCount} mixed-format courts over ${totalRounds} rounds, with singles games, doubles games, partners, opponents, and byes balanced across the session.`;
+    return `This setup uses ${courtCount} courts for ${roundLabel} of singles and doubles, balancing partners, opponents, and byes.`;
   }
-  return `${targetCount} players create ${courtCount} court${courtCount === 1 ? "" : "s"} and ${totalRounds} rounds for a complete partner rotation.`;
+  return `This setup uses ${courtCount} court${courtCount === 1 ? "" : "s"} for ${roundLabel}, rotating partners throughout.`;
 }
 
 export default function GeneratorRosterSetup({
@@ -299,6 +299,7 @@ export default function GeneratorRosterSetup({
   const linkedCount = participantNames.filter(
     (name) => Number(linkedPlayerIds[normalizeRosterName(name)] || 0) > 0
   ).length;
+  const manualCount = participantNames.length - linkedCount;
   const exactCount = participantNames.length === targetCount;
   const publicClubSlug = clubKey.replace(/_/g, "-");
   const maximumDoublesCourts = Math.max(1, Math.floor((targetCount - 2) / 4));
@@ -336,7 +337,7 @@ export default function GeneratorRosterSetup({
       .then(async (response) => {
         const payload = (await response.json().catch(() => null)) as DirectoryResponse | null;
         if (!response.ok) {
-          throw new Error(String((payload as { detail?: string } | null)?.detail || `API error (${response.status})`));
+          throw new Error("Player search is temporarily unavailable.");
         }
         if (cancelled) return;
         const rows = [...(payload?.players || [])]
@@ -344,10 +345,10 @@ export default function GeneratorRosterSetup({
           .sort((left, right) => String(left.name).localeCompare(String(right.name)));
         setDirectoryPlayers(rows);
       })
-      .catch((error) => {
+      .catch(() => {
         if (cancelled) return;
         setDirectoryPlayers([]);
-        setDirectoryError(error instanceof Error ? error.message : "Current-player search is unavailable.");
+        setDirectoryError("Player search isn’t available right now. You can still type names below.");
       });
     return () => {
       cancelled = true;
@@ -509,14 +510,14 @@ export default function GeneratorRosterSetup({
             )}
           </p>
           <small style={{ color: "#475569" }}>
-            {explanation(generatorKind, playFormat, targetCount, setup.courtCount, setup.totalRounds)}
+            {explanation(generatorKind, playFormat, setup.courtCount, setup.totalRounds)}
           </small>
         </div>
       </div>
 
       <div style={{ display: "grid", gap: "0.5rem" }}>
         <label style={{ display: "grid", gap: "0.25rem", fontWeight: 700 }}>
-          Search current players
+          Search club players
           <input
             value={playerSearch}
             onChange={(event) => {
@@ -529,7 +530,7 @@ export default function GeneratorRosterSetup({
         </label>
         {playerSearch.trim().length < 2 ? (
           <p style={{ margin: 0, color: "#64748b", fontSize: "0.9rem" }}>
-            Search the current player list, or type guest names directly in the roster box below.
+            Search the club player list, or type names directly below.
           </p>
         ) : filteredPlayerOptions.length ? (
           <div style={{ display: "grid", gap: "0.4rem" }}>
@@ -569,18 +570,18 @@ export default function GeneratorRosterSetup({
           </div>
         ) : (
           <p style={{ margin: 0, color: "#b45309", fontSize: "0.9rem" }}>
-            No current players match “{playerSearch.trim()}”. Type a guest name in the roster box below.
+            No club players match “{playerSearch.trim()}”. You can type the name below instead.
           </p>
         )}
         {directoryError ? (
           <p style={{ margin: 0, color: "#b45309", fontSize: "0.9rem" }}>
-            Current-player search is unavailable. Guest roster entry still works. {directoryError}
+            {directoryError}
           </p>
         ) : null}
       </div>
 
       <label style={{ display: "grid", gap: "0.25rem", fontWeight: 700 }}>
-        Names or roster entry ({participantNames.length} of {targetCount})
+        Players ({participantNames.length} of {targetCount})
         <textarea
           value={participantText}
           onChange={(event) => changeParticipantText(event.target.value)}
@@ -594,8 +595,7 @@ export default function GeneratorRosterSetup({
           {countMessage}
         </p>
         <p style={{ margin: "0.25rem 0 0", color: "#64748b", fontSize: "0.9rem" }}>
-          {linkedCount} selected from the current player list · {participantNames.length - linkedCount} guest or unlinked.
-          Roster line order controls starting order and bye priority.
+          {linkedCount} chosen from the club list · {manualCount} entered manually. The order below sets the starting order and who gets the first bye.
         </p>
         {pickerMessage ? (
           <p role="status" aria-live="polite" style={{ margin: "0.25rem 0 0", color: "#1d4ed8" }}>

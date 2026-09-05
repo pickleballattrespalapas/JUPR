@@ -611,7 +611,7 @@ def build_registration_confirmation_delivery(
             "confirmation_token": None,
             "email_delivery": {
                 "status": "failed",
-                "message": "Registration was saved, but confirmation details could not be prepared.",
+                "message": "We saved your registration but couldn’t open the confirmation page. Contact the organizer before trying again.",
             },
         }
     registration = bundle.get("registration") or {}
@@ -623,7 +623,7 @@ def build_registration_confirmation_delivery(
             "confirmation_token": None,
             "email_delivery": {
                 "status": "failed",
-                "message": "Registration was saved, but confirmation details could not be prepared.",
+                "message": "We saved your registration but couldn’t open the confirmation page. Contact the organizer before trying again.",
             },
         }
 
@@ -640,7 +640,7 @@ def build_registration_confirmation_delivery(
             "confirmation_token": None,
             "email_delivery": {
                 "status": "failed",
-                "message": "Registration was saved, but secure confirmation access is not configured.",
+                "message": "We saved your registration but couldn’t open the confirmation page. Contact the organizer before trying again.",
             },
         }
 
@@ -650,10 +650,7 @@ def build_registration_confirmation_delivery(
             "confirmation_token": token,
             "email_delivery": {
                 "status": "already_completed",
-                "message": (
-                    "Registration was already saved; the original "
-                    "confirmation delivery was not repeated."
-                ),
+                "message": "Your registration is already saved.",
             },
         }
 
@@ -664,7 +661,7 @@ def build_registration_confirmation_delivery(
             "confirmation_token": token,
             "email_delivery": {
                 "status": "failed",
-                "message": "Registration was saved, but the confirmation email link is not configured.",
+                "message": "Your registration was saved, but we couldn’t send the confirmation email.",
             },
         }
 
@@ -707,10 +704,10 @@ def build_registration_confirmation_delivery(
         )
         status = _clean_text(send_result.get("status"), limit=40) or "sent"
         message = {
-            "dry_run": "Registration was saved; confirmation email was safely dry-run.",
-            "staging_redirect": "Registration was saved; confirmation email was sent to the staging redirect.",
+            "dry_run": "Your registration was saved.",
+            "staging_redirect": "Your registration was saved.",
             "sent": "Registration was saved and the confirmation email was sent.",
-        }.get(status, "Registration was saved and confirmation delivery was accepted.")
+        }.get(status, "Your registration was saved.")
     except Exception:
         LOGGER.exception("Tournament registration was saved but confirmation email failed")
         status = "failed"
@@ -867,7 +864,7 @@ def resolve_public_tournament_registration_profile(
                 "linkage": "staff_review_required",
                 "public_submission_links_player": False,
             },
-            "message": "A registration already exists for this email. Use the secure edit-link flow.",
+            "message": "You’re already registered with this email. Request an edit link to make changes.",
         }
 
     if not page.get("registration_open"):
@@ -908,9 +905,9 @@ def resolve_public_tournament_registration_profile(
             "public_submission_links_player": False,
         },
         "message": (
-            "Review the suggested profile or continue without one. Tournament staff verify all public profile links."
+            "Is this you? Choose a profile below, or continue without one."
             if candidates
-            else "No exact active profile match was found. You can continue and staff can connect it later."
+            else "We didn’t find a matching player profile. You can still continue."
         ),
     }
 
@@ -1372,7 +1369,7 @@ def submit_public_tournament_registration(
     )
     if existing_registration and not commerce_available:
         raise DuplicateTournamentRegistrationError(
-            "A registration already exists for this email. Please use the secure edit-link flow."
+            "You’re already registered with this email. Request an edit link to make changes."
         )
     save_payload = build_validated_public_registration_save_payload(
         supabase,

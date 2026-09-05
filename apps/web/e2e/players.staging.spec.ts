@@ -23,14 +23,14 @@ test("player directory defaults active and keeps search plus stable links determ
   await expect(page).toHaveURL(/q=/);
   await expect(rows.first(), "search should retain the selected public display name").toContainText(firstName);
 
-  const stableRowLink = page.getByRole("link", { name: `${firstName} stable row link` });
+  const stableRowLink = page.getByRole("link", { name: `Share ${firstName}` });
   const stableHref = await stableRowLink.getAttribute("href");
   expect(stableHref).toContain("player=");
   expect(stableHref).toContain("#player-");
 
   await page.getByRole("link", { name: `Open ${firstName} profile` }).click();
   await expect(page.getByTestId("player-profile")).toBeVisible();
-  await expect(page.getByTestId("player-public-identity")).toContainText(/public display name/i);
+  await expect(page.getByTestId("player-public-identity")).toContainText(/approved public name/i);
 });
 
 test("player profile keeps positions, trophies, badges, relationships, and history in player scope", async ({ page }) => {
@@ -70,10 +70,10 @@ test("player profile keeps positions, trophies, badges, relationships, and histo
   await page.getByTestId("player-section-matches").click();
   await expect(page.getByTestId("player-match-history")).toBeVisible();
   const publicIdentity = page.getByTestId("player-public-identity");
-  await expect(publicIdentity).toContainText(/verified updates (available|enabled|pending)/i);
-  const requestUpdates = page.getByRole("link", { name: "Request verified player updates" });
+  await expect(publicIdentity).toContainText(/player updates (are on|are available)|player update request is pending/i);
+  const requestUpdates = page.getByRole("link", { name: "Request player updates" });
   if (await requestUpdates.count()) await expect(requestUpdates).toBeVisible();
-  else await expect(publicIdentity).toContainText(/private link in the verified email/i);
+  else await expect(publicIdentity).toContainText(/club staff will review this request|preferences link in a player update email/i);
   await expect(page.getByRole("link", { name: "Request an alias or privacy review" })).toBeVisible();
 
   const trend = page.getByTestId("player-rating-trend");
@@ -95,5 +95,5 @@ test("player directory and profile expose explicit empty and error states withou
   await expect(page.getByTestId("players-filter-empty-state")).toContainText("No players match");
 
   await page.goto(`/clubs/${clubSlug}/players/__jupr_missing_player_8b7e42__`, { waitUntil: "domcontentloaded" });
-  await expect(page.getByTestId("player-profile-error-state")).toContainText("No private player data was exposed");
+  await expect(page.getByTestId("player-profile-error-state")).toContainText("We couldn’t load this player profile");
 });

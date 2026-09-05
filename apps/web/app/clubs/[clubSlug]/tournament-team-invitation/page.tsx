@@ -10,8 +10,7 @@ export default function TournamentTeamInvitationPage({ params }: Props) {
       <p style={{ color: "#2563eb", fontWeight: 800 }}>Private team invitation</p>
       <h1>Review your four-player team spot</h1>
       <p style={{ color: "#475569", maxWidth: "44rem" }}>
-        This private link is cleared from your browser address before the
-        invitation is checked.
+        Review the invitation below to accept or decline your roster spot.
       </p>
       <TeamInvitationReview clubSlug={params.clubSlug} />
     </section>

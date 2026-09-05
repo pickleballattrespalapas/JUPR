@@ -42,11 +42,11 @@ export default function EditLinkRequestForm({ clubSlug, tournamentId, registrati
     });
     setPending(false);
     if (response.error) {
-      setError(response.error);
+      setError("We couldn’t send your edit link right now. Please try again.");
       return;
     }
     idempotencyKeyRef.current = "";
-    setMessage(response.data?.message || "If a matching registration exists, an edit link will be sent to that email address.");
+    setMessage("If that email matches a registration, we’ll send the edit link there.");
   }
 
   return (
@@ -57,7 +57,7 @@ export default function EditLinkRequestForm({ clubSlug, tournamentId, registrati
         <input name="email" value={email} onChange={(event) => { idempotencyKeyRef.current = ""; setEmail(event.target.value); }} type="email" autoComplete="email" placeholder="you@example.com" required style={inputStyle} />
       </label>
       <button type="submit" disabled={pending} style={{ padding: "0.65rem 0.9rem", borderRadius: "10px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800 }}>
-        {pending ? "Sending…" : "Send secure edit link"}
+        {pending ? "Sending…" : "Send edit link"}
       </button>
       {message ? <p role="status" style={{ color: "#166534", margin: 0 }}>{message}</p> : null}
       {error ? <p role="alert" style={{ color: "#b91c1c", margin: 0 }}>{error}</p> : null}

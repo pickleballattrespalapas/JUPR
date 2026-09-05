@@ -29,11 +29,11 @@ const initialState: FormState = {
 };
 
 const requestKindLabels: Record<string, string> = {
-  review_display_name: "Review display name",
-  hide_profile: "Request public profile privacy review",
-  anonymize_history: "Request anonymized public display review",
-  contact_update: "Update contact/profile details",
-  other: "Other privacy request"
+  review_display_name: "Review my public name",
+  hide_profile: "Hide my public profile",
+  anonymize_history: "Use an anonymous name in past results",
+  contact_update: "Change my contact or profile details",
+  other: "Something else"
 };
 
 export default function ProfilePrivacyRequestForm({ clubSlug = "tres-palapas" }: { clubSlug?: string }) {
@@ -81,7 +81,7 @@ export default function ProfilePrivacyRequestForm({ clubSlug = "tres-palapas" }:
       return;
     }
     setState(initialState);
-    setMessage(response.data?.message || "Privacy request received. Staff will review it before changing any public display.");
+    setMessage(response.data?.message || "Privacy request received. Staff will review it before changing your public profile.");
   }
 
   return (
@@ -104,7 +104,7 @@ export default function ProfilePrivacyRequestForm({ clubSlug = "tres-palapas" }:
       <label>Evidence or relevant link, optional<br /><input type="url" value={state.evidenceUrl} onChange={(event) => update("evidenceUrl", event.target.value)} placeholder="https://…" style={inputStyle} /></label>
       <label style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start" }}>
         <input type="checkbox" checked={state.consent} onChange={(event) => update("consent", event.target.checked)} />
-        <span>I understand profile privacy requests are reviewed by staff and staff may contact me to verify this request.</span>
+        <span>I understand staff will review my request and may contact me to verify it.</span>
       </label>
       <button type="submit" disabled={pending} style={buttonStyle}>{pending ? "Submitting…" : "Submit privacy request"}</button>
       {message ? <p role="status" style={{ color: "#166534", margin: 0 }}>{message}</p> : null}

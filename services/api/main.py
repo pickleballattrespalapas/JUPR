@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
 from typing import Annotated, Any
@@ -14,6 +15,7 @@ from supabase import Client, create_client
 from jupr_app.data.load import load_data
 from jupr_app.domain.admin.roles import PERMISSION_ENTER_SCORES, has_permission, resolve_admin_role
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
+from jupr_app.domain.tournament_registration_repo import public_registration_error_scope
 from jupr_app.services.direct_match_entry_service import (
     DirectMatchConflictError,
     DirectMatchRecoveryRequiredError,
@@ -35,6 +37,7 @@ from jupr_app.services.public_live_write_service import (
     substitute_public_live_participant,
     update_public_live_scores,
 )
+from jupr_app.services.public_play_generator_service import PublicPlayGeneratorError
 from jupr_app.services.public_player_service import build_public_player_directory, get_public_match_detail, get_public_matches, get_public_player_profile
 from scripts.deployment_verifier import (
     PRODUCTION_FEATURE_FLAGS,
@@ -111,8 +114,10 @@ PUBLIC_LEADERBOARD_BADGE_FIELDS = {"badge_id", "name", "prestige", "category", "
 PUBLIC_LIVE_SESSION_SUMMARY_SELECT = "club_id,session_key,title,status,state,version,created_at,updated_at,last_seen_at,expires_at,completed_at"
 PUBLIC_LIVE_SESSION_DETAIL_SELECT = "club_id,session_key,title,status,state,version,created_at,updated_at,last_seen_at,expires_at,completed_at"
 PUBLIC_LIVE_SESSION_LEGACY_SELECT = "club_id,session_key,title,status,state,created_at,updated_at,last_seen_at,expires_at"
-LIVE_SESSIONS_SETUP_ERROR = "JUPR Live is not fully configured on the API backend. Apply the live_sessions Supabase migrations and set SUPABASE_SERVICE_ROLE_KEY on the FastAPI deployment so the API can build the sanitized public projection."
-PUBLIC_LIVE_WRITES_DISABLED_ERROR = "Public JUPR Live writes are not enabled in this environment. Use the Streamlit fallback or a shared view-only session."
+LOGGER = logging.getLogger(__name__)
+
+LIVE_SESSIONS_SETUP_ERROR = "Live sessions are temporarily unavailable. Please try again later."
+PUBLIC_LIVE_WRITES_DISABLED_ERROR = "Score entry is temporarily unavailable."
 SCORE_ENTRY_SETUP_ERROR = "Next score entry is not write-ready. Enable the backend flag and configure SUPABASE_SERVICE_ROLE_KEY on FastAPI; otherwise use Match Uploader or the Streamlit fallback."
 
 
@@ -194,6 +199,23 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "OPTIONS"],
     allow_headers=["*"],
 )
+
+
+def _is_public_registration_path(path: str) -> bool:
+    return bool(
+        re.match(
+            r"^/clubs/[^/]+/(?:tournament-registration(?:/|$)|tournament-roster(?:/|$))",
+            str(path or ""),
+        )
+    )
+
+
+@app.middleware("http")
+async def _sanitize_public_registration_schema_errors(request: Request, call_next):
+    if not _is_public_registration_path(request.url.path):
+        return await call_next(request)
+    with public_registration_error_scope():
+        return await call_next(request)
 
 
 class MatchBatchRequest(BaseModel):
@@ -313,7 +335,7 @@ def _require_public_live_writes() -> None:
     if not _public_live_secrets_ready():
         raise HTTPException(
             status_code=503,
-            detail="Public JUPR Live secrets are unavailable; no write was attempted. Use the Streamlit fallback.",
+            detail="Score entry is temporarily unavailable.",
         )
 
 
@@ -348,20 +370,22 @@ def _public_live_requester_hash(request: Request) -> str:
     if len(secret) < 32:
         raise HTTPException(
             status_code=503,
-            detail="Public JUPR Live anti-abuse configuration is unavailable; no write was attempted.",
+            detail="Score entry is temporarily unavailable.",
         )
     return hashlib.sha256(f"{secret}\x1f{address_scope}".encode("utf-8")).hexdigest()
 
 
 def _raise_public_live_write_error(exc: Exception) -> None:
     if isinstance(exc, PublicLiveRateLimitError):
-        raise HTTPException(status_code=429, detail=str(exc)) from exc
+        raise HTTPException(status_code=429, detail="Please wait a moment and try again.") from exc
     if isinstance(exc, PublicLiveConflictError):
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise HTTPException(status_code=409, detail="This session changed. Refresh the page and try again.") from exc
     if isinstance(exc, PermissionError):
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-    if isinstance(exc, (PublicLiveSessionError, ValueError)):
+        raise HTTPException(status_code=403, detail="This organizer link can’t make changes to this session.") from exc
+    if isinstance(exc, (PublicLiveSessionError, PublicPlayGeneratorError)):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if isinstance(exc, ValueError):
+        raise HTTPException(status_code=400, detail="Check the information and try again.") from exc
     if isinstance(exc, PublicLiveRecoveryRequiredError):
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     _raise_live_sessions_backend_error(exc)
@@ -417,10 +441,11 @@ def _is_public_live_durability_schema_error(exc: Exception) -> bool:
 
 
 def _live_sessions_backend_error_detail(exc: Exception) -> str:
-    raw_detail = _error_payload_text(exc) or exc.__class__.__name__
-    if len(raw_detail) > 500:
-        raw_detail = raw_detail[:500] + "..."
-    return f"{LIVE_SESSIONS_SETUP_ERROR} Supabase host: {_supabase_host_for_diagnostics()}. Backend error: {raw_detail}"
+    LOGGER.error(
+        "Public live session request failed",
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
+    return LIVE_SESSIONS_SETUP_ERROR
 
 
 def _raise_live_sessions_setup_error(exc: Exception) -> None:
@@ -602,7 +627,7 @@ def _build_live_session_detail_response(club_slug: str, session_key: str) -> dic
     _require_live_sessions_service_role()
     clean_session_key = str(session_key or "").strip()
     if not clean_session_key:
-        raise HTTPException(status_code=400, detail="session_key is required")
+        raise HTTPException(status_code=400, detail="A session link is required.")
     club = get_club(club_slug)
     club_id = str(club.get("id") or club.get("club_id") or club_slug)
     supabase = get_supabase_client()
@@ -621,7 +646,7 @@ def _build_live_session_detail_response(club_slug: str, session_key: str) -> dic
         else:
             _raise_live_sessions_backend_error(exc)
     if not rows or not is_public_live_session_row(rows[0]):
-        raise HTTPException(status_code=404, detail="live session not found")
+        raise HTTPException(status_code=404, detail="We couldn’t find this session.")
     return {"club": _public_club_payload(club, club_slug), "session": public_live_session_detail(rows[0])}
 
 
@@ -860,7 +885,14 @@ def health() -> dict[str, Any]:
 def health_live_sessions() -> dict[str, Any]:
     host = _supabase_host_for_diagnostics()
     if not _has_supabase_service_role_key():
-        return {"ok": False, "service": "jupr-api", "supabase_host": host, "service_role_configured": False, "detail": LIVE_SESSIONS_SETUP_ERROR}
+        return {
+            "ok": False,
+            "service": "jupr-api",
+            "supabase_host": host,
+            "service_role_configured": False,
+            "reason": "service_role_not_configured",
+            "detail": LIVE_SESSIONS_SETUP_ERROR,
+        }
     supabase = None
     try:
         supabase = get_supabase_client()
@@ -870,7 +902,23 @@ def health_live_sessions() -> dict[str, Any]:
             try:
                 legacy_rows = supabase.table("live_sessions").select(PUBLIC_LIVE_SESSION_LEGACY_SELECT).limit(1).execute().data or []
             except Exception as legacy_exc:
-                return {"ok": False, "service": "jupr-api", "supabase_host": host, "service_role_configured": True, "live_sessions_query_ok": False, "detail": _error_payload_text(legacy_exc) or legacy_exc.__class__.__name__}
+                LOGGER.error(
+                    "Public live session health check failed",
+                    exc_info=(type(legacy_exc), legacy_exc, legacy_exc.__traceback__),
+                )
+                return {
+                    "ok": False,
+                    "service": "jupr-api",
+                    "supabase_host": host,
+                    "service_role_configured": True,
+                    "live_sessions_query_ok": False,
+                    "reason": "live_sessions_query_failed",
+                    "detail": "The live-session data check failed. Review the API logs.",
+                }
+            LOGGER.warning(
+                "Public live durability schema is not ready",
+                exc_info=(type(exc), exc, exc.__traceback__),
+            )
             return {
                 "ok": False,
                 "service": "jupr-api",
@@ -880,12 +928,29 @@ def health_live_sessions() -> dict[str, Any]:
                 "operation_ledger_query_ok": False,
                 "durability_schema_ready": False,
                 "sample_count": len(legacy_rows),
+                "reason": "durability_schema_missing",
                 "detail": "Apply the public live durability migration before enabling writes.",
             }
-        return {"ok": False, "service": "jupr-api", "supabase_host": host, "service_role_configured": True, "live_sessions_query_ok": False, "detail": _error_payload_text(exc) or exc.__class__.__name__}
+        LOGGER.error(
+            "Public live session health check failed",
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
+        return {
+            "ok": False,
+            "service": "jupr-api",
+            "supabase_host": host,
+            "service_role_configured": True,
+            "live_sessions_query_ok": False,
+            "reason": "live_sessions_query_failed",
+            "detail": "The live-session data check failed. Review the API logs.",
+        }
     try:
         supabase.table("public_live_operations").select("operation_key,status,executor_token,lease_expires_at").limit(1).execute()
-    except Exception:
+    except Exception as exc:
+        LOGGER.error(
+            "Public live operation-ledger health check failed",
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
         return {
             "ok": False,
             "service": "jupr-api",
@@ -895,6 +960,7 @@ def health_live_sessions() -> dict[str, Any]:
             "operation_ledger_query_ok": False,
             "durability_schema_ready": False,
             "sample_count": len(rows),
+            "reason": "operation_ledger_query_failed",
             "detail": "Apply the public live durability migration before enabling writes.",
         }
     token_secret_ready = len(os.getenv("JUPR_PUBLIC_LIVE_TOKEN_SECRET", "").strip()) >= 32
@@ -929,7 +995,8 @@ def get_club(club_slug: str) -> dict[str, Any]:
     except Exception as exc:
         if known_fallback:
             return known_fallback
-        raise HTTPException(status_code=503, detail="Club lookup is unavailable because Supabase is not configured.") from exc
+        LOGGER.exception("Club lookup is unavailable")
+        raise HTTPException(status_code=503, detail="Club information is temporarily unavailable.") from exc
     club_fields = "id,slug,name,tagline,support_email,public_base_url,logo_url,primary_color,is_active"
     club_minimal_fields = "id,slug,name"
     rows: list[dict[str, Any]] = []

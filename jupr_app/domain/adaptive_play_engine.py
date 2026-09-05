@@ -326,7 +326,9 @@ def _singles_round(
         if history["singles_opponents"].get(_pair_key(a, b), 0)
     )
     if repeated:
-        warnings.append(f"{repeated} singles matchup repeat(s) were unavoidable.")
+        warnings.append(
+            f"{repeated} singles matchup{' was' if repeated == 1 else 's were'} repeated because no new pairing was available."
+        )
     matches = [
         {
             "id": f"r{round_number}-c{court_number + court_offset}",
@@ -412,8 +414,14 @@ def _doubles_round(
     warnings=[]
     partner_repeats=sum(int(history["partners"].get(_pair_key(team[0],team[1]),0)>0) for match in best for team in match)
     exact_repeats=sum(int(history["exact_matches"].get(_exact_match_key(list(a),list(b)),0)>0) for a,b in best)
-    if partner_repeats: warnings.append(f"{partner_repeats} repeated partner pairing(s) were unavoidable.")
-    if exact_repeats: warnings.append(f"{exact_repeats} repeated exact matchup(s) were unavoidable.")
+    if partner_repeats:
+        warnings.append(
+            f"{partner_repeats} partner pairing{' was' if partner_repeats == 1 else 's were'} repeated because no new pairing was available."
+        )
+    if exact_repeats:
+        warnings.append(
+            f"{exact_repeats} matchup{' was' if exact_repeats == 1 else 's were'} repeated because no new matchup was available."
+        )
     matches=[{
         "id":f"r{round_number}-c{court + court_offset}",
         "round":round_number,"court":court + court_offset,"playFormat":"doubles",
@@ -678,13 +686,12 @@ def _mixed_round(
     warnings: list[str] = []
     if (actual_doubles, actual_singles) != (desired_doubles, desired_singles):
         warnings.append(
-            "The active roster supports "
-            f"{actual_doubles} doubles and {actual_singles} singles court(s) this round; "
-            f"the configured mix is {desired_doubles} doubles and {desired_singles} singles."
+            f"This round uses {actual_doubles} doubles court{'s' if actual_doubles != 1 else ''} and "
+            f"{actual_singles} singles court{'s' if actual_singles != 1 else ''} because the available players don’t fit the original setup."
         )
     if actual_doubles == 0 or actual_singles == 0:
         warnings.append(
-            "Both formats could not run this round because the active roster is too small for the configured mix."
+            "There aren’t enough available players to use both formats this round."
         )
     if slots < 2:
         return [], list(active_ids), [*warnings, "At least two active players are required."], {
@@ -1109,7 +1116,7 @@ def create_generator_preview(
 ) -> dict[str, Any]:
     kind = str(generator_kind or "").strip().lower().replace("-", "_")
     if kind not in {"round_robin", "ladder"}:
-        raise ValueError("generator_kind must be round_robin or ladder")
+        raise ValueError("Choose Round-Robin Generator or Ladder Generator.")
     raw_format = str(play_format or "").strip().lower().replace("-", "_").replace("+", "_")
     format_aliases = {
         "mixed": "doubles_singles",
@@ -1120,7 +1127,7 @@ def create_generator_preview(
     }
     raw_format = format_aliases.get(raw_format, raw_format)
     if raw_format not in PLAY_FORMATS:
-        raise ValueError("play_format must be singles, doubles, or doubles_singles")
+        raise ValueError("Choose Singles, Doubles, or Doubles + Singles Mix.")
     fmt = raw_format
     if fmt == "doubles_singles" and kind != "round_robin":
         raise ValueError("Doubles + Singles Mix is available only for Round-Robin Generator sessions.")
@@ -1148,7 +1155,7 @@ def create_generator_preview(
         raise ValueError("Generators support at most 40 players.")
     ids = [int(x) for x in (player_ids or [])]
     if ids and len(ids) != len(unique_names):
-        raise ValueError("player_ids and participant_names must have the same length.")
+        raise ValueError("Choose every player from the club list again.")
     participants = []
     for idx, name in enumerate(unique_names, start=1):
         row = {
@@ -1585,7 +1592,7 @@ def mutate_generator_roster(
         order = [str(pid) for pid in roster_order or []]
         known = {str(row["id"]) for row in next_event.get("participants") or []}
         if len(order) != len(known) or len(set(order)) != len(order) or set(order) != known:
-            raise ValueError("Roster order must include every participant exactly once.")
+            raise ValueError("Put every player in the order once.")
         for idx, pid in enumerate(order, 1):
             participants[pid]["roster_order"] = idx
     elif clean_action == "add":
@@ -1620,7 +1627,7 @@ def mutate_generator_roster(
         new_id = _next_participant_id(next_event)
         scope = str(substitute_scope or "rest").lower()
         if scope not in {"round", "rest"}:
-            raise ValueError("Substitute scope must be round or rest.")
+            raise ValueError("Apply the substitution to this round or the rest of the session.")
         if scope == "round":
             participants[pid].setdefault("inactive_rounds", []).append(effective)
             inactive_from = effective + 1
@@ -1641,7 +1648,7 @@ def mutate_generator_roster(
             row["player_id"] = int(player_id)
         next_event.setdefault("participants", []).append(row)
     else:
-        raise ValueError("Unsupported roster action.")
+        raise ValueError("Choose how you want to change the players.")
 
     next_event.setdefault("rosterRevisions", []).append({
         "action": clean_action,

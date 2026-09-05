@@ -40,6 +40,21 @@ function previewEntries(entries: LeagueAwardProgressRow[]): LeagueAwardProgressR
   return entries.filter((entry, index) => normalizedRank(entry, index) <= fifthRank);
 }
 
+function minimumLabel(race: LeagueAwardRace): string {
+  const count = race.min_games ?? 0;
+  const singular = count === 1;
+  const metric = String(race.minimum_metric || "games");
+  const labels: Record<string, string> = {
+    games: singular ? "game" : "games",
+    games_played: singular ? "game" : "games",
+    close_games: singular ? "close game" : "close games",
+    upset_wins: singular ? "upset win" : "upset wins",
+    best_partnership_games: singular ? "partnership game" : "partnership games",
+    weeks_played: singular ? "week played" : "weeks played"
+  };
+  return `At least ${count} ${labels[metric] || (singular ? "qualifying result" : "qualifying results")}`;
+}
+
 function playerName(clubSlug: string, entry: LeagueAwardProgressRow) {
   if (entry.player_id == null) return entry.recipient_name || "—";
   return <Link href={`/clubs/${clubSlug}/players/${entry.player_id}`}>{entry.recipient_name || "—"}</Link>;
@@ -62,19 +77,26 @@ export function LeagueAwardRaceGrid({ progress, clubSlug }: { progress: LeagueAw
       {races.map((race) => {
         const entries = race.entries || [];
         const preview = previewEntries(entries);
-        const minimum = `${race.min_games ?? 0} ${String(race.minimum_metric || "games").replace(/_/g, " ")}`;
+        const eligibleCount = race.eligible_count ?? entries.length;
+        const teamAward = (race.recipient_type || entries[0]?.recipient_type) === "team";
+        const qualifierLabel = teamAward
+          ? `${eligibleCount} ${eligibleCount === 1 ? "team qualifies" : "teams qualify"}`
+          : `${eligibleCount} ${eligibleCount === 1 ? "player qualifies" : "players qualify"}`;
+        const minimum = minimumLabel(race);
         return (
           <article key={race.category_key} data-testid={`league-award-race-${race.category_key}`} style={cardStyle}>
             <h3 style={{ margin: "0 0 0.25rem" }}>{race.category_label}</h3>
             <p style={{ margin: "0 0 0.65rem", color: "#475569", fontSize: "0.88rem" }}>
-              {race.eligible_count ?? entries.length} eligible · minimum {minimum}
+              {qualifierLabel} · {minimum}
             </p>
             <ol style={{ margin: 0, paddingLeft: "1.5rem", display: "grid", gap: "0.3rem" }}>
               {preview.map((entry, index) => placementRow(clubSlug, entry, index))}
             </ol>
             {preview.length < entries.length ? (
               <details style={{ marginTop: "0.75rem" }}>
-                <summary style={{ cursor: "pointer", fontWeight: 700 }}>View all eligible players ({entries.length})</summary>
+                <summary style={{ cursor: "pointer", fontWeight: 700 }}>
+                  {teamAward ? "View every team that qualifies" : "View everyone who qualifies"} ({entries.length})
+                </summary>
                 <ol style={{ margin: "0.65rem 0 0", paddingLeft: "1.5rem", display: "grid", gap: "0.3rem" }}>
                   {entries.slice(preview.length).map((entry, index) => placementRow(clubSlug, entry, preview.length + index))}
                 </ol>

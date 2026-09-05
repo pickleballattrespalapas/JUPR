@@ -23,12 +23,12 @@ export default async function PublicGeneratorPage({ params }: Props) {
   return (
     <section>
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
-        Public play tools
+        Play tools
       </p>
       <h1 style={{ marginTop: 0 }}>Ladder Generator</h1>
-      <p style={{ color: "#334155", maxWidth: "900px" }}>Preview Round 1, record results, and generate each later court assignment adaptively from the completed or skipped round.</p>
+      <p style={{ color: "#334155", maxWidth: "900px" }}>Preview Round 1, record the scores, and build each new round from the previous result.</p>
       <p style={{ color: "#475569", maxWidth: "900px" }}>
-        Public sessions are unrated. Keep the organizer link private; share the clean page URL as the view-only scoreboard.
+        These games won&apos;t affect ratings. Keep the organizer link private and share the regular page link with players.
       </p>
       <PublicGeneratorWorkspace generatorKind="ladder" apiBase={serverApiBase()} clubId={params.clubSlug} status={status} />
     </section>

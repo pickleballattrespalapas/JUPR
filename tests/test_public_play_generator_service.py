@@ -2,6 +2,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from jupr_app.services.public_live_operation_service import PublicLiveRecoveryRequiredError
+from jupr_app.services import public_play_generator_service
 from jupr_app.services.public_play_generator_service import (
     advance_public_play_generator_session,
     create_public_play_generator_session,
@@ -197,3 +199,95 @@ def test_public_ladder_previews_only_round_one_and_requires_results_to_advance()
             idempotency_key=key("ladder-early"),
             requester_hash=requester(),
         )
+
+
+def _create_singles_session(supabase, *, operation_key="public-generator-recovery-create"):
+    return create_public_play_generator_session(
+        supabase,
+        club_id="club",
+        generator_kind="round_robin",
+        play_format="singles",
+        title="Recovery test",
+        participant_names=["A", "B", "C", "D"],
+        participant_player_ids={},
+        total_rounds=2,
+        court_count=2,
+        preview_fingerprint=None,
+        idempotency_key=operation_key,
+        requester_hash=requester(),
+        token_secret=token_secret(),
+    )
+
+
+def test_completed_generator_create_without_session_stops_before_a_duplicate(monkeypatch):
+    supabase = FakeSupabase()
+    operation = {
+        "operation_key": "f" * 64,
+        "status": "completed",
+        "result_json": {},
+        "request_fingerprint": "a" * 64,
+    }
+    monkeypatch.setattr(
+        public_play_generator_service,
+        "begin_public_live_operation",
+        lambda *_args, **_kwargs: (operation, True),
+    )
+    monkeypatch.setattr(
+        public_play_generator_service,
+        "_find_creation_row",
+        lambda *_args, **_kwargs: None,
+    )
+
+    with pytest.raises(PublicLiveRecoveryRequiredError) as caught:
+        _create_singles_session(supabase)
+
+    message = str(caught.value)
+    assert "contact club staff" in message
+    assert "Don’t start another one" in message
+    assert "Retry the same request" not in message
+
+
+def test_uncertain_generator_create_retries_the_same_request(monkeypatch):
+    supabase = FakeSupabase()
+    original_execute = Query.execute
+
+    def fail_live_session_insert(query):
+        if query.name == "live_sessions" and query.payload is not None:
+            raise RuntimeError("simulated response loss")
+        return original_execute(query)
+
+    monkeypatch.setattr(Query, "execute", fail_live_session_insert)
+
+    with pytest.raises(PublicLiveRecoveryRequiredError) as caught:
+        _create_singles_session(supabase, operation_key="public-generator-uncertain-create")
+
+    message = str(caught.value)
+    assert "Retry the same request" in message
+    assert "contact club staff" not in message
+
+
+def test_pending_generator_change_retries_that_same_action():
+    supabase = FakeSupabase()
+    created = _create_singles_session(supabase)
+    supabase.db["live_sessions"][0]["pending_operation_key"] = "pending-change"
+    first_round = created["session"]["event"]["rounds"][0]
+
+    with pytest.raises(PublicLiveRecoveryRequiredError) as caught:
+        save_public_play_generator_round(
+            supabase,
+            club_id="club",
+            session_key=created["session"]["session_key"],
+            round_number=1,
+            scores=[
+                {"match_id": row["id"], "score_a": 11, "score_b": 7}
+                for row in matches(first_round)
+            ],
+            edit_token=created["edit_token"],
+            expected_version=created["session"]["version"],
+            idempotency_key="public-generator-pending-change",
+            requester_hash=requester(),
+        )
+
+    message = str(caught.value)
+    assert "Retry that same action" in message
+    assert "contact club staff" not in message

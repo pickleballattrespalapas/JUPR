@@ -46,14 +46,18 @@ export default function PartnerConfirmationPanel({ apiBase, clubSlug, teamId }: 
       );
       const payload = await response.json().catch(() => null);
       if (!response.ok) {
-        const detail = typeof payload?.detail === "object" ? payload.detail.message : payload?.detail;
-        throw new Error(String(detail || `Unable to respond (${response.status}).`));
+        setMessage(
+          response.status === 400 || response.status === 404 || response.status === 409
+            ? "This invitation is invalid, expired, or has already been answered."
+            : "We couldn't save your response. Please try again."
+        );
+        return;
       }
       token.current = "";
       setReady(false);
       setMessage(String(payload.message || (accept ? "Team confirmed." : "Invitation declined.")));
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to respond.");
+    } catch {
+      setMessage("We couldn't save your response. Please try again.");
     } finally {
       setBusy(false);
     }
@@ -63,7 +67,7 @@ export default function PartnerConfirmationPanel({ apiBase, clubSlug, teamId }: 
     <article style={{ border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white", maxWidth: "620px" }}>
       <h2 style={{ marginTop: 0 }}>Partner invitation</h2>
       <p style={{ color: "#475569" }}>
-        Confirm only if you agreed to keep this partner for the team-league season.
+        Accept only if you agreed to play on this team for the season.
       </p>
       {!ready && !message ? <p style={{ color: "#b91c1c" }}>This invitation link is incomplete or expired.</p> : null}
       {ready ? (

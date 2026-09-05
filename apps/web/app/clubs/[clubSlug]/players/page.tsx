@@ -114,19 +114,19 @@ export default async function ClubPlayersPage({ params, searchParams }: PlayersP
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>Player profiles</p>
       <h1 style={{ marginTop: 0 }}>{clubName} players</h1>
       <p style={{ color: "#334155", maxWidth: "780px" }}>
-        Find a public player profile, then explore doubles and singles ratings, verified match history, awards, and club connections. Active players are shown by default.
+        Find a player, then explore doubles and singles ratings, match history, awards, frequent partners, and opponents. Active players are shown by default.
       </p>
 
       {error ? (
         <article data-testid="players-error-state" style={{ ...cardStyle, background: "#fef2f2", color: "#991b1b", marginBottom: "1rem" }}>
-          Players are temporarily unavailable. No private player data was exposed. Please try again shortly.
+          Player profiles are unavailable right now. Please try again shortly.
         </article>
       ) : null}
 
       {!error ? (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
-            <article style={cardStyle}><strong>Public players</strong><br />{summary?.public_players ?? 0}</article>
+            <article style={cardStyle}><strong>Players</strong><br />{summary?.public_players ?? 0}</article>
             <article style={cardStyle}><strong>Active players</strong><br />{summary?.active_players ?? 0}</article>
             <article style={cardStyle}><strong>Inactive players</strong><br />{summary?.inactive_players ?? 0}</article>
             <article style={cardStyle}><strong>Matching this view</strong><br />{summary?.filtered_players ?? 0}</article>
@@ -134,7 +134,7 @@ export default async function ClubPlayersPage({ params, searchParams }: PlayersP
 
           <form method="get" action={`/clubs/${clubSlug}/players`} data-testid="players-search-form" style={{ ...cardStyle, marginBottom: "1rem", display: "grid", gridTemplateColumns: "minmax(220px, 1fr) auto", gap: "0.65rem", alignItems: "end" }}>
             <label htmlFor="players-search"><strong>Find player</strong><br />
-              <input id="players-search" name="q" defaultValue={q} type="search" placeholder="Search public display name" style={{ width: "100%", padding: "0.6rem", border: "1px solid #94a3b8", borderRadius: "8px", font: "inherit" }} />
+              <input id="players-search" name="q" defaultValue={q} type="search" placeholder="Search by player name" style={{ width: "100%", padding: "0.6rem", border: "1px solid #94a3b8", borderRadius: "8px", font: "inherit" }} />
             </label>
             <input type="hidden" name="status" value={status} />
             <input type="hidden" name="sort" value={sort} />
@@ -172,13 +172,13 @@ export default async function ClubPlayersPage({ params, searchParams }: PlayersP
           {players.length === 0 ? (
             <article data-testid="players-filter-empty-state" style={cardStyle}>
               <h2 style={{ marginTop: 0 }}>No players match this view</h2>
-              <p>Try a different public display name or status.</p>
+              <p>Try a different player name or status.</p>
               <Link href={pageHref({ clubSlug, status: "active", sort: "rating" })}>Reset to active players</Link>
             </article>
           ) : (
             <div style={{ overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: "12px", background: "white" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.95rem", minWidth: "1020px" }}>
-                <thead><tr><th style={thStyle}>Player</th><th style={thStyle}>Doubles / overall</th><th style={thStyle}>Singles</th><th style={thStyle}>Doubles MP</th><th style={thStyle}>Singles MP</th><th style={thStyle}>Doubles W/L</th><th style={thStyle}>Singles W/L</th><th style={thStyle}>Win %</th><th style={thStyle}>Last played</th><th style={thStyle}>Status</th><th style={thStyle}>Stable links</th></tr></thead>
+                <thead><tr><th style={thStyle}>Player</th><th style={thStyle}>Doubles / overall</th><th style={thStyle}>Singles</th><th style={thStyle}>Doubles matches</th><th style={thStyle}>Singles matches</th><th style={thStyle}>Doubles record</th><th style={thStyle}>Singles record</th><th style={thStyle}>Win %</th><th style={thStyle}>Last played</th><th style={thStyle}>Status</th><th style={thStyle}>Links</th></tr></thead>
                 <tbody>
                   {players.map((player) => {
                     const selected = String(player.id) === String(selectedPlayer);
@@ -199,7 +199,7 @@ export default async function ClubPlayersPage({ params, searchParams }: PlayersP
                           <Link href={profileHref}>profile</Link><span style={{ color: "#64748b" }}> · </span>
                           <Link href={`/clubs/${clubSlug}/leaderboards?player=${encodeURIComponent(String(player.id))}#leaderboard-player-${encodeURIComponent(String(player.id))}`}>leaderboard</Link><span style={{ color: "#64748b" }}> · </span>
                           <Link href={`/clubs/${clubSlug}/verified-updates?player_id=${encodeURIComponent(String(player.id))}`}>email updates</Link><span style={{ color: "#64748b" }}> · </span>
-                          <Link aria-label={`${player.name} stable row link`} href={`${pageHref({ clubSlug, q, status, sort, player: player.id, page, perPage })}#${playerAnchor(player.id)}`}>row link</Link>
+                          <Link aria-label={`Share ${player.name}`} href={`${pageHref({ clubSlug, q, status, sort, player: player.id, page, perPage })}#${playerAnchor(player.id)}`}>share</Link>
                         </td>
                       </tr>
                     );

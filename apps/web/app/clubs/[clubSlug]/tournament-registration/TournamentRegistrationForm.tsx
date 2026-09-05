@@ -15,7 +15,16 @@ import {
   TournamentCommerceQuote,
   TournamentCommerceSelection
 } from "@/lib/tournamentCommerceApi";
-import { publicEventEligibilityReason, publicEventFamilyKey } from "@/lib/tournamentRegistrationEligibility";
+import {
+  formatRegistrationRating,
+  publicEventCapacityLabel,
+  publicEventEligibilityReason,
+  publicEventFamilyKey,
+  publicEventFormatLabel,
+  publicScoringLabel,
+  publicTournamentDayLabel,
+  publicTournamentEventLabel
+} from "@/lib/tournamentRegistrationEligibility";
 import { createPublicFourPlayerTeam } from "@/lib/tournamentTeamCompetitionApi";
 import FourPlayerTeamRegistrationCard, {
   TEAM_SLOTS,
@@ -32,6 +41,7 @@ type TournamentRegistrationFormProps = {
   registrationSlug?: string | null;
   registrationOpen: boolean;
   registrationClosedReason?: string | null;
+  timeZone?: string | null;
   days: PublicRegistrationDay[];
   events: PublicRegistrationEvent[];
   commerce?: TournamentCommerceCatalog | null;
@@ -128,20 +138,24 @@ function emptyPartnerState(event: PublicRegistrationEvent): PartnerState {
 }
 
 function eventMeta(event: PublicRegistrationEvent): string {
-  const pieces = [event.skill_label, event.age_label, event.event_format, event.scoring]
+  const pieces = [
+    event.skill_label,
+    event.age_label,
+    publicEventFormatLabel(event.event_format),
+    publicScoringLabel(event.scoring)
+  ]
     .filter((item) => item && String(item).trim())
     .map(String);
   if (event.price_usd != null) pieces.push(`$${Number(event.price_usd).toFixed(2)}`);
-  if (event.capacity_teams != null) pieces.push(`Cap ${event.capacity_teams}`);
+  const capacity = publicEventCapacityLabel(event);
+  if (capacity) pieces.push(capacity);
   if (
     String(event.eligibility_mode || "").toUpperCase() ===
       "COMBINED_RATING_CAP" &&
     event.combined_rating_cap != null
   ) {
     pieces.push(
-      `Combined rating strictly under ${Number(
-        event.combined_rating_cap
-      ).toFixed(2)}`
+      `Combined rating must be below ${formatRegistrationRating(Number(event.combined_rating_cap))}`
     );
   }
   if (
@@ -164,7 +178,7 @@ function scheduledDaysLabel(
     .map((dayId) => daysById.get(dayId))
     .filter(Boolean)
     .map((day) =>
-      day?.event_date ? `${day.label} · ${day.event_date}` : day?.label
+      day ? publicTournamentDayLabel(day.label, day.event_date) : null
     )
     .join(" · ");
 }
@@ -180,6 +194,7 @@ export default function TournamentRegistrationForm({
   registrationSlug,
   registrationOpen,
   registrationClosedReason,
+  timeZone,
   days,
   events,
   commerce
@@ -369,13 +384,17 @@ export default function TournamentRegistrationForm({
     });
     setPending(false);
     if (response.error || !response.data) {
-      setError(response.error || "Unable to continue registration.");
+      setError(response.error || "We couldn’t continue your registration. Please try again.");
       return;
     }
     if (!response.data.can_start_new) {
       setRecoveryEmail(contact.email.trim());
       setMode("edit");
-      setError(response.data.status === "closed" ? response.data.message : null);
+      setError(
+        response.data.status === "closed"
+          ? response.data.registration_closed_reason || "Registration is closed."
+          : null
+      );
       return;
     }
     setResolution(response.data);
@@ -450,9 +469,9 @@ export default function TournamentRegistrationForm({
             Number((playerRating + partnerRating).toFixed(2)) >=
               Number(event.combined_rating_cap)
           ) {
-            return `${event.division_name}: combined rating must be strictly below ${Number(
-              event.combined_rating_cap
-            ).toFixed(2)}.`;
+            return `${event.division_name}: combined rating must be below ${formatRegistrationRating(
+              Number(event.combined_rating_cap)
+            )}.`;
           }
         }
       }
@@ -488,7 +507,7 @@ export default function TournamentRegistrationForm({
     }
     if (commerce?.available && !commerceQuote) {
       setError(
-        "Review extras and the current total before continuing. You can choose zero extras."
+        "Update your total before continuing. You can choose zero extras."
       );
       return;
     }
@@ -548,7 +567,7 @@ export default function TournamentRegistrationForm({
       return;
     }
     if (needsPartnerBoardConsent && !partnerConsent) {
-      setError("Players Needing Partners contact consent is required before publishing your listing.");
+      setError("Please confirm that organizers may contact you about finding a partner.");
       return;
     }
     if (!termsAccepted) {
@@ -558,7 +577,7 @@ export default function TournamentRegistrationForm({
     if (commerce?.available && !commerceQuote) {
       setStep(3);
       setError(
-        "Review extras and the current total before submitting. Prices or availability may have changed."
+        "Update your total before submitting. Prices or availability may have changed."
       );
       return;
     }
@@ -609,8 +628,7 @@ export default function TournamentRegistrationForm({
           setCommerceSelections(nextQuote.request.item_selections || []);
           setStep(3);
           setError(
-            response.error ||
-              "The total changed. Review the updated price before submitting."
+            "The total changed. Review the updated price before submitting."
           );
           return;
         }
@@ -620,14 +638,13 @@ export default function TournamentRegistrationForm({
           setError(null);
           return;
         }
-        setError(response.error || "Unable to submit registration.");
+        setError(response.error || "We couldn’t submit your registration. Please try again.");
         return;
       }
       if (!response.data.confirmation_token) {
         setPending(false);
         setError(
-          response.data.email_delivery?.message ||
-            "Your registration was saved, but secure confirmation access is unavailable. Please contact tournament staff before submitting again."
+          "We saved your registration but couldn’t open the confirmation page. Contact the organizer before trying again."
         );
         return;
       }
@@ -692,17 +709,27 @@ export default function TournamentRegistrationForm({
   if (mode === "choose") {
     return (
       <section style={{ ...cardStyle, display: "grid", gap: "0.9rem" }} data-testid="registration-mode-chooser">
-        <h2 style={{ margin: 0 }}>How can we help?</h2>
-        <p style={{ color: "#475569", margin: 0 }}>Start a new registration, or request a secure link to edit an existing one.</p>
+        <h2 style={{ margin: 0 }}>
+          {registrationOpen ? "Register or make changes" : "Registration is closed"}
+        </h2>
+        <p style={{ color: "#475569", margin: 0 }}>
+          {registrationOpen
+            ? "Start a registration or update one you’ve already submitted."
+            : "Already registered? You can still edit your registration."}
+        </p>
         <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem" }}>
-          <button type="button" onClick={() => resetWizard("new")} disabled={!registrationOpen} style={primaryButtonStyle}>
-            Start New
-          </button>
+          {registrationOpen ? (
+            <button type="button" onClick={() => resetWizard("new")} style={primaryButtonStyle}>
+              Start a registration
+            </button>
+          ) : null}
           <button type="button" onClick={() => resetWizard("edit")} style={secondaryButtonStyle}>
-            Edit Existing
+            Edit my registration
           </button>
         </div>
-        {!registrationOpen ? <p style={{ color: "#92400e", margin: 0 }}>{registrationClosedReason || "Registration is not currently open."} Existing registrations can still request an edit link.</p> : null}
+        {!registrationOpen && registrationClosedReason ? (
+          <p style={{ color: "#92400e", margin: 0 }}>{registrationClosedReason}</p>
+        ) : null}
       </section>
     );
   }
@@ -711,10 +738,12 @@ export default function TournamentRegistrationForm({
     return (
       <section style={{ ...cardStyle, display: "grid", gap: "0.9rem" }} data-testid="registration-edit-mode">
         <div>
-          <p style={{ color: "#2563eb", fontWeight: 800, margin: "0 0 0.35rem" }}>Edit Existing</p>
-          <h2 style={{ margin: 0 }}>Request a secure edit link</h2>
+          <p style={{ color: "#2563eb", fontWeight: 800, margin: "0 0 0.35rem" }}>Edit my registration</p>
+          <h2 style={{ margin: 0 }}>Request an edit link</h2>
         </div>
-        <p style={{ color: "#475569", margin: 0 }}>If a matching registration exists, the secure link is sent to that address. This page never reveals registration details.</p>
+        <p style={{ color: "#475569", margin: 0 }}>
+          Enter the email you registered with. We’ll send your edit link there.
+        </p>
         <EditLinkRequestForm clubSlug={clubSlug} tournamentId={tournamentId} registrationSlug={registrationSlug} initialEmail={recoveryEmail} />
         {error ? <p role="alert" style={{ color: "#b91c1c", margin: 0 }}>{error}</p> : null}
         <button type="button" onClick={() => resetWizard("choose")} style={secondaryButtonStyle}>Back to registration choices</button>
@@ -725,14 +754,17 @@ export default function TournamentRegistrationForm({
   return (
     <section style={{ display: "grid", gap: "1rem" }} data-testid="registration-new-wizard">
       <div style={{ ...cardStyle, background: "#f8fafc" }}>
-        <p style={{ margin: 0, color: "#2563eb", fontWeight: 800 }}>Start New · Step {step} of 4</p>
-        <p style={{ margin: "0.35rem 0 0", color: "#475569" }}>Contact → Profile → Events & partners → Review</p>
+        <p style={{ margin: 0, color: "#2563eb", fontWeight: 800 }}>New registration · Step {step} of 4</p>
+        <p style={{ margin: "0.35rem 0 0", color: "#475569" }}>Name and contact · Player profile · Events and partners · Review</p>
       </div>
 
       {step === 1 ? (
         <section style={cardStyle} data-testid="registration-step-contact">
           <h2 style={{ marginTop: 0 }}>1. Name and contact</h2>
-          <p style={{ color: "#475569" }}>Age and gender are required for division eligibility. Your contact details remain private.</p>
+          <p style={{ color: "#475569" }}>
+            We use your age and gender to show eligible divisions. Only
+            organizers can see your contact details.
+          </p>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
             <label>First name *<br /><input aria-label="First name" value={contact.firstName} onChange={(event) => updateContact("firstName", event.target.value)} style={inputStyle} /></label>
             <label>Last name *<br /><input aria-label="Last name" value={contact.lastName} onChange={(event) => updateContact("lastName", event.target.value)} style={inputStyle} /></label>
@@ -752,7 +784,11 @@ export default function TournamentRegistrationForm({
       {step === 2 ? (
         <section style={cardStyle} data-testid="registration-step-profile">
           <h2 style={{ marginTop: 0 }}>2. Player profile</h2>
-          <p style={{ color: "#475569" }}>{resolution?.message}</p>
+          <p style={{ color: "#475569" }}>
+            {resolution?.profile_candidates.length
+              ? "Is this you? Choose a profile below, or continue without one."
+              : "We didn’t find a matching player profile. You can still continue."}
+          </p>
           {resolution?.profile_candidates.length ? (
             <div style={{ display: "grid", gap: "0.5rem", marginBottom: "1rem" }}>
               {resolution.profile_candidates.map((candidate) => (
@@ -760,11 +796,12 @@ export default function TournamentRegistrationForm({
                   <input type="radio" name="profile_candidate" checked={profile.candidateId === candidate.id} onChange={() => selectCandidate(candidate)} /> {candidateLabel(candidate)}
                 </label>
               ))}
-              <label style={{ padding: "0.4rem" }}><input type="radio" name="profile_candidate" checked={!profile.candidateId} onChange={() => selectCandidate(null)} /> Continue without a profile suggestion</label>
+              <label style={{ padding: "0.4rem" }}><input type="radio" name="profile_candidate" checked={!profile.candidateId} onChange={() => selectCandidate(null)} /> None of these is me</label>
             </div>
           ) : null}
           <aside style={{ borderLeft: "4px solid #2563eb", padding: "0.65rem 0.8rem", background: "#eff6ff", marginBottom: "1rem" }}>
-            <strong>Profile policy:</strong> suggestions only prefill this form. Public registration never links a JUPR player automatically; tournament staff verify the relationship first.
+            Choosing a profile only fills in this form. An organizer will
+            confirm that it belongs to you.
           </aside>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
             <label>Display name *<br /><input aria-label="Display name" value={profile.displayName} onChange={(event) => updateProfile("displayName", event.target.value)} style={inputStyle} /></label>
@@ -778,10 +815,13 @@ export default function TournamentRegistrationForm({
       {step === 3 ? (
         <section style={cardStyle} data-testid="registration-step-events">
           <h2 style={{ marginTop: 0 }}>3. Events and partners</h2>
-          <p style={{ color: "#475569" }}>Choose one division per day and event family. Selecting another division in the same family replaces the first.</p>
+          <p style={{ color: "#475569" }}>
+            Choose one division for each event on a given day. Picking another
+            division will replace your earlier choice.
+          </p>
           {groupedEvents.map(({ day, events: dayEvents }) => (
             <div key={day.id} style={{ marginBottom: "1rem" }}>
-              <h3>{day.label}{day.event_date ? ` · ${day.event_date}` : ""}</h3>
+              <h3>{publicTournamentDayLabel(day.label, day.event_date)}</h3>
               <div style={{ display: "grid", gap: "0.6rem" }}>
                 {dayEvents.map((eventOption) => {
                   const selected = selectedIds.includes(eventOption.id);
@@ -791,7 +831,7 @@ export default function TournamentRegistrationForm({
                     <article key={eventOption.id} style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: selected ? "#f8fafc" : "white" }}>
                       <label style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start" }}>
                         <input type="checkbox" aria-label={`${eventOption.event_family_label} ${eventOption.division_name}`} checked={selected} disabled={Boolean(eligibilityReason)} onChange={(event) => toggleEvent(eventOption.id, event.target.checked)} />
-                        <span><strong>{eventOption.event_family_label} — {eventOption.division_name}</strong><br /><span style={{ color: "#64748b" }}>{scheduledDaysLabel(eventOption, daysById) || "Schedule TBD"}<br />{eventMeta(eventOption)}</span></span>
+                        <span><strong>{publicTournamentEventLabel(eventOption.event_family_label, eventOption.division_name)}</strong><br /><span style={{ color: "#64748b" }}>{scheduledDaysLabel(eventOption, daysById) || "Schedule TBD"}<br />{eventMeta(eventOption)}</span></span>
                       </label>
                       {eligibilityReason ? <p style={{ color: "#b91c1c", marginBottom: 0 }}>{eligibilityReason}</p> : null}
                       {selected &&
@@ -808,7 +848,10 @@ export default function TournamentRegistrationForm({
                           </label>
                           {partner.mode === "HAS_PARTNER" ? (
                             <>
-                              <p style={{ color: "#475569", margin: 0 }}>We will match this person to an existing club player or create their tournament entry, then list both players as one confirmed team. Your partner does not need to register again.</p>
+                              <p style={{ color: "#475569", margin: 0 }}>
+                                Add your partner’s details here. They don’t need
+                                to register separately.
+                              </p>
                               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.5rem" }}>
                                 <label>Partner name *<br /><input required aria-label={`${eventOption.division_name} partner name`} value={partner.name} onChange={(event) => updatePartner(eventOption.id, { name: event.target.value })} style={inputStyle} /></label>
                                 <label>Partner email *<br /><input required aria-label={`${eventOption.division_name} partner email`} type="email" value={partner.email} onChange={(event) => updatePartner(eventOption.id, { email: event.target.value })} style={inputStyle} /></label>
@@ -821,7 +864,7 @@ export default function TournamentRegistrationForm({
                             </>
                           ) : (
                             <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-                              <input type="checkbox" checked={partner.showOnBoard} disabled={!eventOption.partner_board_enabled} onChange={(event) => updatePartner(eventOption.id, { showOnBoard: event.target.checked })} /> Show me on the public Players Needing Partners page for this division
+                              <input type="checkbox" checked={partner.showOnBoard} disabled={!eventOption.partner_board_enabled} onChange={(event) => updatePartner(eventOption.id, { showOnBoard: event.target.checked })} /> List me as looking for a partner in this division
                             </label>
                           )}
                           <label>Partner note<br /><textarea aria-label={`${eventOption.division_name} partner note`} rows={2} value={partner.note} onChange={(event) => updatePartner(eventOption.id, { note: event.target.value })} style={inputStyle} /></label>
@@ -833,7 +876,7 @@ export default function TournamentRegistrationForm({
               </div>
             </div>
           ))}
-          {!selectableEvents.length ? <p>No selectable events are currently open.</p> : null}
+          {!selectableEvents.length ? <p>No events are open for registration.</p> : null}
           {selectedTeamEvents.map((teamEvent) => (
             <FourPlayerTeamRegistrationCard
               key={teamEvent.id}
@@ -860,6 +903,7 @@ export default function TournamentRegistrationForm({
               tournamentId={tournamentId}
               eventOptionIds={selectedIds}
               catalog={commerce}
+              timeZone={timeZone}
               initialSelections={commerceSelections}
               disabled={pending}
               onReviewChange={updateCommerceReview}
@@ -884,12 +928,12 @@ export default function TournamentRegistrationForm({
                   ? `Team: ${teamDraft?.teamName || "not named"}`
                   : event.partner_required
                 ? partner.mode === "HAS_PARTNER" ? `Partner: ${partner.name}` : "Needs partner"
-                : isDoublesEvent(event) ? "Individual doubles entry" : "Singles";
-              return <li key={id}>{scheduledDaysLabel(event, daysById) || "Schedule TBD"} · {event.event_family_label} — {event.division_name} · {entryLabel}</li>;
+                : isDoublesEvent(event) ? "Registered as an individual" : "Singles";
+              return <li key={id}>{scheduledDaysLabel(event, daysById) || "Schedule TBD"} · {publicTournamentEventLabel(event.event_family_label, event.division_name)} · {entryLabel}</li>;
             })}
           </ul>
           <p>
-            <strong>Total due offline:</strong>{" "}
+            <strong>Amount due to organizer:</strong>{" "}
             {commerceQuote
               ? `$${(commerceQuote.total_minor / 100).toFixed(2)}`
               : `$${totalPrice.toFixed(2)}`}
@@ -914,16 +958,17 @@ export default function TournamentRegistrationForm({
           ) : null}
           {commerceQuote ? (
             <p style={{ color: "#475569" }}>
-              Payment is handled offline by tournament staff.
+              You’ll pay the tournament organizer separately; we won’t charge
+              you here.
             </p>
           ) : null}
           {needsPartnerBoardConsent ? (
             <label style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start", marginBottom: "0.75rem" }}>
-              <input type="checkbox" checked={partnerConsent} onChange={(event) => setPartnerConsent(event.target.checked)} /> Organizers may use my contact information for the Players Needing Partners listing I selected.
+              <input type="checkbox" checked={partnerConsent} onChange={(event) => setPartnerConsent(event.target.checked)} /> The organizers may contact me about finding a partner.
             </label>
           ) : null}
           <label style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start" }}>
-            <input type="checkbox" checked={termsAccepted} onChange={(event) => setTermsAccepted(event.target.checked)} /> I confirm this registration is accurate and agree to the tournament rules and refund policy shown on this page.
+            <input type="checkbox" checked={termsAccepted} onChange={(event) => setTermsAccepted(event.target.checked)} /> My information is correct, and I agree to the tournament rules and refund policy.
           </label>
         </section>
       ) : null}
@@ -934,7 +979,7 @@ export default function TournamentRegistrationForm({
         {step === 1 ? <button type="button" onClick={resolveProfile} disabled={pending} style={primaryButtonStyle}>{pending ? "Checking…" : "Continue"}</button> : null}
         {step === 2 ? <button type="button" onClick={advanceFromProfile} style={primaryButtonStyle}>Continue to events</button> : null}
         {step === 3 ? <button type="button" onClick={advanceFromEvents} style={primaryButtonStyle}>Review registration</button> : null}
-        {step === 4 ? <button type="button" onClick={submitRegistration} disabled={pending} style={primaryButtonStyle}>{pending ? "Submitting…" : savedRegistration ? "Retry team setup" : "Submit registration"}</button> : null}
+        {step === 4 ? <button type="button" onClick={submitRegistration} disabled={pending} style={primaryButtonStyle}>{pending ? "Submitting…" : savedRegistration ? "Finish team registration" : "Submit registration"}</button> : null}
       </div>
     </section>
   );

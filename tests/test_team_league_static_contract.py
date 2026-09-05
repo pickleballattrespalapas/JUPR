@@ -166,6 +166,8 @@ def test_partner_secret_never_appears_in_query_or_browser_history() -> None:
     assert "get_next_web_base_url" in route
     assert 'club.get("public_base_url")' not in route
     assert "https://juprleagues.com" not in route
+    assert "error instanceof Error ? error.message" not in confirmation
+    assert "payload?.detail" not in confirmation
 
 
 def test_team_league_and_award_admin_pages_are_complete_and_responsive() -> None:
@@ -215,6 +217,15 @@ def test_team_league_and_award_admin_pages_are_complete_and_responsive() -> None
     assert "Team setup is managed in League Settings." in team_panel
     assert 'useState<"success" | "error" | null>' in registration
     assert 'messageTone === "error" ? "alert" : "status"' in registration
+    assert "error instanceof Error ? error.message" not in registration
+    assert "Registration failed (" not in registration
+    assert "recovery_required?: unknown" in registration
+    assert "status === 503 && recoveryRequired" in registration
+    assert (
+        "Your team was saved, but we couldn't send the invitation. "
+        "Please contact league staff."
+    ) in registration
+    assert "operation_id" not in registration
     assert 'boxSizing: "border-box"' in registration
     assert "minmax(min(100%, 220px)" in registration
     assert "minmax(min(100%, 200px)" in public_detail

@@ -17,6 +17,7 @@ export type ActionUncertain = {
   title: string;
   description: ReactNode;
   operationKey: string;
+  showOperationReference?: boolean;
   recoveryLabel: string;
   onRecover: () => Promise<ActionCompletion>;
 };
@@ -68,13 +69,15 @@ export function actionUncertain(
   description: ReactNode,
   operationKey: string,
   recoveryLabel: string,
-  onRecover: () => Promise<ActionCompletion>
+  onRecover: () => Promise<ActionCompletion>,
+  showOperationReference = true
 ): ActionUncertain {
   return {
     status: "uncertain",
     title,
     description,
     operationKey,
+    showOperationReference,
     recoveryLabel,
     onRecover
   };
@@ -100,10 +103,8 @@ export function isActionCompletion(value: unknown): value is ActionCompletion {
 
 export function normalizeInteractionActionError(error: unknown): InteractionActionError {
   if (error instanceof InteractionActionError) return error;
-  if (error instanceof Error && error.message.trim()) {
-    return new InteractionActionError(error.message, { cause: error });
-  }
   return new InteractionActionError(
-    "The action could not be completed. Your changes are still here. Review the details and try again."
+    "We couldn’t complete that action. Your changes are still here. Check the details and try again.",
+    { cause: error }
   );
 }

@@ -57,6 +57,6 @@ test("leaderboard has explicit filtered-empty and API-error states", async ({ pa
   await expect(page.getByTestId("leaderboard-filter-empty-state")).toContainText("No players match");
 
   await page.goto("/clubs/__jupr_missing_club_7a9f31__/leaderboards", { waitUntil: "domcontentloaded" });
-  await expect(page.getByTestId("leaderboard-error-state")).toContainText("temporarily unavailable");
-  await expect(page.getByTestId("leaderboard-error-state")).toContainText("No private player data");
+  await expect(page.getByTestId("leaderboard-error-state")).toContainText("Leaderboards are unavailable right now");
+  await expect(page.getByTestId("leaderboard-error-state")).toContainText("Please try again shortly");
 });

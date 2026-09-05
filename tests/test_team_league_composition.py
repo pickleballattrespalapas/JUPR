@@ -262,7 +262,7 @@ def test_public_multi_player_registration_remains_fail_closed(monkeypatch) -> No
     assert detail["registration"]["open"] is False
     assert detail["registration"]["signup_types"] == []
     assert "Contact league staff" in detail["registration"]["unavailable_reason"]
-    with pytest.raises(ValueError, match="not available yet"):
+    with pytest.raises(ValueError, match="isn't available"):
         register_public_team_league(
             supabase,
             club_id="club",
@@ -488,7 +488,7 @@ def test_roster_retry_forwards_stale_version_to_database_receipt(monkeypatch) ->
     "category,genders,message",
     [
         ("mixed", ("Men", "Male"), "one man and one woman"),
-        ("womens", ("Women", "Prefer not to say"), "cannot verify"),
+        ("womens", ("Women", "Prefer not to say"), "couldn't confirm"),
     ],
 )
 def test_public_registration_rejects_ineligible_or_unknown_gender_before_write(
@@ -552,7 +552,7 @@ def test_gender_aliases_are_normalized_for_fixed_pair_categories(
     [
         (("Woman", "MAN"), None),
         (("Men", "Male"), "one man and one woman"),
-        (("Women", "Unknown"), "cannot verify"),
+        (("Women", "Unknown"), "couldn't confirm"),
     ],
 )
 def test_admin_waitlist_pairing_enforces_category_before_write(

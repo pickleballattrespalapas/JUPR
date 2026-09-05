@@ -18,14 +18,14 @@ ADMIN_PANEL = Path(
 )
 
 
-def test_public_extras_are_responsive_and_explain_offline_payment():
+def test_public_extras_are_responsive_and_explain_separate_payment():
     source = PUBLIC_CHOOSER.read_text(encoding="utf-8")
 
     assert 'minmax(min(100%, 260px), 1fr)' in source
     assert 'aria-live="polite"' in source
-    assert "Payment is handled offline" in source
-    assert "Bundle savings available" in source
-    assert "while supplies last" in source
+    assert "pay the tournament organizer separately" in source
+    assert "Bundle savings" in source
+    assert "qualify for a giveaway" in source
     assert "componentLabel(component)" in source
     assert "line.component_snapshot?.length" in source
     assert "component.total_quantity" in source

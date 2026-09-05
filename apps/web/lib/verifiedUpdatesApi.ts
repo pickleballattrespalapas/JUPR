@@ -35,26 +35,16 @@ export function verifiedUpdatesApiBaseUrl(): string | null {
   return process.env.JUPR_API_BASE_URL || process.env.NEXT_PUBLIC_JUPR_API_BASE_URL || null;
 }
 
-async function apiError(response: Response): Promise<string> {
-  const fallback = `API error (${response.status}).`;
-  const text = await response.text().catch(() => "");
-  if (!text) return fallback;
-  try {
-    const payload = JSON.parse(text) as { detail?: unknown; message?: unknown; error?: unknown };
-    return `${fallback} ${String(payload.detail ?? payload.message ?? payload.error ?? text)}`;
-  } catch {
-    return `${fallback} ${text.slice(0, 240)}`;
-  }
-}
+const VERIFIED_UPDATES_LOAD_ERROR = "We couldn’t load player updates. Please try again later.";
 
 export async function loadVerifiedUpdatePlayers(clubSlug: string): Promise<ApiResult<VerifiedUpdateOptionsResponse>> {
   const apiBase = verifiedUpdatesApiBaseUrl();
-  if (!apiBase) return { data: null, error: "Missing JUPR API base URL." };
+  if (!apiBase) return { data: null, error: VERIFIED_UPDATES_LOAD_ERROR };
   try {
     const response = await fetch(`${apiBase.replace(/\/$/, "")}/clubs/${encodeURIComponent(clubSlug)}/verified-updates/options`, { next: { revalidate: 60 } });
-    if (!response.ok) return { data: null, error: await apiError(response) };
+    if (!response.ok) return { data: null, error: VERIFIED_UPDATES_LOAD_ERROR };
     return { data: (await response.json()) as VerifiedUpdateOptionsResponse, error: null };
-  } catch (error) {
-    return { data: null, error: error instanceof Error ? error.message : "Unable to reach API." };
+  } catch {
+    return { data: null, error: VERIFIED_UPDATES_LOAD_ERROR };
   }
 }

@@ -239,7 +239,7 @@ def test_public_team_league_read_is_disabled_before_club_or_client_in_production
         handler("production-club")
     except HTTPException as exc:
         assert exc.status_code == 403
-        assert "disabled" in str(exc.detail).lower()
+        assert "temporarily unavailable" in str(exc.detail).lower()
     else:
         raise AssertionError("production read was not disabled")
     assert called == {"club": False, "client": False}
@@ -268,7 +268,7 @@ def test_admin_team_league_read_is_disabled_before_client_or_auth_in_production(
         handler("production-club", "Bearer ignored")
     except HTTPException as exc:
         assert exc.status_code == 403
-        assert "disabled" in str(exc.detail).lower()
+        assert "temporarily unavailable" in str(exc.detail).lower()
     else:
         raise AssertionError("production read was not disabled")
     assert called == {"client": False}

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { getClubMatches, type PublicMatch } from "@/lib/api";
+import { publicMatchTypeLabel } from "@/lib/publicMatchLabels";
 
 type MatchesPageProps = {
   params: { clubSlug: string };
@@ -106,15 +107,15 @@ export default async function MatchesPage({ params, searchParams }: MatchesPageP
         Match history
       </p>
       <h1 style={{ marginTop: 0 }}>{clubName} matches</h1>
-      <p style={{ color: "#475569", maxWidth: "760px" }}>Public match history is the connective tissue between score entry, ratings, leaderboards, and player profiles.</p>
+      <p style={{ color: "#475569", maxWidth: "760px" }}>Browse recorded scores and see how each match affected player ratings.</p>
 
-      {error ? <p style={{ color: "#b91c1c" }}>Match history is temporarily unavailable. {error}</p> : null}
-      {!error && matches.length === 0 ? <p>No public matches are available yet.</p> : null}
+      {error ? <p role="alert" style={{ color: "#b91c1c" }}>Match history is unavailable right now. Please try again shortly.</p> : null}
+      {!error && matches.length === 0 ? <p>No matches have been recorded yet.</p> : null}
 
       {matches.length > 0 ? (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
-            <article style={cardStyle}><strong>Public matches</strong><br />{matches.length}</article>
+            <article style={cardStyle}><strong>Recorded matches</strong><br />{matches.length}</article>
             <article style={cardStyle}><strong>Scored matches</strong><br />{scoredCount}</article>
             <article style={cardStyle}><strong>Leagues</strong><br />{leagues.length}</article>
             <article style={cardStyle}><strong>Latest match</strong><br />{latestMatch ? formatMatchDate(latestMatch.date) : "—"}</article>
@@ -153,7 +154,7 @@ export default async function MatchesPage({ params, searchParams }: MatchesPageP
                   <th style={thStyle}>Team 2</th>
                   <th style={thStyle}>League</th>
                   <th style={thStyle}>Type</th>
-                  <th style={thStyle}>Link</th>
+                  <th style={thStyle}>Share</th>
                 </tr>
               </thead>
               <tbody>
@@ -167,8 +168,8 @@ export default async function MatchesPage({ params, searchParams }: MatchesPageP
                       <td style={tdStyle}>{match.id ? <Link href={detailHref}>{scoreLabel(match)}</Link> : scoreLabel(match)}</td>
                       <td style={tdStyle}>{teamLabel(clubSlug, match.team_2)}</td>
                       <td style={tdStyle}>{match.league ?? "—"}</td>
-                      <td style={tdStyle}>{match.match_type ?? "—"}</td>
-                      <td style={tdStyle}>{match.id ? <Link href={pageHref({ clubSlug, league: selectedLeague, q, sort: selectedSort, match: match.id }) + `#${matchAnchor(match.id)}`}>row link</Link> : "—"}</td>
+                      <td style={tdStyle}>{publicMatchTypeLabel(match.match_type)}</td>
+                      <td style={tdStyle}>{match.id ? <Link aria-label={`Share match from ${formatMatchDate(match.date)}`} href={pageHref({ clubSlug, league: selectedLeague, q, sort: selectedSort, match: match.id }) + `#${matchAnchor(match.id)}`}>share</Link> : "—"}</td>
                     </tr>
                   );
                 })}

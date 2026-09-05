@@ -15,7 +15,7 @@ export default async function EmailPreferencesPage({ searchParams }: EmailPrefer
   const subscriptionId = searchParams?.subscription_id || null;
   const hasLegacyIdOnly = !token && !ut && Boolean(sid || subscriptionId);
   const { data, error } = hasLegacyIdOnly
-    ? { data: null, error: "Legacy subscription-id links are no longer accepted. Open the tokenized preference link in a recent player update email." }
+    ? { data: null, error: "This link is out of date. Open the preferences link in a recent player update email." }
     : await getEmailPreferences({ token, ut });
 
   return (
@@ -25,7 +25,7 @@ export default async function EmailPreferencesPage({ searchParams }: EmailPrefer
       </p>
       <h1 style={{ marginTop: 0 }}>Manage email preferences</h1>
       <p style={{ color: "#334155", maxWidth: "820px" }}>
-        Manage optional JUPR emails from the tokenized preference link included in your player update email. Category scope disables player update digests; global scope also applies to future optional categories.
+        Use the preferences link in your player update email to stop player updates or all optional JUPR emails.
       </p>
 
       {error ? (

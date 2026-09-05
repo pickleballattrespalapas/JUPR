@@ -54,7 +54,7 @@ export default function PublicLeagueNav({
   return (
     <div className={styles.shell}>
       <div className={styles.contextRow}>
-        <p className={styles.context}>{cleanName} league pages</p>
+        <p className={styles.context}>{cleanName}</p>
         <Link
           href={`/clubs/${clubSlug}/leagues${leagueView === "past" ? "?view=past" : ""}`}
           className={styles.backLink}

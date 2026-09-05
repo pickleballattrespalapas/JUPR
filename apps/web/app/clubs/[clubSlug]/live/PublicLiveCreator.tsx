@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { PublicPlayer } from "@/lib/api";
+import { publicLiveErrorText } from "@/lib/publicLiveErrorText";
 
 type PublicLiveCreatorProps = {
   apiBase: string | null;
@@ -12,6 +13,8 @@ type PublicLiveCreatorProps = {
 type LiveMode = "quick" | "club_social";
 type EventType = "round_robin" | "league_ladder";
 type PendingCreatePayload = Record<string, unknown> & { idempotency_key: string };
+
+class PublicCreateError extends Error {}
 
 const defaultNames = "Amy\nBrooke\nChris\nDana";
 const participantCounts = Array.from({ length: 17 }, (_, index) => index + 4);
@@ -123,7 +126,7 @@ export default function PublicLiveCreator({ apiBase, clubSlug, players = [] }: P
 
   async function createSession() {
     if (!apiBase) {
-      setError("The public API base URL is not configured for this deployment.");
+      setError("This play tool is temporarily unavailable. Please try again later.");
       return;
     }
     if (!canSubmit) {
@@ -176,18 +179,24 @@ export default function PublicLiveCreator({ apiBase, clubSlug, players = [] }: P
           sessionStorage.removeItem(createOperationStorageKey);
           setCreateOperationKey("");
         }
-        throw new Error(String(payload?.detail || `API error (${response.status})`));
+        throw new PublicCreateError(
+          publicLiveErrorText(
+            response.status,
+            payload?.detail,
+            "This play tool is temporarily unavailable. Please try again later."
+          )
+        );
       }
       const sessionKey = String(payload?.session?.session_key || "");
       const editToken = String(payload?.edit_token || "");
       if (!sessionKey || !editToken) {
-        throw new Error("The API did not return a live session edit link.");
+        throw new PublicCreateError("We couldn’t confirm that the event was created. Try again before creating another one.");
       }
       sessionStorage.removeItem(createOperationStorageKey);
       setCreateOperationKey("");
       window.location.href = `/clubs/${clubSlug}/live/${sessionKey}#edit=${encodeURIComponent(editToken)}`;
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to create live session.");
+      setError(err instanceof PublicCreateError ? err.message : "We couldn’t create the event. Please try again.");
     } finally {
       setSubmitting(false);
     }
@@ -199,7 +208,7 @@ export default function PublicLiveCreator({ apiBase, clubSlug, players = [] }: P
         <div>
           <h2 style={{ margin: "0 0 0.35rem", fontSize: "1.35rem" }}>Round-Robin and Ladder Generators</h2>
           <p style={{ color: "#334155", marginTop: 0 }}>
-            Create a durable Round-Robin or Ladder session. Quick sessions stay unrated; Club Social sends completed results to moderation without changing ratings.
+            Create a Round Robin or Ladder and keep score as you play. Quick Sessions stay unrated; Club Social lets staff review completed results without changing ratings.
           </p>
         </div>
         <span style={{ border: "1px solid #bfdbfe", borderRadius: "999px", padding: "0.25rem 0.75rem", background: "white", color: "#1d4ed8", fontWeight: 800, fontSize: "0.85rem" }}>Public</span>
@@ -218,8 +227,8 @@ export default function PublicLiveCreator({ apiBase, clubSlug, players = [] }: P
 
         <p style={{ color: "#334155", margin: 0 }}>
           {liveMode === "quick"
-            ? "Quick Session creates an unrated public scoreboard that survives refreshes and expires automatically."
-            : "Club Social persists the scoreboard, then submits completed unrated results to the staff moderation queue."}
+            ? "Quick Session creates an unrated scoreboard you can reopen if the page refreshes."
+            : "Club Social saves the scoreboard and sends completed, unrated results to club staff for review."}
         </p>
 
         <div style={{ height: "0.7rem", borderRadius: "999px", background: "white", border: "1px solid #dbeafe" }} />
@@ -259,7 +268,7 @@ export default function PublicLiveCreator({ apiBase, clubSlug, players = [] }: P
         {liveMode === "club_social" ? (
           <div style={{ display: "grid", gap: "0.75rem" }}>
             <label style={{ display: "grid", gap: "0.25rem", fontWeight: 700 }}>
-              Host / Submitter Name
+              Organizer name
               <input value={hostName} onChange={(event) => setHostName(event.target.value)} maxLength={160} style={{ padding: "0.6rem", borderRadius: "8px", border: "1px solid #cbd5e1", font: "inherit" }} />
             </label>
             <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
@@ -329,7 +338,7 @@ export default function PublicLiveCreator({ apiBase, clubSlug, players = [] }: P
         </div>
 
         <label style={{ display: "grid", gap: "0.25rem", fontWeight: 700 }}>
-          Names or roster entry ({participantCount})
+          Players ({participantCount})
           <textarea
             value={participantText}
             onChange={(event) => setParticipantText(event.target.value)}
@@ -340,7 +349,7 @@ export default function PublicLiveCreator({ apiBase, clubSlug, players = [] }: P
         <p style={{ margin: 0, color: participantCount >= 4 && participantCount <= 20 && leagueFit ? "#166534" : "#b45309" }}>
           {!leagueFit ? "League / Ladder needs an exact combination of 4-player and 5-player courts." : countMessage}
         </p>
-        {liveMode === "club_social" ? <p style={{ margin: 0, color: "#475569" }}>Use current-player search for rated members so Club Social links the selected profile. Manually typed names are treated as guests and near-duplicates are rejected before creation.</p> : null}
+        {liveMode === "club_social" ? <p style={{ margin: 0, color: "#475569" }}>Choose club players from the search results when possible. Names typed directly into the list are treated as guests.</p> : null}
 
         <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
           <button
@@ -373,12 +382,12 @@ export default function PublicLiveCreator({ apiBase, clubSlug, players = [] }: P
             }}
             style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.65rem 1rem", background: "white", color: "#0f172a", fontWeight: 800, cursor: createOperationKey ? "not-allowed" : "pointer", opacity: createOperationKey ? 0.55 : 1 }}
           >
-            {createOperationKey ? "Reset locked during recovery" : "Reset"}
+            {createOperationKey ? "Finish retry before resetting" : "Reset"}
           </button>
         </div>
         {createOperationKey ? (
           <p style={{ color: "#92400e", margin: 0 }}>
-            <strong>Unresolved create retained.</strong> Create will retry the exact preserved request before accepting new inputs. Operation <code>{createOperationKey}</code>.
+            <strong>We couldn’t confirm whether the event was created.</strong> Choose <strong>Create event</strong> again to safely check the same request before changing this setup.
           </p>
         ) : null}
         {error ? <p style={{ color: "#b91c1c", margin: 0 }}>{error}</p> : null}

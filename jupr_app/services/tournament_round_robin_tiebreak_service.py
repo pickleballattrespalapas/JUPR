@@ -4,7 +4,7 @@ from typing import Any
 
 
 ROUND_ROBIN_RANKING_POLICY: dict[str, Any] = {
-    "description": "Rank active teams by wins. When teams are tied on wins, compare their record against the other tied teams first. If head-to-head does not fully separate them, resolve the remaining tie by point differential, then total points scored, then original team number. Retired teams remain visible after active teams and cannot advance.",
+    "description": "Teams are ranked by wins. Ties are decided by head-to-head record, point differential, total points scored, then team number. Teams that withdraw remain listed but cannot advance.",
     "criteria": [
         "WINS",
         "HEAD_TO_HEAD",
@@ -51,6 +51,16 @@ def _natural_list(values: list[str]) -> str:
     return f"{', '.join(values[:-1])}, and {values[-1]}"
 
 
+def _ordered_list(values: list[str]) -> str:
+    if not values:
+        return ""
+    if len(values) == 1:
+        return values[0]
+    if len(values) == 2:
+        return f"{values[0]}, then {values[1]}"
+    return f"{', '.join(values[:-1])}, then {values[-1]}"
+
+
 def _tiebreak_count_label(count: int) -> str:
     words = {
         2: "Two",
@@ -76,17 +86,19 @@ def _tiebreak_outcome_sentence(
     unresolved = [group for group in groups_after if len(group) > 1]
     normalized = _text(outcome).upper()
     if normalized == "RESOLVED":
-        return f"{criterion_label} resolved the remaining tie."
+        return f"{criterion_label} broke the tie."
     if normalized == "PARTIALLY_RESOLVED":
-        remaining = "; ".join(
-            _natural_list([team_name(team_id) for team_id in group])
-            for group in unresolved
+        remaining = _natural_list(
+            [
+                _natural_list([team_name(team_id) for team_id in group])
+                for group in unresolved
+            ]
         )
         return (
-            f"{criterion_label} separated some teams, but {remaining} "
-            "remained tied."
+            f"{criterion_label} ranked some teams, but {remaining} "
+            "were still tied."
         )
-    return f"{criterion_label} did not separate these teams."
+    return f"The teams were still tied after {criterion_label.lower()}."
 
 
 def _head_to_head_score_detail(
@@ -162,7 +174,7 @@ def build_round_robin_tiebreak_explanations(
         "HEAD_TO_HEAD": "Head-to-head",
         "POINT_DIFFERENTIAL": "Point differential",
         "POINTS_FOR": "Total points scored",
-        "TEAM_NUMBER": "Original team number",
+        "TEAM_NUMBER": "Team number",
     }
     for audit in tiebreaks:
         team_ids = [
@@ -185,7 +197,7 @@ def build_round_robin_tiebreak_explanations(
         record = (
             f"{wins}\u2013{next(iter(losses))}"
             if len(losses) == 1
-            else f"{wins} wins"
+            else f"{wins} {'win' if wins == 1 else 'wins'}"
         )
         title = f"{_tiebreak_count_label(len(team_ids))}-way tie at {record}"
         steps: list[dict[str, Any]] = []
@@ -234,21 +246,19 @@ def build_round_robin_tiebreak_explanations(
                         if isinstance(pair, (list, tuple)) and len(pair) == 2
                     ]
                     available_detail = (
-                        f"Available head-to-head records: {'; '.join(records)}. "
+                        f"Head-to-head records so far: {'; '.join(records)}. "
                         if list(raw_step.get("matchups") or [])
                         else "No head-to-head result was available. "
                     )
                     missing_detail = (
-                        "The complete comparison was unavailable because "
-                        f"{'this matchup' if len(missing_pair_labels) == 1 else 'these matchups'} "
-                        "had no scored result: "
+                        "Not every matchup had a final score: "
                         f"{_natural_list(missing_pair_labels)}. "
                         if missing_pair_labels
-                        else "The complete comparison was unavailable. "
+                        else "Not every matchup had a final score. "
                     )
                     detail = (
                         f"{available_detail}{missing_detail}"
-                        "Head-to-head was not applied."
+                        "Head-to-head could not decide the tie."
                     )
                 else:
                     score_detail = _head_to_head_score_detail(
@@ -269,7 +279,7 @@ def build_round_robin_tiebreak_explanations(
                                     f"{_safe_int(value.get('losses'), 0) or 0}"
                                 )
                         detail = (
-                            f"Head-to-head mini-table: {'; '.join(records)}. "
+                            f"Head-to-head records: {'; '.join(records)}. "
                             f"{outcome_sentence}"
                         )
             else:
@@ -298,8 +308,8 @@ def build_round_robin_tiebreak_explanations(
                         formatted.append(f"{team_name(team_id)} {display_value}")
                     value_groups.append("; ".join(formatted))
                 detail = (
-                    f"{criterion_label} for the remaining tied teams: "
-                    f"{' | '.join(value_groups)}. {outcome_sentence}"
+                    f"{criterion_label}: "
+                    f"{'; '.join(value_groups)}. {outcome_sentence}"
                 )
             steps.append(
                 {
@@ -310,27 +320,46 @@ def build_round_robin_tiebreak_explanations(
             )
         if not steps:
             continue
-        final_order = " \u2192 ".join(
-            team_name(team_id) for team_id in final_team_ids
+        final_order = _ordered_list(
+            [team_name(team_id) for team_id in final_team_ids]
         )
         final_criterion = steps[-1]["criterion"]
-        if final_criterion == "HEAD_TO_HEAD":
-            summary = f"Head-to-head resolved the tie. Final order: {final_order}."
+        deciding_criteria = [
+            step["criterion"]
+            for step in steps
+            if step["outcome"] in {"PARTIALLY_RESOLVED", "RESOLVED"}
+        ]
+        if len(deciding_criteria) > 1:
+            deciding_phrase = _natural_list(
+                [criterion_labels[criterion].lower() for criterion in deciding_criteria]
+            )
+            if head_to_head_incomplete:
+                summary = (
+                    "Not every head-to-head matchup had a final score, so "
+                    f"{deciding_phrase} decided the order: {final_order}."
+                )
+            else:
+                summary = (
+                    f"{deciding_phrase.capitalize()} decided the order: "
+                    f"{final_order}."
+                )
+        elif final_criterion == "HEAD_TO_HEAD":
+            summary = f"Head-to-head decided the order: {final_order}."
         elif head_to_head_incomplete:
             summary = (
-                "A complete head-to-head comparison was unavailable, so "
-                f"{criterion_labels[final_criterion].lower()} completed the order: "
+                "Not every head-to-head matchup had a final score, so "
+                f"{criterion_labels[final_criterion].lower()} decided the order: "
                 f"{final_order}."
             )
         elif final_criterion == "TEAM_NUMBER":
             summary = (
-                "The competitive tie-breaks remained level, so original team "
-                f"number set the deterministic final order: {final_order}."
+                "The teams were still tied, so team number decided the order: "
+                f"{final_order}."
             )
         else:
             summary = (
-                "Head-to-head did not fully separate these teams. "
-                f"{criterion_labels[final_criterion]} completed the order: "
+                "Head-to-head did not break the tie, so "
+                f"{criterion_labels[final_criterion].lower()} decided the order: "
                 f"{final_order}."
             )
         explanations.append(

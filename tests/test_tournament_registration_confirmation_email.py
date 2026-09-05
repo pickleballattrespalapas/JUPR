@@ -47,8 +47,12 @@ def test_html_email_contains_required_details():
     assert "Women" in html and "Doubles" in html
     assert "Mixed Doubles" in html
     assert "Total due: $80" in html
+    assert "offline payment, handled separately from this website" in html
     assert emailer.PAYMENT_NOTE in html
-    assert "View the public tournament roster" in html
+    assert "Tres Palapas" in emailer.PAYMENT_NOTE
+    assert "invoice" in emailer.PAYMENT_NOTE
+    assert "organizer will contact you" not in emailer.PAYMENT_NOTE.lower()
+    assert "View the tournament roster" in html
 
 
 def test_text_email_contains_event_list_total_and_payment_note():
@@ -57,6 +61,7 @@ def test_text_email_contains_event_list_total_and_payment_note():
     assert "Women's Doubles" in text
     assert "Mixed Doubles" in text
     assert "Total due: $80" in text
+    assert "offline payment, handled separately from this website" in text
     assert emailer.PAYMENT_NOTE in text
     assert "Public roster:" in text
 
@@ -67,8 +72,10 @@ def test_empty_confirmation_email_calls_out_missing_selections():
         registration={"display_name": "Player", "email": "p@example.com"},
         selections=[],
     )
-    assert "No event selections were found" in emailer.build_tournament_registration_confirmation_html(vm)
-    assert "No event selections were found" in emailer.build_tournament_registration_confirmation_text(vm)
+    assert "No events are listed" in emailer.build_tournament_registration_confirmation_html(vm)
+    assert "contact tournament staff" in emailer.build_tournament_registration_confirmation_html(vm)
+    assert "No events are listed" in emailer.build_tournament_registration_confirmation_text(vm)
+    assert "contact tournament staff" in emailer.build_tournament_registration_confirmation_text(vm)
 
 
 def test_sender_from_address_in_view_model_when_provided():
@@ -149,11 +156,13 @@ def test_confirmation_email_includes_extras_bundle_parts_and_server_total():
     assert "Tournament extras and bundles" in html
     assert "Player pack" in html
     assert "Tournament shirt" in html
-    assert "Bundle and giveaway savings: $10" in html
+    assert "Total savings: $10" in html
     assert "Total due: $50" in html
-    assert "offline payment" in html
+    assert "offline payment, handled separately from this website" in html
+    assert emailer.PAYMENT_NOTE in html
     assert "Tournament shirt" in text
     assert "Total due: $50" in text
+    assert "offline payment, handled separately from this website" in text
 
 
 class _CaptureQuery:
@@ -236,7 +245,7 @@ def test_non_edit_duplicate_registration_does_not_silently_overwrite(monkeypatch
     monkeypatch.setattr(repo, "_get_existing_registration_by_email", lambda *_args: {"id": "reg_existing", "email": "ada@example.com"})
 
     import pytest
-    with pytest.raises(ValueError, match="secure edit link"):
+    with pytest.raises(ValueError, match="edit link"):
         repo.save_registration(
             supabase,
             tournament_id="tournament_1",

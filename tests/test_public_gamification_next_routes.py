@@ -17,18 +17,24 @@ def test_badge_codex_next_route_wires_authoritative_buckets_filters_and_paging()
         'params.set("scope"',
         "data-badge-bucket",
         "data-badge-id",
-        "Link directly to this badge",
+        "Share this badge",
         "data-load-more-badges",
         "data-load-more-earners",
         "data-badge-earners-panel",
         "data-trophy-player",
-        "Complete definitions",
+        "badgeAvailabilityLabel",
+        "badgeScopeLabel",
+        "badgeTimingLabel",
     ):
         assert contract in page
+
+    assert "Complete definitions" not in page
 
     assert "getClubBadgeEarners" in api
     assert "/earners?" in api
     assert "BadgeTrophyRoomEntry" in api
+    for internal_error in ("API error", "Missing JUPR API", "Unable to reach API"):
+        assert internal_error not in api
 
 
 def test_challenge_ladder_next_route_consumes_python_eligibility_and_rulebook() -> None:
@@ -58,10 +64,10 @@ def test_challenge_ladder_next_route_consumes_python_eligibility_and_rulebook() 
     assert "data-result-completeness" in result_component
     assert "Position change:" in result_component
     assert "JUPR before → after" in result_component
-    assert "Verified legacy Match" in result_component
+    assert "Recorded match" in result_component
     assert "`/clubs/${clubSlug}/matches/${match.match_id}`" in result_component
     assert 'data-result-details="unavailable"' in page
-    assert "Older or imported records may not have linked match details." in page
+    assert "Match details aren't available for this result" in page
     assert "rank_at_create?: number | null" in api
     assert "current_rank?: number | null" in api
     assert "current_rating_jupr?: number | null" in api

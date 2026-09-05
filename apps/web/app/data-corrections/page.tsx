@@ -16,7 +16,7 @@ export default function DataCorrectionsPage() {
       </p>
       <h1 style={{ marginTop: 0 }}>Request a data correction</h1>
       <p style={{ color: "#334155" }}>
-        Submit score, player, league, tournament, badge, duplicate, or profile issues for staff review. This form creates an intake record only; it never directly edits ratings, match history, badges, tournament results, or player records.
+        Tell us about an incorrect score, player, league, tournament, badge, duplicate, or profile. Club staff will review your request before changing anything on the site.
       </p>
 
       <div style={{ display: "grid", gap: "1rem" }}>
@@ -33,7 +33,7 @@ export default function DataCorrectionsPage() {
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Correction request form</h2>
           <p style={{ color: "#475569" }}>
-            Staff will verify the source of truth and then resolve the issue through Match Log, Player Editor, Tournament Admin, or Replay History when appropriate.
+            Staff will review the original information and correct the relevant player, match, league, tournament, badge, or rating details.
           </p>
           <DataCorrectionForm />
         </article>

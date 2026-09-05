@@ -35,19 +35,19 @@ export default function TermsPage() {
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Public pages are informational</h2>
           <p style={{ color: "#475569" }}>
-            Public pages are informational and do not replace organizer decisions. Public pages do not directly create official match records, edit scores, change ratings, or finalize tournament outcomes unless the workflow explicitly says so and the action is accepted by the server.
+            Public pages are informational and do not replace organizer decisions. A match, score, rating, or tournament result changes only when the website confirms it.
           </p>
         </article>
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Tournament registration</h2>
           <p style={{ color: "#475569" }}>
-            Tournament registrations and edits must be accurate and submitted by the registering player or an authorized representative. Event availability, partner-board status, pricing, waitlist state, and eligibility may change. Organizers may review, reject, adjust, waitlist, or correct registrations according to event rules.
+            Tournament registrations and edits must be accurate and submitted by the registering player or an authorized representative. Event availability, partner availability, prices, waitlist position, and eligibility may change. Organizers may review, reject, adjust, waitlist, or correct registrations according to event rules.
           </p>
         </article>
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Corrections and disputes</h2>
           <p style={{ color: "#475569" }}>
-            Score, player-record, tournament, and profile disputes should be submitted through the correction process or organizer support. Staff review is required before correction, replay, recomputation, or administrative changes are applied.
+            Questions or disputes about scores, player records, tournaments, or profiles should be submitted through the correction process or organizer support. Staff review is required before records are corrected or ratings are recalculated.
           </p>
           <p><Link href="/data-corrections">Request a correction</Link></p>
         </article>

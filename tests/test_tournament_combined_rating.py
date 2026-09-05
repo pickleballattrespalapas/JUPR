@@ -92,4 +92,4 @@ def test_registration_validation_uses_combined_cap_before_skill_band():
 
     assert (allowed, message) == (True, None)
     assert blocked is False
-    assert "strictly below" in str(blocked_message)
+    assert "must be below" in str(blocked_message)

@@ -19,6 +19,17 @@ function apiUrl(apiBase: string, path: string): string {
   return `${apiBase.replace(/\/$/, "")}${path}`;
 }
 
+function partnerModeLabel(partnerMode?: string | null): string {
+  switch (String(partnerMode || "").toUpperCase()) {
+    case "HAS_PARTNER":
+      return "Has a partner";
+    case "NEEDS_PARTNER":
+      return "Looking for a partner";
+    default:
+      return "Your entry";
+  }
+}
+
 export default function PairingInterestPanel({ apiBase, clubSlug, tournamentId, registrationSlug, editToken, requesterSelections, boardEntries }: PairingInterestPanelProps) {
   const [selectionByEntry, setSelectionByEntry] = useState<Record<string, string>>({});
   const [pendingKey, setPendingKey] = useState<string | null>(null);
@@ -30,7 +41,7 @@ export default function PairingInterestPanel({ apiBase, clubSlug, tournamentId, 
     setMessage(null);
     setError(null);
     if (!apiBase) {
-      setError("API base URL is not configured.");
+      setError("Partner requests are unavailable right now. Please try again shortly.");
       return;
     }
     const entryKey = String(entry.board_entry_key || "");
@@ -52,12 +63,14 @@ export default function PairingInterestPanel({ apiBase, clubSlug, tournamentId, 
           board_entry_key: entryKey
         })
       });
-      const payload = await response.json().catch(() => null) as { detail?: unknown; message?: string; partner_request_id?: string; idempotent?: boolean } | null;
-      if (!response.ok) throw new Error(String(payload?.detail || `API error (${response.status})`));
-      setMessage(payload?.message || "Pairing request sent. If the other player accepts, JUPR will automatically pair both registrations.");
+      const payload = await response.json().catch(() => null) as { idempotent?: boolean } | null;
+      if (!response.ok) throw new Error("Partner requests are unavailable right now. Please try again.");
+      setMessage(payload?.idempotent
+        ? "You’ve already sent this request."
+        : "Request sent. If they accept, you’ll be partners for this event.");
       setSentEntries((current) => ({ ...current, [entryKey]: true }));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to send pairing request.");
+    } catch {
+      setError("We couldn’t send your request. Please try again.");
     } finally {
       setPendingKey(null);
     }
@@ -78,11 +91,15 @@ export default function PairingInterestPanel({ apiBase, clubSlug, tournamentId, 
             <label>
               Your registration for this division<br />
               <select value={selectionByEntry[entryKey] || possibleSelections[0]?.id || ""} onChange={(event) => setSelectionByEntry((current) => ({ ...current, [entryKey]: event.target.value }))} style={selectStyle}>
-                {possibleSelections.map((selection) => <option key={selection.id} value={selection.id}>{selection.partner_mode || "Registration"}</option>)}
+                {possibleSelections.map((selection, index) => (
+                  <option key={selection.id} value={selection.id}>
+                    {possibleSelections.length > 1 ? `Entry ${index + 1} · ` : ""}{partnerModeLabel(selection.partner_mode)}
+                  </option>
+                ))}
               </select>
             </label>
             <button type="button" onClick={() => sendInterest(entry)} disabled={pendingKey === entryKey || Boolean(sentEntries[entryKey])} style={{ marginTop: "0.5rem", padding: "0.55rem 0.8rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800 }}>
-              {pendingKey === entryKey ? "Sending…" : sentEntries[entryKey] ? "Request pending" : "Request pairing"}
+              {pendingKey === entryKey ? "Sending…" : sentEntries[entryKey] ? "Request sent" : "Ask to partner"}
             </button>
           </div>
         );

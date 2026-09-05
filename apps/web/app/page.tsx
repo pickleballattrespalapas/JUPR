@@ -17,7 +17,7 @@ const primaryLinks = [
 const featureGroups = [
   {
     title: "Ratings and results",
-    description: "Leaderboards, league results, player profiles, match history, badges, and Match Explorer live on the public site.",
+    description: "Find leaderboards, results, player profiles, match history, badges, and matchup tools in one place.",
     links: [
       ["Leaderboards", "/clubs/tres-palapas/leaderboards"],
       ["League Results", "/clubs/tres-palapas/league-results"],
@@ -29,26 +29,26 @@ const featureGroups = [
   },
   {
     title: "Events and tournaments",
-    description: "Registration, roster, Players Needing Partners, live event pages, weekly recaps, and the challenge ladder are ready for public navigation.",
+    description: "Register for a tournament, browse the roster, find a partner, follow live events, read weekly recaps, or join the challenge ladder.",
     links: [
       ["Register", "/clubs/tres-palapas/tournament-registration"],
       ["Roster", "/clubs/tres-palapas/tournament-roster"],
       ["Players Needing Partners", "/clubs/tres-palapas/tournament-partner-board"],
-      ["Live", "/clubs/tres-palapas/live"],
+      ["Play tools", "/clubs/tres-palapas/play"],
       ["Weekly Recap", "/clubs/tres-palapas/weekly-recap"],
       ["Challenge Ladder", "/clubs/tres-palapas/challenge-ladder"]
     ]
   },
   {
-    title: "Help and operations",
-    description: "Public help pages and a separate staff sign-in keep member support easy to find while administrative tools remain protected.",
+    title: "Help and support",
+    description: "Find answers, request a correction, or contact support. Club staff can sign in separately.",
     links: [
       ["Ratings explainer", "/how-ratings-work"],
       ["FAQ", "/faq"],
       ["Support", "/support"],
       ["Data corrections", "/data-corrections"],
       ["Staff sign-in", "/admin/login"],
-      ["Site Map", "/site-map"]
+      ["Site map", "/site-map"]
     ]
   }
 ];
@@ -64,7 +64,7 @@ export default function HomePage() {
           Pickleball Club Sandwich is the new home for club leagues, events, and ratings.
         </h1>
         <p style={{ marginTop: 0, fontSize: "1.1rem", color: "#334155" }}>
-          Follow live event scoring, club leaderboards, player profiles, tournament registration, public rosters, Players Needing Partners listings, weekly recaps, and rating history from one public website.
+          Follow scores and ratings, register for tournaments, find partners, and catch up on club news—all in one place.
         </p>
         <p style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
           {primaryLinks.map(([label, href]) => <Link key={href} href={href} style={{ fontWeight: 800 }}>{label}</Link>)}
@@ -82,13 +82,6 @@ export default function HomePage() {
           </article>
         ))}
       </div>
-
-      <article style={{ ...cardStyle, background: "#f8fafc" }}>
-        <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Migration status</h2>
-        <p style={{ color: "#475569", marginBottom: 0 }}>
-          The public Next/Vercel site is the front door for club members. Admin write workflows remain guarded and are being ported one workflow at a time behind FastAPI and audit controls.
-        </p>
-      </article>
     </section>
   );
 }

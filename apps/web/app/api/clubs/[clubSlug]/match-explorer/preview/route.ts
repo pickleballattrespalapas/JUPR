@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 const QUERY_KEYS = new Set(["me", "partner", "opp1", "opp2", "context", "score_you", "score_opp"]);
+const PUBLIC_ERROR = "We couldn’t build this preview. Please try again.";
 
 function baseUrl(): string | null {
   return process.env.JUPR_API_BASE_URL || process.env.NEXT_PUBLIC_JUPR_API_BASE_URL || null;
@@ -17,7 +18,7 @@ function upstreamUrl(base: string, clubSlug: string, searchParams: URLSearchPara
 export async function GET(request: Request, { params }: { params: { clubSlug: string } }) {
   const base = baseUrl();
   if (!base) {
-    return NextResponse.json({ detail: "JUPR API base URL is not configured." }, { status: 500 });
+    return NextResponse.json({ detail: PUBLIC_ERROR }, { status: 500 });
   }
 
   try {
@@ -27,17 +28,20 @@ export async function GET(request: Request, { params }: { params: { clubSlug: st
       cache: "no-store",
       headers: { accept: "application/json" }
     });
-    const text = await response.text();
-    let payload: unknown;
-    try {
-      payload = text ? JSON.parse(text) : {};
-    } catch {
-      payload = { detail: text.slice(0, 500) || "FastAPI returned a non-JSON Match Explorer response." };
+    if (!response.ok) {
+      console.error("Match Explorer preview request failed", { status: response.status });
+      return NextResponse.json({ detail: PUBLIC_ERROR }, { status: response.status });
+    }
+    const payload = await response.json().catch(() => null);
+    if (!payload) {
+      console.error("Match Explorer preview returned an invalid success response");
+      return NextResponse.json({ detail: PUBLIC_ERROR }, { status: 502 });
     }
     return NextResponse.json(payload, { status: response.status });
   } catch (error) {
+    console.error("Match Explorer preview request failed", error);
     return NextResponse.json(
-      { detail: error instanceof Error ? error.message : "Unable to reach Match Explorer preview service." },
+      { detail: PUBLIC_ERROR },
       { status: 502 }
     );
   }

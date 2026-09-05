@@ -5,6 +5,7 @@ import FourPlayerTeamRegistrationCard, {
   TEAM_SLOTS,
   TeamRegistrationDraft,
   newTeamRegistrationDraft,
+  teamSlotLabel,
   validateTeamRegistrationDraft
 } from "@/components/tournaments/FourPlayerTeamRegistrationCard";
 import {
@@ -13,6 +14,7 @@ import {
   recoverPublicFourPlayerTeamSetup
 } from "@/lib/tournamentTeamCompetitionApi";
 import type { PublicRegistrationEvent } from "@/lib/tournamentRegistrationApi";
+import { publicTournamentEventLabel } from "@/lib/tournamentRegistrationEligibility";
 
 type Props = {
   clubSlug: string;
@@ -27,6 +29,46 @@ const cardStyle = {
   padding: "1rem",
   background: "white"
 };
+
+function teamStatusLabel(status?: string | null): string {
+  switch (String(status || "").toUpperCase()) {
+    case "CONFIRMED":
+      return "Confirmed";
+    case "FORMING":
+      return "Team forming";
+    case "WAITLIST":
+      return "On the waitlist";
+    case "REVIEW_REQUIRED":
+      return "Organizer review needed";
+    case "INELIGIBLE":
+      return "Not eligible";
+    case "WITHDRAWN":
+      return "Withdrawn";
+    case "CANCELLED":
+    case "CANCELED":
+      return "Canceled";
+    default:
+      return "Team saved";
+  }
+}
+
+function memberStatusLabel(status?: string | null): string {
+  switch (String(status || "").toUpperCase()) {
+    case "ACCEPTED":
+      return "Confirmed";
+    case "INVITED":
+      return "Invitation pending";
+    case "DECLINED":
+      return "Declined";
+    case "REMOVED":
+      return "Removed";
+    case "CANCELLED":
+    case "CANCELED":
+      return "Canceled";
+    default:
+      return "Status unavailable";
+  }
+}
 
 function initialDrafts(
   recovery: PublicFourPlayerTeamSetupRecovery
@@ -52,7 +94,7 @@ export default function FourPlayerTeamSetupRecovery({
   const [pendingEventId, setPendingEventId] = useState("");
   const [message, setMessage] = useState<string | null>(
     needsAttention
-      ? "Your registration is safe. Review the durable team setup status below."
+      ? "Your registration is saved, but your team still needs to be completed."
       : null
   );
 
@@ -63,8 +105,7 @@ export default function FourPlayerTeamSetupRecovery({
     );
     if (response.error || !response.data) {
       setMessage(
-        response.error ||
-          "Unable to refresh the durable team setup. Contact tournament staff."
+        "We couldn’t refresh your team. Try again or contact the organizer."
       );
       return null;
     }
@@ -101,7 +142,7 @@ export default function FourPlayerTeamSetupRecovery({
       "CONFIRMED"
     ) {
       setMessage(
-        "This registration is no longer confirmed. Contact tournament staff before creating a team."
+        "The organizer needs to review your registration before you can finish the team."
       );
       return;
     }
@@ -140,16 +181,11 @@ export default function FourPlayerTeamSetupRecovery({
     setPendingEventId("");
     const refreshedEvent = refreshed?.events.find((row) => row.id === eventId);
     if (refreshedEvent?.setup_state === "COMPLETE") {
-      setMessage(
-        response.error
-          ? "The team was already saved. Its durable setup was recovered after the interrupted response."
-          : "Team setup saved."
-      );
+      setMessage(response.error ? "Your team is already saved." : "Team saved.");
       return;
     }
     setMessage(
-      response.error ||
-        "The team is not yet saved. Review the roster and try again."
+      "We couldn’t save your team yet. Check the roster and try again."
     );
   }
 
@@ -157,11 +193,10 @@ export default function FourPlayerTeamSetupRecovery({
 
   return (
     <section style={{ marginTop: "1rem" }} data-testid="team-setup-recovery">
-      <h2>Four-player team setup</h2>
+      <h2>Complete your four-player team</h2>
       <p style={{ color: "#475569" }}>
-        This status comes from your saved registration, team records, and
-        idempotent operation history. A refresh will not create a second
-        registration or team.
+        Finish setting up your team below. Refreshing this page won’t create a
+        duplicate.
       </p>
       {message ? (
         <p
@@ -182,15 +217,15 @@ export default function FourPlayerTeamSetupRecovery({
             return (
               <article key={event.id} style={cardStyle}>
                 <h3 style={{ marginTop: 0 }}>
-                  {event.event_family_label} — {event.division_name}
+                  {publicTournamentEventLabel(event.event_family_label, event.division_name)}
                 </h3>
                 <p>
-                  <strong>{event.team.name}</strong> · {event.team.status}
+                  <strong>{event.team.name}</strong> · {teamStatusLabel(event.team.status)}
                 </p>
                 <ul>
                   {event.team.members.map((member) => (
                     <li key={member.member_id}>
-                      {member.slot}: {member.display_name} · {member.status}
+                      {teamSlotLabel(member.slot)}: {member.display_name} · {memberStatusLabel(member.status)}
                     </li>
                   ))}
                 </ul>
@@ -201,12 +236,11 @@ export default function FourPlayerTeamSetupRecovery({
             return (
               <article key={event.id} style={cardStyle}>
                 <h3 style={{ marginTop: 0 }}>
-                  {event.event_family_label} — {event.division_name}
+                  {publicTournamentEventLabel(event.event_family_label, event.division_name)}
                 </h3>
                 <p style={{ color: "#991b1b" }}>
-                  The operation ledger needs staff reconciliation before this
-                  team can be submitted again. No second registration is
-                  required.
+                  The organizer needs to finish setting up this team. You don’t
+                  need to register again.
                 </p>
               </article>
             );
@@ -249,8 +283,8 @@ export default function FourPlayerTeamSetupRecovery({
                 }}
               >
                 {pendingEventId === event.id
-                  ? "Recovering…"
-                  : "Save team setup"}
+                  ? "Saving…"
+                  : "Save team"}
               </button>
             </article>
           );

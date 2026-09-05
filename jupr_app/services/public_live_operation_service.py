@@ -55,16 +55,14 @@ def edit_token_matches(token: str, expected_hash: str) -> bool:
 def normalize_idempotency_key(value: Any) -> str:
     key = str(value or "").strip()
     if not IDEMPOTENCY_RE.fullmatch(key):
-        raise ValueError(
-            "idempotency_key must be 8-160 characters using letters, numbers, dot, underscore, colon, or hyphen."
-        )
+        raise ValueError("We couldn’t submit this request. Please try again.")
     return key
 
 
 def normalize_requester_hash(value: Any) -> str:
     requester_hash = str(value or "").strip().lower()
     if not SHA256_RE.fullmatch(requester_hash):
-        raise RuntimeError("Public live requester identity could not be safely rate-limited.")
+        raise RuntimeError("We couldn’t submit this request. Please try again.")
     return requester_hash
 
 
@@ -135,9 +133,7 @@ def ensure_public_live_operation_schema(supabase: Any) -> None:
             "operation_key,club_id,session_key,action,idempotency_key,request_fingerprint,requester_hash,expected_version,status,executor_token,lease_expires_at"
         ).limit(1).execute()
     except Exception as exc:
-        raise RuntimeError(
-            "Public JUPR Live durability is unavailable. Apply the order-25 migration before enabling public writes."
-        ) from exc
+        raise RuntimeError("Live sessions are temporarily unavailable. Please try again later.") from exc
 
 
 def get_public_live_operation(
@@ -158,7 +154,7 @@ def get_public_live_operation(
             .execute()
         )
     except Exception as exc:
-        raise RuntimeError("Unable to read the public JUPR Live recovery ledger.") from exc
+        raise RuntimeError("Live sessions are temporarily unavailable. Please try again later.") from exc
 
 
 def _limit_for(action: str) -> int:
@@ -195,9 +191,9 @@ def enforce_public_live_rate_limit(
             .execute()
         )
     except Exception as exc:
-        raise RuntimeError("Public JUPR Live anti-abuse checks are unavailable; no write was attempted.") from exc
+        raise RuntimeError("We couldn’t submit this request. Please try again.") from exc
     if len(rows) >= limit:
-        raise PublicLiveRateLimitError("Too many JUPR Live requests were submitted. Please try again later.")
+        raise PublicLiveRateLimitError("Please wait a moment and try again.")
 
 
 def begin_public_live_operation(
@@ -235,7 +231,7 @@ def begin_public_live_operation(
     if existing is not None:
         if str(existing.get("request_fingerprint") or "") != fingerprint:
             raise PublicLiveConflictError(
-                "This idempotency key was already used for a different JUPR Live request."
+                "We couldn’t submit this request. Refresh and try again."
             )
         return existing, True
 
@@ -274,11 +270,11 @@ def begin_public_live_operation(
             return raced, True
         if "public live rate limit exceeded" in _error_text(exc):
             raise PublicLiveRateLimitError(
-                "Too many JUPR Live requests were submitted. Please try again later."
+                "Please wait a moment and try again."
             ) from exc
-        raise RuntimeError("Public JUPR Live could not persist write intent; no session write was attempted.") from exc
+        raise RuntimeError("We couldn’t submit this request. Please try again.") from exc
     if inserted is None:
-        raise RuntimeError("Public JUPR Live could not persist write intent; no session write was attempted.")
+        raise RuntimeError("We couldn’t submit this request. Please try again.")
     return inserted, False
 
 
@@ -313,11 +309,11 @@ def update_public_live_operation(
         )
     except Exception as exc:
         raise PublicLiveRecoveryRequiredError(
-            "JUPR Live may have changed, but its recovery record could not be updated. Reload before retrying."
+            "Your change may have been saved. Refresh the page before trying again."
         ) from exc
     if updated is None:
         raise PublicLiveRecoveryRequiredError(
-            "JUPR Live may have changed, but its recovery record could not be updated. Reload before retrying."
+            "Your change may have been saved. Refresh the page before trying again."
         )
     return updated
 
@@ -345,11 +341,11 @@ def claim_public_live_completion_executor(
         )
     except Exception as exc:
         raise PublicLiveRecoveryRequiredError(
-            "Completion executor locking is unavailable. No Club Social submit was attempted."
+            "We couldn’t confirm that the session finished. Wait a moment, refresh, and try again."
         ) from exc
     if claimed is None:
         raise PublicLiveRecoveryRequiredError(
-            "This completion is already being reconciled by another request. Wait for it to finish, then retry the same preserved operation if needed."
+            "We couldn’t confirm that the session finished. Wait a moment, refresh, and try again."
         )
     return executor_token
 
@@ -360,6 +356,6 @@ def completed_operation_result(operation: dict[str, Any]) -> dict[str, Any] | No
     result = operation.get("result_json")
     if not isinstance(result, dict):
         raise PublicLiveRecoveryRequiredError(
-            "The completed JUPR Live operation has no readable result. Reload the session before retrying."
+            "We couldn’t confirm that the session finished. Wait a moment, refresh, and try again."
         )
     return {**result, "idempotent_replay": True}

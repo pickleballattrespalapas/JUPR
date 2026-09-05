@@ -65,7 +65,6 @@ export function publicTournamentHref(
 
 export default function PublicTournamentNav({
   clubSlug,
-  tournamentName,
   tournamentId,
   registrationSlug,
   active
@@ -80,12 +79,7 @@ export default function PublicTournamentNav({
 
   return (
     <div className={styles.shell}>
-      <p className={styles.context}>
-        {tournamentName
-          ? `${tournamentName} public tournament pages`
-          : "Public tournament pages"}
-      </p>
-      <nav className={styles.nav} aria-label="Tournament public navigation">
+      <nav className={styles.nav} aria-label="Tournament pages">
         {items.map(([module, label]) => (
           <Link
             key={module}

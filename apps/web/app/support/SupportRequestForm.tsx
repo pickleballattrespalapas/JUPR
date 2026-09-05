@@ -82,7 +82,7 @@ export default function SupportRequestForm({ clubSlug = "tres-palapas" }: { club
       <label>Player name, if relevant<br /><input value={state.playerName} onChange={(event) => update("playerName", event.target.value)} style={inputStyle} /></label>
       <label>Short subject<br /><input value={state.subject} onChange={(event) => update("subject", event.target.value)} style={inputStyle} /></label>
       <label>How can we help?<br /><textarea value={state.description} onChange={(event) => update("description", event.target.value)} rows={5} style={inputStyle} /></label>
-      <label>Relevant http/https link, optional<br /><input type="url" value={state.evidenceUrl} onChange={(event) => update("evidenceUrl", event.target.value)} placeholder="https://…" style={inputStyle} /></label>
+      <label>Link to the page, if helpful<br /><input type="url" value={state.evidenceUrl} onChange={(event) => update("evidenceUrl", event.target.value)} placeholder="https://…" style={inputStyle} /></label>
       <label style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start" }}>
         <input type="checkbox" checked={state.consent} onChange={(event) => update("consent", event.target.checked)} />
         <span>Staff may contact me at the email above to resolve this request.</span>
@@ -93,4 +93,3 @@ export default function SupportRequestForm({ clubSlug = "tres-palapas" }: { club
     </form>
   );
 }
-

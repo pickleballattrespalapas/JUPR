@@ -55,8 +55,51 @@ def test_public_live_edit_credentials_stay_fragment_and_session_only() -> None:
     assert "jupr-live-create-operation:" in creator
     assert "JSON.stringify(pending)" in runner
     assert "JSON.stringify(requestPayload)" in creator
-    assert "exact preserved payload" in runner
-    assert "exact preserved request" in creator
+    assert "We couldn’t confirm the last change" in runner
+    assert "exact preserved payload" not in runner
+    assert "safely check the same request" in creator
+
+
+def test_public_live_next_proxy_preserves_status_and_masks_upstream_details() -> None:
+    proxy = _read("apps/web/lib/publicLiveProxy.ts")
+    error_text = _read("apps/web/lib/publicLiveErrorText.ts")
+    route_paths = (
+        "apps/web/app/api/clubs/[clubSlug]/live-sessions/route.ts",
+        "apps/web/app/api/clubs/[clubSlug]/live-sessions/[sessionKey]/route.ts",
+        "apps/web/app/api/clubs/[clubSlug]/live-sessions/[sessionKey]/scores/route.ts",
+        "apps/web/app/api/clubs/[clubSlug]/live-sessions/[sessionKey]/advance/route.ts",
+        "apps/web/app/api/clubs/[clubSlug]/live-sessions/[sessionKey]/complete/route.ts",
+        "apps/web/app/api/clubs/[clubSlug]/live-sessions/[sessionKey]/substitutions/route.ts",
+        "apps/web/app/api/clubs/[clubSlug]/live-sessions/[sessionKey]/export/route.ts",
+    )
+
+    assert "publicLiveErrorResponse(response.status, upstreamDetail(payload))" in proxy
+    assert "SAFE_DETAIL_STATUSES.has(status)" in error_text
+    assert "TECHNICAL_DETAIL.test(clean)" in error_text
+    assert "publicLiveErrorDetail(status, detail)" in proxy
+    assert "{ status }" in proxy
+    assert "if (!body) return new NextResponse(null, { status: response.status })" in proxy
+    assert "publicLiveErrorResponse(response.ok ? 502 : response.status)" in proxy
+    for path in route_paths:
+        route = _read(path)
+        assert "publicLiveErrorResponse" in route
+        assert "error instanceof Error" not in route
+        assert "FastAPI returned" not in route
+        assert "JUPR API base URL is not configured" not in route
+
+
+def test_public_play_and_live_catches_do_not_print_native_network_errors() -> None:
+    sources = (
+        _read("apps/web/app/clubs/[clubSlug]/play-generators/PublicGeneratorWorkspace.tsx"),
+        _read("apps/web/app/clubs/[clubSlug]/play-generators/PublicGeneratorRoundRunner.tsx"),
+        _read("apps/web/app/clubs/[clubSlug]/play-generators/PublicGeneratorStandings.tsx"),
+        _read("apps/web/app/clubs/[clubSlug]/live/[sessionKey]/LiveSessionRunner.tsx"),
+    )
+
+    for source in sources:
+        assert "requestFailureMessage" in source or "workspaceErrorMessage" in source
+        assert "error instanceof Error ? error.message" not in source
+        assert "err instanceof Error ? err.message" not in source
 
 
 def test_public_live_old_league_rounds_are_read_only_and_writes_use_reviewed_host_gates() -> None:
@@ -83,7 +126,8 @@ def test_public_live_completion_uses_recoverable_reservation_and_safe_exports() 
     assert '"pending_operation_key": operation_key' in service
     assert '"pending_operation_action": "complete"' in service
     assert '"pending_operation_key": None' in service
-    assert "This live session has an unfinished completion" in service
+    assert "We couldn’t confirm the last change" in service
+    assert "unfinished completion" not in service
     assert "_formula_safe" in service
     assert "edit_token_hash" in service
     row_payload = service.split("row_payload = {", 1)[1].split("update_public_live_operation(", 1)[0]

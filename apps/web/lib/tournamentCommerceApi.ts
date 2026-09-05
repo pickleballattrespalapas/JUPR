@@ -204,7 +204,7 @@ function baseUrl(): string | null {
   );
 }
 
-async function errorMessage(response: Response): Promise<string> {
+async function adminErrorMessage(response: Response): Promise<string> {
   const fallback = `API error (${response.status}).`;
   try {
     const payload = (await response.json()) as {
@@ -225,7 +225,7 @@ async function errorMessage(response: Response): Promise<string> {
   }
 }
 
-async function fetchJson<T>(
+async function fetchAdminJson<T>(
   path: string,
   init?: RequestInit
 ): Promise<ApiResult<T>> {
@@ -242,7 +242,7 @@ async function fetchJson<T>(
     if (!response.ok) {
       return {
         data: null,
-        error: await errorMessage(response),
+        error: await adminErrorMessage(response),
         status: response.status
       };
     }
@@ -257,6 +257,87 @@ async function fetchJson<T>(
       error: `Unable to reach API: ${
         error instanceof Error ? error.message : "Unknown error"
       }`,
+      status: null
+    };
+  }
+}
+
+function safeCommerceValidation(detail: string): string | null {
+  const message = detail.trim();
+  if (!message || message.length > 300 || /[<>\u0000-\u001f]/.test(message)) return null;
+  if (/\b(?:uuid|database|supabase|credential|runtime|stack|traceback|exception|rpc|sql|fingerprint)\b|JUPR_|\b\w+_id\b|status=|enabled=/i.test(message)) {
+    return null;
+  }
+  if (!/\b(?:quantity|extra|select|selected|event|item|available|registration|cart|bundle|offer)\b/i.test(message)) {
+    return null;
+  }
+  return message;
+}
+
+function publicCommerceError(status: number, detail: string): string {
+  const normalized = detail.toLowerCase();
+  if (status === 400 || status === 422) {
+    if (normalized.includes("quantity exceeds")) {
+      return "Choose a smaller quantity for that extra.";
+    }
+    return (
+      safeCommerceValidation(detail) ||
+      "Check your extras and quantities, then try again."
+    );
+  }
+  if (status === 403) {
+    if (normalized.includes("extras are unavailable for this registration")) {
+      return "Tournament extras aren’t available for this registration.";
+    }
+    return "Tournament extras aren’t available right now.";
+  }
+  if (status === 404) return "Tournament extras aren’t available right now.";
+  if (status === 409) {
+    if (/pricing|quote|total/.test(normalized)) {
+      return "The total changed. Review the updated price and try again.";
+    }
+    return (
+      safeCommerceValidation(detail) ||
+      "The available extras changed. Review your choices and try again."
+    );
+  }
+  if (status === 429) return "Too many attempts were made. Wait a moment and try again.";
+  return "We couldn’t update your total right now. Please try again.";
+}
+
+async function fetchPublicJson<T>(
+  path: string,
+  init?: RequestInit
+): Promise<ApiResult<T>> {
+  const apiBase = baseUrl();
+  if (!apiBase) {
+    return {
+      data: null,
+      error: "We couldn’t update your total right now. Please try again.",
+      status: null
+    };
+  }
+  try {
+    const response = await fetch(`${apiBase.replace(/\/$/, "")}${path}`, init);
+    if (!response.ok) {
+      return {
+        data: null,
+        error: publicCommerceError(
+          response.status,
+          await adminErrorMessage(response)
+        ),
+        status: response.status
+      };
+    }
+    return {
+      data: (await response.json()) as T,
+      error: null,
+      status: response.status
+    };
+  } catch {
+    return {
+      data: null,
+      error: "We couldn’t update your total right now. Please try again.",
       status: null
     };
   }
@@ -278,11 +359,14 @@ export async function quoteTournamentCommerce(
     item_selections: TournamentCommerceSelection[];
   }
 ): Promise<ApiResult<{ ok: true; quote: TournamentCommerceQuote }>> {
-  return fetchJson(`/clubs/${encodeURIComponent(clubSlug)}/tournament-commerce/quote`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  });
+  return fetchPublicJson(
+    `/clubs/${encodeURIComponent(clubSlug)}/tournament-commerce/quote`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }
+  );
 }
 
 function adminHeaders(accessToken: string): HeadersInit {
@@ -296,7 +380,7 @@ export async function getAdminTournamentCommerceStatus(
   clubId: string,
   accessToken: string
 ): Promise<ApiResult<Record<string, unknown>>> {
-  return fetchJson(
+  return fetchAdminJson(
     `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/commerce/status`,
     { headers: adminHeaders(accessToken), cache: "no-store" }
   );
@@ -310,7 +394,7 @@ export async function listAdminTournamentCommerceTournaments(
     tournaments: Array<{ id: string; name: string; status?: string }>;
   }>
 > {
-  return fetchJson(
+  return fetchAdminJson(
     `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/commerce/tournaments`,
     { headers: adminHeaders(accessToken), cache: "no-store" }
   );
@@ -321,7 +405,7 @@ export async function getAdminTournamentCommerceDetail(
   tournamentId: string,
   accessToken: string
 ): Promise<ApiResult<AdminTournamentCommerceDetail>> {
-  return fetchJson(
+  return fetchAdminJson(
     `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/commerce/tournaments/${encodeURIComponent(tournamentId)}`,
     { headers: adminHeaders(accessToken), cache: "no-store" }
   );
@@ -333,7 +417,7 @@ export async function getAdminTournamentCommerceOperation(
   operationId: string,
   accessToken: string
 ): Promise<ApiResult<Record<string, unknown>>> {
-  return fetchJson(
+  return fetchAdminJson(
     `/admin/clubs/${encodeURIComponent(
       clubId
     )}/tournaments/commerce/tournaments/${encodeURIComponent(
@@ -349,7 +433,7 @@ export async function mutateAdminTournamentCommerce<T>(
   payload: Record<string, unknown>,
   accessToken: string
 ): Promise<ApiResult<T>> {
-  return fetchJson(path, {
+  return fetchAdminJson(path, {
     method,
     headers: adminHeaders(accessToken),
     body: JSON.stringify(payload)

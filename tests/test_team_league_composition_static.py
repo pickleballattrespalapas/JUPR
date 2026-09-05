@@ -125,8 +125,8 @@ def test_admin_surfaces_advertise_normalized_rosters_but_public_form_stays_pair_
         "Create a forming team",
     ):
         assert phrase in admin_surfaces
-    assert "substitutes are allowed" in registration
-    assert "team_size}-player primary roster" in public_detail
+    assert "Need a substitute for one match?" in registration
+    assert "team_size} players per team" in public_detail
     assert "league.team_size" in public_list
     assert "team_size: 2 | 3 | 4" in api_types
     assert "max_alternates" in surfaces

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { getClubMatch, type PublicMatchPlayer, type PublicRatingSnapshotEntry } from "@/lib/api";
+import { publicMatchTypeLabel } from "@/lib/publicMatchLabels";
 
 type MatchDetailPageProps = {
   params: { clubSlug: string; matchId: string };
@@ -38,6 +39,15 @@ function ratingLabel(value?: number | null): string {
   return value == null ? "—" : Math.round(Number(value)).toString();
 }
 
+function ratingGroupLabel(value?: string | null): string {
+  const group = String(value || "").trim().toLowerCase();
+  if (!group || group === "overall" || group === "overall_only") return "Overall";
+  if (group === "unrated") return "Unrated";
+  if (group === "singles") return "Singles";
+  if (group === "league") return "League";
+  return group.replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
 function snapshotRows(players: PublicMatchPlayer[], snapshot: PublicRatingSnapshotEntry[] | undefined) {
   return players.map((player) => {
     const snap = (snapshot || []).find((entry) => String(entry.player_id) === String(player.id));
@@ -54,7 +64,7 @@ export default async function MatchDetailPage({ params }: MatchDetailPageProps) 
     return (
       <section>
         <h1>Match unavailable</h1>
-        <p style={{ color: "#b91c1c" }}>We could not load this match. {error}</p>
+        <p style={{ color: "#b91c1c" }}>We couldn&apos;t load this match. Please try again shortly.</p>
         <p><Link href={`/clubs/${clubSlug}/matches`}>Back to matches</Link></p>
       </section>
     );
@@ -73,8 +83,8 @@ export default async function MatchDetailPage({ params }: MatchDetailPageProps) 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "1rem", marginBottom: "1rem" }}>
         <article style={cardStyle}><strong>Date</strong><div>{formatDateTime(match.date)}</div></article>
         <article style={cardStyle}><strong>League</strong><div>{match.league ?? "—"}</div></article>
-        <article style={cardStyle}><strong>Type</strong><div>{match.match_type ?? "—"}</div></article>
-        <article style={cardStyle}><strong>Rating scope</strong><div>{match.rating_scope ?? "—"}</div></article>
+        <article style={cardStyle}><strong>Type</strong><div>{publicMatchTypeLabel(match.match_type)}</div></article>
+        <article style={cardStyle}><strong>Rating group</strong><div>{ratingGroupLabel(match.rating_scope)}</div></article>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "1rem", marginBottom: "1rem" }}>
@@ -92,7 +102,7 @@ export default async function MatchDetailPage({ params }: MatchDetailPageProps) 
 
       {match.rating_snapshot ? (
         <section style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>Rating snapshot</h2>
+          <h2 style={{ marginTop: 0 }}>Rating changes</h2>
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead><tr><th style={thStyle}>Player</th><th style={thStyle}>Team</th><th style={thStyle}>Start</th><th style={thStyle}>End</th><th style={thStyle}>Change</th></tr></thead>
