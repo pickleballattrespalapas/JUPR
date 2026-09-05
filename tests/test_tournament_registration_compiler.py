@@ -37,7 +37,14 @@ def _state(*, selections):
     )
 
 
-def _linked_state(*, selections, partner_requests=None, partner_links=None, team_members=None):
+def _linked_state(
+    *,
+    selections,
+    partner_requests=None,
+    partner_links=None,
+    team_members=None,
+    registrations=None,
+):
     return compile_tournament_registration_state(
         tournament={"id": "t-1"},
         settings={},
@@ -65,8 +72,9 @@ def _linked_state(*, selections, partner_requests=None, partner_links=None, team
                 "sort_order": 2,
             },
         ],
-        registrations=[
-            {"id": "reg-mary", "display_name": "Mary Bauman", "email": "mary@example.com", "player_id": 101, "submitted_at": "2026-06-01T10:05:00+00:00"},
+        registrations=registrations
+        or [
+            {"id": "reg-mary", "display_name": "Mary Bauman", "email": "mary@example.com", "player_id": 101, "doubles_skill": 4.0, "singles_skill": 3.5, "submitted_at": "2026-06-01T10:05:00+00:00"},
             {"id": "reg-elizabeth", "display_name": "Elizabeth Whelan", "email": "elizabeth@example.com", "player_id": 102, "submitted_at": "2026-06-01T10:00:00+00:00"},
         ],
         selections=selections,
@@ -232,6 +240,67 @@ def test_accepted_link_creates_single_confirmed_team_and_suppresses_needs_partne
     assert not any(entry["status"] == "LEGACY_PARTNER_UNRESOLVED" for entry in doubles_entries)
     singles_roster = next(roster for roster in state["event_rosters"] if roster["event_option_id"] == "singles-35")
     assert singles_roster["entries"][0]["status"] == "CONFIRMED"
+    assert singles_roster["entries"][0]["members"][0]["skill"] == 3.5
+
+
+def test_rosters_do_not_borrow_skill_between_singles_and_doubles():
+    singles_state = _linked_state(
+        selections=[
+            {
+                "id": "sel-mary-singles",
+                "registration_id": "reg-mary",
+                "registration_day_id": "day-1",
+                "event_option_id": "singles-35",
+                "partner_mode": "NONE",
+            }
+        ],
+        registrations=[
+            {
+                "id": "reg-mary",
+                "display_name": "Mary Bauman",
+                "email": "mary@example.com",
+                "player_id": 101,
+                "doubles_skill": 4.0,
+                "singles_skill": None,
+                "submitted_at": "2026-06-01T10:05:00+00:00",
+            }
+        ],
+    )
+    singles_roster = next(
+        roster
+        for roster in singles_state["event_rosters"]
+        if roster["event_option_id"] == "singles-35"
+    )
+    assert singles_roster["entries"][0]["members"][0]["skill"] is None
+
+    doubles_state = _linked_state(
+        selections=[
+            {
+                "id": "sel-mary-doubles",
+                "registration_id": "reg-mary",
+                "registration_day_id": "day-1",
+                "event_option_id": "wd-35",
+                "partner_mode": "NEEDS_PARTNER",
+            }
+        ],
+        registrations=[
+            {
+                "id": "reg-mary",
+                "display_name": "Mary Bauman",
+                "email": "mary@example.com",
+                "player_id": 101,
+                "doubles_skill": None,
+                "singles_skill": 3.5,
+                "submitted_at": "2026-06-01T10:05:00+00:00",
+            }
+        ],
+    )
+    doubles_roster = next(
+        roster
+        for roster in doubles_state["event_rosters"]
+        if roster["event_option_id"] == "wd-35"
+    )
+    assert doubles_roster["entries"][0]["members"][0]["skill"] is None
 
 
 def test_four_player_event_compiles_durable_team_instead_of_partner_missing():

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from jupr_app.domain.tournament_registration_compiler import validate_selection_against_skill
+from jupr_app.domain.tournament_registration_compiler import (
+    evaluate_selection_skill_eligibility,
+    validate_selection_against_skill,
+)
 
 
 def _event(skill_label: str, *, doubles: bool = True) -> dict[str, object]:
@@ -10,6 +13,9 @@ def _event(skill_label: str, *, doubles: bool = True) -> dict[str, object]:
         "skill_label": skill_label,
         "event_type": "DOUBLES" if doubles else "SINGLES",
         "partner_required": doubles,
+        # Persisted STANDARD events currently carry this default for both
+        # singles and doubles, so every eligibility test should use that shape.
+        "team_roster_size": 2,
     }
 
 
@@ -57,6 +63,68 @@ def test_singles_player_can_play_up_to_higher_skill_label():
     assert message is None
 
 
+def test_missing_singles_rating_does_not_fall_back_to_doubles_rating():
+    event = _event("3.5", doubles=False)
+    player = {"doubles_skill": 4.0, "singles_skill": None}
+
+    result = evaluate_selection_skill_eligibility(
+        event=event,
+        selection=_selection(),
+        player=player,
+    )
+    eligible, message = _is_eligible(
+        event=event,
+        selection=_selection(),
+        player=player,
+    )
+
+    assert result["status"] == "MISSING_DATA"
+    assert result["player_rating"] is None
+    assert eligible is True
+    assert message is None
+
+
+def test_entered_singles_rating_controls_singles_eligibility_independently():
+    eligible, message = _is_eligible(
+        event=_event("3.5", doubles=False),
+        selection=_selection(),
+        player={"doubles_skill": 4.0, "singles_skill": 3.5},
+    )
+
+    assert eligible is True
+    assert message is None
+
+    eligible, message = _is_eligible(
+        event=_event("3.5", doubles=False),
+        selection=_selection(),
+        player={"doubles_skill": 3.5, "singles_skill": 4.0},
+    )
+
+    assert eligible is False
+    assert "above the 3.5 division cap" in str(message)
+
+
+def test_missing_doubles_rating_does_not_fall_back_to_singles_rating():
+    event = _event("3.5")
+    player = {"doubles_skill": None, "singles_skill": 4.0}
+
+    result = evaluate_selection_skill_eligibility(
+        event=event,
+        selection=_selection("NEEDS_PARTNER"),
+        player=player,
+    )
+    eligible, message = _is_eligible(
+        event=event,
+        selection=_selection("NEEDS_PARTNER"),
+        player=player,
+    )
+
+    assert result["status"] == "MISSING_DATA"
+    assert result["player_rating"] is None
+    assert eligible is True
+    assert message is None
+
+
 def test_doubles_player_at_next_ceiling_cannot_register_down():
     eligible, message = _is_eligible(
         event=_event("3.0"),
@@ -90,6 +158,31 @@ def test_doubles_missing_partner_skill_does_not_block_registration():
         partner={"doubles_skill": None, "singles_skill": None},
     )
 
+    assert eligible is True
+    assert message is None
+
+
+def test_doubles_partner_does_not_borrow_singles_rating() -> None:
+    event = _event("3.5")
+    selection = _selection("HAS_PARTNER")
+    player = {"doubles_skill": 3.2, "singles_skill": None}
+    partner = {"doubles_skill": None, "singles_skill": 4.0}
+
+    result = evaluate_selection_skill_eligibility(
+        event=event,
+        selection=selection,
+        player=player,
+        partner=partner,
+    )
+    eligible, message = _is_eligible(
+        event=event,
+        selection=selection,
+        player=player,
+        partner=partner,
+    )
+
+    assert result["partner_rating"] is None
+    assert result["status"] == "MISSING_DATA"
     assert eligible is True
     assert message is None
 

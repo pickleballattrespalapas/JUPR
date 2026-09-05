@@ -72,17 +72,11 @@ def _format_skill(value: float | None) -> str:
 
 
 def _effective_singles_skill(player: dict[str, Any]) -> float | None:
-    singles = _coerce_skill(player.get("singles_skill"))
-    if singles is not None:
-        return singles
-    return _coerce_skill(player.get("doubles_skill"))
+    return _coerce_skill(player.get("singles_skill"))
 
 
 def _effective_doubles_skill(player: dict[str, Any]) -> float | None:
-    doubles = _coerce_skill(player.get("doubles_skill"))
-    if doubles is not None:
-        return doubles
-    return _coerce_skill(player.get("singles_skill"))
+    return _coerce_skill(player.get("doubles_skill"))
 
 
 def _explicit_skill_mode(event: dict[str, Any]) -> str:
@@ -577,7 +571,14 @@ def _day_sort_key(day: dict[str, Any]) -> tuple:
 
 
 def _is_doubles_event(event: dict[str, Any]) -> bool:
-    event_type = str(event.get("event_type") or event.get("participant_type") or "").upper()
+    event_type = str(
+        event.get("event_type") or event.get("participant_type") or ""
+    ).strip().upper()
+    # STANDARD events retain a database default team_roster_size of 2, even for
+    # singles. An explicit singles type must therefore win over roster-size
+    # inference or its eligibility check will incorrectly use doubles skill.
+    if event_type == "SINGLES":
+        return False
     if event_type in DoublesTypes:
         return True
     try:
@@ -588,7 +589,12 @@ def _is_doubles_event(event: dict[str, Any]) -> bool:
     return bool(event.get("partner_required"))
 
 
-def _to_member_from_registration(registration: dict[str, Any], selection: dict[str, Any] | None = None) -> dict[str, Any]:
+def _to_member_from_registration(
+    registration: dict[str, Any],
+    selection: dict[str, Any] | None = None,
+    *,
+    rating_format: str = "doubles",
+) -> dict[str, Any]:
     display_name = str(registration.get("display_name") or "").strip()
     if not display_name:
         display_name = " ".join(
@@ -604,7 +610,11 @@ def _to_member_from_registration(registration: dict[str, Any], selection: dict[s
         "email": _normalize_email(registration.get("email")),
         "phone": str(registration.get("phone") or "").strip() or None,
         "dupr_id": str(registration.get("dupr_id") or "").strip() or None,
-        "skill": registration.get("doubles_skill") or registration.get("singles_skill"),
+        "skill": (
+            registration.get("singles_skill")
+            if rating_format == "singles"
+            else registration.get("doubles_skill")
+        ),
         "age": registration.get("age"),
         "gender": registration.get("gender"),
         "age_bracket": registration.get("age_bracket"),
@@ -709,7 +719,13 @@ def _compile_singles_roster(
                 "event_option_id": str(event.get("id")),
                 "event_label": str(event.get("label") or ""),
                 "status": "CONFIRMED",
-                "members": [_to_member_from_registration(registration, selection)],
+                "members": [
+                    _to_member_from_registration(
+                        registration,
+                        selection,
+                        rating_format="singles",
+                    )
+                ],
                 **_entry_identity(selection, registration),
                 "submitted_at": registration.get("submitted_at"),
                 "sort_key": _parse_dt(registration.get("submitted_at")),

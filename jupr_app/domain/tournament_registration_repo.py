@@ -1256,12 +1256,9 @@ def _selection_partner_record(
     doubles_skill = _optional_float(partner_registration.get("doubles_skill"))
     singles_skill = _optional_float(partner_registration.get("singles_skill"))
     submitted_skill = _optional_float(selection.get("partner_skill"))
-    resolved_skill = doubles_skill if doubles_skill is not None else singles_skill
-    if resolved_skill is None:
-        resolved_skill = submitted_skill
     return {
-        "doubles_skill": doubles_skill if doubles_skill is not None else resolved_skill,
-        "singles_skill": singles_skill if singles_skill is not None else resolved_skill,
+        "doubles_skill": doubles_skill if doubles_skill is not None else submitted_skill,
+        "singles_skill": singles_skill,
         "age": _optional_float(partner_registration.get("age"))
         if partner_registration.get("age") not in (None, "")
         else _optional_float(selection.get("partner_age")),
@@ -1279,7 +1276,7 @@ def _selection_with_resolved_partner(
     if not partner:
         return resolved
     if resolved.get("partner_skill") in (None, ""):
-        resolved["partner_skill"] = partner.get("doubles_skill") or partner.get("singles_skill")
+        resolved["partner_skill"] = partner.get("doubles_skill")
     if resolved.get("partner_age") in (None, ""):
         resolved["partner_age"] = partner.get("age")
     if resolved.get("partner_gender") in (None, ""):

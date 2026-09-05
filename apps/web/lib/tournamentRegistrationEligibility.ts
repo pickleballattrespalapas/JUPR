@@ -197,8 +197,8 @@ export function publicEventEligibilityReason(
   const eventType = String(event.event_type || "").toUpperCase();
   const isDoubles = Boolean(event.partner_required) || ["DOUBLES", "GENDER_DOUBLES", "MIXED_DOUBLES", "MIXED"].includes(eventType);
   const rating = isDoubles
-    ? finiteNumber(profile.doublesSkill) ?? finiteNumber(profile.singlesSkill)
-    : finiteNumber(profile.singlesSkill) ?? finiteNumber(profile.doublesSkill);
+    ? finiteNumber(profile.doublesSkill)
+    : finiteNumber(profile.singlesSkill);
   if (rating == null) return null;
   if (
     policy.mode === "COMBINED_RATING_CAP" &&

@@ -186,14 +186,12 @@ class FakeRegistrationEditRpc:
                     if str(row.get("id") or "").isdigit()
                 ]
                 player_id = max(current_ids or [0]) + 1
-                skill = registration.get("doubles_skill") or registration.get(
-                    "singles_skill"
-                )
+                skill = registration.get("doubles_skill")
                 try:
                     skill = float(skill)
                 except (TypeError, ValueError):
                     skill = 3.0
-                state = "CREATED" if registration.get("doubles_skill") or registration.get("singles_skill") else "CREATED_UNRATED"
+                state = "CREATED" if registration.get("doubles_skill") else "CREATED_UNRATED"
                 reason = None if state == "CREATED" else "TEMPORARY_3_0_BASELINE"
                 self.storage.setdefault("players", []).append(
                     {
@@ -202,6 +200,14 @@ class FakeRegistrationEditRpc:
                         "name": registration.get("display_name"),
                         "rating": skill * 400,
                         "starting_rating": skill * 400,
+                        "singles_rating": None,
+                        "singles_replay_baseline": {
+                            "rating": 1200,
+                            "wins": 0,
+                            "losses": 0,
+                            "matches_played": 0,
+                            "last_game_at": None,
+                        },
                         "wins": 0,
                         "losses": 0,
                         "matches_played": 0,
@@ -448,7 +454,7 @@ def test_public_tournament_registration_page_is_public_safe() -> None:
     assert payload["events"][0]["scheduled_day_ids"] == ["day1", "day2"]
 
 
-def test_public_profile_resolution_returns_safe_suggestion_without_linking_policy() -> None:
+def test_public_profile_resolution_keeps_missing_singles_rating_blank() -> None:
     storage = fake_storage()
     storage["players"] = [
         {
@@ -458,6 +464,8 @@ def test_public_profile_resolution_returns_safe_suggestion_without_linking_polic
             "email": "avery@example.com",
             "phone": "private",
             "rating": 1600,
+            "singles_rating": 1600,
+            "singles_matches_played": 0,
             "dupr_id": "DUPR-10",
             "active": True,
             "inactive_at": None,
@@ -485,7 +493,7 @@ def test_public_profile_resolution_returns_safe_suggestion_without_linking_polic
             "display_name": "Avery Ace",
             "dupr_id": "DUPR-10",
             "doubles_skill": 4.0,
-            "singles_skill": 4.0,
+            "singles_skill": None,
         }
     ]
     assert result["profile_policy"] == {
@@ -494,6 +502,39 @@ def test_public_profile_resolution_returns_safe_suggestion_without_linking_polic
     }
     assert "phone" not in result["profile_candidates"][0]
     assert "email" not in result["profile_candidates"][0]
+
+
+def test_public_profile_resolution_returns_separate_official_singles_rating() -> None:
+    storage = fake_storage()
+    storage["players"] = [
+        {
+            "id": 10,
+            "club_id": "club-1",
+            "name": "Avery Ace",
+            "email": "avery@example.com",
+            "rating": 1600,
+            "singles_rating": 1400,
+            "singles_matches_played": 1,
+            "active": True,
+            "inactive_at": None,
+        }
+    ]
+
+    result = resolve_public_tournament_registration_profile(
+        FakeSupabase(storage),
+        club_id="club-1",
+        payload={
+            "registration_slug": "tres-open",
+            "first_name": "Avery",
+            "last_name": "Ace",
+            "email": "avery@example.com",
+            "age": 34,
+            "gender": "Women",
+        },
+    )
+
+    assert result["profile_candidates"][0]["doubles_skill"] == 4.0
+    assert result["profile_candidates"][0]["singles_skill"] == 3.5
 
 
 def test_public_profile_resolution_hands_existing_email_to_recovery_without_id() -> None:
@@ -899,6 +940,57 @@ def test_registered_partner_without_demographics_uses_submitted_review_fields() 
     assert saved["partner_skill"] == 3.5
 
 
+def test_registered_partner_without_doubles_rating_does_not_borrow_singles_rating() -> None:
+    storage = fake_storage()
+    storage["tournament_event_options"][0].update(
+        {
+            "event_type": "GENDER_DOUBLES",
+            "partner_required": True,
+            "division_name": "Doubles 3.5",
+            "skill_label": "3.5",
+        }
+    )
+    storage["tournament_registrations"] = [
+        {
+            "id": "partner-registration",
+            "tournament_id": "t1",
+            "email": "casey@example.com",
+            "display_name": "Casey Court",
+            "doubles_skill": None,
+            "singles_skill": 4.5,
+            "age": 35,
+            "gender": "Men",
+        }
+    ]
+
+    result = submit_public_tournament_registration(
+        FakeSupabase(storage),
+        club_id="club-1",
+        payload={
+            "registration_slug": "tres-open",
+            "first_name": "Alex",
+            "last_name": "Rivera",
+            "email": "alex@example.com",
+            "age": 34,
+            "gender": "Women",
+            "doubles_skill": 3.2,
+            "terms_accepted": True,
+            "selections": [
+                {
+                    "event_option_id": "event1",
+                    "partner_mode": "HAS_PARTNER",
+                    "partner_name": "Casey Court",
+                    "partner_email": "casey@example.com",
+                }
+            ],
+        },
+    )
+
+    assert result["ok"] is True
+    saved = storage["tournament_registration_selections"][-1]
+    assert saved["partner_skill"] is None
+
+
 def test_singles_rejects_partner_fields() -> None:
     storage = fake_storage()
     storage["tournament_event_options"][0].update(
@@ -1158,6 +1250,140 @@ def test_public_registration_enforces_division_gender_and_rating() -> None:
                 "selections": [{"event_option_id": "event1", "partner_mode": "NONE"}],
             },
         )
+
+
+def test_public_singles_registration_saves_self_rating_separately_from_doubles() -> None:
+    storage = fake_storage()
+    storage["tournament_event_options"][0].update(
+        {
+            "event_type": "SINGLES",
+            "partner_required": False,
+            "skill_label": "3.5",
+            "division_name": "Singles 3.5",
+        }
+    )
+
+    result = submit_public_tournament_registration(
+        FakeSupabase(storage),
+        club_id="club-1",
+        payload={
+            "registration_slug": "tres-open",
+            "first_name": "Jay",
+            "last_name": "Senior",
+            "email": "jay@example.com",
+            "gender": "Men",
+            "age": 40,
+            "doubles_skill": 4.0,
+            "singles_skill": 3.5,
+            "terms_accepted": True,
+            "selections": [
+                {"event_option_id": "event1", "partner_mode": "NONE"}
+            ],
+        },
+    )
+
+    registration = next(
+        row
+        for row in storage["tournament_registrations"]
+        if row["id"] == result["registration_id"]
+    )
+    assert registration["doubles_skill"] == 4.0
+    assert registration["singles_skill"] == 3.5
+
+
+def test_public_singles_only_rating_does_not_seed_canonical_player_ratings() -> None:
+    storage = fake_storage()
+    storage["tournament_event_options"][0].update(
+        {
+            "event_type": "SINGLES",
+            "partner_required": False,
+            "skill_label": "3.5",
+            "division_name": "Singles 3.5",
+        }
+    )
+
+    result = submit_public_tournament_registration(
+        FakeSupabase(storage),
+        club_id="club-1",
+        payload={
+            "registration_slug": "tres-open",
+            "first_name": "Jay",
+            "last_name": "Senior",
+            "email": "jay@example.com",
+            "gender": "Men",
+            "age": 40,
+            "singles_skill": 3.5,
+            "terms_accepted": True,
+            "selections": [
+                {"event_option_id": "event1", "partner_mode": "NONE"}
+            ],
+        },
+    )
+
+    registration = next(
+        row
+        for row in storage["tournament_registrations"]
+        if row["id"] == result["registration_id"]
+    )
+    player = next(
+        row for row in storage["players"] if row["id"] == registration["player_id"]
+    )
+    reconciliation = next(
+        row
+        for row in storage["tournament_primary_player_reconciliation"]
+        if row["registration_id"] == result["registration_id"]
+    )
+    assert registration["doubles_skill"] is None
+    assert registration["singles_skill"] == 3.5
+    assert player["rating"] == 1200
+    assert player["starting_rating"] == 1200
+    assert player["singles_rating"] is None
+    assert reconciliation["state"] == "CREATED_UNRATED"
+    assert reconciliation["reason_code"] == "TEMPORARY_3_0_BASELINE"
+
+
+def test_public_singles_registration_keeps_unknown_singles_rating_blank() -> None:
+    storage = fake_storage()
+    storage["tournament_event_options"][0].update(
+        {
+            "event_type": "SINGLES",
+            "partner_required": False,
+            "skill_label": "3.5",
+            "division_name": "Singles 3.5",
+        }
+    )
+
+    result = submit_public_tournament_registration(
+        FakeSupabase(storage),
+        club_id="club-1",
+        payload={
+            "registration_slug": "tres-open",
+            "first_name": "Jay",
+            "last_name": "Senior",
+            "email": "jay@example.com",
+            "gender": "Men",
+            "age": 40,
+            "doubles_skill": 4.0,
+            "terms_accepted": True,
+            "selections": [
+                {"event_option_id": "event1", "partner_mode": "NONE"}
+            ],
+        },
+    )
+
+    registration = next(
+        row
+        for row in storage["tournament_registrations"]
+        if row["id"] == result["registration_id"]
+    )
+    player = next(
+        row for row in storage["players"] if row["id"] == registration["player_id"]
+    )
+    assert registration["doubles_skill"] == 4.0
+    assert registration["singles_skill"] is None
+    assert player["rating"] == 1600
+    assert player["singles_rating"] is None
+    assert player["singles_replay_baseline"]["rating"] == 1200
 
 
 def test_public_registration_enforces_partner_identity_gender_and_rating() -> None:

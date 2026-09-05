@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile": "next-fastapi-tournament-acceptance-2026-08-25",
-  "repository_migration_content_sha256": "5c7e7578c3db5853dec1d003d1177ffb778e87e8ea24c838d0bb9f1c98d84baf",
+  "repository_migration_content_sha256": "d4b9c88da3fc3d1b41f3c7242b8f6bbce96a9d73012b5d336835ad3882b3fa2e",
   "allow_additional_ledger_names": true,
   "allowed_duplicate_ledger_names": [
     "tournament_admin_operations"
@@ -104,7 +104,8 @@
     "league_roster_rating_integrity",
     "four_player_team_match_security_hardening",
     "server_only_view_security_hardening",
-    "team_league_trigger_function_security_hardening"
+    "team_league_trigger_function_security_hardening",
+    "independent_singles_registration_rating"
   ],
   "required_ledger_names": [
     "add_admin_activity_log",
@@ -138,6 +139,7 @@
     "harden_public_data_api",
     "harden_tournament_registration_check_in_privileges",
     "historic_singles_league_rating_backfill",
+    "independent_singles_registration_rating",
     "league_competition_mode",
     "league_live_direct_match_context",
     "league_live_domain_contract",

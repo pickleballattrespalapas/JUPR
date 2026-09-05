@@ -1,7 +1,12 @@
+import math
+
 from jupr_app.ui.pages.tournament_registration import (
     _hydrate_registration_wizard_from_bundle,
     _mask_email,
     _partner_details_from_selections,
+    _player_current_overall_jupr,
+    _player_current_singles_jupr,
+    _player_label,
     _selected_event_ids_from_selections,
 )
 
@@ -30,6 +35,42 @@ def test_mask_email():
     assert _mask_email("alina@example.com") == "a***a@example.com"
 
 
+def test_missing_pandas_singles_rating_does_not_become_nan_skill():
+    assert _player_current_singles_jupr(
+        {"singles_rating": math.nan, "singles_matches_played": 1}
+    ) is None
+
+
+def test_default_singles_rating_without_singles_history_is_missing():
+    assert _player_current_singles_jupr(
+        {"singles_rating": 1200, "singles_matches_played": 0}
+    ) is None
+
+
+def test_overall_rating_does_not_fall_back_to_singles_skill():
+    assert _player_current_overall_jupr(
+        {"rating": None, "doubles_skill": None, "singles_skill": 4.0}
+    ) is None
+
+
+def test_official_singles_skill_requires_positive_match_history():
+    assert _player_current_singles_jupr(
+        {"singles_rating": 1400, "singles_matches_played": 1}
+    ) == 3.5
+    assert _player_current_singles_jupr({"singles_skill": 3.25}) is None
+
+
+def test_player_label_shows_independent_doubles_and_singles_ratings():
+    assert _player_label(
+        {
+            "name": "Jay Senior",
+            "rating": 1600,
+            "singles_rating": 1600,
+            "singles_matches_played": 0,
+        }
+    ) == "Jay Senior · Doubles 4.000 · Singles not set"
+
+
 def test_hydrate_wizard_from_one_event():
     wizard = _hydrate_registration_wizard_from_bundle({}, _bundle([{"event_option_id": "e1", "partner_mode": "NONE"}]))
     assert wizard["edit_mode"] is True
@@ -42,6 +83,19 @@ def test_hydrate_wizard_from_one_event():
 def test_hydrate_wizard_from_two_events():
     wizard = _hydrate_registration_wizard_from_bundle({}, _bundle([{"event_option_id": "e1"}, {"event_option_id": "e2"}]))
     assert wizard["step3"]["selected_event_ids"] == ["e1", "e2"]
+
+
+def test_hydrate_edit_preserves_locked_player_for_missing_singles_entry():
+    bundle = _bundle([])
+    bundle["registration"]["player_id"] = 42
+
+    wizard = _hydrate_registration_wizard_from_bundle({}, bundle)
+
+    assert wizard["step2"]["profile_mode"] == "existing"
+    assert wizard["step2"]["selected_player_id"] == "42"
+    assert wizard["step2"]["candidate_player_id"] == "42"
+    assert wizard["step2"]["candidate_confirmed"] is True
+    assert wizard["step2"]["selection_source"] == "edit_link"
 
 
 def test_partner_details_preserve_has_partner():
