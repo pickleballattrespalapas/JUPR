@@ -183,7 +183,13 @@ def test_partner_board_request_review_decline_cancel_accept_and_stale_contract(p
 
 def test_partner_board_public_projection_hides_nonconsenting_needs_partner_entry(partner_client):
     api, storage = partner_client
-    _register(api, storage, first_name="Visible", email="visible@example.com", needs_partner=True)
+    visible_registration, _visible_selection, _visible_token = _register(
+        api,
+        storage,
+        first_name="Visible",
+        email="visible@example.com",
+        needs_partner=True,
+    )
     _private_registration, _private_selection, _private_token = _register(
         api,
         storage,
@@ -198,7 +204,14 @@ def test_partner_board_public_projection_hides_nonconsenting_needs_partner_entry
 
     assert response.status_code == 200
     payload = response.json()
-    assert {row["player_name"] for row in payload["roster"]["players_needing_partners"]} == {"Visible Player", "Private Player"}
+    assert [row["player_name"] for row in payload["roster"]["players_needing_partners"]] == ["Visible Player"]
     assert [row["player_name"] for row in payload["roster"]["partner_board_entries"]] == ["Visible Player"]
+    visible_entry = payload["roster"]["partner_board_entries"][0]
+    assert visible_entry["player_entry_key"] == build_public_tournament_reference(
+        tournament_id="t1",
+        namespace="partner-board-registration",
+        source_id=visible_registration,
+    )
+    assert visible_registration not in str(visible_entry)
     assert "visible@example.com" not in str(payload).lower()
     assert "private@example.com" not in str(payload).lower()

@@ -1102,7 +1102,7 @@ def _render_registration_bridge(tournament: dict[str, Any], registration_bridge:
     with st.expander("Registration links"):
         st.text_input("Tournament Manager", value=links["admin_manager"], key=f"ops_reg_admin_{tournament.get('id')}")
         st.text_input("Public registration", value=links["registration"], key=f"ops_reg_public_{tournament.get('id')}")
-        st.text_input("Public partner board", value=links["partner_board"], key=f"ops_reg_partner_{tournament.get('id')}")
+        st.text_input("Public Players Needing Partners", value=links["partner_board"], key=f"ops_reg_partner_{tournament.get('id')}")
 
 
 def _render_games_table(*, games, teams_by_id, id_to_name, on_save, key_prefix: str, disabled: bool = False):

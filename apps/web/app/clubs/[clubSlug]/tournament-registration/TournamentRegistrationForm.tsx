@@ -548,7 +548,7 @@ export default function TournamentRegistrationForm({
       return;
     }
     if (needsPartnerBoardConsent && !partnerConsent) {
-      setError("Partner-board contact consent is required before publishing your listing.");
+      setError("Players Needing Partners contact consent is required before publishing your listing.");
       return;
     }
     if (!termsAccepted) {
@@ -821,7 +821,7 @@ export default function TournamentRegistrationForm({
                             </>
                           ) : (
                             <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-                              <input type="checkbox" checked={partner.showOnBoard} disabled={!eventOption.partner_board_enabled} onChange={(event) => updatePartner(eventOption.id, { showOnBoard: event.target.checked })} /> Show me on the public partner board for this division
+                              <input type="checkbox" checked={partner.showOnBoard} disabled={!eventOption.partner_board_enabled} onChange={(event) => updatePartner(eventOption.id, { showOnBoard: event.target.checked })} /> Show me on the public Players Needing Partners page for this division
                             </label>
                           )}
                           <label>Partner note<br /><textarea aria-label={`${eventOption.division_name} partner note`} rows={2} value={partner.note} onChange={(event) => updatePartner(eventOption.id, { note: event.target.value })} style={inputStyle} /></label>
@@ -919,7 +919,7 @@ export default function TournamentRegistrationForm({
           ) : null}
           {needsPartnerBoardConsent ? (
             <label style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start", marginBottom: "0.75rem" }}>
-              <input type="checkbox" checked={partnerConsent} onChange={(event) => setPartnerConsent(event.target.checked)} /> Organizers may use my contact information for the partner-board listing I selected.
+              <input type="checkbox" checked={partnerConsent} onChange={(event) => setPartnerConsent(event.target.checked)} /> Organizers may use my contact information for the Players Needing Partners listing I selected.
             </label>
           ) : null}
           <label style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start" }}>

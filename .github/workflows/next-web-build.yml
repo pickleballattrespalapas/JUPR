@@ -82,6 +82,19 @@ jobs:
             --outDir "$RUNNER_TEMP/admin-auth-client"
           JUPR_ADMIN_AUTH_CLIENT_MODULE="$RUNNER_TEMP/admin-auth-client/adminAuthClient.js" \
             node lib/adminAuthClient.storage.test.mjs
+      - name: Test Players Needing Partners grouping
+        run: |
+          mkdir -p "$RUNNER_TEMP/tournament-partner-board"
+          npx tsc lib/tournamentPartnerBoard.ts \
+            --target ES2022 \
+            --module CommonJS \
+            --moduleResolution Node \
+            --esModuleInterop \
+            --skipLibCheck \
+            --rootDir . \
+            --outDir "$RUNNER_TEMP/tournament-partner-board"
+          JUPR_TOURNAMENT_PARTNER_BOARD_MODULE="$RUNNER_TEMP/tournament-partner-board/lib/tournamentPartnerBoard.js" \
+            node lib/tournamentPartnerBoard.test.mjs
       - name: Test Challenge Ladder full-result rendering
         run: npm run test:component
       - name: Build Next app

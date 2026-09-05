@@ -267,13 +267,8 @@ test("tournament roster filters and public deep links remain navigable", async (
     await expect(empty.or(unavailable).or(page.getByText(/No tournament roster is currently published|No published tournament roster was found/i)).first()).toBeVisible();
   }
 
-  const partnerLink = page.getByRole("link", { name: "View on partner board" }).first();
-  if (await partnerLink.count()) {
-    const href = String(await partnerLink.getAttribute("href"));
-    expect(href).toContain("/tournament-partner-board");
-    expect(href).toMatch(/#partner-tr-[a-f0-9]{24}$/);
-    expect(href).not.toMatch(/selection_id|registration_id|player_id/);
-  }
+  await expect(page.getByText("Players looking for partners", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "View on partner board" })).toHaveCount(0);
 });
 
 test("badge codex: authoritative buckets, filters, anchors, and trophy room", async ({ page }) => {

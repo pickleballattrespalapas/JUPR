@@ -110,7 +110,7 @@ export default function TournamentSetupEventFamilyCard({
         <div><dt style={{ fontWeight: 800 }}>Capacity</dt><dd style={{ margin: 0 }}>{numberInputValue(value.default_capacity_teams) || "—"}</dd></div>
         <div><dt style={{ fontWeight: 800 }}>Entry fee</dt><dd style={{ margin: 0 }}>${Number(value.default_price_usd || 0).toFixed(2)}</dd></div>
         <div><dt style={{ fontWeight: 800 }}>Waitlist</dt><dd style={{ margin: 0 }}>{recordBoolean(value.default_waitlist, true) ? "Enabled" : "Disabled"}</dd></div>
-        <div><dt style={{ fontWeight: 800 }}>Partner Board</dt><dd style={{ margin: 0 }}>{participantType !== "SINGLES" && recordBoolean(value.default_partner_board, true) ? "Enabled" : "Disabled"}</dd></div>
+        <div><dt style={{ fontWeight: 800 }}>Players Needing Partners</dt><dd style={{ margin: 0 }}>{participantType !== "SINGLES" && recordBoolean(value.default_partner_board, true) ? "Enabled" : "Disabled"}</dd></div>
         {competitionFormat === "FOUR_PLAYER_TEAM" ? (
           <div><dt style={{ fontWeight: 800 }}>Team rules</dt><dd style={{ margin: 0 }}>2 men + 2 women · {optionLabel(cleanString(value.team_tiebreak_mode) || "SINGLES")} tiebreak · {recordBoolean(value.team_allow_substitutes, false) ? "Roster replacement allowed between matches" : "Pre-play roster correction only"}</dd></div>
         ) : null}

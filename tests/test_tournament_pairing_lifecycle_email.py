@@ -28,6 +28,7 @@ def test_pairing_lifecycle_email_explains_acceptance_without_contact_disclosure(
     assert "@example.com" not in html
     assert "+1" not in text
     assert "Contact details remain private" in html
+    assert "Players Needing Partners" in text
 
 
 def test_pairing_lifecycle_subject_and_decline_copy_are_deterministic():

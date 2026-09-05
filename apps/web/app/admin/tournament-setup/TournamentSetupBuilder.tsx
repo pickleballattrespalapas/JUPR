@@ -243,7 +243,7 @@ export function TournamentSetupBuilder({
           <div>
             <h3 id="setup-divisions-heading">Divisions and registration options</h3>
             <p className={styles.sectionDescription}>
-              Assign each division to a day, then set participant rules, capacity, price, waitlist, and Partner Board behavior.
+              Assign each division to a day, then set participant rules, capacity, price, waitlist, and Players Needing Partners behavior.
             </p>
           </div>
           <button

@@ -60,7 +60,7 @@ PAGE_DEFINITIONS: tuple[PageDefinition, ...] = (
     PageDefinition("tournament_registration_confirmation", "✅ Registration Confirmation", public=True, show_in_nav=False),
     PageDefinition("tournament_registration_edit", "✏️ Edit Registration", public=True, show_in_nav=False),
     PageDefinition("tournament_roster", "📋 Tournament Roster", public=True, show_in_nav=False),
-    PageDefinition("tournament_partner_board", "🤝 Partner Board", public=True),
+    PageDefinition("tournament_partner_board", "🤝 Players Needing Partners", public=True),
     PageDefinition("weekly_recap", "🗞️ Weekly Recap", public=True),
     PageDefinition("top_players_printable", "🧾 Top Active Players PDF", admin_only=True),
     PageDefinition("weekly_recap_admin", "🗞️ Weekly Recap Admin", admin_only=True),

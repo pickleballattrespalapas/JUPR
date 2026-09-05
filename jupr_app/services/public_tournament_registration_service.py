@@ -1164,7 +1164,7 @@ def validate_and_clean_tournament_selection(
             if not _safe_bool(settings.get("partner_board_enabled")) or not _safe_bool(
                 event.get("partner_board_enabled")
             ):
-                raise ValueError(f"{_event_label(event)}: the public partner board is not enabled.")
+                raise ValueError(f"{_event_label(event)}: Players Needing Partners is not enabled.")
         for key in _PARTNER_IDENTITY_RATING_AGE_FIELDS:
             clean_selection[key] = None if key in {"partner_skill", "partner_age"} else ""
         partner_gender = ""
@@ -1318,7 +1318,7 @@ def build_validated_public_registration_save_payload(
     if any(_safe_bool(selection.get("show_on_partner_board")) for selection in selections) and not _safe_bool(
         payload.get("wants_partner_board_contact")
     ):
-        raise ValueError("Partner-board contact consent is required before publishing a needs-partner listing.")
+        raise ValueError("Players Needing Partners contact consent is required before publishing a needs-partner listing.")
 
     save_payload = {
         "first_name": _clean_text(payload.get("first_name"), limit=80),

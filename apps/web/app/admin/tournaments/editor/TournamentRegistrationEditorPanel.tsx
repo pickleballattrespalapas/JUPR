@@ -213,7 +213,7 @@ export default function TournamentRegistrationEditorPanel({ apiBase, clubId, sta
           })
         }
       );
-      const completion = actionSuccess("Event entry saved", "The selected division and partner-board state were updated.");
+      const completion = actionSuccess("Event entry saved", "The selected division and Players Needing Partners state were updated.");
       if (!actionRequest.isCurrent(generation)) return completion;
       await loadDetail(selectedRegistrationId, selectedSelection.id);
       if (actionRequest.isCurrent(generation)) setMessage("Event entry saved.");
@@ -271,7 +271,7 @@ export default function TournamentRegistrationEditorPanel({ apiBase, clubId, sta
                     <label><strong>Partner mode</strong><br /><select value={selectionDraft.partnerMode} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerMode: event.target.value }))} style={inputStyle}>{PARTNER_MODE_OPTIONS.map((value) => <option key={value} value={value}>{value === "NONE" ? "No partner request" : "Needs partner"}</option>)}</select></label>
                   </div>
                   <label style={{ display: "block", marginTop: "0.75rem" }}><strong>Partner note</strong><br /><textarea value={selectionDraft.partnerNote} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerNote: event.target.value }))} rows={3} style={inputStyle} /></label>
-                  <p><ConfirmAction triggerLabel={busy ? "Saving…" : "Save event entry"} title="Save this event-entry update?" description="Update the selected division and partner-board state using the loaded row version." confirmLabel="Yes, save event entry" confirmationText="SAVE EVENT ENTRY" busy={busy} onConfirm={saveSelection} /></p>
+                  <p><ConfirmAction triggerLabel={busy ? "Saving…" : "Save event entry"} title="Save this event-entry update?" description="Update the selected division and Players Needing Partners state using the loaded row version." confirmLabel="Yes, save event entry" confirmationText="SAVE EVENT ENTRY" busy={busy} onConfirm={saveSelection} /></p>
                 </div>
               ) : null}
             </article>

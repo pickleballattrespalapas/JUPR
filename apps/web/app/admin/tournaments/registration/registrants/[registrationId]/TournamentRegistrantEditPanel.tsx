@@ -219,7 +219,7 @@ function partnerStateLabel(row: AdminTournamentSelection): string {
   }
   if (row.partner_mode === "NEEDS_PARTNER") {
     return row.show_on_partner_board
-      ? "Needs partner · on Partner Board"
+      ? "Needs partner · in Players Needing Partners"
       : "Needs partner";
   }
   return "No partner request";
@@ -588,7 +588,7 @@ export default function TournamentRegistrantEditPanel({
           })
         }
       );
-      const completion = actionSuccess("Event entry saved", "The division, eligibility, and partner-board details were saved.");
+      const completion = actionSuccess("Event entry saved", "The division, eligibility, and Players Needing Partners details were saved.");
       if (!actionRequest.isCurrent(generation)) return completion;
       await loadDetail(selectedSelection.id);
       if (actionRequest.isCurrent(generation))
@@ -964,7 +964,7 @@ export default function TournamentRegistrantEditPanel({
             </div>
             <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.9rem" }}>
               <input type="checkbox" checked={registrationDraft.wantsPartnerBoardContact} onChange={(event) => setRegistrationDraft((current) => ({ ...current, wantsPartnerBoardContact: event.target.checked }))} />
-              Registrant consents to contact information appearing on the Partner Board
+              Registrant consents to contact information being used for private partner coordination
             </label>
             <h3>Administrative status and payment</h3>
             <div
@@ -1201,8 +1201,8 @@ export default function TournamentRegistrantEditPanel({
                 {selectionDraft.partnerMode === "NEEDS_PARTNER" && !selectionDraft.partnerSelectionId ? (
                   <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                     <input type="checkbox" checked={selectionDraft.showOnPartnerBoard} disabled={!Boolean(registration.wants_partner_board_contact)} onChange={(event) => setSelectionDraft((current) => ({ ...current, showOnPartnerBoard: event.target.checked }))} />
-                    Show this request on the Partner Board
-                    {!registration.wants_partner_board_contact ? <small>Save Partner Board contact consent above first.</small> : null}
+                    Show this request in Players Needing Partners
+                    {!registration.wants_partner_board_contact ? <small>Save Players Needing Partners contact consent above first.</small> : null}
                   </label>
                 ) : null}
                 <label>

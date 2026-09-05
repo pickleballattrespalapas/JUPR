@@ -688,7 +688,7 @@ def main():
             "✅ Registration Confirmation": tournament_registration_confirmation,
             "✏️ Edit Registration": tournament_registration_edit,
             "📋 Tournament Roster": tournament_roster,
-            "🤝 Partner Board": tournament_partner_board,
+            "🤝 Players Needing Partners": tournament_partner_board,
             "🗞️ Weekly Recap": weekly_recap,
             "🧾 Top Active Players PDF": top_players_printable,
             # Hidden deep-link page

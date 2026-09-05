@@ -25,8 +25,10 @@ function boardQuery(extra: Record<string, string> = {}): string {
 test("partner board renders the explicit privacy boundary", async ({ page }) => {
   await page.goto(`/clubs/${clubSlug}/tournament-partner-board${boardQuery()}`);
 
-  await expect(page.getByText("Tournament Partner Board", { exact: true })).toBeVisible();
-  await expect(page.getByText(/contact details are not exposed/i)).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Players Needing Partners", exact: true })
+  ).toHaveAttribute("aria-current", "page");
+  await expect(page.getByText(/contact details stay private/i)).toBeVisible();
   await expect(page.locator('a[href^="mailto:"]')).toHaveCount(0);
   await expect(page.locator('a[href^="tel:"]')).toHaveCount(0);
 });

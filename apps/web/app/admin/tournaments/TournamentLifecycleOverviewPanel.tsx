@@ -237,7 +237,7 @@ function registrationSteps(
     },
     {
       title: "Partners and teams",
-      description: "Partner Board requests, automatic pairing, team rosters, substitutes, and incomplete entries.",
+      description: "Players Needing Partners requests, automatic pairing, team rosters, substitutes, and incomplete entries.",
       href: selectedHref(
         "/admin/tournaments/registration/partners",
         tournamentId,

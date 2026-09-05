@@ -3,7 +3,6 @@ import { redirect } from "next/navigation";
 import PublicTournamentModuleHeader from "@/components/PublicTournamentModuleHeader";
 import {
   getClubTournamentRoster,
-  type PublicTournamentNeedsPartnerEntry,
   type PublicTournamentRosterEntry,
   type PublicTournamentRosterMember
 } from "@/lib/tournamentRegistrationApi";
@@ -28,15 +27,6 @@ function firstParam(
   const value = searchParams?.[key];
   if (Array.isArray(value)) return value[0] ?? null;
   return value ?? null;
-}
-
-function slugify(value: string): string {
-  return (
-    value
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "") || "event"
-  );
 }
 
 function dateLabel(value?: string | null): string {
@@ -120,16 +110,6 @@ function memberLabel(member: PublicTournamentRosterMember): string {
   return details.length
     ? `${member.display_name} · ${details.join(" · ")}`
     : member.display_name;
-}
-
-function partnerEventKey(entry: PublicTournamentNeedsPartnerEntry): string {
-  return slugify(
-    [
-      entry.event_day_label || "Day",
-      entry.event_family || "Event",
-      entry.division || "Division"
-    ].join(" · ")
-  );
 }
 
 export default async function TournamentRosterPage({
@@ -347,73 +327,6 @@ export default async function TournamentRosterPage({
             </span>
           </div>
         </form>
-      ) : null}
-
-      {roster?.players_needing_partners?.length ? (
-        <article
-          style={{
-            ...cardStyle,
-            marginBottom: "1rem",
-            background: "#fffbeb",
-            borderColor: "#fde68a"
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              gap: "1rem",
-              flexWrap: "wrap",
-              alignItems: "center"
-            }}
-          >
-            <div>
-              <h2 style={{ margin: 0 }}>Players looking for partners</h2>
-              <p style={{ margin: "0.35rem 0 0", color: "#92400e" }}>
-                Open requests are also available on the tournament Partner Board.
-              </p>
-            </div>
-            <Link
-              href={`/clubs/${params.clubSlug}/tournament-partner-board${queryPrefix}`}
-              style={{ fontWeight: 800 }}
-            >
-              Open Partner Board
-            </Link>
-          </div>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-              gap: "0.75rem",
-              marginTop: "1rem"
-            }}
-          >
-            {roster.players_needing_partners.map((entry, index) => {
-              const boardQuery = new URLSearchParams(query);
-              boardQuery.set("event", partnerEventKey(entry));
-              return (
-                <Link
-                  key={entry.board_entry_key || `${entry.player_name}-${index}`}
-                  href={`/clubs/${params.clubSlug}/tournament-partner-board?${boardQuery.toString()}`}
-                  style={{
-                    border: "1px solid #fde68a",
-                    borderRadius: "12px",
-                    padding: "0.8rem",
-                    background: "white",
-                    color: "#0f172a",
-                    textDecoration: "none"
-                  }}
-                >
-                  <strong>{entry.player_name}</strong>
-                  <div style={{ color: "#92400e", marginTop: "0.25rem" }}>
-                    {entry.event_day_label} · {entry.event_family} · {entry.division}
-                  </div>
-                  {entry.note ? <p style={{ marginBottom: 0, color: "#475569" }}>{entry.note}</p> : null}
-                </Link>
-              );
-            })}
-          </div>
-        </article>
       ) : null}
 
       {filteredEntries.length ? (

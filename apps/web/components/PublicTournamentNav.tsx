@@ -74,7 +74,7 @@ export default function PublicTournamentNav({
     ["overview", "Tournament Home"],
     ["registration", "Register"],
     ["roster", "Roster"],
-    ["partner-board", "Partner Board"],
+    ["partner-board", "Players Needing Partners"],
     ["results", "Live & Results"]
   ];
 

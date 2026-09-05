@@ -4,6 +4,7 @@ from pathlib import Path
 PAGE = Path("apps/web/app/clubs/[clubSlug]/tournament-partner-board/page.tsx")
 INTEREST = Path("apps/web/app/clubs/[clubSlug]/tournament-partner-board/PairingInterestPanel.tsx")
 REVIEW = Path("apps/web/app/clubs/[clubSlug]/tournament-partner-board/PartnerRequestReviewPanel.tsx")
+GROUPING = Path("apps/web/lib/tournamentPartnerBoard.ts")
 ROUTES = Path("services/api/public_tournament_pairing_routes.py")
 
 
@@ -11,9 +12,17 @@ def test_partner_board_uses_consent_projection_and_fastapi_only():
     page = PAGE.read_text(encoding="utf-8")
     interest = INTEREST.read_text(encoding="utf-8")
     review = REVIEW.read_text(encoding="utf-8")
+    grouping = GROUPING.read_text(encoding="utf-8")
 
     assert "partner_board_entries" in page
     assert "roster?.players_needing_partners" not in page
+    assert "entry.player_entry_key || entry.board_entry_key" in grouping
+    assert "groupPartnerEntries(partnerEntries)" in page
+    assert "visiblePlayerGroups.map" in page
+    assert "group.entries.map" in page
+    assert 'data-testid="partner-player-card"' in page
+    assert 'data-testid="partner-division-listing"' in page
+    assert "boardEntries={[entry]}" in page
     assert "pairing-interest" in interest
     assert "pairing-requests" in review
     combined = "\n".join([page, interest, review]).lower()

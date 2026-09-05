@@ -29,11 +29,11 @@ const featureGroups = [
   },
   {
     title: "Events and tournaments",
-    description: "Registration, roster, partner board, live event pages, weekly recaps, and the challenge ladder are ready for public navigation.",
+    description: "Registration, roster, Players Needing Partners, live event pages, weekly recaps, and the challenge ladder are ready for public navigation.",
     links: [
       ["Register", "/clubs/tres-palapas/tournament-registration"],
       ["Roster", "/clubs/tres-palapas/tournament-roster"],
-      ["Partner Board", "/clubs/tres-palapas/tournament-partner-board"],
+      ["Players Needing Partners", "/clubs/tres-palapas/tournament-partner-board"],
       ["Live", "/clubs/tres-palapas/live"],
       ["Weekly Recap", "/clubs/tres-palapas/weekly-recap"],
       ["Challenge Ladder", "/clubs/tres-palapas/challenge-ladder"]
@@ -64,7 +64,7 @@ export default function HomePage() {
           Pickleball Club Sandwich is the new home for club leagues, events, and ratings.
         </h1>
         <p style={{ marginTop: 0, fontSize: "1.1rem", color: "#334155" }}>
-          Follow live event scoring, club leaderboards, player profiles, tournament registration, public rosters, partner-board discovery, weekly recaps, and rating history from one public website.
+          Follow live event scoring, club leaderboards, player profiles, tournament registration, public rosters, Players Needing Partners listings, weekly recaps, and rating history from one public website.
         </p>
         <p style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
           {primaryLinks.map(([label, href]) => <Link key={href} href={href} style={{ fontWeight: 800 }}>{label}</Link>)}

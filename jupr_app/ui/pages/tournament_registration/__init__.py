@@ -13,7 +13,7 @@ _FLOW_CHOICE_KEY = "registration_flow_choice"
 _FLOW_NEW = "new"
 _FLOW_EDIT = "edit"
 _ACTIVE_TOURNAMENT_ID_KEY = "registration_active_public_tournament_id"
-_PUBLIC_PARTNER_BOARD_OPT_IN_LABEL = "Show me on the public partner board for this division"
+_PUBLIC_PARTNER_BOARD_OPT_IN_LABEL = "Show me in Players Needing Partners for this division"
 
 
 def _load_legacy_module():

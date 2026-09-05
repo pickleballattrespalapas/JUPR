@@ -195,7 +195,7 @@ def render(ctx):
             params=tournament_nav_params,
             public_mode=True,
         )
-    if launch[4].button("🤝 Partner Board"):
+    if launch[4].button("🤝 Players Needing Partners"):
         navigate_same_tab(
             page="tournament_partner_board",
             params=tournament_nav_params,

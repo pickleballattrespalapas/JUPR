@@ -3780,7 +3780,7 @@ function renderDivisions() {
             <ConfirmAction
               triggerLabel={busy ? "Opening…" : "Open registration"}
               title="Open tournament registration?"
-              description="Open registration using the published tournament, registration window, policies, divisions, prices, and Partner Board settings."
+              description="Open registration using the published tournament, registration window, policies, divisions, prices, and Players Needing Partners settings."
               confirmLabel="Yes, open registration"
               confirmationText={settingsConfirmation}
               disabled={!(setupPublishedThisSession || registrationCanOpen)}

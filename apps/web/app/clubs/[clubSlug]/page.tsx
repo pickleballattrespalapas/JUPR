@@ -43,7 +43,7 @@ export default async function ClubPage({ params }: ClubPageProps) {
     {
       title: "Tournaments",
       description:
-        "Choose a tournament, then open its registration, roster, Partner Board, and published results.",
+        "Choose a tournament, then open its registration, roster, the Players Needing Partners page, and published results.",
       href: `${base}/tournaments`,
       label: "Open tournaments"
     },
