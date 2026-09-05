@@ -8,17 +8,17 @@ test.beforeEach(async ({ context }) => {
   await bootstrapStagingContext(context);
 });
 
-test("tournament registration exposes explicit Start New and Edit Existing recovery paths", async ({ page }) => {
+test("tournament registration exposes explicit start and edit recovery paths", async ({ page }) => {
   const response = await page.goto(fixturePath, { waitUntil: "domcontentloaded" });
   expect(response?.status()).toBeLessThan(400);
 
   const chooser = page.getByTestId("registration-mode-chooser");
   await expect(chooser).toBeVisible();
-  await expect(chooser.getByRole("button", { name: "Start New" })).toBeVisible();
-  await chooser.getByRole("button", { name: "Edit Existing" }).click();
+  await expect(chooser.getByRole("button", { name: "Start a registration" })).toBeVisible();
+  await chooser.getByRole("button", { name: "Edit my registration" }).click();
   await expect(page.getByTestId("registration-edit-mode")).toBeVisible();
   await expect(page.getByTestId("registration-edit-link-form")).toBeVisible();
-  await expect(page.getByText(/never reveals registration details/i)).toBeVisible();
+  await expect(page.getByText(/We’ll send your edit link there/i)).toBeVisible();
 });
 
 test("new-registration wizard requires demographics and resolves profiles through FastAPI", async ({ page }) => {
@@ -45,7 +45,7 @@ test("new-registration wizard requires demographics and resolves profiles throug
         masked_email: "a***y@example.test",
         profile_match_kind: "email_exact",
         profile_candidates: [
-          { id: "player-10", display_name: "Avery Ace", dupr_id: "DUPR-10", doubles_skill: 3.5, singles_skill: 3.5 }
+          { id: "player-10", display_name: "Avery Ace", dupr_id: "DUPR-10", doubles_skill: 4.0, singles_skill: null }
         ],
         profile_policy: { linkage: "staff_review_required", public_submission_links_player: false },
         message: "Review the suggested profile or continue without one."
@@ -54,7 +54,7 @@ test("new-registration wizard requires demographics and resolves profiles throug
   });
 
   await page.goto(fixturePath, { waitUntil: "domcontentloaded" });
-  const start = page.getByRole("button", { name: "Start New" });
+  const start = page.getByRole("button", { name: "Start a registration" });
   test.skip(await start.isDisabled(), "The configured staging tournament is closed; closed-state contracts are covered by FastAPI tests.");
   await start.click();
   await expect(page.getByTestId("registration-step-contact")).toBeVisible();
@@ -72,7 +72,11 @@ test("new-registration wizard requires demographics and resolves profiles throug
   await page.getByRole("button", { name: "Continue", exact: true }).click();
 
   await expect(page.getByTestId("registration-step-profile")).toBeVisible();
-  await page.getByText(/Avery Ace · Rating 3.50/).click();
+  await page.getByText(/Avery Ace · Doubles 4 · Singles not set/).click();
   await expect(page.getByLabel("Display name")).toHaveValue("Avery Ace");
-  await expect(page.getByText(/Public registration never links a JUPR player automatically/i)).toBeVisible();
+  await expect(page.getByLabel("Doubles skill")).toHaveValue("4");
+  await expect(page.getByLabel("Singles skill")).toHaveValue("");
+  await page.getByLabel("Singles skill").fill("3.5");
+  await expect(page.getByLabel("Singles skill")).toHaveValue("3.5");
+  await expect(page.getByText(/Choosing a profile only fills in this form/i)).toBeVisible();
 });

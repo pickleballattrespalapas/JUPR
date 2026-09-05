@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 from difflib import SequenceMatcher
 import json
+import math
 import re
 import uuid
 
@@ -274,7 +275,7 @@ def _load_active_players(supabase, *, club_id: str, ctx) -> list[dict[str, Any]]
     try:
         base_query = (
             supabase.table("players")
-            .select("id,name,display_name,email,phone,whatsapp,dupr_id,rating,doubles_skill,singles_skill,gender,age,inactive_at,active")
+            .select("id,name,display_name,email,phone,whatsapp,dupr_id,rating,singles_rating,singles_matches_played,gender,age,inactive_at,active")
             .eq("club_id", str(club_id))
             .order("name")
             .limit(2000)
@@ -295,9 +296,24 @@ def _player_current_overall_jupr(player: dict[str, Any]) -> float | None:
     doubles = _coerce_float(player.get("doubles_skill"))
     if doubles is not None:
         return doubles
-    singles = _coerce_float(player.get("singles_skill"))
-    if singles is not None:
-        return singles
+    return None
+
+
+def _player_current_singles_jupr(player: dict[str, Any]) -> float | None:
+    singles_matches_played = _coerce_int(player.get("singles_matches_played"))
+    singles_rating_elo = (
+        _coerce_float(player.get("singles_rating"))
+        if singles_matches_played is not None and singles_matches_played > 0
+        else None
+    )
+    if singles_rating_elo is not None and math.isfinite(singles_rating_elo):
+        canonical = (
+            singles_rating_elo / 400.0
+            if singles_rating_elo > 10
+            else singles_rating_elo
+        )
+        if 1.0 <= canonical <= 7.0:
+            return canonical
     return None
 
 
@@ -310,10 +326,11 @@ def _player_rating_text(player: dict[str, Any]) -> str:
 
 def _player_label(player: dict[str, Any]) -> str:
     display_name = _safe_text(player.get("display_name") or player.get("name") or f"Player #{player.get('id')}")
-    rating_text = _player_rating_text(player)
-    if rating_text == "N/A":
-        return display_name
-    return f"{display_name} · Rating {rating_text}"
+    doubles = _player_current_overall_jupr(player)
+    singles = _player_current_singles_jupr(player)
+    doubles_text = f"{doubles:.3f}" if doubles is not None else "not set"
+    singles_text = f"{singles:.3f}" if singles is not None else "not set"
+    return f"{display_name} · Doubles {doubles_text} · Singles {singles_text}"
 
 
 def _find_player_by_id(players: list[dict[str, Any]], player_id: Any) -> dict[str, Any] | None:
@@ -857,15 +874,16 @@ def _hydrate_registration_wizard_from_bundle(
         }
     )
     wizard.setdefault("step2", {})
+    linked_player_id = _safe_text(registration.get("player_id"))
     wizard["step2"].update(
         {
-            "profile_mode": "new",
-            "selected_player_id": "",
-            "candidate_player_id": "",
-            "candidate_confirmed": False,
+            "profile_mode": "existing" if linked_player_id else "new",
+            "selected_player_id": linked_player_id,
+            "candidate_player_id": linked_player_id,
+            "candidate_confirmed": bool(linked_player_id),
             "rejected_likely": False,
             "search_query": "",
-            "selection_source": "",
+            "selection_source": "edit_link" if linked_player_id else "",
             "display_name": _safe_text(registration.get("display_name")),
             "dupr_id": _safe_text(registration.get("dupr_id")),
             "doubles_skill": registration.get("doubles_skill"),
@@ -1638,13 +1656,17 @@ def render(ctx):
                 selection_source = "likely"
             if len(likely_matches) > 1 and not candidate_player_id and not rejected_likely:
                 st.caption("We found a few possible JUPR profiles. Pick one to review.")
-                likely_options = {f"{_player_label(row)}": str(row.get("id")) for row in likely_matches}
-                picked_likely = st.radio(
+                likely_options = {
+                    str(row.get("id")): row for row in likely_matches
+                }
+                candidate_player_id = st.radio(
                     "Likely profiles",
                     list(likely_options.keys()),
+                    format_func=lambda player_id: _player_label(
+                        likely_options[player_id]
+                    ),
                     key=f"wizard_likely_profile_pick_{tournament.get('id')}",
                 )
-                candidate_player_id = likely_options[picked_likely]
                 selection_source = "likely"
             candidate_player = _find_player_by_id(active_players, candidate_player_id)
             if candidate_player:
@@ -1770,13 +1792,17 @@ def render(ctx):
                 elif search_query:
                     st.caption("Keep typing to search.")
                 if search_results:
-                    result_options = {f"{_player_label(row)}": str(row.get("id")) for row in search_results}
-                    picked_search = st.radio(
+                    result_options = {
+                        str(row.get("id")): row for row in search_results
+                    }
+                    candidate_player_id = st.radio(
                         "Search results",
                         list(result_options.keys()),
+                        format_func=lambda player_id: _player_label(
+                            result_options[player_id]
+                        ),
                         key=f"wizard_search_pick_{tournament.get('id')}",
                     )
-                    candidate_player_id = result_options[picked_search]
                     st.caption("Select a profile, then click Next to continue with that JUPR profile.")
                 elif len(normalized_query) >= 2:
                     st.info("No matching active profiles found.")
@@ -1885,27 +1911,62 @@ def render(ctx):
         selected_existing_player = _find_player_by_id(active_players, step2.get("selected_player_id"))
     if using_existing_player and selected_existing_player:
         canonical_overall_rating = _player_current_overall_jupr(selected_existing_player)
-        if canonical_overall_rating is not None:
-            profile_doubles = canonical_overall_rating
-            profile_singles = canonical_overall_rating
-        else:
-            profile_doubles = _coerce_float(selected_existing_player.get("doubles_skill"))
-            profile_singles = _coerce_float(selected_existing_player.get("singles_skill"))
+        canonical_singles_rating = _player_current_singles_jupr(selected_existing_player)
+        profile_doubles = canonical_overall_rating
+        profile_singles = (
+            canonical_singles_rating
+            if canonical_singles_rating is not None
+            else _coerce_float(step2.get("singles_skill"))
+        )
     else:
+        canonical_singles_rating = None
         profile_doubles = _coerce_float(step2.get("doubles_skill"))
         profile_singles = _coerce_float(step2.get("singles_skill"))
     player_profile = {"doubles_skill": profile_doubles, "singles_skill": profile_singles}
 
-    visible_event_options = _visible_division_options(
-        selectable_event_options,
-        gender=_safe_text(step1.get("gender")),
-        player=player_profile,
-    )
-    visible_grouped_events = _group_events(days, visible_event_options)
-
     if current_step == 3:
         st.markdown("### 3. Select events")
         st.caption("Choose up to one division per Day + Event Family.")
+        singles_self_rating_valid = True
+        if (
+            using_existing_player
+            and selected_existing_player
+            and canonical_singles_rating is None
+        ):
+            singles_self_rating_text = st.text_input(
+                "Singles skill (optional)",
+                value=_safe_text(step2.get("singles_skill")),
+                key=f"wizard_existing_singles_skill_{tournament.get('id')}",
+            )
+            clean_singles_self_rating = _safe_text(singles_self_rating_text)
+            parsed_singles_self_rating = _coerce_float(clean_singles_self_rating)
+            singles_self_rating_valid = not clean_singles_self_rating or (
+                parsed_singles_self_rating is not None
+                and math.isfinite(parsed_singles_self_rating)
+                and 1.0 <= parsed_singles_self_rating <= 7.0
+            )
+            if not singles_self_rating_valid:
+                st.error("Singles skill must be between 1 and 7, or left blank.")
+            st.caption(
+                "No JUPR singles rating yet? Enter the level you play at for singles. "
+                "This is used for tournament placement only and does not create an official JUPR rating."
+            )
+            wizard["step2"] = {
+                **step2,
+                "singles_skill": clean_singles_self_rating,
+            }
+            step2 = wizard["step2"]
+            profile_singles = (
+                parsed_singles_self_rating if singles_self_rating_valid else None
+            )
+            player_profile["singles_skill"] = profile_singles
+
+        visible_event_options = _visible_division_options(
+            selectable_event_options,
+            gender=_safe_text(step1.get("gender")),
+            player=player_profile,
+        )
+        visible_grouped_events = _group_events(days, visible_event_options)
         selected_ids: list[str] = step3.get("selected_event_ids") or []
         family_selection_counts: dict[str, int] = {}
         for day in days:
@@ -1943,7 +2004,12 @@ def render(ctx):
                 wizard["current_step"] = 2
                 st.rerun()
         with c2:
-            if st.button("Next ➜", type="primary", key="step3_next"):
+            if st.button(
+                "Next ➜",
+                type="primary",
+                key="step3_next",
+                disabled=not singles_self_rating_valid,
+            ):
                 new_selected = [
                     str(event.get("id"))
                     for event in visible_event_options

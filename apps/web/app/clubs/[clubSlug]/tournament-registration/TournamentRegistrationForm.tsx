@@ -184,8 +184,13 @@ function scheduledDaysLabel(
 }
 
 function candidateLabel(candidate: PublicRegistrationPlayer): string {
-  const rating = candidate.doubles_skill ?? candidate.singles_skill;
-  return rating == null ? candidate.display_name : `${candidate.display_name} · Rating ${Number(rating).toFixed(2)}`;
+  const doubles = candidate.doubles_skill == null
+    ? "Doubles not set"
+    : `Doubles ${formatRegistrationRating(Number(candidate.doubles_skill))}`;
+  const singles = candidate.singles_skill == null
+    ? "Singles not set"
+    : `Singles ${formatRegistrationRating(Number(candidate.singles_skill))}`;
+  return `${candidate.display_name} · ${doubles} · ${singles}`;
 }
 
 export default function TournamentRegistrationForm({
@@ -807,7 +812,13 @@ export default function TournamentRegistrationForm({
             <label>Display name *<br /><input aria-label="Display name" value={profile.displayName} onChange={(event) => updateProfile("displayName", event.target.value)} style={inputStyle} /></label>
             <label>DUPR ID<br /><input aria-label="DUPR ID" value={profile.duprId} onChange={(event) => updateProfile("duprId", event.target.value)} style={inputStyle} /></label>
             <label>Doubles skill<br /><input aria-label="Doubles skill" type="number" min="1" max="7" step="0.01" value={profile.doublesSkill} onChange={(event) => updateProfile("doublesSkill", event.target.value)} style={inputStyle} /></label>
-            <label>Singles skill<br /><input aria-label="Singles skill" type="number" min="1" max="7" step="0.01" value={profile.singlesSkill} onChange={(event) => updateProfile("singlesSkill", event.target.value)} style={inputStyle} /></label>
+            <label>
+              Singles skill<br />
+              <input aria-label="Singles skill" type="number" min="1" max="7" step="0.01" aria-describedby="singles-skill-help" value={profile.singlesSkill} onChange={(event) => updateProfile("singlesSkill", event.target.value)} style={inputStyle} />
+              <span id="singles-skill-help" style={{ display: "block", color: "#64748b", fontSize: "0.9rem", marginTop: "0.35rem" }}>
+                No JUPR singles rating yet? Enter the level you play at for singles. This is used for tournament placement only and does not create an official JUPR rating.
+              </span>
+            </label>
           </div>
         </section>
       ) : null}

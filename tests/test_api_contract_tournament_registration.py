@@ -94,6 +94,8 @@ def test_public_tournament_registration_profile_resolution_contract(integrity_cl
     assert payload["status"] == "ready"
     assert payload["profile_match_kind"] == "email_exact"
     assert payload["profile_candidates"][0]["id"] == "10"
+    assert payload["profile_candidates"][0]["doubles_skill"] == 4.0
+    assert payload["profile_candidates"][0]["singles_skill"] is None
     assert payload["profile_policy"]["public_submission_links_player"] is False
     assert "email" not in payload["profile_candidates"][0]
 

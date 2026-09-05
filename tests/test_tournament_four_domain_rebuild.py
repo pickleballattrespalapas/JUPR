@@ -1426,6 +1426,19 @@ def test_review_resolves_linked_partner_profile_for_directional_eligibility() ->
             "event_option_id": "event1",
             "partner_mode": "HAS_PARTNER",
             "partner_email": "partner@example.com",
+            "partner_skill": 6.5,
+        }
+    ]
+    storage["tournament_registration_team_links"] = [
+        {
+            "id": "link-1",
+            "tournament_id": "t1",
+            "event_option_id": "event1",
+            "registration1_id": "r1",
+            "registration2_id": "r2",
+            "selection1_id": "s1",
+            "selection2_id": "s2",
+            "status": "ADMIN_CONFIRMED",
         }
     ]
     proposed = {
@@ -1455,6 +1468,88 @@ def test_review_resolves_linked_partner_profile_for_directional_eligibility() ->
     assert proposed_value["gender_eligibility"]["status"] == "ELIGIBLE"
     assert proposed_value["age_eligibility"]["status"] == "ELIGIBLE"
     assert proposed_value["partner_age"] == 67
+
+
+def test_review_doubles_partner_does_not_borrow_singles_rating() -> None:
+    storage = base_storage()
+    storage["tournament_event_options"][0].update(
+        {
+            "skill_label": "4.0",
+            "gender_restriction": "ANY",
+        }
+    )
+    storage["tournament_registrations"] = [
+        {
+            "id": "r1",
+            "tournament_id": "t1",
+            "display_name": "Primary",
+            "email": "primary@example.com",
+            "status": "confirmed",
+            "doubles_skill": 3.2,
+            "gender": "Women",
+            "age": 34,
+        },
+        {
+            "id": "r2",
+            "tournament_id": "t1",
+            "display_name": "Partner",
+            "email": "partner@example.com",
+            "status": "confirmed",
+            "doubles_skill": None,
+            "singles_skill": 4.5,
+            "gender": "Men",
+            "age": 35,
+        },
+    ]
+    storage["tournament_registration_selections"] = [
+        {
+            "id": "s1",
+            "tournament_id": "t1",
+            "registration_id": "r1",
+            "registration_day_id": "day1",
+            "event_option_id": "event1",
+            "partner_mode": "HAS_PARTNER",
+            "partner_email": "partner@example.com",
+            "partner_skill": 6.5,
+        }
+    ]
+    storage["tournament_registration_team_links"] = [
+        {
+            "id": "link-1",
+            "tournament_id": "t1",
+            "event_option_id": "event1",
+            "registration1_id": "r1",
+            "registration2_id": "r2",
+            "selection1_id": "s1",
+            "selection2_id": "s2",
+            "status": "ADMIN_CONFIRMED",
+        }
+    ]
+    proposed = {
+        **storage["tournament_event_options"][0],
+        "skill_label": "3.5",
+    }
+
+    impact = analyze_registration_publish_impact(
+        FakeSupabase(storage),
+        tournament_id="t1",
+        days=storage["tournament_registration_days"],
+        event_options=[proposed],
+    )
+
+    assert not [
+        row
+        for row in impact["blocked_details"]
+        if row["field"] == "skill_age_rules"
+    ]
+    detail = next(
+        row
+        for row in impact["communication_impact_details"]
+        if row["field"] == "skill_age_rules"
+    )
+    proposed_value = detail["affected_registrations"][0]["proposed_value"]
+    assert proposed_value["skill_eligibility"]["partner_rating"] is None
+    assert proposed_value["skill_eligibility"]["status"] == "MISSING_DATA"
 
 
 def test_missing_partner_age_does_not_hide_known_directional_age_ineligibility() -> None:

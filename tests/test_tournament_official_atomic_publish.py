@@ -16,6 +16,9 @@ from tests.test_api_contract_admin_tournament_match_publish import (
     install_official_publish_prerequisites,
     match_publish_tables,
 )
+from tests.test_api_contract_admin_tournament_singles_publish import (
+    singles_tournament_tables,
+)
 
 
 class _RpcCall:
@@ -28,6 +31,27 @@ class _RpcCall:
         self.owner.rpc_calls.append((self.name, dict(self.params)))
         if self.owner.rpc_error is not None:
             raise self.owner.rpc_error
+        if self.name == "admin_apply_tournament_official_rating_plan_cas":
+            for update in self.params.get("p_player_updates") or []:
+                player = next(
+                    (
+                        row
+                        for row in self.owner.tables.get("players", [])
+                        if str(row.get("club_id"))
+                        == str(self.params.get("p_club_id"))
+                        and int(row.get("id")) == int(update["player_id"])
+                    ),
+                    None,
+                )
+                if player is None:
+                    continue
+                for key, expected in update["expected"].items():
+                    actual = player.get(key)
+                    if actual != expected:
+                        raise RuntimeError(
+                            "JUPR_TOURNAMENT_OFFICIAL_PUBLISH_PLAYER_STALE: "
+                            f"{key} expected {expected!r}, found {actual!r}"
+                        )
         return SimpleNamespace(data=dict(self.owner.rpc_result))
 
 
@@ -200,6 +224,73 @@ def test_atomic_publish_receipt_binds_identity_and_failed_queue_blocks_receipt(m
     assert not any(
         row.get("action_type") == "publish_tournament_games_to_matches_admin"
         for row in failed_tables["admin_activity_log"]
+    )
+
+
+def test_atomic_singles_publish_compares_null_rating_while_using_preserved_seed(
+    monkeypatch,
+) -> None:
+    _enable_atomic_publish(monkeypatch)
+    tables = singles_tournament_tables()
+    for player, seed in zip(tables["players"], (1400, 1300), strict=True):
+        player.update(
+            {
+                "singles_rating": None,
+                "singles_wins": 0,
+                "singles_losses": 0,
+                "singles_matches_played": 0,
+                "singles_last_game_at": None,
+                "singles_replay_baseline": {
+                    "rating": seed,
+                    "wins": 0,
+                    "losses": 0,
+                    "matches_played": 0,
+                    "last_game_at": None,
+                },
+            }
+        )
+    install_official_publish_prerequisites(tables)
+    supabase = AtomicFakeSupabase(tables)
+    plan = build_admin_tournament_official_publish_plan(
+        supabase,
+        club_id="club",
+        tournament_id="tour_1",
+        draw_id="draw_1",
+    )
+    monkeypatch.setattr(
+        "jupr_app.services.admin_tournament_match_publish_service.run_badge_side_effects",
+        lambda **_kwargs: {"mode": "queue", "processed": 1, "errored": 0},
+    )
+    monkeypatch.setattr(
+        "jupr_app.services.admin_tournament_match_publish_service.queue_player_updates",
+        lambda **_kwargs: {"mode": "queued", "failed": 0},
+    )
+    monkeypatch.setattr(
+        "jupr_app.services.admin_tournament_match_publish_service.auto_send_player_updates_for_match_payloads",
+        lambda *_args, **_kwargs: {"mode": "disabled"},
+    )
+
+    result = publish_admin_tournament_draw_matches(
+        supabase,
+        club_id="club",
+        tournament_id="tour_1",
+        draw_id="draw_1",
+        actor_email="owner@example.com",
+        actor_role="club_owner",
+        confirmation_text="PUBLISH MATCHES",
+        expected_plan=plan,
+        guarded_operation_key="singles-operation-key",
+        guarded_request_fingerprint="singles-request-fingerprint",
+        client_idempotency_key="singles-client-uuid",
+    )
+
+    assert result["match_count"] == 1
+    rpc_payload = supabase.rpc_calls[0][1]
+    assert rpc_payload["p_match_rows"][0]["t1_p1_r"] == 1400
+    assert rpc_payload["p_match_rows"][0]["t2_p1_r"] == 1300
+    assert all(
+        update["expected"]["singles_rating"] is None
+        for update in rpc_payload["p_player_updates"]
     )
 
 

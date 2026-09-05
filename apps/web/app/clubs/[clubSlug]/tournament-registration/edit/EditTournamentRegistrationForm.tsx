@@ -429,10 +429,10 @@ export default function EditTournamentRegistrationForm({
         <p style={{ color: "#475569" }}>
           To change your email, contact the tournament organizer.
         </p>
-        {registration.player_id != null ? (
+        {linkedPlayer ? (
           <p style={{ color: "#475569" }}>
-            Your verified JUPR rating can’t be changed here. Contact the
-            organizer if it looks wrong.
+            Verified JUPR ratings can’t be changed here. If your singles rating
+            is blank, enter the level you play at for this tournament.
           </p>
         ) : null}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
@@ -442,8 +442,16 @@ export default function EditTournamentRegistrationForm({
           <label>Email<br /><input name="email" type="email" value={registration.email} disabled style={{ width: "100%" }} /></label>
           <label>Phone<br /><input name="phone" defaultValue={registration.phone || ""} style={{ width: "100%" }} /></label>
           <label>DUPR ID<br /><input name="dupr_id" defaultValue={registration.dupr_id || ""} style={{ width: "100%" }} /></label>
-          <label>Doubles skill<br /><input name="doubles_skill" value={linkedPlayer?.doubles_skill ?? doublesSkill} onChange={(event) => setDoublesSkill(event.target.value)} disabled={registration.player_id != null} type="number" min="1" max="7" step="0.01" style={{ width: "100%" }} /></label>
-          <label>Singles skill<br /><input name="singles_skill" value={linkedPlayer?.singles_skill ?? singlesSkill} onChange={(event) => setSinglesSkill(event.target.value)} disabled={registration.player_id != null} type="number" min="1" max="7" step="0.01" style={{ width: "100%" }} /></label>
+          <label>Doubles skill<br /><input name="doubles_skill" value={linkedPlayer?.doubles_skill ?? doublesSkill} onChange={(event) => setDoublesSkill(event.target.value)} disabled={linkedPlayer?.doubles_skill != null} type="number" min="1" max="7" step="0.01" style={{ width: "100%" }} /></label>
+          <label>
+            Singles skill<br />
+            <input name="singles_skill" aria-label="Singles skill" aria-describedby={linkedPlayer?.singles_skill == null ? "edit-singles-skill-help" : undefined} value={linkedPlayer?.singles_skill ?? singlesSkill} onChange={(event) => setSinglesSkill(event.target.value)} disabled={linkedPlayer?.singles_skill != null} type="number" min="1" max="7" step="0.01" style={{ width: "100%" }} />
+            {linkedPlayer?.singles_skill == null ? (
+              <span id="edit-singles-skill-help" style={{ display: "block", color: "#64748b", fontSize: "0.9rem", marginTop: "0.35rem" }}>
+                No JUPR singles rating yet? Enter the level you play at for singles. This is used for tournament placement only.
+              </span>
+            ) : null}
+          </label>
           <label>Age<br /><input name="age" value={ageDraft} onChange={(event) => setAgeDraft(event.target.value)} type="number" min="1" max="120" required style={{ width: "100%" }} /></label>
           <label>Gender<br /><select name="gender" value={gender} onChange={(event) => setGender(event.target.value)} style={{ width: "100%" }}><option value="">Select</option><option>Women</option><option>Men</option><option>Non-binary</option><option>Prefer not to say</option></select></label>
         </div>

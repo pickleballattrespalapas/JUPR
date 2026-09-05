@@ -532,7 +532,13 @@ def process_singles_matches(
             )
             activity_update = build_player_activity_update(current.get("last_game_at"), latest_match_at)
             expected = {
-                "singles_rating": _seed_singles_rating(current),
+                # The calculation may start from the immutable replay baseline
+                # when the player has no materialized singles rating yet.  CAS
+                # must still compare against the actual nullable database value,
+                # otherwise the first rated singles result is rejected as stale.
+                "singles_rating": _finite_float_or_none(
+                    current.get("singles_rating")
+                ),
                 "singles_wins": _seed_stat(current, "singles_wins"),
                 "singles_losses": _seed_stat(current, "singles_losses"),
                 "singles_matches_played": _seed_stat(current, "singles_matches_played"),

@@ -20,6 +20,11 @@ FINALIZED_PROJECTION_REPAIR_SQL = (
     / "supabase/migrations/"
     "20261108015000_tournament_player_projection_finalized_review_repair.sql"
 ).read_text(encoding="utf-8").lower()
+INDEPENDENT_SINGLES_SQL = (
+    ROOT
+    / "supabase/migrations/"
+    "20261108028000_independent_singles_registration_rating.sql"
+).read_text(encoding="utf-8").lower()
 
 
 def _split_top_level_sql_list(source: str) -> list[str]:
@@ -298,3 +303,60 @@ def test_admin_registration_has_a_separate_validated_player_link_path() -> None:
         "grant execute on function public.create_admin_tournament_registration_canonical_v1"
         in SQL
     )
+
+
+def test_public_player_rating_is_never_seeded_from_registration_singles_skill() -> None:
+    assert (
+        "create or replace function private."
+        "resolve_public_tournament_primary_player_v1"
+        in INDEPENDENT_SINGLES_SQL
+    )
+    assert "v_doubles_skill := nullif(p_registration ->> 'doubles_skill', '')::numeric" in INDEPENDENT_SINGLES_SQL
+    assert "p_registration ->> 'singles_skill'" not in INDEPENDENT_SINGLES_SQL
+    assert "v_doubles_skill := 3.0" in INDEPENDENT_SINGLES_SQL
+    assert "v_state := 'created_unrated'" in INDEPENDENT_SINGLES_SQL
+    player_insert = INDEPENDENT_SINGLES_SQL.split(
+        "insert into public.players (", 1
+    )[1].split("returning * into v_player", 1)[0]
+    assert "singles_rating" in player_insert
+    assert re.search(
+        r"v_doubles_skill \* 400\.0,\s*"
+        r"v_doubles_skill \* 400\.0,\s*null,",
+        player_insert,
+    )
+    assert "security definer" in INDEPENDENT_SINGLES_SQL
+    assert "set search_path = ''" in INDEPENDENT_SINGLES_SQL
+    assert (
+        "revoke all on function private."
+        "resolve_public_tournament_primary_player_v1"
+        in INDEPENDENT_SINGLES_SQL
+    )
+    assert "from public, anon, authenticated" in INDEPENDENT_SINGLES_SQL
+    assert "to service_role" in INDEPENDENT_SINGLES_SQL
+
+
+def test_new_player_singles_replay_baseline_is_independent_from_doubles() -> None:
+    function = INDEPENDENT_SINGLES_SQL.split(
+        "create or replace function public."
+        "initialize_player_singles_replay_baseline()",
+        1,
+    )[1].split(
+        "revoke all on function public."
+        "initialize_player_singles_replay_baseline()",
+        1,
+    )[0]
+
+    assert "if new.singles_replay_baseline is null then" in function
+    assert (
+        "'rating', coalesce(new.singles_rating, 1200.0)"
+        in function
+    )
+    assert "new.rating" not in function
+    assert "set search_path = ''" in function
+    assert (
+        "revoke all on function public."
+        "initialize_player_singles_replay_baseline()"
+        in INDEPENDENT_SINGLES_SQL
+    )
+    assert "from public, anon, authenticated" in INDEPENDENT_SINGLES_SQL
+    assert "to service_role" in INDEPENDENT_SINGLES_SQL

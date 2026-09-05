@@ -136,6 +136,74 @@ def test_registration_edit_submit_updates_existing_registration_and_locks_email(
     assert selections[0]["show_on_partner_board"] is True
 
 
+def test_linked_registration_edit_preserves_self_reported_singles_when_official_is_missing(monkeypatch) -> None:
+    supabase, storage, registration_id, token = _registered_supabase(monkeypatch)
+    player = storage["players"][0]
+    assert player.get("singles_rating") is None
+
+    result = submit_public_tournament_registration_edit(
+        supabase,
+        club_id="club-1",
+        edit_token=token,
+        payload={
+            **_edit_versions(storage),
+            "tournament_id": "t1",
+            "registration_slug": "tres-open",
+            "first_name": "Alex",
+            "last_name": "Rivera",
+            "email": "alex@example.com",
+            "doubles_skill": 4.0,
+            "singles_skill": 3.5,
+            "terms_accepted": True,
+            "selections": [
+                {"event_option_id": "event1", "partner_mode": "NONE"}
+            ],
+        },
+    )
+
+    assert result["registration_id"] == registration_id
+    assert storage["tournament_registrations"][0]["doubles_skill"] == 4.0
+    assert storage["tournament_registrations"][0]["singles_skill"] == 3.5
+    assert player.get("singles_rating") is None
+
+
+def test_linked_registration_edit_uses_official_singles_rating_added_before_save(monkeypatch) -> None:
+    supabase, storage, registration_id, token = _registered_supabase(monkeypatch)
+    edit_page = build_public_tournament_registration_edit_page(
+        supabase,
+        club_id="club-1",
+        edit_token=token,
+        registration_slug="tres-open",
+    )
+    assert edit_page["registration"]["singles_skill"] is None
+
+    storage["players"][0]["singles_rating"] = 1400
+    storage["players"][0]["singles_matches_played"] = 1
+    result = submit_public_tournament_registration_edit(
+        supabase,
+        club_id="club-1",
+        edit_token=token,
+        payload={
+            **_edit_versions(storage),
+            "tournament_id": "t1",
+            "registration_slug": "tres-open",
+            "first_name": "Alex",
+            "last_name": "Rivera",
+            "email": "alex@example.com",
+            "doubles_skill": 4.0,
+            "singles_skill": 3.0,
+            "terms_accepted": True,
+            "selections": [
+                {"event_option_id": "event1", "partner_mode": "NONE"}
+            ],
+        },
+    )
+
+    assert result["registration_id"] == registration_id
+    assert storage["tournament_registrations"][0]["singles_skill"] == 3.5
+    assert storage["players"][0]["singles_rating"] == 1400
+
+
 def test_registration_edit_rejects_stale_versions_without_mutation(monkeypatch) -> None:
     supabase, storage, _registration_id, token = _registered_supabase(monkeypatch)
     before = deepcopy(storage)

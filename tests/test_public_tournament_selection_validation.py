@@ -109,7 +109,7 @@ class _PlayerSupabase:
         return _PlayerQuery(self.players)
 
 
-def test_existing_registration_profile_prefers_canonical_linked_player_values() -> None:
+def test_existing_registration_profile_preserves_self_rating_when_official_singles_is_missing() -> None:
     profile = build_tournament_registration_player_profile(
         _PlayerSupabase(
             [
@@ -139,10 +139,42 @@ def test_existing_registration_profile_prefers_canonical_linked_player_values() 
         "email": "player@example.com",
         "player_id": "player-1",
         "doubles_skill": 4.0,
-        "singles_skill": 4.0,
+        "singles_skill": 2.5,
         "gender": "Women",
         "age": 42,
     }
+
+
+def test_existing_registration_profile_prefers_official_singles_rating() -> None:
+    profile = build_tournament_registration_player_profile(
+        _PlayerSupabase(
+            [
+                {
+                    "id": "player-1",
+                    "club_id": "club-1",
+                    "rating": 1600,
+                    "singles_rating": 1400,
+                    "singles_matches_played": 1,
+                    "gender": "Women",
+                    "age": 42,
+                    "active": True,
+                    "inactive_at": None,
+                }
+            ]
+        ),
+        club_id="club-1",
+        registration={
+            "player_id": "player-1",
+            "email": "PLAYER@EXAMPLE.COM",
+            "doubles_skill": 2.5,
+            "singles_skill": 2.5,
+            "gender": "Men",
+            "age": 30,
+        },
+    )
+
+    assert profile["doubles_skill"] == 4.0
+    assert profile["singles_skill"] == 3.5
 
 
 def _age_event(
