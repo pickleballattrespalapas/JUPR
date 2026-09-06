@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile": "next-fastapi-tournament-acceptance-2026-08-25",
-  "repository_migration_content_sha256": "b1b8ebe176fccccf7f509705235be3c830132b27535540fbeb8aaf3f4bd69082",
+  "repository_migration_content_sha256": "f48dafde70af10778f2392a8855579469b1920a3de790dd2b82ecf8cb1eae942",
   "allow_additional_ledger_names": false,
   "required_ledger_names": [
     "add_admin_activity_log",
@@ -17,6 +17,7 @@
     "atomic_direct_match_entry",
     "atomic_league_roster_batch",
     "badge_eval_queue_atomic_club_claim",
+    "badge_plain_requirements",
     "baseline_worker_run_log",
     "canonicalize_server_only_tables",
     "challenge_ladder_public_results",
