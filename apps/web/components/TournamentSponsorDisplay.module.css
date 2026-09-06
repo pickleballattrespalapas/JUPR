@@ -23,3 +23,15 @@ a.sponsor:focus-visible { outline:3px solid #2563eb; outline-offset:4px; border-
 .headerDescriptions .description { margin:0 0 10px; }
 .describedSponsor { width:280px; max-width:100%; min-width:0; }
 .grid .describedSponsor .sponsor { width:100%; }
+
+.titleLink { color:inherit; text-decoration:none; }
+.titleLink:hover { text-decoration:underline; }
+.titleLink:focus-visible { outline:3px solid #2563eb; outline-offset:4px; border-radius:4px; }
+.compact { min-width:0; }
+.compact .titleRow { gap:12px 20px; margin-bottom:8px; }
+.compact .title { font-size:1.25rem; }
+.compact .presenting { font-size:.9rem; }
+.compact .presenting .sponsor { font-size:1.1rem; gap:8px 12px; }
+.compact .presenting .logo { width:180px; height:72px; }
+.compact .headerDescriptions { margin-bottom:12px; }
+.compact .description { font-size:.9rem; }
