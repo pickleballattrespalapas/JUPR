@@ -1,3 +1,4 @@
+import PublicTournamentSponsors from "@/components/PublicTournamentSponsors";
 import Link from "next/link";
 import { getPublicTeamTournamentResults } from "@/lib/tournamentTeamCompetitionApi";
 import styles from "@/components/tournaments/TournamentTeamCompetition.module.css";
@@ -71,11 +72,13 @@ export default async function TournamentTeamResultsDetail({ params }: Props) {
   return (
     <section>
       <p style={{ color: "#2563eb", fontWeight: 800, marginBottom: "0.4rem" }}>
-        {data?.tournament.name || "Team tournament"}
+        Four-player team results
       </p>
-      <h1 style={{ marginTop: 0 }}>
-        {data?.draw.name || (missing ? "Team results not found" : "Team tournament results")}
+      <h1 style={{ marginTop: 0, marginBottom: 0 }}>
+        {data?.tournament.name || (missing ? "Team results not found" : "Team tournament results")}
       </h1>
+      <PublicTournamentSponsors clubSlug={params.clubSlug} tournamentId={data?.tournament.id} placement="header" />
+      {data?.draw.name ? <h2>{data.draw.name}</h2> : null}
       {error ? (
         <p role="alert" style={{ color: "#b91c1c" }}>
           {missing
@@ -184,6 +187,7 @@ export default async function TournamentTeamResultsDetail({ params }: Props) {
           All team tournaments
         </Link>
       </p>
+      <PublicTournamentSponsors clubSlug={params.clubSlug} tournamentId={data?.tournament.id} placement="footer" />
     </section>
   );
 }

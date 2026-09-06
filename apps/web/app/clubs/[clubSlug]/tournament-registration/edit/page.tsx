@@ -1,3 +1,4 @@
+import PublicTournamentSponsors from "@/components/PublicTournamentSponsors";
 import Link from "next/link";
 import { getClubTournamentRegistrationEdit } from "@/lib/tournamentRegistrationApi";
 import EditTournamentRegistrationForm from "./EditTournamentRegistrationForm";
@@ -33,7 +34,8 @@ export default async function EditTournamentRegistrationPage({ params, searchPar
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
         Edit Tournament Registration
       </p>
-      <h1 style={{ marginTop: 0 }}>{tournament?.name ?? "Edit registration"}</h1>
+      <h1 style={{ marginTop: 0, marginBottom: 0 }}>{tournament?.name ?? "Edit registration"}</h1>
+      <PublicTournamentSponsors clubSlug={clubSlug} tournamentId={tournament?.id} placement="header" />
       <p style={{ color: "#334155", maxWidth: "820px" }}>
         Use the link we emailed you to update your registration.
       </p>
@@ -82,6 +84,7 @@ export default async function EditTournamentRegistrationPage({ params, searchPar
           commerceOrder={data.commerce_order ?? null}
         />
       ) : null}
+      <PublicTournamentSponsors clubSlug={clubSlug} tournamentId={tournament?.id} placement="footer" />
     </section>
   );
 }

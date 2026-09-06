@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import PublicTournamentSponsorsClient from "@/components/PublicTournamentSponsorsClient";
 import {
   resolvePublicTeamInvitation,
   respondPublicTeamInvitation
@@ -11,7 +12,7 @@ type Props = {
 };
 
 type Invitation = {
-  tournament?: { name?: string };
+  tournament?: { id?: string; name?: string };
   team?: { name?: string };
   invitation?: {
     invited_name?: string;
@@ -125,7 +126,9 @@ export default function TeamInvitationReview({ clubSlug }: Props) {
     >
       {invitation ? (
         <>
-          <h2>{invitation.team?.name || "Team invitation"}</h2>
+          <h2 style={{ marginBottom: 0 }}>{invitation.tournament?.name || "Team invitation"}</h2>
+          <PublicTournamentSponsorsClient clubSlug={clubSlug} tournamentId={invitation.tournament?.id} placement="header" />
+          <h3>{invitation.team?.name || "Your team"}</h3>
           <p>
             {invitation.registration?.display_name ||
               invitation.invitation?.invited_name ||
@@ -158,6 +161,7 @@ export default function TeamInvitationReview({ clubSlug }: Props) {
         </>
       ) : null}
       {message ? <p role="status">{message}</p> : null}
+      {invitation ? <PublicTournamentSponsorsClient clubSlug={clubSlug} tournamentId={invitation.tournament?.id} placement="footer" /> : null}
     </section>
   );
 }

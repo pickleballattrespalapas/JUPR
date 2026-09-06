@@ -33,6 +33,8 @@ from jupr_app.services.public_tournament_commerce_service import (
 from jupr_app.services.public_tournament_roster_service import build_public_tournament_roster_page
 from jupr_app.services.production_tournament_guard import require_production_tournament_writes
 from services.api.staging_write_guard import require_public_intake_or_403
+from jupr_app.domain.tournament_registration_repo import get_public_tournament_bundle
+from jupr_app.services.tournament_sponsor_service import public_sponsors
 
 
 class PublicTournamentCommerceSelectionRequest(BaseModel):
@@ -136,6 +138,17 @@ def install_public_tournament_registration_routes(
     public_club_payload,
 ) -> None:
     """Register public tournament registration routes on the main FastAPI app."""
+
+    @app.get("/clubs/{club_slug}/tournaments/{tournament_id}/sponsors")
+    def get_tournament_sponsors(club_slug: str, tournament_id: str, response: Response) -> dict[str, Any]:
+        response.headers["Cache-Control"] = "no-store"
+        club = get_club(club_slug)
+        club_id = str(club.get("id") or club.get("club_id") or club_slug)
+        supabase = get_supabase_client()
+        tournament, settings, _, _ = get_public_tournament_bundle(supabase, club_id=club_id, tournament_id=tournament_id)
+        if not tournament or not settings:
+            raise HTTPException(status_code=404, detail="Tournament not found.")
+        return {"tournament_id": str(tournament["id"]), "sponsors": public_sponsors(supabase, settings.get("sponsors_json"), club_id=club_id, tournament_id=tournament_id)}
 
     @app.get("/clubs/{club_slug}/tournament-registration")
     def get_club_tournament_registration(
