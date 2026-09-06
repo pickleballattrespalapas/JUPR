@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from jupr_app.data.paged_reads import read_all_rows
+from jupr_app.domain.gamification.award_identity import award_key
+from jupr_app.domain.gamification.presentation import badge_requirement
+
 from datetime import datetime, timezone
 import logging
 import os
@@ -8,7 +12,7 @@ from typing import Any, Iterable
 from uuid import uuid4
 
 from jupr_app.domain.gamification.badge_types import BadgeCandidate
-from jupr_app.domain.gamification.copy_pack import get_badge_copy, pick_variant, render_template
+from jupr_app.domain.gamification.copy_pack import get_badge_copy
 from postgrest.exceptions import APIError
 
 
@@ -82,7 +86,7 @@ def upsert_player_badges(
     candidates: Iterable[BadgeCandidate],
     *,
     awarded_by: str = "engine",
-    rule_version: str | None = None,
+    rule_version: str | None = "badge-repair-2026-09-v1",
     eval_run_id: str | None = None,
 ) -> list[BadgeCandidate]:
     global _PLAYER_BADGES_CONTRACT_CHECKED
@@ -101,12 +105,9 @@ def upsert_player_badges(
         if candidate.context_id is None or str(candidate.context_id).strip() == "":
             raise ValueError(f"Missing context_id for badge {candidate.badge_id} (player {candidate.player_id})")
         context_id = str(candidate.context_id)
-        key = (
-            int(candidate.player_id),
-            str(candidate.badge_id),
-            str(candidate.context_type),
-            str(context_id),
-        )
+        key = award_key({"player_id": candidate.player_id, "badge_id": candidate.badge_id,
+                         "context_type": candidate.context_type, "context_id": context_id,
+                         "value_json": candidate.value_json})
         if key in existing:
             continue
         existing.add(key)
@@ -136,7 +137,7 @@ def build_player_badge_rows(
     candidates: Iterable[BadgeCandidate],
     *,
     awarded_by: str = "engine",
-    rule_version: str | None = None,
+    rule_version: str | None = "badge-repair-2026-09-v1",
     eval_run_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Build canonical insert rows without reading or mutating badge storage.
@@ -181,6 +182,7 @@ def _upsert_player_badges_chunk(supabase: Any, rows: list[dict[str, Any]]) -> No
         supabase.table("player_badges").upsert(
             rows,
             on_conflict=PLAYER_BADGES_CONFLICT_KEY,
+            ignore_duplicates=True,
         ).execute()
     except APIError as exc:
         if _is_missing_column_error(exc, _PLAYER_BADGES_OPTIONAL_COLUMNS):
@@ -191,6 +193,7 @@ def _upsert_player_badges_chunk(supabase: Any, rows: list[dict[str, Any]]) -> No
             supabase.table("player_badges").upsert(
                 stripped,
                 on_conflict=PLAYER_BADGES_CONFLICT_KEY,
+                ignore_duplicates=True,
             ).execute()
         elif _is_awarded_by_uuid_error(exc):
             logger.warning(
@@ -200,6 +203,7 @@ def _upsert_player_badges_chunk(supabase: Any, rows: list[dict[str, Any]]) -> No
             supabase.table("player_badges").upsert(
                 stripped,
                 on_conflict=PLAYER_BADGES_CONFLICT_KEY,
+                ignore_duplicates=True,
             ).execute()
         else:
             raise
@@ -227,54 +231,17 @@ def _is_awarded_by_uuid_error(exc: APIError) -> bool:
 
 
 def _fetch_existing_keys(
-    supabase: Any,
-    club_id: str,
-    candidates: list[BadgeCandidate],
-) -> set[tuple[int, str, str, str]]:
+    supabase: Any, club_id: str, candidates: list[BadgeCandidate],
+) -> set[tuple]:
     badge_ids = sorted({str(c.badge_id) for c in candidates})
-    try:
-        resp = (
-            supabase.table("player_badges")
-            .select("player_id,badge_id,context_type,context_id")
-            .eq("club_id", club_id)
-            .in_("badge_id", badge_ids)
-            .execute()
-        )
-    except Exception:
-        logger.exception("Failed to fetch existing badge keys")
-        return set()
-
-    existing = set()
-    for row in resp.data or []:
-        try:
-            player_id = int(row.get("player_id"))
-        except Exception:
-            continue
-        badge_id = str(row.get("badge_id"))
-        context_type = str(row.get("context_type"))
-        context_id = row.get("context_id")
-        if context_id is None:
-            continue
-        existing.add((player_id, badge_id, context_type, str(context_id)))
-    return existing
+    rows = read_all_rows(lambda: supabase.table("player_badges")
+        .select("player_id,badge_id,context_type,context_id,value_json")
+        .eq("club_id", club_id).in_("badge_id", badge_ids))
+    return {award_key(row) for row in rows}
 
 
 def _build_tape_excerpt(candidate: BadgeCandidate, data: dict[str, Any]) -> str:
-    copy = get_badge_copy(candidate.badge_id)
-    seed = f"{candidate.player_id}:{candidate.badge_id}:{candidate.context_id}"
-    template = pick_variant(copy.get("tape_excerpts", []), seed)
-    rendered = render_template(template, data | {"badge_name": copy.get("name", candidate.badge_id)})
-    lines = [line.strip() for line in rendered.splitlines() if line.strip()]
-    if lines:
-        return "\n".join(lines[:4])
-    return ""
-
+    return badge_requirement(candidate.badge_id)
 
 def _build_tape_title(candidate: BadgeCandidate, data: dict[str, Any]) -> str:
-    copy = get_badge_copy(candidate.badge_id)
-    highlight = copy.get("highlight", {}) if isinstance(copy, dict) else {}
-    titles = highlight.get("titles", []) if isinstance(highlight, dict) else []
-    seed = f"{candidate.player_id}:{candidate.badge_id}:{candidate.context_id}:title"
-    template = pick_variant(titles, seed)
-    rendered = render_template(template, data | {"badge_name": copy.get("name", candidate.badge_id)})
-    return rendered or str(data.get("badge_name") or candidate.badge_id)
+    return str(get_badge_copy(candidate.badge_id).get("name") or candidate.badge_id)

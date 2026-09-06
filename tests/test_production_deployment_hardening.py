@@ -366,8 +366,8 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         ROOT / "supabase/migrations",
     )
 
-    assert len(versions) == 113
-    assert versions[-31:] == (
+    assert len(versions) == 114
+    assert versions[-32:] == (
         "20261030010000",
         "20261101000000",
         "20261102000000",
@@ -399,11 +399,12 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         "20261109000000",
         "20261109001000",
         "20261109002000",
+        "20261109003000",
     )
-    assert len(names) == 113
+    assert len(names) == 114
     assert all("XX" not in version for version in versions)
-    assert len(contract["required_ledger_names"]) == 100
-    assert len(contract["deployment_order"]) == 100
+    assert len(contract["required_ledger_names"]) == 101
+    assert len(contract["deployment_order"]) == 101
     assert set(contract["deployment_order"]) == set(
         contract["required_ledger_names"]
     )
@@ -836,7 +837,7 @@ def test_preflight_accepts_only_matching_protected_project_and_config() -> None:
     )
 
     assert errors == []
-    assert migrations[-1] == "20261109002000"
+    assert migrations[-1] == "20261109003000"
 
     wrong_project_errors, _ = verifier.preflight_errors(
         _production_env(

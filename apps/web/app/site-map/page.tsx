@@ -20,7 +20,7 @@ const routeGroups = [
       ["Match history", "/clubs/tres-palapas/matches"],
       ["Match Explorer", "/clubs/tres-palapas/match-explorer"],
       ["Weekly Recap", "/clubs/tres-palapas/weekly-recap"],
-      ["Badge Codex", "/clubs/tres-palapas/badge-codex"]
+      ["Badges & Trophies", "/clubs/tres-palapas/badge-codex"]
     ]
   },
   {

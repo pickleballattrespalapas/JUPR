@@ -38,6 +38,7 @@ from jupr_app.services.public_live_write_service import (
     update_public_live_scores,
 )
 from jupr_app.services.public_play_generator_service import PublicPlayGeneratorError
+from jupr_app.data.paged_reads import DataReadUnavailable
 from jupr_app.services.public_player_service import build_public_player_directory, get_public_match_detail, get_public_matches, get_public_player_profile
 from scripts.deployment_verifier import (
     PRODUCTION_FEATURE_FLAGS,
@@ -1141,13 +1142,16 @@ def get_club_player_profile(
     club = get_club(club_slug)
     club_id = str(club.get("id") or club.get("club_id") or club_slug)
     supabase = get_supabase_client()
-    profile = get_public_player_profile(
-        supabase,
-        club_id=club_id,
-        player_id=player_id,
-        recent_match_limit=recent_limit,
-        history_limit=history_limit,
-    )
+    try:
+        profile = get_public_player_profile(
+            supabase,
+            club_id=club_id,
+            player_id=player_id,
+            recent_match_limit=recent_limit,
+            history_limit=history_limit,
+        )
+    except DataReadUnavailable as exc:
+        raise HTTPException(status_code=503, detail="Player achievements are temporarily unavailable.") from exc
     if profile is None:
         raise HTTPException(status_code=404, detail="player not found")
     return {"club": _public_club_payload(club, club_slug), **profile}

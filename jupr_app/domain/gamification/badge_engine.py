@@ -25,6 +25,7 @@ def compute_candidates_for_player(
     status: str = "live",
     award_timing: str = "live",
     allow_non_live: bool = False,
+    strict: bool = False,
 ) -> list[BadgeCandidate]:
     if ctx is None:
         raise ValueError("compute_candidates_for_player requires a context with match data")
@@ -43,6 +44,8 @@ def compute_candidates_for_player(
                     continue
                 candidates.append(candidate)
         except Exception:
+            if strict:
+                raise
             logger.exception(
                 "Badge evaluator failed for %s (club_id=%s league_id=%s)",
                 spec.badge_id,
@@ -62,6 +65,7 @@ def compute_candidates_for_club(
     status: str = "live",
     award_timing: str = "live",
     allow_non_live: bool = False,
+    strict: bool = False,
 ) -> Iterator[BadgeCandidate]:
     if ctx is None:
         raise ValueError("compute_candidates_for_club requires a context with match data")
@@ -76,6 +80,8 @@ def compute_candidates_for_club(
         try:
             yield from spec.evaluator(eval_for_badge)
         except Exception:
+            if strict:
+                raise
             logger.exception(
                 "Badge evaluator failed for %s (club_id=%s league_id=%s)",
                 spec.badge_id,
@@ -87,16 +93,14 @@ def compute_candidates_for_club(
 
 def _badge_state_map(ctx: Any | None) -> dict[str, str]:
     if ctx is None:
-        return {badge.badge_id: badge.state for badge in BADGE_DEFINITIONS}
+        return {badge.badge_id: badge.state if badge.is_active else "deprecated" for badge in BADGE_DEFINITIONS}
     df_badges = getattr(ctx, "df_badges", None)
     if df_badges is None or getattr(df_badges, "empty", True):
-        return {badge.badge_id: badge.state for badge in BADGE_DEFINITIONS}
+        return {badge.badge_id: badge.state if badge.is_active else "deprecated" for badge in BADGE_DEFINITIONS}
     if "badge_id" not in df_badges.columns:
-        return {badge.badge_id: badge.state for badge in BADGE_DEFINITIONS}
-    if "state" not in df_badges.columns:
-        return {str(badge_id): "live" for badge_id in df_badges["badge_id"].dropna().astype(str).unique()}
+        return {badge.badge_id: badge.state if badge.is_active else "deprecated" for badge in BADGE_DEFINITIONS}
     return {
-        str(row.badge_id): str(getattr(row, "state", "") or "live")
+        str(row.badge_id): "deprecated" if getattr(row, "is_active", True) == False else str(getattr(row, "state", "") or "live")
         for row in df_badges.itertuples(index=False)
     }
 

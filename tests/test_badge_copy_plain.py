@@ -11,7 +11,7 @@ def test_build_badge_copy_plain_keeps_text_plain():
     copy = build_badge_copy_plain(badge, earners_count=7)
 
     assert copy.req_text == "Win 10 games"
-    assert copy.desc_text == "Earn *10* wins."
+    assert copy.desc_text == "Win 10 games"
     assert copy.meta_text == "7 earners"
 
 

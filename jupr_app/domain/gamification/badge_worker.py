@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.data.paged_reads import DataReadUnavailable, read_all_rows
+
 from copy import copy
 from datetime import datetime, timezone
 import time
@@ -12,7 +14,7 @@ import pandas as pd
 from postgrest.exceptions import APIError
 
 from jupr_app.domain.gamification.badge_catalog import BADGE_DEFINITIONS
-from jupr_app.domain.gamification.badge_engine import compute_candidates_for_player
+from jupr_app.domain.gamification.badge_engine import compute_candidates_for_club
 from jupr_app.domain.gamification.badges_repo import upsert_player_badges
 from jupr_app.domain.gamification.badge_queue import ack_badge_eval, dequeue_badge_eval
 from jupr_app.domain.player_activity import add_activity_columns
@@ -178,15 +180,12 @@ def _process_job(
     badge_ids = _badge_ids_for_trigger(context, event_type)
     if badge_ids and player_ids:
         _update_incremental_facts(supabase, job, player_ids, context_id)
-        candidates = []
-        for pid in player_ids:
-            candidates.extend(
-                [
-                    c
-                    for c in compute_candidates_for_player(job_club_id, pid, ctx=context)
-                    if str(c.badge_id) in badge_ids
-                ]
-            )
+        # Evaluate once per club. Completed week/month winners can be players
+        # outside the triggering match, and must not wait for their next game.
+        period_badges = {"most_improved_monthly", "upset_champion", "clean_sweep_week"}
+        candidates = [c for c in compute_candidates_for_club(job_club_id, ctx=context, strict=True)
+                      if str(c.badge_id) in badge_ids
+                      and (int(c.player_id) in player_ids or c.badge_id in period_badges)]
         if candidates:
             upsert_player_badges(
                 supabase,
@@ -257,8 +256,8 @@ def load_live_badge_data(supabase: Any, club_id: str, *, match_limit: int = 5000
     schema_degraded = False
     schema_degraded_reason = None
 
-    p_resp = supabase.table("players").select("*").eq("club_id", club_id).execute()
-    df_players_all = add_activity_columns(pd.DataFrame(p_resp.data or []))
+    p_rows = read_all_rows(lambda: supabase.table("players").select("*").eq("club_id", club_id))
+    df_players_all = add_activity_columns(pd.DataFrame(p_rows))
     if not df_players_all.empty and "inactive_at" in df_players_all.columns:
         df_players_active = df_players_all[df_players_all["inactive_at"].isna()].copy()
     elif not df_players_all.empty and "active" in df_players_all.columns:
@@ -266,27 +265,15 @@ def load_live_badge_data(supabase: Any, club_id: str, *, match_limit: int = 5000
     else:
         df_players_active = df_players_all.copy()
 
-    l_resp = (
-        supabase.table("league_ratings")
+    df_leagues = pd.DataFrame(read_all_rows(lambda: supabase.table("league_ratings")
         .select("id,player_id,league_name,rating,starting_rating,wins,losses,matches_played,is_active")
-        .eq("club_id", club_id)
-        .execute()
-    )
-    df_leagues = pd.DataFrame(l_resp.data or [])
-
-    m_resp = (
-        supabase.table("matches")
-        .select("*")
-        .eq("club_id", club_id)
-        .is_("deleted_at", None)
-        .order("id", desc=True)
-        .limit(int(match_limit))
-        .execute()
-    )
-    df_matches = pd.DataFrame(m_resp.data or [])
-
-    meta_resp = supabase.table("leagues_metadata").select("*").eq("club_id", club_id).execute()
-    df_meta = pd.DataFrame(meta_resp.data or [])
+        .eq("club_id", club_id)))
+    # Lifetime badges require complete history. match_limit remains a compatible
+    # call argument but must never truncate earning calculations.
+    df_matches = pd.DataFrame(read_all_rows(lambda: supabase.table("matches")
+        .select("*").eq("club_id", club_id).is_("deleted_at", None)))
+    df_meta = pd.DataFrame(read_all_rows(lambda: supabase.table("leagues_metadata")
+        .select("*").eq("club_id", club_id)))
 
     df_badges = _fetch_badges(supabase)
     df_player_badges, schema_degraded, schema_degraded_reason = _fetch_player_badges_live(supabase, club_id)
@@ -348,29 +335,21 @@ def _fetch_player_badges_live(supabase: Any, club_id: str) -> tuple[pd.DataFrame
         "value_json",
     ]
     optional_cols = ["awarded_by", "rule_version", "eval_run_id", "revoked_at", "revoked_by", "revoke_reason"]
-    schema_degraded = False
-    schema_degraded_reason = None
+    degraded = False
     try:
-        resp = (
-            supabase.table("player_badges")
-            .select(",".join(base_cols + optional_cols))
-            .eq("club_id", club_id)
-            .execute()
-        )
-    except APIError:
-        schema_degraded = True
-        schema_degraded_reason = "player_badges optional provenance/revocation columns missing"
-        resp = (
-            supabase.table("player_badges")
-            .select(",".join(base_cols))
-            .eq("club_id", club_id)
-            .execute()
-        )
-    df = pd.DataFrame(resp.data or [])
-    for col in optional_cols:
-        if col not in df.columns:
-            df[col] = None
-    return df, schema_degraded, schema_degraded_reason
+        rows = read_all_rows(lambda: supabase.table("player_badges")
+            .select(",".join(base_cols + optional_cols)).eq("club_id", club_id))
+    except DataReadUnavailable as exc:
+        cause = exc.__cause__
+        provenance = set(optional_cols) - {"revoked_at"}
+        if not isinstance(cause, APIError) or getattr(cause, "code", None) != "42703" or not any(col in str(cause) for col in provenance):
+            raise
+        # Revocation visibility is mandatory; optional attribution can degrade.
+        rows = read_all_rows(lambda: supabase.table("player_badges")
+            .select(",".join(base_cols + ["revoked_at"])).eq("club_id", club_id))
+        degraded = True
+    df = pd.DataFrame(rows, columns=base_cols + optional_cols).where(pd.notna, None)
+    return df, degraded, "player_badges attribution columns missing" if degraded else None
 
 
 def _badge_ids_for_trigger(ctx: Any, event_type: str) -> set[str]:

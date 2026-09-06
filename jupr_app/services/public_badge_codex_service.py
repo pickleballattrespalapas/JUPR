@@ -9,9 +9,11 @@ from typing import Any
 from jupr_app.domain.gamification.badge_catalog import BADGE_DEFINITIONS
 from jupr_app.domain.gamification.badge_schema import load_badge_definitions
 from jupr_app.domain.gamification.requirements import load_requirements_map
+from jupr_app.domain.gamification.presentation import badge_category, badge_requirement, category_sort_key
+from jupr_app.data.paged_reads import read_all_rows
 
 BADGE_SELECT = "badge_id,name,category,prestige,state,is_active,rarity,tier,icon_key,scope,lore,hint,created_at"
-PLAYER_BADGE_SELECT = "club_id,player_id,badge_id,earned_at,created_at,context_type,context_id"
+PLAYER_BADGE_SELECT = "club_id,player_id,badge_id,earned_at,revoked_at,context_type,context_id"
 PLAYER_SELECT = "id,club_id,name,active,inactive_at"
 SECTION_ORDER = ["Common", "Uncommon", "Rare", "Legendary", "Unclaimed", "Unranked", "Other"]
 CATALOG_BUCKET_ORDER = ["Live Now", "Seasonal / League Close", "Manual / Curated", "Tracked / Disabled"]
@@ -85,6 +87,8 @@ def _requirements_text(row: dict[str, Any]) -> str:
 
 
 def _badge_state(row: dict[str, Any]) -> str:
+    if row.get("is_active") is False:
+        return "deprecated"
     state = str(row.get("state") or "").strip().lower()
     if state:
         return state
@@ -114,13 +118,7 @@ def _badge_authority(row: dict[str, Any]) -> dict[str, Any]:
     if not requirements_text:
         requirements_text = _plain_text(requirements.get(badge_id)) or _requirements_text(row)
 
-    description = _plain_text(row.get("lore")) or _plain_text(row.get("description_md"))
-    if not description:
-        description = _plain_text(getattr(getattr(schema, "display", None), "flavor", None))
-    if not description:
-        description = _plain_text(getattr(definition, "lore", None))
-    if not description:
-        description = "Badge definition available in the public unlock rules."
+    description = requirements_text
 
     if lifecycle_state == "deprecated":
         catalog_bucket = "Tracked / Disabled"
@@ -189,7 +187,7 @@ def _section_for_badge(badge: dict[str, Any], *, has_category: bool) -> str:
 
 def _sort_sections(sections: dict[str, list[dict[str, Any]]], *, has_category: bool) -> list[dict[str, Any]]:
     if has_category:
-        keys = sorted(sections.keys(), key=lambda item: str(item).lower())
+        keys = sorted(sections.keys(), key=category_sort_key)
     else:
         order = {name: idx for idx, name in enumerate(SECTION_ORDER)}
         keys = sorted(sections.keys(), key=lambda item: (order.get(item, len(order)), str(item).lower()))
@@ -203,31 +201,14 @@ def _sort_sections(sections: dict[str, list[dict[str, Any]]], *, has_category: b
 
 
 def _fetch_badge_rows(supabase: Any) -> list[dict[str, Any]]:
-    try:
-        return _safe_rows(supabase.table("badges").select(BADGE_SELECT).execute())
-    except Exception:
-        try:
-            return _safe_rows(
-                supabase.table("badges")
-                .select("badge_id,name,category,prestige,state,is_active,created_at")
-                .execute()
-            )
-        except Exception:
-            return []
-
+    return read_all_rows(lambda: supabase.table("badges").select(BADGE_SELECT), order="badge_id")
 
 def _fetch_player_badge_rows(supabase: Any, *, club_id: str) -> list[dict[str, Any]]:
-    try:
-        return _safe_rows(supabase.table("player_badges").select(PLAYER_BADGE_SELECT).eq("club_id", str(club_id)).execute())
-    except Exception:
-        return []
-
+    rows = read_all_rows(lambda: supabase.table("player_badges").select(PLAYER_BADGE_SELECT).eq("club_id", str(club_id)))
+    return [row for row in rows if not row.get("revoked_at")]
 
 def _fetch_player_names(supabase: Any, *, club_id: str) -> dict[int, str]:
-    try:
-        rows = _safe_rows(supabase.table("players").select(PLAYER_SELECT).eq("club_id", str(club_id)).execute())
-    except Exception:
-        rows = []
+    rows = read_all_rows(lambda: supabase.table("players").select(PLAYER_SELECT).eq("club_id", str(club_id)))
     names: dict[int, str] = {}
     for row in rows:
         if row.get("active") is False or row.get("inactive_at"):
@@ -300,7 +281,7 @@ def _public_badge_payload(
     return {
         "badge_id": badge_id,
         "name": str(row.get("name") or "Badge"),
-        "category": _category_label(row.get("category")),
+        "category": badge_category(badge_id),
         "prestige": int(prestige),
         "rarity": _plain_text(row.get("rarity")) or _plain_text(row.get("tier")),
         "icon_key": _plain_text(row.get("icon_key")),
@@ -425,7 +406,7 @@ def build_public_badge_codex(supabase: Any, *, club_id: str, recent_earners_limi
     earned_badges = sum(1 for badge in badges if int(badge.get("earners_count") or 0) > 0)
     total_earners = sum(int(badge.get("earners_count") or 0) for badge in badges)
     badges_by_id = {str(badge.get("badge_id") or ""): badge for badge in badges}
-    categories = sorted({str(badge.get("category") or "Other") for badge in badges}, key=str.casefold)
+    categories = sorted({str(badge.get("category") or "Other") for badge in badges}, key=category_sort_key)
     scopes = sorted({str(badge.get("badge_scope") or "") for badge in badges if badge.get("badge_scope")}, key=str.casefold)
     return {
         "summary": {
@@ -433,6 +414,9 @@ def build_public_badge_codex(supabase: Any, *, club_id: str, recent_earners_limi
             "earned_badge_count": earned_badges,
             "unclaimed_badge_count": max(0, len(badges) - earned_badges),
             "total_unique_earners_by_badge": total_earners,
+            "unique_earner_count": len({int(row["player_id"]) for row in player_badges
+                                       if _safe_int(row.get("player_id")) in player_names
+                                       and str(row.get("badge_id")) in badges_by_id}),
             "complete_definition_count": sum(
                 1
                 for badge in badges

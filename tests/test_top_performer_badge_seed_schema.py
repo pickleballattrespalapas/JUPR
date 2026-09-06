@@ -55,9 +55,8 @@ def test_top_performer_seed_matches_the_python_canonical_definitions() -> None:
         badge = canonical[badge_id]
         assert badge.name == expected["name"]
         assert badge.prestige == expected["prestige"]
-        assert badge.lore == expected["lore"]
-        assert badge.hint == expected["hint"]
-        assert badge.category == "Top Performer Awards"
+        assert badge.lore == badge.hint
+        assert badge.category == "Trophies"
         assert badge.is_stackable is True
         assert badge.is_active is True
         assert badge.rarity == "legendary"

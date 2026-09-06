@@ -32,7 +32,7 @@ export default async function AdminBadgeDiagnosticsPage() {
       {status ? <BadgeDiagnosticsPanel apiBase={getAdminBadgeDiagnosticsApiBaseUrl()} clubId={clubId} status={status} /> : null}
 
       <p style={{ marginTop: "1rem" }}>
-        <Link href="/clubs/tres-palapas/badge-codex">Public Badge Codex</Link> · <Link href="/admin/replay-history">Replay History</Link> · <Link href="/admin">Operations cockpit</Link>
+        <Link href="/clubs/tres-palapas/badge-codex">Public Badges & Trophies</Link> · <Link href="/admin/replay-history">Replay History</Link> · <Link href="/admin">Operations cockpit</Link>
       </p>
     </section>
   );
