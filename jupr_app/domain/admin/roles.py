@@ -5,6 +5,8 @@ from typing import Any
 
 from postgrest.exceptions import APIError
 
+ROLE_ADMINISTRATOR = "administrator"
+ROLE_OPERATOR = "operator"
 ROLE_SUPER_ADMIN = "super_admin"
 ROLE_CLUB_OWNER = "club_owner"
 ROLE_ORGANIZER = "organizer"
@@ -15,6 +17,8 @@ ROLE_READ_ONLY = "read_only"
 ROLE_UNASSIGNED = "__unassigned__"
 
 ALL_ROLES: tuple[str, ...] = (
+    ROLE_ADMINISTRATOR,
+    ROLE_OPERATOR,
     ROLE_SUPER_ADMIN,
     ROLE_CLUB_OWNER,
     ROLE_ORGANIZER,
@@ -76,6 +80,15 @@ ROLE_PERMISSION_MATRIX: dict[str, frozenset[str]] = {
 }
 
 
+ROLE_PERMISSION_MATRIX[ROLE_ADMINISTRATOR] = (
+    ROLE_PERMISSION_MATRIX[ROLE_SUPER_ADMIN] - {PERMISSION_MANAGE_ROLES}
+) | {"manage_club_staff"}
+ROLE_PERMISSION_MATRIX[ROLE_OPERATOR] = frozenset({
+    PERMISSION_MANAGE_PLAYERS, PERMISSION_MANAGE_MATCHES,
+    PERMISSION_MANAGE_TOURNAMENTS, PERMISSION_ENTER_SCORES,
+})
+
+
 @dataclass(frozen=True)
 class AdminRoleResolution:
     role: str
@@ -119,7 +132,7 @@ def _select_role_assignment_rows(*, supabase: Any, club_id: str, email: str) -> 
     try:
         response = (
             supabase.table("admin_role_assignments")
-            .select("role,user_id")
+            .select("*")
             .eq("club_id", str(club_id or "").strip())
             .eq("email", email)
             .execute()
@@ -178,6 +191,12 @@ def resolve_admin_role(
             if preferred_row is None and normalized_user_id is None:
                 preferred_row = rows[0]
             if preferred_row is not None:
+                from jupr_app.domain.admin.staff_policy import assignment_active
+                if not assignment_active(preferred_row):
+                    return AdminRoleResolution(ROLE_UNASSIGNED, "expired_assignment", True, False)
+                if preferred_row.get("role") == ROLE_OPERATOR:
+                    from services.api.staff_access import authorize_operator_request
+                    authorize_operator_request(supabase, str(club_id), preferred_row)
                 return AdminRoleResolution(
                     role=normalize_role(preferred_row.get("role")),
                     source="admin_role_assignments",
@@ -224,6 +243,10 @@ def has_permission(role: str, permission: str) -> bool:
     if str(role or "").strip().lower() == ROLE_UNASSIGNED:
         return False
     normalized_role = normalize_role(role)
+    if normalized_role == ROLE_OPERATOR:
+        from jupr_app.domain.admin.staff_policy import operator_request_authorized
+        if not operator_request_authorized.get():
+            return False
     return permission in ROLE_PERMISSION_MATRIX.get(normalized_role, frozenset())
 
 

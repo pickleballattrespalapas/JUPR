@@ -167,6 +167,9 @@ function AdminSessionSummary({ session }: { session: AdminSession }) {
       </p>
       <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
         <Link href="/admin/login">Manage session</Link>
+        <Link href="/admin/platform">PCS administration</Link>
+          <Link href="/admin/staff">Club staff</Link>
+        <Link href="/admin/interclub">Interclub planning</Link>
         <button type="button" onClick={() => void signOutAdminSession()}>
           Sign out
         </button>
