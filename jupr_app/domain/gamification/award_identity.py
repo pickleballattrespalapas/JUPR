@@ -1,5 +1,5 @@
 """Semantic identity for lifetime achievements across historical engine keys."""
-SINGLE_LIFETIME = {"participant", "dedicated_participant_50", "lifetime_participant_200", "first_win", "social_butterfly", "network_builder", "high_roller"}
+SINGLE_LIFETIME = {"participant", "dedicated_participant_50", "lifetime_participant_200", "first_win", "social_butterfly", "network_builder", "high_roller", "clutch_performer"}
 
 
 def award_key(row: dict) -> tuple:
@@ -22,4 +22,3 @@ def award_key(row: dict) -> tuple:
         except (TypeError, ValueError):
             pass
     return pid, badge_id, str(row.get("context_type")), str(row.get("context_id"))
-

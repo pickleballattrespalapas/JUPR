@@ -370,7 +370,34 @@ def evaluate_bounce_back(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate
 
 
 def evaluate_clutch_performer(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
-    return _inactive("clutch_performer", "missing explicit clutch performance schema")
+    facts = _as_of_filter(ctx.facts, ctx.as_of)
+    if facts.empty:
+        return []
+    # A close loss or a tied/invalid score never contributes to this milestone.
+    close_wins = facts[
+        facts["win"].eq(True)
+        & pd.to_numeric(facts["margin"], errors="coerce").between(1, 2)
+        & facts["date_dt"].notna()
+    ].sort_values(["date_dt", "match_id"])
+    close_wins = close_wins.drop_duplicates(["player_id", "match_id"])
+    candidates: list[BadgeCandidate] = []
+    for player_id, group in close_wins.groupby("player_id"):
+        if len(group) < 5:
+            continue
+        fifth = group.iloc[4]
+        candidates.append(
+            BadgeCandidate(
+                badge_id="clutch_performer",
+                player_id=int(player_id),
+                club_id=ctx.club_id,
+                context_type="overall",
+                context_id="clutch_performer:lifetime",
+                match_id=str(fifth["match_id"]),
+                value_json={"close_wins": 5, "qualifying_match_ids": group.iloc[:5]["match_id"].astype(str).tolist()},
+                value_num=5.0,
+            )
+        )
+    return candidates
 
 
 def evaluate_ice_in_veins(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
