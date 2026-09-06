@@ -6,16 +6,18 @@ This file defines the exact, player-facing requirements to unlock each badge.
 
 1) Only recorded matches with valid scores count.
    - A match must have score_t1 + score_t2 > 0.
-   - Matches are filtered by the app (invalid/voided/popups excluded).
+   - Deleted, invalid, voided, PopUp, and tournament matches do not count toward automatic match-based badges. Tournament trophies use official podium results. Participation milestones and High Roller use recorded club standings totals.
 
 2) “League” means the match’s `league` field (defaults to "OVERALL" if empty).
 
-3) “Week” is ISO week (YYYY-W##). “Month” is YYYY-MM. “Season” is derived from match timestamps.
+3) “Week” is ISO week (YYYY-W##). “Month” is YYYY-MM. "Season" currently means the calendar year. Week and month boundaries use UTC.
 
-4) If a badge is stackable:
+4) Clean Sweep Week, Most Improved (monthly), and Upset Champion are checked after the week or month ends, when the next eligible result is processed.
+
+5) If a badge is stackable:
    - You can earn it multiple times (as determined by its context: match/week/month/league/season/opponent).
 
-5) Important reality check:
+6) Award availability:
    - The Streamlit app awards badges through the badge engine registry/evaluators via
      `jupr_app/domain/gamification/ensure_badges.py`.
    - Some catalog badges are tracked or seasonal and are not awarded by the live badge job.
@@ -51,13 +53,13 @@ Unlock: In the **same league**, play **40+ matches** in a single **calendar mont
 # Skill Growth & Momentum
 
 ## level_up — Level Up (stackable)
-Unlock: Awarded the first time reaching a **JUPR rating** milestone: **3.0 / 3.5 / 4.0 / 4.5 / 5.0**.
+Unlock: Reach a league **JUPR rating** of **3.0, 3.5, 4.0, 4.5, or 5.0**. Earn each milestone once; a later rating drop does not remove it.
 
 ## rocket_start — Rocket Start (non-stackable)
 Unlock: In the **same league**, win **4+ of your first 5 matches** (requires 5 recorded matches in that league).
 
 ## most_improved_monthly — Most Improved (stackable)
-Unlock: **Monthly (per league):** Highest total **positive JUPR rating gain** across matches that month. If nobody finishes net‑positive, no award.
+Unlock: **Monthly (per league):** Finish the month with the largest **net JUPR rating gain** across matches in that league. If nobody finishes net‑positive, no award.
 
 ## mountain_climber — Mountain Climber (stackable)
 Unlock: In a league, improve your **standing** by **5 / 10 / 20 places** from your starting rank. Standings are ordered by **JUPR rating**.
@@ -100,7 +102,7 @@ Unlock: Reach a **20+ match** win streak (lifetime). Earn it again for each addi
 ## clean_sweep_week — Clean Sweep Week (stackable)
 Unlock: In one **ISO week** (Mon–Sun), play **at least one match in 2+ different leagues** and **win them all**.
 
-## high_roller — High Roller (stackable)
+## high_roller — High Roller (once per lifetime under the current rule)
 Unlock: Record **100+ lifetime match wins**.
 
 ## dominant_run — Dominant Run (stackable)
@@ -123,14 +125,14 @@ Unlock: Play with **50+ different partners** (lifetime). Doubles only; a recorde
 Unlock: In a single **ISO week** (Mon–Sun), record wins with **5+ different partners**.
 
 ## swiss_army_knife — Swiss Army Knife (non-stackable)
-Unlock: In the same season, record wins in **3+ different leagues**.
+Unlock: In one calendar year, record wins in **3+ different leagues**.
 
 ---
 
 # Prestige / Rarity
 
 ## giant_slayer — Giant Slayer (stackable)
-Unlock: Win a match where the highest‑rated opponent **is >5.0+**.
+Unlock: Win a match where the highest‑rated opponent **is above 5.0**.
 
 ## david_vs_goliath — David vs Goliath (stackable)
 Unlock: Win a match when your **pre‑match win chance** is **25% or less**.

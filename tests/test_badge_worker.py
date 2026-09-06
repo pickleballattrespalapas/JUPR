@@ -73,7 +73,7 @@ class FakeTable:
             stored.append(row)
         return self
 
-    def upsert(self, rows, on_conflict=None):
+    def upsert(self, rows, on_conflict=None, ignore_duplicates=False):
         if self.storage.get("raise_missing_table"):
             raise APIError({"code": "PGRST205", "message": "missing table"})
         existing = self.storage.setdefault(self.name, [])
@@ -91,6 +91,10 @@ class FakeTable:
                 existing_keys.add(key)
         return self
 
+    def range(self, start, end):
+        self.page_bounds = (start, end)
+        return self
+
     def execute(self):
         if self.storage.get("raise_missing_table"):
             raise APIError({"code": "PGRST205", "message": "missing table"})
@@ -103,12 +107,14 @@ class FakeTable:
             elif op == "is" and value is None:
                 data = [row for row in data if row.get(column) is None]
         if self.sort_key:
-            data = sorted(data, key=lambda row: row.get(self.sort_key), reverse=self.sort_desc)
+            data = sorted(data, key=lambda row: str(row.get(self.sort_key) or ""), reverse=self.sort_desc)
         if self.limit_count is not None:
             data = data[: int(self.limit_count)]
         if self.update_payload is not None:
             for row in data:
                 row.update(self.update_payload)
+        if hasattr(self, "page_bounds"):
+            data = data[self.page_bounds[0]:self.page_bounds[1] + 1]
         return SimpleNamespace(data=data)
 
 
@@ -306,7 +312,7 @@ def test_worker_error_marks_queue(monkeypatch):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(
-        "jupr_app.domain.gamification.badge_worker.compute_candidates_for_player",
+        "jupr_app.domain.gamification.badge_worker.compute_candidates_for_club",
         boom,
     )
     process_badge_eval_queue(supabase, "club", max_jobs=1, time_budget_seconds=2, ctx=ctx)
@@ -517,7 +523,7 @@ def test_worker_respects_time_budget_deadline(monkeypatch):
         clock["now"] += 0.7
         return []
 
-    monkeypatch.setattr("jupr_app.domain.gamification.badge_worker.compute_candidates_for_player", fake_compute)
+    monkeypatch.setattr("jupr_app.domain.gamification.badge_worker.compute_candidates_for_club", fake_compute)
 
     result = process_badge_eval_queue(
         object(),

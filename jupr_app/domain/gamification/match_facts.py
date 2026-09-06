@@ -85,7 +85,7 @@ def build_canonical_player_match_facts(
     filtered = filtered.copy()
     if "id" not in filtered.columns:
         filtered["id"] = range(1, len(filtered) + 1)
-    filtered["date_dt"] = pd.to_datetime(filtered.get("date", None), utc=True, errors="coerce")
+    filtered["date_dt"] = pd.to_datetime(filtered.get("date", None), utc=True, errors="coerce", format="mixed")
     filtered = filtered.dropna(subset=["date_dt"]).sort_values(["date_dt", "id"], ascending=[True, True])
 
     records: list[dict[str, Any]] = []
@@ -137,9 +137,14 @@ def build_canonical_player_match_facts(
             if not pid:
                 continue
             win = winner_team == team
-            signed_delta = None
-            if delta_abs is not None:
-                signed_delta = float(delta_abs) if win else -float(delta_abs)
+            slot = {p1: "t1_p1", p2: "t1_p2", p3: "t2_p1", p4: "t2_p2"}.get(pid)
+            before = _safe_float(getattr(row, f"{slot}_r", None))
+            after = _safe_float(getattr(row, f"{slot}_r_end", None))
+            signed_delta = _safe_float(getattr(row, f"elo_delta_t{team}", None))
+            if before is not None and after is not None:
+                signed_delta = after - before
+            elif signed_delta is None and delta_abs is not None:
+                signed_delta = abs(delta_abs) * (1 if win else -1 if winner_team else 0)
             records.append(
                 {
                     "club_id": club_id,
@@ -158,7 +163,7 @@ def build_canonical_player_match_facts(
                     "opponent_ids": [int(x) for x in opp_ids if x],
                     "expected_win_prob": float(expected_win),
                     "elo_delta_signed": signed_delta,
-                    "abs_elo_delta": abs(delta_abs) if delta_abs is not None else None,
+                    "abs_elo_delta": abs(signed_delta) if signed_delta is not None else None,
                     "opp_max_rating": float(opp_max) if opp_max is not None else None,
                     "lobby_avg_rating": float(lobby_avg_rating) if lobby_avg_rating is not None else None,
                 }
@@ -295,6 +300,8 @@ def filter_matches_for_badge_facts(
     *,
     include_audit: bool = False,
 ) -> pd.DataFrame | tuple[pd.DataFrame, MatchFilterAudit]:
+    if "deleted_at" in df_matches.columns:
+        df_matches = df_matches[df_matches["deleted_at"].isna()].copy()
     if include_audit:
         return apply_match_filters_with_audit(df_matches, context_filters)
     return apply_match_filters(df_matches, context_filters)

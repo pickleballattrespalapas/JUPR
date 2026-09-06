@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import logging
 import re
 from typing import Any
+from jupr_app.domain.gamification.presentation import badge_requirement
 
 logger = logging.getLogger(__name__)
 
@@ -79,8 +80,9 @@ def build_badge_copy_plain(
     *,
     earners_count: int | None = None,
 ) -> BadgeCopyPlain:
-    desc_text = _normalize_plain_text(badge.get("description_md"), field="desc_text")
-    req_text = _normalize_requirement_text(badge.get("requirements"))
+    req_text = (badge_requirement(str(badge["badge_id"])) if badge.get("badge_id")
+                else _normalize_requirement_text(badge.get("requirements")))
+    desc_text = req_text
     meta_text = f"{earners_count} earners" if earners_count is not None else None
 
     copy = BadgeCopyPlain(desc_text=desc_text, req_text=req_text, meta_text=meta_text)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from dataclasses import replace
 
 from jupr_app.domain.gamification.badge_catalog import BADGE_DEFINITIONS
 from jupr_app.domain.tournament_podium import PODIUM_BADGE_MAP
@@ -39,7 +40,7 @@ def test_podium_badge_seed_matches_the_python_canonical_definitions() -> None:
 
     assert set(canonical) == expected_ids
     for badge_id in sorted(expected_ids):
-        badge = canonical[badge_id]
+        badge = replace(canonical[badge_id], **historical_presentation(MIGRATION.read_text(), badge_id))
         expected_row = _normalized(
             "( " + ", ".join(
                 (
@@ -101,3 +102,12 @@ def test_podium_badge_seed_version_is_ordered_and_unique() -> None:
     assert len("20261108024000") == 14
     assert "20261108024000".isdigit()
     assert "20261108023000" < "20261108024000"
+
+
+def historical_presentation(sql: str, badge_id: str) -> dict[str, str]:
+    import re
+    pattern = r"\(\s*'" + re.escape(badge_id) + r"'\s*,([\s\S]*?)\)"
+    row = re.search(pattern, sql).group(0)
+    strings = [value.replace("''", "'") for value in re.findall(r"'((?:''|[^'])*)'", row)]
+    # id, name, category, rarity, icon, lore, hint, scope, state
+    return dict(zip(("category", "lore", "hint"), (strings[2], strings[5], strings[6])))

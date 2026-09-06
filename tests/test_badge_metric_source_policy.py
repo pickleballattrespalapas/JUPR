@@ -31,7 +31,7 @@ class FakeTable:
         self.storage.setdefault(self.name, []).extend(payloads)
         return self
 
-    def upsert(self, rows, on_conflict=None):
+    def upsert(self, rows, on_conflict=None, ignore_duplicates=False):
         existing = self.storage.setdefault(self.name, [])
         keys = [c.strip() for c in str(on_conflict or "").split(",") if c.strip()]
         existing_keys = {tuple(row.get(k) for k in keys) for row in existing} if keys else set()
@@ -48,6 +48,13 @@ class FakeTable:
         self.update_payload = payload
         return self
 
+    def range(self, start, end):
+        self.page_bounds = (start, end)
+        return self
+
+    def order(self, *_args, **_kwargs):
+        return self
+
     def execute(self):
         data = list(self.storage.get(self.name, []))
         for op, column, value in self.filters:
@@ -58,6 +65,8 @@ class FakeTable:
         if self.update_payload is not None:
             for row in data:
                 row.update(self.update_payload)
+        if hasattr(self, "page_bounds"):
+            data = data[self.page_bounds[0]:self.page_bounds[1] + 1]
         return SimpleNamespace(data=data)
 
 

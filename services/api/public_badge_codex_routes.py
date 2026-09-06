@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import HTTPException, Query
+from jupr_app.data.paged_reads import DataReadUnavailable
 from supabase import Client
 
 from jupr_app.services.public_badge_codex_service import (
@@ -25,7 +26,10 @@ def install_public_badge_codex_routes(
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
         supabase: Client = get_supabase_client()
-        codex = build_public_badge_codex(supabase, club_id=club_id)
+        try:
+            codex = build_public_badge_codex(supabase, club_id=club_id)
+        except DataReadUnavailable as exc:
+            raise HTTPException(status_code=503, detail="Badges are temporarily unavailable.") from exc
         return {"club": public_club_payload(club, club_slug), **codex}
 
     @app.get("/clubs/{club_slug}/badges/{badge_id}/earners")
@@ -46,6 +50,8 @@ def install_public_badge_codex_routes(
                 offset=int(offset),
                 limit=int(limit),
             )
+        except DataReadUnavailable as exc:
+            raise HTTPException(status_code=503, detail="Badge earners are temporarily unavailable.") from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"club": public_club_payload(club, club_slug), **earners}

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import date, datetime, timedelta
 import logging
 from typing import Any
 
@@ -42,6 +42,17 @@ def _as_of_filter(df: pd.DataFrame, as_of: datetime | None) -> pd.DataFrame:
     if pd.isna(as_of_dt):
         return df
     return df[df["date_dt"] <= as_of_dt].copy()
+
+
+def _completed_periods(ctx: BadgeEvaluationContext, period: str) -> pd.DataFrame:
+    facts = _as_of_filter(ctx.facts, ctx.as_of)
+    as_of = pd.Timestamp(ctx.as_of) if ctx.as_of is not None else pd.Timestamp.now(tz="UTC")
+    as_of = as_of.tz_localize("UTC") if as_of.tzinfo is None else as_of.tz_convert("UTC")
+    if period == "month":
+        boundary = as_of.normalize().replace(day=1)
+    else:
+        boundary = as_of.normalize() - pd.Timedelta(days=as_of.weekday())
+    return facts[facts["date_dt"] < boundary].copy()
 
 
 def _league_filter(df: pd.DataFrame, league_id: str | None) -> pd.DataFrame:
@@ -180,6 +191,8 @@ def evaluate_level_up(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
     df = df_leagues.copy()
     df["league_name"] = df["league_name"].fillna("").astype(str).str.strip()
     df["rating"] = pd.to_numeric(df.get("rating", 0.0), errors="coerce").fillna(0.0)
+    # Persisted league ratings are Elo; older in-memory contexts may use JUPR.
+    df["rating"] = df["rating"].where(df["rating"] <= 20, df["rating"] / 400.0)
     milestones = [3.0, 3.5, 4.0, 4.5, 5.0]
     candidates: list[BadgeCandidate] = []
     awarded: set[tuple[int, float]] = set()
@@ -234,7 +247,7 @@ def evaluate_rocket_start(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidat
 
 
 def evaluate_most_improved_monthly(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
-    facts = _as_of_filter(ctx.facts, ctx.as_of)
+    facts = _completed_periods(ctx, "month")
     if facts["elo_delta_signed"].dropna().empty:
         return []
     monthly = facts.groupby(["league", "month_key", "player_id"])["elo_delta_signed"].sum().reset_index()
@@ -442,7 +455,7 @@ def evaluate_untouchable(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate
 
 
 def evaluate_clean_sweep_week(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
-    facts = _as_of_filter(ctx.facts, ctx.as_of)
+    facts = _completed_periods(ctx, "week")
     grouped = facts.groupby(["player_id", "week_key"])
     candidates: list[BadgeCandidate] = []
     for (player_id, week_key), group in grouped:
@@ -612,7 +625,7 @@ def evaluate_david_vs_goliath(ctx: BadgeEvaluationContext) -> Iterable[BadgeCand
 
 
 def evaluate_upset_champion(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
-    facts = _as_of_filter(ctx.facts, ctx.as_of)
+    facts = _completed_periods(ctx, "month")
     winners = facts[facts["win"] == True].copy()
     if winners.empty:
         return []
@@ -655,7 +668,7 @@ def evaluate_hall_of_fame_night(ctx: BadgeEvaluationContext) -> Iterable[BadgeCa
         if values.empty:
             continue
         threshold = values.quantile(0.95)
-        heroes = group[group["abs_elo_delta"] >= threshold]
+        heroes = group[(group["win"] == True) & (group["abs_elo_delta"] >= threshold)]
         for row in heroes.itertuples(index=False):
             candidates.append(
                 BadgeCandidate(
@@ -673,7 +686,7 @@ def evaluate_hall_of_fame_night(ctx: BadgeEvaluationContext) -> Iterable[BadgeCa
 
 def evaluate_legendary_upset(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
     facts = _as_of_filter(ctx.facts, ctx.as_of)
-    wins = facts[(facts["win"] == True) & (facts["expected_win_prob"] <= 0.1)]
+    wins = facts[(facts["win"] == True) & (facts["expected_win_prob"] <= 0.15)]
     return [
         BadgeCandidate(
             badge_id="legendary_upset",
@@ -1082,29 +1095,17 @@ def build_evaluation_context(
 
 
 def _max_consecutive_weeks(weeks: list[str]) -> int:
-    if not weeks:
-        return 0
-    parsed = []
+    mondays = set()
     for week in weeks:
         try:
-            year_str, week_str = week.split("-W")
-            parsed.append((int(year_str), int(week_str)))
-        except Exception:
+            year, number = week.split("-W")
+            mondays.add(date.fromisocalendar(int(year), int(number), 1))
+        except (ValueError, AttributeError):
             continue
-    if not parsed:
-        return 0
-    parsed = sorted(set(parsed))
-    max_run = 1
-    run = 1
-    for (y1, w1), (y2, w2) in zip(parsed, parsed[1:]):
-        next_week = w1 + 1
-        next_year = y1
-        if w1 >= 52:
-            next_week = 1
-            next_year = y1 + 1
-        if (y2, w2) == (next_year, next_week):
-            run += 1
-        else:
-            run = 1
-        max_run = max(max_run, run)
-    return max_run
+    longest = run = 0
+    previous = None
+    for monday in sorted(mondays):
+        run = run + 1 if previous is not None and monday - previous == timedelta(days=7) else 1
+        longest = max(longest, run)
+        previous = monday
+    return longest
