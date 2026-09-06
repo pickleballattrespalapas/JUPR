@@ -12,7 +12,7 @@ export type SponsorDraft = TournamentSponsor & { notes: string; logo_path: strin
 export const sponsorTiers: SponsorTier[] = ["presenting", "premier", "supporting"];
 export const sponsorTierLabels: Record<SponsorTier, string> = { presenting: "Premier / Presenting", premier: "Supporting sponsors", supporting: "Community sponsors" };
 export function sponsorPlacement(tier: SponsorTier): string {
-  return tier === "presenting" ? "Directly below the tournament title on every tournament page." : "At the bottom of every tournament page.";
+  return tier === "presenting" ? "Alongside the tournament title on every tournament page." : "At the bottom of every tournament page.";
 }
 export function normalizeSponsorWebsite(value: string): string {
   let text = value.trim();

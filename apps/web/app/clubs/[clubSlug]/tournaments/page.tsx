@@ -286,8 +286,7 @@ export default async function PublicTournamentsPage({
       >
         Tournament Home
       </p>
-      <h1 style={{ marginTop: 0, marginBottom: 0 }}>{tournament.name}</h1>
-      <PublicTournamentSponsors clubSlug={params.clubSlug} tournamentId={tournament.id} placement="header" />
+      <PublicTournamentSponsors clubSlug={params.clubSlug} tournamentId={tournament.id} placement="header" title={tournament.name} />
       <p style={{ color: "#334155", maxWidth: "820px" }}>
         Everything you need to register, find a partner, and follow the
         tournament.
