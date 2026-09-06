@@ -139,8 +139,7 @@ export default async function TournamentRegistrationConfirmationPage({ params, s
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
         Registration Confirmation
       </p>
-      <h1 style={{ marginTop: 0, marginBottom: 0 }}>{data?.tournament.name ?? "Tournament registration"}</h1>
-      <PublicTournamentSponsors clubSlug={clubSlug} tournamentId={data?.tournament.id} placement="header" />
+      <PublicTournamentSponsors clubSlug={clubSlug} tournamentId={data?.tournament.id} placement="header" title={data?.tournament.name ?? "Tournament registration"} />
 
       {error ? (
         <p style={{ color: "#b91c1c" }}>

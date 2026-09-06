@@ -74,10 +74,7 @@ export default async function TournamentTeamResultsDetail({ params }: Props) {
       <p style={{ color: "#2563eb", fontWeight: 800, marginBottom: "0.4rem" }}>
         Four-player team results
       </p>
-      <h1 style={{ marginTop: 0, marginBottom: 0 }}>
-        {data?.tournament.name || (missing ? "Team results not found" : "Team tournament results")}
-      </h1>
-      <PublicTournamentSponsors clubSlug={params.clubSlug} tournamentId={data?.tournament.id} placement="header" />
+      <PublicTournamentSponsors clubSlug={params.clubSlug} tournamentId={data?.tournament.id} placement="header" title={data?.tournament.name || (missing ? "Team results not found" : "Team tournament results")} />
       {data?.draw.name ? <h2>{data.draw.name}</h2> : null}
       {error ? (
         <p role="alert" style={{ color: "#b91c1c" }}>
