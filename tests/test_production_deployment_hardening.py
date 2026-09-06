@@ -215,9 +215,9 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         ROOT / "supabase/migrations",
     )
 
-    assert len(versions) == 98
+    assert len(versions) == 99
     assert {"20260906004056", "20260906005541", "20260906052216"}.issubset(versions)
-    assert versions[-29:] == (
+    assert versions[-30:] == (
         "20261030010000",
         "20261101000000",
         "20261102000000",
@@ -247,13 +247,15 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         "20261108027000",
         "20261108028000",
         "20261109000000",
+        "20261109001000",
     )
-    assert len(names) == 98
+    assert len(names) == 99
     assert all("XX" not in version for version in versions)
-    assert len(contract["required_ledger_names"]) == 98
+    assert len(contract["required_ledger_names"]) == 99
     assert {"club_staff_scopes", "pcs_platform_onboarding"}.issubset(contract["required_ledger_names"])
     assert "tournament_sponsor_logo_storage" in contract["required_ledger_names"]
     assert "rating_calculation_versioning" in contract["required_ledger_names"]
+    assert "badge_plain_requirements" in contract["required_ledger_names"]
     assert "tournament_complete_registration_editor" in contract[
         "required_ledger_names"
     ]
@@ -416,7 +418,7 @@ def test_preflight_accepts_only_matching_protected_project_and_config() -> None:
     )
 
     assert errors == []
-    assert migrations[-1] == "20261109000000"
+    assert migrations[-1] == "20261109001000"
 
     wrong_project_errors, _ = verifier.preflight_errors(
         _production_env(
