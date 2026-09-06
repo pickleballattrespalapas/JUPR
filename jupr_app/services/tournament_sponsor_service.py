@@ -80,6 +80,9 @@ def normalize_sponsors(value: Any, *, club_id: str, tournament_id: str, strict: 
             if strict:
                 raise
             website = ""
+        description = str(row.get("public_description") or "").strip()
+        if len(description) > 500 and strict:
+            raise ValueError("Keep the public sponsor description to 500 characters or fewer.")
         path = str(row.get("logo_path") or "")
         if path and not valid_asset_path(path, club_id=club_id, tournament_id=tournament_id):
             if strict:
@@ -93,6 +96,7 @@ def normalize_sponsors(value: Any, *, club_id: str, tournament_id: str, strict: 
         ids.add(sponsor_id)
         result.append({"id": sponsor_id, "name": name, "tier": tier,
                        "level": str(row.get("level") or "").strip()[:80],
+                       "public_description": description[:500],
                        "website": website, "notes": str(row.get("notes") or "")[:2000],
                        "logo_path": path, "is_visible": row.get("is_visible") is not False,
                        "sort_order": index})
@@ -159,4 +163,5 @@ def public_sponsors(supabase: Any, value: Any, *, club_id: str, tournament_id: s
     sponsors = [s for s in normalize_sponsors(value or [], club_id=club_id, tournament_id=tournament_id, strict=False) if s["is_visible"]]
     urls = logo_urls(supabase, sponsors)
     return [{"id": s["id"], "name": s["name"], "tier": s["tier"], "level": s["level"],
+             "public_description": s["public_description"],
              "website": s["website"], "sort_order": s["sort_order"], "logo_url": urls.get(s["logo_path"], "")} for s in sponsors]

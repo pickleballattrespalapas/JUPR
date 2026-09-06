@@ -66,6 +66,8 @@ async function main() {
     await act(async () => root.findAllByType("button").find(b => b.props.children === "Edit").props.onClick());
     await act(async () => root.findByType("select").props.onChange({ target: { value: "premier" } }));
     await act(async () => root.findAllByType("input").find(i => i.props.type === "file").props.onChange({ target: { files: [{ type: "image/png", size: 100 }] } }));
+    await act(async () => root.findAllByType("textarea").find(t => t.props.maxLength === 500).props.onChange({ target: { value: "Local homes.\nLocal knowledge." } }));
+    assert.equal(root.findByType(Display).props.sponsors[0].public_description, "Local homes.\nLocal knowledge.");
     assert.equal(root.findByType(Display).props.placement, "footer");
     assert.equal(root.findByType(Display).props.sponsors[0].tier, "premier");
     await act(async () => {
@@ -79,6 +81,7 @@ async function main() {
     await act(async () => { result = await root.findByType(FormDialog).props.onSubmit(); });
     assert.equal(result.status, "success");
     assert.equal(uploads, 1, "Retry must reuse the already uploaded logo");
+    assert.equal(saves[1][0].public_description, "Local homes.\nLocal knowledge.");
     assert.equal(saves[1][0].name, sponsor.name);
     assert.equal(saves[1][0].tier, "premier");
     assert.equal(saves[1][0].logo_path, "club/tournament/logo.webp");
@@ -99,3 +102,17 @@ async function main() {
   console.log("Sponsor editor checks passed: actionable errors, tier preview, preserved edits, and upload reuse on retry.");
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });
+
+// Exercise the actual wizard reload/save functions: descriptions must survive both boundaries.
+const wizardPath = path.resolve(__dirname, "../app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx");
+const wizardAst = ts.createSourceFile(wizardPath, fs.readFileSync(wizardPath, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const functions = wizardAst.statements.filter(n => ts.isFunctionDeclaration(n) && ["safeString", "sponsorId", "normalizeSponsors", "basicsDraftPayload"].includes(n.name?.text)).map(n => n.getText(wizardAst)).join("\n");
+const { normalizeSponsors, basicsDraftPayload } = new Function("sponsorTiers", ts.transpileModule(functions, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText + "\nreturn { normalizeSponsors, basicsDraftPayload };")(["presenting", "premier", "supporting"]);
+const savedDescription = "Local homes.\nLocal knowledge.";
+const reloaded = normalizeSponsors([{ id: "s1", name: "Homes", public_description: savedDescription, notes: "Private terms" }]);
+const serialized = basicsDraftPayload({ name: "Baja Classic", startDate: "", endDate: "", locationName: "", timezone: "America/Mazatlan", sponsors: reloaded });
+assert.equal(serialized.sponsors_json[0].public_description, savedDescription);
+assert.equal(normalizeSponsors(serialized.sponsors_json)[0].public_description, savedDescription);
+assert.equal(normalizeSponsors([{ id: "legacy", name: "Legacy sponsor" }])[0].public_description, "");
+reloaded[0].public_description = "";
+assert.equal(basicsDraftPayload({ name: "Baja", locationName: "", sponsors: reloaded }).sponsors_json[0].public_description, "", "Clearing a description persists");

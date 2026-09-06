@@ -12,7 +12,9 @@ function Sponsor({ sponsor, presenting = false }: { sponsor: TournamentSponsor; 
   const name = <strong>{sponsor.name}</strong>;
   const logo = sponsor.logo_url && failedUrl !== sponsor.logo_url ? <Image unoptimized src={sponsor.logo_url} alt="" width={presenting ? 240 : 160} height={presenting ? 96 : 56} referrerPolicy="no-referrer" className={styles.logo} onError={() => setFailedUrl(sponsor.logo_url || "")} /> : null;
   const content = presenting ? <>{name}{logo}</> : <>{logo}{name}</>;
-  return website ? <a className={styles.sponsor} href={website} target="_blank" rel="sponsored noopener noreferrer" referrerPolicy="no-referrer" aria-label={`Visit ${sponsor.name} (opens in a new tab)`}>{content}</a> : <span className={styles.sponsor}>{content}</span>;
+  const brand = website ? <a className={styles.sponsor} href={website} target="_blank" rel="sponsored noopener noreferrer" referrerPolicy="no-referrer" aria-label={`Visit ${sponsor.name} (opens in a new tab)`}>{content}</a> : <span className={styles.sponsor}>{content}</span>;
+  if (presenting || !sponsor.public_description?.trim()) return brand;
+  return <div className={styles.describedSponsor}>{brand}<p className={styles.description}>{sponsor.public_description}</p></div>;
 }
 
 export type SponsorDisplayProps = {
@@ -26,7 +28,9 @@ export default function TournamentSponsorDisplay({ sponsors, placement, title, h
   const records = sponsors.filter(s => placement === "header" ? s.tier === "presenting" : s.tier !== "presenting");
   if (placement === "header") {
     const presenting = records.length ? <div className={styles.presenting} aria-label="Presenting sponsors"><span>Presented by </span><span className={styles.names}>{records.map((s, index) => <Fragment key={s.id}>{index > 0 ? <span>{index === records.length - 1 ? " and " : ", "}</span> : null}<Sponsor sponsor={s} presenting /></Fragment>)}</span></div> : null;
-    return title ? <div className={styles.titleRow}><Heading className={styles.title}>{title}</Heading>{presenting}</div> : presenting;
+    const header = title ? <div className={styles.titleRow}><Heading className={styles.title}>{title}</Heading>{presenting}</div> : presenting;
+    const described = records.filter(s => s.public_description?.trim());
+    return described.length ? <div>{header}<div className={styles.headerDescriptions}>{described.map(s => <p key={s.id} className={styles.description}>{records.length > 1 ? <><strong>{s.name}</strong>{": "}</> : null}{s.public_description}</p>)}</div></div> : header;
   }
   if (!records.length) return null;
   const groups = new Map<string, { label: string; community: boolean; records: TournamentSponsor[] }>();

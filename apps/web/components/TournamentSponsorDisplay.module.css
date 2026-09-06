@@ -17,3 +17,9 @@ a.sponsor:focus-visible { outline:3px solid #2563eb; outline-offset:4px; border-
 .community .sponsor { width:112px; font-size:.85rem; }
 .community .logo { width:112px; height:40px; }
 @media (max-width:480px) {  .presenting .logo { width:200px; height:80px; } .grid { gap:20px 16px; } }
+
+.description { margin:10px 0 0; color:#475569; font-size:.95rem; font-weight:400; line-height:1.5; white-space:pre-wrap; overflow-wrap:anywhere; }
+.headerDescriptions { max-width:70ch; margin-bottom:16px; }
+.headerDescriptions .description { margin:0 0 10px; }
+.describedSponsor { width:280px; max-width:100%; min-width:0; }
+.grid .describedSponsor .sponsor { width:100%; }

@@ -5,6 +5,7 @@ export type TournamentSponsor = {
   tier: SponsorTier;
   level: string;
   website: string;
+  public_description?: string;
   logo_url?: string;
   sort_order?: number;
 };
