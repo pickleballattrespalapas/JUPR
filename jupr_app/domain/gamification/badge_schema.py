@@ -118,8 +118,7 @@ def _build_badge_metadata() -> dict[str, dict[str, str]]:
     assign(["high_output", "rivalry_win"], status="tracked", scope="match", award_timing="disabled")
     assign(["nemesis_found", "rivalry_streak", "settled_the_score"], status="tracked", scope="lifetime", award_timing="disabled")
     assign(["battle_tested", "consistency", "mr_reliable"], status="tracked", scope="season", award_timing="disabled")
-    assign(["good_sport", "community_builder"], status="curated", scope="lifetime", award_timing="manual")
-    assign(["mentor"], status="curated", scope="match", award_timing="manual")
+    assign(["good_sport", "community_builder", "mentor"], status="curated", scope="lifetime", award_timing="manual")
 
     return metadata
 

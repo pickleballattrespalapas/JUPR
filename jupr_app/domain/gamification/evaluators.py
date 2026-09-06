@@ -14,6 +14,7 @@ from jupr_app.domain.gamification.aggregate_metrics import (
     compute_participation_counts_from_standings,
 )
 from jupr_app.domain.gamification.badge_types import BadgeCandidate, BadgeEvaluationContext
+from jupr_app.domain.gamification.seasons import season_match_groups
 from jupr_app.domain.gamification.match_facts import (
     build_canonical_player_match_facts,
     build_hybrid_player_match_facts,
@@ -769,7 +770,18 @@ def evaluate_steady_hand(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate
 
 
 def evaluate_mr_reliable(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
-    return _inactive("mr_reliable", "missing availability tracking by season")
+    candidates: list[BadgeCandidate] = []
+    for season, player_id, group in season_match_groups(ctx, completed_only=True):
+        matches = len(group)
+        wins = int(group["win"].eq(True).sum())
+        if matches >= 30 and wins * 10 >= matches * 7:
+            candidates.append(BadgeCandidate(
+                badge_id="mr_reliable", player_id=player_id, club_id=ctx.club_id,
+                context_type="season", context_id=season.context_id, match_id=None,
+                value_json={**season.evidence(), "matches": matches, "wins": wins, "win_pct": wins / matches},
+                value_num=wins / matches,
+            ))
+    return candidates
 
 
 def evaluate_league_champion(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
@@ -781,15 +793,15 @@ def evaluate_podium(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
 
 
 def evaluate_good_sport(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
-    return _inactive("good_sport", "missing sportsmanship data")
+    return []  # Issued explicitly by a club admin through community_awards.
 
 
 def evaluate_community_builder(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
-    return _inactive("community_builder", "missing community engagement data")
+    return []  # Issued explicitly by a club admin through community_awards.
 
 
 def evaluate_mentor(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
-    return _inactive("mentor", "missing mentorship tracking")
+    return []  # Issued explicitly by a club admin through community_awards.
 
 
 def evaluate_breakthrough(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
@@ -959,11 +971,47 @@ def evaluate_high_output(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate
 
 
 def evaluate_battle_tested(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
-    return _inactive("battle_tested", "missing battle tested criteria")
+    candidates: list[BadgeCandidate] = []
+    for season, player_id, group in season_match_groups(ctx):
+        if len(group) < 50:
+            continue
+        qualifying = group.iloc[:50]
+        candidates.append(BadgeCandidate(
+            badge_id="battle_tested", player_id=player_id, club_id=ctx.club_id,
+            context_type="season", context_id=season.context_id,
+            match_id=str(qualifying.iloc[-1]["match_id"]),
+            value_json={**season.evidence(), "matches": 50,
+                        "qualifying_match_ids": qualifying["match_id"].astype(str).tolist()},
+            value_num=50.0,
+        ))
+    return candidates
 
 
 def evaluate_consistency(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
-    return _inactive("consistency", "missing consistency definition")
+    candidates: list[BadgeCandidate] = []
+    for season, player_id, group in season_match_groups(ctx):
+        weeks: list[str] = []
+        previous_monday = None
+        for row in group.itertuples(index=False):
+            played_date = row.date_dt.date()
+            monday = played_date - timedelta(days=played_date.weekday())
+            if monday == previous_monday:
+                continue
+            if previous_monday is None or monday - previous_monday != timedelta(days=7):
+                weeks = []
+            year, week, _ = monday.isocalendar()
+            weeks.append(f"{year}-W{week:02d}")
+            previous_monday = monday
+            if len(weeks) == 6:
+                candidates.append(BadgeCandidate(
+                    badge_id="consistency", player_id=player_id, club_id=ctx.club_id,
+                    context_type="season", context_id=season.context_id,
+                    match_id=str(row.match_id),
+                    value_json={**season.evidence(), "consecutive_weeks": 6, "weeks": weeks.copy()},
+                    value_num=6.0,
+                ))
+                break  # One first achievement per configured season.
+    return candidates
 
 
 def _cached_top_performer_candidates(ctx: BadgeEvaluationContext) -> list[BadgeCandidate]:

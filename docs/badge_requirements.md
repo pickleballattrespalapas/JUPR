@@ -231,11 +231,11 @@ Unlock: **Seasonal (league close):** finish with the most **wins** in the league
 
 # Sportsmanship & Community (admin awards; awaiting activation)
 
-## good_sport — Good Sport (inactive)
-Unlock: Awarded by a club admin for honest calls even when they cost a point, respectful handling of a difficult situation, or consistently encouraging and supporting other players.
+## good_sport — Good Sport (stackable admin award; awaiting activation)
+Unlock: Awarded by a club admin for honest calls even when they cost a point, respectful handling of a difficult situation, or consistently encouraging and supporting other players. Can be awarded again for a separate contribution.
 
-## community_builder — Community Builder (inactive)
-Unlock: Awarded by a club admin for welcoming newcomers and helping them find games, volunteering at club events, organizing inclusive social play, or introducing new participants to the club.
+## community_builder — Community Builder (stackable admin award; awaiting activation)
+Unlock: Awarded by a club admin for welcoming newcomers and helping them find games, volunteering at club events, organizing inclusive social play, or introducing new participants to the club. Can be awarded again for a separate contribution.
 
-## mentor — Mentor (inactive)
-Unlock: Awarded by a club admin for helping a newer player improve over several visits, leading beginner lessons or practice sessions, or helping players learn rules and court etiquette.
+## mentor — Mentor (stackable admin award; awaiting activation)
+Unlock: Awarded by a club admin for helping a newer player improve over several visits, leading beginner lessons or practice sessions, or helping players learn rules and court etiquette. Can be awarded again for a separate contribution.
