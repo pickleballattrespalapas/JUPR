@@ -14,6 +14,6 @@ const loadSponsors = cache(async (clubSlug: string, tournamentId: string): Promi
   } catch { return []; }
 });
 
-export default async function PublicTournamentSponsors({ clubSlug, tournamentId, placement, title, headingLevel }: { title?: string; headingLevel?: "h1" | "h2"; clubSlug: string; tournamentId?: string | null; placement: "header" | "footer" }) {
-  return <TournamentSponsorDisplay sponsors={tournamentId ? await loadSponsors(clubSlug, tournamentId) : []} placement={placement} title={title} headingLevel={headingLevel} />;
+export default async function PublicTournamentSponsors({ clubSlug, tournamentId, placement, title, headingLevel, titleHref, compact }: { title?: string; titleHref?: string; compact?: boolean; headingLevel?: "h1" | "h2"; clubSlug: string; tournamentId?: string | null; placement: "header" | "footer" }) {
+  return <TournamentSponsorDisplay sponsors={tournamentId ? await loadSponsors(clubSlug, tournamentId) : []} placement={placement} title={title} headingLevel={headingLevel} titleHref={titleHref} compact={compact} />;
 }
