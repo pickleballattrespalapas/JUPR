@@ -1753,6 +1753,18 @@ def analyze_registration_publish_impact(
             proposed_source=proposed_source,
             selection_ids=data_completion_selection_ids or set(),
         ) if data_completion_selection_ids else []
+        # Former entrants do not need notices or data-completion actions for
+        # changes to events they have cancelled.
+        affected_registrations = [
+            row for row in affected_registrations
+            if str(row.get("registration_status") or "").strip().lower() != "cancelled"
+        ]
+        data_completion_registrations = [
+            row for row in data_completion_registrations
+            if str(row.get("registration_status") or "").strip().lower() != "cancelled"
+        ]
+        if not affected_registrations:
+            return
         communication_impacts.append(message)
         communication_impact_details.append(
             {
@@ -1893,7 +1905,16 @@ def analyze_registration_publish_impact(
         )
 
         if has_usage and (participant_policy_changed or gender_policy_changed or skill_policy_changed or age_policy_changed):
-            event_selections = selections_by_event.get(event_id, [])
+            # Cancellation preserves selection history and structural usage, but
+            # the former entrant no longer needs to satisfy new eligibility rules.
+            event_selections = [
+                selection
+                for selection in selections_by_event.get(event_id, [])
+                if str(
+                    registrations_by_id.get(str(selection.get("registration_id") or ""), {}).get("status")
+                    or ""
+                ).strip().lower() != "cancelled"
+            ]
             all_selection_ids = {
                 str(row.get("id") or "").strip()
                 for row in event_selections
