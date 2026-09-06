@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from jupr_app.data.paged_reads import read_all_rows
+from jupr_app.domain.gamification.presentation import badge_category
+
 import re
 from typing import Any
 
@@ -45,7 +48,7 @@ LEAGUE_RATING_SELECT_FALLBACK = (
 )
 LEAGUE_META_SELECT = "club_id,league_name,is_active,status,min_games"
 LEAGUE_META_SELECT_FALLBACK = "club_id,league_name,is_active,min_games"
-PLAYER_BADGE_SELECT = "club_id,player_id,badge_id,earned_at"
+PLAYER_BADGE_SELECT = "club_id,player_id,badge_id,earned_at,revoked_at"
 BADGE_SELECT = "badge_id,name,prestige,category,icon_key,rarity,state,is_active"
 
 _HTML_TAG_RE = re.compile(r"<[^>]*>")
@@ -75,10 +78,10 @@ def _query_rows(
     last_error: Exception | None = None
     for columns in select_options:
         try:
-            query = supabase.table(table_name).select(columns)
-            if club_id is not None:
-                query = query.eq("club_id", str(club_id))
-            return _safe_rows(query.execute())
+            def query_factory():
+                query = supabase.table(table_name).select(columns)
+                return query.eq("club_id", str(club_id)) if club_id is not None else query
+            return read_all_rows(query_factory, order="badge_id" if table_name == "badges" else "id")
         except Exception as exc:
             last_error = exc
             continue
@@ -188,8 +191,9 @@ def _badge_map(supabase: Any, *, club_id: str) -> dict[str, list[dict[str, Any]]
     earned_rows = _query_rows(
         supabase,
         "player_badges",
-        (PLAYER_BADGE_SELECT, "club_id,player_id,badge_id,earned_at"),
+        (PLAYER_BADGE_SELECT,),
         club_id=club_id,
+        required=True,
     )
     if not earned_rows:
         return {}
@@ -197,6 +201,7 @@ def _badge_map(supabase: Any, *, club_id: str) -> dict[str, list[dict[str, Any]]
         supabase,
         "badges",
         (BADGE_SELECT, "badge_id,name,prestige,category,icon_key,rarity"),
+        required=True,
     )
     definitions: dict[str, dict[str, Any]] = {}
     for row in badge_rows:
@@ -208,13 +213,15 @@ def _badge_map(supabase: Any, *, club_id: str) -> dict[str, list[dict[str, Any]]
             "badge_id": badge_id,
             "name": name,
             "prestige": _safe_int(row.get("prestige"), 0) or 0,
-            "category": _plain_text(row.get("category")),
+            "category": badge_category(badge_id),
             "icon_key": _plain_text(row.get("icon_key")),
             "rarity": _plain_text(row.get("rarity")),
         }
 
     grouped: dict[str, dict[str, dict[str, Any]]] = {}
     for row in earned_rows:
+        if row.get("revoked_at"):
+            continue
         player_id = str(row.get("player_id") or "").strip()
         badge_id = str(row.get("badge_id") or "").strip()
         definition = definitions.get(badge_id)

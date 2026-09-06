@@ -58,6 +58,7 @@ export type BadgeCodexResponse = {
     earned_badge_count: number;
     unclaimed_badge_count: number;
     total_unique_earners_by_badge: number;
+    unique_earner_count: number;
     complete_definition_count: number;
   };
   sections: BadgeCodexSection[];

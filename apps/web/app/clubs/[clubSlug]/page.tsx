@@ -88,11 +88,11 @@ export default async function ClubPage({ params }: ClubPageProps) {
       label: "Open Weekly Recap"
     },
     {
-      title: "Badge Codex",
+      title: "Badges & Trophies",
       description:
         "Explore club badges, learn how to earn them, and see recent earners.",
       href: `${base}/badge-codex`,
-      label: "Open Badge Codex"
+      label: "Open Badges & Trophies"
     },
     {
       title: "Ratings",

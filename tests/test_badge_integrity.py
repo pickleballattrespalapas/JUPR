@@ -25,9 +25,16 @@ class CaptureTable:
         self.filters.append(("in", column, set(values)))
         return self
 
-    def upsert(self, rows, on_conflict=None):
+    def upsert(self, rows, on_conflict=None, ignore_duplicates=False):
         self.on_conflict = on_conflict
         self.rows.extend(rows)
+        return self
+
+    def range(self, start, end):
+        self.page_bounds = (start, end)
+        return self
+
+    def order(self, *_args, **_kwargs):
         return self
 
     def execute(self):
@@ -37,6 +44,8 @@ class CaptureTable:
                 data = [row for row in data if str(row.get(column)) == str(value)]
             elif op == "in":
                 data = [row for row in data if row.get(column) in value]
+        if hasattr(self, "page_bounds"):
+            data = data[self.page_bounds[0]:self.page_bounds[1] + 1]
         return SimpleNamespace(data=data)
 
 

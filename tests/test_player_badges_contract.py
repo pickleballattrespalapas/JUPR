@@ -24,7 +24,7 @@ class FakeTable:
         self.filters.append(("in", column, set(values)))
         return self
 
-    def upsert(self, rows, on_conflict=None):
+    def upsert(self, rows, on_conflict=None, ignore_duplicates=False):
         existing = self.storage.setdefault(self.name, [])
         keys = [c.strip() for c in str(on_conflict or "").split(",") if c.strip()]
         existing_keys = {tuple(row.get(k) for k in keys) for row in existing} if keys else set()
@@ -37,6 +37,13 @@ class FakeTable:
                 existing_keys.add(key)
         return self
 
+    def range(self, start, end):
+        self.page_bounds = (start, end)
+        return self
+
+    def order(self, *_args, **_kwargs):
+        return self
+
     def execute(self):
         data = list(self.storage.get(self.name, []))
         for op, column, value in self.filters:
@@ -44,6 +51,8 @@ class FakeTable:
                 data = [row for row in data if str(row.get(column)) == str(value)]
             elif op == "in":
                 data = [row for row in data if row.get(column) in value]
+        if hasattr(self, "page_bounds"):
+            data = data[self.page_bounds[0]:self.page_bounds[1] + 1]
         return SimpleNamespace(data=data)
 
 
@@ -160,8 +169,11 @@ def test_player_badges_upsert_retries_when_awarded_by_uuid_cast_fails(monkeypatc
 
     calls: list[list[dict[str, object]]] = []
 
-    class _RetryTable:
-        def upsert(self, rows, on_conflict=None):
+    class _RetryTable(FakeTable):
+        def __init__(self):
+            super().__init__({}, "player_badges")
+
+        def upsert(self, rows, on_conflict=None, ignore_duplicates=False):
             calls.append(rows)
             if len(calls) == 1:
                 raise APIError(

@@ -1,8 +1,4 @@
-BADGE_DESCRIPTIONS_MD: dict[str, str] = {
-    "clutch_performer": "Deliver when the stakes are highest.",
-    "ice_in_veins": "Stay calm in the tight ones.",
-    "battle_tested": "Proven through volume and adversity.",
-    "consistency": "Show up and perform repeatedly.",
-    "mr_reliable": "Dependable results over time.",
-    "steady_hand": "Steady volume without volatility.",
-}
+from jupr_app.domain.gamification.badge_catalog import BADGE_DEFINITIONS
+from jupr_app.domain.gamification.presentation import badge_requirement
+
+BADGE_DESCRIPTIONS_MD = {badge.badge_id: badge_requirement(badge.badge_id) for badge in BADGE_DEFINITIONS}

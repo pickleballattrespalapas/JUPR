@@ -39,7 +39,7 @@ class FakeTable:
         self.update_payload = payload
         return self
 
-    def upsert(self, rows, on_conflict=None):
+    def upsert(self, rows, on_conflict=None, ignore_duplicates=False):
         self.mutations.append(("upsert", self.name))
         existing = self.storage.setdefault(self.name, [])
         keys = [c.strip() for c in str(on_conflict or "").split(",") if c.strip()]
@@ -51,6 +51,13 @@ class FakeTable:
             existing.append(row)
             if key is not None:
                 existing_keys.add(key)
+        return self
+
+    def range(self, start, end):
+        self.page_bounds = (start, end)
+        return self
+
+    def order(self, *_args, **_kwargs):
         return self
 
     def execute(self):
@@ -77,6 +84,8 @@ class FakeTable:
         if self.update_payload is not None:
             for row in data:
                 row.update(self.update_payload)
+        if hasattr(self, "page_bounds"):
+            data = data[self.page_bounds[0]:self.page_bounds[1] + 1]
             return SimpleNamespace(data=data)
 
         return SimpleNamespace(data=data)
@@ -176,7 +185,7 @@ def test_recompute_same_context_id_with_different_context_type_is_distinct(monke
                 "id": "existing-league",
                 "club_id": "club",
                 "player_id": 1,
-                "badge_id": "participant",
+                "badge_id": "blowout_artist",
                 "context_type": "league",
                 "context_id": "shared-context",
                 "revoked_at": None,
@@ -184,7 +193,7 @@ def test_recompute_same_context_id_with_different_context_type_is_distinct(monke
         ]
     }
     candidate = BadgeCandidate(
-        badge_id="participant",
+        badge_id="blowout_artist",
         player_id=1,
         club_id="club",
         context_type="overall",
@@ -203,7 +212,7 @@ def test_recompute_same_context_id_with_different_context_type_is_distinct(monke
         club_id="club",
         mode="append-only",
         ctx=_build_ctx(),
-        badge_id="participant",
+        badge_id="blowout_artist",
         allow_strict_global=True,
     )
 

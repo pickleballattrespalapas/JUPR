@@ -235,7 +235,7 @@ export default async function PlayerProfilePage({ params, searchParams }: Player
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: "0.75rem" }}>
             <article style={cardStyle}><strong>League positions</strong><p style={{ color: "#475569" }}>Award standings, league rating, record, and qualification status for each league.</p><Link href={pageHref({ clubSlug, playerId, section: "positions" })}>Open league positions</Link></article>
             <article style={cardStyle}><strong>Trophy case</strong><p style={{ color: "#475569" }}>End-of-league awards and tournament podium honors only.</p><Link href={pageHref({ clubSlug, playerId, section: "trophies" })}>Open trophy case</Link></article>
-            <article style={cardStyle}><strong>Badge cabinet</strong><p style={{ color: "#475569" }}>Achievements for activity, participation, momentum, and skill.</p><Link href={pageHref({ clubSlug, playerId, section: "badges" })}>Open badge cabinet</Link></article>
+            <article style={cardStyle}><strong>Badge cabinet</strong><p style={{ color: "#475569" }}>Achievements for participation, improvement, partnerships, and match results.</p><Link href={pageHref({ clubSlug, playerId, section: "badges" })}>Open badge cabinet</Link></article>
           </div>
         </section>
       ) : null}
@@ -320,7 +320,7 @@ export default async function PlayerProfilePage({ params, searchParams }: Player
           <article style={cardStyle}>
             <h2 style={{ marginTop: 0 }}>Badge cabinet</h2>
             <p style={{ color: "#475569" }}>Achievements for activity, momentum, participation, and skill. Some can be earned more than once.</p>
-            {awards.badges.length === 0 ? <p style={{ color: "#475569" }}>No badges earned yet.</p> : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>{awards.badges.map((badge) => <article key={badge.badge_id} data-testid="player-badge" style={{ border: "1px solid #cbd5e1", borderRadius: "12px", padding: "0.85rem" }}><strong>🏅 {badge.name}{badge.count > 1 ? ` ×${badge.count}` : ""}</strong><p style={{ margin: "0.35rem 0", color: "#475569" }}>{badge.category} · {badge.prestige} prestige{badge.rarity ? ` · ${publicBadgeRarityLabel(badge.rarity)}` : ""}</p><small>{badge.description ?? badge.requirements ?? `Last earned ${formatDate(badge.last_earned_at)}`}</small></article>)}</div>}
+            {awards.badges.length === 0 ? <p style={{ color: "#475569" }}>No badges earned yet.</p> : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>{awards.badges.map((badge) => <article key={badge.badge_id} data-testid="player-badge" style={{ border: "1px solid #cbd5e1", borderRadius: "12px", padding: "0.85rem" }}><strong>🏅 {badge.name}{badge.count > 1 ? ` ×${badge.count}` : ""}</strong><p style={{ margin: "0.35rem 0", color: "#475569" }}>{badge.category} · {badge.prestige} prestige{badge.rarity ? ` · ${publicBadgeRarityLabel(badge.rarity)}` : ""}</p><p style={{ margin: "0.35rem 0" }}><strong>How to earn it:</strong> {badge.requirements ?? "Requirements are unavailable."}</p><small>Last earned {formatDate(badge.last_earned_at)}</small></article>)}</div>}
           </article>
         </section>
       ) : null}

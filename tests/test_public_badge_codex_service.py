@@ -20,10 +20,19 @@ class FakeQuery:
         self._filters[key] = value
         return self
 
+    def range(self, start, end):
+        self.page_bounds = (start, end)
+        return self
+
+    def order(self, *_args, **_kwargs):
+        return self
+
     def execute(self):
         rows = list(self._rows)
         for key, expected in self._filters.items():
             rows = [row for row in rows if row.get(key) == expected]
+        if hasattr(self, "page_bounds"):
+            rows = rows[self.page_bounds[0]:self.page_bounds[1] + 1]
         return SimpleNamespace(data=rows)
 
 
@@ -91,7 +100,7 @@ def test_public_badge_codex_groups_badges_and_counts_unique_earners() -> None:
     assert payload["summary"]["badge_count"] == 2
     assert payload["summary"]["earned_badge_count"] == 2
     assert payload["summary"]["complete_definition_count"] == 2
-    assert {section["name"] for section in payload["sections"]} == {"Participation", "Upsets"}
+    assert {section["name"] for section in payload["sections"]} == {"Participation", "Match Achievements"}
     assert [bucket["name"] for bucket in payload["catalog_buckets"]] == [
         "Live Now",
         "Seasonal / League Close",
@@ -113,7 +122,7 @@ def test_public_badge_codex_groups_badges_and_counts_unique_earners() -> None:
     assert "private_email" not in participant["recent_earners"][0]
 
     giant_slayer = next(badge for badge in all_badges if badge["badge_id"] == "giant_slayer")
-    assert giant_slayer["description"] == "HTML should be stripped"
+    assert giant_slayer["description"] == giant_slayer["requirements"]
     assert giant_slayer["state"] == "frozen"
     assert "old_unused" not in {badge["badge_id"] for badge in all_badges}
     assert payload["trophy_room"][0]["player_name"] == "Blair"
@@ -159,7 +168,7 @@ def test_public_badge_codex_uses_authoritative_timing_buckets() -> None:
     }
 
     assert "participant" in buckets["Live Now"]
-    assert "league_champion" in buckets["Seasonal / League Close"]
+    assert "league_champion" in buckets["Tracked / Disabled"]
     assert "tournament_champion" in buckets["Manual / Curated"]
     assert "breakthrough" in buckets["Tracked / Disabled"]
     assert set(payload["filters"]["scopes"]) >= {"lifetime", "season"}

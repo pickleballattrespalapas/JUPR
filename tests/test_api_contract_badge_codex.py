@@ -31,12 +31,21 @@ class FakeQuery:
         self._limit = int(value)
         return self
 
+    def range(self, start, end):
+        self.page_bounds = (start, end)
+        return self
+
+    def order(self, *_args, **_kwargs):
+        return self
+
     def execute(self):
         rows = list(self._rows)
         for key, expected in self._filters.items():
             rows = [row for row in rows if row.get(key) == expected]
         if self._limit is not None:
             rows = rows[: self._limit]
+        if hasattr(self, "page_bounds"):
+            rows = rows[self.page_bounds[0]:self.page_bounds[1] + 1]
         return SimpleNamespace(data=rows)
 
 
