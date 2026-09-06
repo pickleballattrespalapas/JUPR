@@ -56,8 +56,10 @@ test("new-registration wizard requires demographics and resolves profiles throug
   await page.goto(fixturePath, { waitUntil: "domcontentloaded" });
   const start = page.getByRole("button", { name: "Start a registration" });
   test.skip(await start.isDisabled(), "The configured staging tournament is closed; closed-state contracts are covered by FastAPI tests.");
-  await start.click();
+  await page.getByRole("button", { name: "Register now", exact: true }).click();
   await expect(page.getByTestId("registration-step-contact")).toBeVisible();
+  await expect(page.getByLabel("First name")).toBeFocused();
+  await expect(page.getByTestId("registration-mode-chooser")).toHaveCount(0);
 
   await page.getByRole("button", { name: "Continue", exact: true }).click();
   await expect(
