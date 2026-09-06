@@ -1,0 +1,16 @@
+.presenting { margin:8px 0 16px; font-size:1.08rem; color:#334155; line-height:1.7; overflow-wrap:anywhere; }
+.names { display:inline; }
+.sponsor { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; color:#0f172a; text-decoration:none; text-align:center; overflow-wrap:anywhere; max-width:100%; }
+a.sponsor:hover { text-decoration:underline; }
+a.sponsor:focus-visible { outline:3px solid #2563eb; outline-offset:4px; border-radius:4px; }
+.presenting .sponsor { display:inline; text-align:left; }
+.logo { width:160px; height:56px; object-fit:contain; padding:5px; background:#fff; border-radius:4px; max-width:100%; }
+.presenting .logo { display:inline-block; width:120px; height:48px; margin-left:12px; vertical-align:middle; }
+.footer { border-top:1px solid #dce4ec; margin-top:32px; padding-top:24px; text-align:center; }
+.group + .group { margin-top:24px; }
+.group h3 { font-size:.9rem; color:#475569; margin:0 0 16px; }
+.grid { display:flex; flex-wrap:wrap; justify-content:center; align-items:flex-start; gap:20px 28px; }
+.grid .sponsor { width:160px; font-size:.9rem; }
+.community .sponsor { width:112px; font-size:.85rem; }
+.community .logo { width:112px; height:40px; }
+@media (max-width:480px) { .presenting { font-size:1rem; } .presenting .logo { width:104px; height:40px; } .grid { gap:20px 16px; } }
