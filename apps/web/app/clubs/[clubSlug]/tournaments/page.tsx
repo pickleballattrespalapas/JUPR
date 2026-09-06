@@ -88,12 +88,10 @@ function dayHeading(label: string, eventDate?: string | null): string {
     : `${label} · ${formattedDate}`;
 }
 
-function registrationStatusLabel(status?: string | null): string {
-  const normalized = String(status || "").trim().toLocaleLowerCase();
-  if (normalized === "open") return "Registration open";
-  if (normalized === "closed") return "Registration closed";
-  if (normalized === "waitlist") return "Waitlist open";
-  return "Registration not open";
+function registrationStatusLabel(isOpen?: boolean | null): string {
+  if (isOpen === true) return "Registration open";
+  if (isOpen === false) return "Registration closed";
+  return "View registration";
 }
 
 function markdownish(text?: string | null) {
@@ -217,7 +215,7 @@ export default async function PublicTournamentsPage({
                     : ""}
                 </p>
                 <p style={{ margin: "0.35rem 0 0", color: "#64748b" }}>
-                  {registrationStatusLabel(choice.settings.registration_status)}
+                  {registrationStatusLabel(choice.registration_open)}
                 </p>
               </Link>
             ))}
@@ -332,7 +330,7 @@ export default async function PublicTournamentsPage({
               fontWeight: 800
             }}
           >
-            {registrationStatusLabel(settings?.registration_status)}
+            {registrationStatusLabel(data?.registration_open)}
           </span>
         </div>
       </article>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   PublicRegistrationDay,
   PublicRegistrationEvent,
@@ -45,6 +45,7 @@ type TournamentRegistrationFormProps = {
   days: PublicRegistrationDay[];
   events: PublicRegistrationEvent[];
   commerce?: TournamentCommerceCatalog | null;
+  overview?: ReactNode;
 };
 
 type ContactState = {
@@ -202,8 +203,10 @@ export default function TournamentRegistrationForm({
   timeZone,
   days,
   events,
-  commerce
+  commerce,
+  overview
 }: TournamentRegistrationFormProps) {
+  const formRef = useRef<HTMLDivElement>(null);
   const [mode, setMode] = useState<"choose" | "new" | "edit">("choose");
   const [step, setStep] = useState(1);
   const [contact, setContact] = useState<ContactState>({
@@ -251,13 +254,6 @@ export default function TournamentRegistrationForm({
   const selectableEvents = useMemo(() => events.filter((event) => event.selectable), [events]);
   const eventById = useMemo(() => new Map(events.map((event) => [event.id, event])), [events]);
   const daysById = useMemo(() => new Map(days.map((day) => [day.id, day])), [days]);
-  const groupedEvents = useMemo(
-    () =>
-      days
-        .map((day) => ({ day, events: selectableEvents.filter((event) => event.registration_day_id === day.id) }))
-        .filter((row) => row.events.length > 0),
-    [days, selectableEvents]
-  );
   const eligibilityProfile = useMemo(
     () => ({
       gender: contact.gender,
@@ -266,6 +262,17 @@ export default function TournamentRegistrationForm({
       singlesSkill: numericValue(profile.singlesSkill)
     }),
     [contact.gender, contact.age, profile.doublesSkill, profile.singlesSkill]
+  );
+  const eligibleEvents = useMemo(
+    () => selectableEvents.filter((event) => !publicEventEligibilityReason(event, eligibilityProfile)),
+    [selectableEvents, eligibilityProfile]
+  );
+  const groupedEvents = useMemo(
+    () =>
+      days
+        .map((day) => ({ day, events: eligibleEvents.filter((event) => event.registration_day_id === day.id) }))
+        .filter((row) => row.events.length > 0),
+    [days, eligibleEvents]
   );
   const totalPrice = selectedIds.reduce((sum, id) => sum + Number(eventById.get(id)?.price_usd || 0), 0);
   const needsPartnerBoardConsent = selectedIds.some(
@@ -500,6 +507,12 @@ export default function TournamentRegistrationForm({
         return;
       }
     }
+    const eligibleIds = new Set(eligibleEvents.map((event) => event.id));
+    const nextSelectedIds = selectedIds.filter((id) => eligibleIds.has(id));
+    if (nextSelectedIds.length !== selectedIds.length) {
+      setSelectedIds(nextSelectedIds);
+      setCommerceQuote(null);
+    }
     setStep(3);
   }
 
@@ -711,8 +724,7 @@ export default function TournamentRegistrationForm({
     window.location.href = confirmationPath(saved);
   }
 
-  if (mode === "choose") {
-    return (
+  const formContent = mode === "choose" ? (
       <section style={{ ...cardStyle, display: "grid", gap: "0.9rem" }} data-testid="registration-mode-chooser">
         <h2 style={{ margin: 0 }}>
           {registrationOpen ? "Register or make changes" : "Registration is closed"}
@@ -736,11 +748,7 @@ export default function TournamentRegistrationForm({
           <p style={{ color: "#92400e", margin: 0 }}>{registrationClosedReason}</p>
         ) : null}
       </section>
-    );
-  }
-
-  if (mode === "edit") {
-    return (
+    ) : mode === "edit" ? (
       <section style={{ ...cardStyle, display: "grid", gap: "0.9rem" }} data-testid="registration-edit-mode">
         <div>
           <p style={{ color: "#2563eb", fontWeight: 800, margin: "0 0 0.35rem" }}>Edit my registration</p>
@@ -753,10 +761,7 @@ export default function TournamentRegistrationForm({
         {error ? <p role="alert" style={{ color: "#b91c1c", margin: 0 }}>{error}</p> : null}
         <button type="button" onClick={() => resetWizard("choose")} style={secondaryButtonStyle}>Back to registration choices</button>
       </section>
-    );
-  }
-
-  return (
+    ) : (
     <section style={{ display: "grid", gap: "1rem" }} data-testid="registration-new-wizard">
       <div style={{ ...cardStyle, background: "#f8fafc" }}>
         <p style={{ margin: 0, color: "#2563eb", fontWeight: 800 }}>New registration · Step {step} of 4</p>
@@ -810,7 +815,9 @@ export default function TournamentRegistrationForm({
           </aside>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
             <label>Display name *<br /><input aria-label="Display name" value={profile.displayName} onChange={(event) => updateProfile("displayName", event.target.value)} style={inputStyle} /></label>
-            <label>DUPR ID<br /><input aria-label="DUPR ID" value={profile.duprId} onChange={(event) => updateProfile("duprId", event.target.value)} style={inputStyle} /></label>
+            {!profile.candidateId ? (
+              <label>DUPR ID<br /><input aria-label="DUPR ID" value={profile.duprId} onChange={(event) => updateProfile("duprId", event.target.value)} style={inputStyle} /></label>
+            ) : null}
             <label>Doubles skill<br /><input aria-label="Doubles skill" type="number" min="1" max="7" step="0.01" value={profile.doublesSkill} onChange={(event) => updateProfile("doublesSkill", event.target.value)} style={inputStyle} /></label>
             <label>
               Singles skill<br />
@@ -837,14 +844,12 @@ export default function TournamentRegistrationForm({
                 {dayEvents.map((eventOption) => {
                   const selected = selectedIds.includes(eventOption.id);
                   const partner = partnerDetails[eventOption.id] || emptyPartnerState(eventOption);
-                  const eligibilityReason = publicEventEligibilityReason(eventOption, eligibilityProfile);
                   return (
                     <article key={eventOption.id} style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: selected ? "#f8fafc" : "white" }}>
                       <label style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start" }}>
-                        <input type="checkbox" aria-label={`${eventOption.event_family_label} ${eventOption.division_name}`} checked={selected} disabled={Boolean(eligibilityReason)} onChange={(event) => toggleEvent(eventOption.id, event.target.checked)} />
+                        <input type="checkbox" aria-label={`${eventOption.event_family_label} ${eventOption.division_name}`} checked={selected} onChange={(event) => toggleEvent(eventOption.id, event.target.checked)} />
                         <span><strong>{publicTournamentEventLabel(eventOption.event_family_label, eventOption.division_name)}</strong><br /><span style={{ color: "#64748b" }}>{scheduledDaysLabel(eventOption, daysById) || "Schedule TBD"}<br />{eventMeta(eventOption)}</span></span>
                       </label>
-                      {eligibilityReason ? <p style={{ color: "#b91c1c", marginBottom: 0 }}>{eligibilityReason}</p> : null}
                       {selected &&
                       eventOption.partner_required &&
                       String(
@@ -887,7 +892,9 @@ export default function TournamentRegistrationForm({
               </div>
             </div>
           ))}
-          {!selectableEvents.length ? <p>No events are open for registration.</p> : null}
+          {!eligibleEvents.length ? (
+            <p>{selectableEvents.length ? "No available divisions match your age, gender, and skill level." : "No events are open for registration."}</p>
+          ) : null}
           {selectedTeamEvents.map((teamEvent) => (
             <FourPlayerTeamRegistrationCard
               key={teamEvent.id}
@@ -993,5 +1000,62 @@ export default function TournamentRegistrationForm({
         {step === 4 ? <button type="button" onClick={submitRegistration} disabled={pending} style={primaryButtonStyle}>{pending ? "Submitting…" : savedRegistration ? "Finish team registration" : "Submit registration"}</button> : null}
       </div>
     </section>
+  );
+
+  return (
+    <>
+      {registrationOpen && mode !== "new" ? (
+        <article
+          style={{
+            ...cardStyle,
+            marginBottom: "1rem",
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "1rem",
+            alignItems: "center",
+            justifyContent: "space-between",
+            background: "#eff6ff",
+            borderColor: "#93c5fd"
+          }}
+        >
+          <div>
+            <h2 style={{ margin: 0 }}>Ready to register?</h2>
+            <p style={{ color: "#475569", margin: "0.35rem 0 0" }}>
+              Choose from {selectableEvents.length} open division
+              {selectableEvents.length === 1 ? "" : "s"} below.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              resetWizard("new");
+              requestAnimationFrame(() => {
+                formRef.current?.scrollIntoView({ block: "start" });
+                formRef.current?.querySelector<HTMLInputElement>('[aria-label="First name"]')?.focus({ preventScroll: true });
+              });
+            }}
+            style={{
+              display: "inline-block",
+              border: 0,
+              font: "inherit",
+              cursor: "pointer",
+              padding: "0.7rem 1rem",
+              borderRadius: "999px",
+              background: "#0f172a",
+              color: "white",
+              textDecoration: "none",
+              fontWeight: 800
+            }}
+          >
+            Register now
+          </button>
+        </article>
+      ) : null}
+
+      {overview}
+      <div id="registration-form" ref={formRef} style={{ scrollMarginTop: "1rem" }}>
+        {formContent}
+      </div>
+    </>
   );
 }

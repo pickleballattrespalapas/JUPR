@@ -56,8 +56,10 @@ test("new-registration wizard requires demographics and resolves profiles throug
   await page.goto(fixturePath, { waitUntil: "domcontentloaded" });
   const start = page.getByRole("button", { name: "Start a registration" });
   test.skip(await start.isDisabled(), "The configured staging tournament is closed; closed-state contracts are covered by FastAPI tests.");
-  await start.click();
+  await page.getByRole("button", { name: "Register now", exact: true }).click();
   await expect(page.getByTestId("registration-step-contact")).toBeVisible();
+  await expect(page.getByLabel("First name")).toBeFocused();
+  await expect(page.getByTestId("registration-mode-chooser")).toHaveCount(0);
 
   await page.getByRole("button", { name: "Continue", exact: true }).click();
   await expect(
@@ -72,11 +74,15 @@ test("new-registration wizard requires demographics and resolves profiles throug
   await page.getByRole("button", { name: "Continue", exact: true }).click();
 
   await expect(page.getByTestId("registration-step-profile")).toBeVisible();
+  await expect(page.getByLabel("DUPR ID", { exact: true })).toBeVisible();
   await page.getByText(/Avery Ace · Doubles 4 · Singles not set/).click();
+  await expect(page.getByLabel("DUPR ID", { exact: true })).toHaveCount(0);
   await expect(page.getByLabel("Display name")).toHaveValue("Avery Ace");
   await expect(page.getByLabel("Doubles skill")).toHaveValue("4");
   await expect(page.getByLabel("Singles skill")).toHaveValue("");
   await page.getByLabel("Singles skill").fill("3.5");
   await expect(page.getByLabel("Singles skill")).toHaveValue("3.5");
   await expect(page.getByText(/Choosing a profile only fills in this form/i)).toBeVisible();
+  await page.getByText("None of these is me", { exact: true }).click();
+  await expect(page.getByLabel("DUPR ID", { exact: true })).toBeVisible();
 });
