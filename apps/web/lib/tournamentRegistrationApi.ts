@@ -27,6 +27,8 @@ export type PublicTournamentSettings = {
 export type PublicTournamentChoice = {
   tournament: PublicTournamentSummary;
   settings: PublicTournamentSettings;
+  registration_open?: boolean;
+  registration_closed_reason?: string | null;
 };
 
 export type PublicRegistrationDay = {

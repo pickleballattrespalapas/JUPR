@@ -443,6 +443,8 @@ def test_public_tournament_registration_page_is_public_safe() -> None:
 
     assert payload["available"] is True
     assert payload["registration_open"] is True
+    assert payload["tournaments"][0]["registration_open"] is True
+    assert payload["tournaments"][0]["registration_closed_reason"] is None
     assert payload["tournament"]["name"] == "Tres Palapas Open"
     assert payload["events"][0]["selectable"] is True
     assert payload["events"][0]["price_usd"] == 50

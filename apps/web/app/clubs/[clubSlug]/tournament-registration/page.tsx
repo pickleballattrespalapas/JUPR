@@ -74,8 +74,9 @@ export default async function TournamentRegistrationPage({
       </p>
       <PublicTournamentSponsors clubSlug={clubSlug} tournamentId={tournament?.id} placement="header" title={tournament?.name ?? "Tournament registration"} />
       <p style={{ color: "#334155", maxWidth: "820px" }}>
-        Choose your events and complete the form below. Need details? Visit
-        Tournament Home anytime.
+        {data?.registration_open
+          ? "Choose your events and complete the form below. Need details? Visit Tournament Home anytime."
+          : "View registration details or manage an existing registration below."}
       </p>
 
       {error ? (
