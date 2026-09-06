@@ -169,15 +169,26 @@ def _pending_requests_for_event(supabase, *, event_option_id: str) -> list[dict[
 
 
 def _update_selection_partner_mode(supabase, *, selection_id: str, partner_mode: str) -> dict[str, Any]:
+    current = _get_selection(supabase, selection_id)
+    already_set = _safe_text(current.get("partner_mode")).upper() == _safe_text(partner_mode).upper()
+    if already_set and (
+        _safe_text(partner_mode).upper() != "HAS_PARTNER"
+        or current.get("show_on_partner_board") is False
+    ):
+        return current
     payload: dict[str, Any] = {"partner_mode": partner_mode}
     if _safe_text(partner_mode).upper() == "HAS_PARTNER":
         payload["show_on_partner_board"] = False
-    updated = _safe_first(
-        _table(supabase, "tournament_registration_selections")
-        .update(payload)
-        .eq("id", _safe_text(selection_id))
-        .execute()
-    )
+    if already_set:
+        # Legacy entries can already say HAS_PARTNER while their canonical
+        # team is being confirmed. Updating that column again unnecessarily
+        # invokes manual-partner creation and its missing-email validation.
+        # Only finish the board flag, preserving the legacy identity fields.
+        payload.pop("partner_mode")
+    query = _table(supabase, "tournament_registration_selections").update(payload).eq("id", _safe_text(selection_id))
+    if already_set:
+        query = query.eq("partner_mode", current.get("partner_mode"))
+    updated = _safe_first(query.execute())
     if not updated:
         raise ValueError("Registration selection could not be updated.")
     return updated
