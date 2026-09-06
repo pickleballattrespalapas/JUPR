@@ -760,8 +760,8 @@ BADGE_DEFINITIONS: list[BadgeDefinition] = [
         rarity="rare",
         tier=None,
         icon_key="good_sport",
-        lore='Awarded manually for outstanding sportsmanship.',
-        hint='Awarded manually for outstanding sportsmanship.',
+        lore='Awarded by a club admin for honest calls even when they cost a point, respectful handling of a difficult situation, or consistently encouraging and supporting other players.',
+        hint='Awarded by a club admin for honest calls even when they cost a point, respectful handling of a difficult situation, or consistently encouraging and supporting other players.',
         scope="overall",
     ),
     BadgeDefinition(
@@ -774,8 +774,8 @@ BADGE_DEFINITIONS: list[BadgeDefinition] = [
         rarity="epic",
         tier=None,
         icon_key="community_builder",
-        lore='Awarded manually for meaningful community impact.',
-        hint='Awarded manually for meaningful community impact.',
+        lore='Awarded by a club admin for welcoming newcomers and helping them find games, volunteering at club events, organizing inclusive social play, or introducing new participants to the club.',
+        hint='Awarded by a club admin for welcoming newcomers and helping them find games, volunteering at club events, organizing inclusive social play, or introducing new participants to the club.',
         scope="overall",
     ),
     BadgeDefinition(
@@ -788,8 +788,8 @@ BADGE_DEFINITIONS: list[BadgeDefinition] = [
         rarity="epic",
         tier=None,
         icon_key="mentor",
-        lore='Awarded manually for mentorship contributions.',
-        hint='Awarded manually for mentorship contributions.',
+        lore='Awarded by a club admin for helping a newer player improve over several visits, leading beginner lessons or practice sessions, or helping players learn rules and court etiquette.',
+        hint='Awarded by a club admin for helping a newer player improve over several visits, leading beginner lessons or practice sessions, or helping players learn rules and court etiquette.',
         scope="match",
     ),
 ]
