@@ -49,3 +49,11 @@ assert.match(titled([]), /Baja Classic 2026/, "The tournament title remains when
 assert.doesNotMatch(titled([]), /Presented by/);
 assert.match(titled([sponsor], "h2"), /<h2[^>]*>Baja Classic 2026<\/h2>/);
 assert.match(titled([sponsor, { ...sponsor, id: "2", name: "Second sponsor" }]), / and /);
+
+for (const tier of ["presenting", "premier", "supporting"]) {
+  const markup = render([{ ...sponsor, tier, public_description: "Local homes.\n<script>alert('x')</script>", notes: "Private contract" }], tier === "presenting" ? "header" : "footer");
+  assert.match(markup, /Local homes\.\n&lt;script&gt;/, "Public text is escaped and retains line breaks");
+  assert.doesNotMatch(markup, /<script>|Private contract/);
+  assert.ok(markup.indexOf("</a>") < markup.indexOf("Local homes."), "Description is readable text outside the website link");
+}
+assert.equal(render([{ ...sponsor, public_description: "  " }], "header"), header, "Blank descriptions leave the header unchanged");
