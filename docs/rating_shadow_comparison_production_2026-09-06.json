@@ -1,0 +1,85 @@
+{
+  "as_of": "2026-09-06",
+  "data_access": "production_read_only",
+  "purpose": "private_shadow_benchmark_only",
+  "input": {
+    "excluded_leagues": [
+      "test league"
+    ],
+    "matches": 2201
+  },
+  "selection": {
+    "candidate_count": 24,
+    "rule": "lowest validation Brier score; log loss breaks ties",
+    "selected_parameters": {
+      "fallback_initial_rating_elo": 1200.0,
+      "minimum_variance_elo2": 25.0,
+      "performance_sigma_elo": 150.0,
+      "prior_sigma_elo": 200.0,
+      "score_smoothing_points": 1.0
+    },
+    "validation_window": {
+      "end_exclusive": "2026-04-01T00:00:00+00:00",
+      "start_inclusive": "2026-03-01T00:00:00+00:00"
+    }
+  },
+  "validation": {
+    "matches": 435,
+    "current_jupr": {
+      "brier_score": 0.23124051244287336,
+      "log_loss": 0.6537244886044229,
+      "outcome_accuracy": 0.6183908045977011,
+      "score_share_mae": 0.1575963244377026
+    },
+    "bayesian_shadow": {
+      "brier_score": 0.215845811324869,
+      "log_loss": 0.618175657641647,
+      "outcome_accuracy": 0.6436781609195402,
+      "score_share_mae": 0.14850222357333862
+    }
+  },
+  "holdout": {
+    "matches": 477,
+    "window": {
+      "end_exclusive": null,
+      "start_inclusive": "2026-04-01T00:00:00+00:00"
+    },
+    "current_jupr": {
+      "brier_score": 0.23076693018005448,
+      "log_loss": 0.6540599797787762,
+      "outcome_accuracy": 0.6079664570230608,
+      "score_share_mae": 0.16193461890072738
+    },
+    "bayesian_shadow": {
+      "brier_score": 0.2197086577284274,
+      "log_loss": 0.6323178428611816,
+      "outcome_accuracy": 0.6352201257861635,
+      "score_share_mae": 0.1561925239315444
+    }
+  },
+  "full_history": {
+    "matches": 2201,
+    "current_jupr": {
+      "brier_score": 0.22894626327117473,
+      "log_loss": 0.6496234256442951,
+      "outcome_accuracy": 0.6265333939118582,
+      "score_share_mae": 0.16447823067092365
+    },
+    "bayesian_shadow": {
+      "brier_score": 0.22113230756044924,
+      "log_loss": 0.6320503868813132,
+      "outcome_accuracy": 0.6310767832803271,
+      "score_share_mae": 0.1587775277169524
+    }
+  },
+  "official_policy_checks": {
+    "loser_outperformance_gains": 316,
+    "winner_gain_violations": 0
+  },
+  "guardrails": {
+    "changes_official_ratings": false,
+    "eligible_for_automatic_promotion": false,
+    "uses_production_writes": false,
+    "visible_to_players": false
+  }
+}

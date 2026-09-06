@@ -11,6 +11,7 @@ from jupr_app.domain.constants import DEFAULT_K_FACTOR
 from jupr_app.domain.matches import compute_outcomes, compute_team_deltas
 from jupr_app.domain.player_activity import coerce_utc_datetime, max_activity_time
 from jupr_app.domain.ratings import calculate_hybrid_elo
+from jupr_app.domain.rating_policy import rating_calculation_metadata
 
 FULL_RESET_LABEL = "ALL (Full System Reset)"
 _RESERVED_LEAGUE_NAMES = frozenset({"", "overall", "popup", "singles"})
@@ -343,6 +344,14 @@ def _managed_singles_replay_plan(
             "t1_p2_r_end": None,
             "t2_p1_r_end": float(end_r2),
             "t2_p2_r_end": None,
+            **rating_calculation_metadata(
+                overall_k_factor=float(DEFAULT_K_FACTOR),
+                league_k_factor=(
+                    float(league_metadata.get("k_factor") or DEFAULT_K_FACTOR)
+                    if league_p1_state is not None
+                    else None
+                ),
+            ),
         }
         snapshots.append(snapshot)
         row_league_key = _normalize_league_name(row.get("league")).casefold()
@@ -1003,6 +1012,12 @@ def replay_history(
                         "t1_p2_r_end": float(er2),
                         "t2_p1_r_end": float(er3),
                         "t2_p2_r_end": float(er4),
+                        **rating_calculation_metadata(
+                            overall_k_factor=float(DEFAULT_K_FACTOR),
+                            league_k_factor=(
+                                float(k_for(lg)) if do_league else None
+                            ),
+                        ),
                     }
                 )
 

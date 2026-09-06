@@ -409,8 +409,10 @@ def process_matches(
             cap_loser_gain=cap_loser_gain_elo,
         )
         di1, di2 = 0.0, 0.0
+        league_k_factor: float | None = None
         if update_island:
             k_val = get_k(league_name)
+            league_k_factor = float(k_val)
             ri1, ri2, ri3, ri4 = get_island_r(p1, league_name), get_island_r(p2, league_name), get_island_r(p3, league_name), get_island_r(p4, league_name)
             di1, di2 = compute_team_deltas(
                 (ri1 + ri2) / 2.0,
@@ -459,6 +461,10 @@ def process_matches(
                 end_ratings=(end_r1, end_r2, end_r3, end_r4),
                 context=m,
                 rating_scope=rating_scope,
+                overall_k_factor=float(default_k_factor),
+                min_win_delta_elo=float(min_win_delta_elo),
+                cap_loser_gain_elo=cap_loser_gain_elo,
+                league_k_factor=league_k_factor,
             )
         )
         match_payloads.append({"league": league_name, "date": dt_val, "score_t1": s1, "score_t2": s2})

@@ -1,7 +1,22 @@
-.PHONY: db-migrate check-migration-sources check-next-parity-matrix check-parity-closure-program check-parity-manual-book check-parity-final-evidence check-parity-final-evidence-integrated check-parity-final-evidence-complete api-test public-web-smoke next-staging-browser-smoke admin-pilot-smoke
+.PHONY: db-migrate rating-backtest rating-shadow-compare check-migration-sources check-next-parity-matrix check-parity-closure-program check-parity-manual-book check-parity-final-evidence check-parity-final-evidence-integrated check-parity-final-evidence-complete api-test public-web-smoke next-staging-browser-smoke admin-pilot-smoke
 
 db-migrate: ## Apply pending SQL migrations (requires DATABASE_URL)
 	@bash scripts/db_migrate.sh
+
+rating-backtest: ## Chronological predictive backtest (MATCH_EXPORT=path/to/matches.json)
+	@test -n "$(MATCH_EXPORT)" || (echo "MATCH_EXPORT is required" >&2; exit 2)
+	@python scripts/backtest_ratings.py --input "$(MATCH_EXPORT)"
+
+rating-shadow-compare: ## Compare JUPR and Bayesian shadow on validation/holdout windows
+	@test -n "$(MATCH_EXPORT)" || (echo "MATCH_EXPORT is required" >&2; exit 2)
+	@test -n "$(VALIDATION_START)" || (echo "VALIDATION_START is required" >&2; exit 2)
+	@test -n "$(VALIDATION_END)" || (echo "VALIDATION_END is required" >&2; exit 2)
+	@test -n "$(HOLDOUT_START)" || (echo "HOLDOUT_START is required" >&2; exit 2)
+	@python scripts/compare_rating_models.py --input "$(MATCH_EXPORT)" \
+		--validation-start "$(VALIDATION_START)" \
+		--validation-end "$(VALIDATION_END)" \
+		--holdout-start "$(HOLDOUT_START)" \
+		$(if $(HOLDOUT_END),--holdout-end "$(HOLDOUT_END)",)
 
 check-migration-sources: ## Guard: block undocumented new root migrations
 	@python scripts/check_migration_sources.py

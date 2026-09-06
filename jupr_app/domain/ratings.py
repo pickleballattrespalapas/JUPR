@@ -1,3 +1,14 @@
+def expected_team1_performance(t1_avg: float, t2_avg: float) -> float:
+    """Return team 1's pre-match expectation from the Elo rating gap."""
+
+    try:
+        return 1.0 / (
+            1.0 + 10.0 ** ((float(t2_avg) - float(t1_avg)) / 400.0)
+        )
+    except Exception:
+        return 0.5
+
+
 def calculate_hybrid_elo(
     t1_avg: float,
     t2_avg: float,
@@ -31,10 +42,7 @@ def calculate_hybrid_elo(
         return 0.0, 0.0
 
     # Expected outcome from ratings
-    try:
-        expected_t1 = 1.0 / (1.0 + 10.0 ** ((float(t2_avg) - float(t1_avg)) / 400.0))
-    except Exception:
-        expected_t1 = 0.5
+    expected_t1 = expected_team1_performance(t1_avg, t2_avg)
     expected_t2 = 1.0 - expected_t1
 
     # Observed performance proxy from score share

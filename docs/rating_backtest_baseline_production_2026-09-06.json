@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "generated_at_utc": "2026-09-06T17:30:24Z",
+  "source": {
+    "environment": "JUPR Production (read-only)",
+    "project_ref": "dnoockbwfenunhcibwfn",
+    "base_commit": "42b3f2b42fb668d6ff4a8767e3d606f2f3dc1e29",
+    "clubs": 1,
+    "total_match_rows": 2239,
+    "evaluated_rated_matches": 2223,
+    "skipped_missing_player_slots": 15,
+    "skipped_invalid_scores": 1,
+    "players_simulated": 406,
+    "rating_states_simulated": 406,
+    "first_match_at": "2025-12-17T00:00:00Z",
+    "last_match_at": "2026-05-06T17:43:10.601506Z"
+  },
+  "model": {
+    "algorithm_version": "jupr-hybrid-score-share-v1",
+    "parameter_version": "flat-k32-floor1-loser-cap16-v1"
+  },
+  "method": "chronological_walk_forward",
+  "metrics": {
+    "brier_score": 0.22919124231328505,
+    "log_loss": 0.6501469169380543,
+    "outcome_accuracy": 0.6257309941520468,
+    "score_share_mae": 0.16511222364314904,
+    "brier_improvement_vs_50_percent": 0.020808757686715168,
+    "brier_improvement_95pct_normal_ci": [
+      0.01665680549302575,
+      0.024960709880404587
+    ]
+  },
+  "by_format": {
+    "doubles": {
+      "matches": 2223,
+      "brier_score": 0.22919124231328505,
+      "log_loss": 0.6501469169380543,
+      "outcome_accuracy": 0.6257309941520468,
+      "score_share_mae": 0.16511222364314904
+    }
+  },
+  "by_month": {
+    "2025-12": {
+      "matches": 211,
+      "brier_score": 0.22751289623103663,
+      "log_loss": 0.6464712899402715,
+      "outcome_accuracy": 0.6635071090047393,
+      "score_share_mae": 0.176992180682282
+    },
+    "2026-01": {
+      "matches": 487,
+      "brier_score": 0.2278160317008524,
+      "log_loss": 0.6462255133677799,
+      "outcome_accuracy": 0.6119096509240246,
+      "score_share_mae": 0.16790710621531368
+    },
+    "2026-02": {
+      "matches": 613,
+      "brier_score": 0.22818116559679058,
+      "log_loss": 0.6489438275177659,
+      "outcome_accuracy": 0.6427406199021207,
+      "score_share_mae": 0.16660872424445966
+    },
+    "2026-03": {
+      "matches": 435,
+      "brier_score": 0.2312405124428734,
+      "log_loss": 0.6537244886044227,
+      "outcome_accuracy": 0.6183908045977011,
+      "score_share_mae": 0.15759632443770263
+    },
+    "2026-04": {
+      "matches": 363,
+      "brier_score": 0.23355681218414492,
+      "log_loss": 0.6602253203819722,
+      "outcome_accuracy": 0.5922865013774105,
+      "score_share_mae": 0.1635711502797715
+    },
+    "2026-05": {
+      "matches": 114,
+      "brier_score": 0.22188335853545113,
+      "log_loss": 0.6344282373317567,
+      "outcome_accuracy": 0.6578947368421053,
+      "score_share_mae": 0.1567235584569288
+    }
+  },
+  "as_recorded_snapshot_cross_check": {
+    "matches": 2223,
+    "brier_score": 0.229222516131202,
+    "log_loss": 0.650205638154258,
+    "outcome_accuracy": 0.624831309041835,
+    "score_share_mae": 0.165127718531516
+  },
+  "sensitivity_excluding_explicit_test_league": {
+    "matches": 2201,
+    "brier_score": 0.22894626327117498,
+    "log_loss": 0.6496234256442942,
+    "outcome_accuracy": 0.6265333939118582,
+    "score_share_mae": 0.16447823067092346,
+    "brier_improvement_vs_50_percent": 0.021053736728825285,
+    "brier_improvement_95pct_normal_ci": [
+      0.016882860803107403,
+      0.025224612654543167
+    ]
+  },
+  "policy_checks": {
+    "winner_gain_violations": 0,
+    "loser_outperformance_gains": 317
+  },
+  "decision_note": "This is the first formula-decision baseline. It shows that current JUPR predicts these production doubles results better than a blind 50/50 forecast. It does not establish singles accuracy and does not by itself show that current JUPR is better than an adaptive-K or Bayesian doubles candidate. Candidate comparison must use the same ordered production history and a later untouched holdout period. The confidence interval shown is a simple match-level normal interval and does not adjust for repeated players. No player-level or match-level production data is retained in this artifact."
+}

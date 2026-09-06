@@ -2,12 +2,17 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from jupr_app.domain.rating_policy import rating_calculation_metadata
+
 
 OPTIONAL_MATCH_INSERT_COLUMNS = (
     "rating_scope",
     "rating_bonus_elo",
     "rating_bonus_reason",
     "match_format",
+    "rating_algorithm_version",
+    "rating_parameter_version",
+    "rating_parameters",
 )
 
 
@@ -51,6 +56,10 @@ def build_match_row(
     context: dict[str, Any],
     rating_scope: str,
     match_format: str | None = None,
+    overall_k_factor: float = 32.0,
+    min_win_delta_elo: float = 1.0,
+    cap_loser_gain_elo: float | None = 16.0,
+    league_k_factor: float | None = None,
 ) -> dict[str, Any]:
     p1, p2, p3, p4 = pids
     s1, s2 = scores
@@ -83,6 +92,12 @@ def build_match_row(
         "tournament_game_id": context.get("tournament_game_id"),
         "rating_scope": rating_scope,
         "match_format": _normalize_match_format(match_format or context.get("match_format")),
+        **rating_calculation_metadata(
+            overall_k_factor=overall_k_factor,
+            min_win_delta_elo=min_win_delta_elo,
+            cap_loser_gain_elo=cap_loser_gain_elo,
+            league_k_factor=league_k_factor,
+        ),
     }
     bonus_elo = _safe_positive_float(context.get("rating_bonus_elo", context.get("winner_bonus_elo")))
     if bonus_elo > 0:
