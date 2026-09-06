@@ -6,7 +6,8 @@ import { sponsorTiers, type SponsorDraft, type SponsorTier } from "@/lib/tournam
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
-import { actionSuccess, InteractionActionError, type ActionSuccess } from "@/components/interaction";
+import { actionSuccess, type ActionSuccess } from "@/components/interaction";
+import { InteractionActionError } from "@/components/interaction/types";
 import { tournamentSetupActionError } from "@/lib/tournamentSetupActionError";
 import TournamentSetupWizardNav, {
   TOURNAMENT_SETUP_STEPS,
