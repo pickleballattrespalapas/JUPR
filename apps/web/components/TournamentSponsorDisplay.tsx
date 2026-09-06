@@ -10,15 +10,25 @@ function Sponsor({ sponsor, presenting = false }: { sponsor: TournamentSponsor; 
   let website = "";
   try { website = normalizeSponsorWebsite(sponsor.website); } catch { /* Invalid legacy links render as plain names. */ }
   const name = <strong>{sponsor.name}</strong>;
-  const logo = sponsor.logo_url && failedUrl !== sponsor.logo_url ? <Image unoptimized src={sponsor.logo_url} alt="" width={160} height={56} referrerPolicy="no-referrer" className={styles.logo} onError={() => setFailedUrl(sponsor.logo_url || "")} /> : null;
+  const logo = sponsor.logo_url && failedUrl !== sponsor.logo_url ? <Image unoptimized src={sponsor.logo_url} alt="" width={presenting ? 240 : 160} height={presenting ? 96 : 56} referrerPolicy="no-referrer" className={styles.logo} onError={() => setFailedUrl(sponsor.logo_url || "")} /> : null;
   const content = presenting ? <>{name}{logo}</> : <>{logo}{name}</>;
   return website ? <a className={styles.sponsor} href={website} target="_blank" rel="sponsored noopener noreferrer" referrerPolicy="no-referrer" aria-label={`Visit ${sponsor.name} (opens in a new tab)`}>{content}</a> : <span className={styles.sponsor}>{content}</span>;
 }
 
-export default function TournamentSponsorDisplay({ sponsors, placement }: { sponsors: TournamentSponsor[]; placement: "header" | "footer" }) {
+export type SponsorDisplayProps = {
+  sponsors: TournamentSponsor[];
+  placement: "header" | "footer";
+  title?: string;
+  headingLevel?: "h1" | "h2";
+};
+
+export default function TournamentSponsorDisplay({ sponsors, placement, title, headingLevel: Heading = "h1" }: SponsorDisplayProps) {
   const records = sponsors.filter(s => placement === "header" ? s.tier === "presenting" : s.tier !== "presenting");
+  if (placement === "header") {
+    const presenting = records.length ? <div className={styles.presenting} aria-label="Presenting sponsors"><span>Presented by </span><span className={styles.names}>{records.map((s, index) => <Fragment key={s.id}>{index > 0 ? <span>{index === records.length - 1 ? " and " : ", "}</span> : null}<Sponsor sponsor={s} presenting /></Fragment>)}</span></div> : null;
+    return title ? <div className={styles.titleRow}><Heading className={styles.title}>{title}</Heading>{presenting}</div> : presenting;
+  }
   if (!records.length) return null;
-  if (placement === "header") return <div className={styles.presenting} aria-label="Presenting sponsors"><span>Presented by </span><span className={styles.names}>{records.map((s, index) => <Fragment key={s.id}>{index > 0 ? <span>{index === records.length - 1 ? " and " : ", "}</span> : null}<Sponsor sponsor={s} presenting /></Fragment>)}</span></div>;
   const groups = new Map<string, { label: string; community: boolean; records: TournamentSponsor[] }>();
   for (const tier of ["premier", "supporting"] as const) for (const s of records.filter(row => row.tier === tier)) {
     const label = s.level || sponsorTierLabels[tier];
