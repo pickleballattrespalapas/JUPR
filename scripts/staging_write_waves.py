@@ -256,6 +256,7 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/admin/clubs/{club_id}/tools/social-submissions/{event_id}/moderate"),
         ("POST", "/admin/clubs/{club_id}/tools/backfills/tournament-matches/apply"),
         ("PATCH", "/admin/clubs/{club_id}/tools/roles"),
+        ("PUT", "/admin/clubs/{club_id}/staff"),
         ("POST", "/admin/clubs/{club_id}/tools/workers/badge-queue"),
         ("POST", "/admin/clubs/{club_id}/tools/workers/badge-recompute"),
         ("POST", "/admin/clubs/{club_id}/tools/backfills/tournament-matches/operations/{operation_key}/recover"),

@@ -1419,3 +1419,10 @@ def submit_admin_match_batch(club_id: str, payload: MatchBatchRequest, authoriza
             "operator_rule": "Retry the exact unchanged request after an interrupted response; the same idempotency key cannot create a duplicate.",
         },
     }
+
+
+# Install after all routes so the scope boundary covers every registered family.
+from services.api.admin_staff_routes import install_admin_staff_routes
+from services.api.staff_access import install_staff_access
+install_admin_staff_routes(app, get_supabase_client=get_supabase_client)
+install_staff_access(app, get_supabase_client=get_supabase_client)

@@ -5,6 +5,7 @@ from typing import Any, Callable
 from fastapi import HTTPException, Query
 
 from jupr_app.domain.admin.roles import ALL_ROLES, ROLE_PERMISSION_MATRIX
+from jupr_app.domain.admin.staff_policy import assignment_active
 from services.api.auth import authenticate_bearer, auth_header
 
 
@@ -20,6 +21,8 @@ def _matching_assignments(
 ) -> list[dict[str, Any]]:
     assignments: list[dict[str, Any]] = []
     for row in rows:
+        if not assignment_active(row):
+            continue
         row_user_id = str(row.get("user_id") or "").strip()
         if row_user_id and row_user_id != user_id:
             continue
@@ -31,6 +34,7 @@ def _matching_assignments(
             {
                 "club_id": club_id,
                 "role": role,
+                **({"scopes": row.get("scopes", []), "expires_at": row.get("expires_at")} if role in {"administrator", "operator"} else {}),
                 "permissions": sorted(ROLE_PERMISSION_MATRIX.get(role, frozenset())),
             }
         )
@@ -56,7 +60,7 @@ def require_admin_assignments(
         rows = (
             get_supabase_client()
             .table("admin_role_assignments")
-            .select("club_id,role,user_id")
+            .select("*")
             .eq("email", user.email)
             .execute()
             .data
