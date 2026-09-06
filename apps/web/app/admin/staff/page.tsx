@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { ConfirmAction } from "@/components/ConfirmAction";
 import { useEffect, useState } from "react";
 import { useAdminSession } from "@/lib/useAdminSession";
 import { getAdminPlayerEditorApiBaseUrl } from "@/lib/adminPlayerEditorApi";
@@ -38,7 +39,7 @@ export default function StaffPage() {
     return () => controller.abort();
   }, [accessToken, clubId, api, revision]);
   async function save(target?: Staff) {
-    if (!api || busy) return;
+    if (!api || busy) { if (target) throw new Error("Staff service is not ready."); return; }
     setBusy(true); setMessage("");
     try {
       const response = await fetch(`${api}/admin/clubs/${encodeURIComponent(clubId)}/staff`, {
@@ -51,7 +52,7 @@ export default function StaffPage() {
       if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Check the email and scope fields.");
       setMessage(target ? "Staff access removed." : "Staff access saved. They can sign in using this email.");
       setEmail(""); setRevision(n => n + 1);
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to save staff."); }
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to save staff."); if (target) throw error; }
     finally { setBusy(false); }
   }
   if (loading) return <p>Loading staff access…</p>;
@@ -83,7 +84,7 @@ export default function StaffPage() {
       {row.expires_at && <p>Expires {new Date(row.expires_at).toLocaleString()}</p>}
       {["administrator", "operator", "club_owner"].includes(row.role) && <div style={{ display: "flex", gap: 12 }}>
         <button disabled={busy} onClick={() => { setEmail(row.email); setRole(row.role === "operator" ? "operator" : "administrator"); setScopes(row.scopes?.length ? row.scopes : [{ kind: "program_type", program_type: "leagues", resource_id: "" }]); setExpires(row.expires_at ? new Date(new Date(row.expires_at).getTime() - new Date(row.expires_at).getTimezoneOffset() * 60000).toISOString().slice(0,16) : ""); }}>Edit access</button>
-        {!row.revoked_at && <button disabled={busy} onClick={() => { if (window.confirm(`Remove staff access for ${row.email}?`)) void save(row); }}>Remove access</button>}
+        {!row.revoked_at && <ConfirmAction disabled={busy} triggerLabel="Remove access" title="Remove staff access?" description={`Remove access for ${row.email} at this club.`} confirmLabel="Remove access" confirmationText="" tone="danger" onConfirm={async () => { await save(row); return { status: "success", title: "Staff access removed", description: `${row.email} no longer has this club assignment.` }; }}/>}
       </div>}
     </article>)}
     <p><Link href="/admin">Back to club operations</Link></p>
