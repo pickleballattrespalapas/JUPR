@@ -546,7 +546,13 @@ def _open_tournament_choices(supabase: Any, *, club_id: str) -> list[dict[str, A
         tournament = _public_tournament(item.get("tournament") or {})
         settings = _public_settings(item.get("settings") or {})
         if tournament and settings:
-            choices.append({"tournament": tournament, "settings": settings})
+            registration_open, closed_reason = registration_is_open(item.get("settings") or {})
+            choices.append({
+                "tournament": tournament,
+                "settings": settings,
+                "registration_open": bool(registration_open),
+                "registration_closed_reason": closed_reason,
+            })
     return choices
 
 
