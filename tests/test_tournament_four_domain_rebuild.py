@@ -1318,6 +1318,82 @@ def test_skill_ceiling_change_blocks_only_team_that_is_playing_down() -> None:
     assert proposed_value["skill_eligibility"]["skill_ceiling_exclusive"] == 4.0
 
 
+@pytest.mark.parametrize("status", ["cancelled", "confirmed", "waitlist"])
+@pytest.mark.parametrize("policy", ["skill", "age", "gender", "participant"])
+def test_publish_eligibility_ignores_only_cancelled_entries(status: str, policy: str) -> None:
+    storage = base_storage()
+    storage["tournament_event_options"][0].update({"skill_mode": "OPEN", "skill_label": "Open"})
+    storage["tournament_registrations"] = [
+        {"id": "r1", "tournament_id": "t1", "status": status, "age": 38, "gender": "Male", "doubles_skill": 5.19},
+    ]
+    storage["tournament_registration_selections"] = [
+        {"id": "s1", "tournament_id": "t1", "registration_id": "r1", "registration_day_id": "day1", "event_option_id": "event1", "partner_mode": "HAS_PARTNER", "partner_age": 38, "partner_gender": "Male", "partner_skill": 5.0},
+    ]
+    changes = {
+        "skill": {"skill_mode": "STANDARD", "eligibility_mode": "STANDARD", "skill_label": "3.5"},
+        "age": {"age_mode": "FIXED_AGE_BRACKET", "age_rules": {"mode": "FIXED_AGE_BRACKET", "min_age": 50, "team_age_rule": "YOUNGER"}},
+        "gender": {"gender_restriction": "WOMEN"},
+        "participant": {"event_type": "SINGLES"},
+    }
+    proposed = {**storage["tournament_event_options"][0], **changes[policy]}
+    impact = analyze_registration_publish_impact(
+        FakeSupabase(storage), tournament_id="t1",
+        days=storage["tournament_registration_days"], event_options=[proposed],
+    )
+    affected = [row for detail in impact["blocked_details"] for row in detail["affected_registrations"]]
+    assert {row["registration_id"] for row in affected} == (set() if status == "cancelled" else {"r1"})
+    if status == "cancelled":
+        assert impact["blocked_details"] == []
+        assert impact["communication_impact_details"] == []
+        selections_before = deepcopy(storage["tournament_registration_selections"])
+        publish_registration_configuration(
+            FakeSupabase(storage), tournament_id="t1",
+            days=storage["tournament_registration_days"], event_options=[proposed],
+        )
+        assert storage["tournament_registration_selections"] == selections_before
+        assert storage["tournament_registrations"][0]["status"] == "cancelled"
+
+
+def test_cancelled_entries_do_not_require_age_communication_but_draws_still_block() -> None:
+    storage = base_storage()
+    storage["tournament_registrations"] = [
+        {"id": "r1", "tournament_id": "t1", "status": "cancelled", "age": 65},
+    ]
+    storage["tournament_registration_selections"] = [
+        {"id": "s1", "tournament_id": "t1", "registration_id": "r1", "registration_day_id": "day1", "event_option_id": "event1", "partner_mode": "NEEDS_PARTNER"},
+    ]
+    proposed = {**storage["tournament_event_options"][0], "age_mode": "FIXED_AGE_BRACKET", "age_rules": {"mode": "FIXED_AGE_BRACKET", "min_age": 50, "team_age_rule": "YOUNGER"}}
+    def review():
+        return analyze_registration_publish_impact(
+            FakeSupabase(storage), tournament_id="t1",
+            days=storage["tournament_registration_days"], event_options=[proposed],
+        )
+    impact = review()
+    assert impact["blocked_details"] == []
+    assert impact["communication_impact_details"] == []
+    storage["tournament_event_draws"] = [{"id": "draw1", "tournament_id": "t1", "event_option_id": "event1"}]
+    detail = next(row for row in review()["blocked_details"] if row["field"] == "skill_age_rules")
+    assert "FORCE_CHANGE_WITH_RESOLUTION" not in detail["resolution_options"]
+
+
+@pytest.mark.parametrize("include_active", [False, True])
+def test_schedule_notice_excludes_cancelled_registrants(include_active: bool) -> None:
+    storage = base_storage()
+    for status in (["cancelled", "confirmed"] if include_active else ["cancelled"]):
+        storage["tournament_registrations"].append({"id": status, "tournament_id": "t1", "status": status})
+        storage["tournament_registration_selections"].append({"id": f"s-{status}", "tournament_id": "t1", "registration_id": status, "registration_day_id": "day1", "event_option_id": "event1"})
+    days = [*storage["tournament_registration_days"], {**storage["tournament_registration_days"][0], "id": "day2", "event_date": "2026-10-02"}]
+    impact = analyze_registration_publish_impact(
+        FakeSupabase(storage), tournament_id="t1", days=days,
+        event_options=[{**storage["tournament_event_options"][0], "scheduled_day_ids": ["day1", "day2"]}],
+    )
+    assert impact["blocked_details"] == []
+    notices = impact["communication_impact_details"]
+    assert len(notices) == int(include_active)
+    if include_active:
+        assert [row["registration_id"] for row in notices[0]["affected_registrations"]] == ["confirmed"]
+
+
 def test_cosmetic_skill_metadata_does_not_turn_age_grouping_into_skill_conflict() -> None:
     storage = base_storage()
     storage["tournament_event_options"][0].update({"skill_label": "3.5+", "skill_mode": "minimum"})
