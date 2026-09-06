@@ -4,7 +4,7 @@ import TournamentSponsorDisplay from "./TournamentSponsorDisplay";
 import type { TournamentSponsor } from "@/lib/tournamentSponsors";
 
 // Token-based invitation pages resolve their tournament in the browser.
-export default function PublicTournamentSponsorsClient({ clubSlug, tournamentId, placement }: { clubSlug: string; tournamentId?: string; placement: "header" | "footer" }) {
+export default function PublicTournamentSponsorsClient({ clubSlug, tournamentId, placement, title, headingLevel }: { title?: string; headingLevel?: "h1" | "h2"; clubSlug: string; tournamentId?: string; placement: "header" | "footer" }) {
   const [loaded, setLoaded] = useState<{ id: string; sponsors: TournamentSponsor[] } | null>(null);
   useEffect(() => {
     const base = process.env.NEXT_PUBLIC_JUPR_API_BASE_URL;
@@ -16,5 +16,5 @@ export default function PublicTournamentSponsorsClient({ clubSlug, tournamentId,
       .catch(() => {});
     return () => controller.abort();
   }, [clubSlug, tournamentId]);
-  return <TournamentSponsorDisplay sponsors={loaded?.id === `${clubSlug}:${tournamentId}` ? loaded.sponsors : []} placement={placement} />;
+  return <TournamentSponsorDisplay sponsors={loaded?.id === `${clubSlug}:${tournamentId}` ? loaded.sponsors : []} placement={placement} title={title} headingLevel={headingLevel} />;
 }

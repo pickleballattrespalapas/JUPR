@@ -39,3 +39,13 @@ assert.equal(render([sponsor], "footer"), "");
 assert.equal(render([], "header"), "");
 assert.equal(model.normalizeSponsorWebsite("example.com"), "https://example.com/");
 console.log("Sponsor render checks passed: names with logos, tier placement, empty tiers, and safe links.");
+
+const titled = (sponsors, headingLevel) => renderToStaticMarkup(React.createElement(Display, {
+  sponsors, placement: "header", title: "Baja Classic 2026", headingLevel
+}));
+assert.match(titled([sponsor]), /<h1[^>]*>Baja Classic 2026<\/h1>/);
+assert.ok(titled([sponsor]).indexOf("</h1>") < titled([sponsor]).indexOf("Presented by"));
+assert.match(titled([]), /Baja Classic 2026/, "The tournament title remains when sponsors are absent or unavailable");
+assert.doesNotMatch(titled([]), /Presented by/);
+assert.match(titled([sponsor], "h2"), /<h2[^>]*>Baja Classic 2026<\/h2>/);
+assert.match(titled([sponsor, { ...sponsor, id: "2", name: "Second sponsor" }]), / and /);

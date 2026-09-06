@@ -126,8 +126,7 @@ export default function TeamInvitationReview({ clubSlug }: Props) {
     >
       {invitation ? (
         <>
-          <h2 style={{ marginBottom: 0 }}>{invitation.tournament?.name || "Team invitation"}</h2>
-          <PublicTournamentSponsorsClient clubSlug={clubSlug} tournamentId={invitation.tournament?.id} placement="header" />
+          <PublicTournamentSponsorsClient clubSlug={clubSlug} tournamentId={invitation.tournament?.id} placement="header" title={invitation.tournament?.name || "Team invitation"} headingLevel="h2" />
           <h3>{invitation.team?.name || "Your team"}</h3>
           <p>
             {invitation.registration?.display_name ||

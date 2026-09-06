@@ -72,10 +72,7 @@ export default async function TournamentRegistrationPage({
       >
         Tournament Registration
       </p>
-      <h1 style={{ marginTop: 0, marginBottom: 0 }}>
-        {tournament?.name ?? "Tournament registration"}
-      </h1>
-      <PublicTournamentSponsors clubSlug={clubSlug} tournamentId={tournament?.id} placement="header" />
+      <PublicTournamentSponsors clubSlug={clubSlug} tournamentId={tournament?.id} placement="header" title={tournament?.name ?? "Tournament registration"} />
       <p style={{ color: "#334155", maxWidth: "820px" }}>
         Choose your events and complete the form below. Need details? Visit
         Tournament Home anytime.
