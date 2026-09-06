@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   PublicRegistrationDay,
   PublicRegistrationEvent,
@@ -45,6 +45,7 @@ type TournamentRegistrationFormProps = {
   days: PublicRegistrationDay[];
   events: PublicRegistrationEvent[];
   commerce?: TournamentCommerceCatalog | null;
+  overview?: ReactNode;
 };
 
 type ContactState = {
@@ -202,8 +203,10 @@ export default function TournamentRegistrationForm({
   timeZone,
   days,
   events,
-  commerce
+  commerce,
+  overview
 }: TournamentRegistrationFormProps) {
+  const formRef = useRef<HTMLDivElement>(null);
   const [mode, setMode] = useState<"choose" | "new" | "edit">("choose");
   const [step, setStep] = useState(1);
   const [contact, setContact] = useState<ContactState>({
@@ -711,8 +714,7 @@ export default function TournamentRegistrationForm({
     window.location.href = confirmationPath(saved);
   }
 
-  if (mode === "choose") {
-    return (
+  const formContent = mode === "choose" ? (
       <section style={{ ...cardStyle, display: "grid", gap: "0.9rem" }} data-testid="registration-mode-chooser">
         <h2 style={{ margin: 0 }}>
           {registrationOpen ? "Register or make changes" : "Registration is closed"}
@@ -736,11 +738,7 @@ export default function TournamentRegistrationForm({
           <p style={{ color: "#92400e", margin: 0 }}>{registrationClosedReason}</p>
         ) : null}
       </section>
-    );
-  }
-
-  if (mode === "edit") {
-    return (
+    ) : mode === "edit" ? (
       <section style={{ ...cardStyle, display: "grid", gap: "0.9rem" }} data-testid="registration-edit-mode">
         <div>
           <p style={{ color: "#2563eb", fontWeight: 800, margin: "0 0 0.35rem" }}>Edit my registration</p>
@@ -753,10 +751,7 @@ export default function TournamentRegistrationForm({
         {error ? <p role="alert" style={{ color: "#b91c1c", margin: 0 }}>{error}</p> : null}
         <button type="button" onClick={() => resetWizard("choose")} style={secondaryButtonStyle}>Back to registration choices</button>
       </section>
-    );
-  }
-
-  return (
+    ) : (
     <section style={{ display: "grid", gap: "1rem" }} data-testid="registration-new-wizard">
       <div style={{ ...cardStyle, background: "#f8fafc" }}>
         <p style={{ margin: 0, color: "#2563eb", fontWeight: 800 }}>New registration · Step {step} of 4</p>
@@ -993,5 +988,62 @@ export default function TournamentRegistrationForm({
         {step === 4 ? <button type="button" onClick={submitRegistration} disabled={pending} style={primaryButtonStyle}>{pending ? "Submitting…" : savedRegistration ? "Finish team registration" : "Submit registration"}</button> : null}
       </div>
     </section>
+  );
+
+  return (
+    <>
+      {registrationOpen && mode !== "new" ? (
+        <article
+          style={{
+            ...cardStyle,
+            marginBottom: "1rem",
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "1rem",
+            alignItems: "center",
+            justifyContent: "space-between",
+            background: "#eff6ff",
+            borderColor: "#93c5fd"
+          }}
+        >
+          <div>
+            <h2 style={{ margin: 0 }}>Ready to register?</h2>
+            <p style={{ color: "#475569", margin: "0.35rem 0 0" }}>
+              Choose from {selectableEvents.length} open division
+              {selectableEvents.length === 1 ? "" : "s"} below.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              resetWizard("new");
+              requestAnimationFrame(() => {
+                formRef.current?.scrollIntoView({ block: "start" });
+                formRef.current?.querySelector<HTMLInputElement>('[aria-label="First name"]')?.focus({ preventScroll: true });
+              });
+            }}
+            style={{
+              display: "inline-block",
+              border: 0,
+              font: "inherit",
+              cursor: "pointer",
+              padding: "0.7rem 1rem",
+              borderRadius: "999px",
+              background: "#0f172a",
+              color: "white",
+              textDecoration: "none",
+              fontWeight: 800
+            }}
+          >
+            Register now
+          </button>
+        </article>
+      ) : null}
+
+      {overview}
+      <div id="registration-form" ref={formRef} style={{ scrollMarginTop: "1rem" }}>
+        {formContent}
+      </div>
+    </>
   );
 }

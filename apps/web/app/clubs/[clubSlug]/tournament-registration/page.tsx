@@ -138,113 +138,74 @@ export default async function TournamentRegistrationPage({
         />
       ) : null}
 
-      {tournament && data?.registration_open ? (
-        <article
-          style={{
-            ...cardStyle,
-            marginBottom: "1rem",
-            display: "flex",
-            flexWrap: "wrap",
-            gap: "1rem",
-            alignItems: "center",
-            justifyContent: "space-between",
-            background: "#eff6ff",
-            borderColor: "#93c5fd"
-          }}
-        >
-          <div>
-            <h2 style={{ margin: 0 }}>Ready to register?</h2>
-            <p style={{ color: "#475569", margin: "0.35rem 0 0" }}>
-              Choose from {selectableCount} open division
-              {selectableCount === 1 ? "" : "s"} below.
-            </p>
-          </div>
-          <a
-            href="#registration-form"
-            style={{
-              display: "inline-block",
-              padding: "0.7rem 1rem",
-              borderRadius: "999px",
-              background: "#0f172a",
-              color: "white",
-              textDecoration: "none",
-              fontWeight: 800
-            }}
-          >
-            Register now
-          </a>
-        </article>
-      ) : null}
-
       {tournament ? (
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-            gap: "0.75rem",
-            marginBottom: "1rem"
-          }}
-        >
-          <article style={cardStyle}>
-            <strong>Start</strong>
-            <br />
-            {dateLabel(tournament.start_date) ?? "To be announced"}
-          </article>
-          <article style={cardStyle}>
-            <strong>Registration</strong>
-            <br />
-            {data?.registration_open ? "Open" : "Closed"}
-          </article>
-          <article style={cardStyle}>
-            <strong>Open divisions</strong>
-            <br />
-            {selectableCount}
-          </article>
-        </div>
-      ) : null}
+        <TournamentRegistrationForm
+          clubSlug={clubSlug}
+          tournamentId={tournament.id}
+          registrationSlug={settings?.registration_slug ?? null}
+          registrationOpen={Boolean(data?.registration_open)}
+          registrationClosedReason={data?.registration_closed_reason ?? null}
+          timeZone={settings?.timezone ?? null}
+          days={data.days ?? []}
+          events={data.events ?? []}
+          commerce={data.commerce ?? null}
+          overview={
+            <>
+              <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                    gap: "0.75rem",
+                    marginBottom: "1rem"
+                  }}
+                >
+                  <article style={cardStyle}>
+                    <strong>Start</strong>
+                    <br />
+                    {dateLabel(tournament.start_date) ?? "To be announced"}
+                  </article>
+                  <article style={cardStyle}>
+                    <strong>Registration</strong>
+                    <br />
+                    {data?.registration_open ? "Open" : "Closed"}
+                  </article>
+                  <article style={cardStyle}>
+                    <strong>Open divisions</strong>
+                    <br />
+                    {selectableCount}
+                  </article>
+                </div>
 
-      {tournament && venueMapQuery ? (
-        <article style={{ ...cardStyle, marginBottom: "1rem" }}>
-          <h2 style={{ marginTop: 0 }}>Venue</h2>
-          {settings?.location_name ? <p><strong>{settings.location_name}</strong></p> : null}
-          {settings?.venue_address ? <p>{settings.venue_address}</p> : null}
-          {settings?.timezone ? (
-            <p style={{ color: "#475569" }}>
-              All times are shown in {timeZoneLabel(settings.timezone)} time.
-            </p>
-          ) : null}
-          <p>
-            <a
-              href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(venueMapQuery)}`}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Open map
-            </a>
-          </p>
-          {settings?.venue_directions ? (
-            <div>
-              <h3>Arrival directions</h3>
-              <p style={{ whiteSpace: "pre-wrap" }}>{settings.venue_directions}</p>
-            </div>
-          ) : null}
-        </article>
-      ) : null}
-
-      {tournament ? (
-        <div id="registration-form" style={{ scrollMarginTop: "1rem" }}>
-          <TournamentRegistrationForm
-            clubSlug={clubSlug}
-            tournamentId={tournament.id}
-            registrationSlug={settings?.registration_slug ?? null}
-            registrationOpen={Boolean(data?.registration_open)}
-            registrationClosedReason={data?.registration_closed_reason ?? null}
-            timeZone={settings?.timezone ?? null}
-            days={data.days ?? []}
-            events={data.events ?? []}
-            commerce={data.commerce ?? null}
-          />
-        </div>
+              {venueMapQuery ? (
+                <article style={{ ...cardStyle, marginBottom: "1rem" }}>
+                  <h2 style={{ marginTop: 0 }}>Venue</h2>
+                  {settings?.location_name ? <p><strong>{settings.location_name}</strong></p> : null}
+                  {settings?.venue_address ? <p>{settings.venue_address}</p> : null}
+                  {settings?.timezone ? (
+                    <p style={{ color: "#475569" }}>
+                      All times are shown in {timeZoneLabel(settings.timezone)} time.
+                    </p>
+                  ) : null}
+                  <p>
+                    <a
+                      href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(venueMapQuery)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Open map
+                    </a>
+                  </p>
+                  {settings?.venue_directions ? (
+                    <div>
+                      <h3>Arrival directions</h3>
+                      <p style={{ whiteSpace: "pre-wrap" }}>{settings.venue_directions}</p>
+                    </div>
+                  ) : null}
+                </article>
+              ) : null}
+            </>
+          }
+        />
       ) : null}
 
       {tournament ? (
