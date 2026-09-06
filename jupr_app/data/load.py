@@ -243,6 +243,8 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
                     df_badges["state"] = "live"
                 if "eval_triggers" not in df_badges.columns:
                     df_badges["eval_triggers"] = [["match_recorded", "match_updated"]] * len(df_badges)
+                from jupr_app.domain.gamification.presentation import badge_category
+                df_badges["category"] = df_badges["badge_id"].astype(str).map(badge_category)
                 requirements_map = load_requirements_map()
                 df_badges["requirements"] = (
                     df_badges["badge_id"].astype(str).map(requirements_map).fillna("Requirements TBD")

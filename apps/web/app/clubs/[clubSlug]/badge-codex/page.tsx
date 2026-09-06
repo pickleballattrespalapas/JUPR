@@ -13,6 +13,7 @@ type BadgeCodexPageProps = {
   searchParams?: Record<string, string | string[] | undefined>;
 };
 
+const CATEGORY_ORDER = ["Participation", "Improvement", "Partnerships", "Match Achievements", "Trophies"];
 const DEFAULT_BADGE_LIMIT = 12;
 const BADGE_LOAD_MORE_STEP = 12;
 const DEFAULT_EARNERS_LIMIT = 25;
@@ -123,12 +124,6 @@ function bucketDescription(value: string): string {
   return "Browse badges in this group.";
 }
 
-function badgeDescription(badge: PublicBadge): string {
-  const description = String(badge.description || "").trim();
-  if (!description || /definition available|public unlock rules/i.test(description)) return "More details are coming soon.";
-  return description;
-}
-
 function badgeRequirements(badge: PublicBadge): string {
   const requirements = String(badge.requirements || "").trim();
   if (!requirements || /^requirements?\s*(tbd|coming soon)?\.?$/i.test(requirements)) return "Details coming soon.";
@@ -205,7 +200,7 @@ function sectionsForBadges(badges: PublicBadge[]): BadgeCodexSection[] {
     grouped.set(category, [...(grouped.get(category) ?? []), badge]);
   }
   return Array.from(grouped.entries())
-    .sort(([a], [b]) => a.localeCompare(b))
+    .sort(([a], [b]) => CATEGORY_ORDER.indexOf(a) - CATEGORY_ORDER.indexOf(b) || a.localeCompare(b))
     .map(([name, items]) => ({
       name,
       badges: items.sort((a, b) => a.name.localeCompare(b.name))
@@ -265,7 +260,6 @@ function BadgeCard({
           {badgeAvailabilityLabel(badge)}
         </span>
       </div>
-      <p style={{ margin: 0, color: "#475569" }}>{badgeDescription(badge)}</p>
       <p style={{ margin: 0, color: "#334155", fontSize: "0.9rem" }}><strong>How to earn it:</strong> {badgeRequirements(badge)}</p>
       <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", fontSize: "0.82rem", color: "#475569" }}>
         <span style={{ border: "1px solid #e2e8f0", borderRadius: "999px", padding: "0.2rem 0.5rem" }}>Prestige {Number(badge.prestige || 0)}</span>
@@ -305,11 +299,11 @@ function BadgeCard({
 function TrophyRoom({ entries, clubSlug }: { entries: BadgeTrophyRoomEntry[]; clubSlug: string }) {
   return (
     <section id="trophy-room" style={{ marginTop: "1.5rem" }}>
-      <h2>Recent trophy room</h2>
+      <h2>All-time badge totals</h2>
       <p style={{ color: "#475569", maxWidth: "760px" }}>
-        See recent badge earners, ranked by total prestige. Badges earned more than once add to the total.
+        Players ranked by all-time prestige. Each recorded award adds to the total, including repeat awards.
       </p>
-      {!entries.length ? <p style={{ color: "#64748b" }}>No badges have been earned recently.</p> : null}
+      {!entries.length ? <p style={{ color: "#64748b" }}>No badge earners are listed yet.</p> : null}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "1rem" }}>
         {entries.map((entry) => (
           <article key={String(entry.player_id)} style={cardStyle} data-trophy-player={entry.player_id}>
@@ -417,13 +411,13 @@ export default async function BadgeCodexPage({ params, searchParams }: BadgeCode
 
   return (
     <section>
-      <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>Badge Codex</p>
-      <h1 style={{ marginTop: 0 }}>{data?.club.name ?? clubSlug} badge codex</h1>
+      <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>Badges &amp; trophies</p>
+      <h1 style={{ marginTop: 0 }}>{data?.club.name ?? clubSlug} badges &amp; trophies</h1>
       <p style={{ color: "#334155", maxWidth: "800px" }}>
-        Explore every badge, learn how to earn it, and see recent earners.
+        Celebrate showing up, improving, playing with different partners, and earning major trophies. Each badge below explains exactly how to earn it.
       </p>
 
-      {error ? <p role="alert" style={{ color: "#b91c1c" }}>Badge Codex is unavailable right now. Please try again shortly.</p> : null}
+      {error ? <p role="alert" style={{ color: "#b91c1c" }}>Badges are unavailable right now. Please try again shortly.</p> : null}
       {!error && data && !badges.length ? <p>No badges are available yet.</p> : null}
 
       {data ? (
@@ -431,7 +425,7 @@ export default async function BadgeCodexPage({ params, searchParams }: BadgeCode
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
             <article style={cardStyle}><strong>Badges</strong><br />{data.summary.badge_count}</article>
             <article style={cardStyle}><strong>Earned badge types</strong><br />{data.summary.earned_badge_count}</article>
-            <article style={cardStyle}><strong>Badge earners</strong><br />{data.summary.total_unique_earners_by_badge}</article>
+            <article style={cardStyle}><strong>Badge earners</strong><br />{data.summary.unique_earner_count ?? "—"}</article>
           </div>
 
           <nav aria-label="When badges are awarded" style={{ marginBottom: "1rem" }}>
@@ -452,7 +446,7 @@ export default async function BadgeCodexPage({ params, searchParams }: BadgeCode
             <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.5rem" }}>
               <Link href={pageHref({ clubSlug, bucket, scope: selectedScope, badgeLimit })} style={filterLinkStyle(!selectedCategory)}>All categories</Link>
               {categories.map((category) => (
-                <Link key={category} href={pageHref({ clubSlug, bucket, category, scope: selectedScope, badgeLimit })} style={filterLinkStyle(selectedCategory === category)}>{category}</Link>
+                <Link key={category} href={pageHref({ clubSlug, bucket: "all", category, scope: selectedScope, badgeLimit })} style={filterLinkStyle(selectedCategory === category)}>{category}</Link>
               ))}
             </div>
           </nav>
@@ -467,7 +461,8 @@ export default async function BadgeCodexPage({ params, searchParams }: BadgeCode
             </div>
           </nav>
 
-          <TrophyRoom entries={data.trophy_room ?? []} clubSlug={clubSlug} />
+          <p style={{ color: "#475569" }}>Match achievements count eligible recorded club matches. Deleted, invalid, PopUp, and tournament matches are excluded. Participation milestones and 100 lifetime wins use club standings totals. Weeks run Monday–Sunday; months and calendar years use UTC.</p>
+          <Link href={pageHref({ clubSlug, bucket: "all", category: "Trophies", badgeLimit: "all" })}>Explore league awards and tournament trophies</Link>
         </>
       ) : null}
 
@@ -518,6 +513,7 @@ export default async function BadgeCodexPage({ params, searchParams }: BadgeCode
           </section>
         );
       })}
+      {data ? <TrophyRoom entries={data.trophy_room ?? []} clubSlug={clubSlug} /> : null}
     </section>
   );
 }

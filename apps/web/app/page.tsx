@@ -24,7 +24,7 @@ const featureGroups = [
       ["Players", "/clubs/tres-palapas/players"],
       ["Matches", "/clubs/tres-palapas/matches"],
       ["Match Explorer", "/clubs/tres-palapas/match-explorer"],
-      ["Badge Codex", "/clubs/tres-palapas/badge-codex"]
+      ["Badges & Trophies", "/clubs/tres-palapas/badge-codex"]
     ]
   },
   {

@@ -68,7 +68,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                 <Link href="/clubs/tres-palapas/tournaments">Tournaments</Link>
                 <Link href="/admin/login">Staff sign in</Link>
                 <Link href="/site-map">Site map</Link>
-                <Link href="/clubs/tres-palapas/badge-codex">Badge Codex</Link>
+                <Link href="/clubs/tres-palapas/badge-codex">Badges & Trophies</Link>
                 <Link href="/clubs/tres-palapas/matches">Matches</Link>
                 <Link href="/how-ratings-work">How ratings work</Link>
                 <Link href="/faq">FAQ</Link>

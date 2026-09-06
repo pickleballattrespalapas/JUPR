@@ -45,7 +45,7 @@ export default function HowRatingsWorkPage() {
         <article id="badges" style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>7. How badges are awarded</h2>
           <p style={{ color: "#475569" }}>Badges are based on match results, league and tournament play, attendance, and other club activity. They’re awarded when a player meets the listed requirements.</p>
-          <Link href="/clubs/tres-palapas/badge-codex">Open Badge Codex</Link>
+          <Link href="/clubs/tres-palapas/badge-codex">Open Badges & Trophies</Link>
         </article>
         <article id="other-ratings" style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>8. Why JUPR can differ from other ratings</h2>

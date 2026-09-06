@@ -21,10 +21,19 @@ class _Query:
         self.filters[key] = value
         return self
 
+    def range(self, start, end):
+        self.page_bounds = (start, end)
+        return self
+
+    def order(self, *_args, **_kwargs):
+        return self
+
     def execute(self):
         rows = [dict(row) for row in self.store.get(self.table_name, [])]
         for key, value in self.filters.items():
             rows = [row for row in rows if str(row.get(key)) == str(value)]
+        if hasattr(self, "page_bounds"):
+            rows = rows[self.page_bounds[0]:self.page_bounds[1] + 1]
         return _Response(rows)
 
 

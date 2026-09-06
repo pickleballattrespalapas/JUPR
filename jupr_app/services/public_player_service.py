@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from jupr_app.data.paged_reads import read_all_rows
+from jupr_app.domain.gamification.presentation import badge_category, badge_requirement, category_sort_key
+
 import json
 import re
 from collections import defaultdict
@@ -403,27 +406,9 @@ def _public_match(row: dict[str, Any], name_by_id: dict[str, str], *, include_ra
 
 
 def _fetch_player_badges(supabase: Any, *, club_id: str, player_id: int | str) -> list[dict[str, Any]]:
-    try:
-        rows = _safe_rows(
-            supabase.table("player_badges")
-            .select(PLAYER_BADGE_SELECT)
-            .eq("club_id", str(club_id))
-            .eq("player_id", player_id)
-            .execute()
-        )
-    except Exception:
-        try:
-            rows = _safe_rows(
-                supabase.table("player_badges")
-                .select(PLAYER_BADGE_FALLBACK_SELECT)
-                .eq("club_id", str(club_id))
-                .eq("player_id", player_id)
-                .execute()
-            )
-        except Exception:
-            return []
+    rows = read_all_rows(lambda: supabase.table("player_badges").select(PLAYER_BADGE_SELECT)
+                         .eq("club_id", str(club_id)).eq("player_id", player_id))
     return [row for row in rows if not row.get("revoked_at")]
-
 
 def _fetch_badge_definitions(supabase: Any) -> dict[str, dict[str, Any]]:
     try:
@@ -510,12 +495,12 @@ def _public_awards(supabase: Any, *, club_id: str, player_id: int | str) -> dict
                 {
                     "badge_id": badge_id,
                     "name": badge_name,
-                    "category": _plain_text(definition.get("category"), limit=80) or "Other",
+                    "category": badge_category(badge_id),
                     "prestige": prestige,
                     "rarity": _plain_text(definition.get("rarity") or definition.get("tier"), limit=80),
                     "icon_key": _plain_text(definition.get("icon_key"), limit=80),
-                    "description": _plain_text(definition.get("lore"), limit=280),
-                    "requirements": _plain_text(definition.get("hint"), limit=280),
+                    "description": badge_requirement(badge_id),
+                    "requirements": badge_requirement(badge_id),
                     "count": len(cabinet_rows),
                     "last_earned_at": max(earned_values) or None,
                 }
@@ -532,7 +517,7 @@ def _public_awards(supabase: Any, *, club_id: str, player_id: int | str) -> dict
                 }
             )
 
-    badges.sort(key=lambda item: (-int(item.get("prestige") or 0), str(item.get("name") or "").casefold()))
+    badges.sort(key=lambda item: (category_sort_key(item["category"]), str(item.get("name") or "").casefold()))
     trophies.sort(key=lambda item: str(item.get("earned_at") or ""), reverse=True)
     return {
         "badge_count": len(badges),

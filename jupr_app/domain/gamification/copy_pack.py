@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.domain.gamification.presentation import badge_requirement
+
 import hashlib
 import json
 from pathlib import Path
@@ -171,13 +173,13 @@ def get_badge_copy(badge_id: str) -> dict[str, Any]:
     badge_copy = badges.get(str(badge_id), {}) if isinstance(badges, dict) else {}
     return {
         "name": badge_copy.get("name", ""),
-        "lore": badge_copy.get("lore", ""),
-        "hint": badge_copy.get("hint", ""),
+        "lore": badge_requirement(badge_id),
+        "hint": badge_requirement(badge_id),
         "rarity": badge_copy.get("rarity", "common"),
         "tier": badge_copy.get("tier", None),
         "icon_key": badge_copy.get("icon_key", None),
         "scope": badge_copy.get("scope", "overall"),
-        "tape_excerpts": list(badge_copy.get("tape_excerpts", []) or []),
+        "tape_excerpts": [badge_requirement(badge_id)],
         "highlight": badge_copy.get("highlight", {}) or {},
         "foreshadow": badge_copy.get("foreshadow", {}) or {},
     }

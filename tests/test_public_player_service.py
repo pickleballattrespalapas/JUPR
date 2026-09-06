@@ -40,6 +40,10 @@ class FakeQuery:
         self.row_limit = int(value)
         return self
 
+    def range(self, start, end):
+        self.page_bounds = (start, end)
+        return self
+
     def execute(self):
         rows = list(self.rows_by_table.get(self.table_name, []))
         for key, value in self.filters.items():
@@ -48,6 +52,8 @@ class FakeQuery:
             rows = [row for row in rows if str(row.get(key)) in values]
         if self.row_limit is not None:
             rows = rows[: self.row_limit]
+        if hasattr(self, "page_bounds"):
+            rows = rows[self.page_bounds[0]:self.page_bounds[1] + 1]
         return FakeResponse(rows)
 
 

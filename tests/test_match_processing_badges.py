@@ -32,7 +32,7 @@ class _Query:
         self._payload = payload
         return self
 
-    def upsert(self, payload, on_conflict=None):
+    def upsert(self, payload, on_conflict=None, ignore_duplicates=False):
         self._op = "upsert"
         self._payload = payload
         self._on_conflict = on_conflict
@@ -106,7 +106,7 @@ class _Supabase:
 
         if q._order:
             col, desc = q._order
-            data = sorted(data, key=lambda r: r.get(col), reverse=desc)
+            data = sorted(data, key=lambda r: str(r.get(col) or ""), reverse=desc)
         if q._range is not None:
             start, end = q._range
             data = data[start : end + 1]
