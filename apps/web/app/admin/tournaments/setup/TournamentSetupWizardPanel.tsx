@@ -6,7 +6,8 @@ import { sponsorTiers, type SponsorDraft, type SponsorTier } from "@/lib/tournam
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
-import { actionSuccess, type ActionSuccess } from "@/components/interaction";
+import { actionSuccess, InteractionActionError, type ActionSuccess } from "@/components/interaction";
+import { tournamentSetupActionError } from "@/lib/tournamentSetupActionError";
 import TournamentSetupWizardNav, {
   TOURNAMENT_SETUP_STEPS,
   TOURNAMENT_SETUP_DOMAINS,
@@ -953,14 +954,14 @@ export default function TournamentSetupWizardPanel({
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
     if (!apiBase) throw new Error("Tournament Setup API is not configured.");
-    if (!accessToken) throw new Error("Sign in before editing tournament setup.");
+    if (!accessToken) throw new InteractionActionError("Sign in before editing tournament setup.", { kind: "forbidden" });
     const headers = new Headers(options?.headers);
     headers.set("Authorization", `Bearer ${accessToken}`);
     if (options?.body) headers.set("Content-Type", "application/json");
     const response = await fetch(apiUrl(apiBase, path), { ...options, headers });
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
-      throw new Error(String(payload?.detail || `API error (${response.status})`));
+      throw tournamentSetupActionError(response, payload);
     }
     return payload as T;
   }
@@ -1270,7 +1271,8 @@ export default function TournamentSetupWizardPanel({
     savedStep: TournamentSetupStep,
     successMessage: string,
     settingsOverride: Record<string, unknown> = settings,
-    basicsOverride: BasicsDraft = basics
+    basicsOverride: BasicsDraft = basics,
+    propagateError = false
   ): Promise<boolean> {
     if (!detail) return false;
     const generation = actionRequest.begin();
@@ -1306,6 +1308,9 @@ export default function TournamentSetupWizardPanel({
       if (actionRequest.isCurrent(generation)) {
         setMessage(error instanceof Error ? error.message : "Unable to save the unpublished tournament draft.");
       }
+      // Dialog actions must receive the actual rejection instead of a boolean
+      // that hides the actionable message behind the open modal.
+      if (propagateError) throw error;
       return false;
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
@@ -2375,7 +2380,7 @@ async function saveResolutionDraft() {
           tournamentName={basics.name}
           disabled={busy}
           onUpload={(image_base64) => requestJson(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/setup/tournaments/${encodeURIComponent(tournamentId)}/sponsor-logos`, { method: "POST", body: JSON.stringify({ image_base64 }) })}
-          onSave={(sponsors) => persistConfigurationDraft(configuration, "basics", "Sponsor draft saved. Publish from Review when you’re ready.", settings, { ...basics, sponsors })}
+          onSave={(sponsors) => persistConfigurationDraft(configuration, "basics", "Sponsor draft saved. Publish from Review when you’re ready.", settings, { ...basics, sponsors }, true)}
         />
 
         <div>
