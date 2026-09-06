@@ -60,6 +60,11 @@ export default async function TournamentRegistrationPage({
 
   return (
     <section>
+      <p style={{ margin: "0 0 0.75rem" }}>
+        <Link href={`/clubs/${clubSlug}/tournaments`}>
+          ← Choose another tournament
+        </Link>
+      </p>
       <p
         style={{
           margin: "0 0 0.5rem",
@@ -91,42 +96,6 @@ export default async function TournamentRegistrationPage({
       ) : null}
       {!error && data && !data.setup_error && !tournament ? (
         <p>There isn’t an open tournament registration right now.</p>
-      ) : null}
-
-      {data?.tournaments?.length ? (
-        <div
-          style={{
-            display: "flex",
-            gap: "0.5rem",
-            flexWrap: "wrap",
-            marginBottom: "1rem"
-          }}
-        >
-          {data.tournaments.map((choice) => {
-            const slug = choice.settings.registration_slug;
-            const active = choice.tournament.id === tournament?.id;
-            const href = slug
-              ? `/clubs/${clubSlug}/tournament-registration?tournament=${encodeURIComponent(slug)}`
-              : `/clubs/${clubSlug}/tournament-registration?tournament_id=${encodeURIComponent(choice.tournament.id)}`;
-            return (
-              <Link
-                key={choice.tournament.id}
-                href={href}
-                style={{
-                  border: "1px solid #cbd5e1",
-                  borderRadius: "999px",
-                  padding: "0.45rem 0.75rem",
-                  background: active ? "#dbeafe" : "white",
-                  color: "#0f172a",
-                  textDecoration: "none",
-                  fontWeight: active ? 800 : 600
-                }}
-              >
-                {choice.tournament.name}
-              </Link>
-            );
-          })}
-        </div>
       ) : null}
 
       {tournament ? (
