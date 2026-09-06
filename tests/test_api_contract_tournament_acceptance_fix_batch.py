@@ -16,9 +16,13 @@ def read_root(path: str) -> str:
 def test_basics_supports_sponsor_reordering_and_draft_publication_clarity() -> None:
     panel = read_web("app/admin/tournaments/setup/TournamentSetupWizardPanel.tsx")
 
-    assert "function moveSponsor(index: number, direction: -1 | 1)" in panel
-    assert "Move up" in panel
-    assert "Move down" in panel
+    editor = read_web("app/admin/tournaments/setup/TournamentSponsorEditor.tsx")
+    assert "<TournamentSponsorEditor" in panel
+    assert "async function move(id: string, direction: number)" in editor
+    assert 'aria-label={`Move ${s.name} up`}' in editor
+    assert 'aria-label={`Move ${s.name} down`}' in editor
+    assert "sponsors.filter(s => s.tier === sponsor.tier)" in editor
+    assert "await save(rows)" in editor
     assert "Unpublished setup draft" in panel
     assert "Public tournament pages continue using the currently published configuration" in panel
     assert "Review domain publishes the complete tournament" in panel

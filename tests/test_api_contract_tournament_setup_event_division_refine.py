@@ -30,8 +30,10 @@ def test_tournament_domain_separates_basics_from_venue_without_save_confirmation
     basics = panel.split("function renderBasics()", 1)[1].split("function renderEvents()", 1)[0]
     venue = panel.split("function renderSchedule()", 1)[1].split("function renderReview()", 1)[0]
     assert "Registration and public policies" in basics
-    assert "Add sponsor" in basics
-    assert "Sponsor name" in basics
+    editor = read("app/admin/tournaments/setup/TournamentSponsorEditor.tsx")
+    assert "<TournamentSponsorEditor" in basics
+    assert "Add sponsor" in editor
+    assert "Sponsor name" in editor
     assert "Venue name" in venue
     assert "Timezone" in venue
     assert "Total venue courts" in venue

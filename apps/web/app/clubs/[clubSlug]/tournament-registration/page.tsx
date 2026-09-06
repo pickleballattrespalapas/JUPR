@@ -1,3 +1,4 @@
+import PublicTournamentSponsors from "@/components/PublicTournamentSponsors";
 import Link from "next/link";
 import PublicTournamentNav from "@/components/PublicTournamentNav";
 import { getClubTournamentRegistration } from "@/lib/tournamentRegistrationApi";
@@ -71,9 +72,10 @@ export default async function TournamentRegistrationPage({
       >
         Tournament Registration
       </p>
-      <h1 style={{ marginTop: 0 }}>
+      <h1 style={{ marginTop: 0, marginBottom: 0 }}>
         {tournament?.name ?? "Tournament registration"}
       </h1>
+      <PublicTournamentSponsors clubSlug={clubSlug} tournamentId={tournament?.id} placement="header" />
       <p style={{ color: "#334155", maxWidth: "820px" }}>
         Choose your events and complete the form below. Need details? Visit
         Tournament Home anytime.
@@ -307,6 +309,7 @@ export default async function TournamentRegistrationPage({
           </span>
         </article>
       ) : null}
+      <PublicTournamentSponsors clubSlug={clubSlug} tournamentId={tournament?.id} placement="footer" />
     </section>
   );
 }

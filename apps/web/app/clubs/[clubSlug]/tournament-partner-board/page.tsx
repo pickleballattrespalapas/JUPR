@@ -1,3 +1,4 @@
+import PublicTournamentSponsors from "@/components/PublicTournamentSponsors";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import PublicTournamentModuleHeader from "@/components/PublicTournamentModuleHeader";
@@ -507,6 +508,7 @@ export default async function TournamentPartnerBoardPage({
           ) : null}
         </article>
       )}
+      <PublicTournamentSponsors clubSlug={params.clubSlug} tournamentId={tournament.id} placement="footer" />
     </section>
   );
 }

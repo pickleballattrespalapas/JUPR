@@ -1,3 +1,4 @@
+import PublicTournamentSponsors from "@/components/PublicTournamentSponsors";
 import Link from "next/link";
 import { getClubTournamentRegistrationConfirmation } from "@/lib/tournamentRegistrationApi";
 import { formatCommerceMoney } from "@/lib/tournamentCommerceApi";
@@ -138,7 +139,8 @@ export default async function TournamentRegistrationConfirmationPage({ params, s
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
         Registration Confirmation
       </p>
-      <h1 style={{ marginTop: 0 }}>{data?.tournament.name ?? "Tournament registration"}</h1>
+      <h1 style={{ marginTop: 0, marginBottom: 0 }}>{data?.tournament.name ?? "Tournament registration"}</h1>
+      <PublicTournamentSponsors clubSlug={clubSlug} tournamentId={data?.tournament.id} placement="header" />
 
       {error ? (
         <p style={{ color: "#b91c1c" }}>
@@ -287,6 +289,7 @@ export default async function TournamentRegistrationConfirmationPage({ params, s
           </p>
         </>
       ) : null}
+      <PublicTournamentSponsors clubSlug={clubSlug} tournamentId={data?.tournament.id} placement="footer" />
     </section>
   );
 }

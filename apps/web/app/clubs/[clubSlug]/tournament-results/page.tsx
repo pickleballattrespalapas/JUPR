@@ -1,3 +1,4 @@
+import PublicTournamentSponsors from "@/components/PublicTournamentSponsors";
 import Link from "next/link";
 import PublicTournamentNav from "@/components/PublicTournamentNav";
 import {
@@ -464,7 +465,8 @@ export default async function TournamentResultsPage({ params, searchParams }: Pr
         <Link href={`/clubs/${params.clubSlug}/tournament-results${data.tournament.status === "COMPLETED" ? "?view=past" : ""}`}>← Choose another tournament</Link>
       </p>
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>Live & Results</p>
-      <h1 style={{ marginTop: 0 }}>{data.tournament.name}</h1>
+      <h1 style={{ marginTop: 0, marginBottom: 0 }}>{data.tournament.name}</h1>
+      <PublicTournamentSponsors clubSlug={params.clubSlug} tournamentId={data.tournament.id} placement="header" />
       <p style={{ color: "#475569", maxWidth: "52rem" }}>Follow live scores, standings, brackets, and medal winners.</p>
       <PublicTournamentNav
         clubSlug={params.clubSlug}
@@ -535,6 +537,7 @@ export default async function TournamentResultsPage({ params, searchParams }: Pr
       ) : null}
       {!data.draws.length ? <article style={cardStyle}><h2 style={{ marginTop: 0 }}>No results yet</h2><p style={{ color: "#475569", marginBottom: 0 }}>Singles and doubles results will appear after organizers publish them.</p></article> : null}
       <p><Link href={`/clubs/${params.clubSlug}/tournament-team-results`}>Four-player team results</Link></p>
+      <PublicTournamentSponsors clubSlug={params.clubSlug} tournamentId={data.tournament.id} placement="footer" />
     </section>
   );
 }
