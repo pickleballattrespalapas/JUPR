@@ -198,16 +198,23 @@ export default async function PublicTournamentsPage({
             }}
           >
             {data.tournaments.map((choice) => (
-              <Link
+              <article
                 key={choice.tournament.id}
-                href={tournamentHref(params.clubSlug, choice)}
                 style={{
                   ...cardStyle,
                   color: "#0f172a",
                   textDecoration: "none"
                 }}
               >
-                <strong>{choice.tournament.name}</strong>
+                <PublicTournamentSponsors
+                  clubSlug={params.clubSlug}
+                  tournamentId={choice.tournament.id}
+                  placement="header"
+                  title={choice.tournament.name}
+                  titleHref={tournamentHref(params.clubSlug, choice)}
+                  headingLevel="h2"
+                  compact
+                />
                 <p style={{ margin: "0.35rem 0 0", color: "#475569" }}>
                   {dateLabel(choice.tournament.start_date)}
                   {choice.tournament.end_date
@@ -217,7 +224,10 @@ export default async function PublicTournamentsPage({
                 <p style={{ margin: "0.35rem 0 0", color: "#64748b" }}>
                   {registrationStatusLabel(choice.registration_open)}
                 </p>
-              </Link>
+                <Link href={tournamentHref(params.clubSlug, choice)} style={{ display: "inline-block", marginTop: "0.75rem", fontWeight: 700 }}>
+                  View tournament
+                </Link>
+              </article>
             ))}
           </div>
         ) : !error ? (

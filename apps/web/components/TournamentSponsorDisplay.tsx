@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import Link from "next/link";
 import { Fragment, useState } from "react";
 import { normalizeSponsorWebsite, sponsorTierLabels, type TournamentSponsor } from "@/lib/tournamentSponsors";
 import styles from "./TournamentSponsorDisplay.module.css";
@@ -21,16 +22,19 @@ export type SponsorDisplayProps = {
   sponsors: TournamentSponsor[];
   placement: "header" | "footer";
   title?: string;
+  titleHref?: string;
+  compact?: boolean;
   headingLevel?: "h1" | "h2";
 };
 
-export default function TournamentSponsorDisplay({ sponsors, placement, title, headingLevel: Heading = "h1" }: SponsorDisplayProps) {
+export default function TournamentSponsorDisplay({ sponsors, placement, title, titleHref, compact = false, headingLevel: Heading = "h1" }: SponsorDisplayProps) {
   const records = sponsors.filter(s => placement === "header" ? s.tier === "presenting" : s.tier !== "presenting");
   if (placement === "header") {
     const presenting = records.length ? <div className={styles.presenting} aria-label="Presenting sponsors"><span>Presented by </span><span className={styles.names}>{records.map((s, index) => <Fragment key={s.id}>{index > 0 ? <span>{index === records.length - 1 ? " and " : ", "}</span> : null}<Sponsor sponsor={s} presenting /></Fragment>)}</span></div> : null;
-    const header = title ? <div className={styles.titleRow}><Heading className={styles.title}>{title}</Heading>{presenting}</div> : presenting;
+    const header = title ? <div className={styles.titleRow}><Heading className={styles.title}>{titleHref ? <Link className={styles.titleLink} href={titleHref}>{title}</Link> : title}</Heading>{presenting}</div> : presenting;
     const described = records.filter(s => s.public_description?.trim());
-    return described.length ? <div>{header}<div className={styles.headerDescriptions}>{described.map(s => <p key={s.id} className={styles.description}>{records.length > 1 ? <><strong>{s.name}</strong>{": "}</> : null}{s.public_description}</p>)}</div></div> : header;
+    const content = described.length ? <div>{header}<div className={styles.headerDescriptions}>{described.map(s => <p key={s.id} className={styles.description}>{records.length > 1 ? <><strong>{s.name}</strong>{": "}</> : null}{s.public_description}</p>)}</div></div> : header;
+    return compact ? <div className={styles.compact}>{content}</div> : content;
   }
   if (!records.length) return null;
   const groups = new Map<string, { label: string; community: boolean; records: TournamentSponsor[] }>();
