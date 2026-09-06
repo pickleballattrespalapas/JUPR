@@ -74,11 +74,15 @@ test("new-registration wizard requires demographics and resolves profiles throug
   await page.getByRole("button", { name: "Continue", exact: true }).click();
 
   await expect(page.getByTestId("registration-step-profile")).toBeVisible();
+  await expect(page.getByLabel("DUPR ID", { exact: true })).toBeVisible();
   await page.getByText(/Avery Ace · Doubles 4 · Singles not set/).click();
+  await expect(page.getByLabel("DUPR ID", { exact: true })).toHaveCount(0);
   await expect(page.getByLabel("Display name")).toHaveValue("Avery Ace");
   await expect(page.getByLabel("Doubles skill")).toHaveValue("4");
   await expect(page.getByLabel("Singles skill")).toHaveValue("");
   await page.getByLabel("Singles skill").fill("3.5");
   await expect(page.getByLabel("Singles skill")).toHaveValue("3.5");
   await expect(page.getByText(/Choosing a profile only fills in this form/i)).toBeVisible();
+  await page.getByText("None of these is me", { exact: true }).click();
+  await expect(page.getByLabel("DUPR ID", { exact: true })).toBeVisible();
 });

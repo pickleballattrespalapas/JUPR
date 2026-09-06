@@ -254,13 +254,6 @@ export default function TournamentRegistrationForm({
   const selectableEvents = useMemo(() => events.filter((event) => event.selectable), [events]);
   const eventById = useMemo(() => new Map(events.map((event) => [event.id, event])), [events]);
   const daysById = useMemo(() => new Map(days.map((day) => [day.id, day])), [days]);
-  const groupedEvents = useMemo(
-    () =>
-      days
-        .map((day) => ({ day, events: selectableEvents.filter((event) => event.registration_day_id === day.id) }))
-        .filter((row) => row.events.length > 0),
-    [days, selectableEvents]
-  );
   const eligibilityProfile = useMemo(
     () => ({
       gender: contact.gender,
@@ -269,6 +262,17 @@ export default function TournamentRegistrationForm({
       singlesSkill: numericValue(profile.singlesSkill)
     }),
     [contact.gender, contact.age, profile.doublesSkill, profile.singlesSkill]
+  );
+  const eligibleEvents = useMemo(
+    () => selectableEvents.filter((event) => !publicEventEligibilityReason(event, eligibilityProfile)),
+    [selectableEvents, eligibilityProfile]
+  );
+  const groupedEvents = useMemo(
+    () =>
+      days
+        .map((day) => ({ day, events: eligibleEvents.filter((event) => event.registration_day_id === day.id) }))
+        .filter((row) => row.events.length > 0),
+    [days, eligibleEvents]
   );
   const totalPrice = selectedIds.reduce((sum, id) => sum + Number(eventById.get(id)?.price_usd || 0), 0);
   const needsPartnerBoardConsent = selectedIds.some(
@@ -502,6 +506,12 @@ export default function TournamentRegistrationForm({
         setError(`${label} must be between 1 and 7.`);
         return;
       }
+    }
+    const eligibleIds = new Set(eligibleEvents.map((event) => event.id));
+    const nextSelectedIds = selectedIds.filter((id) => eligibleIds.has(id));
+    if (nextSelectedIds.length !== selectedIds.length) {
+      setSelectedIds(nextSelectedIds);
+      setCommerceQuote(null);
     }
     setStep(3);
   }
@@ -805,7 +815,9 @@ export default function TournamentRegistrationForm({
           </aside>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
             <label>Display name *<br /><input aria-label="Display name" value={profile.displayName} onChange={(event) => updateProfile("displayName", event.target.value)} style={inputStyle} /></label>
-            <label>DUPR ID<br /><input aria-label="DUPR ID" value={profile.duprId} onChange={(event) => updateProfile("duprId", event.target.value)} style={inputStyle} /></label>
+            {!profile.candidateId ? (
+              <label>DUPR ID<br /><input aria-label="DUPR ID" value={profile.duprId} onChange={(event) => updateProfile("duprId", event.target.value)} style={inputStyle} /></label>
+            ) : null}
             <label>Doubles skill<br /><input aria-label="Doubles skill" type="number" min="1" max="7" step="0.01" value={profile.doublesSkill} onChange={(event) => updateProfile("doublesSkill", event.target.value)} style={inputStyle} /></label>
             <label>
               Singles skill<br />
@@ -832,14 +844,12 @@ export default function TournamentRegistrationForm({
                 {dayEvents.map((eventOption) => {
                   const selected = selectedIds.includes(eventOption.id);
                   const partner = partnerDetails[eventOption.id] || emptyPartnerState(eventOption);
-                  const eligibilityReason = publicEventEligibilityReason(eventOption, eligibilityProfile);
                   return (
                     <article key={eventOption.id} style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: selected ? "#f8fafc" : "white" }}>
                       <label style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start" }}>
-                        <input type="checkbox" aria-label={`${eventOption.event_family_label} ${eventOption.division_name}`} checked={selected} disabled={Boolean(eligibilityReason)} onChange={(event) => toggleEvent(eventOption.id, event.target.checked)} />
+                        <input type="checkbox" aria-label={`${eventOption.event_family_label} ${eventOption.division_name}`} checked={selected} onChange={(event) => toggleEvent(eventOption.id, event.target.checked)} />
                         <span><strong>{publicTournamentEventLabel(eventOption.event_family_label, eventOption.division_name)}</strong><br /><span style={{ color: "#64748b" }}>{scheduledDaysLabel(eventOption, daysById) || "Schedule TBD"}<br />{eventMeta(eventOption)}</span></span>
                       </label>
-                      {eligibilityReason ? <p style={{ color: "#b91c1c", marginBottom: 0 }}>{eligibilityReason}</p> : null}
                       {selected &&
                       eventOption.partner_required &&
                       String(
@@ -882,7 +892,9 @@ export default function TournamentRegistrationForm({
               </div>
             </div>
           ))}
-          {!selectableEvents.length ? <p>No events are open for registration.</p> : null}
+          {!eligibleEvents.length ? (
+            <p>{selectableEvents.length ? "No available divisions match your age, gender, and skill level." : "No events are open for registration."}</p>
+          ) : null}
           {selectedTeamEvents.map((teamEvent) => (
             <FourPlayerTeamRegistrationCard
               key={teamEvent.id}
