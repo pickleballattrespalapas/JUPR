@@ -22,7 +22,7 @@ JUPR (Joe’s Unique Pickleball Ratings) is Tres Palapas’ **in-house rating sy
 ## How do I get a JUPR rating?
 You get a JUPR rating once you have **recorded matches** in the system from a JUPR-eligible event (examples below).
 - If you haven’t played a recorded event yet, you may show as **Unrated / No JUPR**.
-- Your first set of results can move your rating more quickly while the system “learns” your level.
+- The same calculation rules apply from your first rated match. There is no provisional period or special new-player multiplier.
 
 ---
 
@@ -43,7 +43,8 @@ JUPR is performance-based. Rating movement depends on:
 - **Opponent strength** (beating stronger opponents moves you more)
 - **Expected outcome** (results that surprise the system move you more)
 - **Game score** (the score matters—not only win/loss)
-- **Consistency over time** (repeated results matter more than one match)
+
+JUPR does not add recency, reliability, or a changing new-player factor to the calculation.
 
 ---
 
@@ -63,9 +64,9 @@ However, because scores matter, a win that is **far below expected performance**
 JUPR is an **individual rating**, but doubles results are used to update each player.
 In doubles:
 - the system evaluates the matchup based on **both teams** (each team’s strength is derived from the two players),
-- then adjusts each player based on the outcome and score.
+- then gives both partners the same rating change based on the outcome and score.
 
-This means playing with different partners over time helps the system find your true level faster.
+JUPR stays an in-house club rating; it is not intended to replace a national or universal rating.
 
 ---
 

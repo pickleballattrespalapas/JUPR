@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "generated_at_utc": "2026-09-06T05:30:58Z",
+  "source": {
+    "environment": "JUPR Staging",
+    "project_ref": "sijpxjxvdtrehmqvirfi",
+    "base_commit": "42b3f2b42fb668d6ff4a8767e3d606f2f3dc1e29",
+    "clubs": 1,
+    "total_match_rows": 318,
+    "evaluated_rated_matches": 287,
+    "skipped_deleted_matches": 31,
+    "players_simulated": 51,
+    "rating_states_simulated": 57
+  },
+  "model": {
+    "algorithm_version": "jupr-hybrid-score-share-v1",
+    "parameter_version": "flat-k32-floor1-loser-cap16-v1"
+  },
+  "method": "chronological_walk_forward",
+  "metrics": {
+    "brier_score": 0.23450740178793383,
+    "log_loss": 0.6611126494815841,
+    "outcome_accuracy": 0.6376306620209059,
+    "score_share_mae": 0.12498470174890734,
+    "brier_improvement_vs_50_percent": 0.015492598212066166
+  },
+  "by_format": {
+    "doubles": {
+      "matches": 283,
+      "brier_score": 0.23435922920073557,
+      "log_loss": 0.6608015509828351,
+      "outcome_accuracy": 0.6325088339222615,
+      "score_share_mae": 0.1255826707061515
+    },
+    "singles": {
+      "matches": 4,
+      "brier_score": 0.24499061233220681,
+      "log_loss": 0.6831228682680771,
+      "outcome_accuracy": 1.0,
+      "score_share_mae": 0.0826783980238791
+    }
+  },
+  "policy_checks": {
+    "winner_gain_violations": 0,
+    "loser_outperformance_gains": 18
+  },
+  "decision_note": "This staging history includes acceptance fixtures and future-dated test rows. It freezes the current baseline and validates the backtest pipeline, but it is not by itself enough evidence to change the formula. The singles slice is especially too small for comparison."
+}

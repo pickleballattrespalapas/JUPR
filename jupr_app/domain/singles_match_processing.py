@@ -450,13 +450,15 @@ def process_singles_matches(
         p2_bonus = winner_bonus_elo if p2_outcome is True else 0.0
 
         league_d1, league_d2 = 0.0, 0.0
+        effective_league_k_factor: float | None = None
         if update_league_rating:
+            effective_league_k_factor = float(league_k_factor(league_name))
             league_d1, league_d2 = compute_team_deltas(
                 league_rating(p1, league_name),
                 league_rating(p2, league_name),
                 score_t1,
                 score_t2,
-                k_factor=float(league_k_factor(league_name)),
+                k_factor=effective_league_k_factor,
                 min_win_delta=float(min_win_delta_elo),
                 cap_loser_gain=cap_loser_gain_elo,
             )
@@ -509,6 +511,10 @@ def process_singles_matches(
             context={**match, "match_format": "singles"},
             rating_scope=rating_scope,
             match_format="singles",
+            overall_k_factor=float(default_k_factor),
+            min_win_delta_elo=float(min_win_delta_elo),
+            cap_loser_gain_elo=cap_loser_gain_elo,
+            league_k_factor=effective_league_k_factor,
         )
         db_match["singles_replay_managed"] = True
         db_matches.append(db_match)
