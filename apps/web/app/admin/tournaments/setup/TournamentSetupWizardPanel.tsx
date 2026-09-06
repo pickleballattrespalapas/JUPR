@@ -325,6 +325,7 @@ function normalizeSponsors(value: unknown, urls: Record<string, string> = {}): S
       is_visible: row.is_visible !== false,
       level: safeString(row.level),
       website: safeString(row.website),
+      public_description: safeString(row.public_description),
       notes: safeString(row.notes)
     }));
 }
@@ -355,6 +356,7 @@ function basicsDraftPayload(basics: BasicsDraft): Record<string, unknown> {
       name: sponsor.name.trim(),
       level: sponsor.level.trim(),
       website: sponsor.website.trim(),
+      public_description: (sponsor.public_description || "").trim(),
       notes: sponsor.notes.trim()
     }))
   };

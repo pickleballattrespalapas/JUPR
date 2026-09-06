@@ -111,12 +111,35 @@ def test_public_route_reads_published_settings_not_private_draft(monkeypatch):
     app = FastAPI()
     install_public_tournament_registration_routes(app, get_club=lambda _slug: {"id": "club", "name": "Test"}, get_supabase_client=lambda: sb, public_club_payload=lambda club, slug: club)
     sb.storage["tournaments"][0]["status"] = "ACTIVE"
-    sb.storage["tournament_registration_settings"][0].update({"registration_status": "open", "builder_draft_json": {"published_at": "2026-09-06T00:00:00Z", "basics": {"sponsors_json": [{"name": "Private sponsor"}]}}, "sponsors_json": [{"id": "s1", "name": "Published sponsor", "tier": "presenting"}]})
+    sb.storage["tournament_registration_settings"][0].update({"registration_status": "open", "builder_draft_json": {"published_at": "2026-09-06T00:00:00Z", "basics": {"sponsors_json": [{"name": "Private sponsor"}]}}, "sponsors_json": [{"id": "s1", "name": "Published sponsor", "tier": "presenting", "public_description": "Public introduction", "notes": "Internal only"}]})
     sb.storage["tournament_builder_drafts"] = [{"tournament_id": "t1", "basics": {"sponsors_json": [{"name": "Private sponsor"}]}}]
     client = TestClient(app)
     response = client.get("/clubs/test/tournaments/t1/sponsors")
     assert response.status_code == 200
     assert response.json()["sponsors"][0]["name"] == "Published sponsor"
+    assert response.json()["sponsors"][0]["public_description"] == "Public introduction"
+    assert "Internal only" not in response.text
     assert "Private sponsor" not in response.text
     sb.storage["tournaments"][0]["club_id"] = "other"
     assert client.get("/clubs/test/tournaments/t1/sponsors").status_code == 404
+
+
+def test_public_description_round_trip_and_legacy_default():
+    original = [{"id": "one", "name": "Sponsor", "public_description": "  Local homes.\nLocal knowledge.  ", "notes": "Private pricing"}]
+    saved = normalize_sponsors(original, club_id=CLUB, tournament_id=TOURNAMENT)
+    reloaded = normalize_sponsors(saved, club_id=CLUB, tournament_id=TOURNAMENT)
+    assert reloaded[0]["public_description"] == "Local homes.\nLocal knowledge."
+    public = public_sponsors(None, reloaded, club_id=CLUB, tournament_id=TOURNAMENT)
+    assert public[0]["public_description"] == reloaded[0]["public_description"]
+    assert "notes" not in public[0]
+    assert normalize_sponsors([{"name": "Legacy"}], club_id=CLUB, tournament_id=TOURNAMENT)[0]["public_description"] == ""
+    saved[0]["public_description"] = ""
+    assert public_sponsors(None, saved, club_id=CLUB, tournament_id=TOURNAMENT)[0]["public_description"] == ""
+
+
+def test_public_description_length_validation():
+    row = {"name": "Sponsor", "public_description": "a" * 500}
+    assert len(normalize_sponsors([row], club_id=CLUB, tournament_id=TOURNAMENT)[0]["public_description"]) == 500
+    row["public_description"] += "a"
+    with pytest.raises(ValueError, match="500 characters"):
+        normalize_sponsors([row], club_id=CLUB, tournament_id=TOURNAMENT)
