@@ -1,0 +1,30 @@
+"use client";
+
+import Image from "next/image";
+import { Fragment, useState } from "react";
+import { normalizeSponsorWebsite, sponsorTierLabels, type TournamentSponsor } from "@/lib/tournamentSponsors";
+import styles from "./TournamentSponsorDisplay.module.css";
+
+function Sponsor({ sponsor, presenting = false }: { sponsor: TournamentSponsor; presenting?: boolean }) {
+  const [failedUrl, setFailedUrl] = useState("");
+  let website = "";
+  try { website = normalizeSponsorWebsite(sponsor.website); } catch { /* Invalid legacy links render as plain names. */ }
+  const name = <strong>{sponsor.name}</strong>;
+  const logo = sponsor.logo_url && failedUrl !== sponsor.logo_url ? <Image unoptimized src={sponsor.logo_url} alt="" width={160} height={56} referrerPolicy="no-referrer" className={styles.logo} onError={() => setFailedUrl(sponsor.logo_url || "")} /> : null;
+  const content = presenting ? <>{name}{logo}</> : <>{logo}{name}</>;
+  return website ? <a className={styles.sponsor} href={website} target="_blank" rel="sponsored noopener noreferrer" referrerPolicy="no-referrer" aria-label={`Visit ${sponsor.name} (opens in a new tab)`}>{content}</a> : <span className={styles.sponsor}>{content}</span>;
+}
+
+export default function TournamentSponsorDisplay({ sponsors, placement }: { sponsors: TournamentSponsor[]; placement: "header" | "footer" }) {
+  const records = sponsors.filter(s => placement === "header" ? s.tier === "presenting" : s.tier !== "presenting");
+  if (!records.length) return null;
+  if (placement === "header") return <div className={styles.presenting} aria-label="Presenting sponsors"><span>Presented by </span><span className={styles.names}>{records.map((s, index) => <Fragment key={s.id}>{index > 0 ? <span>{index === records.length - 1 ? " and " : ", "}</span> : null}<Sponsor sponsor={s} presenting /></Fragment>)}</span></div>;
+  const groups = new Map<string, { label: string; community: boolean; records: TournamentSponsor[] }>();
+  for (const tier of ["premier", "supporting"] as const) for (const s of records.filter(row => row.tier === tier)) {
+    const label = s.level || sponsorTierLabels[tier];
+    const key = `${tier}:${label}`;
+    if (!groups.has(key)) groups.set(key, { label, community: tier === "supporting", records: [] });
+    groups.get(key)!.records.push(s);
+  }
+  return <footer className={styles.footer} aria-label="Tournament sponsors">{Array.from(groups, ([key, group]) => <section key={key} className={`${styles.group} ${group.community ? styles.community : ""}`}><h3>{group.label}</h3><div className={styles.grid}>{group.records.map(s => <Sponsor key={s.id} sponsor={s} />)}</div></section>)}</footer>;
+}

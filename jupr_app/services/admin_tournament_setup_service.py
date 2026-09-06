@@ -5,6 +5,8 @@ import os
 import re
 from datetime import datetime, timezone
 from typing import Any
+
+from jupr_app.services.tournament_sponsor_service import validate_sponsor_payload, normalize_sponsors, logo_urls
 from uuid import NAMESPACE_URL, uuid5
 
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
@@ -476,6 +478,7 @@ def get_admin_tournament_setup_detail(supabase: Any, *, club_id: str, tournament
     return {
         "ok": True,
         "mode": "tournament_setup_detail",
+        "sponsor_logo_urls": logo_urls(supabase, normalize_sponsors(settings.get("sponsors_json") or [], club_id=str(club_id), tournament_id=str(tournament_id), strict=False) + normalize_sponsors((draft.get("basics") or {}).get("sponsors_json") or [], club_id=str(club_id), tournament_id=str(tournament_id), strict=False)),
         "tournament": tournament,
         "settings": _settings_payload(settings),
         "days": days,
@@ -1190,6 +1193,7 @@ def update_admin_tournament_setup_settings(
     dry_run: bool = False,
 ) -> dict[str, Any]:
     _assert_enabled()
+    patch = validate_sponsor_payload(patch, club_id=str(club_id), tournament_id=str(tournament_id))
     if _clean(confirmation_text, limit=80).upper() != CONFIRM_SETTINGS:
         raise ValueError(f"Type {CONFIRM_SETTINGS} to save tournament setup settings.")
     tournament = _get_tournament_for_club(supabase, club_id=str(club_id), tournament_id=str(tournament_id))
@@ -1261,6 +1265,8 @@ def save_admin_tournament_setup_draft(
     dry_run: bool = False,
 ) -> dict[str, Any]:
     _assert_enabled()
+    basics = validate_sponsor_payload(basics, club_id=str(club_id), tournament_id=str(tournament_id))
+    settings = validate_sponsor_payload(settings, club_id=str(club_id), tournament_id=str(tournament_id))
     if _clean(confirmation_text, limit=80).upper() != CONFIRM_DRAFT:
         raise ValueError(f"Type {CONFIRM_DRAFT} to save tournament setup draft.")
     _validate_substitution_configuration(
@@ -1327,6 +1333,8 @@ def publish_admin_tournament_setup(
     dry_run: bool = False,
 ) -> dict[str, Any]:
     _assert_enabled()
+    validate_sponsor_payload(basics, club_id=str(club_id), tournament_id=str(tournament_id))
+    validate_sponsor_payload(settings, club_id=str(club_id), tournament_id=str(tournament_id))
     if _clean(confirmation_text, limit=80).upper() != CONFIRM_PUBLISH:
         raise ValueError(f"Type {CONFIRM_PUBLISH} to publish tournament setup.")
     _validate_tournament_setup_eligibility(
@@ -1389,7 +1397,7 @@ def publish_admin_tournament_setup(
             "settings": dict(settings or {}),
         }
 
-    clean_basics = dict(basics or {})
+    clean_basics = validate_sponsor_payload(basics, club_id=str(club_id), tournament_id=str(tournament_id))
     tournament_patch: dict[str, Any] = {}
     for source_key, target_key in (("name", "name"), ("start_date", "start_date"), ("end_date", "end_date")):
         if source_key in clean_basics:
@@ -1408,7 +1416,7 @@ def publish_admin_tournament_setup(
             raise RuntimeError("Tournament basics were not published.")
         tournament = {**tournament, **published_tournament_rows[0]}
 
-    clean_settings = dict(settings or {})
+    clean_settings = validate_sponsor_payload(settings, club_id=str(club_id), tournament_id=str(tournament_id))
     before_settings = get_registration_settings(supabase, str(tournament_id))
     published_settings = dict(before_settings)
     preserved_registration_status = str(

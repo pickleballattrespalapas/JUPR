@@ -1,6 +1,8 @@
 "use client";
 
 import type { CSSProperties, ReactNode } from "react";
+import Image from "next/image";
+import { sponsorTierLabels, type SponsorTier } from "@/lib/tournamentSponsors";
 import {
   cleanString,
   dayLabel,
@@ -191,7 +193,12 @@ function listSummary(values: unknown[], field: string, days: BuilderRow[], timez
   const objects = values.filter((value): value is SetupRecord => Boolean(value) && typeof value === "object" && !Array.isArray(value));
   if (objects.length === values.length && objects.length) {
     if (/sponsor/i.test(field)) {
-      return <ul style={{ margin: 0, paddingLeft: "1.2rem" }}>{objects.map((row, index) => <li key={cleanString(row.id) || `${cleanString(row.name)}-${index}`}><strong>{cleanString(row.name) || `Sponsor ${index + 1}`}</strong>{cleanString(row.level) ? ` — ${cleanString(row.level)}` : ""}</li>)}</ul>;
+      return <ul style={{ margin: 0, paddingLeft: "1.2rem" }}>{objects.map((row, index) => <li key={cleanString(row.id) || `${cleanString(row.name)}-${index}`}>
+        <strong>{cleanString(row.name) || `Sponsor ${index + 1}`}</strong>
+        <div>{sponsorTierLabels[row.tier as SponsorTier] || sponsorTierLabels.supporting}{cleanString(row.level) ? ` · ${cleanString(row.level)}` : ""} · {row.is_visible === false ? "Hidden" : "Visible"} · Position {Number(row.sort_order ?? index) + 1}</div>
+        <div>{cleanString(row.website) || "No website"} · {cleanString(row.logo_path) ? "Logo uploaded" : "Name only"}</div>
+        {cleanString(row.logo_url) ? <Image unoptimized src={cleanString(row.logo_url)} alt="" width={120} height={48} style={{ objectFit: "contain", background: "white", maxWidth: "100%" }} /> : null}
+      </li>)}</ul>;
     }
     if (/court/i.test(field)) {
       return <ul style={{ margin: 0, paddingLeft: "1.2rem" }}>{objects.map((row, index) => <li key={cleanString(row.id) || index}>{cleanString(row.title) || `Court ${index + 1}`}</li>)}</ul>;

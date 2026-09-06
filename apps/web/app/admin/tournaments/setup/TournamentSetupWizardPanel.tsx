@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import TournamentSponsorEditor from "./TournamentSponsorEditor";
+import { sponsorTiers, type SponsorDraft, type SponsorTier } from "@/lib/tournamentSponsors";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
@@ -111,6 +113,7 @@ type SetupDetail = {
   settings: Record<string, unknown>;
   days: SetupRecord[];
   event_options: SetupRecord[];
+  sponsor_logo_urls?: Record<string, string>;
   builder_draft?: Record<string, unknown> | null;
   publish_impact?: Record<string, unknown> | null;
   publish_impact_warning?: string | null;
@@ -157,14 +160,6 @@ type AgeSplitPreviewResponse = {
   recommendations: string[];
   pending_entries?: Array<Record<string, unknown>>;
   unassigned_entries: Array<Record<string, unknown>>;
-};
-
-type SponsorDraft = {
-  id: string;
-  name: string;
-  level: string;
-  website: string;
-  notes: string;
 };
 
 type BasicsDraft = {
@@ -314,17 +309,18 @@ function sponsorId(): string {
   return globalThis.crypto?.randomUUID?.() || `sponsor-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function newSponsor(): SponsorDraft {
-  return { id: sponsorId(), name: "", level: "", website: "", notes: "" };
-}
-
-function normalizeSponsors(value: unknown): SponsorDraft[] {
+function normalizeSponsors(value: unknown, urls: Record<string, string> = {}): SponsorDraft[] {
   if (!Array.isArray(value)) return [];
   return value
     .filter((row): row is Record<string, unknown> => Boolean(row) && typeof row === "object" && !Array.isArray(row))
-    .map((row) => ({
+    .map((row, index) => ({
       id: safeString(row.id) || sponsorId(),
       name: safeString(row.name),
+      sort_order: index,
+      tier: sponsorTiers.includes(row.tier as SponsorTier) ? row.tier as SponsorTier : "supporting",
+      logo_path: safeString(row.logo_path),
+      logo_url: urls[safeString(row.logo_path)] || "",
+      is_visible: row.is_visible !== false,
       level: safeString(row.level),
       website: safeString(row.website),
       notes: safeString(row.notes)
@@ -351,6 +347,9 @@ function basicsDraftPayload(basics: BasicsDraft): Record<string, unknown> {
     timezone: basics.timezone,
     sponsors_json: basics.sponsors.map((sponsor) => ({
       id: sponsor.id,
+      tier: sponsor.tier,
+      logo_path: sponsor.logo_path,
+      is_visible: sponsor.is_visible,
       name: sponsor.name.trim(),
       level: sponsor.level.trim(),
       website: sponsor.website.trim(),
@@ -975,7 +974,7 @@ export default function TournamentSetupWizardPanel({
       endDate: dateValue(payload.tournament.end_date),
       locationName: safeString(publishedSettingsValue.location_name),
       timezone: safeString(publishedSettingsValue.timezone) || "America/Mazatlan",
-      sponsors: normalizeSponsors(publishedSettingsValue.sponsors_json)
+      sponsors: normalizeSponsors(publishedSettingsValue.sponsors_json, payload.sponsor_logo_urls)
     };
     const draftBasicsRecord = objectValue(draft.basics);
     const draftBasicsValue: BasicsDraft = {
@@ -985,7 +984,7 @@ export default function TournamentSetupWizardPanel({
       locationName: safeString(draftBasicsRecord.location_name) || publishedBasicsValue.locationName,
       timezone: safeString(draftBasicsRecord.timezone) || publishedBasicsValue.timezone,
       sponsors: Array.isArray(draftBasicsRecord.sponsors_json)
-        ? normalizeSponsors(draftBasicsRecord.sponsors_json)
+        ? normalizeSponsors(draftBasicsRecord.sponsors_json, payload.sponsor_logo_urls)
         : publishedBasicsValue.sponsors
     };
     const draftSettingsValue = withDefaultTournamentPolicies({
@@ -1155,17 +1154,6 @@ export default function TournamentSetupWizardPanel({
     setImpactReview(null);
   }
 
-  function moveSponsor(index: number, direction: -1 | 1) {
-    setBasics((current) => {
-      const nextIndex = index + direction;
-      if (nextIndex < 0 || nextIndex >= current.sponsors.length) return current;
-      const sponsors = [...current.sponsors];
-      const [moved] = sponsors.splice(index, 1);
-      sponsors.splice(nextIndex, 0, moved);
-      return { ...current, sponsors };
-    });
-    setImpactReview(null);
-  }
 
   function updateVenueSettings(patch: Record<string, unknown>) {
     setSettings((current) => {
@@ -1281,7 +1269,8 @@ export default function TournamentSetupWizardPanel({
     nextConfiguration: SetupConfiguration,
     savedStep: TournamentSetupStep,
     successMessage: string,
-    settingsOverride: Record<string, unknown> = settings
+    settingsOverride: Record<string, unknown> = settings,
+    basicsOverride: BasicsDraft = basics
   ): Promise<boolean> {
     if (!detail) return false;
     const generation = actionRequest.begin();
@@ -1299,7 +1288,7 @@ export default function TournamentSetupWizardPanel({
           method: "PUT",
           body: JSON.stringify({
             ...draft,
-            basics: basicsDraftPayload(basics),
+            basics: basicsDraftPayload(basicsOverride),
             settings: settingsDraftPayload(settingsOverride),
             saved_step: savedStep,
             expected_state_fingerprint: detail.state_fingerprint,
@@ -2381,30 +2370,13 @@ async function saveResolutionDraft() {
           />
         </article>
 
-        <article style={cardStyle}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
-            <div><h3 style={{ margin: 0 }}>Sponsors</h3><p style={{ margin: "0.25rem 0 0", color: "#64748b" }}>Sponsors appear publicly in the order shown here.</p></div>
-            <button type="button" style={ghostButtonStyle} disabled={busy} onClick={() => setBasics((current) => ({ ...current, sponsors: [...current.sponsors, newSponsor()] }))}>Add sponsor</button>
-          </div>
-          <div style={{ display: "grid", gap: "0.75rem", marginTop: "0.75rem" }}>
-            {basics.sponsors.map((sponsor, index) => (
-              <article key={sponsor.id} style={{ ...cardStyle, background: "#f8fafc" }}>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(175px, 1fr))", gap: "0.65rem" }}>
-                  <label><strong>Sponsor name</strong><br /><input value={sponsor.name} onChange={(event) => setBasics((current) => ({ ...current, sponsors: current.sponsors.map((row) => row.id === sponsor.id ? { ...row, name: event.target.value } : row) }))} disabled={busy} style={inputStyle} /></label>
-                  <label><strong>Level or label</strong><br /><input value={sponsor.level} onChange={(event) => setBasics((current) => ({ ...current, sponsors: current.sponsors.map((row) => row.id === sponsor.id ? { ...row, level: event.target.value } : row) }))} placeholder="Title sponsor" disabled={busy} style={inputStyle} /></label>
-                  <label><strong>Website</strong><br /><input type="url" value={sponsor.website} onChange={(event) => setBasics((current) => ({ ...current, sponsors: current.sponsors.map((row) => row.id === sponsor.id ? { ...row, website: event.target.value } : row) }))} placeholder="https://" disabled={busy} style={inputStyle} /></label>
-                  <label><strong>Notes</strong><br /><input value={sponsor.notes} onChange={(event) => setBasics((current) => ({ ...current, sponsors: current.sponsors.map((row) => row.id === sponsor.id ? { ...row, notes: event.target.value } : row) }))} disabled={busy} style={inputStyle} /></label>
-                </div>
-                <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.65rem" }}>
-                  <button type="button" style={ghostButtonStyle} disabled={busy || index === 0} onClick={() => moveSponsor(index, -1)}>Move up</button>
-                  <button type="button" style={ghostButtonStyle} disabled={busy || index === basics.sponsors.length - 1} onClick={() => moveSponsor(index, 1)}>Move down</button>
-                  <button type="button" style={{ ...ghostButtonStyle, color: "#991b1b", borderColor: "#fecaca" }} disabled={busy} onClick={() => setBasics((current) => ({ ...current, sponsors: current.sponsors.filter((row) => row.id !== sponsor.id) }))}>Remove sponsor {index + 1}</button>
-                </div>
-              </article>
-            ))}
-            {!basics.sponsors.length ? <p style={{ color: "#64748b" }}>No sponsors added yet.</p> : null}
-          </div>
-        </article>
+        <TournamentSponsorEditor
+          sponsors={basics.sponsors}
+          tournamentName={basics.name}
+          disabled={busy}
+          onUpload={(image_base64) => requestJson(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/setup/tournaments/${encodeURIComponent(tournamentId)}/sponsor-logos`, { method: "POST", body: JSON.stringify({ image_base64 }) })}
+          onSave={(sponsors) => persistConfigurationDraft(configuration, "basics", "Sponsor draft saved. Publish from Review when you’re ready.", settings, { ...basics, sponsors })}
+        />
 
         <div>
           <button type="button" style={buttonStyle} disabled={busy} onClick={() => void saveBasics()}>{busy ? "Saving draft…" : "Save draft and continue to Venue"}</button>

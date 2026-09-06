@@ -34,6 +34,12 @@ from jupr_app.services.admin_tournament_guarded_operation import (
     tournament_admin_guarded_runtime_enabled,
 )
 from services.api.auth import authenticate_bearer, auth_header
+from jupr_app.services.tournament_sponsor_service import upload_logo
+from jupr_app.domain.tournament_registration_repo import get_tournament_record
+
+
+class SponsorLogoRequest(BaseModel):
+    image_base64: str = Field(min_length=1, max_length=6990508)
 
 
 class TournamentSetupSettingsRequest(BaseModel):
@@ -171,6 +177,30 @@ def _require_canonical_uuid(value: str, *, field: str) -> str:
 
 def install_admin_tournament_setup_routes(app, *, get_supabase_client) -> None:
     """Register guarded Tournament Setup Manager routes for the Next staging surface."""
+
+    @app.post("/admin/clubs/{club_id}/tournaments/setup/tournaments/{tournament_id}/sponsor-logos")
+    def post_sponsor_logo(club_id: str, tournament_id: str, payload: SponsorLogoRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
+        if not is_admin_tournament_setup_enabled():
+            raise HTTPException(status_code=403, detail="Next Tournament Setup is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_role_or_403(supabase=supabase, club_id=club_id, authorization=authorization, source="tournament_sponsor_logo")
+        try:
+            require_tournament_admin_mutation_runtime("setup")
+            tournament = get_tournament_record(supabase, tournament_id)
+            if not tournament or str(tournament.get("club_id")) != str(club_id):
+                raise HTTPException(status_code=404, detail="Tournament not found.")
+            result = upload_logo(supabase, club_id=club_id, tournament_id=tournament_id, encoded=payload.image_base64)
+            write_admin_activity_log(supabase, build_activity_payload(
+                club_id=club_id, actor_email=actor_email, actor_role=actor_role,
+                action_type="tournament_sponsor_logo_upload", entity_type="tournament", entity_id=tournament_id,
+                after_json={"logo_path": result["logo_path"]}, source_page="tournament_sponsor_logo"))
+            return result
+        except (ValueError, PermissionError) as exc:
+            _handle(exc)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="The logo could not be uploaded. Please try again.") from exc
 
     @app.get("/admin/clubs/{club_id}/tournaments/setup/status")
     def get_setup_status(club_id: str) -> dict[str, Any]:

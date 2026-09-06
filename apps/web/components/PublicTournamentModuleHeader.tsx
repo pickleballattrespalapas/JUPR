@@ -1,4 +1,5 @@
 import Link from "next/link";
+import PublicTournamentSponsors from "./PublicTournamentSponsors";
 import PublicTournamentNav, {
   publicTournamentHref,
   type PublicTournamentModule
@@ -50,7 +51,8 @@ export default function PublicTournamentModuleHeader({
       >
         {kicker}
       </p>
-      <h1 style={{ marginTop: 0 }}>{tournamentName}</h1>
+      <h1 style={{ marginTop: 0, marginBottom: 0 }}>{tournamentName}</h1>
+      <PublicTournamentSponsors clubSlug={clubSlug} tournamentId={tournamentId} placement="header" />
       <p style={{ color: "#334155", maxWidth: "820px" }}>{description}</p>
       <PublicTournamentNav
         clubSlug={clubSlug}
