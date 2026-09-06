@@ -101,3 +101,17 @@ slot removals at period end, no partial refund. Select retained staff before
 confirming downgrade. Unsupported programs remain viewable but pause. Failed
 renewal: three days grace, then paid operations pause while admins retain billing
 and records. Pricing/usage review reminder: November 30, 2026.
+
+## Platform onboarding increment
+The `/admin/platform` dashboard lists club accounts, creates a draft club plus
+its first administrator atomically, and tracks draft/in-progress/ready-for-review
+onboarding. Only identities in `pcs_platform_admins` can access these endpoints.
+The migration bootstraps the existing Tres Super Admin through its Auth user ID;
+subsequent club role grants do not grant platform authority. There is no public
+endpoint to appoint platform administrators. Every onboarding write is audited.
+
+This increment does not launch a club, activate trials, charge cards, send email,
+or implement public club signup. Draft status is onboarding/public-visibility
+metadata, not a complete entitlement gate. Plan enforcement and invitations are
+required before opening self-service onboarding. The dashboard displays existing
+plan status rather than implying subscription enforcement is already complete.

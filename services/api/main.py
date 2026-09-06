@@ -1426,3 +1426,6 @@ from services.api.admin_staff_routes import install_admin_staff_routes
 from services.api.staff_access import install_staff_access
 install_admin_staff_routes(app, get_supabase_client=get_supabase_client)
 install_staff_access(app, get_supabase_client=get_supabase_client)
+
+from services.api.platform_admin_routes import install_platform_admin_routes
+install_platform_admin_routes(app, get_supabase_client=get_supabase_client)
