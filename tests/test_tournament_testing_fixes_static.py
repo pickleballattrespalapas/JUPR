@@ -16,10 +16,15 @@ def test_public_registration_leads_with_registration_and_links_details_home() ->
     )
     home = _read("apps/web/app/clubs/[clubSlug]/tournaments/page.tsx")
 
-    assert "Register now" in registration
-    assert 'href="#registration-form"' in registration
-    assert 'id="registration-form"' in registration
-    assert registration.index('id="registration-form"') < registration.index(
+    form = _read(
+        "apps/web/app/clubs/[clubSlug]/tournament-registration/TournamentRegistrationForm.tsx"
+    )
+    assert "Register now" in form
+    assert 'registrationOpen && mode !== "new"' in form
+    assert 'formRef.current?.scrollIntoView' in form
+    assert 'id="registration-form"' in form
+    assert 'registrationOpen={Boolean(data?.registration_open)}' in registration
+    assert registration.index('<TournamentRegistrationForm') < registration.index(
         "Need tournament details?"
     )
     assert "Tournament information" in home
