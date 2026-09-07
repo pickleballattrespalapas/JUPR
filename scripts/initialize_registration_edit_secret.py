@@ -84,7 +84,8 @@ def inventory() -> set[str]:
         if not isinstance(row, dict):
             raise SetupError("Fly returned an invalid secret inventory entry.")
         name = row.get("Name") or row.get("name")
-        status = row.get("DeploymentStatus") or row.get("deployment_status")
+        # Pinned flyctl 0.4.49 emits lowercase name/digest/status.
+        status = row.get("status") or row.get("Status") or row.get("DeploymentStatus") or row.get("deployment_status")
         if not isinstance(name, str) or str(status).lower() != "deployed":
             raise SetupError("All Fly secrets must be fully deployed before initialization.")
         names.add(name)
