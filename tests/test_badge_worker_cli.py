@@ -24,7 +24,10 @@ def test_run_badge_queue_worker_passes_arguments(monkeypatch):
         def execute(self):
             return SimpleNamespace(data=[])
 
-    fake_client = SimpleNamespace(table=lambda _name: EmptyQuery())
+    def rpc(name, args):
+        captured["season_enqueue"] = (name, args)
+        return EmptyQuery()
+    fake_client = SimpleNamespace(table=lambda _name: EmptyQuery(), rpc=rpc)
 
     def fake_make_supabase(url, key):
         captured["url"] = url

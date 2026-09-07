@@ -4,6 +4,7 @@ from collections import deque
 from collections.abc import Iterable
 from datetime import date, datetime, timedelta
 import logging
+import math
 from typing import Any
 
 import pandas as pd
@@ -14,6 +15,8 @@ from jupr_app.domain.gamification.aggregate_metrics import (
     compute_participation_counts_from_standings,
 )
 from jupr_app.domain.gamification.badge_types import BadgeCandidate, BadgeEvaluationContext
+from jupr_app.domain.gamification.seasons import season_match_groups
+from jupr_app.domain.gamification.rivalries import rivalry_candidates
 from jupr_app.domain.gamification.match_facts import (
     build_canonical_player_match_facts,
     build_hybrid_player_match_facts,
@@ -292,10 +295,10 @@ def evaluate_mountain_climber(ctx: BadgeEvaluationContext) -> Iterable[BadgeCand
             continue
         if ctx.league_id and str(league_name) != str(ctx.league_id):
             continue
-        start_sorted = league_df.sort_values("starting_rating", ascending=False).reset_index(drop=True)
-        start_sorted["start_rank"] = start_sorted.index + 1
-        current_sorted = league_df.sort_values("rating", ascending=False).reset_index(drop=True)
-        current_sorted["current_rank"] = current_sorted.index + 1
+        start_sorted = league_df.copy()
+        start_sorted["start_rank"] = league_df["starting_rating"].rank(method="min", ascending=False).astype(int)
+        current_sorted = league_df.copy()
+        current_sorted["current_rank"] = league_df["rating"].rank(method="min", ascending=False).astype(int)
         ranks = start_sorted[["player_id", "start_rank"]].merge(
             current_sorted[["player_id", "current_rank"]], on="player_id", how="inner"
         )
@@ -370,7 +373,34 @@ def evaluate_bounce_back(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate
 
 
 def evaluate_clutch_performer(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
-    return _inactive("clutch_performer", "missing explicit clutch performance schema")
+    facts = _as_of_filter(ctx.facts, ctx.as_of)
+    if facts.empty:
+        return []
+    # A close loss or a tied/invalid score never contributes to this milestone.
+    close_wins = facts[
+        facts["win"].eq(True)
+        & pd.to_numeric(facts["margin"], errors="coerce").between(1, 2)
+        & facts["date_dt"].notna()
+    ].sort_values(["date_dt", "match_id"])
+    close_wins = close_wins.drop_duplicates(["player_id", "match_id"])
+    candidates: list[BadgeCandidate] = []
+    for player_id, group in close_wins.groupby("player_id"):
+        if len(group) < 5:
+            continue
+        fifth = group.iloc[4]
+        candidates.append(
+            BadgeCandidate(
+                badge_id="clutch_performer",
+                player_id=int(player_id),
+                club_id=ctx.club_id,
+                context_type="overall",
+                context_id="clutch_performer:lifetime",
+                match_id=str(fifth["match_id"]),
+                value_json={"close_wins": 5, "qualifying_match_ids": group.iloc[:5]["match_id"].astype(str).tolist()},
+                value_num=5.0,
+            )
+        )
+    return candidates
 
 
 def evaluate_ice_in_veins(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
@@ -702,67 +732,69 @@ def evaluate_legendary_upset(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandi
 
 
 def evaluate_nemesis_found(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
-    return _inactive("nemesis_found", "missing opponent match history aggregation")
+    return rivalry_candidates(ctx, "nemesis_found")
 
 
 def evaluate_rivalry_win(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
-    return _inactive("rivalry_win", "missing opponent match history aggregation")
+    return rivalry_candidates(ctx, "rivalry_win")
 
 
 def evaluate_rivalry_streak(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
-    return _inactive("rivalry_streak", "missing opponent match history aggregation")
+    return rivalry_candidates(ctx, "rivalry_streak")
 
 
 def evaluate_settled_the_score(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
-    return _inactive("settled_the_score", "missing opponent match history aggregation")
+    return rivalry_candidates(ctx, "settled_the_score")
 
 
 def evaluate_steady_hand(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
-    facts = _as_of_filter(ctx.facts, ctx.as_of)
-    grouped = facts.groupby(["player_id", "season_key"])
     candidates: list[BadgeCandidate] = []
-    for (player_id, season_key), group in grouped:
-        matches = len(group)
-        if matches < 20:
-            continue
-        win_pct = float(group["win"].mean())
-        if win_pct >= 0.6:
-            candidates.append(
-                BadgeCandidate(
-                    badge_id="steady_hand",
-                    player_id=int(player_id),
-                    club_id=ctx.club_id,
-                    context_type="season",
-                    context_id=str(season_key),
-                    match_id=None,
-                    value_json={"season": str(season_key), "win_pct": win_pct},
-                )
-            )
+    for season, player_id, group in season_match_groups(ctx):
+        wins = group["win"].eq(True).cumsum()
+        for count, (index, row) in enumerate(group.iterrows(), start=1):
+            if count >= 20 and int(wins.iloc[count - 1]) * 5 >= count * 3:
+                candidates.append(BadgeCandidate(
+                    badge_id="steady_hand", player_id=player_id, club_id=ctx.club_id,
+                    context_type="season", context_id=season.context_id, match_id=str(row["match_id"]),
+                    value_json={**season.evidence(), "matches": count, "wins": int(wins.iloc[count - 1]), "win_pct": int(wins.iloc[count - 1]) / count},
+                ))
+                break
     return candidates
 
 
 def evaluate_mr_reliable(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
-    return _inactive("mr_reliable", "missing availability tracking by season")
+    candidates: list[BadgeCandidate] = []
+    for season, player_id, group in season_match_groups(ctx, completed_only=True):
+        matches = len(group)
+        wins = int(group["win"].eq(True).sum())
+        if matches >= 30 and wins * 10 >= matches * 7:
+            candidates.append(BadgeCandidate(
+                badge_id="mr_reliable", player_id=player_id, club_id=ctx.club_id,
+                context_type="season", context_id=season.context_id, match_id=None,
+                value_json={**season.evidence(), "matches": matches, "wins": wins, "win_pct": wins / matches},
+                value_num=wins / matches,
+            ))
+    return candidates
 
 
 def evaluate_league_champion(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
-    return _inactive("league_champion", "missing league champion records")
+    return []  # Retired; current league awards provide the official trophies.
 
 
 def evaluate_podium(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
-    return _inactive("podium", "missing league podium results")
+    return []  # Retired; current league awards and tournament podiums remain.
 
 
 def evaluate_good_sport(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
-    return _inactive("good_sport", "missing sportsmanship data")
+    return []  # Issued explicitly by a club admin through community_awards.
 
 
 def evaluate_community_builder(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
-    return _inactive("community_builder", "missing community engagement data")
+    return []  # Issued explicitly by a club admin through community_awards.
 
 
 def evaluate_mentor(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
-    return _inactive("mentor", "missing mentorship tracking")
+    return []  # Issued explicitly by a club admin through community_awards.
 
 
 def evaluate_breakthrough(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
@@ -842,17 +874,19 @@ def evaluate_above_expectations(ctx: BadgeEvaluationContext) -> Iterable[BadgeCa
         if not bool(getattr(row, "win", False)):
             continue
         expected_win_prob = getattr(row, "expected_win_prob", None)
-        if expected_win_prob is None or float(expected_win_prob) > 0.40:
+        if expected_win_prob is None or not math.isfinite(float(expected_win_prob)) or not 0 <= float(expected_win_prob) <= 0.40:
             continue
         margin = getattr(row, "margin", None)
-        if margin is None or float(margin) < 4:
+        if margin is None or not math.isfinite(float(margin)) or float(margin) < 4:
             continue
         abs_elo_delta = getattr(row, "abs_elo_delta", None)
         league = getattr(row, "league", "OVERALL")
         threshold = thresholds.get(str(league))
-        if abs_elo_delta is not None and threshold is not None:
-            if float(abs_elo_delta) < float(threshold):
+        if threshold is not None:
+            if abs_elo_delta is None or not math.isfinite(float(abs_elo_delta)) or float(abs_elo_delta) < float(threshold):
                 continue
+        if abs_elo_delta is not None and not math.isfinite(float(abs_elo_delta)):
+            abs_elo_delta = None
         candidates.append(
             BadgeCandidate(
                 badge_id="above_expectations",
@@ -932,11 +966,47 @@ def evaluate_high_output(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate
 
 
 def evaluate_battle_tested(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
-    return _inactive("battle_tested", "missing battle tested criteria")
+    candidates: list[BadgeCandidate] = []
+    for season, player_id, group in season_match_groups(ctx):
+        if len(group) < 50:
+            continue
+        qualifying = group.iloc[:50]
+        candidates.append(BadgeCandidate(
+            badge_id="battle_tested", player_id=player_id, club_id=ctx.club_id,
+            context_type="season", context_id=season.context_id,
+            match_id=str(qualifying.iloc[-1]["match_id"]),
+            value_json={**season.evidence(), "matches": 50,
+                        "qualifying_match_ids": qualifying["match_id"].astype(str).tolist()},
+            value_num=50.0,
+        ))
+    return candidates
 
 
 def evaluate_consistency(ctx: BadgeEvaluationContext) -> Iterable[BadgeCandidate]:
-    return _inactive("consistency", "missing consistency definition")
+    candidates: list[BadgeCandidate] = []
+    for season, player_id, group in season_match_groups(ctx):
+        weeks: list[str] = []
+        previous_monday = None
+        for row in group.itertuples(index=False):
+            played_date = row.date_dt.date()
+            monday = played_date - timedelta(days=played_date.weekday())
+            if monday == previous_monday:
+                continue
+            if previous_monday is None or monday - previous_monday != timedelta(days=7):
+                weeks = []
+            year, week, _ = monday.isocalendar()
+            weeks.append(f"{year}-W{week:02d}")
+            previous_monday = monday
+            if len(weeks) == 6:
+                candidates.append(BadgeCandidate(
+                    badge_id="consistency", player_id=player_id, club_id=ctx.club_id,
+                    context_type="season", context_id=season.context_id,
+                    match_id=str(row.match_id),
+                    value_json={**season.evidence(), "consecutive_weeks": 6, "weeks": weeks.copy()},
+                    value_num=6.0,
+                ))
+                break  # One first achievement per configured season.
+    return candidates
 
 
 def _cached_top_performer_candidates(ctx: BadgeEvaluationContext) -> list[BadgeCandidate]:

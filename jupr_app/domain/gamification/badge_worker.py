@@ -74,6 +74,8 @@ def process_badge_eval_queue_until_empty(
     progress_cb: Callable[[dict[str, int | float | str]], None] | None = None,
 ) -> dict[str, int | float | str]:
     started = time.monotonic()
+    # Both staff checks and the CLI must notice seasons that ended without a new result.
+    supabase.rpc("enqueue_completed_badge_seasons_v1", {"p_club_id": club_id}).execute()
     drain_deadline = started + float(max_wall_clock_seconds)
     loops = 0
     total_processed = 0
@@ -182,7 +184,7 @@ def _process_job(
         _update_incremental_facts(supabase, job, player_ids, context_id)
         # Evaluate once per club. Completed week/month winners can be players
         # outside the triggering match, and must not wait for their next game.
-        period_badges = {"most_improved_monthly", "upset_champion", "clean_sweep_week"}
+        period_badges = {"most_improved_monthly", "upset_champion", "clean_sweep_week", "mr_reliable"}
         candidates = [c for c in compute_candidates_for_club(job_club_id, ctx=context, strict=True)
                       if str(c.badge_id) in badge_ids
                       and (int(c.player_id) in player_ids or c.badge_id in period_badges)]
@@ -353,6 +355,8 @@ def _fetch_player_badges_live(supabase: Any, club_id: str) -> tuple[pd.DataFrame
 
 
 def _badge_ids_for_trigger(ctx: Any, event_type: str) -> set[str]:
+    if event_type in {"season_changed", "season_closed"}:
+        return {"battle_tested", "consistency", "steady_hand", "mr_reliable"}
     df_badges = getattr(ctx, "df_badges", None)
     triggers_by_id: dict[str, list[str]] = {}
     if isinstance(df_badges, pd.DataFrame) and not df_badges.empty and "badge_id" in df_badges.columns:

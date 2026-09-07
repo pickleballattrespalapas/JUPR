@@ -24,6 +24,16 @@ from jupr_app.domain.gamification.badge_worker import (
 )
 
 
+class FakeSeasonQueueClient:
+    def __init__(self):
+        self.enqueued = []
+
+    def rpc(self, name, args):
+        assert name == "enqueue_completed_badge_seasons_v1"
+        self.enqueued.append(args["p_club_id"])
+        return SimpleNamespace(execute=lambda: SimpleNamespace(data=0))
+
+
 class FakeTable:
     def __init__(self, storage, name):
         self.storage = storage
@@ -453,8 +463,9 @@ def test_worker_drain_until_empty_stops_on_empty(monkeypatch):
         fake_batch,
     )
 
+    client = FakeSeasonQueueClient()
     result = process_badge_eval_queue_until_empty(
-        supabase=object(),
+        supabase=client,
         club_id="club",
         batch_max_jobs=10,
         max_wall_clock_seconds=10.0,
@@ -465,6 +476,7 @@ def test_worker_drain_until_empty_stops_on_empty(monkeypatch):
     assert result["loops"] == 4
     assert result["stopped_reason"] == "empty"
     assert seen_club_ids == ["club"] * 4
+    assert client.enqueued == ["club"]
 
 
 def test_worker_drain_until_empty_trips_error_circuit_breaker(monkeypatch):
@@ -480,7 +492,7 @@ def test_worker_drain_until_empty_trips_error_circuit_breaker(monkeypatch):
     )
 
     result = process_badge_eval_queue_until_empty(
-        supabase=object(),
+        supabase=FakeSeasonQueueClient(),
         club_id="club",
         batch_max_jobs=10,
         max_wall_clock_seconds=10.0,
@@ -554,7 +566,7 @@ def test_worker_drain_stops_on_max_wall_clock(monkeypatch):
     monkeypatch.setattr("jupr_app.domain.gamification.badge_worker.process_badge_eval_queue", fake_batch)
 
     result = process_badge_eval_queue_until_empty(
-        supabase=object(),
+        supabase=FakeSeasonQueueClient(),
         club_id="club",
         batch_max_jobs=10,
         per_batch_time_budget_seconds=0.9,

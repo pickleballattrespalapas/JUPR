@@ -20,7 +20,7 @@ CATALOG_BUCKET_ORDER = ["Live Now", "Seasonal / League Close", "Manual / Curated
 CATALOG_BUCKET_DESCRIPTIONS = {
     "Live Now": "Automatically evaluated from eligible activity as results are recorded.",
     "Seasonal / League Close": "Evaluated from final league or season results when staff closes the competition.",
-    "Manual / Curated": "Awarded by an authorized operator for tournament placement, sportsmanship, or community moments.",
+    "Manual / Curated": "Staff confirm tournament placements. Club admins award community badges for the listed contributions.",
     "Tracked / Disabled": "Defined and tracked for history, but not currently awarded by the live badge worker.",
 }
 CANONICAL_CATEGORY_LABELS = {
@@ -152,6 +152,8 @@ def _badge_authority(row: dict[str, Any]) -> dict[str, Any]:
 
 def _badge_should_be_public(row: dict[str, Any], earners_count: int | None) -> bool:
     badge_id = str(row.get("badge_id") or "").strip()
+    if badge_id in {"league_champion", "league_runner_up", "league_third_place", "podium"}:
+        return False  # Historical profile awards remain; these are no longer catalog goals.
     name = str(row.get("name") or "").strip()
     if not badge_id or not name:
         return False
@@ -409,6 +411,7 @@ def build_public_badge_codex(supabase: Any, *, club_id: str, recent_earners_limi
     categories = sorted({str(badge.get("category") or "Other") for badge in badges}, key=category_sort_key)
     scopes = sorted({str(badge.get("badge_scope") or "") for badge in badges if badge.get("badge_scope")}, key=str.casefold)
     return {
+        "seasons": read_all_rows(lambda: supabase.table("badge_seasons").select("id,name,start_date,end_date,timezone").eq("club_id", str(club_id)), order="start_date"),
         "summary": {
             "badge_count": len(badges),
             "earned_badge_count": earned_badges,
