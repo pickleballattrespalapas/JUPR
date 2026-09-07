@@ -66,6 +66,7 @@ def _send_edit_link(
     tournament_id: str,
     registration_id: str,
     email: str,
+    supabase=None,
 ) -> tuple[bool, str]:
     try:
         token = build_registration_edit_token(
@@ -82,6 +83,7 @@ def _send_edit_link(
             tournament_name=_safe_text(tournament.get("name") or "Tournament"),
             registered_email=email,
             edit_url=edit_url,
+            email_sponsors=load_tournament_email_sponsors(supabase, club_id=str(tournament.get("club_id") or ""), tournament_id=tournament_id),
         )
         return True, ""
     except Exception as exc:
@@ -131,6 +133,7 @@ def _render_existing_registration_link_prompt(
     settings: dict[str, Any],
     tournament_id: str,
     wizard: dict[str, Any],
+    supabase=None,
 ) -> None:
     email = _safe_text(wizard.get("returning_email")).lower()
     registration_id = _safe_text(wizard.get("returning_registration_id"))
@@ -143,6 +146,7 @@ def _render_existing_registration_link_prompt(
         if st.button("Email me a secure edit link", type="primary", use_container_width=True, key=f"edit_existing_send_{tournament_id}_{registration_id}"):
             sent, error = _send_edit_link(
                 tournament=tournament,
+                supabase=supabase,
                 settings=settings,
                 tournament_id=tournament_id,
                 registration_id=registration_id,
@@ -180,6 +184,7 @@ def _render_edit_lookup(
     if _safe_text(wizard.get("returning_registration_id")) and _safe_text(wizard.get("returning_email")):
         _render_existing_registration_link_prompt(
             tournament=tournament,
+            supabase=supabase,
             settings=settings,
             tournament_id=tournament_id,
             wizard=wizard,
@@ -207,6 +212,7 @@ def _render_edit_lookup(
             wizard["returning_email"] = clean_email
             sent, error = _send_edit_link(
                 tournament=tournament,
+                supabase=supabase,
                 settings=settings,
                 tournament_id=tournament_id,
                 registration_id=_safe_text(existing_registration.get("id")),
@@ -416,7 +422,8 @@ def _hide_public_partner_board_opt_in_checkbox():
 def render(ctx) -> None:
     admin_mode = bool(getattr(ctx, "admin_logged_in", False)) and not bool(getattr(ctx, "public_mode", False))
     if admin_mode:
-        from jupr_app.ui.pages import tournament_registration_admin_streamlined
+        from jupr_app.services.tournament_email_sponsor_service import load_tournament_email_sponsors
+from jupr_app.ui.pages import tournament_registration_admin_streamlined
 
         tournament_registration_admin_streamlined.render(ctx)
         return

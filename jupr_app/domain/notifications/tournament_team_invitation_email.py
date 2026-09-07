@@ -11,6 +11,7 @@ from jupr_app.config import (
     get_email_mode,
     get_env_or_default,
 )
+from jupr_app.domain.notifications.tournament_email_sponsors import with_sponsors_html, with_sponsors_text, sponsor_inline_images
 from jupr_app.domain.notifications.smtp_mailer import send_email_with_inline_chart
 
 
@@ -34,8 +35,9 @@ def build_team_invitation_email_html(
     captain_name: str,
     invited_name: str,
     invitation_url: str,
+    email_sponsors: list[dict] | None = None,
 ) -> str:
-    return f"""<!doctype html><html><body style="font-family:Arial,sans-serif;color:#1f2937">
+    return with_sponsors_html(f"""<!doctype html><html><body style="font-family:Arial,sans-serif;color:#1f2937">
 <h1>Four-player team invitation</h1>
 <p>Hi {escape(_text(invited_name) or 'there')},</p>
 <p>{escape(_text(captain_name) or 'A captain')} invited you to join
@@ -43,7 +45,7 @@ def build_team_invitation_email_html(
 <strong>{escape(_text(tournament_name))}</strong>.</p>
 <p><a href="{escape(_text(invitation_url), quote=True)}">Accept or decline this invitation</a></p>
 <p>This is a private, single-use link. If you were not expecting it, you may decline.</p>
-</body></html>"""
+</body></html>""", email_sponsors)
 
 
 def build_team_invitation_email_text(
@@ -53,8 +55,9 @@ def build_team_invitation_email_text(
     captain_name: str,
     invited_name: str,
     invitation_url: str,
+    email_sponsors: list[dict] | None = None,
 ) -> str:
-    return "\n".join(
+    return with_sponsors_text("\n".join(
         [
             f"Hi {_text(invited_name) or 'there'},",
             (
@@ -66,7 +69,7 @@ def build_team_invitation_email_text(
             "",
             "This is a private, single-use invitation link.",
         ]
-    )
+    ), email_sponsors)
 
 
 def send_team_invitation_email(
@@ -78,6 +81,7 @@ def send_team_invitation_email(
     invited_name: str,
     invitation_url: str,
     smtp_config: SMTPConfig | None = None,
+    email_sponsors: list[dict] | None = None,
 ) -> dict[str, str]:
     original_to = _text(target_email).lower()
     if not original_to or "@" not in original_to:
@@ -116,6 +120,7 @@ def send_team_invitation_email(
             captain_name=captain_name,
             invited_name=invited_name,
             invitation_url=url,
+            email_sponsors=email_sponsors,
         ),
         text_body=build_team_invitation_email_text(
             tournament_name=tournament_name,
@@ -123,9 +128,11 @@ def send_team_invitation_email(
             captain_name=captain_name,
             invited_name=invited_name,
             invitation_url=url,
+            email_sponsors=email_sponsors,
         ),
         chart_png_bytes=None,
         smtp_config=smtp_config,
+        inline_png_images=sponsor_inline_images(email_sponsors),
     )
     return {
         "status": "sent" if mode == EMAIL_MODE_LIVE else "staging_redirect",

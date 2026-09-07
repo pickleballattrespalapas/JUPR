@@ -8,6 +8,7 @@ from typing import Any, Callable
 from urllib.parse import quote, urlsplit
 from uuid import uuid4
 
+from jupr_app.services.tournament_email_sponsor_service import load_tournament_email_sponsors
 from jupr_app.config import get_email_mode, get_env_or_default
 from jupr_app.domain.notifications.tournament_team_invitation_email import (
     send_team_invitation_email,
@@ -798,6 +799,7 @@ def _deliver_invitations(
                 invitation_url=_invitation_url(
                     public_base_url=public_base_url, token=token
                 ),
+                email_sponsors=load_tournament_email_sponsors(supabase, club_id=str(club_id), tournament_id=str(tournament.get("id") or "")),
             )
         except Exception:
             # A provider exception leaves the durable claim pending. Retrying

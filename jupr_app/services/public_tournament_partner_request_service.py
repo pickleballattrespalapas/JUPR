@@ -5,6 +5,7 @@ from typing import Any
 from urllib.parse import urlencode
 from uuid import uuid4
 
+from jupr_app.services.tournament_email_sponsor_service import load_tournament_email_sponsors
 from jupr_app.domain.notifications.tournament_pairing_interest_email import (
     send_pairing_interest_emails,
     send_pairing_status_emails,
@@ -389,6 +390,7 @@ def create_public_tournament_partner_request(
                 target_email=target_email_for_delivery,
                 board_url=board_url,
                 accept_url=accept_url,
+                email_sponsors=load_tournament_email_sponsors(supabase, club_id=str(club_id), tournament_id=str(tournament.get("id") or "")),
             )
         except Exception as exc:
             notifications = _notification_failure_status(["player", "organizer"], exc)
@@ -577,6 +579,7 @@ def _transition_public_tournament_partner_request(
                 target_email=target_email,
                 requester_url=requester_url,
                 target_url=target_url,
+                email_sponsors=load_tournament_email_sponsors(supabase, club_id=str(club_id), tournament_id=str(tournament.get("id") or "")),
             )
         except Exception as exc:
             expected_keys = ["requester", "target"] if clean_action == "accept" else (["requester"] if clean_action == "decline" else ["target"])

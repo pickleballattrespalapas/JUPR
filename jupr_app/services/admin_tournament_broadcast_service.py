@@ -106,6 +106,7 @@ def create_tournament_broadcast(supabase: Any, *, club_id: str, tournament_id: s
     for recipient in preview["recipients"]:
         validate_email_address(recipient["email"], field_name="Participant email")
     review = {key: preview[key] for key in ("recipients", "preview", "delivery_mode", "sender")}
+    review["email_sponsors"] = preview.get("email_sponsors") or []
     request["review"] = review
     _audit(supabase, club_id=club_id, actor_email=actor_email, actor_role=actor_role,
         operation_key=operation_key, action="tournament_broadcast_confirmed",
@@ -183,9 +184,10 @@ def send_tournament_broadcast_recipient(supabase: Any, *, club_id: str, tourname
     # substitute a new email address into the already-confirmed audience.
     preview = build_admin_tournament_broadcast_preview(supabase, club_id=club_id,
         tournament_id=tournament_id, registration_ids=request["registration_ids"],
-        subject=request["subject"], message=request["message"], include_cancelled=request["include_cancelled"])
+        subject=request["subject"], message=request["message"], include_cancelled=request["include_cancelled"],
+        include_sponsor_logos=False, reviewed_email_sponsors=review.get("email_sponsors"))
     if preview["preview_fingerprint"] != request["preview_fingerprint"]:
-        raise ValueError("Participant details changed. Review the results and preview a new email for the remaining participants.")
+        raise ValueError("Participant details changed, or the email's sponsor details changed. Review the results and preview a new email for the remaining participants.")
     _audit(supabase, club_id=club_id, actor_email=actor_email, actor_role=actor_role,
         operation_key=operation_key, action="tournament_broadcast_recipient_intent",
         details={"recipient_index": recipient_index, "attempt_id": child_key})
@@ -209,7 +211,7 @@ def send_tournament_broadcast_recipient(supabase: Any, *, club_id: str, tourname
         delivery = send_tournament_registrant_broadcast_email(
             tournament_name="", recipient_email=recipient["email"], recipient_name=recipient["name"],
             subject=review["preview"]["subject"], message=request["message"],
-            personalize_greeting=False, message_id=child_key)
+            personalize_greeting=False, message_id=child_key, email_sponsors=review.get("email_sponsors"))
         result = {"status": delivery["status"], "provider_message_id": delivery.get("provider_message_id"),
             "detail": "Accepted by the mail server." if delivery["status"] == "sent" else "Test only; no participant email was sent."}
     except Exception:
