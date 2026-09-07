@@ -14,6 +14,7 @@ import type {
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 import { tournamentRouteHref } from "@/lib/tournamentRouteContext";
+import TournamentEmailDelivery from "./TournamentEmailDelivery";
 
 type Props = {
   apiBase: string | null;
@@ -119,7 +120,7 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
     if (options?.body) headers.set("Content-Type", "application/json");
     const response = await fetch(apiUrl(apiBase, path), { ...options, headers });
     const payload = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(String(payload?.detail || `API error (${response.status})`));
+    if (!response.ok) throw Object.assign(new Error(typeof payload?.detail === "string" ? payload.detail : `API error (${response.status})`), { status: response.status });
     return payload as T;
   }
 
@@ -337,7 +338,7 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
     <section style={{ display: "grid", gap: "1rem" }}>
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Registration reporting session</h2>
-        <p style={{ color: "#475569" }}>Find participants using the filters, then select who to include in your email preview.</p>
+        <p style={{ color: "#475569" }}>Find participants using the filters, then select who to email.</p>
         <div style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: accessToken ? "#f0fdf4" : "#fffbeb", marginBottom: "0.75rem" }}>
           <strong>{accessToken ? `Admin session: ${adminSessionLabel(session)}` : "Admin session required"}</strong>
           <p style={{ margin: "0.35rem 0 0", color: accessToken ? "#166534" : "#92400e" }}>
@@ -412,10 +413,10 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
           </article>
 
           <article style={cardStyle}>
-            <h2 style={{ marginTop: 0 }}>Broadcast preview — no send</h2>
-            <p style={{ color: "#475569" }}>Preview your message for the selected participants and download their email addresses. Shared email addresses appear once. This page does not send email.</p>
-            <label><strong>Subject</strong><br /><input value={broadcastSubject} onChange={(event) => setBroadcastSubject(event.target.value)} style={inputStyle} /></label>
-            <label style={{ display: "block", marginTop: "0.75rem" }}><strong>Message</strong><br /><textarea value={broadcastMessage} onChange={(event) => setBroadcastMessage(event.target.value)} rows={6} style={inputStyle} /></label>
+            <h2 style={{ marginTop: 0 }}>Email participants</h2>
+            <p style={{ color: "#475569" }}>Write your email, review the selected recipients, then send. Each recipient receives a separate email. Shared email addresses receive one copy.</p>
+            <label><strong>Subject</strong><br /><input value={broadcastSubject} disabled={busy} maxLength={200} onChange={(event) => setBroadcastSubject(event.target.value)} style={inputStyle} /></label>
+            <label style={{ display: "block", marginTop: "0.75rem" }}><strong>Message</strong><br /><textarea value={broadcastMessage} disabled={busy} maxLength={10000} onChange={(event) => setBroadcastMessage(event.target.value)} rows={6} style={inputStyle} /></label>
             <p><button type="button" onClick={previewBroadcast} disabled={busy || previewBusy || !selectedRegistrations.length || !broadcastSubject.trim() || !broadcastMessage.trim()} style={buttonStyle}>{previewBusy ? "Building preview…" : "Preview recipients"}</button></p>
             {currentPreview ? (
               <div style={{ background: "#f8fafc", borderRadius: "10px", padding: "0.75rem" }}>
@@ -429,10 +430,13 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
                     </table>
                   </div>
                 ) : <p>No recipients matched the current filters.</p>}
-                <h3>Personalized message sample</h3>
+                <h3>Message preview</h3>
                 <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{currentPreview.preview.text}</pre>
               </div>
             ) : null}
+            <TournamentEmailDelivery clubId={clubId} tournamentId={detail.tournament.id} accessToken={accessToken}
+              apiBase={apiBase} preview={currentPreview} previewScope={previewScope} subject={broadcastSubject}
+              message={broadcastMessage} includeCancelled={includeCancelled} busy={busy} onBusy={setBusy} requestJson={requestJson} />
           </article>
 
           <article style={cardStyle}>

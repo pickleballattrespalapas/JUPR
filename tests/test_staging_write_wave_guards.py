@@ -442,6 +442,7 @@ def test_every_communications_route_has_an_independent_service_guard() -> None:
         "admin_player_updates_routes.py",
         "admin_verified_updates_routes.py",
         "admin_weekly_recap_routes.py",
+        "admin_tournament_routes.py",
     ):
         source_path = ROOT / "services" / "api" / source_name
         tree = ast.parse(
