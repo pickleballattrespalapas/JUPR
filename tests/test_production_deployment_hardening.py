@@ -215,7 +215,7 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         ROOT / "supabase/migrations",
     )
 
-    assert len(versions) == 100
+    assert len(versions) == 101
     assert {"20260906004056", "20260906005541", "20260906052216"}.issubset(versions)
     assert versions[-31:] == (
         "20261030010000",
@@ -250,9 +250,9 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         "20261109001000",
         "20261109001100",
     )
-    assert len(names) == 100
+    assert len(names) == 101
     assert all("XX" not in version for version in versions)
-    assert len(contract["required_ledger_names"]) == 100
+    assert len(contract["required_ledger_names"]) == 101
     assert {"club_staff_scopes", "pcs_platform_onboarding"}.issubset(contract["required_ledger_names"])
     assert "tournament_sponsor_logo_storage" in contract["required_ledger_names"]
     assert "rating_calculation_versioning" in contract["required_ledger_names"]

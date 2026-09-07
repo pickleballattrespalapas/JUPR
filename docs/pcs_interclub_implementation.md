@@ -115,3 +115,23 @@ or implement public club signup. Draft status is onboarding/public-visibility
 metadata, not a complete entitlement gate. Plan enforcement and invitations are
 required before opening self-service onboarding. The dashboard displays existing
 plan status rather than implying subscription enforcement is already complete.
+
+## Saved season planning increment
+Organizer administrators can now create and reopen season drafts at
+`/admin/interclub`: dates, divisions, proposed participating clubs, host meets,
+local meet times, courts and duration. Saves are revision checked and audited.
+Meet validation rejects unselected clubs, hosts outside the meet, more than four
+clubs, durations above three hours, dates outside the season and overlapping
+meet assignments for the same club. Disjoint groups can play simultaneously.
+The club picker exposes only club identity, never player directories.
+
+Super Admin can open a club at `/admin/platform`, edit its name/contact email,
+and inspect active administrator assignments. An assignment does not prove that
+the person has signed in. Profile updates require platform authority and audit
+the previous and new values atomically.
+
+These are planning drafts, not invitations or confirmed participation. Teams,
+eligibility checks, meet scoring, organizer approval and rating replay remain
+future increments. Plan entitlements and billing remain unenforced. Staging
+verification includes API authorization/scheduling tests, database rollback
+checks for revision conflicts/audit/privileges, and the web production build.
