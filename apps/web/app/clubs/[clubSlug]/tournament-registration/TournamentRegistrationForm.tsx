@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   PublicRegistrationDay,
   PublicRegistrationEvent,
@@ -208,6 +208,16 @@ export default function TournamentRegistrationForm({
 }: TournamentRegistrationFormProps) {
   const formRef = useRef<HTMLDivElement>(null);
   const [mode, setMode] = useState<"choose" | "new" | "edit">("choose");
+  // Confirmation emails/pages already link to this anchor. Open the same
+  // recovery form used by the chooser instead of rendering a second form.
+  useEffect(() => {
+    const openEditLink = () => {
+      if (window.location.hash === "#manage-registration") setMode("edit");
+    };
+    openEditLink();
+    window.addEventListener("hashchange", openEditLink);
+    return () => window.removeEventListener("hashchange", openEditLink);
+  }, [clubSlug, tournamentId]);
   const [step, setStep] = useState(1);
   const [contact, setContact] = useState<ContactState>({
     firstName: "",
@@ -1053,8 +1063,10 @@ export default function TournamentRegistrationForm({
       ) : null}
 
       {overview}
-      <div id="registration-form" ref={formRef} style={{ scrollMarginTop: "1rem" }}>
-        {formContent}
+      <div id="manage-registration" style={{ scrollMarginTop: "1rem" }}>
+        <div id="registration-form" ref={formRef} style={{ scrollMarginTop: "1rem" }}>
+          {formContent}
+        </div>
       </div>
     </>
   );
