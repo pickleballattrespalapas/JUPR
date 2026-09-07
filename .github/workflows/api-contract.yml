@@ -42,7 +42,7 @@ jobs:
 
       - name: Verify program badge rules and admin decisions
         run: |
-          python -m pytest -q tests/test_program_badges.py tests/test_program_badge_service.py tests/test_api_badge_management.py tests/test_badge_schema.py tests/test_badge_recompute.py
+          python -m pytest -q tests/test_program_badges.py tests/test_program_badge_service.py tests/test_api_badge_management.py tests/test_badge_schema.py tests/test_badge_recompute.py tests/test_public_player_service.py
 
       - name: Run deployment and admin UX safety contracts
         run: |

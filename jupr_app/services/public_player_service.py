@@ -17,7 +17,7 @@ PLAYER_MINIMAL_SELECT = "id,club_id,name,rating,wins,losses,matches_played"
 LEAGUE_RATINGS_SELECT = "id,club_id,player_id,league_name,rating,starting_rating,wins,losses,matches_played,is_active"
 LEAGUE_META_VISIBILITY_SELECT = "club_id,league_name,is_active,status"
 MATCH_SELECT = "*"
-PLAYER_BADGE_SELECT = "club_id,player_id,badge_id,earned_at,context_type,context_id,value_num,value_json,revoked_at"
+PLAYER_BADGE_SELECT = "id,club_id,player_id,badge_id,earned_at,context_type,context_id,value_num,value_json,revoked_at"
 PLAYER_BADGE_FALLBACK_SELECT = "club_id,player_id,badge_id,earned_at,context_type,context_id,value_num,value_json"
 BADGE_SELECT = "badge_id,name,category,prestige,rarity,tier,icon_key,lore,hint,scope,state,is_active"
 

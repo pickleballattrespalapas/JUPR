@@ -23,6 +23,7 @@ class FakeQuery:
         self.row_limit: int | None = None
 
     def select(self, *_args, **_kwargs):
+        self.selected_columns = str(_args[0]).split(",") if _args else ["*"]
         return self
 
     def eq(self, key, value):
@@ -54,6 +55,8 @@ class FakeQuery:
             rows = rows[: self.row_limit]
         if hasattr(self, "page_bounds"):
             rows = rows[self.page_bounds[0]:self.page_bounds[1] + 1]
+        if self.table_name == "player_badges" and self.selected_columns != ["*"]:
+            rows = [{key: row.get(key) for key in self.selected_columns} for row in rows]
         return FakeResponse(rows)
 
 
@@ -160,6 +163,29 @@ def test_public_players_are_sanitized_and_searchable():
     assert "email" not in rows[0]
     assert "legal_name" not in rows[0]
     assert "club_id" not in rows[0]
+
+
+def test_player_cabinet_keeps_distinct_ids_for_repeated_partner_achievements():
+    supabase = FakeSupabase()
+    supabase.rows_by_table["badges"].append({
+        "badge_id": "matches_together_10", "name": "10 Matches Together", "is_active": True,
+    })
+    for award_id, partner, revoked_at in [(101, "Blair", None), (102, "Casey", None), (103, "Devon", "2026-07-06")]:
+        supabase.rows_by_table["player_badges"].append({
+            "id": award_id, "club_id": "club-1", "player_id": 1,
+            "badge_id": "matches_together_10", "context_type": "overall",
+            "context_id": f"pair:1:{award_id}", "earned_at": "2026-07-05T00:00:00Z",
+            "revoked_at": revoked_at,
+            "value_json": {"rule_version": "program-badges-v1", "tape_excerpt": f"10 matches with {partner}.", "private_note": "do not publish"},
+        })
+
+    profile = get_public_player_profile(supabase, club_id="club-1", player_id=1)
+    badge = next(b for b in profile["awards"]["badges"] if b["badge_id"] == "matches_together_10")
+    assert badge["count"] == 2
+    assert badge["achievements"] == [
+        {"id": "101", "earned_at": "2026-07-05T00:00:00Z", "detail": "10 matches with Blair."},
+        {"id": "102", "earned_at": "2026-07-05T00:00:00Z", "detail": "10 matches with Casey."},
+    ]
 
 
 def test_public_directory_defaults_active_and_supports_inactive_search_and_paging():
