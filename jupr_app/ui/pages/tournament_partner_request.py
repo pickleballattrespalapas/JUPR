@@ -4,6 +4,7 @@ from typing import Any
 
 import streamlit as st
 
+from jupr_app.services.tournament_email_sponsor_service import load_tournament_email_sponsors
 from jupr_app.domain.notifications.tournament_partner_request_email import send_tournament_partner_request_email
 from jupr_app.domain.tournament_public_references import public_tournament_reference_matches
 from jupr_app.domain.tournament_registration_repo import get_public_tournament_bundle, registration_feature_available
@@ -253,6 +254,7 @@ def render(ctx) -> None:
                 division_label=division_label,
                 day_label=day_label,
                 message=_safe_text(message),
+                email_sponsors=load_tournament_email_sponsors(supabase, club_id=str(tournament.get("club_id") or ""), tournament_id=tournament_id),
             )
             st.session_state[sent_key] = True
             status = _safe_text(result.get("status"))

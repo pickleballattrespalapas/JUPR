@@ -12,6 +12,7 @@ from jupr_app.config import (
     get_email_mode,
     get_env_or_default,
 )
+from jupr_app.domain.notifications.tournament_email_sponsors import with_sponsors_html, with_sponsors_text, sponsor_inline_images
 from jupr_app.domain.notifications.smtp_mailer import send_email_with_inline_chart
 
 PAYMENT_NOTE = (
@@ -219,14 +220,14 @@ def build_tournament_registration_confirmation_html(view_model: dict) -> str:
     sender = ""
     if _safe_text(view_model.get("sender_from_email")):
         sender = f"<p>This email was sent from {escape(_safe_text(view_model.get('sender_from_name')))} &lt;{escape(_safe_text(view_model.get('sender_from_email')))}&gt;.</p>"
-    return f"""<!doctype html><html><body style=\"font-family:Arial,sans-serif;color:#1f2937\">
+    return with_sponsors_html(f"""<!doctype html><html><body style=\"font-family:Arial,sans-serif;color:#1f2937\">
 <h1>Registration confirmed</h1>
 <p>Your registration for <strong>{escape(_safe_text(view_model.get('tournament_name')))}</strong> is confirmed.</p>
 <p><strong>Registrant:</strong> {escape(_safe_text(view_model.get('display_name')))}<br><strong>Email:</strong> {escape(_safe_text(view_model.get('email')))}</p>
 <table cellpadding=\"8\" cellspacing=\"0\" border=\"1\" style=\"border-collapse:collapse;width:100%\"><thead><tr><th>Day</th><th>Event</th><th>Division</th><th>Partner</th><th>Price</th></tr></thead><tbody>{rows_html}</tbody></table>{commerce_html}{discount_html}
 <p><strong>Total due: {escape(format_money(view_model.get('total_price_usd')))}</strong> — this is an offline payment, handled separately from this website.</p>
 <p>{escape(_safe_text(view_model.get('payment_note')))}</p>{link}{roster_link}{sender}
-</body></html>"""
+</body></html>""", view_model.get("email_sponsors"))
 
 
 def build_tournament_registration_confirmation_text(view_model: dict) -> str:
@@ -268,10 +269,11 @@ def build_tournament_registration_confirmation_text(view_model: dict) -> str:
         lines.append(f"Confirmation page: {_safe_text(view_model.get('confirmation_url'))}")
     if _safe_text(view_model.get("roster_url")):
         lines.append(f"Public roster: {_safe_text(view_model.get('roster_url'))}")
-    return "\n".join(lines)
+    return with_sponsors_text("\n".join(lines), view_model.get("email_sponsors"))
 
 
-def send_tournament_registration_confirmation_email(*, view_model: dict, smtp_config: SMTPConfig | None = None) -> dict[str, str]:
+def send_tournament_registration_confirmation_email(*, view_model: dict, smtp_config: SMTPConfig | None = None, email_sponsors: list[dict] | None = None) -> dict[str, str]:
+    view_model = {**view_model, "email_sponsors": email_sponsors if email_sponsors is not None else view_model.get("email_sponsors")}
     original_to_email = _safe_text(view_model.get("email"))
     subject = build_tournament_registration_confirmation_subject(view_model)
     mode = get_email_mode()
@@ -291,5 +293,6 @@ def send_tournament_registration_confirmation_email(*, view_model: dict, smtp_co
         text_body=build_tournament_registration_confirmation_text(view_model),
         chart_png_bytes=None,
         smtp_config=smtp_config,
+        inline_png_images=sponsor_inline_images(email_sponsors if email_sponsors is not None else view_model.get("email_sponsors")),
     )
     return {"status": "sent" if mode == EMAIL_MODE_LIVE else "staging_redirect", "provider_message_id": provider_message_id, "to_email": effective_to}

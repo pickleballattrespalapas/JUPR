@@ -4,6 +4,7 @@ from html import escape
 from typing import Any
 
 from jupr_app.config import EMAIL_MODE_DRY_RUN, EMAIL_MODE_LIVE, EMAIL_MODE_STAGING_REDIRECT, SMTPConfig, get_email_mode, get_env_or_default
+from jupr_app.domain.notifications.tournament_email_sponsors import with_sponsors_html, with_sponsors_text, sponsor_inline_images
 from jupr_app.domain.notifications.smtp_mailer import send_email_with_inline_chart
 
 
@@ -34,6 +35,7 @@ def build_pairing_interest_html(
     board_url: str,
     recipient_kind: str,
     accept_url: str | None = None,
+    email_sponsors: list[dict] | None = None,
 ) -> str:
     intro = "A player sent pairing interest from Players Needing Partners."
     action_url = _safe_text(accept_url) or _safe_text(board_url)
@@ -43,7 +45,7 @@ def build_pairing_interest_html(
         intro = "Another player sent interest in pairing with you from Players Needing Partners."
         action_label = "Review and accept request"
         next_step = "If you accept this request, JUPR will automatically pair both registrations for that division."
-    return f"""<!doctype html><html><body style=\"font-family:Arial,sans-serif;color:#1f2937\">
+    return with_sponsors_html(f"""<!doctype html><html><body style=\"font-family:Arial,sans-serif;color:#1f2937\">
 <h1>Tournament pairing interest</h1>
 <p>{escape(intro)}</p>
 <p><strong>Tournament:</strong> {escape(_safe_text(tournament_name))}<br>
@@ -53,7 +55,7 @@ def build_pairing_interest_html(
 <p><a href=\"{escape(action_url)}\" style=\"background:#2563eb;color:white;padding:10px 14px;text-decoration:none;border-radius:6px\">{escape(action_label)}</a></p>
 <p>{escape(next_step)}</p>
 <p><a href=\"{escape(_safe_text(board_url))}\">Open Players Needing Partners</a></p>
-</body></html>"""
+</body></html>""", email_sponsors)
 
 
 def build_pairing_interest_text(
@@ -65,6 +67,7 @@ def build_pairing_interest_text(
     board_url: str,
     recipient_kind: str,
     accept_url: str | None = None,
+    email_sponsors: list[dict] | None = None,
 ) -> str:
     intro = "A player sent pairing interest from Players Needing Partners."
     action_url = _safe_text(accept_url) or _safe_text(board_url)
@@ -72,7 +75,7 @@ def build_pairing_interest_text(
     if recipient_kind == "player":
         intro = "Another player sent interest in pairing with you from Players Needing Partners."
         next_step = "If you accept this request, JUPR will automatically pair both registrations for that division."
-    return "\n".join([
+    return with_sponsors_text("\n".join([
         intro,
         f"Tournament: {_safe_text(tournament_name)}",
         f"Division: {_safe_text(division_name)}",
@@ -81,7 +84,7 @@ def build_pairing_interest_text(
         f"Review request: {action_url}",
         f"Open Players Needing Partners: {_safe_text(board_url)}",
         next_step,
-    ])
+    ]), email_sponsors)
 
 
 def _send_pairing_email(
@@ -96,6 +99,7 @@ def _send_pairing_email(
     recipient_kind: str,
     accept_url: str | None = None,
     smtp_config: SMTPConfig | None = None,
+    email_sponsors: list[dict] | None = None,
 ) -> dict[str, str]:
     original_to_email = _safe_text(to_email)
     if not original_to_email:
@@ -122,6 +126,7 @@ def _send_pairing_email(
             board_url=board_url,
             recipient_kind=recipient_kind,
             accept_url=accept_url,
+            email_sponsors=email_sponsors,
         ),
         text_body=build_pairing_interest_text(
             tournament_name=tournament_name,
@@ -131,9 +136,11 @@ def _send_pairing_email(
             board_url=board_url,
             recipient_kind=recipient_kind,
             accept_url=accept_url,
+            email_sponsors=email_sponsors,
         ),
         chart_png_bytes=None,
         smtp_config=smtp_config,
+        inline_png_images=sponsor_inline_images(email_sponsors),
     )
     return {"status": "sent" if mode == EMAIL_MODE_LIVE else "staging_redirect", "provider_message_id": provider_message_id, "to_email": effective_to}
 
@@ -149,6 +156,7 @@ def send_pairing_interest_emails(
     board_url: str = "",
     accept_url: str | None = None,
     smtp_config: SMTPConfig | None = None,
+    email_sponsors: list[dict] | None = None,
 ) -> dict[str, dict[str, str]]:
     subject = build_pairing_interest_subject(tournament_name=tournament_name, division_name=division_name)
     organizer_to = _safe_text(organizer_to_email) or organizer_email()
@@ -164,6 +172,7 @@ def send_pairing_interest_emails(
             accept_url=accept_url,
             recipient_kind="player",
             smtp_config=smtp_config,
+            email_sponsors=email_sponsors,
         ),
         "organizer": _send_pairing_email(
             to_email=organizer_to,
@@ -176,6 +185,7 @@ def send_pairing_interest_emails(
             accept_url=None,
             recipient_kind="organizer",
             smtp_config=smtp_config,
+            email_sponsors=email_sponsors,
         ),
     }
 
@@ -223,9 +233,10 @@ def build_pairing_status_html(
     board_url: str,
     action: str,
     recipient_kind: str,
+    email_sponsors: list[dict] | None = None,
 ) -> str:
     intro, action_label = _pairing_status_copy(action=action, recipient_kind=recipient_kind)
-    return f"""<!doctype html><html><body style=\"font-family:Arial,sans-serif;color:#1f2937\">
+    return with_sponsors_html(f"""<!doctype html><html><body style=\"font-family:Arial,sans-serif;color:#1f2937\">
 <h1>Tournament partner request update</h1>
 <p>{escape(intro)}</p>
 <p><strong>Tournament:</strong> {escape(_safe_text(tournament_name))}<br>
@@ -234,7 +245,7 @@ def build_pairing_status_html(
 <strong>Requested player:</strong> {escape(_safe_text(target_name))}</p>
 <p><a href=\"{escape(_safe_text(board_url))}\" style=\"background:#2563eb;color:white;padding:10px 14px;text-decoration:none;border-radius:6px\">{escape(action_label)}</a></p>
 <p>Contact details remain private; use the secure registration link above for any further action.</p>
-</body></html>"""
+</body></html>""", email_sponsors)
 
 
 def build_pairing_status_text(
@@ -246,9 +257,10 @@ def build_pairing_status_text(
     board_url: str,
     action: str,
     recipient_kind: str,
+    email_sponsors: list[dict] | None = None,
 ) -> str:
     intro, _action_label = _pairing_status_copy(action=action, recipient_kind=recipient_kind)
-    return "\n".join(
+    return with_sponsors_text("\n".join(
         [
             intro,
             f"Tournament: {_safe_text(tournament_name)}",
@@ -258,7 +270,7 @@ def build_pairing_status_text(
             f"Open Players Needing Partners: {_safe_text(board_url)}",
             "Contact details remain private; use the secure registration link for any further action.",
         ]
-    )
+    ), email_sponsors)
 
 
 def _send_pairing_status_email(
@@ -272,6 +284,7 @@ def _send_pairing_status_email(
     action: str,
     recipient_kind: str,
     smtp_config: SMTPConfig | None = None,
+    email_sponsors: list[dict] | None = None,
 ) -> dict[str, str]:
     original_to_email = _safe_text(to_email)
     if not original_to_email:
@@ -299,6 +312,7 @@ def _send_pairing_status_email(
             board_url=board_url,
             action=action,
             recipient_kind=recipient_kind,
+            email_sponsors=email_sponsors,
         ),
         text_body=build_pairing_status_text(
             tournament_name=tournament_name,
@@ -308,9 +322,11 @@ def _send_pairing_status_email(
             board_url=board_url,
             action=action,
             recipient_kind=recipient_kind,
+            email_sponsors=email_sponsors,
         ),
         chart_png_bytes=None,
         smtp_config=smtp_config,
+        inline_png_images=sponsor_inline_images(email_sponsors),
     )
     return {
         "status": "sent" if mode == EMAIL_MODE_LIVE else "staging_redirect",
@@ -331,6 +347,7 @@ def send_pairing_status_emails(
     requester_url: str,
     target_url: str,
     smtp_config: SMTPConfig | None = None,
+    email_sponsors: list[dict] | None = None,
 ) -> dict[str, dict[str, str]]:
     """Send only the lifecycle messages relevant to the transition actor.
 
@@ -362,6 +379,7 @@ def send_pairing_status_emails(
             action=clean_action,
             recipient_kind=recipient_kind,
             smtp_config=smtp_config,
+            email_sponsors=email_sponsors,
         )
         for recipient_kind, (email, url) in recipients.items()
     }

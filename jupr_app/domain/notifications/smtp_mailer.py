@@ -83,6 +83,7 @@ def send_email_with_inline_chart(
     unsubscribe_url: str | None = None,
     smtp_config: SMTPConfig | None = None,
     message_id: str | None = None,
+    inline_png_images: dict[str, bytes] | None = None,
 ) -> str:
     cfg = _smtp_config_dict(smtp_config)
 
@@ -112,6 +113,12 @@ def send_email_with_inline_chart(
         cid = (chart_cid or "player-digest-chart").strip()
         image_part.add_header("Content-ID", f"<{cid}>")
         image_part.add_header("Content-Disposition", "inline", filename="player-digest-chart.png")
+        msg.attach(image_part)
+
+    for cid, data in (inline_png_images or {}).items():
+        image_part = MIMEImage(data, _subtype="png")
+        image_part.add_header("Content-ID", f"<{cid}>")
+        image_part.add_header("Content-Disposition", "inline", filename=f"{cid}.png")
         msg.attach(image_part)
 
     with smtplib.SMTP(cfg["host"], cfg["port"], timeout=30) as server:

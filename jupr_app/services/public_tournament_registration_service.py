@@ -9,6 +9,7 @@ from datetime import date, datetime
 from typing import Any
 from urllib.parse import urlencode
 
+from jupr_app.services.tournament_email_sponsor_service import load_tournament_email_sponsors
 from jupr_app.config import get_env_or_default
 from jupr_app.domain.tournament_age_policy import evaluate_age_eligibility, normalize_age_policy
 from jupr_app.domain.tournament_registration_compiler import (
@@ -729,7 +730,8 @@ def build_registration_confirmation_delivery(
             sender_from_email=smtp_status.get("from_email"),
         )
         send_result = send_tournament_registration_confirmation_email(
-            view_model=view_model
+            view_model=view_model,
+            email_sponsors=load_tournament_email_sponsors(supabase, club_id=str(club_id), tournament_id=str(tournament_id)),
         )
         status = _clean_text(send_result.get("status"), limit=40) or "sent"
         message = {

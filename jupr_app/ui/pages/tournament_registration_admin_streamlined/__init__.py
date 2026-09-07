@@ -8,6 +8,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+from jupr_app.services.tournament_email_sponsor_service import load_tournament_email_sponsors
 from jupr_app.domain.notifications.smtp_mailer import get_smtp_config_status
 from jupr_app.domain.notifications.tournament_registrant_broadcast_email import send_tournament_registrant_broadcast_email
 from jupr_app.domain.tournament_registration_repo import delete_registration, list_registrations, registration_feature_available
@@ -204,6 +205,7 @@ def _render_email_registrants(*, supabase, tournament: dict[str, Any]) -> None:
                     recipient_name=recipient["name"],
                     subject=subject,
                     message=message,
+                    email_sponsors=load_tournament_email_sponsors(supabase, club_id=str(tournament.get("club_id") or ""), tournament_id=tournament_id),
                 )
                 if _safe_text(result.get("status")) == "dry_run":
                     dry_run += 1

@@ -4,6 +4,7 @@ from html import escape
 from typing import Any
 
 from jupr_app.config import EMAIL_MODE_DRY_RUN, EMAIL_MODE_LIVE, EMAIL_MODE_STAGING_REDIRECT, SMTPConfig, get_email_mode, get_env_or_default
+from jupr_app.domain.notifications.tournament_email_sponsors import with_sponsors_html, with_sponsors_text, sponsor_inline_images
 from jupr_app.domain.notifications.smtp_mailer import send_email_with_inline_chart
 
 
@@ -29,17 +30,18 @@ def build_tournament_registrant_broadcast_email_html(
     subject: str,
     message: str,
     personalize_greeting: bool = True,
+    email_sponsors: list[dict] | None = None,
 ) -> str:
     greeting_name = _safe_text(recipient_name) or "there"
     greeting = f"<p>Hi {escape(greeting_name)},</p>" if personalize_greeting else ""
     tournament_line = f"<p><strong>Tournament:</strong> {escape(_safe_text(tournament_name))}</p>" if personalize_greeting else ""
-    return f"""<!doctype html><html><body style=\"font-family:Arial,sans-serif;color:#1f2937\">
+    return with_sponsors_html(f"""<!doctype html><html><body style=\"font-family:Arial,sans-serif;color:#1f2937\">
 <h1>{escape(_safe_text(subject) or 'Tournament update')}</h1>
 {greeting}
 {tournament_line}
 <p>{_message_html(message)}</p>
 <p style=\"color:#6b7280;font-size:12px\">You are receiving this because you registered for this tournament.</p>
-</body></html>"""
+</body></html>""", email_sponsors)
 
 
 def build_tournament_registrant_broadcast_email_text(
@@ -49,11 +51,12 @@ def build_tournament_registrant_broadcast_email_text(
     subject: str,
     message: str,
     personalize_greeting: bool = True,
+    email_sponsors: list[dict] | None = None,
 ) -> str:
     greeting_name = _safe_text(recipient_name) or "there"
     if not personalize_greeting:
-        return f"{_safe_text(subject)}\n\n{_safe_text(message)}\n\nYou are receiving this because you registered for this tournament."
-    return "\n".join(
+        return with_sponsors_text(f"{_safe_text(subject)}\n\n{_safe_text(message)}\n\nYou are receiving this because you registered for this tournament.", email_sponsors)
+    return with_sponsors_text("\n".join(
         [
             _safe_text(subject) or "Tournament update",
             "",
@@ -65,7 +68,7 @@ def build_tournament_registrant_broadcast_email_text(
             "",
             "You are receiving this because you registered for this tournament.",
         ]
-    )
+    ), email_sponsors)
 
 
 def send_tournament_registrant_broadcast_email(
@@ -78,6 +81,7 @@ def send_tournament_registrant_broadcast_email(
     smtp_config: SMTPConfig | None = None,
     personalize_greeting: bool = True,
     message_id: str | None = None,
+    email_sponsors: list[dict] | None = None,
 ) -> dict[str, str]:
     original_to_email = _safe_text(recipient_email)
     if not original_to_email:
@@ -109,6 +113,7 @@ def send_tournament_registrant_broadcast_email(
             subject=final_subject,
             message=message,
             personalize_greeting=personalize_greeting,
+            email_sponsors=email_sponsors,
         ),
         text_body=build_tournament_registrant_broadcast_email_text(
             tournament_name=tournament_name,
@@ -116,9 +121,11 @@ def send_tournament_registrant_broadcast_email(
             subject=final_subject,
             message=message,
             personalize_greeting=personalize_greeting,
+            email_sponsors=email_sponsors,
         ),
         chart_png_bytes=None,
         smtp_config=smtp_config,
         **({"message_id": message_id} if message_id else {}),
+        inline_png_images=sponsor_inline_images(email_sponsors),
     )
     return {"status": "sent" if mode == EMAIL_MODE_LIVE else "staging_redirect", "provider_message_id": provider_message_id, "to_email": effective_to}

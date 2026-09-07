@@ -22,6 +22,28 @@ The migration `20260906052216_tournament_sponsor_logo_storage.sql` creates the
 private bucket and restrictive client-access policies. It was applied to staging
 project `sijpxjxvdtrehmqvirfi` before the staging merge.
 
+## Tournament emails
+
+Registration confirmations, registration edit links, participant broadcasts,
+partner requests and updates, and four-player team invitations include published,
+visible sponsors automatically. Presenting sponsors appear below the email title;
+Supporting and Community sponsors follow the message. Names, public tier labels,
+descriptions and website links appear in both HTML and plain text. Private notes
+and unpublished setup changes are excluded.
+
+Uploaded logos are embedded as PNG MIME parts, so delivered emails do not depend
+on expiring storage URLs. Images are resized and limited to 64 KB each / 256 KB
+total. If a logo cannot be loaded, the sponsor's text still appears and the
+transactional message can be delivered. The logo bucket stays private.
+
+Communications displays the complete email in a sandboxed preview. Sponsor
+details and embedded images are bound to the confirmation and recorded with the
+broadcast. Changed published sponsors require a new preview. Each recipient
+uses the saved logo copies, including after continuing an interrupted broadcast;
+previously attempted recipients are never sent another copy automatically.
+
+No database migration, new sender credentials, or email-mode change is required.
+
 Validation includes sponsor rendering checks, the existing Next component suite,
 TypeScript and Next production build checks, migration guards, and focused Python
 tests covering uploads, authorization, draft/published separation, validation, and

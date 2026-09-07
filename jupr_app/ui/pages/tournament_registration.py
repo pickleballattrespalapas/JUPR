@@ -9,6 +9,7 @@ import uuid
 
 import streamlit as st
 
+from jupr_app.services.tournament_email_sponsor_service import load_tournament_email_sponsors
 from jupr_app.domain.tournament_registration_compiler import validate_selection_against_skill
 from jupr_app.domain.notifications.smtp_mailer import get_smtp_config_status
 from jupr_app.domain.notifications.tournament_registration_edit_email import send_tournament_registration_edit_email
@@ -1595,6 +1596,7 @@ def render(ctx):
                         tournament_name=_safe_text(tournament.get("name") or "Tournament"),
                         registered_email=_safe_text(wizard.get("returning_email")),
                         edit_url=edit_url,
+                        email_sponsors=load_tournament_email_sponsors(supabase, club_id=str(tournament.get("club_id") or ""), tournament_id=str(tournament.get("id") or "")),
                     )
                     wizard["returning_email_sent"] = True
                     wizard["returning_email_error"] = ""
@@ -2315,7 +2317,7 @@ def render(ctx):
                         sender_from_name=smtp_status.get("from_name"),
                         sender_from_email=smtp_status.get("from_email"),
                     )
-                    send_result = send_tournament_registration_confirmation_email(view_model=view_model)
+                    send_result = send_tournament_registration_confirmation_email(view_model=view_model, email_sponsors=load_tournament_email_sponsors(supabase, club_id=str(tournament.get("club_id") or ""), tournament_id=str(tournament.get("id") or "")))
                     email_status = _safe_text(send_result.get("status")) or "sent"
                     if email_status == "staging_redirect":
                         email_status = "sent"
