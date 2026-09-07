@@ -20,7 +20,7 @@ CATALOG_BUCKET_ORDER = ["Live Now", "Seasonal / League Close", "Manual / Curated
 CATALOG_BUCKET_DESCRIPTIONS = {
     "Live Now": "Automatically evaluated from eligible activity as results are recorded.",
     "Seasonal / League Close": "Evaluated from final league or season results when staff closes the competition.",
-    "Manual / Curated": "Awarded by an authorized operator for tournament placement, sportsmanship, or community moments.",
+    "Manual / Curated": "Staff confirm tournament placements. Club admins award community badges for the listed contributions.",
     "Tracked / Disabled": "Defined and tracked for history, but not currently awarded by the live badge worker.",
 }
 CANONICAL_CATEGORY_LABELS = {
