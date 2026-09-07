@@ -49,3 +49,22 @@ TypeScript and Next production build checks, migration guards, and focused Pytho
 tests covering uploads, authorization, draft/published separation, validation, and
 public response privacy. Hosted staging readiness is determined by the exact-SHA
 deployment handoff described in `AGENTS.md`.
+
+## Optional registration events in Communications
+
+The Communications composer offers **Include registration events**, off by default.
+It appends the selected player's event names, days/dates, and partner names or
+partner-needed status below the organizer's message and above lower-tier sponsors.
+Each recipient receives only the selected registrations associated with their
+email address. Shared inboxes receive one copy with separately named player
+sections; other registrations sharing that address are not added automatically.
+A participant selected using an event filter still receives all their registered
+events when this option is enabled. Empty and explicitly selected cancelled
+registrations are labelled clearly. Partner contact details and private notes
+are never included.
+
+**Preview for** switches the displayed recipient without changing the audience.
+Event details and the option are bound to the reviewed message; editing an event,
+day, partner, or selection requires a new review before remaining emails can be
+sent. Confirmed recipient event snapshots are retained with the existing
+communications ledger; no migration is required.

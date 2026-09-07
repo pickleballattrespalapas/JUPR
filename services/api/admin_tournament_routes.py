@@ -134,10 +134,12 @@ class AdminTournamentRegistrationUpdateRequest(BaseModel):
 
 
 class AdminTournamentBroadcastPreviewRequest(BaseModel):
+    preview_recipient_email: str | None = Field(default=None, max_length=180)
     subject: str = ""
     message: str = ""
     registration_ids: list[str] | None = Field(default=None, max_length=2000)
     include_cancelled: bool = False
+    include_registration_events: bool = False
     registration_status: str | None = None
     payment_status: str | None = None
     partner_mode: str | None = None
@@ -151,6 +153,7 @@ class AdminTournamentBroadcastCreateRequest(BaseModel):
     message: str = Field(min_length=1, max_length=10000)
     registration_ids: list[str] = Field(min_length=1, max_length=2000)
     include_cancelled: bool = False
+    include_registration_events: bool = False
     operation_key: str = Field(min_length=36, max_length=36)
     preview_fingerprint: str = Field(min_length=64, max_length=64)
     confirmation_text: str = Field(default="", max_length=80)
