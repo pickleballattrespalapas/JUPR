@@ -14,6 +14,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+from jupr_app.data.paged_reads import read_all_rows
 
 from jupr_app.domain.gamification.badge_types import BadgeEvaluationContext
 
@@ -90,6 +91,9 @@ def season_match_groups(
 ) -> Iterator[tuple[BadgeSeason, int, pd.DataFrame]]:
     """Group eligible match facts using only this club's configured seasons."""
     raw_seasons = getattr(ctx.ctx, "badge_seasons", None)
+    if raw_seasons is None and getattr(ctx.ctx, "supabase", None) is not None:
+        raw_seasons = read_all_rows(lambda: ctx.ctx.supabase.table("badge_seasons").select("*").eq("club_id", ctx.club_id), order="start_date")
+        ctx.ctx.badge_seasons = raw_seasons
     if raw_seasons is None or ctx.facts.empty:
         return
     seasons = validate_badge_seasons(raw_seasons, club_id=ctx.club_id)

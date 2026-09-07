@@ -10,7 +10,7 @@ This file defines the exact, player-facing requirements to unlock each badge.
 
 2) “League” means the match’s `league` field (defaults to "OVERALL" if empty).
 
-3) “Week” is ISO week (YYYY-W##). “Month” is YYYY-MM. "Season" currently means the calendar year. Week and month boundaries use UTC.
+3) “Week” is ISO week (YYYY-W##). “Month” is YYYY-MM. "Season" means the name and inclusive dates set by a club administrator. Without a configured season, season-based badges are not awarded. Swiss Army Knife explicitly uses a calendar year. Week and month boundaries use UTC.
 
 4) Clean Sweep Week, Most Improved (monthly), and Upset Champion are checked after the week or month ends, when the next eligible result is processed.
 
@@ -148,48 +148,48 @@ Unlock: Win a match when your **pre‑match win chance** is **15% or less**.
 # Rivalry & Nemesis
 
 ## nemesis_found — Nemesis Found (non-stackable)
-Unlock: Against an opponent you’ve faced **6+ times**, your head‑to‑head win rate is **40% or less**.
+Unlock: Face an opponent **at least 6 times** with a head-to-head win rate of **40% or less**. Earned once, when your first nemesis is identified.
 
 ## rivalry_win — Rivalry Win (stackable)
-Unlock: Beat your **nemesis** (as defined in *Nemesis Found*).
+Unlock: Beat an opponent previously identified as your nemesis. Earned for each win against each nemesis.
 
 ## rivalry_streak — Rivalry Streak (stackable)
-Unlock: Against your **nemesis**, win **3 matches in a row**.
+Unlock: After an opponent becomes your nemesis, win **3 consecutive head-to-head matches** against them. Earned once per winning streak; a loss starts a new streak.
 
 ## settled_the_score — Settled the Score (stackable)
-Unlock: Against your **nemesis**, win a match that makes your head‑to‑head record **exactly even**.
+Unlock: Beat a previously identified nemesis to bring your head-to-head wins and losses **exactly level**. The opponent remains tracked after your record improves.
 
 ---
 
 # Consistency & Reliability
 
 ## battle_tested — Battle Tested (stackable)
-Unlock: In the same season, complete **50+ matches** (no forfeits / invalid matches).
+Unlock: During a season set by a club admin, complete **50+ eligible recorded matches**. Earned once per season; forfeits and invalid matches do not count.
 
 ## consistency — Consistency (stackable)
-Unlock: In the same season, play **≥1 match** in **6 consecutive ISO weeks** (missing a week breaks the streak).
+Unlock: During a season set by a club admin, play **at least one match in each of 6 consecutive ISO weeks** (Monday–Sunday). Missing a week breaks the streak. Earned once per season.
 
-## steady_hand — Steady Hand (non-stackable in catalog; awarded once per season in rules)
-Unlock: In the same season, play **20+ matches** and maintain a win rate of **60%+**.
+## steady_hand — Steady Hand (once per configured season)
+Unlock: In a season set by a club admin, reach **20+ matches** with a win rate of **60%+**. Earned once per season; later losses do not remove it.
 
-## mr_reliable — Mr. Reliable (inactive)
-Unlock: In the same season, play **30+ matches** and finish with a **70%+ win rate**.
+## mr_reliable — Mr. Reliable (once per configured season)
+Unlock: In a season set by a club admin, play **30+ matches** and finish with a **70%+ win rate**. Awarded after the season ends when results are next processed or staff runs a badge check.
 
 ---
 
 # Meta / Prestige
 
-## league_champion — League Champion (inactive)
-Unlock: Awarded on league close to the final 1st-place finisher.
+## league_champion — League Champion (retired)
+Unlock: Retired. Existing awards remain in player history; current league awards and tournament podiums provide trophies.
 
-## league_runner_up — League Runner-Up (inactive)
-Unlock: Awarded on league close to the final 2nd-place finisher.
+## league_runner_up — League Runner-Up (retired)
+Unlock: Retired. Existing awards remain in player history; current league awards and tournament podiums provide trophies.
 
-## league_third_place — League Third Place (inactive)
-Unlock: Awarded on league close to the final 3rd-place finisher.
+## league_third_place — League Third Place (retired)
+Unlock: Retired. Existing awards remain in player history; current league awards and tournament podiums provide trophies.
 
-## podium — Podium (inactive)
-Unlock: Awarded on league close to any top-3 finisher.
+## podium — Podium (retired)
+Unlock: Retired. Existing awards remain in player history; current league awards and tournament podiums provide trophies.
 
 ## hall_of_fame_night — Hall of Fame Night (stackable)
 Unlock: In a league, win a match with a **top‑5% rating swing** for that league (by **absolute JUPR rating change**).
@@ -229,13 +229,13 @@ Unlock: **Seasonal (league close):** finish with the most **wins** in the league
 
 ---
 
-# Sportsmanship & Community (admin awards; awaiting activation)
+# Sportsmanship & Community (admin awards)
 
-## good_sport — Good Sport (stackable admin award; awaiting activation)
+## good_sport — Good Sport (stackable admin award)
 Unlock: Awarded by a club admin for honest calls even when they cost a point, respectful handling of a difficult situation, or consistently encouraging and supporting other players. Can be awarded again for a separate contribution.
 
-## community_builder — Community Builder (stackable admin award; awaiting activation)
+## community_builder — Community Builder (stackable admin award)
 Unlock: Awarded by a club admin for welcoming newcomers and helping them find games, volunteering at club events, organizing inclusive social play, or introducing new participants to the club. Can be awarded again for a separate contribution.
 
-## mentor — Mentor (stackable admin award; awaiting activation)
+## mentor — Mentor (stackable admin award)
 Unlock: Awarded by a club admin for helping a newer player improve over several visits, leading beginner lessons or practice sessions, or helping players learn rules and court etiquette. Can be awarded again for a separate contribution.

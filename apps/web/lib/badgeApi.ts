@@ -52,6 +52,7 @@ export type BadgeTrophyRoomEntry = {
 };
 
 export type BadgeCodexResponse = {
+  seasons?: Array<{ id: string; name: string; start_date: string; end_date: string; timezone: string }>;
   club: { id: string; slug: string; name: string };
   summary: {
     badge_count: number;

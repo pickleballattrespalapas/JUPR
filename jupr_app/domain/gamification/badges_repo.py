@@ -86,7 +86,7 @@ def upsert_player_badges(
     candidates: Iterable[BadgeCandidate],
     *,
     awarded_by: str = "engine",
-    rule_version: str | None = "badge-repair-2026-09-v1",
+    rule_version: str | None = "badge-reactivation-v1",
     eval_run_id: str | None = None,
 ) -> list[BadgeCandidate]:
     global _PLAYER_BADGES_CONTRACT_CHECKED
@@ -137,7 +137,7 @@ def build_player_badge_rows(
     candidates: Iterable[BadgeCandidate],
     *,
     awarded_by: str = "engine",
-    rule_version: str | None = "badge-repair-2026-09-v1",
+    rule_version: str | None = "badge-reactivation-v1",
     eval_run_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Build canonical insert rows without reading or mutating badge storage.

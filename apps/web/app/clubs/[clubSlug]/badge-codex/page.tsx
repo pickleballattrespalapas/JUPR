@@ -417,6 +417,8 @@ export default async function BadgeCodexPage({ params, searchParams }: BadgeCode
         Celebrate showing up, improving, playing with different partners, and earning major trophies. Each badge below explains exactly how to earn it.
       </p>
 
+      {data?.seasons?.length ? <details style={{ ...cardStyle, marginBottom: "1rem" }}><summary style={{ cursor: "pointer", fontWeight: 700 }}>Season dates for badges</summary><ul>{data.seasons.map(season => <li key={season.id}>{season.name}: {season.start_date} through {season.end_date} ({season.timezone})</li>)}</ul></details> : data ? <p style={{ color: "#475569" }}>The club hasn’t set badge season dates yet. Season-based badges will start once dates are added.</p> : null}
+
       {error ? <p role="alert" style={{ color: "#b91c1c" }}>Badges are unavailable right now. Please try again shortly.</p> : null}
       {!error && data && !badges.length ? <p>No badges are available yet.</p> : null}
 

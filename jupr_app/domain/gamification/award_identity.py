@@ -1,5 +1,5 @@
 """Semantic identity for lifetime achievements across historical engine keys."""
-SINGLE_LIFETIME = {"participant", "dedicated_participant_50", "lifetime_participant_200", "first_win", "social_butterfly", "network_builder", "high_roller", "clutch_performer"}
+SINGLE_LIFETIME = {"participant", "dedicated_participant_50", "lifetime_participant_200", "first_win", "social_butterfly", "network_builder", "high_roller", "clutch_performer", "nemesis_found"}
 
 
 def award_key(row: dict) -> tuple:

@@ -10,6 +10,7 @@ from services.api.admin_auth_routes import (
     require_admin_assignments,
 )
 from services.api.admin_badge_diagnostics_routes import install_admin_badge_diagnostics_routes
+from services.api.admin_badge_management_routes import install_admin_badge_management_routes
 from services.api.admin_challenge_ladder_routes import install_admin_challenge_ladder_routes
 from services.api.admin_jupr_live_routes import install_admin_jupr_live_routes
 from services.api.admin_league_manager_routes import install_admin_league_manager_routes
@@ -76,6 +77,7 @@ def install_admin_operations_routes(app, *, get_supabase_client=None) -> None:
         install_admin_league_manager_routes(app, get_supabase_client=get_supabase_client)
         install_admin_weekly_recap_routes(app, get_supabase_client=get_supabase_client)
         install_admin_badge_diagnostics_routes(app, get_supabase_client=get_supabase_client)
+        install_admin_badge_management_routes(app, get_supabase_client=get_supabase_client)
         install_admin_tournament_setup_routes(app, get_supabase_client=get_supabase_client)
         install_admin_tournament_routes(app, get_supabase_client=get_supabase_client)
         install_admin_tournament_checkin_routes(

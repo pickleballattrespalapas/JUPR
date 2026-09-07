@@ -168,9 +168,10 @@ def test_public_badge_codex_uses_authoritative_timing_buckets() -> None:
     }
 
     assert "participant" in buckets["Live Now"]
-    assert "league_champion" in buckets["Tracked / Disabled"]
+    assert all("league_champion" not in ids for ids in buckets.values())
+    assert supabase._tables["player_badges"][0]["badge_id"] == "league_champion"
     assert "tournament_champion" in buckets["Manual / Curated"]
-    assert "breakthrough" in buckets["Tracked / Disabled"]
+    assert "breakthrough" in buckets["Live Now"]
     assert set(payload["filters"]["scopes"]) >= {"lifetime", "season"}
 
 

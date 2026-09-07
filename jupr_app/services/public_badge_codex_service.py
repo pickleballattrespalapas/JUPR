@@ -152,6 +152,8 @@ def _badge_authority(row: dict[str, Any]) -> dict[str, Any]:
 
 def _badge_should_be_public(row: dict[str, Any], earners_count: int | None) -> bool:
     badge_id = str(row.get("badge_id") or "").strip()
+    if badge_id in {"league_champion", "league_runner_up", "league_third_place", "podium"}:
+        return False  # Historical profile awards remain; these are no longer catalog goals.
     name = str(row.get("name") or "").strip()
     if not badge_id or not name:
         return False
@@ -409,6 +411,7 @@ def build_public_badge_codex(supabase: Any, *, club_id: str, recent_earners_limi
     categories = sorted({str(badge.get("category") or "Other") for badge in badges}, key=category_sort_key)
     scopes = sorted({str(badge.get("badge_scope") or "") for badge in badges if badge.get("badge_scope")}, key=str.casefold)
     return {
+        "seasons": read_all_rows(lambda: supabase.table("badge_seasons").select("id,name,start_date,end_date,timezone").eq("club_id", str(club_id)), order="start_date"),
         "summary": {
             "badge_count": len(badges),
             "earned_badge_count": earned_badges,

@@ -248,6 +248,8 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/guests"),
     ),
     "badge-diagnostics": (
+        ("POST", "/admin/clubs/{club_id}/badge-management/awards"),
+        ("POST", "/admin/clubs/{club_id}/badge-management/seasons"),
         ("PATCH", "/admin/clubs/{club_id}/badges/{badge_id}/state"),
         ("POST", "/admin/clubs/{club_id}/badges/recompute"),
         ("PATCH", "/admin/clubs/{club_id}/badges/revoke"),

@@ -103,21 +103,17 @@ def _build_badge_metadata() -> dict[str, dict[str, str]]:
             "top_performer_most_improved",
             "top_performer_best_win_pct",
             "top_performer_most_wins",
-            "league_champion",
-            "league_runner_up",
-            "league_third_place",
-            "podium",
         ],
         status="seasonal",
         scope="season",
         award_timing="on_league_close",
     )
 
-    assign(["breakthrough", "above_expectations", "clutch_performer"], status="tracked", scope="lifetime", award_timing="disabled")
-    assign(["dominant_run"], status="tracked", scope="league", award_timing="disabled")
-    assign(["high_output", "rivalry_win"], status="tracked", scope="match", award_timing="disabled")
-    assign(["nemesis_found", "rivalry_streak", "settled_the_score"], status="tracked", scope="lifetime", award_timing="disabled")
-    assign(["battle_tested", "consistency", "mr_reliable"], status="tracked", scope="season", award_timing="disabled")
+    assign(["league_champion", "league_runner_up", "league_third_place", "podium"], status="retired", scope="league", award_timing="disabled")
+    assign(["breakthrough"], status="live", scope="league", award_timing="live")
+    assign(["above_expectations", "rivalry_win"], status="live", scope="match", award_timing="live")
+    assign(["clutch_performer", "dominant_run", "high_output", "nemesis_found", "rivalry_streak", "settled_the_score"], status="live", scope="lifetime", award_timing="live")
+    assign(["battle_tested", "consistency", "mr_reliable"], status="live", scope="season", award_timing="live")
     assign(["good_sport", "community_builder", "mentor"], status="curated", scope="lifetime", award_timing="manual")
 
     return metadata
