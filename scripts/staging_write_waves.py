@@ -149,6 +149,8 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/email-preferences/unsubscribe"),
     ),
     "communications": (
+        ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/registrations/broadcasts"),
+        ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/registrations/broadcasts/{operation_key}/recipients/{recipient_index}/send"),
         ("POST", "/admin/clubs/{club_id}/player-updates/send-range"),
         ("POST", "/admin/clubs/{club_id}/player-updates/digests/preview"),
         ("POST", "/admin/clubs/{club_id}/player-updates/digests/queue"),
