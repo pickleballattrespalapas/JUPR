@@ -148,3 +148,16 @@ def test_pinned_flyctl_inventory_accepts_fully_deployed_secrets(monkeypatch):
         {"name": "SUPABASE_SERVICE_ROLE_KEY", "digest": "another-digest", "status": "Deployed"},
     ]))
     assert setup.inventory() == {"SMTP_HOST", "SUPABASE_SERVICE_ROLE_KEY"}
+
+
+def test_probe_accepts_framed_result_with_ssh_connection_notices(production, monkeypatch):
+    monkeypatch.setattr(setup, "fly", lambda *_a, **_kw:
+        "Connecting to the application...\n\r\nJUPR_REGISTRATION_READINESS=" + json.dumps(production) + "\r\n")
+    assert setup.probe() == production
+
+
+@pytest.mark.parametrize("output", ["{}", "connection failed", "JUPR_REGISTRATION_READINESS=oops", "JUPR_REGISTRATION_READINESS={}\nJUPR_REGISTRATION_READINESS={}"])
+def test_probe_rejects_unframed_invalid_or_duplicate_results(monkeypatch, output):
+    monkeypatch.setattr(setup, "fly", lambda *_a, **_kw: output)
+    with pytest.raises(setup.SetupError, match="invalid response"):
+        setup.probe()

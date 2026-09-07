@@ -46,7 +46,7 @@ try:
     }
 except Exception:
     sys.exit(3)
-print(json.dumps(result))
+print("JUPR_REGISTRATION_READINESS=" + json.dumps(result))
 '''
 
 
@@ -96,7 +96,14 @@ def probe() -> dict:
     encoded = base64.b64encode(REMOTE_PROBE.encode()).decode()
     command = f"python -c 'import base64;exec(compile(base64.b64decode(\"{encoded}\"),\"registration_readiness\",\"exec\"))'"
     try:
-        result = json.loads(fly("ssh", "console", "--quiet", "--command", command, ssh=True))
+        output = fly("ssh", "console", "--quiet", "--command", command, ssh=True)
+        # flyctl can emit SSH connection notices even with --quiet. Only the
+        # explicitly framed remote result is data; never log the other output.
+        prefix = "JUPR_REGISTRATION_READINESS="
+        frames = [line.strip()[len(prefix):] for line in output.splitlines() if line.strip().startswith(prefix)]
+        if len(frames) != 1:
+            raise ValueError("Missing or duplicate readiness frame")
+        result = json.loads(frames[0])
     except ValueError:
         raise SetupError("Registration readiness probe returned an invalid response.") from None
     if not isinstance(result, dict) or any(
