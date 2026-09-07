@@ -136,6 +136,15 @@ def test_provider_failure_never_exposes_secret_output(monkeypatch, capsys, failu
 
 @pytest.mark.parametrize("status", ["Staged", "Partial", "Unknown", None])
 def test_pending_or_unknown_secrets_block_initialization(monkeypatch, status):
-    monkeypatch.setattr(setup, "fly", lambda *_: json.dumps([{"Name": "SMTP_HOST", "DeploymentStatus": status}]))
+    monkeypatch.setattr(setup, "fly", lambda *_: json.dumps([{"name": "SMTP_HOST", "digest": "fake-digest", "status": status}]))
     with pytest.raises(setup.SetupError, match="fully deployed"):
         setup.inventory()
+
+
+def test_pinned_flyctl_inventory_accepts_fully_deployed_secrets(monkeypatch):
+    # Matches SecretWithStatus JSON tags in flyctl v0.4.49 secrets/list.go.
+    monkeypatch.setattr(setup, "fly", lambda *_: json.dumps([
+        {"name": "SMTP_HOST", "digest": "fake-digest", "status": "Deployed"},
+        {"name": "SUPABASE_SERVICE_ROLE_KEY", "digest": "another-digest", "status": "Deployed"},
+    ]))
+    assert setup.inventory() == {"SMTP_HOST", "SUPABASE_SERVICE_ROLE_KEY"}
