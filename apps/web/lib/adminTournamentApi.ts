@@ -464,7 +464,11 @@ export type AdminTournamentBroadcastPreviewResponse = {
   ok: boolean;
   mode: "tournament_broadcast_preview";
   dry_run: true;
-  send_available: false;
+  send_available: boolean;
+  send_unavailable_reason?: string | null;
+  preview_fingerprint?: string;
+  delivery_mode?: string;
+  sender?: { from_email?: string; from_name?: string; reply_to?: string };
   selected_registration_ids?: string[] | null;
   recipient_count: number;
   recipients: AdminTournamentBroadcastRecipient[];
@@ -478,6 +482,19 @@ export type AdminTournamentBroadcastPreviewResponse = {
   };
   warnings?: string[];
 };
+
+export type TournamentBroadcast = {
+  operation_key: string;
+  subject: string;
+  message: string;
+  created_at?: string;
+  recipient_count: number;
+  pending_count: number;
+  delivery_mode: string;
+  sender: { from_email?: string; from_name?: string; reply_to?: string };
+  recipients: Array<{ index: number; name: string; email: string; status: string; detail: string }>;
+};
+export type TournamentBroadcastSummary = Pick<TournamentBroadcast, "operation_key" | "subject" | "created_at" | "recipient_count">;
 
 type ApiResult<T> = { data: T | null; error: string | null };
 

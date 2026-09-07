@@ -5,6 +5,17 @@ from jupr_app.domain.notifications.tournament_registrant_broadcast_email import 
 )
 
 
+def test_composer_message_does_not_add_a_second_greeting():
+    options = dict(tournament_name="Baja Classic", recipient_name="Heather", subject="Women's Open",
+        message="Hi Heather,\n\nSee you soon.\nJoe <organizer>", personalize_greeting=False)
+    text = build_tournament_registrant_broadcast_email_text(**options)
+    html = build_tournament_registrant_broadcast_email_html(**options)
+    assert text.count("Hi Heather,") == 1
+    assert html.count("Hi Heather,") == 1
+    assert "Joe &lt;organizer&gt;" in html
+    assert "Joe <organizer>" in text
+
+
 def test_broadcast_subject_includes_tournament_when_needed():
     assert build_tournament_registrant_broadcast_subject(
         tournament_name="Baja Classic 2026",

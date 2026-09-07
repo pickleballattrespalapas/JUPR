@@ -28,12 +28,15 @@ def build_tournament_registrant_broadcast_email_html(
     recipient_name: str,
     subject: str,
     message: str,
+    personalize_greeting: bool = True,
 ) -> str:
     greeting_name = _safe_text(recipient_name) or "there"
+    greeting = f"<p>Hi {escape(greeting_name)},</p>" if personalize_greeting else ""
+    tournament_line = f"<p><strong>Tournament:</strong> {escape(_safe_text(tournament_name))}</p>" if personalize_greeting else ""
     return f"""<!doctype html><html><body style=\"font-family:Arial,sans-serif;color:#1f2937\">
 <h1>{escape(_safe_text(subject) or 'Tournament update')}</h1>
-<p>Hi {escape(greeting_name)},</p>
-<p><strong>Tournament:</strong> {escape(_safe_text(tournament_name))}</p>
+{greeting}
+{tournament_line}
 <p>{_message_html(message)}</p>
 <p style=\"color:#6b7280;font-size:12px\">You are receiving this because you registered for this tournament.</p>
 </body></html>"""
@@ -45,8 +48,11 @@ def build_tournament_registrant_broadcast_email_text(
     recipient_name: str,
     subject: str,
     message: str,
+    personalize_greeting: bool = True,
 ) -> str:
     greeting_name = _safe_text(recipient_name) or "there"
+    if not personalize_greeting:
+        return f"{_safe_text(subject)}\n\n{_safe_text(message)}\n\nYou are receiving this because you registered for this tournament."
     return "\n".join(
         [
             _safe_text(subject) or "Tournament update",
@@ -70,6 +76,8 @@ def send_tournament_registrant_broadcast_email(
     subject: str,
     message: str,
     smtp_config: SMTPConfig | None = None,
+    personalize_greeting: bool = True,
+    message_id: str | None = None,
 ) -> dict[str, str]:
     original_to_email = _safe_text(recipient_email)
     if not original_to_email:
@@ -100,14 +108,17 @@ def send_tournament_registrant_broadcast_email(
             recipient_name=recipient_name,
             subject=final_subject,
             message=message,
+            personalize_greeting=personalize_greeting,
         ),
         text_body=build_tournament_registrant_broadcast_email_text(
             tournament_name=tournament_name,
             recipient_name=recipient_name,
             subject=final_subject,
             message=message,
+            personalize_greeting=personalize_greeting,
         ),
         chart_png_bytes=None,
         smtp_config=smtp_config,
+        **({"message_id": message_id} if message_id else {}),
     )
     return {"status": "sent" if mode == EMAIL_MODE_LIVE else "staging_redirect", "provider_message_id": provider_message_id, "to_email": effective_to}

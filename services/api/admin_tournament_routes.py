@@ -68,6 +68,13 @@ from jupr_app.services.admin_tournament_registration_reporting_service import (
     build_admin_tournament_broadcast_preview,
     build_admin_tournament_registration_export,
 )
+from jupr_app.services.admin_tournament_broadcast_service import (
+    create_tournament_broadcast,
+    get_tournament_broadcast,
+    list_tournament_broadcasts,
+    send_tournament_broadcast_recipient,
+)
+from jupr_app.services.staging_write_guard import require_staging_communications_mutations
 from jupr_app.services.admin_tournament_score_service import update_admin_tournament_game_score
 from jupr_app.services.admin_tournament_service import (
     build_admin_tournament_registration_import_handoff,
@@ -137,6 +144,20 @@ class AdminTournamentBroadcastPreviewRequest(BaseModel):
     registration_day_id: str | None = None
     event_option_id: str | None = None
     search: str | None = None
+
+
+class AdminTournamentBroadcastCreateRequest(BaseModel):
+    subject: str = Field(min_length=1, max_length=200)
+    message: str = Field(min_length=1, max_length=10000)
+    registration_ids: list[str] = Field(min_length=1, max_length=2000)
+    include_cancelled: bool = False
+    operation_key: str = Field(min_length=36, max_length=36)
+    preview_fingerprint: str = Field(min_length=64, max_length=64)
+    confirmation_text: str = Field(default="", max_length=80)
+
+
+class AdminTournamentBroadcastSendRequest(BaseModel):
+    confirmation_text: str = Field(default="", max_length=80)
 
 
 class AdminTournamentRegistrationBulkUpdateRequest(BaseModel):
@@ -1892,6 +1913,65 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
             )
         except Exception as exc:
             _handle(exc)
+
+    def _broadcast_context(club_id, authorization, response):
+        if not is_admin_tournament_admin_enabled():
+            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_tournament_role_or_403(
+            supabase=supabase, club_id=str(club_id), authorization=authorization,
+            source="next_tournament_communications")
+        response.headers["Cache-Control"] = "private, no-store, max-age=0"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return supabase, actor_email, actor_role
+
+    def _broadcast_error(exc):
+        if isinstance(exc, (ValueError, PermissionError)):
+            _handle(exc)
+        raise HTTPException(status_code=500, detail="Unable to complete the email request. Check Recent emails before continuing.") from exc
+
+    @app.post("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/registrations/broadcasts")
+    def post_tournament_broadcast(club_id: str, tournament_id: str,
+            payload: AdminTournamentBroadcastCreateRequest, response: Response,
+            authorization: str | None = auth_header()) -> dict[str, Any]:
+        supabase, actor_email, actor_role = _broadcast_context(club_id, authorization, response)
+        try:
+            require_staging_communications_mutations()
+            return create_tournament_broadcast(supabase, club_id=club_id, tournament_id=tournament_id,
+                actor_email=actor_email, actor_role=actor_role, **_dump_model(payload))
+        except Exception as exc:
+            _broadcast_error(exc)
+
+    @app.get("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/registrations/broadcasts")
+    def get_tournament_broadcasts(club_id: str, tournament_id: str, response: Response,
+            authorization: str | None = auth_header()) -> dict[str, Any]:
+        supabase, _, _ = _broadcast_context(club_id, authorization, response)
+        try:
+            return list_tournament_broadcasts(supabase, club_id=club_id, tournament_id=tournament_id)
+        except Exception as exc:
+            _broadcast_error(exc)
+
+    @app.get("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/registrations/broadcasts/{operation_key}")
+    def get_tournament_broadcast_result(club_id: str, tournament_id: str, operation_key: str,
+            response: Response, authorization: str | None = auth_header()) -> dict[str, Any]:
+        supabase, _, _ = _broadcast_context(club_id, authorization, response)
+        try:
+            return get_tournament_broadcast(supabase, club_id=club_id, tournament_id=tournament_id, operation_key=operation_key)
+        except Exception as exc:
+            _broadcast_error(exc)
+
+    @app.post("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/registrations/broadcasts/{operation_key}/recipients/{recipient_index}/send")
+    def post_tournament_broadcast_recipient(club_id: str, tournament_id: str, operation_key: str,
+            recipient_index: int, payload: AdminTournamentBroadcastSendRequest, response: Response,
+            authorization: str | None = auth_header()) -> dict[str, Any]:
+        supabase, actor_email, actor_role = _broadcast_context(club_id, authorization, response)
+        try:
+            require_staging_communications_mutations()
+            return send_tournament_broadcast_recipient(supabase, club_id=club_id, tournament_id=tournament_id,
+                operation_key=operation_key, recipient_index=recipient_index,
+                confirmation_text=payload.confirmation_text, actor_email=actor_email, actor_role=actor_role)
+        except Exception as exc:
+            _broadcast_error(exc)
 
     @app.patch("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/registrations/bulk")
     def patch_admin_tournament_registrations_bulk(club_id: str, tournament_id: str, payload: AdminTournamentRegistrationBulkUpdateRequest, authorization: str | None = auth_header()) -> dict[str, Any]:

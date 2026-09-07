@@ -22,6 +22,7 @@ function load(relative, overrides = {}) {
 let token = "test-session";
 const Panel = load("app/admin/tournaments/registrations/RegistrationManagementPanel.tsx", {
   "next/link": { __esModule: true, default: ({ children }) => children },
+  "./TournamentEmailDelivery": { __esModule: true, default: () => null },
   "@/lib/useAdminSession": { useAdminSession: () => ({ accessToken: token, session: {}, loading: false }), adminSessionLabel: () => "Test admin" },
   "@/lib/useAuthenticatedAutoLoad": load("lib/useAuthenticatedAutoLoad.ts"),
   "@/lib/tournamentRouteContext": { tournamentRouteHref: value => value }
