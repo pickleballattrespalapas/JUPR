@@ -74,6 +74,63 @@ def test_broadcast_preview_deduplicates_multi_selection_email(monkeypatch):
     assert result["send_available"] is False
 
 
+@pytest.mark.parametrize(
+    ("registration_ids", "emails"),
+    [
+        (["registration_1"], ["alex@example.com"]),
+        (["registration_2"], ["beth@example.com"]),
+        (["registration_1", "registration_2"], ["alex@example.com", "beth@example.com"]),
+        (["registration_1", "registration_1", "registration_shared"], ["alex@example.com"]),
+        ([], []),
+        (["registration_cancelled", "registration_no_email"], []),
+    ],
+)
+def test_broadcast_preview_uses_only_explicit_participants(monkeypatch, registration_ids, emails):
+    tables = tournament_tables()
+    template = tables["tournament_registrations"][0]
+    tables["tournament_registrations"].extend([
+        {**template, "id": "registration_2", "display_name": "Beth Example", "email": "beth@example.com"},
+        {**template, "id": "registration_shared", "email": "ALEX@example.com"},
+        {**template, "id": "registration_cancelled", "email": "cancelled@example.com", "status": "cancelled"},
+        {**template, "id": "registration_no_email", "email": None},
+    ])
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    result = build_admin_tournament_broadcast_preview(
+        FakeSupabase(tables), club_id="club", tournament_id="tour_1",
+        registration_ids=registration_ids, subject="Update", message="Hello",
+    )
+    assert sorted(row["email"] for row in result["recipients"]) == emails
+    assert result["recipient_count"] == len(emails)
+    assert result["selected_registration_ids"] == sorted(set(registration_ids))
+    assert result["dry_run"] is True
+    assert result["send_available"] is False
+
+
+@pytest.mark.parametrize("invalid_id", ["", "missing", "other_tournament_registration"])
+def test_broadcast_preview_rejects_unknown_or_other_tournament_selection(monkeypatch, invalid_id):
+    tables = tournament_tables()
+    tables["tournament_registrations"].append({
+        **tables["tournament_registrations"][0], "id": "other_tournament_registration", "tournament_id": "tour_2",
+    })
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    with pytest.raises(ValueError, match="selected participant is no longer available"):
+        build_admin_tournament_broadcast_preview(
+            FakeSupabase(tables), club_id="club", tournament_id="tour_1",
+            registration_ids=["registration_1", invalid_id],
+        )
+
+
+def test_broadcast_selection_retains_cancelled_opt_in_and_filters(monkeypatch):
+    tables = tournament_tables()
+    tables["tournament_registrations"][0]["status"] = "cancelled"
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    options = dict(club_id="club", tournament_id="tour_1", registration_ids=["registration_1"], include_cancelled=True)
+    result = build_admin_tournament_broadcast_preview(FakeSupabase(tables), **options)
+    assert result["recipient_count"] == 1
+    result = build_admin_tournament_broadcast_preview(FakeSupabase(tables), **options, search="no match")
+    assert result["recipient_count"] == 0
+
+
 def test_registration_reporting_rejects_cross_club_tournament(monkeypatch):
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
 

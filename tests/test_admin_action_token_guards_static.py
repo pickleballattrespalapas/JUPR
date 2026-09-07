@@ -146,12 +146,18 @@ def test_modified_admin_actions_are_scoped_to_the_current_access_token() -> None
         if relative.endswith("TournamentLivePanel.tsx"):
             assert "const actionScope = `${accessToken}\\u0000${selectedTournamentId}\\u0000${selectedDrawId}`;" in source
             assert "const actionRequest = useLatestRequestGuard(actionScope);" in source
+        elif relative.endswith("RegistrationManagementPanel.tsx"):
+            assert 'const sessionScope = `${accessToken}\\u0000${apiBase}\\u0000${clubId}\\u0000${initialTournamentId}`;' in source
+            assert "const actionRequest = useLatestRequestGuard(sessionScope);" in source
+            assert "JSON.stringify([accessToken, apiBase, clubId, initialTournamentId, selectedTournamentId, selectedRegistrationIds, includeCancelled, broadcastSubject, broadcastMessage])" in source
+            assert "useLatestRequestGuard(previewScope, clearBroadcastPreview)" in source
         else:
             assert "const actionRequest = useLatestRequestGuard(accessToken" in source, relative
         for action_name in action_names:
             body = _async_function_body(source, action_name)
-            assert "actionRequest.begin()" in body, f"{relative}:{action_name}"
-            assert "actionRequest.isCurrent(" in body, f"{relative}:{action_name}"
+            guard = "previewRequest" if relative.endswith("RegistrationManagementPanel.tsx") and action_name == "previewBroadcast" else "actionRequest"
+            assert f"{guard}.begin()" in body, f"{relative}:{action_name}"
+            assert f"{guard}.isCurrent(" in body, f"{relative}:{action_name}"
 
 
 def test_existing_shared_action_guards_remain_token_scoped() -> None:

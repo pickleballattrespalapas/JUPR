@@ -465,6 +465,7 @@ export type AdminTournamentBroadcastPreviewResponse = {
   mode: "tournament_broadcast_preview";
   dry_run: true;
   send_available: false;
+  selected_registration_ids?: string[] | null;
   recipient_count: number;
   recipients: AdminTournamentBroadcastRecipient[];
   recipient_csv: string;

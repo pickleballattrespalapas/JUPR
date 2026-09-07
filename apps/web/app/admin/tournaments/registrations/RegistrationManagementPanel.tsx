@@ -7,6 +7,7 @@ import type {
   AdminTournamentBroadcastPreviewResponse,
   AdminTournamentDetailResponse,
   AdminTournamentListResponse,
+  AdminTournamentRegistration,
   AdminTournamentSelection,
   AdminTournamentStatusResponse
 } from "@/lib/adminTournamentApi";
@@ -49,6 +50,12 @@ function dayLabel(row: Record<string, unknown>): string {
   return String(row.label || row.event_date || row.date || row.id || "Day");
 }
 
+function emailExclusion(registration: AdminTournamentRegistration, includeCancelled: boolean): string {
+  if (!registration.email?.trim()) return "No email address";
+  if (registration.registration_status === "cancelled" && !includeCancelled) return "Cancelled registration";
+  return "";
+}
+
 function downloadText(filename: string, content: string, mime = "text/csv;charset=utf-8"): void {
   const url = URL.createObjectURL(new Blob([content], { type: mime }));
   const anchor = document.createElement("a");
@@ -68,9 +75,10 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
   const [importHandoff, setImportHandoff] = useState<ImportHandoff | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const listRequest = useLatestRequestGuard(accessToken, clearProtectedRegistrationState);
-  const detailRequest = useLatestRequestGuard(accessToken);
-  const actionRequest = useLatestRequestGuard(accessToken);
+  const sessionScope = `${accessToken}\u0000${apiBase}\u0000${clubId}\u0000${initialTournamentId}`;
+  const listRequest = useLatestRequestGuard(sessionScope, clearProtectedRegistrationState);
+  const detailRequest = useLatestRequestGuard(sessionScope);
+  const actionRequest = useLatestRequestGuard(sessionScope);
 
   const [registrationStatus, setRegistrationStatus] = useState("");
   const [paymentStatus, setPaymentStatus] = useState("");
@@ -82,7 +90,26 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
   const [broadcastSubject, setBroadcastSubject] = useState("");
   const [broadcastMessage, setBroadcastMessage] = useState("");
   const [includeCancelled, setIncludeCancelled] = useState(false);
+  const [selectedRegistrationIds, setSelectedRegistrationIds] = useState<string[]>([]);
   const [broadcastPreview, setBroadcastPreview] = useState<AdminTournamentBroadcastPreviewResponse | null>(null);
+  const [broadcastPreviewScope, setBroadcastPreviewScope] = useState("");
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const previewScope = JSON.stringify([accessToken, apiBase, clubId, initialTournamentId, selectedTournamentId, selectedRegistrationIds, includeCancelled, broadcastSubject, broadcastMessage]);
+  const previewRequest = useLatestRequestGuard(previewScope, clearBroadcastPreview);
+  const currentPreview = broadcastPreviewScope === previewScope ? broadcastPreview : null;
+
+  function clearBroadcastPreview() {
+    setBroadcastPreview(null);
+    setBroadcastPreviewScope("");
+    setPreviewBusy(false);
+    setMessage(null);
+  }
+
+  function clearParticipantSelection() {
+    previewRequest.invalidate();
+    clearBroadcastPreview();
+    setSelectedRegistrationIds([]);
+  }
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
     if (!apiBase) throw new Error("API base URL is not configured.");
@@ -101,12 +128,14 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
     setBusy(false); setMessage(null);
     setTournaments([]); setSelectedTournamentId(initialTournamentId); setDetail(null); setImportHandoff(null);
     setBroadcastSubject(""); setBroadcastMessage(""); setBroadcastPreview(null);
+    clearParticipantSelection();
   }
 
   async function loadTournaments(): Promise<void> {
-    const selectedBeforeRefresh = selectedTournamentId;
+    const selectedBeforeRefresh = initialTournamentId;
     const generation = listRequest.begin();
     detailRequest.invalidate();
+    clearParticipantSelection();
     setBusy(true);
     setMessage(null);
     setDetail(null);
@@ -130,6 +159,7 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
 
   async function loadDetail(tournamentId: string, preserveFilters = false): Promise<void> {
     const generation = detailRequest.begin();
+    clearParticipantSelection();
     setSelectedTournamentId(tournamentId);
     setDetail(null);
     setImportHandoff(null);
@@ -194,6 +224,32 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
     });
   }, [detail, eventOptionId, partnerMode, paymentStatus, registrationDayId, registrationStatus, search, selectionByRegistration]);
 
+  const selectedIds = new Set(selectedRegistrationIds);
+  const selectedRegistrations = (detail?.registrations || []).filter((row) => selectedIds.has(row.id) && !emailExclusion(row, includeCancelled));
+  const selectableFiltered = filteredRegistrations.filter((row) => !emailExclusion(row, includeCancelled));
+  const selectedEmails = [...new Set(selectedRegistrations.map((row) => row.email!.trim().toLowerCase()))].sort();
+  const visibleIds = new Set(filteredRegistrations.map((row) => row.id));
+  const hiddenSelectedCount = selectedRegistrations.filter((row) => !visibleIds.has(row.id)).length;
+
+  function selectParticipant(id: string, checked: boolean) {
+    setMessage(null);
+    setSelectedRegistrationIds((current) => checked ? [...new Set([...current, id])] : current.filter((value) => value !== id));
+  }
+
+  function selectAllFiltered() {
+    setMessage(null);
+    setSelectedRegistrationIds((current) => [...new Set([...current, ...selectableFiltered.map((row) => row.id)])]);
+  }
+
+  function changeIncludeCancelled(checked: boolean) {
+    setMessage(null);
+    setIncludeCancelled(checked);
+    if (!checked) {
+      const cancelledIds = new Set((detail?.registrations || []).filter((row) => row.registration_status === "cancelled").map((row) => row.id));
+      setSelectedRegistrationIds((current) => current.filter((id) => !cancelledIds.has(id)));
+    }
+  }
+
   function filterQuery(): URLSearchParams {
     const query = new URLSearchParams();
     if (registrationStatus) query.set("registration_status", registrationStatus);
@@ -233,10 +289,13 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
   }
 
   async function previewBroadcast(): Promise<void> {
-    if (!detail) return;
-    const generation = actionRequest.begin();
+    if (!detail || !selectedRegistrations.length) return;
+    const generation = previewRequest.begin();
     const requestedTournamentId = detail.tournament.id;
-    setBusy(true);
+    const requestedIds = selectedRegistrations.map((row) => row.id).sort();
+    const requestedScope = previewScope;
+    setPreviewBusy(true);
+    setBroadcastPreview(null);
     setMessage(null);
     try {
       const payload = await requestJson<AdminTournamentBroadcastPreviewResponse>(
@@ -247,26 +306,28 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
             subject: broadcastSubject,
             message: broadcastMessage,
             include_cancelled: includeCancelled,
-            registration_status: registrationStatus || null,
-            payment_status: paymentStatus || null,
-            partner_mode: partnerMode || null,
-            registration_day_id: registrationDayId || null,
-            event_option_id: eventOptionId || null,
-            search: search.trim() || null
+            registration_ids: requestedIds
           })
         }
       );
-      if (!actionRequest.isCurrent(generation)) return;
+      if (!previewRequest.isCurrent(generation)) return;
+      if (JSON.stringify(payload.selected_registration_ids?.slice().sort()) !== JSON.stringify(requestedIds)) {
+        throw new Error("Participant selection could not be verified. Refresh the page and preview again.");
+      }
+      if (JSON.stringify(payload.recipients.map((row) => row.email.trim().toLowerCase()).sort()) !== JSON.stringify(selectedEmails)) {
+        throw new Error("Participant email details changed. Refresh the participants and review your selection.");
+      }
       setBroadcastPreview(payload);
+      setBroadcastPreviewScope(requestedScope);
       setMessage(`Previewed ${payload.recipient_count} unique recipient(s). No email was sent.`);
     } catch (error) {
-      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to preview broadcast recipients.");
+      if (previewRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to preview broadcast recipients.");
     } finally {
-      if (actionRequest.isCurrent(generation)) setBusy(false);
+      if (previewRequest.isCurrent(generation)) setPreviewBusy(false);
     }
   }
 
-  useAuthenticatedAutoLoad(status.enabled ? accessToken : "", loadTournaments);
+  useAuthenticatedAutoLoad(status.enabled ? accessToken : "", loadTournaments, `${apiBase}\u0000${clubId}\u0000${initialTournamentId}`);
 
   if (!status.enabled) {
     return <article style={cardStyle}><h2>Tournament Admin is disabled</h2><p>{status.warnings?.[0]}</p></article>;
@@ -276,7 +337,7 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
     <section style={{ display: "grid", gap: "1rem" }}>
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Registration reporting session</h2>
-        <p style={{ color: "#475569" }}>Tournament options load automatically after the admin session is ready. CSV downloads and recipient previews use the same filters shown below.</p>
+        <p style={{ color: "#475569" }}>Find participants using the filters, then select who to include in your email preview.</p>
         <div style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: accessToken ? "#f0fdf4" : "#fffbeb", marginBottom: "0.75rem" }}>
           <strong>{accessToken ? `Admin session: ${adminSessionLabel(session)}` : "Admin session required"}</strong>
           <p style={{ margin: "0.35rem 0 0", color: accessToken ? "#166534" : "#92400e" }}>
@@ -308,39 +369,68 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
           </article>
           <article style={cardStyle}>
             <h2 style={{ marginTop: 0 }}>Filters and CSV export</h2>
-            <p style={{ color: "#475569" }}>Filters apply to the table, authenticated CSV export, and broadcast recipient preview.</p>
+            <p style={{ color: "#475569" }}>Filters narrow the participant list and registration CSV. Your email selection stays selected as you search.</p>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "0.75rem" }}>
               <label><strong>Status</strong><br /><select value={registrationStatus} onChange={(event) => setRegistrationStatus(event.target.value)} style={inputStyle}>{REGISTRATION_STATUS_OPTIONS.map((value) => <option key={value || "all"} value={value}>{value || "All"}</option>)}</select></label>
               <label><strong>Payment</strong><br /><select value={paymentStatus} onChange={(event) => setPaymentStatus(event.target.value)} style={inputStyle}>{PAYMENT_STATUS_OPTIONS.map((value) => <option key={value || "all"} value={value}>{value || "All"}</option>)}</select></label>
               <label><strong>Partner mode</strong><br /><select value={partnerMode} onChange={(event) => setPartnerMode(event.target.value)} style={inputStyle}>{PARTNER_MODE_OPTIONS.map((value) => <option key={value || "all"} value={value}>{value || "All"}</option>)}</select></label>
               <label><strong>Day</strong><br /><select value={registrationDayId} onChange={(event) => setRegistrationDayId(event.target.value)} style={inputStyle}><option value="">All</option>{detail.days.map((day) => <option key={String(day.id)} value={String(day.id)}>{dayLabel(day)}</option>)}</select></label>
               <label><strong>Division</strong><br /><select value={eventOptionId} onChange={(event) => setEventOptionId(event.target.value)} style={inputStyle}><option value="">All</option>{detail.event_options.map((option) => <option key={String(option.id)} value={String(option.id)}>{eventLabel(option)}</option>)}</select></label>
-              <label><strong>Search</strong><br /><input value={search} onChange={(event) => setSearch(event.target.value)} style={inputStyle} /></label>
+              <label><strong>Search</strong><br /><input type="search" placeholder="Name or email" value={search} onChange={(event) => setSearch(event.target.value)} style={inputStyle} /></label>
             </div>
             <p><button type="button" onClick={exportCsv} disabled={busy} style={buttonStyle}>Download filtered CSV</button></p>
           </article>
 
           <article style={cardStyle}>
+            <h2 style={{ marginTop: 0 }}>Choose participants</h2>
+            <p>Select one person, several people, or everyone matching the filters above.</p>
+            <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", minHeight: "44px" }}><input type="checkbox" checked={includeCancelled} onChange={(event) => changeIncludeCancelled(event.target.checked)} disabled={busy} /> Include cancelled registrations</label>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", margin: "0.75rem 0" }}>
+              <button type="button" onClick={selectAllFiltered} disabled={busy || !selectableFiltered.some((row) => !selectedIds.has(row.id))} style={buttonStyle}>Select all filtered ({selectableFiltered.length})</button>
+              <button type="button" onClick={() => { clearParticipantSelection(); setMessage(null); }} disabled={busy || !selectedRegistrationIds.length} style={ghostButtonStyle}>Clear selection</button>
+            </div>
+            <p role="status" aria-live="polite"><strong>{selectedRegistrations.length} participant{selectedRegistrations.length === 1 ? "" : "s"} selected · {selectedEmails.length} email recipient{selectedEmails.length === 1 ? "" : "s"}</strong>{hiddenSelectedCount ? <><br />{hiddenSelectedCount} selected participant{hiddenSelectedCount === 1 ? " is" : "s are"} outside the current filters.</> : null}</p>
+            {selectedRegistrations.length ? <details style={{ marginBottom: "0.75rem" }}>
+              <summary>Review selected participants ({selectedRegistrations.length})</summary>
+              <ul style={{ paddingLeft: "1.25rem" }}>{selectedRegistrations.map((row) => <li key={row.id} style={{ overflowWrap: "anywhere", marginTop: "0.5rem" }}>
+                {row.display_name} · {row.email} <button type="button" aria-label={`Remove ${row.display_name} from selection`} onClick={() => selectParticipant(row.id, false)} disabled={busy} style={{ ...ghostButtonStyle, minHeight: "44px" }}>Remove</button>
+              </li>)}</ul>
+            </details> : <p>Choose at least one participant to preview an email.</p>}
+            <fieldset style={{ margin: 0, padding: "0.5rem", border: "1px solid #e2e8f0", borderRadius: "8px", minWidth: 0 }} disabled={busy}>
+              <legend>Participants matching your filters ({filteredRegistrations.length})</legend>
+              <div style={{ maxHeight: "360px", overflowY: "auto" }}>
+                {filteredRegistrations.map((row) => {
+                  const exclusion = emailExclusion(row, includeCancelled);
+                  return <label key={row.id} style={{ display: "flex", alignItems: "center", gap: "0.75rem", minHeight: "56px", padding: "0.5rem", borderBottom: "1px solid #e2e8f0", background: selectedIds.has(row.id) ? "#eff6ff" : "white" }}>
+                    <input type="checkbox" aria-label={`Select ${row.display_name} (${row.email || "no email address"})`} checked={selectedIds.has(row.id) && !exclusion} disabled={Boolean(exclusion)} onChange={(event) => selectParticipant(row.id, event.target.checked)} style={{ width: "20px", height: "20px", flexShrink: 0 }} />
+                    <span style={{ minWidth: 0, overflowWrap: "anywhere" }}><strong>{row.display_name}</strong><br /><span style={{ color: "#475569" }}>{row.email || "No email address"}</span>{exclusion ? <><br /><small>{exclusion}</small></> : null}</span>
+                  </label>;
+                })}
+                {!filteredRegistrations.length ? <p>No participants match these filters.</p> : null}
+              </div>
+            </fieldset>
+          </article>
+
+          <article style={cardStyle}>
             <h2 style={{ marginTop: 0 }}>Broadcast preview — no send</h2>
-            <p style={{ color: "#475569" }}>Build a deduplicated recipient list, recipient CSV, and one personalized message preview. This reporting surface has no send action.</p>
+            <p style={{ color: "#475569" }}>Preview your message for the selected participants and download their email addresses. Shared email addresses appear once. This page does not send email.</p>
             <label><strong>Subject</strong><br /><input value={broadcastSubject} onChange={(event) => setBroadcastSubject(event.target.value)} style={inputStyle} /></label>
             <label style={{ display: "block", marginTop: "0.75rem" }}><strong>Message</strong><br /><textarea value={broadcastMessage} onChange={(event) => setBroadcastMessage(event.target.value)} rows={6} style={inputStyle} /></label>
-            <label style={{ display: "flex", gap: "0.5rem", marginTop: "0.75rem" }}><input type="checkbox" checked={includeCancelled} onChange={(event) => setIncludeCancelled(event.target.checked)} /> Include cancelled registrations</label>
-            <p><button type="button" onClick={previewBroadcast} disabled={busy || !broadcastSubject.trim() || !broadcastMessage.trim()} style={buttonStyle}>Preview recipients</button></p>
-            {broadcastPreview ? (
+            <p><button type="button" onClick={previewBroadcast} disabled={busy || previewBusy || !selectedRegistrations.length || !broadcastSubject.trim() || !broadcastMessage.trim()} style={buttonStyle}>{previewBusy ? "Building preview…" : "Preview recipients"}</button></p>
+            {currentPreview ? (
               <div style={{ background: "#f8fafc", borderRadius: "10px", padding: "0.75rem" }}>
-                <strong>{broadcastPreview.recipient_count} unique recipient(s)</strong>
-                <p><button type="button" onClick={() => downloadText(`${detail.tournament.id}-broadcast-recipients.csv`, broadcastPreview.recipient_csv)} style={ghostButtonStyle}>Download recipient CSV</button></p>
-                {broadcastPreview.recipients.length ? (
+                <strong>{currentPreview.recipient_count} unique recipient(s)</strong>
+                <p><button type="button" onClick={() => downloadText(`${detail.tournament.id}-broadcast-recipients.csv`, currentPreview.recipient_csv)} style={ghostButtonStyle}>Download recipient CSV</button></p>
+                {currentPreview.recipients.length ? (
                   <div style={{ overflowX: "auto" }}>
                     <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "620px" }}>
                       <thead><tr><th style={tableHeaderStyle}>Recipient</th><th style={tableHeaderStyle}>Email</th><th style={tableHeaderStyle}>Status</th><th style={tableHeaderStyle}>Payment</th></tr></thead>
-                      <tbody>{broadcastPreview.recipients.map((recipient) => <tr key={recipient.email}><td style={tableCellStyle}>{recipient.name}</td><td style={tableCellStyle}>{recipient.email}</td><td style={tableCellStyle}>{recipient.registration_status}</td><td style={tableCellStyle}>{recipient.payment_status}</td></tr>)}</tbody>
+                      <tbody>{currentPreview.recipients.map((recipient) => <tr key={recipient.email}><td style={tableCellStyle}>{recipient.name}</td><td style={tableCellStyle}>{recipient.email}</td><td style={tableCellStyle}>{recipient.registration_status}</td><td style={tableCellStyle}>{recipient.payment_status}</td></tr>)}</tbody>
                     </table>
                   </div>
                 ) : <p>No recipients matched the current filters.</p>}
                 <h3>Personalized message sample</h3>
-                <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{broadcastPreview.preview.text}</pre>
+                <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{currentPreview.preview.text}</pre>
               </div>
             ) : null}
           </article>
