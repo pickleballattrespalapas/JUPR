@@ -59,10 +59,11 @@ async function main() {
       }
       const payload = {
         selected_registration_ids: legacyApi ? undefined : body.registration_ids,
+        include_registration_events: legacyApi ? undefined : body.include_registration_events,
         recipient_count: emails.size,
         recipients: [...emails].map(([email, row]) => ({ name: row.display_name, email })),
         recipient_csv: [...emails.keys()].join("\n"),
-        preview: { text: `Preview: ${body.message}`, html: `<html><body><h1>Email</h1><p>Presented by Homes and Land</p><p>${body.message}</p><h2>Supporting sponsors</h2></body></html>` }
+        preview: { to_email: body.preview_recipient_email || [...emails.keys()][0], to_name: "Selected participant", text: `Preview: ${body.message}`, html: `<html><body><h1>Email</h1><p>Presented by Homes and Land</p><p>${body.message}</p>${body.include_registration_events ? `<h2>Your registration events</h2><p>Events for ${body.preview_recipient_email || [...emails.keys()][0]}</p>` : ""}<h2>Supporting sponsors</h2></body></html>` }
       };
       if (deferNext) { deferNext = false; return new Promise(resolve => { resolvePreview = () => resolve(response(payload)); }); }
       return response(payload);
@@ -80,6 +81,7 @@ async function main() {
     const changeSearch = async value => act(async () => root.findAllByType("input").find(i => i.props.type === "search").props.onChange({ target: { value } }));
     const select = async (name, checked = true) => act(async () => checkbox(name).props.onChange({ target: { checked } }));
     const setContent = async (label, value) => act(async () => root.findAllByType("label").find(l => text(l).startsWith(label)).findByType(label === "Message" ? "textarea" : "input").props.onChange({ target: { value } }));
+    const toggleEvents = async checked => act(async () => root.findAllByType("label").find(l => text(l) === " Include registration events").findByType("input").props.onChange({ target: { checked } }));
     const toggleCancelled = async checked => act(async () => root.findAllByType("label").find(l => text(l) === " Include cancelled registrations").findByType("input").props.onChange({ target: { checked } }));
 
     assert.equal(button("Preview recipients").props.disabled, true);
@@ -101,6 +103,12 @@ async function main() {
     assert.match(emailFrame.props.srcDoc, /Presented by Homes and Land/);
     assert.match(emailFrame.props.srcDoc, /default-src 'none'/);
     assert.match(emailFrame.props.srcDoc, /img-src data:/);
+    assert.equal(requests.at(-1).include_registration_events, false);
+    await toggleEvents(true);
+    assert.equal(button("Download recipient CSV"), undefined, "Event option invalidates the previous review");
+    await act(async () => button("Preview recipients").props.onClick());
+    assert.equal(requests.at(-1).include_registration_events, true);
+    assert.match(root.findByProps({ title: "Tournament email preview" }).props.srcDoc, /Events for alex@example.com/);
 
     await changeSearch("beth");
     assert.match(text(root), /1 selected participant is outside the current filters/);
@@ -108,6 +116,11 @@ async function main() {
     assert.equal(button("Download recipient CSV"), undefined, "Changing selection invalidates the prior preview");
     await act(async () => button("Preview recipients").props.onClick());
     assert.deepEqual(requests.at(-1).registration_ids, ["alex", "beth"], "Bulk select adds visible participants and preserves earlier selections");
+    await act(async () => root.findAllByType("label").find(l => text(l).startsWith("Preview for")).findByType("select").props.onChange({ target: { value: "beth@example.com" } }));
+    assert.equal(requests.at(-1).preview_recipient_email, "beth@example.com");
+    assert.deepEqual(requests.at(-1).registration_ids, ["alex", "beth"], "Preview selection does not change the audience");
+    assert.match(root.findByProps({ title: "Tournament email preview" }).props.srcDoc, /Events for beth@example.com/);
+    assert.doesNotMatch(root.findByProps({ title: "Tournament email preview" }).props.srcDoc, /Events for alex@example.com/);
     await act(async () => root.findByProps({ "aria-label": "Remove Alex from selection" }).props.onClick());
     assert.match(text(root), /1 participant selected · 1 email recipient/);
     await changeSearch("");
@@ -123,6 +136,11 @@ async function main() {
     assert.equal(button("Preview recipients").props.disabled, true);
 
     await select("Alex");
+    deferNext = true;
+    await act(async () => { void button("Preview recipients").props.onClick(); });
+    await toggleEvents(false);
+    await act(async () => resolvePreview());
+    assert.equal(button("Download recipient CSV"), undefined, "A late response cannot restore events after the option changes");
     deferNext = true;
     await act(async () => { void button("Preview recipients").props.onClick(); });
     await select("Beth");

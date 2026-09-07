@@ -91,11 +91,12 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
   const [broadcastSubject, setBroadcastSubject] = useState("");
   const [broadcastMessage, setBroadcastMessage] = useState("");
   const [includeCancelled, setIncludeCancelled] = useState(false);
+  const [includeRegistrationEvents, setIncludeRegistrationEvents] = useState(false);
   const [selectedRegistrationIds, setSelectedRegistrationIds] = useState<string[]>([]);
   const [broadcastPreview, setBroadcastPreview] = useState<AdminTournamentBroadcastPreviewResponse | null>(null);
   const [broadcastPreviewScope, setBroadcastPreviewScope] = useState("");
   const [previewBusy, setPreviewBusy] = useState(false);
-  const previewScope = JSON.stringify([accessToken, apiBase, clubId, initialTournamentId, selectedTournamentId, selectedRegistrationIds, includeCancelled, broadcastSubject, broadcastMessage]);
+  const previewScope = JSON.stringify([accessToken, apiBase, clubId, initialTournamentId, selectedTournamentId, selectedRegistrationIds, includeCancelled, includeRegistrationEvents, broadcastSubject, broadcastMessage]);
   const previewRequest = useLatestRequestGuard(previewScope, clearBroadcastPreview);
   const currentPreview = broadcastPreviewScope === previewScope ? broadcastPreview : null;
 
@@ -129,6 +130,7 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
     setBusy(false); setMessage(null);
     setTournaments([]); setSelectedTournamentId(initialTournamentId); setDetail(null); setImportHandoff(null);
     setBroadcastSubject(""); setBroadcastMessage(""); setBroadcastPreview(null);
+    setIncludeRegistrationEvents(false);
     clearParticipantSelection();
   }
 
@@ -289,7 +291,7 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
     }
   }
 
-  async function previewBroadcast(): Promise<void> {
+  async function previewBroadcast(previewRecipientEmail?: string): Promise<void> {
     if (!detail || !selectedRegistrations.length) return;
     const generation = previewRequest.begin();
     const requestedTournamentId = detail.tournament.id;
@@ -307,11 +309,19 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
             subject: broadcastSubject,
             message: broadcastMessage,
             include_cancelled: includeCancelled,
+            include_registration_events: includeRegistrationEvents,
+            preview_recipient_email: previewRecipientEmail,
             registration_ids: requestedIds
           })
         }
       );
       if (!previewRequest.isCurrent(generation)) return;
+      if (includeRegistrationEvents && payload.include_registration_events !== true) {
+        throw new Error("Registration events could not be included. Refresh the page and preview again.");
+      }
+      if (previewRecipientEmail && payload.preview.to_email !== previewRecipientEmail) {
+        throw new Error("The requested recipient preview could not be verified. Preview again.");
+      }
       if (JSON.stringify(payload.selected_registration_ids?.slice().sort()) !== JSON.stringify(requestedIds)) {
         throw new Error("Participant selection could not be verified. Refresh the page and preview again.");
       }
@@ -418,7 +428,9 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
             <p style={{ color: "#475569" }}>Published tournament sponsors are included automatically.</p>
             <label><strong>Subject</strong><br /><input value={broadcastSubject} disabled={busy} maxLength={200} onChange={(event) => setBroadcastSubject(event.target.value)} style={inputStyle} /></label>
             <label style={{ display: "block", marginTop: "0.75rem" }}><strong>Message</strong><br /><textarea value={broadcastMessage} disabled={busy} maxLength={10000} onChange={(event) => setBroadcastMessage(event.target.value)} rows={6} style={inputStyle} /></label>
-            <p><button type="button" onClick={previewBroadcast} disabled={busy || previewBusy || !selectedRegistrations.length || !broadcastSubject.trim() || !broadcastMessage.trim()} style={buttonStyle}>{previewBusy ? "Building preview…" : "Preview recipients"}</button></p>
+            <label style={{ display: "block", marginTop: "0.75rem" }}><input type="checkbox" checked={includeRegistrationEvents} disabled={busy} onChange={(event) => setIncludeRegistrationEvents(event.target.checked)} /> Include registration events</label>
+            <p style={{ color: "#475569", marginTop: "0.35rem" }}>Add each selected player’s events, dates, and partner details below your message. Players sharing an email address are listed separately in one email.</p>
+            <p><button type="button" onClick={() => previewBroadcast()} disabled={busy || previewBusy || !selectedRegistrations.length || !broadcastSubject.trim() || !broadcastMessage.trim()} style={buttonStyle}>{previewBusy ? "Building preview…" : "Preview recipients"}</button></p>
             {currentPreview ? (
               <div style={{ background: "#f8fafc", borderRadius: "10px", padding: "0.75rem" }}>
                 <strong>{currentPreview.recipient_count} unique recipient(s)</strong>
@@ -432,6 +444,11 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
                   </div>
                 ) : <p>No recipients matched the current filters.</p>}
                 <h3>Message preview</h3>
+                {currentPreview.recipient_count > 1 ? <label style={{ display: "block", marginBottom: "0.75rem" }}>Preview for
+                  <select value={currentPreview.preview.to_email} disabled={busy || previewBusy} onChange={(event) => void previewBroadcast(event.target.value)} style={inputStyle}>
+                    {currentPreview.recipients.map((recipient) => <option key={recipient.email} value={recipient.email}>{recipient.name} · {recipient.email}</option>)}
+                  </select>
+                </label> : <p>To: {currentPreview.preview.to_name} · {currentPreview.preview.to_email}</p>}
                 <iframe title="Tournament email preview" sandbox="" referrerPolicy="no-referrer"
                   srcDoc={currentPreview.preview.html.replace("<html>", '<html><head><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data:; style-src \'unsafe-inline\'; base-uri \'none\'; form-action \'none\'"></head>')}
                   style={{ width: "100%", height: "560px", border: "1px solid #e2e8f0", borderRadius: "8px", background: "white" }} />
@@ -440,7 +457,7 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
             ) : null}
             <TournamentEmailDelivery clubId={clubId} tournamentId={detail.tournament.id} accessToken={accessToken}
               apiBase={apiBase} preview={currentPreview} previewScope={previewScope} subject={broadcastSubject}
-              message={broadcastMessage} includeCancelled={includeCancelled} busy={busy} onBusy={setBusy} requestJson={requestJson} />
+              message={broadcastMessage} includeCancelled={includeCancelled} includeRegistrationEvents={includeRegistrationEvents} busy={busy || previewBusy} onBusy={setBusy} requestJson={requestJson} />
           </article>
 
           <article style={cardStyle}>

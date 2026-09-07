@@ -16,6 +16,7 @@ type Props = {
   subject: string;
   message: string;
   includeCancelled: boolean;
+  includeRegistrationEvents?: boolean;
   busy: boolean;
   onBusy: (value: boolean) => void;
   requestJson: <T>(path: string, options?: RequestInit) => Promise<T>;
@@ -33,7 +34,7 @@ function outcome(result: TournamentBroadcast): string {
 }
 
 export default function TournamentEmailDelivery(props: Props) {
-  const { clubId, tournamentId, accessToken, apiBase, preview, previewScope, subject, message, includeCancelled, busy, onBusy, requestJson } = props;
+  const { clubId, tournamentId, accessToken, apiBase, preview, previewScope, subject, message, includeCancelled, includeRegistrationEvents = false, busy, onBusy, requestJson } = props;
   const [history, setHistory] = useState<TournamentBroadcastSummary[]>([]);
   const [active, setActive] = useState<TournamentBroadcast | null>(null);
   const [sending, setSending] = useState(false);
@@ -96,7 +97,7 @@ export default function TournamentEmailDelivery(props: Props) {
       let result = resumeKey ? await readSaved(key) : await requestJson<TournamentBroadcast>(path, {
         method: "POST", body: JSON.stringify({ operation_key: key, preview_fingerprint: fingerprint,
           registration_ids: preview!.selected_registration_ids, subject, message,
-          include_cancelled: includeCancelled, confirmation_text: confirmationText })
+          include_cancelled: includeCancelled, include_registration_events: includeRegistrationEvents, confirmation_text: confirmationText })
       });
       if (!isCurrent()) throw new Error("The admin session changed.");
       setActive(result);
@@ -145,7 +146,7 @@ export default function TournamentEmailDelivery(props: Props) {
       <ConfirmAction
         triggerLabel={preview.delivery_mode === "live" ? `Send email to ${preview.recipient_count} recipient${preview.recipient_count === 1 ? "" : "s"}` : "Test email sending"}
         title={preview.delivery_mode === "live" ? "Send this email?" : "Test this email?"}
-        description={`Send “${preview.preview.subject}” to ${preview.recipient_count} selected email recipient${preview.recipient_count === 1 ? "" : "s"}. Each person receives a separate email.`}
+        description={`Send “${preview.preview.subject}” to ${preview.recipient_count} selected email recipient${preview.recipient_count === 1 ? "" : "s"}. Each person receives a separate email.${includeRegistrationEvents ? " Each email includes that recipient’s registration events." : ""}`}
         preview={<ul>{preview.recipients.map(row => <li key={row.email}>{row.name} · {row.email}</li>)}</ul>}
         confirmLabel={preview.delivery_mode === "live" ? "Yes, send email" : "Yes, run test"}
         workingLabel="Sending email…" confirmationText={CONFIRM_SEND}
@@ -156,7 +157,7 @@ export default function TournamentEmailDelivery(props: Props) {
     {active ? <section aria-label="Email results" style={{ marginTop: "1rem", padding: "0.75rem", background: "#f8fafc", borderRadius: "10px" }}>
       <h3 style={{ marginTop: 0 }}>{active.subject}</h3>
       <p role="status" aria-live="polite">{sending ? "Sending… " : ""}{outcome(active)}</p>
-      <details><summary>View saved message</summary><p style={{ whiteSpace: "pre-wrap" }}>{active.message}</p></details>
+      <details><summary>View saved message</summary><p style={{ whiteSpace: "pre-wrap" }}>{active.message}</p>{active.include_registration_events ? <p>Each email includes that recipient’s registration events.</p> : null}</details>
       <ul style={{ paddingLeft: "1.25rem" }}>{active.recipients.map(row => <li key={row.email} style={{ marginTop: "0.5rem", overflowWrap: "anywhere" }}>
         <strong>{row.name}</strong> · {row.email} · <strong>{labels[row.status] || "Check delivery"}</strong>
         {row.status === "uncertain" ? <p>{row.detail}</p> : null}
