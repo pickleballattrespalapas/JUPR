@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
+import json
 from typing import Any
 
+from jupr_app.config import EMAIL_MODE_DRY_RUN, get_email_mode
+from jupr_app.domain.notifications.smtp_mailer import get_smtp_config_status
+from jupr_app.services.staging_write_guard import staging_communications_mutations_enabled
 from jupr_app.domain.notifications.tournament_registrant_broadcast_email import (
     build_tournament_registrant_broadcast_email_html,
     build_tournament_registrant_broadcast_email_text,
@@ -48,6 +53,17 @@ MAX_EXPORT_REGISTRATIONS = 2000
 MAX_EXPORT_SELECTIONS = 5000
 MAX_TOURNAMENT_DAYS = 100
 MAX_TOURNAMENT_EVENTS = 500
+
+
+def broadcast_delivery_settings() -> dict[str, Any]:
+    try:
+        mode = get_email_mode()
+        smtp = get_smtp_config_status()
+        enabled = staging_communications_mutations_enabled() and (mode == EMAIL_MODE_DRY_RUN or smtp["ok"])
+        return {"enabled": enabled, "delivery_mode": mode,
+                "sender": {key: smtp[key] for key in ("from_email", "from_name", "reply_to")}}
+    except (ValueError, RuntimeError):
+        return {"enabled": False, "delivery_mode": "unavailable", "sender": {}}
 
 
 def _execute_complete_rows(
@@ -408,6 +424,8 @@ def build_admin_tournament_broadcast_preview(
     )
     clean_subject = _clean_text(subject, limit=200)
     clean_message = str(message or "").replace("\x00", "").strip()[:10000]
+    if "\r" in clean_subject or "\n" in clean_subject:
+        raise ValueError("The email subject must be a single line.")
     preview_recipient = (
         recipients[0]
         if recipients
@@ -417,11 +435,25 @@ def build_admin_tournament_broadcast_preview(
         tournament_name=tournament_name,
         subject=clean_subject,
     )
+    delivery = broadcast_delivery_settings()
+    reviewed_scope = {"tournament_id": clean_tournament_id, "club_id": str(club_id),
+        "registration_ids": sorted(selected_ids) if selected_ids is not None else None,
+        "include_cancelled": include_cancelled, "recipients": recipients,
+        "subject": final_subject, "message": clean_message,
+        "delivery_mode": delivery["delivery_mode"], "sender": delivery["sender"]}
+    fingerprint = hashlib.sha256(json.dumps(reviewed_scope, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    send_available = bool(delivery["enabled"] and selected_ids and recipients and clean_subject and clean_message)
     return {
         "ok": True,
         "mode": "tournament_broadcast_preview",
         "dry_run": True,
-        "send_available": False,
+        "send_available": send_available,
+        "send_unavailable_reason": None if send_available else (
+            "Email sending is unavailable in this environment." if not delivery["enabled"]
+            else "Select participants and enter a subject and message, then preview again."),
+        "preview_fingerprint": fingerprint,
+        "delivery_mode": delivery["delivery_mode"],
+        "sender": delivery["sender"],
         "selected_registration_ids": sorted(selected_ids) if selected_ids is not None else None,
         "recipient_count": len(recipients),
         "recipients": recipients,
@@ -435,12 +467,14 @@ def build_admin_tournament_broadcast_preview(
                 recipient_name=preview_recipient["name"],
                 subject=final_subject,
                 message=clean_message,
+                personalize_greeting=False,
             ),
             "html": build_tournament_registrant_broadcast_email_html(
                 tournament_name=tournament_name,
                 recipient_name=preview_recipient["name"],
                 subject=final_subject,
                 message=clean_message,
+                personalize_greeting=False,
             ),
         },
         "warnings": ["Preview only. This endpoint never sends email."],
