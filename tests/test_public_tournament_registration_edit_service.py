@@ -63,6 +63,40 @@ def _edit_versions(storage):
     }
 
 
+@pytest.mark.parametrize("stored_status", ["pending", "confirmed", "waitlist", "cancelled"])
+def test_public_edit_preserves_server_managed_status(monkeypatch, stored_status):
+    supabase, storage, registration_id, token = _registered_supabase(monkeypatch)
+    storage["tournament_registrations"][0]["status"] = stored_status
+    storage["tournament_registrations"][0]["payment_status"] = "paid"
+    result = submit_public_tournament_registration_edit(
+        supabase,
+        club_id="club-1",
+        edit_token=token,
+        payload={
+            **_edit_versions(storage),
+            "tournament_id": "t1",
+            "registration_slug": "tres-open",
+            "first_name": "Alex",
+            "last_name": "Rivera",
+            "email": "alex@example.com",
+            "phone": "555-9999",
+            "doubles_skill": 4.0,
+            "terms_accepted": True,
+            "status": "cancelled" if stored_status != "cancelled" else "confirmed",
+            "payment_status": "refunded",
+            "selections": [{"event_option_id": "event1", "partner_mode": "NONE"}],
+        },
+    )
+    assert result["ok"] is True
+    row = storage["tournament_registrations"][0]
+    assert row["id"] == registration_id
+    assert row["phone"] == "555-9999"
+    assert row["status"] == stored_status
+    assert row["payment_status"] == "paid"
+    patch = supabase.rpc_calls[0][1]["p_registration_patch"]
+    assert "status" not in patch and "payment_status" not in patch
+
+
 def test_registration_edit_page_verifies_token_and_hydrates_registration(monkeypatch) -> None:
     supabase, _storage, registration_id, token = _registered_supabase(monkeypatch)
 

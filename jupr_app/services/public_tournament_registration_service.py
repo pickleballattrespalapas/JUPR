@@ -36,6 +36,7 @@ from jupr_app.domain.tournament_registration_repo import (
     registration_feature_available,
     registration_is_open,
     save_registration,
+    stored_registration_status,
 )
 from jupr_app.services.public_tournament_commerce_service import (
     build_public_tournament_commerce_catalog,
@@ -1358,7 +1359,7 @@ def build_validated_public_registration_save_payload(
     }
     if locked:
         save_payload["payment_status"] = locked.get("payment_status") or "unpaid"
-        save_payload["status"] = locked.get("status") or "confirmed"
+        save_payload["status"] = stored_registration_status(locked.get("status"))
     return save_payload
 
 

@@ -19,6 +19,7 @@ from jupr_app.domain.tournament_registration_repo import (
     is_day_enabled,
     public_event_option_visibility,
     registration_is_imported_to_draw,
+    stored_registration_status,
     update_admin_registration,
     update_admin_registration_selection,
 )
@@ -271,7 +272,9 @@ def _registration_rows(supabase: Any, *, tournament_id: str, limit: int = 500) -
 
 
 def _registration_status(row: dict[str, Any]) -> str:
-    return _clean_text(row.get("status") or row.get("registration_status") or "confirmed", limit=40) or "confirmed"
+    return stored_registration_status(
+        _clean_text(row.get("status") or row.get("registration_status"), limit=40)
+    )
 
 
 def _display_name(row: dict[str, Any]) -> str:
@@ -1152,6 +1155,10 @@ def update_admin_tournament_registration(
         update_payload["wants_partner_board_contact"] = _safe_bool(patch.get("wants_partner_board_contact"))
     if "registration_status" in patch:
         next_status = _clean_text(patch.get("registration_status"), limit=40).lower()
+        # An editor opened before this compatibility fix can echo the retired
+        # stored value. Accept that echo only for an existing legacy row.
+        if next_status == "pending" and _clean_text(before.get("status"), limit=40).lower() == "pending":
+            next_status = stored_registration_status(next_status)
         if next_status not in ADMIN_REGISTRATION_STATUS_OPTIONS:
             raise ValueError(f"Invalid registration status: {patch.get('registration_status')}")
         update_payload["status"] = next_status
