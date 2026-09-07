@@ -1,5 +1,11 @@
 # Production FastAPI deployment policy
 
+The September 2026 email release adds a required SMTP authentication check before
+any runtime mutation, live application delivery, and an automatic player-update
+worker. The workflow preserves the exact captured email mode during deployment
+and rollback. See [production email activation](operations/production-email-activation.md)
+for sender setup and the separate inbox-delivery check. Staging remains dry-run.
+
 The production FastAPI backend is the existing Fly app
 `juprleagues-api`. Production deployment remains a separate finish line from
 staging acceptance. Do not run this workflow until one exact staging candidate

@@ -252,9 +252,13 @@ def require_admin_tournament_official_publish_runtime() -> None:
     if is_auto_player_updates_enabled():
         if not _truthy_env("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_EMAIL_HANDOFF"):
             raise PermissionError("Automatic tournament player-update email handoff is disabled.")
-        allowed_modes = {"dry_run"} if environment == "production" else {"dry_run", "staging_redirect"}
+        allowed_modes = {"dry_run", "staging_redirect"}
+        if environment == "production":
+            allowed_modes = {"dry_run"}
+            if _truthy_env("JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL"):
+                allowed_modes.add("live")
         if get_email_mode() not in allowed_modes:
-            raise PermissionError("Tournament official publishing requires a non-live email mode.")
+            raise PermissionError("Tournament publishing requires an approved email delivery mode.")
 
 
 def build_admin_tournament_ops_runtime_status() -> dict[str, Any]:

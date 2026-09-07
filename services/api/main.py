@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+from contextlib import suppress
 import hashlib
 import logging
 import os
@@ -44,6 +46,8 @@ from scripts.deployment_verifier import (
     PRODUCTION_FEATURE_FLAGS,
     feature_flag_fingerprint,
 )
+from jupr_app.domain.notifications.smtp_mailer import get_smtp_config_status
+from jupr_app.workers.player_update_email_scheduler import run_scheduler, scheduler_enabled
 from scripts.staging_write_waves import ALL_STAGING_WRITE_FLAGS
 from services.api.auth import (
     authenticate_bearer,
@@ -774,8 +778,20 @@ def _latest_score_entry_match_id(supabase, *, club_id: str, matches: list[dict[s
 
 
 @app.on_event("startup")
-def startup_checks() -> None:
+async def startup_checks() -> None:
     _log_runtime_guardrails()
+    app.state.player_email_task = (
+        asyncio.create_task(run_scheduler()) if scheduler_enabled() else None
+    )
+
+
+@app.on_event("shutdown")
+async def stop_player_email_worker() -> None:
+    task = getattr(app.state, "player_email_task", None)
+    if task is not None:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
 
 
 @app.get("/health")
@@ -853,6 +869,11 @@ def health() -> dict[str, Any]:
                     ).strip().lower()
                     in {"1", "true", "yes", "y", "on"},
                     "email_mode": os.getenv("JUPR_EMAIL_MODE", "").strip().lower() or None,
+                    "smtp_configured": bool(get_smtp_config_status().get("ok")),
+                    "player_update_worker_running": bool(
+                        getattr(app.state, "player_email_task", None)
+                        and not app.state.player_email_task.done()
+                    ),
                     "live_player_update_email_enabled": os.getenv(
                         "JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL", ""
                     ).strip().lower()

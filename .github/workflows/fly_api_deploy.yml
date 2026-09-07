@@ -309,6 +309,19 @@ jobs:
             --no-pending-only \
             --fly-secrets-json "$RUNNER_TEMP/fly-secrets-prechange.json"
 
+      - name: Verify production SMTP authentication without sending email
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_SSH_TOKEN || secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          probe_b64="$(python -c 'import base64; from pathlib import Path; print(base64.b64encode(Path("scripts/production_email_probe.py").read_bytes()).decode())')"
+          remote_probe="python -c 'import base64;exec(compile(base64.b64decode(\"$probe_b64\"),\"production_email_probe.py\",\"exec\"))'"
+          flyctl ssh console \
+            --quiet \
+            --app "$FLY_APP_NAME" \
+            --command "$remote_probe"
+
       - name: Preserve and verify current live production runtime
         id: baseline_projection
         shell: bash
@@ -325,15 +338,16 @@ jobs:
               "$RUNNER_TEMP/production-rollback-snapshot.json"
           )"
           case "$live_feature_profile" in
-            baseline|release) ;;
+            baseline|pre_email|release) ;;
             *)
               echo "::error title=Live feature profile rejected::The pre-deploy runtime is not an exact reviewed production profile."
               exit 2
               ;;
           esac
+          expected_email_mode="$(PRODUCTION_FEATURE_PROFILE="$live_feature_profile" python -c 'import os; from scripts.deployment_verifier import expected_production_email_mode; print(expected_production_email_mode(profile=os.environ["PRODUCTION_FEATURE_PROFILE"]))')"
           runtime_secrets=(
             "JUPR_ENV=production"
-            "JUPR_EMAIL_MODE=dry_run"
+            "JUPR_EMAIL_MODE=$expected_email_mode"
             "JUPR_PRODUCTION_WRITE_POLICY=enabled"
             "JUPR_STAGING_WRITE_WAVE=none"
             "JUPR_WEB_BASE_URL=https://pickleballclubsandwich.com"
@@ -365,7 +379,7 @@ jobs:
           expected_flags_b64="$(
             PRODUCTION_FEATURE_PROFILE="$live_feature_profile" python -c 'import base64,json,os; from scripts.deployment_verifier import expected_production_feature_flags; expected=expected_production_feature_flags(profile=os.environ["PRODUCTION_FEATURE_PROFILE"]); print(base64.b64encode(json.dumps(expected,sort_keys=True).encode()).decode())'
           )"
-          remote_check="python -c 'import base64,json,os,sys;expected=json.loads(base64.b64decode(\"$expected_flags_b64\"));actual={name:os.getenv(name,\"\").strip().lower() in {\"1\",\"true\",\"yes\",\"y\",\"on\"} for name in expected};ok=actual==expected and os.getenv(\"JUPR_STAGING_WRITE_WAVE\")==\"none\" and os.getenv(\"JUPR_PRODUCTION_WRITE_POLICY\")==\"enabled\" and os.getenv(\"JUPR_EMAIL_MODE\")==\"dry_run\";sys.exit(0 if ok else 3)'"
+          remote_check="python -c 'import base64,json,os,sys;expected=json.loads(base64.b64decode(\"$expected_flags_b64\"));actual={name:os.getenv(name,\"\").strip().lower() in {\"1\",\"true\",\"yes\",\"y\",\"on\"} for name in expected};ok=actual==expected and os.getenv(\"JUPR_STAGING_WRITE_WAVE\")==\"none\" and os.getenv(\"JUPR_PRODUCTION_WRITE_POLICY\")==\"enabled\" and os.getenv(\"JUPR_EMAIL_MODE\")==\"$expected_email_mode\";sys.exit(0 if ok else 3)'"
           FLY_API_TOKEN="$JUPR_FLY_SSH_TOKEN" flyctl ssh console \
             --quiet \
             --app "$FLY_APP_NAME" \
@@ -418,9 +432,10 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
         run: |
           set -euo pipefail
+          expected_email_mode="$(python -c 'from scripts.deployment_verifier import expected_production_email_mode; print(expected_production_email_mode(profile="release"))')"
           runtime_secrets=(
             "JUPR_ENV=production"
-            "JUPR_EMAIL_MODE=dry_run"
+            "JUPR_EMAIL_MODE=$expected_email_mode"
             "JUPR_PRODUCTION_WRITE_POLICY=enabled"
             "JUPR_STAGING_WRITE_WAVE=none"
             "JUPR_WEB_BASE_URL=https://pickleballclubsandwich.com"
@@ -449,7 +464,7 @@ jobs:
           expected_flags_b64="$(
             python -c 'import base64,json; from scripts.deployment_verifier import expected_production_feature_flags; print(base64.b64encode(json.dumps(expected_production_feature_flags(profile="release"),sort_keys=True).encode()).decode())'
           )"
-          remote_check="python -c 'import base64,json,os,sys;expected=json.loads(base64.b64decode(\"$expected_flags_b64\"));actual={name:os.getenv(name,\"\").strip().lower() in {\"1\",\"true\",\"yes\",\"y\",\"on\"} for name in expected};ok=actual==expected and os.getenv(\"JUPR_STAGING_WRITE_WAVE\")==\"none\" and os.getenv(\"JUPR_PRODUCTION_WRITE_POLICY\")==\"enabled\" and os.getenv(\"JUPR_EMAIL_MODE\")==\"dry_run\";sys.exit(0 if ok else 3)'"
+          remote_check="python -c 'import base64,json,os,sys;expected=json.loads(base64.b64decode(\"$expected_flags_b64\"));actual={name:os.getenv(name,\"\").strip().lower() in {\"1\",\"true\",\"yes\",\"y\",\"on\"} for name in expected};ok=actual==expected and os.getenv(\"JUPR_STAGING_WRITE_WAVE\")==\"none\" and os.getenv(\"JUPR_PRODUCTION_WRITE_POLICY\")==\"enabled\" and os.getenv(\"JUPR_EMAIL_MODE\")==\"$expected_email_mode\";sys.exit(0 if ok else 3)'"
           FLY_API_TOKEN="$JUPR_FLY_SSH_TOKEN" flyctl ssh console \
             --quiet \
             --app "$FLY_APP_NAME" \
@@ -647,7 +662,7 @@ jobs:
               "$RUNNER_TEMP/production-rollback-snapshot.json"
           )"
           case "$rollback_feature_profile" in
-            baseline|release) ;;
+            baseline|pre_email|release) ;;
             *)
               echo "::error title=Rollback feature profile rejected::The saved baseline is not an exact reviewed production profile."
               exit 2
@@ -657,6 +672,8 @@ jobs:
           if [ "$PROMOTION_ACCEPTED" = "true" ]; then
             final_feature_profile="release"
           fi
+
+          expected_email_mode="$(PRODUCTION_FEATURE_PROFILE="$final_feature_profile" python -c 'import os; from scripts.deployment_verifier import expected_production_email_mode; print(expected_production_email_mode(profile=os.environ["PRODUCTION_FEATURE_PROFILE"]))')"
 
           FLY_API_TOKEN="$JUPR_FLY_DEPLOY_TOKEN" flyctl secrets list \
             --app "$FLY_APP_NAME" \
@@ -672,7 +689,7 @@ jobs:
               --fly-secrets-json "$RUNNER_TEMP/fly-secrets-final-initial.json"
             runtime_secrets=(
               "JUPR_ENV=production"
-              "JUPR_EMAIL_MODE=dry_run"
+              "JUPR_EMAIL_MODE=$expected_email_mode"
               "JUPR_PRODUCTION_WRITE_POLICY=enabled"
               "JUPR_STAGING_WRITE_WAVE=none"
               "JUPR_WEB_BASE_URL=https://pickleballclubsandwich.com"
@@ -741,7 +758,7 @@ jobs:
           expected_flags_b64="$(
             PRODUCTION_FEATURE_PROFILE="$final_feature_profile" python -c 'import base64,json,os; from scripts.deployment_verifier import expected_production_feature_flags; expected=expected_production_feature_flags(profile=os.environ["PRODUCTION_FEATURE_PROFILE"]); print(base64.b64encode(json.dumps(expected,sort_keys=True).encode()).decode())'
           )"
-          remote_check="python -c 'import base64,json,os,sys;expected=json.loads(base64.b64decode(\"$expected_flags_b64\"));actual={name:os.getenv(name,\"\").strip().lower() in {\"1\",\"true\",\"yes\",\"y\",\"on\"} for name in expected};ok=actual==expected and os.getenv(\"JUPR_STAGING_WRITE_WAVE\")==\"none\" and os.getenv(\"JUPR_PRODUCTION_WRITE_POLICY\")==\"enabled\" and os.getenv(\"JUPR_EMAIL_MODE\")==\"dry_run\";sys.exit(0 if ok else 3)'"
+          remote_check="python -c 'import base64,json,os,sys;expected=json.loads(base64.b64decode(\"$expected_flags_b64\"));actual={name:os.getenv(name,\"\").strip().lower() in {\"1\",\"true\",\"yes\",\"y\",\"on\"} for name in expected};ok=actual==expected and os.getenv(\"JUPR_STAGING_WRITE_WAVE\")==\"none\" and os.getenv(\"JUPR_PRODUCTION_WRITE_POLICY\")==\"enabled\" and os.getenv(\"JUPR_EMAIL_MODE\")==\"$expected_email_mode\";sys.exit(0 if ok else 3)'"
           FLY_API_TOKEN="$JUPR_FLY_SSH_TOKEN" flyctl ssh console \
             --quiet \
             --app "$FLY_APP_NAME" \

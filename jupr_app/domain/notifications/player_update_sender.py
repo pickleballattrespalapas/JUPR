@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 import os
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from jupr_app.domain.notifications.player_profile_update_repo import (
     DEFAULT_PREFERENCES,
@@ -83,23 +83,21 @@ def _normalize_public_base_url(public_base_url: str | None = None) -> str:
     return str(public_base_url or get_next_web_base_url()).strip().rstrip("/")
 
 
-def _build_public_players_url(params: dict[str, str], *, public_base_url: str | None = None) -> str:
-    query = {"page": "players", "public": "1"}
-    for key, value in (params or {}).items():
-        query[str(key)] = str(value)
-    return f"{_normalize_public_base_url(public_base_url)}/?{urlencode(query)}"
-
-
 def _merge_links_for_send(
     *,
     digest: dict[str, Any],
     player_id: int,
     subscription_id: str,
+    club_id: str,
     unsubscribe_token: str | None = None,
     public_base_url: str | None = None,
 ) -> dict[str, Any]:
     links = dict((digest or {}).get("links") or {})
-    links["player_profile"] = _build_public_players_url({"pid": str(int(player_id))}, public_base_url=public_base_url)
+    club_path = "tres-palapas" if club_id == "tres_palapas" else str(club_id)
+    links["player_profile"] = (
+        f"{_normalize_public_base_url(public_base_url)}/clubs/"
+        f"{quote(club_path, safe='')}/players/{int(player_id)}"
+    )
     token = str(unsubscribe_token or "").strip()
     if not token:
         raise ValueError(
@@ -461,6 +459,9 @@ def send_pending_player_update_emails(
     club_id = str(ctx.club_id)
     if (start_date is None) != (end_date is None):
         raise ValueError("start_date and end_date must be provided together")
+    selected_query = {}
+    if outbox_items is not None:
+        selected_query["outbox_ids"] = [str((item or {}).get("id") or "") for item in outbox_items]
     pending_rows = list_outbox_rows(
         supabase,
         club_id,
@@ -468,6 +469,7 @@ def send_pending_player_update_emails(
         limit=max(1, int(limit)),
         week_start=start_date,
         week_end=end_date,
+        **selected_query,
     )
     if start_date is not None and end_date is not None:
         start_iso = start_date.isoformat()
@@ -567,6 +569,7 @@ def send_pending_player_update_emails(
 
             digest = _merge_links_for_send(
                 digest=digest,
+                club_id=club_id,
                 player_id=player_id,
                 subscription_id=str(subscription.get("id") or ""),
                 unsubscribe_token=ensure_unsubscribe_token(
@@ -718,6 +721,7 @@ def send_test_player_update_email(
     )
     digest = _merge_links_for_send(
         digest=digest,
+        club_id=club_id,
         player_id=int(selected_player_id),
         subscription_id=selected_subscription_id,
         unsubscribe_token=ensure_unsubscribe_token(supabase, selected_subscription_id),

@@ -66,11 +66,13 @@ def test_player_update_unsubscribe_link_targets_tokenized_next_route():
         digest={},
         player_id=1,
         subscription_id="subscription-id-is-not-a-credential",
+        club_id="tres_palapas",
         unsubscribe_token="safe token",
         public_base_url="https://next.example.com/",
     )
 
     assert digest["links"]["unsubscribe"] == "https://next.example.com/email-preferences?token=safe+token"
+    assert digest["links"]["player_profile"] == "https://next.example.com/clubs/tres-palapas/players/1"
     assert "sid=" not in digest["links"]["unsubscribe"]
     assert "page=email_preferences" not in digest["links"]["unsubscribe"]
 
@@ -81,6 +83,7 @@ def test_player_update_send_fails_closed_without_unsubscribe_token():
             digest={},
             player_id=1,
             subscription_id="bare-id",
+            club_id="tres_palapas",
             unsubscribe_token=None,
             public_base_url="https://next.example.com",
         )
