@@ -76,7 +76,8 @@ def _audit(supabase: Any, *, club_id: str, actor_email: str, actor_role: str,
 def create_tournament_broadcast(supabase: Any, *, club_id: str, tournament_id: str,
         operation_key: str, preview_fingerprint: str, registration_ids: list[str],
         subject: str, message: str, include_cancelled: bool,
-        confirmation_text: str, actor_email: str, actor_role: str) -> dict:
+        confirmation_text: str, actor_email: str, actor_role: str,
+        include_registration_events: bool = False) -> dict:
     _authorize(supabase, club_id, tournament_id)
     require_staging_communications_mutations()
     if confirmation_text != CONFIRM_SEND:
@@ -85,6 +86,8 @@ def create_tournament_broadcast(supabase: Any, *, club_id: str, tournament_id: s
     request = dict(tournament_id=tournament_id, registration_ids=sorted(set(registration_ids)),
         subject=subject.strip(), message=message.strip(), include_cancelled=include_cancelled,
         preview_fingerprint=preview_fingerprint, actor_email=actor_email.lower())
+    if include_registration_events:
+        request["include_registration_events"] = True
     if not request["registration_ids"] or not request["subject"] or not request["message"]:
         raise ValueError("Select participants and enter a subject and message.")
     if "\x00" in message or len(subject) > 200 or len(message) > 10000:
@@ -98,7 +101,8 @@ def create_tournament_broadcast(supabase: Any, *, club_id: str, tournament_id: s
             tournament_id=tournament_id, operation_key=operation_key)
     preview = build_admin_tournament_broadcast_preview(supabase, club_id=club_id,
         tournament_id=tournament_id, registration_ids=registration_ids,
-        subject=subject, message=message, include_cancelled=include_cancelled)
+        subject=subject, message=message, include_cancelled=include_cancelled,
+        include_registration_events=include_registration_events)
     if not preview.get("send_available"):
         raise ValueError(preview.get("send_unavailable_reason") or "Email sending is unavailable.")
     if preview.get("preview_fingerprint") != preview_fingerprint:
@@ -148,6 +152,7 @@ def get_tournament_broadcast(supabase: Any, *, club_id: str, tournament_id: str,
             "detail": result.get("detail", "Check delivery before sending another email." if attempt else "")})
     return {"ok": True, "operation_key": operation_key, "subject": request["review"]["preview"]["subject"],
         "message": request["message"], "created_at": row.get("created_at"),
+        "include_registration_events": request.get("include_registration_events", False),
         "delivery_mode": request["review"]["delivery_mode"], "sender": request["review"]["sender"],
         "recipients": results, "recipient_count": len(results),
         "pending_count": sum(result["status"] == "pending" for result in results)}
@@ -185,9 +190,10 @@ def send_tournament_broadcast_recipient(supabase: Any, *, club_id: str, tourname
     preview = build_admin_tournament_broadcast_preview(supabase, club_id=club_id,
         tournament_id=tournament_id, registration_ids=request["registration_ids"],
         subject=request["subject"], message=request["message"], include_cancelled=request["include_cancelled"],
-        include_sponsor_logos=False, reviewed_email_sponsors=review.get("email_sponsors"))
+        include_sponsor_logos=False, reviewed_email_sponsors=review.get("email_sponsors"),
+        include_registration_events=request.get("include_registration_events", False))
     if preview["preview_fingerprint"] != request["preview_fingerprint"]:
-        raise ValueError("Participant details changed, or the email's sponsor details changed. Review the results and preview a new email for the remaining participants.")
+        raise ValueError("Participant details changed, registration events changed, or the email's sponsor details changed. Review the results and preview a new email for the remaining participants.")
     _audit(supabase, club_id=club_id, actor_email=actor_email, actor_role=actor_role,
         operation_key=operation_key, action="tournament_broadcast_recipient_intent",
         details={"recipient_index": recipient_index, "attempt_id": child_key})
@@ -211,7 +217,8 @@ def send_tournament_broadcast_recipient(supabase: Any, *, club_id: str, tourname
         delivery = send_tournament_registrant_broadcast_email(
             tournament_name="", recipient_email=recipient["email"], recipient_name=recipient["name"],
             subject=review["preview"]["subject"], message=request["message"],
-            personalize_greeting=False, message_id=child_key, email_sponsors=review.get("email_sponsors"))
+            personalize_greeting=False, message_id=child_key, email_sponsors=review.get("email_sponsors"),
+            registration_events=recipient.get("registration_events"))
         result = {"status": delivery["status"], "provider_message_id": delivery.get("provider_message_id"),
             "detail": "Accepted by the mail server." if delivery["status"] == "sent" else "Test only; no participant email was sent."}
     except Exception:

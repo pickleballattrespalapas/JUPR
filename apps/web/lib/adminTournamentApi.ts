@@ -470,6 +470,7 @@ export type AdminTournamentBroadcastPreviewResponse = {
   delivery_mode?: string;
   sender?: { from_email?: string; from_name?: string; reply_to?: string };
   selected_registration_ids?: string[] | null;
+  include_registration_events?: boolean;
   recipient_count: number;
   recipients: AdminTournamentBroadcastRecipient[];
   recipient_csv: string;
@@ -484,6 +485,7 @@ export type AdminTournamentBroadcastPreviewResponse = {
 };
 
 export type TournamentBroadcast = {
+  include_registration_events?: boolean;
   operation_key: string;
   subject: string;
   message: string;

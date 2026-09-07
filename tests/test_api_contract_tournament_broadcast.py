@@ -93,3 +93,20 @@ def test_broadcast_api_does_not_expose_database_errors(api, monkeypatch):
     response = client.get(ROOT, headers=headers)
     assert response.status_code == 500
     assert "sensitive" not in response.text
+
+
+
+def test_event_option_passes_from_api_review_to_saved_delivery(api):
+    db, client, headers = api
+    body = {key: value for key, value in prepare(db, include_registration_events=True).items()
+            if key not in {"club_id", "tournament_id", "actor_email", "actor_role"}}
+    preview = client.post(ROOT.rsplit("/", 1)[0]+"/broadcast-preview", headers=headers, json=body)
+    assert preview.status_code == 200
+    assert preview.json()["include_registration_events"] is True
+    assert "Gender Doubles / 3.5" in preview.json()["preview"]["text"]
+    created = client.post(ROOT, json=body, headers=headers)
+    assert created.status_code == 200
+    assert created.json()["include_registration_events"] is True
+    key = created.json()["operation_key"]
+    sent = client.post(f"{ROOT}/{key}/recipients/0/send", headers=headers, json={"confirmation_text": CONFIRM_SEND})
+    assert sent.json()["status"] == "dry_run"
