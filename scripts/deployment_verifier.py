@@ -179,7 +179,7 @@ PRODUCTION_LIVE_BASELINE_ENABLED_FEATURE_FLAGS = frozenset(
 )
 # These three reviewed League gates open only after the candidate image is
 # deployed. A rejected candidate always returns to the exact live baseline.
-PRODUCTION_ENABLED_FEATURE_FLAGS = frozenset(
+PRODUCTION_PRE_EMAIL_ENABLED_FEATURE_FLAGS = frozenset(
     {
         *PRODUCTION_LIVE_BASELINE_ENABLED_FEATURE_FLAGS,
         "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_DOMAIN",
@@ -187,7 +187,16 @@ PRODUCTION_ENABLED_FEATURE_FLAGS = frozenset(
         "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER",
     }
 )
+PRODUCTION_ENABLED_FEATURE_FLAGS = frozenset({
+    *PRODUCTION_PRE_EMAIL_ENABLED_FEATURE_FLAGS,
+    "JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS",
+    "JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES",
+    "JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS",
+    "JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_EMAIL_HANDOFF",
+    "JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL",
+})
 PRODUCTION_FEATURE_PROFILES = {
+    "pre_email": PRODUCTION_PRE_EMAIL_ENABLED_FEATURE_FLAGS,
     "baseline": PRODUCTION_LIVE_BASELINE_ENABLED_FEATURE_FLAGS,
     "release": PRODUCTION_ENABLED_FEATURE_FLAGS,
 }
@@ -859,6 +868,12 @@ def expected_production_controlled_write_flags(
     return {name: name in enabled_flags for name in ALL_STAGING_WRITE_FLAGS}
 
 
+def expected_production_email_mode(*, profile: str = "release") -> str:
+    if profile not in PRODUCTION_FEATURE_PROFILES:
+        raise ValueError(f"Unknown production feature profile: {profile}")
+    return "live" if profile == "release" else "dry_run"
+
+
 def production_feature_profile_from_health(health: Any) -> str | None:
     """Identify an exact reviewed live profile without accepting flag drift."""
 
@@ -873,8 +888,6 @@ def production_feature_profile_from_health(health: Any) -> str | None:
         or health.get("public_live_writes_enabled") is not True
         or health.get("public_live_production_override_enabled") is not True
         or not isinstance(prerequisites, dict)
-        or prerequisites.get("email_mode") != "dry_run"
-        or prerequisites.get("live_player_update_email_enabled") is not False
     ):
         return None
     for profile in PRODUCTION_FEATURE_PROFILES:
@@ -883,7 +896,11 @@ def production_feature_profile_from_health(health: Any) -> str | None:
             profile=profile
         )
         if (
-            health.get("feature_flags") == expected_flags
+            prerequisites.get("email_mode") == expected_production_email_mode(profile=profile)
+            and prerequisites.get("live_player_update_email_enabled")
+            is expected_flags["JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL"]
+            and (profile != "release" or prerequisites.get("smtp_configured") is True)
+            and health.get("feature_flags") == expected_flags
             and health.get("feature_flag_fingerprint")
             == feature_flag_fingerprint(expected_flags)
             and health.get("controlled_write_flags") == expected_controlled
@@ -922,7 +939,7 @@ def production_fly_config_errors(config_path: Path) -> list[str]:
     required_values = {
         "PORT": "8080",
         "JUPR_ENV": PRODUCTION_ENVIRONMENT,
-        "JUPR_EMAIL_MODE": "dry_run",
+        "JUPR_EMAIL_MODE": expected_production_email_mode(),
         "JUPR_PRODUCTION_WRITE_POLICY": PRODUCTION_WRITE_POLICY,
         "JUPR_STAGING_WRITE_WAVE": NO_WRITE_WAVE,
         "JUPR_WEB_BASE_URL": PRODUCTION_WEB_ORIGIN,
@@ -1536,10 +1553,16 @@ def runtime_identity_errors(
         ):
             if prerequisites.get(key) is not True:
                 errors.append(f"Production write prerequisite {key} must be true.")
-        if prerequisites.get("email_mode") != "dry_run":
-            errors.append("Production email mode must remain dry_run during promotion.")
-        if prerequisites.get("live_player_update_email_enabled") is not False:
-            errors.append("Production live player-update email delivery must remain disabled.")
+        expected_email_mode = expected_production_email_mode(profile=feature_profile)
+        if prerequisites.get("email_mode") != expected_email_mode:
+            errors.append(f"Production email mode must be {expected_email_mode} for {feature_profile}.")
+        if prerequisites.get("live_player_update_email_enabled") is not expected_flags["JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL"]:
+            errors.append("Production live player-update email gate must match the reviewed profile.")
+        if feature_profile == "release":
+            if prerequisites.get("smtp_configured") is not True:
+                errors.append("Production live email requires configured SMTP credentials.")
+            if prerequisites.get("player_update_worker_running") is not True:
+                errors.append("Production player-update email worker must be running.")
 
     errors.extend(secret_inventory_errors(fly_secrets))
     return errors

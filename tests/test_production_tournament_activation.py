@@ -32,3 +32,19 @@ def test_reviewed_surfaces_open(monkeypatch):
     require_public_team_tournament_mutation_runtime()
     require_tournament_commerce_mutation_runtime(actor_type="PUBLIC_REGISTRANT")
     assert tournament_commerce_runtime_status()["offline_payment_only"] is True
+
+
+def test_production_publish_allows_live_email_only_with_both_email_gates(monkeypatch):
+    enable(monkeypatch)
+    monkeypatch.setenv("JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS", "1")
+    monkeypatch.setenv("JUPR_EMAIL_MODE", "live")
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_EMAIL_HANDOFF", "1")
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL", "1")
+    require_admin_tournament_official_publish_runtime()
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL", "0")
+    with pytest.raises(PermissionError):
+        require_admin_tournament_official_publish_runtime()
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL", "1")
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_EMAIL_HANDOFF", "0")
+    with pytest.raises(PermissionError):
+        require_admin_tournament_official_publish_runtime()

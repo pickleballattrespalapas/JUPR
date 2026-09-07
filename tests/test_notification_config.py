@@ -63,7 +63,7 @@ def test_send_email_uses_provided_smtp_config(monkeypatch):
         def ehlo(self):
             return None
 
-        def starttls(self):
+        def starttls(self, *, context):
             return None
 
         def login(self, username, password):
@@ -101,7 +101,8 @@ def test_send_email_uses_provided_smtp_config(monkeypatch):
         text_body="hi",
         smtp_config=cfg,
     )
-    assert provider == "smtp"
+    assert provider.endswith("@example.org>")
+    assert "Date:" in FakeSMTP.payloads[-1]
 
     attempt_id = "11111111-1111-1111-1111-111111111111"
     provider = smtp_mailer.send_email_with_inline_chart(
@@ -112,5 +113,5 @@ def test_send_email_uses_provided_smtp_config(monkeypatch):
         smtp_config=cfg,
         message_id=attempt_id,
     )
-    assert provider == f"<{attempt_id}@notifications.juprleagues.com>"
-    assert f"Message-ID: <{attempt_id}@notifications.juprleagues.com>" in FakeSMTP.payloads[-1]
+    assert provider == f"<{attempt_id}@example.org>"
+    assert f"Message-ID: <{attempt_id}@example.org>" in FakeSMTP.payloads[-1]

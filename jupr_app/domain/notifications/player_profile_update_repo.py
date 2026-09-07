@@ -1028,8 +1028,12 @@ def list_outbox_rows(
     offset: int = 0,
     week_start: date | None = None,
     week_end: date | None = None,
+    outbox_ids: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     club_id = _require_nonempty(club_id, "club_id")
+
+    if outbox_ids == []:
+        return []
 
     upper = max(0, int(limit) - 1)
     start = max(0, int(offset))
@@ -1041,6 +1045,8 @@ def list_outbox_rows(
         .order("created_at", desc=True)
         .range(start, end)
     )
+    if outbox_ids is not None:
+        query = query.in_("id", outbox_ids)
     if status:
         normalized_status = str(status).strip().lower()
         if normalized_status not in {

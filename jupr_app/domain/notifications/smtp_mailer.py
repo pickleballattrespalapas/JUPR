@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import smtplib
+import ssl
 from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.utils import formatdate, make_msgid
 
 from jupr_app.config import SMTPConfig, get_env_or_default, get_smtp_config
 
@@ -91,9 +93,13 @@ def send_email_with_inline_chart(
     msg["From"] = f"{cfg['from_name']} <{cfg['from_email']}>"
     msg["To"] = str(to_email).strip()
     clean_message_id = str(message_id or "").strip().strip("<>")
-    rfc_message_id = f"<{clean_message_id}@notifications.juprleagues.com>" if clean_message_id else None
-    if rfc_message_id:
-        msg["Message-ID"] = rfc_message_id
+    sender_domain = str(cfg["from_email"]).rsplit("@", 1)[-1]
+    rfc_message_id = (
+        f"<{clean_message_id}@{sender_domain}>"
+        if clean_message_id else make_msgid(domain=sender_domain)
+    )
+    msg["Message-ID"] = rfc_message_id
+    msg["Date"] = formatdate(localtime=False, usegmt=True)
     if cfg.get("reply_to"):
         msg["Reply-To"] = str(cfg["reply_to"]).strip()
 
@@ -114,12 +120,17 @@ def send_email_with_inline_chart(
         image_part.add_header("Content-Disposition", "inline", filename="player-digest-chart.png")
         msg.attach(image_part)
 
-    with smtplib.SMTP(cfg["host"], cfg["port"], timeout=30) as server:
+    implicit_tls = cfg["port"] == 465
+    smtp_class = smtplib.SMTP_SSL if implicit_tls else smtplib.SMTP
+    connection_options = {"timeout": 30}
+    if implicit_tls:
+        connection_options["context"] = ssl.create_default_context()
+    with smtp_class(cfg["host"], cfg["port"], **connection_options) as server:
         server.ehlo()
-        if cfg["use_tls"]:
-            server.starttls()
+        if cfg["use_tls"] and not implicit_tls:
+            server.starttls(context=ssl.create_default_context())
             server.ehlo()
         server.login(cfg["username"], cfg["password"])
         server.sendmail(cfg["from_email"], [msg["To"]], msg.as_string())
 
-    return rfc_message_id or "smtp"
+    return rfc_message_id

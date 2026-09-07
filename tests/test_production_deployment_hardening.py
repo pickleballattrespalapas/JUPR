@@ -104,8 +104,10 @@ def _health_payload(*, feature_profile: str = "release") -> dict:
             "service_role_configured": True,
             "api_audit_required": True,
             "worker_run_log_required": True,
-            "email_mode": "dry_run",
-            "live_player_update_email_enabled": False,
+            "email_mode": verifier.expected_production_email_mode(profile=feature_profile),
+            "live_player_update_email_enabled": features["JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL"],
+            "smtp_configured": feature_profile == "release",
+            "player_update_worker_running": feature_profile == "release",
         },
     }
 
@@ -258,8 +260,16 @@ def test_production_feature_projection_covers_every_runtime_flag() -> None:
     assert discovered == set(verifier.PRODUCTION_FEATURE_FLAGS)
 
 
-def test_reviewed_projection_preserves_live_and_adds_only_league_core() -> None:
+def test_reviewed_projection_preserves_live_and_adds_email_delivery() -> None:
+    email_flags = {
+        "JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS",
+        "JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES",
+        "JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS",
+        "JUPR_ENABLE_NEXT_ADMIN_TOURNAMENT_EMAIL_HANDOFF",
+        "JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL",
+    }
     assert verifier.PRODUCTION_ENABLED_FEATURE_FLAGS == {
+        *email_flags,
         "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_DOMAIN",
         "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_SUBMIT",
         "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER",
@@ -282,8 +292,6 @@ def test_reviewed_projection_preserves_live_and_adds_only_league_core() -> None:
     assert all(
         verifier.expected_production_feature_flags()[name] is False
         for name in (
-            "JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS",
-            "JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL",
             "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE",
             "JUPR_ENABLE_TEAM_LEAGUES",
         )
@@ -292,6 +300,7 @@ def test_reviewed_projection_preserves_live_and_adds_only_league_core() -> None:
         verifier.PRODUCTION_ENABLED_FEATURE_FLAGS
         - verifier.PRODUCTION_LIVE_BASELINE_ENABLED_FEATURE_FLAGS
     ) == {
+        *email_flags,
         "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_DOMAIN",
         "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_SUBMIT",
         "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER",
@@ -1276,7 +1285,7 @@ def test_final_runtime_attests_candidate_or_exact_immutable_rollback() -> None:
     }
     unsafe_final["write_prerequisites"] = {
         **unsafe_final["write_prerequisites"],
-        "email_mode": "live",
+        "email_mode": "dry_run",
     }
     unsafe_final_errors = verifier.final_runtime_errors(
         unsafe_final,
@@ -1522,7 +1531,7 @@ def test_production_workflow_is_exact_candidate_and_never_creates_or_retargets_a
     assert "/database/query\"" not in workflow
     assert workflow.count(
         "${{ secrets.FLY_SSH_TOKEN || secrets.FLY_API_TOKEN }}"
-    ) == 4
+    ) == 5
     assert "PRODUCTION_SOURCE_BRANCH: rollback-feb8" in workflow
     assert "ref: rollback-feb8" in workflow
     assert "github.event.repository.default_branch" not in workflow
@@ -1635,7 +1644,7 @@ def test_production_workflow_verifies_database_runtime_cors_and_final_write_poli
     assert 'sha256sum "$PREDEPLOY_CONFIG"' not in workflow
     assert '&& [ "$DEPLOY_OUTCOME" != "skipped" ]; then' in workflow
     assert workflow.index("--no-pending-only") < workflow.index("flyctl secrets set")
-    assert workflow.count("flyctl ssh console") == 3
+    assert workflow.count("flyctl ssh console") == 4
     assert 'expected_production_feature_flags(profile="release")' in workflow
     assert 'PRODUCTION_FEATURE_PROFILE="$live_feature_profile"' in workflow
     assert 'final_feature_profile="$rollback_feature_profile"' in workflow
@@ -1706,3 +1715,35 @@ def test_api_image_bakes_candidate_revision_for_runtime_cross_check() -> None:
     assert "ARG JUPR_DEPLOYMENT_GIT_SHA=unknown" in dockerfile
     assert 'org.opencontainers.image.revision="${JUPR_DEPLOYMENT_GIT_SHA}"' in dockerfile
     assert 'JUPR_IMAGE_BUILD_GIT_SHA="${JUPR_DEPLOYMENT_GIT_SHA}"' in dockerfile
+
+
+def test_pre_email_production_profile_is_retained_for_safe_activation_and_rollback():
+    health = _health_payload(feature_profile="pre_email")
+    assert verifier.production_feature_profile_from_health(health) == "pre_email"
+    assert verifier.expected_production_email_mode(profile="pre_email") == "dry_run"
+    assert health["feature_flags"]["JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_SUBMIT"]
+    assert not health["feature_flags"]["JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS"]
+    health["write_prerequisites"]["email_mode"] = "live"
+    assert verifier.production_feature_profile_from_health(health) is None
+
+
+def test_email_release_cannot_attest_missing_sender_or_worker():
+    for field in ("smtp_configured", "player_update_worker_running"):
+        health = _health_payload()
+        health["write_prerequisites"][field] = False
+        errors = verifier.runtime_identity_errors(
+            health, candidate_sha=CANDIDATE_SHA, expected_project_ref=PRODUCTION_REF,
+            expected_migration_head=REMOTE_MIGRATION_HEAD,
+            expected_migration_contract=MIGRATION_CONTRACT_FINGERPRINT,
+            expected_migration_profile=MIGRATION_PROFILE,
+            fly_machines=[_machine()], fly_secrets=_fly_secrets(),
+        )
+        assert errors
+
+
+def test_smtp_authentication_probe_runs_before_any_production_mutation():
+    workflow = (ROOT / ".github/workflows/fly_api_deploy.yml").read_text()
+    assert workflow.index("production_email_probe.py") < workflow.index("flyctl secrets set")
+    assert "baseline|pre_email|release" in workflow
+    assert "JUPR_EMAIL_MODE=dry_run" not in workflow
+    assert "expected_production_email_mode(profile=" in workflow

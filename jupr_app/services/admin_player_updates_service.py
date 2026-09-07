@@ -107,8 +107,8 @@ def build_admin_player_updates_status(supabase: Any | None, *, club_id: str) -> 
     mutations_enabled = staging_communications_mutations_enabled()
     if not mutations_enabled:
         warnings.append(
-            "Read-only mode is active. Open the isolated communications write wave "
-            "before queueing, sending, retrying, deleting, or changing subscriptions."
+            "Email management is currently read-only. Enable communications "
+            "before sending updates or changing subscriptions."
         )
     if not is_auto_player_updates_enabled():
         warnings.append("Automatic post-batch player update email sending is disabled. Set JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS=1 after email mode is verified.")
@@ -298,6 +298,11 @@ def auto_send_player_updates_for_match_payloads(
 ) -> dict[str, Any]:
     if not is_auto_player_updates_enabled():
         return {"mode": "disabled", "reason": "JUPR_ENABLE_AUTO_PLAYER_UPDATE_EMAILS is not enabled."}
+    if os.getenv("JUPR_ENV", "").strip().lower() == "production":
+        # Match processing has already queued the automatic rows. The background
+        # worker delivers those exact rows without holding up result publishing
+        # or sending separately prepared admin drafts from the same date range.
+        return {"mode": "queued", "source": source, "email_mode": get_email_mode()}
     dates = sorted({day for day in (_safe_match_date(row.get("date")) for row in (match_payloads or [])) if day is not None})
     if not dates:
         return {"mode": "skipped", "reason": "No match dates available for player update sending."}

@@ -153,11 +153,17 @@ def staging_match_canonical_normalize_writes_enabled() -> bool:
 
 
 def staging_communications_mutations_enabled() -> bool:
-    """Keep staging communications reads open without opening their writes."""
+    """Require the communication gate and each hosted environment's write policy."""
 
     environment = os.getenv("JUPR_ENV", "").strip().lower()
     if environment in {"local", "test", "development", "dev"}:
         return True
+    if environment == "production":
+        return (
+            os.getenv("JUPR_PRODUCTION_WRITE_POLICY", "").strip().lower() == "enabled"
+            and os.getenv("JUPR_STAGING_WRITE_WAVE", "").strip().lower() == "none"
+            and os.getenv(COMMUNICATIONS_MUTATION_FLAG, "").strip().lower() in TRUTHY
+        )
     if environment != "staging":
         return False
     return (
@@ -170,6 +176,6 @@ def require_staging_communications_mutations() -> None:
     if staging_communications_mutations_enabled():
         return
     raise PermissionError(
-        "Communications mutations are disabled. Use the explicitly approved "
-        f"communications staging wave with {COMMUNICATIONS_MUTATION_FLAG}=1."
+        "Communications mutations are disabled for this environment. "
+        "Enable the communications gate under the approved write policy."
     )
