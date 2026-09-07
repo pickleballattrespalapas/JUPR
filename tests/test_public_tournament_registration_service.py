@@ -592,6 +592,14 @@ def test_public_tournament_registration_submit_and_confirmation(monkeypatch) -> 
     monkeypatch.setenv("JUPR_ENV", "staging")
     monkeypatch.setenv("JUPR_EMAIL_MODE", "dry_run")
     storage = fake_storage()
+    storage["tournament_registration_settings"][0]["sponsors_json"] = [
+        {"name": "Published Title Sponsor", "tier": "presenting", "notes": "Private agreement"}
+    ]
+    deliveries = []
+    monkeypatch.setattr(
+        "jupr_app.services.public_tournament_registration_service.send_tournament_registration_confirmation_email",
+        lambda **kwargs: deliveries.append(kwargs) or {"status": "dry_run"},
+    )
     storage["tournament_registration_days"].append(
         {
             "id": "day2",
@@ -624,6 +632,8 @@ def test_public_tournament_registration_submit_and_confirmation(monkeypatch) -> 
     assert len(storage["tournament_registration_selections"]) == 1
     assert result["confirmation_token"]
     assert result["email_delivery"]["status"] == "dry_run"
+    assert deliveries[0]["email_sponsors"][0]["name"] == "Published Title Sponsor"
+    assert "Private agreement" not in str(deliveries[0]["email_sponsors"])
 
     confirmation = build_public_tournament_registration_confirmation(
         supabase,

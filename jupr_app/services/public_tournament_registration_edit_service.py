@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlencode
 
+from jupr_app.services.tournament_email_sponsor_service import load_tournament_email_sponsors
 from jupr_app.config import get_env_or_default, get_explicit_registration_edit_token_secret, get_public_base_url
 from jupr_app.domain.notifications.tournament_registration_edit_email import send_tournament_registration_edit_email
 from jupr_app.domain.tournament_registration_edit_tokens import build_registration_edit_token, verify_registration_edit_token
@@ -345,6 +346,7 @@ def request_public_tournament_registration_edit_link(
                 registration_slug=_clean_text(settings.get("registration_slug"), limit=120) or _clean_text(registration_slug, limit=120) or None,
                 public_base_url=public_base_url,
             ),
+            email_sponsors=load_tournament_email_sponsors(supabase, club_id=str(club_id), tournament_id=tid),
         )
     except Exception as exc:
         try:

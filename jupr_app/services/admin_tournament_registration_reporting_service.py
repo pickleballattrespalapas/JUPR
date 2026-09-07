@@ -8,6 +8,11 @@ from typing import Any
 
 from jupr_app.config import EMAIL_MODE_DRY_RUN, get_email_mode
 from jupr_app.domain.notifications.smtp_mailer import get_smtp_config_status
+from jupr_app.domain.notifications.tournament_email_sponsors import sponsor_preview_html
+from jupr_app.services.tournament_email_sponsor_service import (
+    prepare_tournament_email_sponsors,
+    tournament_email_sponsor_snapshot,
+)
 from jupr_app.services.staging_write_guard import staging_communications_mutations_enabled
 from jupr_app.domain.notifications.tournament_registrant_broadcast_email import (
     build_tournament_registrant_broadcast_email_html,
@@ -233,6 +238,7 @@ def _registration_export_rows(
                         limit=160,
                     ),
                     "event_option_id": event_id,
+                    "event_date": _clean_text(day.get("event_date") or day.get("date"), limit=40),
                     "division": _event_label(event) if event_id else "",
                     "partner_mode": _clean_text(
                         selection.get("partner_mode") or "NONE",
@@ -356,12 +362,16 @@ def build_admin_tournament_broadcast_preview(
     message: str = "",
     registration_ids: list[str] | None = None,
     include_cancelled: bool = False,
+    include_registration_events: bool = False,
+    preview_recipient_email: str | None = None,
     registration_status: str | None = None,
     payment_status: str | None = None,
     partner_mode: str | None = None,
     registration_day_id: str | None = None,
     event_option_id: str | None = None,
     search: str | None = None,
+    include_sponsor_logos: bool = True,
+    reviewed_email_sponsors: list[dict] | None = None,
 ) -> dict[str, Any]:
     if not is_admin_tournament_admin_enabled():
         raise PermissionError("Next Tournament Admin is disabled.")
@@ -392,8 +402,9 @@ def build_admin_tournament_broadcast_preview(
         event_option_id=event_option_id,
         search=search,
     )
-    recipients: list[dict[str, str]] = []
+    recipients: list[dict[str, Any]] = []
     seen: set[str] = set()
+    included_registration_ids: set[str] = set()
     for row in filtered_rows:
         status = _clean_text(
             row.get("registration_status") or "confirmed",
@@ -402,7 +413,10 @@ def build_admin_tournament_broadcast_preview(
         if status == "cancelled" and not include_cancelled:
             continue
         email = _clean_email(row.get("email"))
-        if not email or email in seen:
+        if not email:
+            continue
+        included_registration_ids.add(row["registration_id"])
+        if email in seen:
             continue
         seen.add(email)
         recipients.append(
@@ -418,6 +432,35 @@ def build_admin_tournament_broadcast_preview(
         )
     recipients.sort(key=lambda row: (row["name"].lower(), row["email"]))
 
+    if include_registration_events:
+        # Filters choose participants. Include all events for those selected
+        # registrations, never other registrations that merely share an inbox.
+        registrations: dict[str, dict] = {}
+        email_by_registration: dict[str, str] = {}
+        for row in rows:
+            registration_id = row["registration_id"]
+            if registration_id not in included_registration_ids:
+                continue
+            email_by_registration[registration_id] = row["email"]
+            registration = registrations.setdefault(registration_id, {
+                "registration_id": registration_id, "name": row["display_name"],
+                "registration_status": row["registration_status"], "events": [],
+            })
+            if row.get("selection_id") and row.get("event_option_id"):
+                registration["events"].append({key: row.get(key, "") for key in (
+                    "selection_id", "event_option_id", "division", "day", "event_date",
+                    "partner_mode", "partner_name",
+                )})
+        registrations_by_email: dict[str, list[dict]] = {}
+        for registration_id, registration in registrations.items():
+            registration["events"].sort(key=lambda event: (
+                event["event_date"], event["day"], event["division"], event["selection_id"]))
+            registrations_by_email.setdefault(email_by_registration[registration_id], []).append(registration)
+        for recipient in recipients:
+            recipient["registration_events"] = sorted(
+                registrations_by_email.get(recipient["email"], []),
+                key=lambda registration: (registration["name"].lower(), registration["registration_id"]))
+
     tournament_name = _clean_text(
         tournament.get("name") or "Tournament",
         limit=180,
@@ -431,16 +474,27 @@ def build_admin_tournament_broadcast_preview(
         if recipients
         else {"name": "Registrant", "email": ""}
     )
+    if preview_recipient_email:
+        preview_recipient = next((row for row in recipients if row["email"] == _clean_email(preview_recipient_email)), None)
+        if preview_recipient is None:
+            raise ValueError("Choose a preview recipient from the selected participants.")
     final_subject = build_tournament_registrant_broadcast_subject(
         tournament_name=tournament_name,
         subject=clean_subject,
     )
     delivery = broadcast_delivery_settings()
+    sponsor_snapshot = tournament_email_sponsor_snapshot(supabase, club_id=str(club_id), tournament_id=clean_tournament_id)
+    email_sponsors = prepare_tournament_email_sponsors(supabase, sponsor_snapshot) if include_sponsor_logos else (reviewed_email_sponsors or [])
     reviewed_scope = {"tournament_id": clean_tournament_id, "club_id": str(club_id),
         "registration_ids": sorted(selected_ids) if selected_ids is not None else None,
         "include_cancelled": include_cancelled, "recipients": recipients,
         "subject": final_subject, "message": clean_message,
         "delivery_mode": delivery["delivery_mode"], "sender": delivery["sender"]}
+    if include_registration_events:
+        reviewed_scope["include_registration_events"] = True
+    if sponsor_snapshot:
+        reviewed_scope["sponsors"] = sponsor_snapshot
+        reviewed_scope["sponsor_logos"] = [row.get("logo_png_base64", "") for row in email_sponsors]
     fingerprint = hashlib.sha256(json.dumps(reviewed_scope, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     send_available = bool(delivery["enabled"] and selected_ids and recipients and clean_subject and clean_message)
     return {
@@ -454,6 +508,8 @@ def build_admin_tournament_broadcast_preview(
         "preview_fingerprint": fingerprint,
         "delivery_mode": delivery["delivery_mode"],
         "sender": delivery["sender"],
+        "email_sponsors": email_sponsors,
+        "include_registration_events": include_registration_events,
         "selected_registration_ids": sorted(selected_ids) if selected_ids is not None else None,
         "recipient_count": len(recipients),
         "recipients": recipients,
@@ -468,14 +524,18 @@ def build_admin_tournament_broadcast_preview(
                 subject=final_subject,
                 message=clean_message,
                 personalize_greeting=False,
+                email_sponsors=email_sponsors,
+                registration_events=preview_recipient.get("registration_events"),
             ),
-            "html": build_tournament_registrant_broadcast_email_html(
+            "html": sponsor_preview_html(build_tournament_registrant_broadcast_email_html(
                 tournament_name=tournament_name,
                 recipient_name=preview_recipient["name"],
                 subject=final_subject,
                 message=clean_message,
                 personalize_greeting=False,
-            ),
+                email_sponsors=email_sponsors,
+                registration_events=preview_recipient.get("registration_events"),
+            ), email_sponsors),
         },
         "warnings": ["Preview only. This endpoint never sends email."],
     }

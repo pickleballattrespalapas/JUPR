@@ -22,8 +22,49 @@ The migration `20260906052216_tournament_sponsor_logo_storage.sql` creates the
 private bucket and restrictive client-access policies. It was applied to staging
 project `sijpxjxvdtrehmqvirfi` before the staging merge.
 
+## Tournament emails
+
+Registration confirmations, registration edit links, participant broadcasts,
+partner requests and updates, and four-player team invitations include published,
+visible sponsors automatically. Presenting sponsors appear below the email title;
+Supporting and Community sponsors follow the message. Names, public tier labels,
+descriptions and website links appear in both HTML and plain text. Private notes
+and unpublished setup changes are excluded.
+
+Uploaded logos are embedded as PNG MIME parts, so delivered emails do not depend
+on expiring storage URLs. Images are resized and limited to 64 KB each / 256 KB
+total. If a logo cannot be loaded, the sponsor's text still appears and the
+transactional message can be delivered. The logo bucket stays private.
+
+Communications displays the complete email in a sandboxed preview. Sponsor
+details and embedded images are bound to the confirmation and recorded with the
+broadcast. Changed published sponsors require a new preview. Each recipient
+uses the saved logo copies, including after continuing an interrupted broadcast;
+previously attempted recipients are never sent another copy automatically.
+
+No database migration, new sender credentials, or email-mode change is required.
+
 Validation includes sponsor rendering checks, the existing Next component suite,
 TypeScript and Next production build checks, migration guards, and focused Python
 tests covering uploads, authorization, draft/published separation, validation, and
 public response privacy. Hosted staging readiness is determined by the exact-SHA
 deployment handoff described in `AGENTS.md`.
+
+## Optional registration events in Communications
+
+The Communications composer offers **Include registration events**, off by default.
+It appends the selected player's event names, days/dates, and partner names or
+partner-needed status below the organizer's message and above lower-tier sponsors.
+Each recipient receives only the selected registrations associated with their
+email address. Shared inboxes receive one copy with separately named player
+sections; other registrations sharing that address are not added automatically.
+A participant selected using an event filter still receives all their registered
+events when this option is enabled. Empty and explicitly selected cancelled
+registrations are labelled clearly. Partner contact details and private notes
+are never included.
+
+**Preview for** switches the displayed recipient without changing the audience.
+Event details and the option are bound to the reviewed message; editing an event,
+day, partner, or selection requires a new review before remaining emails can be
+sent. Confirmed recipient event snapshots are retained with the existing
+communications ledger; no migration is required.

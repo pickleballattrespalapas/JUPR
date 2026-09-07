@@ -72,6 +72,52 @@ def test_single_and_bulk_deduplicate_only_selected_participants(fixture, monkeyp
     assert replay["recipients"][0]["status"] == "sent"
 
 
+def _published_sponsor(fixture):
+    sponsor = {"name": "Title Sponsor", "tier": "presenting", "public_description": "Public description", "notes": "Private contract"}
+    fixture.tables["tournament_registration_settings"] = [{"tournament_id": "tour_1", "sponsors_json": [sponsor]}]
+    return sponsor
+
+
+def test_published_sponsor_changes_invalidate_review_before_any_email(fixture):
+    sponsor = _published_sponsor(fixture)
+    payload = prepare(fixture)
+    sponsor["public_description"] = "Changed description"
+    with pytest.raises(ValueError, match="Preview the email again"):
+        service.create_tournament_broadcast(fixture, **payload)
+    assert not fixture.tables.get(service.TABLE)
+
+
+def test_saved_sponsors_are_used_for_delivery_and_shared_address_still_sends_once(fixture, monkeypatch):
+    from jupr_app.services import admin_tournament_registration_reporting_service as reporting
+    _published_sponsor(fixture)
+    sent = []
+    monkeypatch.setattr(service, "send_tournament_registrant_broadcast_email", lambda **kw: sent.append(kw) or {"status": "sent"})
+    root = service.create_tournament_broadcast(fixture, **prepare(fixture, ["registration_1", "reg_shared"]))
+    review = fixture.tables[service.TABLE][0]["request_json"]["review"]
+    assert "Title Sponsor" in review["preview"]["html"]
+    assert "Public description" in review["preview"]["text"]
+    assert "Private contract" not in str(review)
+    # Delivery uses the reviewed logo copies, not new storage URLs or downloads.
+    monkeypatch.setattr(reporting, "prepare_tournament_email_sponsors", lambda *a: pytest.fail("Do not fetch logo copies again after confirmation"))
+    attempt(fixture, root["operation_key"])
+    attempt(fixture, root["operation_key"])
+    assert len(sent) == 1
+    assert sent[0]["email_sponsors"] == review["email_sponsors"]
+
+
+def test_sponsor_change_after_confirmation_stops_only_remaining_recipients(fixture, monkeypatch):
+    sponsor = _published_sponsor(fixture)
+    sent = []
+    monkeypatch.setattr(service, "send_tournament_registrant_broadcast_email", lambda **kw: sent.append(kw) or {"status": "sent"})
+    root = service.create_tournament_broadcast(fixture, **prepare(fixture, ["registration_1", "reg_b"]))
+    attempt(fixture, root["operation_key"], 0)
+    sponsor["name"] = "New sponsor"
+    assert attempt(fixture, root["operation_key"], 0)["status"] == "sent"
+    with pytest.raises(ValueError, match="sponsor details changed"):
+        attempt(fixture, root["operation_key"], 1)
+    assert len(sent) == 1
+
+
 def test_bulk_progress_survives_reload_and_does_not_resend(fixture, monkeypatch):
     sent = []
     monkeypatch.setattr(service, "send_tournament_registrant_broadcast_email", lambda **kw: sent.append(kw["recipient_email"]) or {"status": "sent"})
@@ -212,3 +258,127 @@ def test_records_and_selection_data_are_never_changed(fixture):
     root = service.create_tournament_broadcast(fixture, **prepare(fixture))
     attempt(fixture, root["operation_key"])
     assert fixture.tables["tournament_registrations"] == before
+
+
+
+def _event_preview(db, ids=None, **overrides):
+    return build_admin_tournament_broadcast_preview(db, club_id="club", tournament_id="tour_1",
+        registration_ids=ids or ["registration_1"], subject="Schedule", message="See you soon.",
+        include_registration_events=True, **overrides)
+
+
+def test_events_are_optional_and_only_selected_registrations_are_included(fixture):
+    ordinary = build_admin_tournament_broadcast_preview(fixture, club_id="club", tournament_id="tour_1",
+        registration_ids=["registration_1"], subject="Schedule", message="See you soon.")
+    assert ordinary["include_registration_events"] is False
+    assert "Your registration events" not in ordinary["preview"]["text"]
+    assert "registration_events" not in ordinary["recipients"][0]
+    preview = _event_preview(fixture)
+    assert preview["preview_fingerprint"] != ordinary["preview_fingerprint"]
+    assert "Gender Doubles / 3.5" in preview["preview"]["text"]
+    assert "Apr 10, 2026" in preview["preview"]["html"]
+    assert "Looking for a partner" in preview["preview"]["html"]
+    assert "Sam" not in preview["preview"]["html"]  # Unselected, same inbox.
+    assert "Original note" not in str(preview["recipients"])
+    assert "555-0100" not in str(preview["recipients"])
+
+
+def test_each_recipient_preview_and_actual_smtp_body_contains_only_their_events(fixture, monkeypatch):
+    from jupr_app.domain.notifications import tournament_registrant_broadcast_email as email
+    fixture.tables["tournament_registration_selections"].append({
+        **fixture.tables["tournament_registration_selections"][0], "id": "selection_b", "registration_id": "reg_b",
+        "event_option_id": "event_2", "partner_mode": "KNOWN", "partner_name": "Beth's Partner",
+        "partner_email": "private@example.com", "partner_phone": "private-phone"})
+    first = _event_preview(fixture, ["registration_1", "reg_b"])
+    second = _event_preview(fixture, ["registration_1", "reg_b"], preview_recipient_email="beth@example.com")
+    assert first["preview_fingerprint"] == second["preview_fingerprint"]
+    assert second["preview"]["to_email"] == "beth@example.com"
+    assert "Gender Doubles / 4.0" in second["preview"]["text"]
+    assert "Gender Doubles / 3.5" not in second["preview"]["text"]
+    assert "Beth's Partner" in second["preview"]["text"]
+    assert "private@example.com" not in str(second["recipients"])
+    with pytest.raises(ValueError, match="selected participants"):
+        _event_preview(fixture, preview_recipient_email="beth@example.com")
+    delivered = []
+    monkeypatch.setenv("JUPR_EMAIL_MODE", "live")
+    monkeypatch.setattr("jupr_app.services.admin_tournament_registration_reporting_service.broadcast_delivery_settings",
+        lambda: {"enabled": True, "delivery_mode": "live", "sender": {}})
+    monkeypatch.setattr(service, "broadcast_delivery_settings", lambda: {"enabled": True, "delivery_mode": "live", "sender": {}})
+    monkeypatch.setattr(email, "send_email_with_inline_chart", lambda **kw: delivered.append(kw) or "fake-id")
+    root = service.create_tournament_broadcast(fixture, **prepare(fixture, ["registration_1", "reg_b"], include_registration_events=True))
+    for index in (0, 1, 0):
+        attempt(fixture, root["operation_key"], index)
+    assert len(delivered) == 2
+    assert delivered[0]["to_email"] == "alex@example.com"
+    assert "Gender Doubles / 3.5" in delivered[0]["html_body"]
+    assert "Gender Doubles / 4.0" not in delivered[0]["text_body"]
+    assert "Gender Doubles / 4.0" in delivered[1]["html_body"]
+    assert "Alex Example" not in delivered[1]["text_body"]
+    assert "private@example.com" not in str(delivered)
+
+
+def test_shared_mailbox_has_named_sections_for_selected_players_and_sends_once(fixture, monkeypatch):
+    sent = []
+    monkeypatch.setattr(service, "send_tournament_registrant_broadcast_email", lambda **kw: sent.append(kw) or {"status": "sent"})
+    preview = _event_preview(fixture, ["registration_1", "reg_shared"])
+    assert preview["recipient_count"] == 1
+    assert "Alex Example" in preview["preview"]["html"] and "Sam" in preview["preview"]["html"]
+    assert "No registration events are currently listed." in preview["preview"]["text"]
+    root = service.create_tournament_broadcast(fixture, **prepare(fixture, ["registration_1", "reg_shared"], include_registration_events=True))
+    attempt(fixture, root["operation_key"])
+    attempt(fixture, root["operation_key"])
+    assert len(sent) == 1
+    assert [row["name"] for row in sent[0]["registration_events"]] == ["Alex Example", "Sam"]
+
+
+def test_audience_event_filter_does_not_remove_other_events_from_the_email(fixture):
+    fixture.tables["tournament_registration_selections"].append({
+        **fixture.tables["tournament_registration_selections"][0], "id": "selection_second", "event_option_id": "event_2"})
+    preview = _event_preview(fixture, event_option_id="event_1")
+    assert "Gender Doubles / 3.5" in preview["preview"]["text"]
+    assert "Gender Doubles / 4.0" in preview["preview"]["text"]
+
+
+@pytest.mark.parametrize("change", ["partner", "date", "division", "removed"])
+def test_changed_event_details_require_a_fresh_review_before_confirmation(fixture, change):
+    payload = prepare(fixture, include_registration_events=True)
+    if change == "partner":
+        fixture.tables["tournament_registration_selections"][0]["partner_name"] = "New partner"
+    elif change == "date":
+        fixture.tables["tournament_registration_days"][0]["event_date"] = "2026-04-11"
+    elif change == "division":
+        fixture.tables["tournament_event_options"][0]["division_name"] = "4.5"
+    else:
+        fixture.tables["tournament_registration_selections"] = []
+    with pytest.raises(ValueError, match="Preview the email again"):
+        service.create_tournament_broadcast(fixture, **payload)
+    assert not fixture.tables.get(service.TABLE)
+
+
+def test_event_change_after_confirmation_pauses_remaining_and_keeps_reviewed_snapshot(fixture, monkeypatch):
+    sent = []
+    monkeypatch.setattr(service, "send_tournament_registrant_broadcast_email", lambda **kw: sent.append(deepcopy(kw)) or {"status": "sent"})
+    root = service.create_tournament_broadcast(fixture, **prepare(fixture, ["registration_1", "reg_b"], include_registration_events=True))
+    attempt(fixture, root["operation_key"], 0)
+    fixture.tables["tournament_registration_days"][0]["event_date"] = "2026-04-11"
+    assert attempt(fixture, root["operation_key"], 0)["status"] == "sent"
+    with pytest.raises(ValueError, match="registration events changed"):
+        attempt(fixture, root["operation_key"], 1)
+    assert len(sent) == 1
+    assert sent[0]["registration_events"][0]["events"][0]["event_date"] == "2026-04-10"
+
+
+def test_event_option_cannot_be_changed_using_an_existing_preview_or_operation(fixture):
+    payload = prepare(fixture, include_registration_events=True)
+    with pytest.raises(ValueError, match="Preview the email again"):
+        service.create_tournament_broadcast(fixture, **{**payload, "include_registration_events": False})
+    service.create_tournament_broadcast(fixture, **payload)
+    with pytest.raises(ValueError, match="different communications request"):
+        service.create_tournament_broadcast(fixture, **{**payload, "include_registration_events": False})
+
+
+def test_cancelled_registrations_are_labelled_when_explicitly_included(fixture):
+    fixture.tables["tournament_registrations"][0]["status"] = "cancelled"
+    assert _event_preview(fixture)["recipient_count"] == 0
+    preview = _event_preview(fixture, include_cancelled=True)
+    assert "Registration cancelled" in preview["preview"]["html"]
