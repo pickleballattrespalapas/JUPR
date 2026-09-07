@@ -793,3 +793,16 @@ BADGE_DEFINITIONS: list[BadgeDefinition] = [
         scope="overall",
     ),
 ]
+
+
+# Program awards use a durable, revision-checked reconciler rather than the
+# per-match evaluator; finalized events can qualify players outside that match.
+from jupr_app.domain.gamification.program_badge_catalog import PROGRAM_BADGES
+
+BADGE_DEFINITIONS.extend(
+    BadgeDefinition(b.id, b.name, b.prestige, b.category, b.repeatable, True,
+                    "epic" if b.prestige >= 60 else "rare" if b.prestige >= 35 else "common",
+                    None, "tournament_champion" if b.category == "Trophies" else "draft_master" if b.category == "Partnerships" else "participant",
+                    b.requirement, b.requirement, "overall", eval_triggers=("program_changed",))
+    for b in PROGRAM_BADGES
+)

@@ -6,7 +6,16 @@ from jupr_app.domain.gamification.presentation import badge_category, badge_requ
 def test_presentation_overlay_covers_every_badge_without_changing_awards_or_activation():
     sql = Path('supabase/migrations/20261109001000_badge_plain_requirements.sql').read_text()
     activation = next(Path('supabase/migrations').glob('*_badge_reactivation_and_admin_seasons.sql')).read_text()
+    import json
+    expansion = Path('supabase/migrations/20261109001200_program_badge_expansion.sql').read_text()
+    seeds = {row['badge_id']: row for row in json.loads(expansion.split('$catalog$')[1])}
     for badge in BADGE_DEFINITIONS:
+        if badge.badge_id in seeds:
+            seed = seeds[badge.badge_id]
+            assert seed['category'] == badge_category(badge.badge_id)
+            assert seed['hint'] == badge_requirement(badge.badge_id)
+            assert seed['lore'] == badge_requirement(badge.badge_id)
+            continue
         values = (badge.badge_id, badge_category(badge.badge_id), badge_requirement(badge.badge_id))
         expected = '(' + ', '.join("'" + value.replace("'", "''") + "'" for value in values) + ')'
         assert expected in sql or expected[:-1] + "," in activation

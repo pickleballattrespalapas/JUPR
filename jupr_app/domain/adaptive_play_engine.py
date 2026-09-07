@@ -1391,6 +1391,13 @@ def generator_event_standings(event: dict[str, Any]) -> list[dict[str, Any]]:
     """
     if normalize_scoring_mode(event.get("scoringMode")) == "unscored":
         return []
+    if event.get("type") == "round_robin" and event.get("status") == "completed":
+        from jupr_app.domain.live_beta_engine import round_robin_standings
+        final_event = {**event, "rounds": [r for r in event.get("rounds", []) if r.get("status") == "saved"]}
+        rows = round_robin_standings(final_event)
+        for row in rows:
+            row["roundRobinVictoryRanking"] = True
+        return rows
     participants = _participant_map(event)
     stats: dict[str, dict[str, Any]] = {}
     for participant in event.get("participants") or []:

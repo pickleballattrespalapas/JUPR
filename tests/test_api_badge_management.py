@@ -73,3 +73,17 @@ def test_new_season_request_carries_admin_dates_and_revision(monkeypatch):
     response=c.post('/admin/clubs/club/badge-management/seasons',json=dict(operation_id=str(uuid4()),id=str(uuid4()),name='Club season',start_date='2026-09-15',end_date='2027-09-14',timezone='America/Mazatlan',expected_revision=0))
     assert response.status_code==200
     assert checks==['club']
+
+
+def test_round_robin_decision_is_admin_only_and_starts_evaluation(monkeypatch):
+    checks = []
+    seen = []
+    monkeypatch.setattr(routes, 'check_program_badges', lambda _db, club: checks.append(club))
+    monkeypatch.setattr(routes, 'save_badge_management', lambda _db, **kwargs: seen.append(kwargs) or {'ok': True})
+    p = dict(operation_id=str(uuid4()),source_key='live:rr',source_fingerprint='a'*64,winner_player_id=1)
+    assert client(monkeypatch, 'operator').post('/admin/clubs/club/badge-management/round-robin-winners', json=p).status_code == 403
+    assert not checks and not seen
+    assert client(monkeypatch).post('/admin/clubs/club/badge-management/round-robin-winners', json=p).status_code == 200
+    assert checks == ['club']
+    assert seen[0]['action'] == 'resolve_round_robin'
+    assert seen[0]['payload']['source_fingerprint'] == p['source_fingerprint']

@@ -40,6 +40,10 @@ jobs:
             tests/test_smoke_public_web.py \
             tests/test_staging_deployment_config.py
 
+      - name: Verify program badge rules and admin decisions
+        run: |
+          python -m pytest -q tests/test_program_badges.py tests/test_program_badge_service.py tests/test_api_badge_management.py tests/test_badge_schema.py tests/test_badge_recompute.py
+
       - name: Run deployment and admin UX safety contracts
         run: |
           python -m pytest -q \

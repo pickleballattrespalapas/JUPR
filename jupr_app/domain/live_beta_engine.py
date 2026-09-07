@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import re
 from collections import defaultdict
@@ -272,9 +273,13 @@ def create_league_event(
 
 
 def round_robin_matches(event: dict[str, Any]) -> list[dict[str, Any]]:
-    matches: list[dict[str, Any]] = []
+    matches = []
     for round_data in event.get("rounds") or []:
-        matches.extend(round_data.get("matches") or [])
+        if round_data.get("matches"):
+            matches.extend(round_data["matches"])
+        else:
+            for court in round_data.get("courts") or []:
+                matches.extend(court.get("matches") or [])
     return matches
 
 
@@ -564,8 +569,75 @@ def update_league_score(event: dict[str, Any], match_id: str, score_a: int | Non
             return
 
 
+def round_robin_players_of_record(event: dict[str, Any]) -> dict[str, Any]:
+    """Attribute each result to the person who played, including recorded subs."""
+    if not event.get("substitutions"):
+        return event
+    materialized = copy.deepcopy(event)
+    participants = {str(p["id"]): p for p in materialized.get("participants", [])}
+    tokens = {p.get("player_id"): token for token, p in participants.items() if p.get("player_id") is not None}
+    for match in round_robin_matches(materialized):
+        for side in ("teamA", "teamB"):
+            for index, original in enumerate(match.get(side, [])):
+                sub = get_active_sub_for_match(event, str(match["id"]), str(original), include_inactive=True)
+                if not sub:
+                    continue
+                pid = sub.get("substitute_player_id")
+                token = tokens.get(pid) if pid is not None else None
+                token = token or f"sub:{pid if pid is not None else sub.get('id')}"
+                participants.setdefault(token, {"id": token, "name": sub.get("substitute_name") or "Substitute", "player_id": pid})
+                if pid is not None:
+                    tokens[pid] = token
+                match[side][index] = token
+    materialized["participants"] = list(participants.values())
+    materialized["substitutions"] = []
+    return materialized
+
+
+def round_robin_result_matches(event: dict[str, Any]) -> list[dict[str, Any]]:
+    rounds = [r for r in event.get("rounds", []) if str(r.get("status", "")).lower() not in {"skipped", "cancelled", "canceled"}]
+    return [m for m in round_robin_matches({**event, "rounds": rounds})
+            if str(m.get("status", "")).lower() not in {"cancelled", "canceled", "bye"}]
+
+
+def round_robin_result_fingerprint(event: dict[str, Any]) -> str:
+    event = round_robin_players_of_record(event)
+    proof = {
+        "participants": sorted((str(p.get("id")), p.get("player_id")) for p in event.get("participants", [])),
+        "matches": [{k: m.get(k) for k in ("id", "teamA", "teamB", "scoreA", "scoreB", "status")}
+                    for m in round_robin_result_matches(event)],
+    }
+    return hashlib.sha256(json.dumps(proof, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
 def round_robin_standings(event: dict[str, Any]) -> list[dict[str, Any]]:
-    return compute_standings(round_robin_matches(event), event.get("participants") or [])
+    event = round_robin_players_of_record(event)
+    rows = compute_standings(round_robin_result_matches(event), event.get("participants") or [])
+    # Names may order the display, but never decide the winner. Shared ranks
+    # expose a numerical tie until a club administrator records the decision.
+    key = lambda row: (row["wins"], row["differential"], row["pointsFor"])
+    rows.sort(key=key, reverse=True)
+    previous = None
+    rank = 0
+    for index, row in enumerate(rows, 1):
+        score = key(row)
+        if score != previous:
+            rank = index
+        row["rank"] = rank
+        previous = score
+    tied_first = sum(row["rank"] == 1 for row in rows) > 1
+    decision = event.get("round_robin_winner") or {}
+    chosen = str(decision.get("participant_id") or "")
+    decision_valid = (tied_first and decision.get("display_fingerprint") == round_robin_result_fingerprint(event)
+                      and any(str(r["participantId"]) == chosen and r["rank"] == 1 for r in rows))
+    for row in rows:
+        row["winnerNeedsAdmin"] = tied_first and row["rank"] == 1 and not decision_valid
+        row["winnerDecidedByAdmin"] = decision_valid and str(row["participantId"]) == chosen
+        if decision_valid and row["rank"] == 1 and str(row["participantId"]) != chosen:
+            row["rank"] = 2
+    if decision_valid:
+        rows.sort(key=lambda row: row["rank"])
+    return rows
 
 
 def league_round_summary(event: dict[str, Any], round_number: int | None = None) -> list[dict[str, Any]]:

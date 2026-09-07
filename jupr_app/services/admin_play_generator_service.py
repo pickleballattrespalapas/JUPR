@@ -963,6 +963,8 @@ def publish_play_generator_matches(
     )
     newly_published = [str(payload["live_match_id"]) for payload in payloads]
     official["published_match_ids"] = sorted(published_ids.union(newly_published))
+    official["match_context_by_live_id"] = {**dict(official.get("match_context_by_live_id") or {}),
+        **{str(payload["live_match_id"]): str(payload["context_id"]) for payload in payloads}}
     official["published_at"] = _now_iso()
     official["publish_result"] = result
     state["official_publish"] = official

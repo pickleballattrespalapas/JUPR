@@ -503,6 +503,12 @@ def _public_awards(supabase: Any, *, club_id: str, player_id: int | str) -> dict
                     "requirements": badge_requirement(badge_id),
                     "count": len(cabinet_rows),
                     "last_earned_at": max(earned_values) or None,
+                    "achievements": [
+                        {"id": str(row.get("id")), "earned_at": _json_safe(row.get("earned_at")),
+                         "detail": _plain_text(_json_object(row.get("value_json")).get("tape_excerpt"), limit=500)}
+                        for row in cabinet_rows
+                        if _json_object(row.get("value_json")).get("rule_version") == "program-badges-v1"
+                    ],
                 }
             )
         for row in trophy_rows:

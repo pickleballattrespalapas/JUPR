@@ -14,6 +14,7 @@ from jupr_app.data.load import load_data
 from jupr_app.domain.gamification.badge_catalog import BADGE_DEFINITIONS
 from jupr_app.domain.gamification.badge_engine import compute_candidates_for_club
 from jupr_app.domain.gamification.badges_repo import upsert_player_badges
+from jupr_app.domain.gamification.program_badge_catalog import PROGRAM_BADGE_IDS
 
 
 _REVOKE_REASON_MAX_CHARS = 500
@@ -268,6 +269,10 @@ def _fetch_existing_awards(
     resp = query.execute()
     rows = []
     for row in resp.data or []:
+        # These have a separate complete-source, revision-checked reconciler.
+        # A legacy match-only recompute cannot establish their eligibility.
+        if str(row.get("badge_id")) in PROGRAM_BADGE_IDS:
+            continue
         player_id_value = int(row.get("player_id"))
         badge_id_value = str(row.get("badge_id"))
         context_type_value = str(row.get("context_type"))

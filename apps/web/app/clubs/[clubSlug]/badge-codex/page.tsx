@@ -102,6 +102,7 @@ function badgeTimingLabel(value?: string | null): string {
   const timing = String(value || "live").trim().toLowerCase();
   if (timing === "live") return "As results are posted";
   if (timing === "manual" || timing === "curated") return "By club staff";
+  if (timing === "on_program_change") return "After eligible results or event completion";
   if (timing === "on_league_close") return "When the league ends";
   if (timing === "seasonal") return "When the season ends";
   if (timing === "disabled") return "No longer awarded";

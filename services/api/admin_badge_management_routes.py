@@ -33,6 +33,21 @@ class CommunityAwardRequest(BaseModel):
     contribution_date: date
 
 
+def check_program_badges(supabase, club_id):
+    from jupr_app.domain.gamification.program_badge_service import reconcile_program_badges
+    try:
+        reconcile_program_badges(supabase, club_id)
+    except Exception:
+        logging.getLogger(__name__).exception("Program badge check remains pending for club %s", club_id)
+
+
+class RoundRobinWinnerRequest(BaseModel):
+    operation_id: UUID
+    source_key: str = Field(min_length=1, max_length=200)
+    source_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    winner_player_id: int = Field(gt=0)
+
+
 class BadgeSeasonRequest(BaseModel):
     operation_id: UUID
     id: UUID
@@ -70,6 +85,8 @@ def install_admin_badge_management_routes(app, *, get_supabase_client):
                 actor_user_id=user.user_id, actor_role=role, operation_id=operation_id, action=action, payload=data)
             if action == "save_season" and background_tasks is not None:
                 background_tasks.add_task(check_saved_season, supabase, club_id)
+            if action == "resolve_round_robin" and background_tasks is not None:
+                background_tasks.add_task(check_program_badges, supabase, club_id)
             return result
         except PermissionError as exc:
             raise HTTPException(403, str(exc)) from exc
@@ -94,3 +111,7 @@ def install_admin_badge_management_routes(app, *, get_supabase_client):
     @app.post("/admin/clubs/{club_id}/badge-management/seasons")
     def season(club_id: str, payload: BadgeSeasonRequest, background_tasks: BackgroundTasks, authorization: str | None = auth_header()):
         return save(club_id, payload, authorization, "save_season", background_tasks)
+
+    @app.post("/admin/clubs/{club_id}/badge-management/round-robin-winners")
+    def round_robin_winner(club_id: str, payload: RoundRobinWinnerRequest, background_tasks: BackgroundTasks, authorization: str | None = auth_header()):
+        return save(club_id, payload, authorization, "resolve_round_robin", background_tasks)
