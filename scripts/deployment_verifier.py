@@ -35,6 +35,7 @@ LEGACY_BASELINE_CONFIRMATION = "BOOTSTRAP REVIEWED LEGACY ROLLBACK"
 PRODUCTION_RELEASE_TRIGGER_KEYS = frozenset(
     {
         "confirmation",
+        "initialize_registration_edit_secret",
         "legacy_baseline_config_sha256",
         "legacy_baseline_confirmation",
         "legacy_baseline_image_digest",
@@ -380,7 +381,10 @@ def production_release_trigger_errors(
     ) != 1:
         errors.append("Production release trigger must use schema_version=1.")
 
-    string_keys = PRODUCTION_RELEASE_TRIGGER_KEYS - {"schema_version"}
+    initialize_edit = payload.get("initialize_registration_edit_secret", False)
+    if type(initialize_edit) is not bool:
+        errors.append("Production registration edit initialization must be a boolean.")
+    string_keys = PRODUCTION_RELEASE_TRIGGER_KEYS - {"schema_version", "initialize_registration_edit_secret"}
     for name in sorted(string_keys & set(payload)):
         if not isinstance(payload.get(name), str):
             errors.append(f"Production release trigger {name} must be a string.")
@@ -459,6 +463,7 @@ def production_release_trigger_errors(
     resolved = {
         "candidate_sha": clean_head,
         "confirmation": confirmation,
+        "initialize_registration_edit_secret": "true" if initialize_edit is True else "false",
         "legacy_baseline_config_sha256": legacy_config,
         "legacy_baseline_confirmation": legacy_confirmation,
         "legacy_baseline_image_digest": legacy_digest,

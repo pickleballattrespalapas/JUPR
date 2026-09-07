@@ -1451,6 +1451,7 @@ def test_release_trigger_requires_closed_content_parent_and_trigger_only_diff() 
     assert resolved == {
         "candidate_sha": CANDIDATE_SHA,
         "confirmation": verifier.PRODUCTION_RELEASE_CONFIRMATION,
+        "initialize_registration_edit_secret": "false",
         "legacy_baseline_config_sha256": "",
         "legacy_baseline_confirmation": "",
         "legacy_baseline_image_digest": "",
@@ -1499,6 +1500,32 @@ def test_release_trigger_requires_closed_content_parent_and_trigger_only_diff() 
     assert legacy_resolved["legacy_baseline_config_sha256"] == FLY_CONFIG_SHA
 
 
+@pytest.mark.parametrize("value", [True, False, "true", "false", 1, 0, None])
+def test_registration_edit_initialization_requires_explicit_boolean(value) -> None:
+    errors, resolved = verifier.production_release_trigger_errors(
+        {"schema_version": 1, "confirmation": verifier.PRODUCTION_RELEASE_CONFIRMATION,
+         "release_parent_sha": "b" * 40, "initialize_registration_edit_secret": value},
+        head_sha=CANDIDATE_SHA, parent_shas=["b" * 40],
+        changed_status_lines=[f"M\t{verifier.PRODUCTION_RELEASE_TRIGGER_PATH}"],
+    )
+    if type(value) is bool:
+        assert errors == []
+        assert resolved["initialize_registration_edit_secret"] == str(value).lower()
+    else:
+        assert any("must be a boolean" in error for error in errors)
+
+
+def test_registration_signing_setup_is_guarded_and_post_deploy_verified() -> None:
+    workflow = (ROOT / ".github/workflows/fly_api_deploy.yml").read_text()
+    assert "default: false\n        type: boolean" in workflow
+    assert "true) signing_args+=(--initialize-missing)" in workflow
+    assert '.registration_edit_secret_configured == true' in workflow
+    assert workflow.index("Capture exact pre-deploy rollback identity") < workflow.index("python scripts/initialize_registration_edit_secret.py")
+    assert workflow.index("Verify production SMTP authentication") < workflow.index("python scripts/initialize_registration_edit_secret.py")
+    assert workflow.index("Reject pending Fly secret deployments") < workflow.index("python scripts/initialize_registration_edit_secret.py")
+    assert workflow.index("python scripts/initialize_registration_edit_secret.py") < workflow.index("Preserve and verify current live production runtime")
+
+
 def test_production_workflow_is_exact_candidate_and_never_creates_or_retargets_app() -> None:
     workflow = (
         ROOT / ".github/workflows/fly_api_deploy.yml"
@@ -1531,7 +1558,7 @@ def test_production_workflow_is_exact_candidate_and_never_creates_or_retargets_a
     assert "/database/query\"" not in workflow
     assert workflow.count(
         "${{ secrets.FLY_SSH_TOKEN || secrets.FLY_API_TOKEN }}"
-    ) == 5
+    ) == 6
     assert "PRODUCTION_SOURCE_BRANCH: rollback-feb8" in workflow
     assert "ref: rollback-feb8" in workflow
     assert "github.event.repository.default_branch" not in workflow

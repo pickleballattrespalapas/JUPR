@@ -3,7 +3,6 @@ import Link from "next/link";
 import PublicTournamentNav from "@/components/PublicTournamentNav";
 import { getClubTournamentRegistration } from "@/lib/tournamentRegistrationApi";
 import TournamentRegistrationForm from "./TournamentRegistrationForm";
-import EditLinkRequestForm from "./EditLinkRequestForm";
 
 type TournamentRegistrationPageProps = {
   params: { clubSlug: string };
@@ -207,24 +206,6 @@ export default async function TournamentRegistrationPage({
             </>
           }
         />
-      ) : null}
-
-      {tournament ? (
-        <article
-          id="manage-registration"
-          style={{ ...cardStyle, marginBottom: "1rem", scrollMarginTop: "1rem" }}
-        >
-          <h2 style={{ marginTop: 0 }}>Manage an existing registration</h2>
-          <p style={{ color: "#475569" }}>
-            Enter the email you registered with and we’ll send you a private
-            edit link.
-          </p>
-          <EditLinkRequestForm
-            clubSlug={clubSlug}
-            tournamentId={tournament.id}
-            registrationSlug={settings?.registration_slug ?? null}
-          />
-        </article>
       ) : null}
 
       {tournament ? (
