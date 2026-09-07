@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
-import { FormDialog, actionSuccess } from "@/components/interaction";
+import { FormDialog, actionSuccess, InteractionActionError } from "@/components/interaction";
+import { tournamentRegistrationActionError } from "@/lib/tournamentRegistrationActionError";
 import type {
   AdminTournamentDetailResponse,
   AdminTournamentRegistration,
@@ -120,6 +121,7 @@ function apiUrl(apiBase: string, path: string): string {
 function registrationEdit(
   row: AdminTournamentRegistration | null
 ): RegistrationEdit {
+  const storedStatus = row?.registration_status?.trim().toLowerCase() || "confirmed";
   return {
     firstName: row?.first_name || "",
     lastName: row?.last_name || "",
@@ -134,7 +136,7 @@ function registrationEdit(
     doublesSkill: row?.doubles_skill == null ? "" : String(row.doubles_skill),
     singlesSkill: row?.singles_skill == null ? "" : String(row.singles_skill),
     wantsPartnerBoardContact: Boolean(row?.wants_partner_board_contact),
-    registrationStatus: row?.registration_status || "confirmed",
+    registrationStatus: storedStatus === "pending" ? "confirmed" : storedStatus,
     paymentStatus: row?.payment_status || "unpaid",
     notes: row?.notes || ""
   };
@@ -297,7 +299,7 @@ export default function TournamentRegistrantEditPanel({
   ): Promise<T> {
     if (!apiBase) throw new Error("API base URL is not configured.");
     if (!accessToken)
-      throw new Error("Sign in before editing tournament registrations.");
+      throw new InteractionActionError("Sign in before editing tournament registrations.", { kind: "forbidden" });
     const headers = new Headers(options?.headers);
     headers.set("Authorization", `Bearer ${accessToken}`);
     if (options?.body) headers.set("Content-Type", "application/json");
@@ -306,10 +308,7 @@ export default function TournamentRegistrantEditPanel({
       headers
     });
     const payload = await response.json().catch(() => null);
-    if (!response.ok)
-      throw new Error(
-        String(payload?.detail || `API error (${response.status})`)
-      );
+    if (!response.ok) throw tournamentRegistrationActionError(response, payload);
     return payload as T;
   }
 
@@ -412,7 +411,7 @@ export default function TournamentRegistrantEditPanel({
   async function saveRegistration(confirmationText: string) {
     if (!registration?.updated_at) {
       setMessage("Reload this registration before saving.");
-      throw new Error("Reload this registration before saving.");
+      throw new InteractionActionError("Reload this registration before saving.", { kind: "conflict" });
     }
     const generation = actionRequest.begin();
     setBusy(true);

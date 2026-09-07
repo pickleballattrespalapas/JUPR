@@ -141,6 +141,43 @@ def _enable_guarded_staging(monkeypatch) -> None:
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "server-only")
 
 
+@pytest.mark.parametrize("submitted_status", ["confirmed", "pending"])
+def test_legacy_pending_registration_can_be_saved_from_current_or_open_editor(monkeypatch, submitted_status):
+    tables = _tables()
+    tables["tournament_registrations"][0]["status"] = "pending"
+    client = _install(monkeypatch, CompleteEditorFakeSupabase(tables))
+    detail = _detail(client)
+    assert detail["registrations"][0]["registration_status"] == "confirmed"
+    # Reading the editor does not mutate the registration or its version.
+    assert tables["tournament_registrations"][0]["status"] == "pending"
+    _enable_guarded_staging(monkeypatch)
+    response = client.patch(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/registrations/registration_1",
+        headers={"Authorization": "Bearer local"},
+        json={
+            "registration_status": submitted_status,
+            "phone": "555-9999",
+            "expected_updated_at": "2026-03-03T00:00:00Z",
+            "confirmation_text": "SAVE REGISTRATION",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert tables["tournament_registrations"][0]["status"] == "confirmed"
+    assert tables["tournament_registrations"][0]["phone"] == "555-9999"
+
+
+def test_admin_cannot_set_a_current_registration_to_retired_pending_status(monkeypatch):
+    tables = _tables()
+    client = _install(monkeypatch, CompleteEditorFakeSupabase(tables))
+    response = client.patch(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/registrations/registration_1",
+        headers={"Authorization": "Bearer local"},
+        json={"registration_status": "pending", "expected_updated_at": "2026-03-03T00:00:00Z", "confirmation_text": "SAVE REGISTRATION"},
+    )
+    assert response.status_code == 400
+    assert tables["tournament_registrations"][0]["status"] == "confirmed"
+
+
 def test_registration_editor_round_trip_null_clears_and_waived(monkeypatch) -> None:
     tables = _tables()
     client = _install(monkeypatch, CompleteEditorFakeSupabase(tables))

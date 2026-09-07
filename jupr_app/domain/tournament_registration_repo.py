@@ -47,6 +47,16 @@ _PUBLIC_REGISTRATION_ERROR_SCOPE: ContextVar[bool] = ContextVar(
 )
 
 
+def stored_registration_status(value: Any) -> str:
+    """Interpret legacy rows under the auto-confirm policy without writing them.
+
+    Pending admin confirmation was retired in June 2026. This is for stored
+    values only; explicit status changes still use the supported-status list.
+    """
+    status = str(value or "confirmed").strip().lower() or "confirmed"
+    return "confirmed" if status == "pending" else status
+
+
 @contextmanager
 def public_registration_error_scope() -> Iterator[None]:
     """Sanitize schema diagnostics while building a public API response."""
