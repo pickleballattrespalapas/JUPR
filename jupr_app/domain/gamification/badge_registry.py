@@ -132,6 +132,13 @@ def registry() -> dict[str, BadgeSpec]:
         BadgeSpec("tournament_runner_up", evaluate_tournament_runner_up, "tournament", False, "non_match", "non_match"),
         BadgeSpec("tournament_third_place", evaluate_tournament_third_place, "tournament", False, "non_match", "non_match"),
     ]
+    from jupr_app.domain.gamification.program_badge_catalog import PROGRAM_BADGES
+    from jupr_app.domain.gamification.program_badge_service import evaluate_program_badge
+    from functools import partial
+    for badge in PROGRAM_BADGES:
+        evaluator = partial(evaluate_program_badge, badge_id=badge.id)
+        evaluator.__name__ = "evaluate_program_badge"
+        specs.append(BadgeSpec(badge.id, evaluator, "overall", badge.repeatable, "non_match", "non_match"))
     return {spec.badge_id: spec for spec in specs}
 
 

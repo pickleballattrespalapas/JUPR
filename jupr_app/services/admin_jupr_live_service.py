@@ -517,6 +517,8 @@ def publish_admin_jupr_live_matches(supabase: Any, *, club_id: str, session_key:
         raise ValueError("; ".join(result.errors) or "Unable to publish JUPR Live matches.")
     newly_published = [str(payload.get("live_match_id")) for payload in payloads if payload.get("live_match_id")]
     official["published_live_match_ids"] = sorted(published_ids | set(newly_published))
+    official["match_context_by_live_id"] = {**dict(official.get("match_context_by_live_id") or {}),
+        **{str(payload["live_match_id"]): str(payload["context_id"]) for payload in payloads}}
     official["published_at"] = _now_iso()
     official["publish_result"] = result.data if isinstance(result.data, dict) else {"result": result.data}
     official.pop("pending_operation_key", None)

@@ -22,7 +22,9 @@ def badge_management_options(supabase: Any, club_id: str) -> dict:
                "available": bool(states.get(badge.badge_id, {}).get("is_active")) and states.get(badge.badge_id, {}).get("state", "live") == "live",
                "criteria": COMMUNITY_CRITERIA[badge.badge_id]}
               for badge in BADGE_DEFINITIONS if badge.badge_id in COMMUNITY_CRITERIA]
-    return {"ok": True, "players": sorted(players, key=lambda row: str(row.get("name", "")).casefold()), "seasons": seasons,
+    state_rows = supabase.table("badge_program_state").select("pending_ties,review,checked_at,last_error,revision,applied_revision").eq("club_id", club_id).execute().data or []
+    program = state_rows[0] if state_rows else {}
+    return {"ok": True, "program": program, "players": sorted(players, key=lambda row: str(row.get("name", "")).casefold()), "seasons": seasons,
             "badges": badges, "recent_awards": recent,
             "write_enabled": staging_write_wave_allows("badge-diagnostics")}
 
@@ -51,6 +53,15 @@ def save_badge_management(
         payload = {"id": str(UUID(season.id)), "name": season.name, "start_date": season.start_date.isoformat(),
                    "end_date": season.end_date.isoformat(), "timezone": season.timezone,
                    "expected_revision": int(payload["expected_revision"])}
+    elif action == "resolve_round_robin":
+        require_staging_service_role_write(supabase, workflow="round_robin_winner", required_tables=("badge_round_robin_decisions", "badge_program_state"))
+        payload = {"source_key": str(payload["source_key"]), "source_fingerprint": str(payload["source_fingerprint"]),
+                   "winner_player_id": int(payload["winner_player_id"])}
+        result = supabase.rpc("admin_resolve_round_robin_v1", {"p_club_id": club_id, "p_actor_email": actor_email,
+            "p_actor_user_id": actor_user_id, "p_actor_role": actor_role, "p_operation_id": operation_id, "p_payload": payload}).execute().data
+        if not isinstance(result, dict) or not result.get("ok"):
+            raise RuntimeError("Unable to confirm the round-robin decision. Retry the same request.")
+        return result
     else:
         raise ValueError("Unknown badge action.")
     response = supabase.rpc("admin_manage_badges_v1", {"p_club_id": club_id, "p_actor_email": actor_email,

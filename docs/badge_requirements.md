@@ -239,3 +239,70 @@ Unlock: Awarded by a club admin for welcoming newcomers and helping them find ga
 
 ## mentor — Mentor (stackable admin award)
 Unlock: Awarded by a club admin for helping a newer player improve over several visits, leading beginner lessons or practice sessions, or helping players learn rules and court etiquette. Can be awarded again for a separate contribution.
+
+
+## leagues_completed_5 — 5 Leagues Completed
+Unlock: Finish 5 leagues at this club, meeting each league's required minimum games.
+
+## leagues_completed_10 — 10 Leagues Completed
+Unlock: Finish 10 leagues at this club, meeting each league's required minimum games.
+
+## leagues_completed_25 — 25 Leagues Completed
+Unlock: Finish 25 leagues at this club, meeting each league's required minimum games.
+
+## tournaments_completed_5 — 5 Tournaments Completed
+Unlock: Complete play in 5 finished tournaments at this club.
+
+## tournaments_completed_10 — 10 Tournaments Completed
+Unlock: Complete play in 10 finished tournaments at this club.
+
+## tournaments_completed_25 — 25 Tournaments Completed
+Unlock: Complete play in 25 finished tournaments at this club.
+
+## round_robins_completed_5 — 5 Round Robins Completed
+Unlock: Complete your assigned play in 5 finished round robins at this club.
+
+## round_robins_completed_10 — 10 Round Robins Completed
+Unlock: Complete your assigned play in 10 finished round robins at this club.
+
+## round_robins_completed_25 — 25 Round Robins Completed
+Unlock: Complete your assigned play in 25 finished round robins at this club.
+
+## matches_together_10 — 10 Matches Together
+Unlock: Play 10 doubles matches with the same partner at this club.
+
+## matches_together_25 — 25 Matches Together
+Unlock: Play 25 doubles matches with the same partner at this club.
+
+## matches_together_50 — 50 Matches Together
+Unlock: Play 50 doubles matches with the same partner at this club.
+
+## wins_together_10 — 10 Wins Together
+Unlock: Win 10 doubles matches with the same partner at this club.
+
+## wins_together_25 — 25 Wins Together
+Unlock: Win 25 doubles matches with the same partner at this club.
+
+## wins_together_50 — 50 Wins Together
+Unlock: Win 50 doubles matches with the same partner at this club.
+
+## five_winning_partners — Five Winning Partners
+Unlock: Win with at least 5 different partners in one completed round robin.
+
+## triple_crown — Triple Crown
+Unlock: Earn a medal in at least 3 different events at the same completed tournament.
+
+## round_robin_wins_1 — First Round Robin Win
+Unlock: Win 1 completed round robin at this club. Winners are decided by wins, point differential, total points scored, then an admin decision if still tied.
+
+## round_robin_wins_5 — 5 Round Robin Wins
+Unlock: Win 5 completed round robins at this club. Winners are decided by wins, point differential, total points scored, then an admin decision if still tied.
+
+## round_robin_wins_10 — 10 Round Robin Wins
+Unlock: Win 10 completed round robins at this club. Winners are decided by wins, point differential, total points scored, then an admin decision if still tied.
+
+## round_robin_wins_25 — 25 Round Robin Wins
+Unlock: Win 25 completed round robins at this club. Winners are decided by wins, point differential, total points scored, then an admin decision if still tied.
+
+## round_robin_wins_50 — 50 Round Robin Wins
+Unlock: Win 50 completed round robins at this club. Winners are decided by wins, point differential, total points scored, then an admin decision if still tied.

@@ -10,7 +10,7 @@ from jupr_app.domain.gamification.requirements import load_requirements_map
 
 BadgeStatus = Literal["live", "tracked", "seasonal", "curated", "retired"]
 BadgeScope = Literal["match", "week", "month", "season", "league", "lifetime"]
-AwardTiming = Literal["live", "on_league_close", "manual", "disabled"]
+AwardTiming = Literal["live", "on_league_close", "on_program_change", "manual", "disabled"]
 
 
 @dataclass(frozen=True)
@@ -116,6 +116,8 @@ def _build_badge_metadata() -> dict[str, dict[str, str]]:
     assign(["battle_tested", "consistency", "mr_reliable"], status="live", scope="season", award_timing="live")
     assign(["good_sport", "community_builder", "mentor"], status="curated", scope="lifetime", award_timing="manual")
 
+    from jupr_app.domain.gamification.program_badge_catalog import PROGRAM_BADGE_IDS
+    assign(PROGRAM_BADGE_IDS, status="live", scope="lifetime", award_timing="on_program_change")
     return metadata
 
 
@@ -123,7 +125,7 @@ BADGE_METADATA = _build_badge_metadata()
 
 _VALID_STATUS = {"live", "tracked", "seasonal", "curated", "retired"}
 _VALID_SCOPE = {"match", "week", "month", "season", "league", "lifetime"}
-_VALID_AWARD_TIMING = {"live", "on_league_close", "manual", "disabled"}
+_VALID_AWARD_TIMING = {"live", "on_league_close", "on_program_change", "manual", "disabled"}
 
 _REQUIRED_BADGE_TITLES = [
     "Level Up",

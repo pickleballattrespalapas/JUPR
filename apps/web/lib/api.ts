@@ -193,6 +193,7 @@ export type PublicBadgeAward = {
   requirements?: string | null;
   count: number;
   last_earned_at?: string | null;
+  achievements?: { id: string; earned_at?: string | null; detail?: string | null }[];
 };
 
 export type PublicTrophy = {

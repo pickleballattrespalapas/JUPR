@@ -7,8 +7,9 @@ import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthen
 type Season = { id: string; name: string; start_date: string; end_date: string; timezone: string; revision: number };
 type Badge = { id: string; name: string; requirement: string; available: boolean; criteria: Record<string, string> };
 type Award = { id: string; player_id: number; badge_id: string; earned_at: string; revoked_at: string | null; value_json: { recognition_note?: string; contribution_date?: string } };
-type Options = { players: { id: number; name: string }[]; badges: Badge[]; seasons: Season[]; recent_awards: Award[]; write_enabled: boolean };
-type Pending = { kind: "awards" | "seasons"; payload: Record<string, unknown> };
+type RoundRobinTie = { source_key: string; source_fingerprint: string; event_name: string; completed_at: string; leaders: { player_id: number | null; name: string; wins: number; differential: number; points: number }[] };
+type Options = { program?: { pending_ties?: RoundRobinTie[]; review?: { source: string; reason: string }[]; checked_at?: string; last_error?: string; revision?: number; applied_revision?: number }; players: { id: number; name: string }[]; badges: Badge[]; seasons: Season[]; recent_awards: Award[]; write_enabled: boolean };
+type Pending = { kind: "awards" | "seasons" | "round-robin-winners"; payload: Record<string, unknown> };
 const card = { border: "1px solid #cbd5e1", borderRadius: 14, padding: "1rem", background: "white", marginBottom: "1rem" };
 const input = { width: "100%", padding: ".55rem", border: "1px solid #94a3b8", borderRadius: 7, font: "inherit" };
 const button = { padding: ".6rem 1rem", border: 0, borderRadius: 8, background: "#0f172a", color: "white", fontWeight: 700 };
@@ -59,7 +60,7 @@ export default function BadgeManagementPanel({ apiBase, clubId }: { apiBase: str
       const stored = sessionStorage.getItem(storageKey);
       if (stored) {
         const saved = JSON.parse(stored) as Pending;
-        if (["awards", "seasons"].includes(saved.kind) && saved.payload?.operation_id) setPending(saved);
+        if (["awards", "seasons", "round-robin-winners"].includes(saved.kind) && saved.payload?.operation_id) setPending(saved);
       }
     } catch (err) { if (requestGuard.isCurrent(generation)) setError(err instanceof Error ? err.message : "Unable to load badges."); }
   }
@@ -78,6 +79,7 @@ export default function BadgeManagementPanel({ apiBase, clubId }: { apiBase: str
       if (!requestGuard.isCurrent(generation)) return;
       setPending(null);
       if (submission.kind === "awards") { setNote(""); setCriteria([]); setDay(""); setMessage("Badge awarded. The contribution has been recorded."); }
+      else if (submission.kind === "round-robin-winners") { setMessage("Winner recorded. Qualifying badges will update automatically."); }
       else { setSeason(emptySeason()); setMessage("Season saved."); }
       const refreshed = await request("") as Options;
       if (requestGuard.isCurrent(generation)) setOptions(refreshed);
@@ -96,6 +98,26 @@ export default function BadgeManagementPanel({ apiBase, clubId }: { apiBase: str
     {message ? <p role="status" style={{ color: "#166534" }}>{message}</p> : null}
     {pending ? <div style={card}><p>A save is awaiting confirmation. Retrying checks the same request and will not create a duplicate.</p><button style={button} disabled={busy} onClick={() => void save(pending.kind, pending.payload)}>{busy ? "Saving…" : "Retry save"}</button></div> : null}
     {options && !options.write_enabled ? <p>Badge changes are currently paused.</p> : null}
+    <section style={card} aria-labelledby="round-robin-winner-heading">
+      <h2 id="round-robin-winner-heading" style={{ marginTop: 0 }}>Round-robin winners</h2>
+      <p>Winners are decided by wins, point differential, then total points scored. If players remain tied, choose the winner below.</p>
+      {options?.program?.revision !== options?.program?.applied_revision ? <p role="status">Results are being checked. Refresh to load the latest ties.</p> : null}
+      {options?.program?.last_error ? <p role="status">The automatic badge check will retry. Existing awards remain visible.</p> : null}
+      {!options?.program?.pending_ties?.length ? <p>No round-robin ties are awaiting a decision.</p> : options.program.pending_ties.map(tie => <form key={`${tie.source_key}:${tie.source_fingerprint}`} onSubmit={event => {
+        event.preventDefault(); const data = new FormData(event.currentTarget);
+        void save("round-robin-winners", { source_key: tie.source_key, source_fingerprint: tie.source_fingerprint, winner_player_id: Number(data.get("winner_player_id")) });
+      }}>
+        <fieldset disabled={disabled || options.program?.revision !== options.program?.applied_revision} style={{ marginBottom: "1rem", border: "1px solid #cbd5e1", borderRadius: 8 }}>
+          <legend>{tie.event_name} · {tie.completed_at.slice(0, 10)}</legend>
+          <p>{tie.leaders[0]?.wins} wins · {tie.leaders[0]?.differential} point differential · {tie.leaders[0]?.points} total points</p>
+          <label>Winner<select name="winner_player_id" required defaultValue="" style={input}><option value="">Choose a tied player</option>{tie.leaders.map((leader, index) => <option key={leader.player_id ?? `guest-${index}`} value={leader.player_id ?? ""} disabled={!leader.player_id}>{leader.name}{leader.player_id ? "" : " (link to a club player first)"}</option>)}</select></label>
+          <p><small>This decision records who won this round robin and updates their victory milestones.</small></p>
+          <button type="submit" style={button}>Record winner</button>
+        </fieldset>
+      </form>)}
+      <button type="button" disabled={busy} onClick={() => void load()}>Refresh results</button>
+      {options?.program?.review?.length ? <details style={{ marginTop: "1rem" }}><summary>History needing review ({options.program.review.length})</summary><ul>{options.program.review.map((item, index) => <li key={`${item.source}:${index}`}>{item.source}: {item.reason}</li>)}</ul></details> : null}
+    </section>
     <section style={card} aria-labelledby="community-badge-heading">
       <h2 id="community-badge-heading" style={{ marginTop: 0 }}>Award a community badge</h2>
       <p>Recognize a specific contribution. Players can receive these badges again for separate contributions.</p>

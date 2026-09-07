@@ -2,6 +2,9 @@ type StandingsSort = "wins" | "points" | "differential";
 
 export type PlayGeneratorStanding = {
   rank: number;
+  roundRobinVictoryRanking?: boolean;
+  winnerNeedsAdmin?: boolean;
+  winnerDecidedByAdmin?: boolean;
   participantId: string;
   name: string;
   matches: number;
@@ -35,6 +38,8 @@ const primaryCell = {
 };
 
 export default function PlayGeneratorStandingsTable({ rows, sortMode }: Props) {
+  const finalRoundRobin = rows.some(row => row.roundRobinVictoryRanking);
+  if (finalRoundRobin) sortMode = "wins";
   return (
     <article
       style={{
@@ -47,7 +52,7 @@ export default function PlayGeneratorStandingsTable({ rows, sortMode }: Props) {
       <div style={{ marginBottom: "0.85rem" }}>
         <h2 style={{ margin: "0 0 0.3rem" }}>Standings</h2>
         <p style={{ margin: 0, color: "#475569" }}>
-          Ranked by <strong>{standingsSortLabel(sortMode)}</strong>. {tieBreakText(sortMode)}
+          Ranked by <strong>{standingsSortLabel(sortMode)}</strong>. {finalRoundRobin ? "Ties are decided by point difference, then total points, then an admin decision." : tieBreakText(sortMode)}
           {" "}Skipped and unplayed rounds do not affect the table.
         </p>
       </div>
@@ -70,7 +75,7 @@ export default function PlayGeneratorStandingsTable({ rows, sortMode }: Props) {
             {rows.map((row) => (
               <tr key={row.participantId} style={{ borderBottom: "1px solid #e2e8f0" }}>
                 <td align="center" style={{ padding: "0.65rem", fontWeight: 850 }}>{row.rank}</td>
-                <td style={{ padding: "0.65rem", fontWeight: 750 }}>{row.name}</td>
+                <td style={{ padding: "0.65rem", fontWeight: 750 }}>{row.name}{row.winnerNeedsAdmin ? <small> · Admin decision pending</small> : null}{row.winnerDecidedByAdmin ? <small> · Winner confirmed by admin</small> : null}</td>
                 <td align="center" style={{ padding: "0.65rem" }}>{row.matches}</td>
                 <td align="center" style={{ padding: "0.65rem", ...(sortMode === "wins" ? primaryCell : {}) }}>{row.wins}</td>
                 <td align="center" style={{ padding: "0.65rem" }}>{row.losses}</td>

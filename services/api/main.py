@@ -778,6 +778,10 @@ def startup_checks() -> None:
     _log_runtime_guardrails()
 
 
+from services.api.program_badge_worker import install_program_badge_worker
+install_program_badge_worker(app, get_supabase_client=get_supabase_client)
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     payload: dict[str, Any] = {"ok": True, "service": "jupr-api"}
