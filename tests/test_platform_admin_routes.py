@@ -43,3 +43,22 @@ def test_status_does_not_allow_launch_or_billing(client):
     assert c.patch('/admin/platform/clubs/tres/onboarding',json={'status':'active'}).status_code==422
     assert c.patch('/admin/platform/clubs/tres/onboarding',json={'status':'ready_for_review'}).status_code==200
     assert c.get('/admin/platform/clubs?offset=-1').status_code==422
+
+@pytest.mark.parametrize('path,method,payload',[
+    ('details','get',None),
+    ('profile','patch',{'name':'Tres','support_email':'staff@example.com'}),
+])
+def test_profile_and_details_require_platform_access(client,path,method,payload):
+    c,db=client
+    kwargs={'json':payload} if payload else {}
+    assert getattr(c,method)(f'/admin/platform/clubs/tres/{path}',**kwargs).status_code==403
+    assert not db.calls
+
+def test_profile_passes_verified_actor_and_route_club(client):
+    c,db=client;db.admins=[{'user_id':'trusted-user'}]
+    assert c.patch('/admin/platform/clubs/tres/profile',json={
+        'name':'Tres','support_email':'staff@example.com','p_actor_id':'forged','p_club_id':'other'
+    }).status_code==200
+    assert db.calls==[('pcs_update_club_profile',{
+        'p_actor_id':'trusted-user','p_club_id':'tres','p_name':'Tres','p_support_email':'staff@example.com'
+    })]

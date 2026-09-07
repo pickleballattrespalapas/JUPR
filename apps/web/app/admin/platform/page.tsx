@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import { ClubOnboardingDetails } from "./ClubOnboardingDetails";
 import { useEffect, useState } from "react";
 import { useAdminSession } from "@/lib/useAdminSession";
 import { getAdminPlayerEditorApiBaseUrl } from "@/lib/adminPlayerEditorApi";
@@ -8,6 +9,7 @@ type Club = { id: string; slug: string; name: string; is_active: boolean; plan_s
 export default function PlatformPage() {
   const { accessToken, loading } = useAdminSession();
   const api = getAdminPlayerEditorApiBaseUrl();
+  const [detailsClub, setDetailsClub] = useState("");
   const [clubs, setClubs] = useState<Club[]>([]);
   const [allowed, setAllowed] = useState(false);
   const [message, setMessage] = useState("");
@@ -56,12 +58,13 @@ export default function PlatformPage() {
         <p>New clubs start as drafts with one administrator. Invitations, trial activation, and public signup will follow.</p>
         <button disabled={busy} type="submit">{busy ? "Saving…" : "Create draft club"}</button>
       </form>
+      {detailsClub && api && <ClubOnboardingDetails key={detailsClub} api={api} accessToken={accessToken} clubId={detailsClub} onSaved={() => setRevision(n => n + 1)}/>}
       <h2>Clubs</h2>
       {!clubs.length && <p>No clubs on this page.</p>}
       <div style={{ overflowX: "auto" }}><table style={{ width: "100%", textAlign: "left" }}>
         <thead><tr><th>Club</th><th>Account</th><th>Onboarding</th></tr></thead>
         <tbody>{clubs.map(c => <tr key={c.id}>
-          <td style={{ padding: 12 }}><strong>{c.name}</strong><br/>{c.slug}</td>
+          <td style={{ padding: 12 }}><button type="button" onClick={() => setDetailsClub(c.id)}>{c.name}</button><br/>{c.slug}</td>
           <td>{c.plan_status} · {c.is_active ? "Active" : "Draft / inactive"}</td>
           <td><select aria-label={`Onboarding for ${c.name}`} value={c.onboarding_status} disabled={busy} onChange={e => void save(`/admin/platform/clubs/${encodeURIComponent(c.id)}/onboarding`, "PATCH", { status: e.target.value })}>
             {!["draft", "in_progress", "ready_for_review"].includes(c.onboarding_status) && <option value={c.onboarding_status}>{c.onboarding_status}</option>}

@@ -9,6 +9,10 @@ class ClubCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     administrator_email: str = Field(max_length=254, pattern=r'^[^\s@]+@[^\s@]+\.[^\s@]+$')
 
+class ClubProfileUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    support_email: str = Field(max_length=254, pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
 class OnboardingUpdate(BaseModel):
     status: Literal['draft', 'in_progress', 'ready_for_review']
 
@@ -53,3 +57,18 @@ def install_platform_admin_routes(app, *, get_supabase_client):
     def update(club_id: str, payload: OnboardingUpdate, authorization: str | None = auth_header()):
         db, user = authorize(authorization)
         return {'club': rpc(db, 'pcs_review_onboarding', {'p_actor_id': user.user_id, 'p_club_id': club_id, 'p_status': payload.status})}
+
+
+    @app.get('/admin/platform/clubs/{club_id}/details')
+    def details(club_id: str, authorization: str | None = auth_header()):
+        db, _ = authorize(authorization)
+        rows = db.table('clubs').select('id,name,slug,support_email,onboarding_status,plan_status,is_active').eq('id',club_id).limit(1).execute().data or []
+        if not rows: raise HTTPException(404,'Club not found.')
+        staff = db.table('admin_role_assignments').select('email,role,revoked_at,expires_at').eq('club_id',club_id).execute().data or []
+        from jupr_app.domain.admin.staff_policy import assignment_active, ADMIN_ROLES
+        return {'club':rows[0], 'administrators':[{'email':r['email']} for r in staff if r.get('role') in ADMIN_ROLES and assignment_active(r)]}
+
+    @app.patch('/admin/platform/clubs/{club_id}/profile')
+    def profile(club_id: str, payload: ClubProfileUpdate, authorization: str | None = auth_header()):
+        db, user = authorize(authorization)
+        return {'club':rpc(db,'pcs_update_club_profile',{'p_actor_id':user.user_id,'p_club_id':club_id,'p_name':payload.name,'p_support_email':payload.support_email})}
