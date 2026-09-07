@@ -129,6 +129,7 @@ class AdminTournamentRegistrationUpdateRequest(BaseModel):
 class AdminTournamentBroadcastPreviewRequest(BaseModel):
     subject: str = ""
     message: str = ""
+    registration_ids: list[str] | None = Field(default=None, max_length=2000)
     include_cancelled: bool = False
     registration_status: str | None = None
     payment_status: str | None = None

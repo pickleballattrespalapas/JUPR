@@ -1002,6 +1002,35 @@ def test_admin_tournament_registration_export_rejects_cross_club(monkeypatch):
     assert response.json()["detail"] == "tournament not found"
 
 
+@pytest.mark.parametrize("registration_ids,expected_status,expected_count", [
+    (["registration_1"], 200, 1),
+    ([], 200, 0),
+    (["missing"], 400, None),
+    (["registration_1"] * 2001, 422, None),
+])
+def test_admin_broadcast_preview_accepts_exact_selection(monkeypatch, registration_ids, expected_status, expected_count):
+    tables = tournament_tables()
+    tables["tournament_registrations"].append({
+        **tables["tournament_registrations"][0], "id": "registration_other", "email": "other@example.com",
+    })
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
+    _install_auth(monkeypatch)
+    response = TestClient(app).post(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/registrations/broadcast-preview",
+        headers={"Authorization": "Bearer local"},
+        json={"subject": "Update", "message": "Hello", "registration_ids": registration_ids},
+    )
+    assert response.status_code == expected_status
+    if expected_status == 200:
+        assert response.json()["recipient_count"] == expected_count
+        assert response.json()["selected_registration_ids"] == registration_ids
+        assert "other@example.com" not in response.json()["recipient_csv"]
+
+
 def test_admin_tournament_registration_export_requires_manage_permission(monkeypatch):
     tables = tournament_tables()
     supabase = FakeSupabase(tables)
