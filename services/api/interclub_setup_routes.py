@@ -21,7 +21,7 @@ class SeasonDraft(BaseModel):
     start_date: date
     end_date: date
     timezone: str = 'America/Mazatlan'
-    divisions: list[Literal['3.5','4.0','4.5/Open']] = Field(min_length=1, max_length=3)
+    divisions: list[Literal['2.5','3.0','3.5','4.0','4.5','5.0','Open','4.5/Open']] = Field(min_length=1, max_length=8)
     club_ids: list[str] = Field(default_factory=list, max_length=32)
     meets: list[MeetDraft] = Field(default_factory=list, max_length=100)
 
