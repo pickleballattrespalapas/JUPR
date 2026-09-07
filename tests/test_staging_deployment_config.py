@@ -120,9 +120,10 @@ def test_staging_fly_config_is_isolated_and_full_surface():
     assert env["JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES"] == "1"
     assert env["JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP"] == "1"
     assert env["JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS"] == "0"
-    assert production["env"]["JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES"] == "0"
+    assert production["env"]["JUPR_EMAIL_MODE"] == "live"
+    assert production["env"]["JUPR_ENABLE_NEXT_ADMIN_PLAYER_UPDATES"] == "1"
     assert production["env"]["JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP"] == "0"
-    assert production["env"]["JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS"] == "0"
+    assert production["env"]["JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS"] == "1"
     assert env["JUPR_ALLOWED_ORIGIN_REGEX"].startswith("^https://jupr")
     assert env["JUPR_ALLOWED_ORIGIN_REGEX"].endswith("vercel\\.app$")
     assert re.fullmatch(
