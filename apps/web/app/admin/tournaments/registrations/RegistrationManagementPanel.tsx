@@ -415,6 +415,7 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
           <article style={cardStyle}>
             <h2 style={{ marginTop: 0 }}>Email participants</h2>
             <p style={{ color: "#475569" }}>Write your email, review the selected recipients, then send. Each recipient receives a separate email. Shared email addresses receive one copy.</p>
+            <p style={{ color: "#475569" }}>Published tournament sponsors are included automatically.</p>
             <label><strong>Subject</strong><br /><input value={broadcastSubject} disabled={busy} maxLength={200} onChange={(event) => setBroadcastSubject(event.target.value)} style={inputStyle} /></label>
             <label style={{ display: "block", marginTop: "0.75rem" }}><strong>Message</strong><br /><textarea value={broadcastMessage} disabled={busy} maxLength={10000} onChange={(event) => setBroadcastMessage(event.target.value)} rows={6} style={inputStyle} /></label>
             <p><button type="button" onClick={previewBroadcast} disabled={busy || previewBusy || !selectedRegistrations.length || !broadcastSubject.trim() || !broadcastMessage.trim()} style={buttonStyle}>{previewBusy ? "Building preview…" : "Preview recipients"}</button></p>
@@ -431,7 +432,10 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
                   </div>
                 ) : <p>No recipients matched the current filters.</p>}
                 <h3>Message preview</h3>
-                <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{currentPreview.preview.text}</pre>
+                <iframe title="Tournament email preview" sandbox="" referrerPolicy="no-referrer"
+                  srcDoc={currentPreview.preview.html.replace("<html>", '<html><head><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data:; style-src \'unsafe-inline\'; base-uri \'none\'; form-action \'none\'"></head>')}
+                  style={{ width: "100%", height: "560px", border: "1px solid #e2e8f0", borderRadius: "8px", background: "white" }} />
+                <details><summary>Plain-text version</summary><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{currentPreview.preview.text}</pre></details>
               </div>
             ) : null}
             <TournamentEmailDelivery clubId={clubId} tournamentId={detail.tournament.id} accessToken={accessToken}

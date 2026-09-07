@@ -62,7 +62,7 @@ async function main() {
         recipient_count: emails.size,
         recipients: [...emails].map(([email, row]) => ({ name: row.display_name, email })),
         recipient_csv: [...emails.keys()].join("\n"),
-        preview: { text: `Preview: ${body.message}` }
+        preview: { text: `Preview: ${body.message}`, html: `<html><body><h1>Email</h1><p>Presented by Homes and Land</p><p>${body.message}</p><h2>Supporting sponsors</h2></body></html>` }
       };
       if (deferNext) { deferNext = false; return new Promise(resolve => { resolvePreview = () => resolve(response(payload)); }); }
       return response(payload);
@@ -95,6 +95,12 @@ async function main() {
     assert.deepEqual(requests.at(-1).registration_ids, ["alex"]);
     assert.equal(requests.at(-1).search, undefined);
     assert.ok(button("Download recipient CSV"));
+    const emailFrame = root.findByProps({ title: "Tournament email preview" });
+    assert.equal(emailFrame.props.sandbox, "");
+    assert.equal(emailFrame.props.referrerPolicy, "no-referrer");
+    assert.match(emailFrame.props.srcDoc, /Presented by Homes and Land/);
+    assert.match(emailFrame.props.srcDoc, /default-src 'none'/);
+    assert.match(emailFrame.props.srcDoc, /img-src data:/);
 
     await changeSearch("beth");
     assert.match(text(root), /1 selected participant is outside the current filters/);

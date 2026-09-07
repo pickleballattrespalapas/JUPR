@@ -72,6 +72,52 @@ def test_single_and_bulk_deduplicate_only_selected_participants(fixture, monkeyp
     assert replay["recipients"][0]["status"] == "sent"
 
 
+def _published_sponsor(fixture):
+    sponsor = {"name": "Title Sponsor", "tier": "presenting", "public_description": "Public description", "notes": "Private contract"}
+    fixture.tables["tournament_registration_settings"] = [{"tournament_id": "tour_1", "sponsors_json": [sponsor]}]
+    return sponsor
+
+
+def test_published_sponsor_changes_invalidate_review_before_any_email(fixture):
+    sponsor = _published_sponsor(fixture)
+    payload = prepare(fixture)
+    sponsor["public_description"] = "Changed description"
+    with pytest.raises(ValueError, match="Preview the email again"):
+        service.create_tournament_broadcast(fixture, **payload)
+    assert not fixture.tables.get(service.TABLE)
+
+
+def test_saved_sponsors_are_used_for_delivery_and_shared_address_still_sends_once(fixture, monkeypatch):
+    from jupr_app.services import admin_tournament_registration_reporting_service as reporting
+    _published_sponsor(fixture)
+    sent = []
+    monkeypatch.setattr(service, "send_tournament_registrant_broadcast_email", lambda **kw: sent.append(kw) or {"status": "sent"})
+    root = service.create_tournament_broadcast(fixture, **prepare(fixture, ["registration_1", "reg_shared"]))
+    review = fixture.tables[service.TABLE][0]["request_json"]["review"]
+    assert "Title Sponsor" in review["preview"]["html"]
+    assert "Public description" in review["preview"]["text"]
+    assert "Private contract" not in str(review)
+    # Delivery uses the reviewed logo copies, not new storage URLs or downloads.
+    monkeypatch.setattr(reporting, "prepare_tournament_email_sponsors", lambda *a: pytest.fail("Do not fetch logo copies again after confirmation"))
+    attempt(fixture, root["operation_key"])
+    attempt(fixture, root["operation_key"])
+    assert len(sent) == 1
+    assert sent[0]["email_sponsors"] == review["email_sponsors"]
+
+
+def test_sponsor_change_after_confirmation_stops_only_remaining_recipients(fixture, monkeypatch):
+    sponsor = _published_sponsor(fixture)
+    sent = []
+    monkeypatch.setattr(service, "send_tournament_registrant_broadcast_email", lambda **kw: sent.append(kw) or {"status": "sent"})
+    root = service.create_tournament_broadcast(fixture, **prepare(fixture, ["registration_1", "reg_b"]))
+    attempt(fixture, root["operation_key"], 0)
+    sponsor["name"] = "New sponsor"
+    assert attempt(fixture, root["operation_key"], 0)["status"] == "sent"
+    with pytest.raises(ValueError, match="sponsor details changed"):
+        attempt(fixture, root["operation_key"], 1)
+    assert len(sent) == 1
+
+
 def test_bulk_progress_survives_reload_and_does_not_resend(fixture, monkeypatch):
     sent = []
     monkeypatch.setattr(service, "send_tournament_registrant_broadcast_email", lambda **kw: sent.append(kw["recipient_email"]) or {"status": "sent"})

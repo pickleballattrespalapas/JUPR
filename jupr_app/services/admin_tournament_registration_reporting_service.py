@@ -8,6 +8,11 @@ from typing import Any
 
 from jupr_app.config import EMAIL_MODE_DRY_RUN, get_email_mode
 from jupr_app.domain.notifications.smtp_mailer import get_smtp_config_status
+from jupr_app.domain.notifications.tournament_email_sponsors import sponsor_preview_html
+from jupr_app.services.tournament_email_sponsor_service import (
+    prepare_tournament_email_sponsors,
+    tournament_email_sponsor_snapshot,
+)
 from jupr_app.services.staging_write_guard import staging_communications_mutations_enabled
 from jupr_app.domain.notifications.tournament_registrant_broadcast_email import (
     build_tournament_registrant_broadcast_email_html,
@@ -362,6 +367,8 @@ def build_admin_tournament_broadcast_preview(
     registration_day_id: str | None = None,
     event_option_id: str | None = None,
     search: str | None = None,
+    include_sponsor_logos: bool = True,
+    reviewed_email_sponsors: list[dict] | None = None,
 ) -> dict[str, Any]:
     if not is_admin_tournament_admin_enabled():
         raise PermissionError("Next Tournament Admin is disabled.")
@@ -436,11 +443,16 @@ def build_admin_tournament_broadcast_preview(
         subject=clean_subject,
     )
     delivery = broadcast_delivery_settings()
+    sponsor_snapshot = tournament_email_sponsor_snapshot(supabase, club_id=str(club_id), tournament_id=clean_tournament_id)
+    email_sponsors = prepare_tournament_email_sponsors(supabase, sponsor_snapshot) if include_sponsor_logos else (reviewed_email_sponsors or [])
     reviewed_scope = {"tournament_id": clean_tournament_id, "club_id": str(club_id),
         "registration_ids": sorted(selected_ids) if selected_ids is not None else None,
         "include_cancelled": include_cancelled, "recipients": recipients,
         "subject": final_subject, "message": clean_message,
         "delivery_mode": delivery["delivery_mode"], "sender": delivery["sender"]}
+    if sponsor_snapshot:
+        reviewed_scope["sponsors"] = sponsor_snapshot
+        reviewed_scope["sponsor_logos"] = [row.get("logo_png_base64", "") for row in email_sponsors]
     fingerprint = hashlib.sha256(json.dumps(reviewed_scope, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     send_available = bool(delivery["enabled"] and selected_ids and recipients and clean_subject and clean_message)
     return {
@@ -454,6 +466,7 @@ def build_admin_tournament_broadcast_preview(
         "preview_fingerprint": fingerprint,
         "delivery_mode": delivery["delivery_mode"],
         "sender": delivery["sender"],
+        "email_sponsors": email_sponsors,
         "selected_registration_ids": sorted(selected_ids) if selected_ids is not None else None,
         "recipient_count": len(recipients),
         "recipients": recipients,
@@ -468,14 +481,16 @@ def build_admin_tournament_broadcast_preview(
                 subject=final_subject,
                 message=clean_message,
                 personalize_greeting=False,
+                email_sponsors=email_sponsors,
             ),
-            "html": build_tournament_registrant_broadcast_email_html(
+            "html": sponsor_preview_html(build_tournament_registrant_broadcast_email_html(
                 tournament_name=tournament_name,
                 recipient_name=preview_recipient["name"],
                 subject=final_subject,
                 message=clean_message,
                 personalize_greeting=False,
-            ),
+                email_sponsors=email_sponsors,
+            ), email_sponsors),
         },
         "warnings": ["Preview only. This endpoint never sends email."],
     }

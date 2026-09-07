@@ -4,6 +4,7 @@ from html import escape
 from typing import Any
 
 from jupr_app.config import EMAIL_MODE_DRY_RUN, EMAIL_MODE_LIVE, EMAIL_MODE_STAGING_REDIRECT, SMTPConfig, get_email_mode, get_env_or_default
+from jupr_app.domain.notifications.tournament_email_sponsors import with_sponsors_html, with_sponsors_text, sponsor_inline_images
 from jupr_app.domain.notifications.smtp_mailer import send_email_with_inline_chart
 
 
@@ -37,12 +38,13 @@ def build_tournament_partner_request_email_html(
     division_label: str,
     day_label: str,
     message: str,
+    email_sponsors: list[dict] | None = None,
 ) -> str:
     contact = _contact_line(requester_email=requester_email, requester_phone=requester_phone)
     message_html = ""
     if _safe_text(message):
         message_html = f"<p><strong>Message:</strong><br>{escape(_safe_text(message))}</p>"
-    return f"""<!doctype html><html><body style=\"font-family:Arial,sans-serif;color:#1f2937\">
+    return with_sponsors_html(f"""<!doctype html><html><body style=\"font-family:Arial,sans-serif;color:#1f2937\">
 <h1>Partner request</h1>
 <p>Hi {escape(_safe_text(target_name) or 'there')},</p>
 <p>{escape(_safe_text(requester_name) or 'A player')} would like to request you as a partner.</p>
@@ -51,7 +53,7 @@ def build_tournament_partner_request_email_html(
 <p><strong>Requester contact:</strong><br>{escape(contact)}</p>
 {message_html}
 <p>Your email address was not shared with the requester by this form. Contact them directly if you want to discuss playing together.</p>
-</body></html>"""
+</body></html>""", email_sponsors)
 
 
 def build_tournament_partner_request_email_text(
@@ -65,6 +67,7 @@ def build_tournament_partner_request_email_text(
     division_label: str,
     day_label: str,
     message: str,
+    email_sponsors: list[dict] | None = None,
 ) -> str:
     lines = [
         f"Hi {_safe_text(target_name) or 'there'},",
@@ -79,7 +82,7 @@ def build_tournament_partner_request_email_text(
         "",
         "Your email address was not shared with the requester by this form. Contact them directly if you want to discuss playing together.",
     ])
-    return "\n".join(lines)
+    return with_sponsors_text("\n".join(lines), email_sponsors)
 
 
 def send_tournament_partner_request_email(
@@ -95,6 +98,7 @@ def send_tournament_partner_request_email(
     day_label: str,
     message: str = "",
     smtp_config: SMTPConfig | None = None,
+    email_sponsors: list[dict] | None = None,
 ) -> dict[str, str]:
     original_to_email = _safe_text(target_email)
     if not original_to_email:
@@ -130,6 +134,7 @@ def send_tournament_partner_request_email(
             division_label=division_label,
             day_label=day_label,
             message=message,
+            email_sponsors=email_sponsors,
         ),
         text_body=build_tournament_partner_request_email_text(
             tournament_name=tournament_name,
@@ -141,8 +146,10 @@ def send_tournament_partner_request_email(
             division_label=division_label,
             day_label=day_label,
             message=message,
+            email_sponsors=email_sponsors,
         ),
         chart_png_bytes=None,
         smtp_config=smtp_config,
+        inline_png_images=sponsor_inline_images(email_sponsors),
     )
     return {"status": "sent" if mode == EMAIL_MODE_LIVE else "staging_redirect", "provider_message_id": provider_message_id, "to_email": effective_to}
