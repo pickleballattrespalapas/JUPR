@@ -338,6 +338,7 @@ def build_admin_tournament_broadcast_preview(
     tournament_id: str,
     subject: str = "",
     message: str = "",
+    registration_ids: list[str] | None = None,
     include_cancelled: bool = False,
     registration_status: str | None = None,
     payment_status: str | None = None,
@@ -354,11 +355,20 @@ def build_admin_tournament_broadcast_preview(
         club_id=str(club_id),
         tournament_id=clean_tournament_id,
     )
+    rows = _registration_export_rows(supabase, tournament_id=clean_tournament_id)
+    selected_ids = None
+    if registration_ids is not None:
+        # None preserves older filtered previews; an explicit empty selection
+        # must never expand to every registration.
+        if len(registration_ids) > MAX_EXPORT_REGISTRATIONS:
+            raise ValueError("Too many selected registrations.")
+        selected_ids = {_clean_text(value, limit=120) for value in registration_ids}
+        available_ids = {row["registration_id"] for row in rows}
+        if selected_ids - available_ids:
+            raise ValueError("A selected participant is no longer available in this tournament. Refresh the participants.")
+        rows = [row for row in rows if row["registration_id"] in selected_ids]
     filtered_rows = _filter_export_rows(
-        _registration_export_rows(
-            supabase,
-            tournament_id=clean_tournament_id,
-        ),
+        rows,
         registration_status=registration_status,
         payment_status=payment_status,
         partner_mode=partner_mode,
@@ -412,6 +422,7 @@ def build_admin_tournament_broadcast_preview(
         "mode": "tournament_broadcast_preview",
         "dry_run": True,
         "send_available": False,
+        "selected_registration_ids": sorted(selected_ids) if selected_ids is not None else None,
         "recipient_count": len(recipients),
         "recipients": recipients,
         "recipient_csv": _csv_text(recipients, RECIPIENT_EXPORT_COLUMNS),
