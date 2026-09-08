@@ -134,8 +134,8 @@ async function accountSetup(clubJoin = false) {
   global.fetch = async (url, options) => {
     requests.push({ url, options });
     if (url.endsWith('/sign-in')) return options.method === 'POST'
-      ? reply({ email_enabled: true, message: 'If the email matches an available invitation, a sign-in link will arrive shortly.' })
-      : reply({ email_enabled: true }, optionsStatus);
+      ? reply({ email_enabled: true, email_test_mode: true, message: 'If the email matches an available invitation, a sign-in link will arrive shortly.' })
+      : reply({ email_enabled: true, email_test_mode: true }, optionsStatus);
     if (url.endsWith('/accept')) return reply({ invitation });
     if (url.endsWith('/workspaces')) return reply({ workspaces: [{ club_id: 'beta' }] });
     return reply(reviewStatus === 200 ? { invitation, club: { id: 'beta', name: 'Beta Club' } } : { detail: 'Invitation unavailable for this account.' }, reviewStatus);
@@ -155,6 +155,7 @@ async function accountSetup(clubJoin = false) {
   let tree;
   await act(async () => { tree = create(React.createElement(Page)); });
   assert.equal(tree.root.findAllByProps({ type: 'password' }).length, 0);
+  assert.ok(JSON.stringify(tree.toJSON()).includes('Invitation email testing is enabled'));
   await act(async () => tree.root.findByProps({ type: 'email' }).props.onChange({ target: { value: invitation.email } }));
   await act(async () => tree.root.findByType('form').props.onSubmit({ preventDefault() {} }));
   const emailRequest = requests.find(r => r.options.method === 'POST');

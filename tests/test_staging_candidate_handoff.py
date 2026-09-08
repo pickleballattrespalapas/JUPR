@@ -118,8 +118,30 @@ class StagingCandidateHandoffTests(unittest.TestCase):
                 "supabase_project_ref": STAGING_SUPABASE_PROJECT_REF,
                 "write_wave": "open",
                 "email_mode": "dry_run",
+                "invitation_email_test": None,
             },
         )
+
+    def test_identity_includes_only_safe_invitation_email_test_status(self) -> None:
+        fly = _fly_identity()
+        safe_status = {
+            "active": True,
+            "recipient_count": 1,
+            "expires_at": "2026-09-10T12:00:00+00:00",
+            "reason": "active",
+            "smtp_ready": True,
+        }
+        fly["invitation_email_test"] = {
+            **safe_status,
+            "recipients": ["test@example.com"],
+            "smtp_password": "must-not-be-in-handoff",
+        }
+        identity = validate_identity(
+            candidate_sha=CANDIDATE_SHA,
+            fly=fly,
+            web=_web_identity(),
+        )
+        self.assertEqual(identity["invitation_email_test"], safe_status)
 
     def test_identity_rejects_mismatches_and_production_targets(self) -> None:
         cases = (

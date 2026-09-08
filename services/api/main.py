@@ -862,6 +862,9 @@ def health() -> dict[str, Any]:
                     ).strip().lower()
                     in {"1", "true", "yes", "y", "on"},
                 },
+                "invitation_email_test": invitation_email_test_status(
+                    os.getenv("JUPR_EMAIL_MODE", "dry_run").strip().lower()
+                ),
                 "expected_migration_head": os.getenv(
                     "JUPR_EXPECTED_MIGRATION_HEAD", ""
                 ).strip()
@@ -1440,6 +1443,7 @@ install_platform_admin_routes(app, get_supabase_client=get_supabase_client)
 from services.api.club_settings_routes import install_club_settings_routes
 install_club_settings_routes(app, get_supabase_client=get_supabase_client)
 from services.api.staff_invitation_routes import install_staff_invitation_routes
+from services.api.invitation_email_policy import invitation_email_test_status
 install_staff_invitation_routes(app, get_supabase_client=get_supabase_client)
 
 from services.api.interclub_setup_routes import install_interclub_setup_routes

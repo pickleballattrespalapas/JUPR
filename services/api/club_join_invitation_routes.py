@@ -13,8 +13,10 @@ from services.api.auth import authenticate_bearer, auth_header
 from services.api.interclub_models import PlanningDraft
 from services.api.staff_invitation_routes import (
     InvitedEmail, InvitationSignIn, invitation_response, send_invitation_sign_in,
-    invitation_sign_in_options, get_email_mode, EMAIL_MODE_LIVE, EMAIL_DISABLED_MESSAGE,
+    invitation_sign_in_options, get_email_mode, EMAIL_DISABLED_MESSAGE,
+    invitation_email_request_response,
 )
+from services.api.invitation_email_policy import invitation_email_policy
 
 FIELDS = "id,organizer_club_id,season_id,club_id,club_name,email,status,revision,expires_at,created_at,accepted_at"
 
@@ -113,8 +115,11 @@ def install_club_join_invitation_routes(app, *, get_supabase_client):
 
     @app.post("/club-invitations/{invitation_id}/sign-in")
     def sign_in(invitation_id: UUID, payload: InvitationSignIn):
-        if get_email_mode() != EMAIL_MODE_LIVE:
+        policy = invitation_email_policy(get_email_mode())
+        if not policy.enabled:
             return {"email_enabled": False, "message": EMAIL_DISABLED_MESSAGE}
+        if not policy.allows(payload.email):
+            return invitation_email_request_response(policy)
         db = get_supabase_client()
         try:
             row = rpc(db, p_action="email_claim", p_id=str(invitation_id), p_email=payload.email)
@@ -123,4 +128,4 @@ def install_club_join_invitation_routes(app, *, get_supabase_client):
             if exc.status_code not in (403, 404, 409): raise
         except Exception as exc:
             raise HTTPException(503, "Unable to send a sign-in email. Wait a minute before retrying.") from exc
-        return {"email_enabled": True, "message": "If the email matches an available invitation, a sign-in link will arrive shortly. Wait a minute before requesting another; each invitation allows up to five emails."}
+        return invitation_email_request_response(policy)
