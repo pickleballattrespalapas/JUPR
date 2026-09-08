@@ -88,9 +88,11 @@ def test_manual_partner_ui_requires_identity_and_new_player_baseline() -> None:
     )
 
     assert "partner name, email, age, gender, and starting skill are required" in public_form
-    assert "Partner starting skill *" in public_form
-    assert "They don’t need" in public_form
-    assert "to register separately" in public_form
+    partner_fields = _read("apps/web/components/tournaments/TournamentPartnerDetails.tsx")
+    assert "<TournamentPartnerDetails" in public_form
+    assert "Partner starting skill *" in partner_fields
+    assert "They don’t need" in partner_fields
+    assert "to register separately" in partner_fields
     assert "manualPartnerFieldsValid" in admin_editor
     assert "Partner name *" in admin_editor
     assert "Partner email *" in admin_editor
