@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from hashlib import sha256
 import json
 from types import SimpleNamespace
 from uuid import uuid4
@@ -20,7 +21,7 @@ def test_settings(monkeypatch, tmp_path):
     monkeypatch.setattr(policy, "get_next_web_base_url", lambda **_: policy.STAGING_WEB)
     monkeypatch.setattr(policy, "get_smtp_config_status", lambda: {"ok": True, "use_tls": True})
     now = datetime.now(timezone.utc)
-    config = {"enabled": True, "recipients": ["tester@example.com"],
+    config = {"enabled": True, "recipient_hashes": [sha256(b"tester@example.com").hexdigest()],
               "approved_at": (now - timedelta(minutes=1)).isoformat(),
               "expires_at": (now + timedelta(days=1)).isoformat()}
     policy.CONFIG_PATH.write_text(json.dumps(config))
@@ -39,10 +40,11 @@ def test_restricted_email_does_not_enable_global_mail_or_disclose_recipients(tes
 
 
 @pytest.mark.parametrize("change", [
-    {"enabled": False}, {"enabled": "true"}, {"recipients": []},
-    {"recipients": ["*@example.com"]}, {"recipients": ["staging@x.invalid"]},
-    {"recipients": ["tester@example.com\nother@example.com"]},
-    {"recipients": [f"tester{i}@example.com" for i in range(4)]},
+    {"enabled": False}, {"enabled": "true"}, {"recipient_hashes": []},
+    {"recipient_hashes": ["*"]}, {"recipient_hashes": ["tester@example.com"]},
+    {"recipient_hashes": ["z" * 64]}, {"recipient_hashes": [None]},
+    {"recipient_hashes": ["a" * 64 for _ in range(4)]},
+    {"recipients": ["tester@example.com"]},
     {"expires_at": "2000-01-01T00:00:00Z"}, {"expires_at": "2099-01-01T00:00:00Z"},
     {"approved_at": "2099-01-01T00:00:00Z"}, {"approved_at": "2026-09-08T00:00:00"},
     {"approved_at": None},
@@ -50,6 +52,27 @@ def test_restricted_email_does_not_enable_global_mail_or_disclose_recipients(tes
 def test_invalid_disabled_expired_or_overbroad_config_sends_nothing(test_settings, change):
     config, _ = test_settings
     policy.CONFIG_PATH.write_text(json.dumps({**config, **change}))
+    assert not policy.invitation_email_policy("dry_run").allows("tester@example.com")
+
+
+@pytest.mark.parametrize("email", ["staging@x.invalid", "*@example.com", "tester@example.com\nother@example.com"])
+def test_unusable_mailboxes_cannot_be_approved_by_hash(test_settings, email):
+    config, _ = test_settings
+    config["recipient_hashes"] = [sha256(email.encode()).hexdigest()]
+    policy.CONFIG_PATH.write_text(json.dumps(config))
+    assert not policy.invitation_email_policy("dry_run").allows(email)
+
+
+@pytest.mark.parametrize("start_days,end_days", [(-2, -1), (1, 2)])
+def test_valid_window_cannot_send_before_approval_or_after_expiration(test_settings, start_days, end_days):
+    config, _ = test_settings
+    now = datetime.now(timezone.utc)
+    config.update(
+        approved_at=(now + timedelta(days=start_days)).isoformat(),
+        expires_at=(now + timedelta(days=end_days)).isoformat(),
+    )
+    policy.CONFIG_PATH.write_text(json.dumps(config))
+    assert policy.invitation_email_test_status("dry_run")["reason"] == "outside_test_window"
     assert not policy.invitation_email_policy("dry_run").allows("tester@example.com")
 
 
@@ -117,11 +140,15 @@ def test_test_email_still_claims_matching_invitation_and_delivers_only_to_recipi
     assert len(generated) == len(sent) == 1
 
 
-def test_repository_test_delivery_is_disabled_until_recipient_approval():
-    # Activation is a separate, reviewed configuration change after Joe selects
-    # an actual mailbox. Do not bake test recipients into a functional change.
+def test_repository_test_configuration_has_no_plaintext_recipient_or_unbounded_window():
     config = json.loads(policy.CONFIG_PATH.read_text())
+    assert "recipients" not in config
     if config["enabled"]:
-        assert config["recipients"] and config["approved_at"] and config["expires_at"]
+        assert 1 <= len(config["recipient_hashes"]) <= 3
+        assert all(len(digest) == 64 and set(digest) <= set("0123456789abcdef") for digest in config["recipient_hashes"])
+        approved = datetime.fromisoformat(config["approved_at"])
+        expires = datetime.fromisoformat(config["expires_at"])
+        assert approved.tzinfo and expires.tzinfo
+        assert timedelta() < expires - approved <= timedelta(days=7)
     else:
-        assert config == {"enabled": False, "recipients": [], "approved_at": None, "expires_at": None}
+        assert config == {"enabled": False, "recipient_hashes": [], "approved_at": None, "expires_at": None}

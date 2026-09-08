@@ -1,6 +1,7 @@
 """Short-lived, recipient-bound invitation email testing on isolated staging."""
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from hashlib import sha256
 import json
 from pathlib import Path
 import re
@@ -17,14 +18,28 @@ STAGING_WEB = "https://jupr-git-staging-pickleballattrespalapas1.vercel.app"
 STAGING_AUTH = "https://sijpxjxvdtrehmqvirfi.supabase.co"
 
 
+def recipient_digest(email: str) -> str | None:
+    """Match one normalized mailbox without publishing it in repository config."""
+    normalized = email.strip().lower()
+    if (
+        len(normalized) > 254
+        or not re.fullmatch(r"[^\s@,*<>]+@[^\s@,*<>]+\.[^\s@,*<>]+", normalized)
+        or normalized.endswith(".invalid")
+    ):
+        return None
+    return sha256(normalized.encode("utf-8")).hexdigest()
+
+
 @dataclass(frozen=True)
 class InvitationEmailPolicy:
     enabled: bool = False
     test_mode: bool = False
-    recipients: frozenset[str] = frozenset()
+    recipient_hashes: frozenset[str] = frozenset()
 
     def allows(self, email: str) -> bool:
-        return self.enabled and (not self.test_mode or email.strip().lower() in self.recipients)
+        return self.enabled and (
+            not self.test_mode or recipient_digest(email) in self.recipient_hashes
+        )
 
     def public_options(self) -> dict:
         # Never expose addresses, account existence, or an invitation lookup.
@@ -42,18 +57,15 @@ def _test_config(now: datetime) -> tuple[frozenset[str], dict]:
             return frozenset(), status
         if config.get("enabled") is not True:
             raise ValueError("Invalid enable flag")
-        emails = config["recipients"]
-        if not isinstance(emails, list) or not 1 <= len(emails) <= 3:
+        hashes = config["recipient_hashes"]
+        if not isinstance(hashes, list) or not 1 <= len(hashes) <= 3 or config.get("recipients"):
             raise ValueError("One to three explicit recipients required")
         if any(
-            not isinstance(email, str)
-            or len(email) > 254
-            or not re.fullmatch(r"[^\s@,*<>]+@[^\s@,*<>]+\.[^\s@,*<>]+", email)
-            or email.lower().endswith(".invalid")
-            for email in emails
+            not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest)
+            for digest in hashes
         ):
-            raise ValueError("Explicit, real email addresses required")
-        recipients = frozenset(email.lower() for email in emails)
+            raise ValueError("SHA-256 mailbox digests required")
+        recipients = frozenset(hashes)
         approved = datetime.fromisoformat(config["approved_at"].replace("Z", "+00:00"))
         expires = datetime.fromisoformat(config["expires_at"].replace("Z", "+00:00"))
         if (
@@ -96,7 +108,7 @@ def invitation_email_policy(email_mode: str) -> InvitationEmailPolicy:
         # The staging test configuration cannot activate email elsewhere.
         return InvitationEmailPolicy(enabled=email_mode == EMAIL_MODE_LIVE)
     recipients, status = _staging_test(email_mode)
-    return InvitationEmailPolicy(enabled=status["active"], test_mode=True, recipients=recipients)
+    return InvitationEmailPolicy(enabled=status["active"], test_mode=True, recipient_hashes=recipients)
 
 
 def invitation_email_test_status(email_mode: str) -> dict:

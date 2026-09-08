@@ -485,13 +485,14 @@ The full new-account journey needs a real mailbox. An existing account can test
 acceptance, but it cannot establish that a new recipient receives verification,
 sets a first password and signs into the newly assigned club successfully.
 
-The restricted test path is prepared in
-`config/staging_invitation_email_test.json` and ships **disabled**, with no
-approved recipients. Enable it only after Joe approves the actual recipient
-addresses and testing window. The reviewable configuration holds at most three
-exact addresses, an approval time and an expiry no more than seven days later.
-No wildcard, redirected mailbox or `.invalid` address is accepted. Configuration
-changes go through the normal staging PR, build and deployment process.
+The restricted test path is configured in
+`config/staging_invitation_email_test.json`. Joe approved one actual test inbox
+on September 8; the seven-day window ends September 15 at 19:22:20 UTC. The public
+repository holds only the SHA-256 digest of the normalized address. The invitation
+record retains the actual email. Configuration permits at most three mailbox
+digests, an approval time and an expiry no more than seven days later. No wildcard,
+redirected mailbox or `.invalid` address is accepted. Configuration changes go
+through the normal staging PR, build and deployment process.
 
 The runtime requires the isolated staging Fly app, Supabase project and canonical
 web origin, `JUPR_EMAIL_MODE=dry_run`, and configured SMTP with TLS. The invitation
@@ -518,4 +519,8 @@ After activation, the manual pilot is:
    available to this single-club account; Tres remains in the organizer's account.
 6. Continue the season invitation and choose a lineup for an upcoming meet.
 
-The prepared change does not claim email delivery or mailbox ownership testing.
+La Ribera's existing pending invitation has been renewed for the approved inbox.
+The staging SMTP configuration is still missing, so delivery remains blocked even
+with the approved recipient configuration. See [staging mail setup](staging_invitation_email_setup.md)
+for the remaining secure configuration and manual acceptance steps. No email
+delivery or mailbox ownership test has been completed yet.
