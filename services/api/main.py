@@ -1437,6 +1437,8 @@ install_staff_access(app, get_supabase_client=get_supabase_client)
 
 from services.api.platform_admin_routes import install_platform_admin_routes
 install_platform_admin_routes(app, get_supabase_client=get_supabase_client)
+from services.api.club_settings_routes import install_club_settings_routes
+install_club_settings_routes(app, get_supabase_client=get_supabase_client)
 
 from services.api.interclub_setup_routes import install_interclub_setup_routes
 install_interclub_setup_routes(app, get_supabase_client=get_supabase_client)

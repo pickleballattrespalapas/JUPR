@@ -2,6 +2,7 @@
 // the current user's assignment to the supplied club.
 export const ADMIN_WORKSPACE_COOKIE = "jupr_admin_workspace_v1";
 export const ADMIN_WORKSPACE_CHANGE = "jupr-admin-workspace-change";
+export const ADMIN_WORKSPACE_DETAILS_CHANGE = "jupr-admin-workspace-details-change";
 export type AdminWorkspace = { clubId: string; clubSlug: string };
 export type AvailableWorkspace = {
   club_id: string; club_slug: string; club_name: string; roles: string[];

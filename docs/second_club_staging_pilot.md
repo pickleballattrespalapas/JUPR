@@ -31,13 +31,19 @@ Validate JUPR multi-club behavior in staging using a non-production second club 
 
 ### Admin
 
-- [ ] A second-club-only account can sign in and choose its club by name.
+- [ ] A second-club-only account signs in directly to its club, with no switcher.
 - [ ] A multi-club account can switch clubs and lands on the chosen admin home.
 - [ ] Players, leagues, tournaments and communications use the selected club.
 - [ ] Switching in a second tab blocks actions in an older tab until reload.
 - [ ] Reload/back navigation cannot restore actionable controls from another club.
 - [ ] Staff and interclub pages follow the same selected club.
 - [ ] Expired/revoked assignments cannot open a workspace.
+- [ ] An administrator can save its name, description and contact email in Club settings.
+- [ ] Draft setup can be submitted and appears Ready for review in PCS administration.
+- [ ] Editing a pending submission returns it to In progress until resubmitted.
+- [ ] Two administrators editing the same club receive a conflict instead of overwriting newer details.
+- [ ] Saving details for an active club preserves its active/setup status.
+- [ ] Operators and another club's administrators cannot read or write club settings.
 
 - [ ] Verify second-club operator cannot access Tres Palapas write operations.
 - [ ] Verify Tres Palapas operator cannot write second-club matches.

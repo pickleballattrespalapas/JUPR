@@ -62,7 +62,7 @@ def install_platform_admin_routes(app, *, get_supabase_client):
     @app.get('/admin/platform/clubs/{club_id}/details')
     def details(club_id: str, authorization: str | None = auth_header()):
         db, _ = authorize(authorization)
-        rows = db.table('clubs').select('id,name,slug,support_email,onboarding_status,plan_status,is_active').eq('id',club_id).limit(1).execute().data or []
+        rows = db.table('clubs').select('id,name,slug,tagline,support_email,onboarding_status,plan_status,is_active,updated_at').eq('id',club_id).limit(1).execute().data or []
         if not rows: raise HTTPException(404,'Club not found.')
         staff = db.table('admin_role_assignments').select('email,role,revoked_at,expires_at').eq('club_id',club_id).execute().data or []
         from jupr_app.domain.admin.staff_policy import assignment_active, ADMIN_ROLES

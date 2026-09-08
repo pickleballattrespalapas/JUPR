@@ -194,3 +194,34 @@ existing component suite; Next production build with type/lint checks; migration
 source guard and whitespace checks. The local cloud-browser URL is blocked by
 its network policy, so authenticated real-browser acceptance remains a staging
 pilot task. Do not represent these local checks as that acceptance.
+
+## Club administrator setup increment (September 8, 2026)
+
+`/admin/club-settings` lets an assigned club administrator update the club name,
+short description, and public contact email. The sidebar refreshes the saved
+club name. Operators cannot read or save settings; the API checks the verified
+identity and the route's club assignment on every request.
+
+Draft clubs can save their progress and submit setup for Super Admin review.
+Submission requires a contact email and records an audit with the verified
+actor. The existing platform dashboard shows the resulting Ready for review
+status and the club description. Editing a pending submission returns setup to
+In progress until it is submitted again. Active clubs keep their existing status
+when saving details and cannot accidentally submit themselves as new clubs.
+
+The service-only database function serializes saves with staff changes, repeats
+authorization, rejects outdated timestamps, and writes the audit atomically.
+The form preserves drafts after a conflict, requires reload after uncertain saves,
+blocks duplicate clicks, and discards late responses from a different account
+or club. Token refresh preserves unsaved edits. Club URLs and commercial settings
+are not editable here. This does not activate a club or send messages.
+
+Validation: 57 focused API/permission/navigation checks, executable component scenarios,
+full component suite, Next build, migration guards, and a staging transaction
+test (`tests/sql/club_settings_transaction.sql`) covering permissions, save,
+submission, stale writes, audit, cross-club denial, revoked access and active-club
+status. Test records were rolled back. No new database security advisor findings.
+Authenticated browser acceptance remains a staging pilot task.
+
+Next: staff account invitation/acceptance and the second-club pilot, followed by
+interclub participation, team rosters and organizer eligibility decisions.

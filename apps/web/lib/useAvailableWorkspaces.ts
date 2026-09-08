@@ -2,10 +2,16 @@
 import { useEffect, useState } from "react";
 import { getAdminApiBaseUrl } from "./adminAuthClient";
 import type { AvailableWorkspace } from "./adminWorkspace";
+import { ADMIN_WORKSPACE_DETAILS_CHANGE } from "./adminWorkspace";
 
 export function useAvailableWorkspaces(accessToken: string, identity = accessToken) {
   const [state, setState] = useState<{identity: string; workspaces: AvailableWorkspace[]; error: string; loaded: boolean}>({ identity: "", workspaces: [], error: "", loaded: false });
   const [revision, setRevision] = useState(0);
+  useEffect(() => {
+    const refresh = () => setRevision(n => n + 1);
+    window.addEventListener(ADMIN_WORKSPACE_DETAILS_CHANGE, refresh);
+    return () => window.removeEventListener(ADMIN_WORKSPACE_DETAILS_CHANGE, refresh);
+  }, []);
   useEffect(() => {
     if (!accessToken) return;
     const controller = new AbortController();

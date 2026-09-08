@@ -37,6 +37,7 @@ const adminGroups: AdminGroup[] = [
         href: "/admin",
         active: (pathname) => pathname === "/admin"
       },
+      { label: "Club settings", href: "/admin/club-settings", active: path => path === "/admin/club-settings" },
       { label: "Club staff", href: "/admin/staff", active: path => path === "/admin/staff" },
       { label: "Interclub seasons", href: "/admin/interclub", active: path => path === "/admin/interclub" },
       {
