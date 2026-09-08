@@ -412,3 +412,35 @@ access, exact revisions, opened-season protection and independent meet rosters.
 The Next build passed. Local browser verification could not run because this
 workspace blocks browser process sockets; desktop/mobile visual acceptance
 remains in the staging pilot checklist. No new database advisory findings.
+
+
+## Invite missing clubs during setup (September 8, 2026)
+
+Step 2 keeps club selection in place and now includes **Invite a new club**.
+Organizers enter a club name and its first administrator's email. Creating the
+invitation atomically creates an inactive free club, selects it in the season,
+and saves the current draft. It does not grant the organizer access to the new
+club. A duplicate name/address directs the organizer to select the existing club.
+At least two clubs are still required before continuing from this step.
+
+The organizer copies a seven-day link from this same step. No email is sent by
+creating it. The recipient signs in with the invited, verified email, reviews
+the club and explicitly accepts administrator access. Other club assignments
+remain intact. Recipients can request an email sign-in link in live mode; staging
+stays dry_run and requires an existing confirmed test account. The organizer can
+correct the email, renew or cancel the account invitation. After opening the
+season, these controls remain available through **Club account invitations** on
+the season card. Season invitations still open after reviewing rules and meets;
+club onboarding does not accept a season or choose any players.
+
+The service-only transaction checks current organizer authority, season ownership,
+revisions and existing club/staff records. RLS and revoked browser grants protect
+invitation contact details. Creation retries cannot duplicate clubs; verified
+acceptance retries cannot restore revoked grants. Existing clubs cannot be claimed
+through this flow. Email claims are capped and throttled, and non-live modes stop
+before any Auth user/token creation or mail delivery. No production changes.
+
+Validation: focused API and executable component scenarios, web build and type
+checks, and `tests/sql/club_join_invitation_transaction.sql` against staging under
+the API database role. Transaction fixtures are rolled back. Browser acceptance
+remains a manual staging check because this workspace cannot launch a browser.
