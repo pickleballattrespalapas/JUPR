@@ -45,6 +45,25 @@ Validate JUPR multi-club behavior in staging using a non-production second club 
 - [ ] Saving details for an active club preserves its active/setup status.
 - [ ] Operators and another club's administrators cannot read or write club settings.
 
+### Staff invitations
+
+- [ ] In Club staff, create an operator invitation with a program scope and access end date.
+- [ ] Verify the invitation appears Pending and grants no staff access yet.
+- [ ] Copy the link and open it in a separate browser profile with an existing confirmed staging test account.
+- [ ] Verify a different email cannot view or accept the invitation.
+- [ ] Sign in with the invited email, review the correct club/role/scopes, then accept.
+- [ ] Verify acceptance opens that club and the administrator sees Accepted after refreshing.
+- [ ] Verify a single-club account has no switcher; an account assigned to two clubs retains both.
+- [ ] Cancel a pending invitation and verify its link cannot grant access.
+- [ ] Remove accepted staff access and verify reopening the old invitation cannot restore it.
+- [ ] Verify operator access stops on its end date and that expired staff can receive a new invitation.
+- [ ] Verify a removed inviter or a newer staff assignment prevents stale invitation acceptance.
+- [ ] Verify Email me a sign-in link explains that email is disabled in staging; no email or Auth account is created.
+
+Staging email remains `dry_run`. Creating links does not send invitations. Real
+new-account email delivery is a separate future acceptance check when explicitly
+authorized in an appropriate environment.
+
 - [ ] Verify second-club operator cannot access Tres Palapas write operations.
 - [ ] Verify Tres Palapas operator cannot write second-club matches.
 - [ ] Verify admin activity log records the correct `club_id` for every write attempt.

@@ -540,6 +540,25 @@ export function consumeHashSession(options: { requireRecovery?: boolean } = {}):
   return session;
 }
 
+// Invitation sign-in deliberately returns an unpersisted session. A new staff
+// account has no capabilities until it explicitly accepts the invitation.
+export async function consumeStaffInvitationSession(): Promise<AdminSession | null> {
+  if (typeof window === "undefined") return null;
+  const tokenHash = new URLSearchParams(window.location.hash.replace(/^#/, "")).get("staff_token_hash");
+  if (!tokenHash) return refreshAdminSession(consumeHashSession() || loadAdminSession());
+  cleanAuthCallbackUrl();
+  const config = getAdminAuthConfig();
+  if (!config) throw new Error("Sign-in is unavailable.");
+  const response = await fetch(`${config.supabaseUrl}/auth/v1/verify`, {
+    method: "POST",
+    headers: { apikey: config.supabaseAnonKey, "Content-Type": "application/json" },
+    body: JSON.stringify({ token_hash: tokenHash, type: "email" })
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok || !payload?.access_token) throw new Error("This sign-in link is invalid or expired. Request another email.");
+  return normalizeSession(payload);
+}
+
 async function exchangeRecoveryCode(code: string): Promise<AdminSession> {
   const config = getAdminAuthConfig();
   const verifier = consumeRecoveryVerifier();
