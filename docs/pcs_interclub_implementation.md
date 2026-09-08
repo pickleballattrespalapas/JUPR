@@ -444,3 +444,37 @@ Validation: focused API and executable component scenarios, web build and type
 checks, and `tests/sql/club_join_invitation_transaction.sql` against staging under
 the API database role. Transaction fixtures are rolled back. Browser acceptance
 remains a manual staging check because this workspace cannot launch a browser.
+
+## Invitation account setup (September 8, 2026)
+
+Invitation recipients now choose **Create account** or **Already have an account**.
+The new account path explains and follows three steps: verify the invited email,
+choose and confirm a password, then review and explicitly accept club access.
+It no longer starts by asking a new recipient for a password they have never set.
+Existing accounts can sign in with their current password or use an email link.
+Recipients using an older email link can also choose **Set a password** during
+review. Setting a password applies to their PCS sign-in across all assigned clubs.
+
+Verification uses the existing invitation-bound, throttled email claim. The link
+retains the invitation ID and club-invitation kind and carries `setup=password`
+to return to password setup after authentication. The token hash stays in the
+fragment and is removed before verification. The password goes only to Supabase
+Auth using the recipient's session; there is no administrator credential or
+unauthenticated password change. Password setup does not save an admin session
+or grant a role. Club permissions still require the existing verified acceptance
+transaction. See Supabase's [email link creation](https://supabase.com/docs/reference/python/auth-admin-generatelink)
+and [authenticated password updates](https://supabase.com/docs/reference/javascript/auth-updateuser).
+
+Public GET requests to either invitation's `/sign-in` resource report only whether
+email is enabled, without looking up or revealing an invitation or account. The
+page explains the staging limitation immediately and disables email actions.
+Staging remains `dry_run`: no email, Auth account or token is created by these
+requests, so a new-account email journey cannot be manually completed there.
+For the staging club pilot, update the pending invitation in step 2 to an existing
+confirmed test account's email and use its existing sign-in. An invented email
+address and an invitation alone are not a sign-in account.
+
+Regression coverage includes both invitation kinds, callback intent, password
+confirmation and failure recovery, no role grant before acceptance, wrong accounts,
+duplicate submissions, email capability failures and non-live email restrictions.
+No schema migration or change to season setup, club selection or meet rosters.

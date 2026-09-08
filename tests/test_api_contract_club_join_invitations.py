@@ -114,24 +114,35 @@ def test_safe_database_rejections(setup,code,status):
 
 
 @pytest.mark.parametrize("mode",["dry_run","staging_redirect"])
-def test_staging_sign_in_creates_no_auth_token_or_mail(setup,monkeypatch,mode):
+@pytest.mark.parametrize("setup_password", [False, True])
+def test_staging_sign_in_creates_no_auth_token_or_mail(setup,monkeypatch,mode,setup_password):
     c,s=setup; monkeypatch.setattr(routes,"get_email_mode",lambda:mode)
-    r=c.post(f"/club-invitations/{s['invite']['id']}/sign-in",json={"email":"invited@example.test"})
+    r=c.post(f"/club-invitations/{s['invite']['id']}/sign-in",json={"email":"invited@example.test", "setup_password":setup_password})
     assert not r.json()["email_enabled"] and not s["calls"] and not s["sent"]
 
 
-def test_live_sign_in_claim_uses_club_invitation_callback(setup,monkeypatch):
+@pytest.mark.parametrize("setup_password", [False, True])
+def test_live_sign_in_claim_uses_club_invitation_callback(setup,monkeypatch,setup_password):
     c,s=setup; monkeypatch.setattr(routes,"get_email_mode",lambda:"live")
-    assert c.post(f"/club-invitations/{s['invite']['id']}/sign-in",json={"email":"invited@example.test"}).status_code==200
-    assert s["calls"][-1][1]["p_action"]=="email_claim" and s["sent"][-1][1]=={"club_join":True}
+    assert c.post(f"/club-invitations/{s['invite']['id']}/sign-in",json={"email":"invited@example.test", "setup_password":setup_password}).status_code==200
+    assert s["calls"][-1][1]["p_action"]=="email_claim" and s["sent"][-1][1]=={"club_join":True, "setup_password":setup_password}
     generated=[]; sent=[]
     monkeypatch.setattr(staff,"get_email_mode",lambda:"live")
     monkeypatch.setattr(staff,"get_next_web_base_url",lambda **_:"https://web.example.test")
     monkeypatch.setattr(staff,"send_email_with_inline_chart",lambda **kw:sent.append(kw))
     db=SimpleNamespace(auth=SimpleNamespace(admin=SimpleNamespace(generate_link=lambda p: generated.append(p) or SimpleNamespace(properties=SimpleNamespace(hashed_token="test-secret")))))
-    staff.send_invitation_sign_in(db,s["invite"],club_join=True)
-    assert "&kind=club#staff_token_hash=test-secret" in sent[0]["text_body"]
+    staff.send_invitation_sign_in(db,s["invite"],club_join=True,setup_password=setup_password)
+    setup_query = "&setup=password" if setup_password else ""
+    assert f"&kind=club{setup_query}#staff_token_hash=test-secret" in sent[0]["text_body"]
     assert sent[0]["to_email"]==s["invite"]["email"] and generated==[{"type":"magiclink","email":s["invite"]["email"]}]
+
+
+@pytest.mark.parametrize("mode", ["dry_run", "staging_redirect", "live"])
+def test_club_sign_in_options_are_public_without_invitation_lookup(setup, monkeypatch, mode):
+    c, s = setup
+    monkeypatch.setattr(routes, "get_email_mode", lambda: mode)
+    assert c.get(f"/club-invitations/{uuid4()}/sign-in").json() == {"email_enabled": mode == "live"}
+    assert not s["calls"] and not s["sent"]
 
 
 def test_unauthenticated_recipient_denied(setup,monkeypatch):

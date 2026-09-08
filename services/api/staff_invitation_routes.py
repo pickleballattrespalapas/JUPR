@@ -35,6 +35,22 @@ class StaffInvitationCreate(InvitedEmail):
     access_expires_at: AwareDatetime | None = None
 
 
+class InvitationSignIn(InvitedEmail):
+    setup_password: bool = Field(default=False, strict=True)
+
+
+def invitation_sign_in_options(email_mode):
+    # Public environment capability only: never look up an invitation or user.
+    return {"email_enabled": email_mode == EMAIL_MODE_LIVE}
+
+
+EMAIL_DISABLED_MESSAGE = (
+    "Account verification and sign-in emails are disabled in this test environment. "
+    "New account setup cannot finish here. Use an existing test account with the invited email, "
+    "or ask your club administrator for an invitation to your test account's email."
+)
+
+
 def invitation_response(row):
     result = {key: row.get(key) for key in INVITATION_FIELDS.split(",")}
     if result["status"] == "pending" and any(
@@ -61,7 +77,7 @@ def invitation_rpc(db, **params):
         raise HTTPException(503, "Could not confirm the invitation update. Reload before retrying.") from exc
 
 
-def send_invitation_sign_in(db, row, *, club_join=False):
+def send_invitation_sign_in(db, row, *, club_join=False, setup_password=False):
     # Authentication links must never be redirected to a staging mailbox. Stop
     # before creating an Auth user/token in every non-live email mode.
     if get_email_mode() != EMAIL_MODE_LIVE:
@@ -77,11 +93,15 @@ def send_invitation_sign_in(db, row, *, club_join=False):
     # The fragment stays out of request/referrer logs. Only the recipient gets
     # this credential; the staff list/API response contains just invitation IDs.
     kind = "&kind=club" if club_join else ""
-    link = f"{origin.rstrip('/')}/admin/accept-invitation?invitation={row['id']}{kind}#" + urlencode({"staff_token_hash": token_hash})
+    setup = "&setup=password" if setup_password else ""
+    link = f"{origin.rstrip('/')}/admin/accept-invitation?invitation={row['id']}{kind}{setup}#" + urlencode({"staff_token_hash": token_hash})
+    subject = "Verify your email and set up your PCS account" if setup_password else "Sign in to review your club invitation"
+    introduction = "Verify your email, then choose a password and review your club invitation." if setup_password else "You requested a sign-in link to review a club invitation."
+    action = "Verify email and set password" if setup_password else "Sign in and review invitation"
     send_email_with_inline_chart(
-        to_email=row["email"], subject="Sign in to review your club staff invitation",
-        html_body=f'<p>You requested a sign-in link to review a club staff invitation.</p><p><a href="{escape(link, quote=True)}">Sign in and review invitation</a></p><p>You will review the club and access before accepting. If you did not request this, ignore this email.</p>',
-        text_body=f"Sign in to review your club staff invitation:\n{link}\nYou will review the club and access before accepting. If you did not request this, ignore this email.",
+        to_email=row["email"], subject=subject,
+        html_body=f'<p>{introduction}</p><p><a href="{escape(link, quote=True)}">{action}</a></p><p>You will review the club and access before accepting. If you did not request this, ignore this email.</p>',
+        text_body=f"{introduction}\n{link}\nYou will review the club and access before accepting. If you did not request this, ignore this email.",
     )
     return True
 
@@ -140,15 +160,19 @@ def install_staff_invitation_routes(app, *, get_supabase_client):
         row = invitation_rpc(get_supabase_client(), p_action="accept", p_id=str(invitation_id), p_actor_id=user.user_id, p_actor_email=user.email)
         return {"invitation": invitation_response(row)}
 
+    @app.get("/staff-invitations/{invitation_id}/sign-in")
+    def sign_in_options(invitation_id: UUID):
+        return invitation_sign_in_options(get_email_mode())
+
     @app.post("/staff-invitations/{invitation_id}/sign-in")
-    def sign_in(invitation_id: UUID, payload: InvitedEmail):
+    def sign_in(invitation_id: UUID, payload: InvitationSignIn):
         if get_email_mode() != EMAIL_MODE_LIVE:
-            return {"email_enabled": False, "message": "Sign-in email is disabled in this test environment. Use an existing test account."}
+            return {"email_enabled": False, "message": EMAIL_DISABLED_MESSAGE}
         db = get_supabase_client()
         try:
             row = invitation_rpc(db, p_action="email_claim", p_id=str(invitation_id), p_email=payload.email)
             if row:
-                send_invitation_sign_in(db, row)
+                send_invitation_sign_in(db, row, setup_password=payload.setup_password)
         except HTTPException as exc:
             if exc.status_code not in (403, 404, 409):
                 raise

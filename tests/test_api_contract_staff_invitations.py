@@ -115,26 +115,39 @@ def test_database_rejections_do_not_expose_details(setup, code, status):
 
 
 @pytest.mark.parametrize("mode", ["dry_run", "staging_redirect"])
-def test_nonlive_email_never_creates_auth_user_token_or_mail(setup, monkeypatch, mode):
+@pytest.mark.parametrize("setup_password", [False, True])
+def test_nonlive_email_never_creates_auth_user_token_or_mail(setup, monkeypatch, mode, setup_password):
     c, s = setup
     monkeypatch.setattr(routes, "get_email_mode", lambda: mode)
-    r = c.post(f"/staff-invitations/{s['invite']['id']}/sign-in",json={"email":"invited@example.test"})
+    r = c.post(f"/staff-invitations/{s['invite']['id']}/sign-in",json={"email":"invited@example.test", "setup_password":setup_password})
     assert r.status_code == 200 and not r.json()["email_enabled"]
     assert routes.send_invitation_sign_in(s["db"],s["invite"]) is False
     assert not s["calls"] and not s["generated"] and not s["sent"]
 
 
-def test_live_link_is_only_delivered_to_bound_recipient_after_claim(setup, monkeypatch):
+@pytest.mark.parametrize("setup_password", [False, True])
+def test_live_link_is_only_delivered_to_bound_recipient_after_claim(setup, monkeypatch, setup_password):
     c, s = setup
     monkeypatch.setattr(routes, "get_email_mode", lambda: "live")
     monkeypatch.setattr(routes, "get_next_web_base_url", lambda **_: "https://web.example.test")
-    r = c.post(f"/staff-invitations/{s['invite']['id']}/sign-in",json={"email":"invited@example.test"})
+    r = c.post(f"/staff-invitations/{s['invite']['id']}/sign-in",json={"email":"invited@example.test", "setup_password":setup_password})
     assert r.status_code == 200 and "credential-fixture" not in r.text and "web.example.test" not in r.text
     assert s["calls"][0][1]["p_action"] == "email_claim"
     assert s["generated"] == [{"type":"magiclink","email":"invited@example.test"}]
     sent = s["sent"][0]
     assert sent["to_email"] == "invited@example.test"
-    assert f"https://web.example.test/admin/accept-invitation?invitation={s['invite']['id']}#staff_token_hash=credential-fixture" in sent["text_body"]
+    setup_query = "&setup=password" if setup_password else ""
+    assert f"https://web.example.test/admin/accept-invitation?invitation={s['invite']['id']}{setup_query}#staff_token_hash=credential-fixture" in sent["text_body"]
+    if setup_password:
+        assert "choose a password" in sent["text_body"]
+
+
+@pytest.mark.parametrize("mode", ["dry_run", "staging_redirect", "live"])
+def test_sign_in_options_are_public_and_never_disclose_invitation_or_account(setup, monkeypatch, mode):
+    c, s = setup
+    monkeypatch.setattr(routes, "get_email_mode", lambda: mode)
+    assert c.get(f"/staff-invitations/{uuid4()}/sign-in").json() == {"email_enabled": mode == "live"}
+    assert not s["calls"] and not s["generated"] and not s["sent"]
 
 
 @pytest.mark.parametrize("code", ["40001", "P0002", "42501"])
@@ -142,7 +155,7 @@ def test_unavailable_email_requests_are_generic_and_send_nothing(setup, monkeypa
     c, s = setup
     monkeypatch.setattr(routes, "get_email_mode", lambda: "live")
     s["error"] = code
-    r = c.post(f"/staff-invitations/{s['invite']['id']}/sign-in", json={"email":"wrong@example.test"})
+    r = c.post(f"/staff-invitations/{s['invite']['id']}/sign-in", json={"email":"wrong@example.test", "setup_password":True})
     assert r.status_code == 200 and "If the email matches" in r.json()["message"]
     assert not s["sent"] and not s["generated"]
 

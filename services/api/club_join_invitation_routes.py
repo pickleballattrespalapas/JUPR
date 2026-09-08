@@ -12,7 +12,8 @@ from services.api.admin_auth_routes import require_admin_assignments
 from services.api.auth import authenticate_bearer, auth_header
 from services.api.interclub_models import PlanningDraft
 from services.api.staff_invitation_routes import (
-    InvitedEmail, invitation_response, send_invitation_sign_in, get_email_mode, EMAIL_MODE_LIVE,
+    InvitedEmail, InvitationSignIn, invitation_response, send_invitation_sign_in,
+    invitation_sign_in_options, get_email_mode, EMAIL_MODE_LIVE, EMAIL_DISABLED_MESSAGE,
 )
 
 FIELDS = "id,organizer_club_id,season_id,club_id,club_name,email,status,revision,expires_at,created_at,accepted_at"
@@ -106,14 +107,18 @@ def install_club_join_invitation_routes(app, *, get_supabase_client):
         row = rpc(get_supabase_client(), p_action="accept", p_id=str(invitation_id), p_actor_id=user.user_id, p_actor_email=user.email)
         return {"invitation": response(row)}
 
+    @app.get("/club-invitations/{invitation_id}/sign-in")
+    def sign_in_options(invitation_id: UUID):
+        return invitation_sign_in_options(get_email_mode())
+
     @app.post("/club-invitations/{invitation_id}/sign-in")
-    def sign_in(invitation_id: UUID, payload: InvitedEmail):
+    def sign_in(invitation_id: UUID, payload: InvitationSignIn):
         if get_email_mode() != EMAIL_MODE_LIVE:
-            return {"email_enabled": False, "message": "Sign-in email is disabled in this test environment. Use an existing test account."}
+            return {"email_enabled": False, "message": EMAIL_DISABLED_MESSAGE}
         db = get_supabase_client()
         try:
             row = rpc(db, p_action="email_claim", p_id=str(invitation_id), p_email=payload.email)
-            if row: send_invitation_sign_in(db, row, club_join=True)
+            if row: send_invitation_sign_in(db, row, club_join=True, setup_password=payload.setup_password)
         except HTTPException as exc:
             if exc.status_code not in (403, 404, 409): raise
         except Exception as exc:
