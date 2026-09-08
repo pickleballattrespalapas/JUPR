@@ -273,12 +273,15 @@ def test_admin_pilot_match_log_readiness_forwards_the_bearer_token() -> None:
 
 def test_public_navigation_does_not_advertise_protected_admin_tools() -> None:
     layout = _source("apps/web/app/layout.tsx")
+    footer = _source("apps/web/components/PublicFooterNav.tsx")
     home = _source("apps/web/app/page.tsx")
     route_map = _source("apps/web/app/site-map/page.tsx")
     sitemap = _source("apps/web/app/sitemap.ts")
     admin_layout = _source("apps/web/app/admin/layout.tsx")
 
-    assert '<Link href="/admin/login">Staff sign in</Link>' in layout
+    assert "<PublicFooterNav />" in layout
+    assert '<Link href="/admin/login">Staff sign in</Link>' in footer
+    assert 'href="/admin/tools"' not in footer
     assert '["Staff sign-in", "/admin/login"]' in home
     assert '["Operations cockpit", "/admin"]' not in route_map
     assert '["Admin Tools", "/admin/tools"]' not in route_map
