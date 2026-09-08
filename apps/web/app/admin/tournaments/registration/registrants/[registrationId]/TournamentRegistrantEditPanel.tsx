@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import { FormDialog, actionSuccess, InteractionActionError } from "@/components/interaction";
 import { tournamentRegistrationActionError } from "@/lib/tournamentRegistrationActionError";
-import { publicEventEligibilityReason } from "@/lib/tournamentRegistrationEligibility";
+import { normalizeRegistrationGender, registrationGenderOptions, publicEventEligibilityReason } from "@/lib/tournamentRegistrationEligibility";
 import type { PublicRegistrationEvent } from "@/lib/tournamentRegistrationApi";
 import type {
   AdminTournamentDetailResponse,
@@ -131,7 +131,7 @@ function registrationEdit(
     email: row?.email || "",
     phone: row?.phone || "",
     playerId: row?.player_id == null ? "" : String(row.player_id),
-    gender: row?.gender || "",
+    gender: normalizeRegistrationGender(row?.gender),
     age: row?.age == null ? "" : String(row.age),
     ageBracket: row?.age_bracket || "",
     duprId: row?.dupr_id || "",
@@ -153,7 +153,7 @@ function selectionEdit(row: AdminTournamentSelection | null): SelectionEdit {
     partnerDuprId: row?.partner_dupr_id || "",
     partnerSkill: row?.partner_skill == null ? "" : String(row.partner_skill),
     partnerAge: row?.partner_age == null ? "" : String(row.partner_age),
-    partnerGender: row?.partner_gender || "",
+    partnerGender: normalizeRegistrationGender(row?.partner_gender),
     partnerNote: row?.partner_note || "",
     showOnPartnerBoard: Boolean(row?.show_on_partner_board),
     partnerSelectionId: row?.partner_selection_id || ""
@@ -1000,7 +1000,7 @@ export default function TournamentRegistrantEditPanel({
               <label><strong>Email</strong><br /><input type="email" value={registrationDraft.email} onChange={(event) => setRegistrationDraft((current) => ({ ...current, email: event.target.value }))} style={inputStyle} /></label>
               <label><strong>Phone</strong><br /><input type="tel" value={registrationDraft.phone} onChange={(event) => setRegistrationDraft((current) => ({ ...current, phone: event.target.value }))} style={inputStyle} /></label>
               <label><strong>Linked player ID</strong><br /><input type="number" min="1" value={registrationDraft.playerId} onChange={(event) => setRegistrationDraft((current) => ({ ...current, playerId: event.target.value }))} style={inputStyle} /><small>Clear to unlink this tournament registration from a player profile.</small></label>
-              <label><strong>Gender</strong><br /><select value={registrationDraft.gender} onChange={(event) => setRegistrationDraft((current) => ({ ...current, gender: event.target.value }))} style={inputStyle}><option value="">Not specified</option><option value="Women">Women</option><option value="Men">Men</option><option value="Non-binary">Non-binary</option><option value="Other">Other</option><option value="Prefer not to say">Prefer not to say</option></select></label>
+              <label><strong>Gender</strong><br /><select value={registrationDraft.gender} onChange={(event) => setRegistrationDraft((current) => ({ ...current, gender: event.target.value }))} style={inputStyle}><option value="">Not specified</option>{registrationGenderOptions(registrationDraft.gender).map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
               <label><strong>Age</strong><br /><input type="number" min="5" max="120" value={registrationDraft.age} onChange={(event) => setRegistrationDraft((current) => ({ ...current, age: event.target.value }))} style={inputStyle} /></label>
               <label><strong>Age bracket note</strong><br /><input value={registrationDraft.ageBracket} onChange={(event) => setRegistrationDraft((current) => ({ ...current, ageBracket: event.target.value }))} style={inputStyle} /></label>
               <label><strong>DUPR ID</strong><br /><input value={registrationDraft.duprId} onChange={(event) => setRegistrationDraft((current) => ({ ...current, duprId: event.target.value }))} style={inputStyle} /></label>
@@ -1241,7 +1241,7 @@ export default function TournamentRegistrantEditPanel({
                       <label><strong>Partner DUPR ID</strong><br /><input value={selectionDraft.partnerDuprId} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerDuprId: event.target.value }))} style={inputStyle} /></label>
                       <label><strong>Partner starting skill *</strong><br /><input required type="number" min="1" max="7" step="0.01" value={selectionDraft.partnerSkill} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerSkill: event.target.value }))} style={inputStyle} /></label>
                       <label><strong>Partner age</strong><br /><input type="number" min="5" max="120" value={selectionDraft.partnerAge} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerAge: event.target.value }))} style={inputStyle} /></label>
-                      <label><strong>Partner gender</strong><br /><select value={selectionDraft.partnerGender} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerGender: event.target.value }))} style={inputStyle}><option value="">Not specified</option><option value="Women">Women</option><option value="Men">Men</option><option value="Non-binary">Non-binary</option><option value="Other">Other</option><option value="Prefer not to say">Prefer not to say</option></select></label>
+                      <label><strong>Partner gender</strong><br /><select value={selectionDraft.partnerGender} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerGender: event.target.value }))} style={inputStyle}><option value="">Not specified</option>{registrationGenderOptions(selectionDraft.partnerGender).map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
                     </div>
                   </section>
                 ) : null}

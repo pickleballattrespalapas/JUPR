@@ -52,6 +52,18 @@ const doublesEvent = {
   gender_restriction: "ANY"
 };
 
+for (const [stored, expected] of [
+  ["Female", "Women"], [" f ", "Women"], ["WOMAN", "Women"],
+  ["Male", "Men"], ["m", "Men"], ["MEN", "Men"],
+  ["nonbinary", "Non-binary"], ["OTHER", "Other"],
+  ["prefer not to say", "Prefer not to say"], [null, ""],
+  ["Self-described", "Self-described"]
+]) {
+  const value = eligibility.normalizeRegistrationGender(stored);
+  assert.equal(value, expected);
+  if (value) assert.ok(eligibility.registrationGenderOptions(stored).includes(value));
+}
+
 assert.equal(
   eligibility.publicEventEligibilityReason(singlesEvent, {
     doublesSkill: 4.0,

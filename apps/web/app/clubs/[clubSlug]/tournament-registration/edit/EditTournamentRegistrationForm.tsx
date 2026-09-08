@@ -18,6 +18,8 @@ import {
   TournamentCommerceSelection
 } from "@/lib/tournamentCommerceApi";
 import {
+  normalizeRegistrationGender,
+  registrationGenderOptions,
   publicEventEligibilityReason,
   publicEventCapacityLabel,
   publicEventFamilyKey,
@@ -149,7 +151,7 @@ export default function EditTournamentRegistrationForm({
           partner_dupr_id: selection.partner_dupr_id || "",
           partner_skill: selection.partner_skill ?? null,
           partner_age: selection.partner_age ?? null,
-          partner_gender: selection.partner_gender || "",
+          partner_gender: normalizeRegistrationGender(selection.partner_gender),
           partner_note: selection.partner_note || "",
           show_on_partner_board: Boolean(selection.show_on_partner_board)
         }
@@ -158,7 +160,7 @@ export default function EditTournamentRegistrationForm({
   );
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
   const [addEventOpen, setAddEventOpen] = useState(false);
-  const [gender, setGender] = useState(String(registration.gender || ""));
+  const [gender, setGender] = useState(() => normalizeRegistrationGender(registration.gender));
   const [ageDraft, setAgeDraft] = useState(String(registration.age ?? ""));
   const [doublesSkill, setDoublesSkill] = useState(String(registration.doubles_skill ?? ""));
   const [singlesSkill, setSinglesSkill] = useState(String(registration.singles_skill ?? ""));
@@ -255,7 +257,7 @@ export default function EditTournamentRegistrationForm({
           partner_dupr_id: prior?.partner_dupr_id || "",
           partner_skill: prior?.partner_skill ?? null,
           partner_age: prior?.partner_age ?? null,
-          partner_gender: prior?.partner_gender || "",
+          partner_gender: normalizeRegistrationGender(prior?.partner_gender),
           partner_note: prior?.partner_note || "",
           show_on_partner_board: Boolean(prior?.show_on_partner_board)
         }
@@ -452,7 +454,7 @@ export default function EditTournamentRegistrationForm({
             ) : null}
           </label>
           <label>Age<br /><input name="age" value={ageDraft} onChange={(event) => setAgeDraft(event.target.value)} type="number" min="1" max="120" required style={{ width: "100%" }} /></label>
-          <label>Gender<br /><select name="gender" value={gender} onChange={(event) => setGender(event.target.value)} style={{ width: "100%" }}><option value="">Select</option><option>Women</option><option>Men</option><option>Non-binary</option><option>Prefer not to say</option></select></label>
+          <label>Gender<br /><select name="gender" value={gender} onChange={(event) => setGender(event.target.value)} style={{ width: "100%" }}><option value="">Select</option>{registrationGenderOptions(gender).map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
         </div>
       </section>
 
@@ -652,7 +654,7 @@ export default function EditTournamentRegistrationForm({
                   <label>Partner DUPR ID<br /><input defaultValue={prior?.partner_dupr_id || ""} onChange={(event) => updateSelectionDraft(editingEventId, { partner_dupr_id: event.target.value })} style={{ width: "100%" }} /></label>
                   <label>Partner skill<br /><input defaultValue={prior?.partner_skill ?? ""} onChange={(event) => updateSelectionDraft(editingEventId, { partner_skill: numberOrNull(event.target.value) })} type="number" min="1" max="7" step="0.01" style={{ width: "100%" }} /></label>
                   <label>Partner age<br /><input defaultValue={prior?.partner_age ?? ""} type="number" min="1" max="120" required onChange={(event) => updateSelectionDraft(editingEventId, { partner_age: numberOrNull(event.target.value) })} style={{ width: "100%" }} /></label>
-                  <label>Partner gender<br /><select defaultValue={prior?.partner_gender || ""} required onChange={(event) => updateSelectionDraft(editingEventId, { partner_gender: event.target.value })} style={{ width: "100%" }}><option value="">Select</option><option value="Women">Women</option><option value="Men">Men</option><option value="Non-binary">Non-binary</option><option value="Other">Other</option><option value="Prefer not to say">Prefer not to say</option></select></label>
+                  <label>Partner gender<br /><select value={prior?.partner_gender || ""} required onChange={(event) => updateSelectionDraft(editingEventId, { partner_gender: event.target.value })} style={{ width: "100%" }}><option value="">Select</option>{registrationGenderOptions(prior?.partner_gender).map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
                 </div>
               ) : null}
               {mode === "NEEDS_PARTNER" ? (
