@@ -943,6 +943,51 @@ def resolve_public_tournament_registration_profile(
     }
 
 
+def resolve_public_tournament_partner_profile(
+    supabase: Any,
+    *,
+    club_id: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Find public-safe partner suggestions without creating or linking a player.
+
+    Unlike the registrant preflight, a partner may already be registered. Their
+    registration/contact records are neither returned nor changed by this lookup.
+    """
+    if _clean_text(payload.get("website")):
+        raise ValueError("Unable to look up a partner profile.")
+    name = _clean_text(payload.get("name"), limit=160)
+    email = _clean_email(payload.get("email"))
+    if not name:
+        raise ValueError("Enter your partner's full name.")
+    if email and not _EMAIL_RE.match(email):
+        raise ValueError("Enter a valid partner email address.")
+    page = build_public_tournament_registration_page(
+        supabase,
+        club_id=str(club_id),
+        tournament_id=_clean_text(payload.get("tournament_id"), limit=120) or None,
+        registration_slug=_clean_text(payload.get("registration_slug"), limit=120) or None,
+    )
+    if not page.get("available"):
+        raise ValueError("Tournament registration is not configured.")
+    if not page.get("registration_open"):
+        raise ValueError(str(page.get("registration_closed_reason") or "Registration is not open."))
+    first_name, _, last_name = name.partition(" ")
+    match_kind, candidates = _profile_candidates(
+        supabase, club_id=str(club_id), first_name=first_name,
+        last_name=last_name, email=email,
+    )
+    return {
+        "ok": True,
+        "profile_match_kind": match_kind,
+        "profile_candidates": candidates,
+        "profile_policy": {
+            "linkage": "staff_review_required",
+            "public_submission_links_player": False,
+        },
+    }
+
+
 def _validate_submit_payload(payload: dict[str, Any]) -> None:
     if _clean_text(payload.get("website")):
         raise ValueError("Unable to submit registration.")

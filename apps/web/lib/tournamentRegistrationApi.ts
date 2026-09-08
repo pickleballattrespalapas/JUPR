@@ -134,6 +134,11 @@ export type TournamentRegistrationResponse = {
   commerce?: TournamentCommerceCatalog | null;
 };
 
+export type PublicPartnerProfileResolutionResponse = Pick<
+  PublicRegistrationProfileResolutionResponse,
+  "club" | "ok" | "profile_match_kind" | "profile_candidates" | "profile_policy"
+>;
+
 export type PublicTournamentRosterMember = {
   display_name: string;
   skill?: string | number | null;
@@ -565,6 +570,25 @@ export async function resolveClubTournamentRegistrationProfile(
 ): Promise<ApiResult<PublicRegistrationProfileResolutionResponse>> {
   return fetchJson<PublicRegistrationProfileResolutionResponse>(
     `/clubs/${clubSlug}/tournament-registration/profile-resolution`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export async function resolveClubTournamentPartnerProfile(
+  clubSlug: string,
+  payload: {
+    tournament_id: string;
+    registration_slug?: string | null;
+    name: string;
+    email?: string | null;
+  }
+): Promise<ApiResult<PublicPartnerProfileResolutionResponse>> {
+  return fetchJson<PublicPartnerProfileResolutionResponse>(
+    `/clubs/${clubSlug}/tournament-registration/partner-profile-resolution`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
