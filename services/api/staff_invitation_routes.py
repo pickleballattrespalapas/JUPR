@@ -8,11 +8,12 @@ from uuid import UUID
 from fastapi import HTTPException
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
-from jupr_app.config import EMAIL_MODE_LIVE, get_email_mode, get_next_web_base_url
+from jupr_app.config import get_email_mode, get_next_web_base_url
 from jupr_app.domain.admin.staff_policy import ADMIN_ROLES, validate_scopes
 from jupr_app.domain.notifications.smtp_mailer import send_email_with_inline_chart
 from services.api.admin_auth_routes import require_admin_assignments
 from services.api.auth import authenticate_bearer, auth_header
+from services.api.invitation_email_policy import invitation_email_policy
 
 
 INVITATION_FIELDS = "id,club_id,email,role,scopes,access_expires_at,expires_at,status,created_at,accepted_at,cancelled_at"
@@ -41,7 +42,7 @@ class InvitationSignIn(InvitedEmail):
 
 def invitation_sign_in_options(email_mode):
     # Public environment capability only: never look up an invitation or user.
-    return {"email_enabled": email_mode == EMAIL_MODE_LIVE}
+    return invitation_email_policy(email_mode).public_options()
 
 
 EMAIL_DISABLED_MESSAGE = (
@@ -49,6 +50,14 @@ EMAIL_DISABLED_MESSAGE = (
     "New account setup cannot finish here. Use an existing test account with the invited email, "
     "or ask your club administrator for an invitation to your test account's email."
 )
+
+
+def invitation_email_request_response(policy):
+    restriction = " and is an approved test address" if policy.test_mode else ""
+    return {**policy.public_options(), "message": (
+        f"If the email matches an available invitation{restriction}, a sign-in link will arrive shortly. "
+        "Wait a minute before requesting another; each invitation allows up to five emails."
+    )}
 
 
 def invitation_response(row):
@@ -78,9 +87,10 @@ def invitation_rpc(db, **params):
 
 
 def send_invitation_sign_in(db, row, *, club_join=False, setup_password=False):
-    # Authentication links must never be redirected to a staging mailbox. Stop
-    # before creating an Auth user/token in every non-live email mode.
-    if get_email_mode() != EMAIL_MODE_LIVE:
+    # Check the bound recipient again immediately before creating any credential.
+    # A test email goes to that exact address, never a redirected staging mailbox.
+    policy = invitation_email_policy(get_email_mode())
+    if not policy.allows(row["email"]):
         return False
     origin = get_next_web_base_url(default="")
     parsed = urlsplit(origin)
@@ -96,6 +106,8 @@ def send_invitation_sign_in(db, row, *, club_join=False, setup_password=False):
     setup = "&setup=password" if setup_password else ""
     link = f"{origin.rstrip('/')}/admin/accept-invitation?invitation={row['id']}{kind}{setup}#" + urlencode({"staff_token_hash": token_hash})
     subject = "Verify your email and set up your PCS account" if setup_password else "Sign in to review your club invitation"
+    if policy.test_mode:
+        subject = "[PCS staging test] " + subject
     introduction = "Verify your email, then choose a password and review your club invitation." if setup_password else "You requested a sign-in link to review a club invitation."
     action = "Verify email and set password" if setup_password else "Sign in and review invitation"
     send_email_with_inline_chart(
@@ -166,8 +178,11 @@ def install_staff_invitation_routes(app, *, get_supabase_client):
 
     @app.post("/staff-invitations/{invitation_id}/sign-in")
     def sign_in(invitation_id: UUID, payload: InvitationSignIn):
-        if get_email_mode() != EMAIL_MODE_LIVE:
+        policy = invitation_email_policy(get_email_mode())
+        if not policy.enabled:
             return {"email_enabled": False, "message": EMAIL_DISABLED_MESSAGE}
+        if not policy.allows(payload.email):
+            return invitation_email_request_response(policy)
         db = get_supabase_client()
         try:
             row = invitation_rpc(db, p_action="email_claim", p_id=str(invitation_id), p_email=payload.email)
@@ -178,4 +193,4 @@ def install_staff_invitation_routes(app, *, get_supabase_client):
                 raise
         except Exception as exc:
             raise HTTPException(503, "Unable to send a sign-in email. Wait a minute before retrying.") from exc
-        return {"email_enabled": True, "message": "If the email matches an available invitation, a sign-in link will arrive shortly. Wait a minute before requesting another; each invitation allows up to five emails."}
+        return invitation_email_request_response(policy)

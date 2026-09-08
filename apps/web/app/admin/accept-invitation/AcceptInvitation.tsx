@@ -27,6 +27,7 @@ function InvitationContent({ id, clubJoin, setupPassword }: { id: string; clubJo
   const [mode, setMode] = useState<"create" | "signin">("create");
   const [needsPassword, setNeedsPassword] = useState(setupPassword);
   const [emailEnabled, setEmailEnabled] = useState<boolean | null>(null);
+  const [emailTestMode, setEmailTestMode] = useState(false);
   const [optionsError, setOptionsError] = useState(false);
   const [optionsRevision, setOptionsRevision] = useState(0);
   const [emailRequested, setEmailRequested] = useState(false);
@@ -48,7 +49,7 @@ function InvitationContent({ id, clubJoin, setupPassword }: { id: string; clubJo
       .then(async response => {
         const data = await response.json();
         if (!response.ok || typeof data.email_enabled !== "boolean") throw new Error("Unavailable");
-        if (!controller.signal.aborted) setEmailEnabled(data.email_enabled);
+        if (!controller.signal.aborted) { setEmailEnabled(data.email_enabled); setEmailTestMode(data.email_test_mode === true); }
       })
       .catch(() => { if (!controller.signal.aborted) setOptionsError(true); });
     return () => controller.abort();
@@ -95,6 +96,7 @@ function InvitationContent({ id, clubJoin, setupPassword }: { id: string; clubJo
     if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Check the invited email and try again.");
     if (mounted.current) {
       setEmailEnabled(data.email_enabled === true);
+      setEmailTestMode(data.email_test_mode === true);
       setEmailRequested(data.email_enabled === true);
       setMessage(data.message);
     }
@@ -143,6 +145,10 @@ function InvitationContent({ id, clubJoin, setupPassword }: { id: string; clubJo
       {emailEnabled === false && <div className={styles.notice} role="status">
         <strong>New account setup is unavailable in this test environment.</strong>
         <p>Verification and sign-in emails are disabled. To test invitation acceptance, use an existing test account with the invited email. {clubJoin ? "The organizer can update the invitation to that account’s email in the club setup." : "Ask your club administrator for an invitation to that test account’s email."}</p>
+      </div>}
+      {emailEnabled && emailTestMode && <div className={styles.notice} role="status">
+        <strong>Invitation email testing is enabled.</strong>
+        <p>Use the real email address approved for this test. The invitation must use that same address. You can then verify your email, choose a password and accept your club invitation.</p>
       </div>}
       {optionsError && <div className={styles.notice} role="status">
         <p>We could not check email verification availability. You can still sign in with an existing password.</p>

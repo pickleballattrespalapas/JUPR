@@ -478,3 +478,44 @@ Regression coverage includes both invitation kinds, callback intent, password
 confirmation and failure recovery, no role grant before acceptance, wrong accounts,
 duplicate submissions, email capability failures and non-live email restrictions.
 No schema migration or change to season setup, club selection or meet rosters.
+
+## Controlled invitation email pilot (prepared September 8, 2026)
+
+The full new-account journey needs a real mailbox. An existing account can test
+acceptance, but it cannot establish that a new recipient receives verification,
+sets a first password and signs into the newly assigned club successfully.
+
+The restricted test path is prepared in
+`config/staging_invitation_email_test.json` and ships **disabled**, with no
+approved recipients. Enable it only after Joe approves the actual recipient
+addresses and testing window. The reviewable configuration holds at most three
+exact addresses, an approval time and an expiry no more than seven days later.
+No wildcard, redirected mailbox or `.invalid` address is accepted. Configuration
+changes go through the normal staging PR, build and deployment process.
+
+The runtime requires the isolated staging Fly app, Supabase project and canonical
+web origin, `JUPR_EMAIL_MODE=dry_run`, and configured SMTP with TLS. The invitation
+email endpoints are the only callers of this exception. Other staging mail
+remains in its existing dry-run mode. Both the request and final sender check the
+approved address before any Auth user/token creation; the normal invitation
+claim still checks validity, email binding and rate limits. Messages carry
+`[PCS staging test]` in the subject and go only to the invited, approved address.
+No token is exposed in the API response, list, handoff or organizer screen.
+
+Staging health and its handoff report activation, recipient count, expiry and
+SMTP configuration readiness, without revealing addresses or credentials. A
+missing/invalid configuration, expired window, incorrect environment or missing
+TLS/SMTP keeps delivery disabled. Delivery activation does not send any mail by
+itself: the recipient must request the verification link from their invitation.
+
+After activation, the manual pilot is:
+
+1. Update La Ribera's pending invitation to the approved real test address.
+2. Open its link in a separate browser session and choose **Create account**.
+3. Request and receive the verification email; follow the link.
+4. Set and confirm a password, review La Ribera, then accept the invitation.
+5. Sign out and sign in with the new email/password. Confirm only La Ribera is
+   available to this single-club account; Tres remains in the organizer's account.
+6. Continue the season invitation and choose a lineup for an upcoming meet.
+
+The prepared change does not claim email delivery or mailbox ownership testing.

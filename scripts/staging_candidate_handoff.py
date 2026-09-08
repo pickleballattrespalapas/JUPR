@@ -250,6 +250,10 @@ def validate_identity(
         "supabase_project_ref": STAGING_SUPABASE_PROJECT_REF,
         "write_wave": EXPECTED_WRITE_WAVE,
         "email_mode": "dry_run",
+        "invitation_email_test": {
+            key: fly["invitation_email_test"].get(key)
+            for key in ("active", "recipient_count", "expires_at", "reason", "smtp_ready")
+        } if isinstance(fly.get("invitation_email_test"), dict) else None,
     }
 
 
@@ -411,6 +415,7 @@ def render_markdown(handoff: Mapping[str, object]) -> str:
         f"- Vercel origin: {deployment.get('vercel_deployment_origin')}",
         f"- Write posture: `{deployment.get('write_wave')}` (persistent staging testing)",
         f"- Email mode: `{deployment.get('email_mode')}`",
+        f"- Invitation verification test: `{json.dumps(deployment.get('invitation_email_test'), sort_keys=True)}`",
         f"- Workflow: {handoff.get('workflow_run_url')}",
         "",
         "## Read-only checks",
