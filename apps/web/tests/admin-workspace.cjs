@@ -13,13 +13,16 @@ const workspace=load('lib/adminWorkspace.ts'), context=load('lib/useAdminWorkspa
 const alpha={club_id:'alpha',club_slug:'alpha-club',club_name:'Alpha Club',roles:['administrator']},beta={club_id:'beta',club_slug:'beta-club',club_name:'Beta Club',roles:['operator']};
 const selected={clubId:'beta',clubSlug:'beta-club'},link=({children,...props})=>React.createElement('a',props,children);
 let session={user:{id:'user-a'},capabilities:{assignments:[{club_id:'alpha',role:'administrator'},{club_id:'beta',role:'operator'}]}},tree;
+let availableClubs=[alpha,beta], workspaceError='', workspaceLoaded=true;
+const availableMock={useAvailableWorkspaces:()=>({workspaces:availableClubs,loaded:workspaceLoaded,error:workspaceError,retry(){}})};
+const redirects=[];
 const auth={getAdminApiBaseUrl:()=> 'https://test.invalid',signOutAdminSession:async()=>{}};
 (async()=>{
  for(const value of [undefined,'bad','%ZZ',encodeURIComponent(JSON.stringify({clubId:'../a',clubSlug:'a'})),encodeURIComponent(JSON.stringify({clubId:'a',clubSlug:'a/x'}))])assert.equal(workspace.parseAdminWorkspace(value),null);
  workspace.selectAdminWorkspace(beta);assert.deepEqual(workspace.readBrowserWorkspace(),selected);assert.equal(destination,'/admin','Switch clears old record paths and query parameters');
  const server=load('lib/adminWorkspaceServer.ts',{'server-only':{},'next/headers':{cookies:()=>({get:()=>({value:cookie.split('=')[1]})})},'next/navigation':{redirect:d=>{throw Error(d)}},'./adminWorkspace':workspace});
  assert.deepEqual(server.requireAdminWorkspace(),selected);cookie='';assert.throws(()=>server.requireAdminWorkspace(),/select-club/);workspace.selectAdminWorkspace(beta);
- const Shell=load('components/AdminShell.tsx',{'next/link':link,'next/navigation':{usePathname:()=>pathname,useRouter:()=>({replace(){},refresh(){}})},'@/lib/adminAuthClient':auth,'@/lib/useAdminSession':{useAdminSession:()=>({accessToken:'fixture',session,loading:false})},'@/lib/useAvailableWorkspaces':{useAvailableWorkspaces:()=>({workspaces:[alpha,beta],loaded:true,error:'',retry(){}})},'@/lib/useAdminWorkspace':context,'@/lib/adminWorkspace':workspace,'./AdminShell.module.css':{}}).default;
+ const Shell=load('components/AdminShell.tsx',{'next/link':link,'next/navigation':{usePathname:()=>pathname,useRouter:()=>({replace:v=>redirects.push(v),refresh(){}})},'@/lib/adminAuthClient':auth,'@/lib/useAdminSession':{useAdminSession:()=>({accessToken:'fixture',session,loading:false})},'@/lib/useAvailableWorkspaces':availableMock,'@/lib/useAdminWorkspace':context,'@/lib/adminWorkspace':workspace,'./AdminShell.module.css':{}}).default;
  let mounted=0;function Child(){const {clubId}=context.useAdminWorkspace();mounted++;return React.createElement('input',{'data-club':clubId,defaultValue:'unsaved draft'});}
  await act(async()=>tree=create(React.createElement(Shell,{workspace:selected},React.createElement(Child))));
  assert.equal(tree.root.findByType('input').props['data-club'],'beta');
@@ -30,6 +33,22 @@ const auth={getAdminApiBaseUrl:()=> 'https://test.invalid',signOutAdminSession:a
  workspace.selectAdminWorkspace(beta);session.capabilities.assignments=[{club_id:'alpha',role:'administrator'}];
  await act(async()=>tree=create(React.createElement(Shell,{workspace:selected},React.createElement(Child))));
  assert.equal(tree.root.findAllByType('input').length,0,'Revoked assignment cannot mount protected controls');assert.equal(mounted,1);await act(async()=>tree.unmount());
+ const Picker=load('app/admin/select-club/page.tsx',{'next/link':link,'@/lib/useAdminSession':{useAdminSession:()=>({accessToken:'fixture',session,loading:false})},'@/lib/useAvailableWorkspaces':availableMock,'@/lib/adminWorkspace':workspace}).default;
+ availableClubs=[alpha];destination='';
+ await act(async()=>tree=create(React.createElement(Picker)));
+ assert.equal(destination,'/admin','A single-club account opens automatically');assert.equal(workspace.readBrowserWorkspace().clubId,'alpha');await act(async()=>tree.unmount());
+ await act(async()=>tree=create(React.createElement(Shell,{workspace:{clubId:'alpha',clubSlug:'alpha-club'}},React.createElement(Child))));
+ assert.equal(tree.root.findAllByType('a').some(n=>n.children.includes('Switch club')),false,'Single-club navigation has no switcher');await act(async()=>tree.unmount());
+ await act(async()=>tree=create(React.createElement(Shell,{workspace:selected},React.createElement(Child))));
+ assert.equal(redirects.at(-1),'/admin/select-club','Previous account workspace is replaced via automatic selection');assert.equal(tree.root.findAllByType('input').length,0);await act(async()=>tree.unmount());
+ for (const clubs of [[alpha,beta],[{...alpha,roles:['super_admin']}],[]]) {
+   availableClubs=clubs;destination='';await act(async()=>tree=create(React.createElement(Picker)));
+   assert.equal(destination,'','Multiple clubs, Super Admin, or no access never auto-select');await act(async()=>tree.unmount());
+ }
+ availableClubs=[alpha];workspaceError='Unable to verify clubs';destination='';
+ await act(async()=>tree=create(React.createElement(Picker)));assert.equal(destination,'','Failed access check does not auto-select');await act(async()=>tree.unmount());workspaceError='';
+ workspaceLoaded=false;await act(async()=>tree=create(React.createElement(Picker)));assert.equal(destination,'','Pending access check does not auto-select');await act(async()=>tree.unmount());workspaceLoaded=true;
+ availableClubs=[alpha,beta];session.capabilities.assignments=[{club_id:'alpha',role:'administrator'},{club_id:'beta',role:'operator'}];workspace.selectAdminWorkspace(beta);
  const requests=[],Panel=()=>null;
  const find=(node,type)=>node?.type===type?node:[].concat(node?.props?.children||[]).map(child=>find(child,type)).find(Boolean);
  const Tournaments=load('app/admin/tournaments/page.tsx',{'@/lib/adminWorkspaceServer':server,'next/link':link,'@/lib/adminTournamentApi':{getAdminTournamentApiBaseUrl:()=>'/api',getAdminTournamentStatus:async id=>(requests.push(id),{data:{status:'enabled'}})},'./TournamentAdminPanel':Panel}).default;

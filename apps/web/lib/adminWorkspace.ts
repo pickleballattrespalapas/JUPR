@@ -7,6 +7,10 @@ export type AvailableWorkspace = {
   club_id: string; club_slug: string; club_name: string; roles: string[];
 };
 
+export function canChooseAdminWorkspace(workspaces: AvailableWorkspace[]): boolean {
+  return workspaces.length > 1 || workspaces.some(club => club.roles.includes("super_admin"));
+}
+
 export function parseAdminWorkspace(value: string | undefined): AdminWorkspace | null {
   try {
     const data = JSON.parse(decodeURIComponent(value || ""));

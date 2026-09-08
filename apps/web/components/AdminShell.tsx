@@ -8,7 +8,7 @@ import { signOutAdminSession } from "@/lib/adminAuthClient";
 import { useAdminSession } from "@/lib/useAdminSession";
 import { useAvailableWorkspaces } from "@/lib/useAvailableWorkspaces";
 import { AdminWorkspaceContext } from "@/lib/useAdminWorkspace";
-import { ADMIN_WORKSPACE_CHANGE, readBrowserWorkspace, sameWorkspace, type AdminWorkspace } from "@/lib/adminWorkspace";
+import { ADMIN_WORKSPACE_CHANGE, canChooseAdminWorkspace, readBrowserWorkspace, sameWorkspace, type AdminWorkspace } from "@/lib/adminWorkspace";
 import styles from "./AdminShell.module.css";
 
 type Props = {
@@ -200,6 +200,16 @@ export default function AdminShell({ children, workspace }: Props) {
     pathname === "/admin/login" || pathname === "/admin/reset-password";
   const globalPage = pathname === "/admin/select-club" || pathname === "/admin/platform";
   const activeClub = workspaces.find(club => club.club_id === workspace?.clubId && club.club_slug === workspace?.clubSlug);
+  const canChoose = canChooseAdminWorkspace(workspaces);
+
+  useEffect(() => {
+    // A previous account's navigation cookie must not make a single-club user
+    // choose their club or leave them stranded in the previous workspace.
+    if (!authPage && !globalPage && !loading && accessToken && loaded && !error &&
+        !canChoose && workspaces.length === 1 && !activeClub) {
+      router.replace("/admin/select-club");
+    }
+  }, [authPage, globalPage, loading, accessToken, loaded, error, canChoose, workspaces.length, activeClub, router]);
 
   useEffect(() => {
     if (authPage || globalPage || !accessToken || !workspace) return;
@@ -240,6 +250,7 @@ export default function AdminShell({ children, workspace }: Props) {
   if (authPage || globalPage) return <>{children}</>;
   if (loading) return <p role="status">Checking club access…</p>;
   if (!accessToken) return <section><h1>Admin sign-in required</h1><Link href={`/admin/login?next=${encodeURIComponent(pathname)}`}>Sign in</Link></section>;
+  if (loaded && !error && !canChoose && workspaces.length === 1 && !activeClub) return <p role="status">Opening your club…</p>;
   if (!workspace) return <section><h1>Choose a club workspace</h1><Link href="/admin/select-club">Choose club</Link></section>;
   if (contextChanged) return <section><h1>Club selection changed</h1><p>A different club was selected in another tab. Reload to open the selected club.</p><button data-workspace-reload onClick={() => window.location.assign("/admin")}>Reload workspace</button></section>;
   if (error) return <p role="alert">{error} <button onClick={retry}>Try again</button></p>;
@@ -294,7 +305,7 @@ export default function AdminShell({ children, workspace }: Props) {
             <div className={styles.identity}>
               <p className={styles.eyebrow}>Admin workspace</p>
               <strong>{activeClub.club_name}</strong>
-              <p><Link href="/admin/select-club">Switch club</Link></p>
+              {canChoose && <p><Link href="/admin/select-club">Switch club</Link></p>}
               <p className={styles.email}>
                 {session?.user?.email || "Authorized staff account"}
               </p>

@@ -1,25 +1,33 @@
 "use client";
 import Link from "next/link";
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useAdminSession } from "@/lib/useAdminSession";
 import { useAvailableWorkspaces } from "@/lib/useAvailableWorkspaces";
-import { selectAdminWorkspace, type AvailableWorkspace } from "@/lib/adminWorkspace";
+import { canChooseAdminWorkspace, selectAdminWorkspace, type AvailableWorkspace } from "@/lib/adminWorkspace";
 
 export default function SelectClubPage() {
   const { session, accessToken, loading, message } = useAdminSession();
   const { workspaces, error, loaded, retry } = useAvailableWorkspaces(accessToken, session?.user?.id || session?.user?.email || accessToken);
   const [opening, setOpening] = useState("");
   const [selectionError, setSelectionError] = useState("");
-  function open(workspace: AvailableWorkspace) {
+  const canChoose = canChooseAdminWorkspace(workspaces);
+  const open = useCallback((workspace: AvailableWorkspace) => {
     if (opening) return;
     setOpening(workspace.club_id); setSelectionError("");
     try { selectAdminWorkspace(workspace); }
     catch (error) { setSelectionError(error instanceof Error ? error.message : "Unable to open club."); setOpening(""); }
-  }
+  }, [opening]);
+  useEffect(() => {
+    if (!loading && accessToken && loaded && !error && !selectionError && !canChoose && workspaces.length === 1) {
+      open(workspaces[0]);
+    }
+  }, [loading, accessToken, loaded, error, selectionError, canChoose, workspaces, open]);
   if (loading) return <p role="status">Checking your access…</p>;
   if (!accessToken) return <section><h1>Club workspace</h1><p>{message || "Sign in to open your clubs."}</p><Link href="/admin/login?next=/admin/select-club">Sign in</Link></section>;
   return <section style={{ maxWidth: 780, margin: "0 auto", padding: 24 }}>
-    <h1>Choose your club</h1><p>Open a club to manage its players and programs.</p>
+    <h1>{canChoose ? "Choose your club" : "Your club"}</h1>
+    <p>{canChoose ? "Open a club to manage its players and programs." : "Your club is linked to your sign-in."}</p>
+    {opening && <p role="status">Opening your club…</p>}
     {error || selectionError ? <p role="alert">{error || selectionError} {error && <button onClick={retry}>Try again</button>}</p> : null}
     {!loaded && <p role="status">Loading your clubs…</p>}
     {loaded && !error && !workspaces.length && <p>No club workspace is available. Ask a club administrator to check your assignment.</p>}
