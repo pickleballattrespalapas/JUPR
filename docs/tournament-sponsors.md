@@ -68,3 +68,24 @@ Event details and the option are bound to the reviewed message; editing an event
 day, partner, or selection requires a new review before remaining emails can be
 sent. Confirmed recipient event snapshots are retained with the existing
 communications ledger; no migration is required.
+
+
+## Optional registration edit buttons in Communications
+
+**Include Edit Registration button** is off by default and works independently
+of **Include registration events**. Each selected registration gets a named button
+below the message/event details. A shared inbox receives one email containing only
+the selected players' buttons. HTML and plain-text versions both support the links.
+
+The preview shows inactive buttons. No bearer tokens are issued during preview,
+confirmation, or dry-run delivery, and no bearer URLs are stored in the audit or
+communications ledger. The sender generates each personal link immediately before
+its claimed SMTP attempt, using the existing explicit edit signing secret and
+48-hour expiry. Resuming a batch generates fresh links only for remaining recipients.
+The existing public edit endpoint continues to enforce tournament, registration,
+email binding, expiry, and draw/relationship editing restrictions.
+
+The option, selected registration identities, recipient email, club slug, and web
+origin are included in the preview fingerprint. Changes require a fresh review.
+The saved results retain the inclusion choice without exposing the links. No new
+database migration, credentials, email provider, or live staging send is required.

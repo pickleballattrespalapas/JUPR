@@ -149,7 +149,7 @@ def test_modified_admin_actions_are_scoped_to_the_current_access_token() -> None
         elif relative.endswith("RegistrationManagementPanel.tsx"):
             assert 'const sessionScope = `${accessToken}\\u0000${apiBase}\\u0000${clubId}\\u0000${initialTournamentId}`;' in source
             assert "const actionRequest = useLatestRequestGuard(sessionScope);" in source
-            assert "JSON.stringify([accessToken, apiBase, clubId, initialTournamentId, selectedTournamentId, selectedRegistrationIds, includeCancelled, includeRegistrationEvents, broadcastSubject, broadcastMessage])" in source
+            assert "JSON.stringify([accessToken, apiBase, clubId, initialTournamentId, selectedTournamentId, selectedRegistrationIds, includeCancelled, includeRegistrationEvents, includeRegistrationEditLinks, broadcastSubject, broadcastMessage])" in source
             assert "useLatestRequestGuard(previewScope, clearBroadcastPreview)" in source
         else:
             assert "const actionRequest = useLatestRequestGuard(accessToken" in source, relative

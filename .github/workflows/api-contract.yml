@@ -36,6 +36,7 @@ jobs:
             tests/test_api_health.py \
             tests/test_api_contract_*.py \
             tests/test_admin_tournament_broadcast_service.py \
+            tests/test_tournament_broadcast_edit_links.py \
             tests/test_admin_tournament_registration_reporting_service.py \
             tests/test_tournament_registrant_broadcast_email.py \
             tests/test_tournament_email_sponsors.py \

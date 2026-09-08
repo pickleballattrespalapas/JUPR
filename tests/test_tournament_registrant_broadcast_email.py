@@ -57,3 +57,16 @@ def test_event_details_are_escaped_and_appear_between_message_and_supporting_spo
     assert "<img src=x" not in html
     assert "Nov 19, 2026" in text and "Partner: Sam" in text
     assert html.index("Title Sponsor") < html.index("Organizer message") < html.index("Your registration events") < html.index("Supporting Sponsor")
+
+
+def test_edit_buttons_escape_names_and_urls_and_preserve_sponsors():
+    options = dict(tournament_name="Baja", recipient_name="Alex", subject="Update", message="Organizer message",
+        registration_edit_links=[{"name": "Alex <script>", "edit_url": "https://example.test/edit?t=fixture&x=1"}],
+        email_sponsors=[{"name": "Sponsor", "tier": "premier"}])
+    html = build_tournament_registrant_broadcast_email_html(**options)
+    text = build_tournament_registrant_broadcast_email_text(**options)
+    assert "Alex &lt;script&gt;" in html
+    assert 'href="https://example.test/edit?t=fixture&amp;x=1"' in html
+    assert "https://example.test/edit?t=fixture&x=1" in text
+    assert html.index("Organizer message") < html.index("Edit Registration") < html.index("Sponsor")
+    assert "48 hours" in text
