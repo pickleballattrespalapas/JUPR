@@ -13,6 +13,7 @@ from jupr_app.services.tournament_email_sponsor_service import (
     prepare_tournament_email_sponsors,
     tournament_email_sponsor_snapshot,
 )
+from jupr_app.services.tournament_broadcast_edit_link_service import tournament_broadcast_edit_link_context
 from jupr_app.services.staging_write_guard import staging_communications_mutations_enabled
 from jupr_app.domain.notifications.tournament_registrant_broadcast_email import (
     build_tournament_registrant_broadcast_email_html,
@@ -363,6 +364,7 @@ def build_admin_tournament_broadcast_preview(
     registration_ids: list[str] | None = None,
     include_cancelled: bool = False,
     include_registration_events: bool = False,
+    include_registration_edit_links: bool = False,
     preview_recipient_email: str | None = None,
     registration_status: str | None = None,
     payment_status: str | None = None,
@@ -461,6 +463,20 @@ def build_admin_tournament_broadcast_preview(
                 registrations_by_email.get(recipient["email"], []),
                 key=lambda registration: (registration["name"].lower(), registration["registration_id"]))
 
+    edit_link_context = None
+    if include_registration_edit_links:
+        edit_link_context = tournament_broadcast_edit_link_context(supabase, club_id=str(club_id))
+        edit_registrations_by_email: dict[str, dict[str, dict]] = {}
+        for row in rows:
+            if row["registration_id"] in included_registration_ids:
+                edit_registrations_by_email.setdefault(row["email"], {})[row["registration_id"]] = {
+                    "registration_id": row["registration_id"], "name": row["display_name"],
+                }
+        for recipient in recipients:
+            recipient["registration_edit_links"] = sorted(
+                edit_registrations_by_email.get(recipient["email"], {}).values(),
+                key=lambda registration: (registration["name"].lower(), registration["registration_id"]))
+
     tournament_name = _clean_text(
         tournament.get("name") or "Tournament",
         limit=180,
@@ -492,6 +508,9 @@ def build_admin_tournament_broadcast_preview(
         "delivery_mode": delivery["delivery_mode"], "sender": delivery["sender"]}
     if include_registration_events:
         reviewed_scope["include_registration_events"] = True
+    if include_registration_edit_links:
+        reviewed_scope["include_registration_edit_links"] = True
+        reviewed_scope["edit_link_context"] = edit_link_context
     if sponsor_snapshot:
         reviewed_scope["sponsors"] = sponsor_snapshot
         reviewed_scope["sponsor_logos"] = [row.get("logo_png_base64", "") for row in email_sponsors]
@@ -510,6 +529,8 @@ def build_admin_tournament_broadcast_preview(
         "sender": delivery["sender"],
         "email_sponsors": email_sponsors,
         "include_registration_events": include_registration_events,
+        "include_registration_edit_links": include_registration_edit_links,
+        "edit_link_context": edit_link_context,
         "selected_registration_ids": sorted(selected_ids) if selected_ids is not None else None,
         "recipient_count": len(recipients),
         "recipients": recipients,
@@ -526,6 +547,7 @@ def build_admin_tournament_broadcast_preview(
                 personalize_greeting=False,
                 email_sponsors=email_sponsors,
                 registration_events=preview_recipient.get("registration_events"),
+                registration_edit_links=preview_recipient.get("registration_edit_links"),
             ),
             "html": sponsor_preview_html(build_tournament_registrant_broadcast_email_html(
                 tournament_name=tournament_name,
@@ -535,6 +557,7 @@ def build_admin_tournament_broadcast_preview(
                 personalize_greeting=False,
                 email_sponsors=email_sponsors,
                 registration_events=preview_recipient.get("registration_events"),
+                registration_edit_links=preview_recipient.get("registration_edit_links"),
             ), email_sponsors),
         },
         "warnings": ["Preview only. This endpoint never sends email."],
