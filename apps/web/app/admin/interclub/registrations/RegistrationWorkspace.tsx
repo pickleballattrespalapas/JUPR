@@ -36,9 +36,9 @@ function ClubRegistrations({ clubId, accessToken, initialSeasonId }: { clubId: s
     return () => controller.abort();
   }, [api, clubId, reload]);
   return <section className={styles.page}>
-    <h1>Interclub participation and rosters</h1>
+    <h1>Interclub season workspace</h1>
     <p>Accept season invitations, then choose your available players for each upcoming meet.</p>
-    <p><Link href="/admin/interclub">Plan a season and invite clubs</Link></p>
+    <p><Link href="/admin/interclub">Back to interclub leagues and setup</Link></p>
     <div className={styles.toolbar}>
       <label>Season <select value={selected} onChange={e => setSelected(e.target.value)} disabled={!loaded}>
         {!seasons.length && <option value="">No open invitations</option>}
@@ -110,23 +110,30 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId }: { api: strin
     {!data ? <p>Loading season…</p> : <>
       <h2>{data.season.details.name}</h2>
       <p>Organized by {clubName(data.season.organizer_club_id)} · {data.season.details.start_date} to {data.season.details.end_date}</p>
+      <ol className={styles.nextSteps} aria-label="Season next steps">
+        <li><strong>1. Club responses</strong><p>{data.is_organizer ? `${data.participations.filter(p => p.status === "accepted").length} of ${data.participations.length} clubs have accepted.` : data.own_participation?.status === "accepted" ? "Your club has accepted the season invitation." : data.own_participation?.status === "invited" ? "Respond to your club’s invitation below." : "Your club has not joined. Ask the organizer for a new invitation."}</p><a href="#club-responses">Review responses</a></li>
+        <li><strong>2. Prepare a meet</strong><p>Choose an upcoming meet. The organizer can set its roster deadline before teams submit.</p><a href="#meet-rosters">Choose a meet</a></li>
+        <li><strong>3. Submit meet rosters</strong><p>Each accepted club chooses four available players per team. Lineups can change at the next meet.</p></li>
+      </ol>
+      <details className={styles.card}><summary>Season details and eligibility rules</summary>
       <div className={styles.scroll}><table className={styles.table}><caption>Season eligibility rules</caption><thead><tr><th>Division</th><th>Minimum rating</th><th>Maximum rating</th><th>Team</th></tr></thead><tbody>
         {Object.entries(data.season.rules).map(([division, rule]) => <tr key={division}><td>{division}</td><td>{rule.min_rating ?? "No minimum"}</td><td>{rule.max_rating ?? "No maximum"}</td><td>{composition(rule)}</td></tr>)}
       </tbody></table></div>
       <p>Starting ratings come from the represented club when each player first enters this season. Those starting ratings stay fixed for this season’s eligibility checks.</p>
-      {data.own_participation && <section className={styles.card}><h3>{clubName(clubId)} participation</h3><p className={styles.tag}>{data.own_participation.status}</p>
+      </details>
+      {data.own_participation && <section id={data.is_organizer ? undefined : "club-responses"} className={styles.card}><h3>{clubName(clubId)} participation</h3><p className={styles.tag}>{data.own_participation.status}</p>
         {data.own_participation.status === "invited" && <div className={styles.toolbar}>
           <button disabled={disabled} onClick={() => void change(`/participations/${encodeURIComponent(clubId)}`, "POST", { action: "accept", expected_revision: data.own_participation!.revision }, "Your club accepted the invitation. Choose an upcoming meet to submit its roster.")}>Accept season invitation</button>
           <button disabled={disabled} onClick={() => void change(`/participations/${encodeURIComponent(clubId)}`, "POST", { action: "decline", expected_revision: data.own_participation!.revision }, "Your club declined the invitation.")}>Decline invitation</button>
         </div>}
       </section>}
-      {data.is_organizer && <section className={styles.card}><h3>Club responses</h3><div className={styles.scroll}><table className={styles.table}><thead><tr><th>Club</th><th>Response</th><th>Invitation</th></tr></thead><tbody>
+      {data.is_organizer && <section id="club-responses" className={styles.card}><h3>Club responses</h3><div className={styles.scroll}><table className={styles.table}><thead><tr><th>Club</th><th>Response</th><th>Invitation</th></tr></thead><tbody>
         {data.participations.map(p => <tr key={p.club_id}><td>{clubName(p.club_id)}</td><td>{p.status}</td><td>
           {p.status === "invited" && <button disabled={disabled} onClick={() => void change(`/participations/${encodeURIComponent(p.club_id)}`, "POST", { action: "cancel", expected_revision: p.revision }, "Club invitation cancelled.")}>Cancel invitation</button>}
           {["declined", "cancelled"].includes(p.status) && <button disabled={disabled} onClick={() => void change(`/participations/${encodeURIComponent(p.club_id)}`, "POST", { action: "reinvite", expected_revision: p.revision }, "Club invited again.")}>Invite again</button>}
         </td></tr>)}
       </tbody></table></div></section>}
-      <h3>Meet rosters</h3>
+      <h3 id="meet-rosters">Meet rosters</h3>
       <p>Choose four players for each meet. Your lineup can change from one meet to the next.</p>
       {!data.meets.length ? <p>No meets are scheduled for your club in this season.</p> : <>
         <label>Meet <select aria-label="Meet" value={selectedMeet} onChange={e => setSelectedMeet(e.target.value)}>

@@ -1,0 +1,76 @@
+.page { max-width: 1040px; margin: 0 auto; padding: 12px 8px 32px; color: #172033; }
+.page * { box-sizing: border-box; }
+.page h1 { margin: 0 0 8px; font-size: clamp(1.6rem, 3vw, 2rem); line-height: 1.25; }
+.page h2, .page h3 { margin-top: 0; }
+.page p { line-height: 1.55; }
+.eyebrow { margin: 0 0 6px; color: #1d4ed8; font-size: .75rem; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
+.muted { color: #526174; }
+.header, .toolbar, .footer { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
+.header { margin-bottom: 24px; align-items: flex-start; }
+.header p { margin: 6px 0; }
+.toolbar { justify-content: flex-start; }
+.page button, .button { display: inline-flex; align-items: center; justify-content: center; width: auto; min-height: 42px; border: 1px solid #b8c5d5; border-radius: 8px; padding: 9px 16px; background: #fff; color: #24334b; font: inherit; font-size: .92rem; font-weight: 650; line-height: 1.35; cursor: pointer; text-decoration: none; }
+.page button:hover, .button:hover { background: #f1f5f9; border-color: #64748b; }
+.page .primary { background: #1d4ed8; border-color: #1d4ed8; color: #fff; }
+.page .primary:hover { background: #1e40af; }
+.page button:disabled { cursor: default; opacity: .55; }
+.page button:focus-visible, .page a:focus-visible, .page input:focus-visible, .page select:focus-visible { outline: 3px solid #60a5fa; outline-offset: 3px; }
+.steps { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; list-style: none; padding: 0; margin: 0 0 24px; }
+.steps li { min-width: 0; }
+.steps button { width: 100%; height: 100%; align-items: flex-start; justify-content: flex-start; text-align: left; padding: 12px 10px; gap: 9px; font-size: .83rem; }
+.steps button[aria-current="step"] { background: #eaf2ff; border-color: #2563eb; color: #1d4ed8; box-shadow: inset 0 -2px #2563eb; }
+.stepNumber { flex: 0 0 24px; width: 24px; height: 24px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: #e2e8f0; color: #334155; font-size: .78rem; }
+[aria-current="step"] .stepNumber { background: #1d4ed8; color: white; }
+.panel, .card { background: #fff; border: 1px solid #d5dfea; border-radius: 14px; padding: 24px; }
+.panel { box-shadow: 0 4px 18px #0f172a06; }
+.panel > p:first-of-type { margin-top: 8px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 16px; margin: 16px 0 28px; }
+.card h3 { margin-bottom: 8px; }
+.card p { margin: 6px 0 16px; }
+.form { border: 0; padding: 0; margin: 24px 0 0; min-width: 0; display: grid; gap: 20px; }
+.grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.field { display: grid; align-content: start; gap: 7px; font-size: .94rem; font-weight: 650; }
+.field small { color: #526174; font-weight: 400; }
+.field input, .field select { width: 100%; min-width: 0; min-height: 44px; padding: 10px 12px; border: 1px solid #a9b8cb; border-radius: 7px; background: #fff; color: #172033; font: inherit; font-weight: 400; }
+.wide { grid-column: 1 / -1; }
+.choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.choice { display: flex; gap: 12px; align-items: center; border: 1px solid #cbd5e1; border-radius: 9px; padding: 14px; cursor: pointer; font-size: .94rem; }
+.choice[data-selected="true"] { background: #eff6ff; border-color: #60a5fa; }
+.choice input, .check input { flex: 0 0 auto; width: 18px; height: 18px; margin: 0; accent-color: #1d4ed8; }
+.choice small { display: block; color: #526174; font-size: .8rem; }
+.divisionChoices { display: flex; gap: 10px; flex-wrap: wrap; }
+.divisionChoices .choice { min-width: 86px; padding: 10px 14px; }
+.rule { padding: 20px; border: 1px solid #d5dfea; border-radius: 10px; margin: 0; min-width: 0; }
+.rule legend { font-weight: 750; padding: 0 8px; }
+.ruleGrid { display: grid; grid-template-columns: 1fr 1fr 1.2fr; gap: 16px; }
+.note, .error, .success { padding: 16px 18px; border-radius: 9px; margin: 16px 0; }
+.note { background: #eff6ff; color: #1e3a5f; border: 1px solid #bfdbfe; }
+.note p, .success p { margin: 4px 0; }
+.error { background: #fff7ed; color: #9a3412; border: 1px solid #fdba74; }
+.error ul { margin: 8px 0 0; padding-left: 20px; }
+.success { background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
+.footer { border-top: 1px solid #e2e8f0; margin-top: 28px; padding-top: 20px; }
+.footer small { color: #526174; }
+.review { display: grid; gap: 18px; }
+.review section { padding-bottom: 18px; border-bottom: 1px solid #e2e8f0; }
+.review h3 { font-size: 1rem; margin: 0; }
+.review .toolbar { justify-content: space-between; margin-bottom: 10px; }
+.review p { margin: 6px 0; }
+.review dl { display: grid; grid-template-columns: 130px 1fr; gap: 6px 16px; margin: 0; }
+.review dt { color: #526174; }
+.review dd { margin: 0; }
+.tableWrap { overflow-x: auto; }
+.table { width: 100%; border-collapse: collapse; font-size: .9rem; text-align: left; }
+.table th, .table td { padding: 10px; border-bottom: 1px solid #e2e8f0; }
+.table th { color: #526174; font-weight: 650; background: #f8fafc; }
+.check { display: flex; gap: 12px; align-items: flex-start; padding: 16px 0; }
+.nextSteps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 0; list-style: none; gap: 16px; margin: 20px 0; }
+.nextSteps li { padding: 16px; background: #f8fafc; border-radius: 9px; }
+.nextSteps strong { display: block; margin-bottom: 4px; }
+.nextSteps span { color: #526174; font-size: .9rem; }
+.progress { font-size: .85rem; color: #526174; margin-bottom: 10px; }
+.saved { font-size: .82rem; color: #526174; }
+.meetCard { margin-top: 16px; }
+.meetCard .toolbar { justify-content: space-between; }
+@media (max-width: 780px) { .steps { grid-template-columns: repeat(3, minmax(0, 1fr)); } .ruleGrid { grid-template-columns: 1fr 1fr; } .ruleGrid > :last-child { grid-column: 1 / -1; } }
+@media (max-width: 520px) { .page { padding: 4px 0 24px; } .panel, .card { padding: 18px; } .grid, .choices, .nextSteps, .ruleGrid { grid-template-columns: 1fr; } .steps { gap: 5px; } .steps button { flex-direction: column; padding: 8px; font-size: .73rem; } .footer { gap: 12px; } .review dl { grid-template-columns: 1fr; gap: 2px; } .review dd { margin-bottom: 8px; } }

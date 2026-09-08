@@ -71,9 +71,17 @@ authorized in an appropriate environment.
 
 ### Interclub participation and teams
 
-- [ ] As organizer, save a season with two or more proposed clubs and the required divisions.
-- [ ] Set explicit rating limits and any required team composition, then open invitations without a season roster deadline.
-- [ ] Confirm later planning edits do not silently change the open registration's rules or dates.
+Start at `/admin/interclub`. **Continue setup** resumes an unfinished draft;
+**Season workspaces** opens a season whose invitations are already open.
+
+- [ ] Select **Set up a season**. Step 1: enter a name, season dates, and meet timezone.
+- [ ] Step 2: choose at least two clubs. If only one exists, verify the wizard explains that a Super Admin must create the other club account. Save and exit before leaving.
+- [ ] Step 3: choose divisions, explicit rating limits, and team composition. Save and exit, then continue setup and verify the rules are retained.
+- [ ] Step 4: add a meet with host, date, duration, courts, and 2–4 attending clubs. Save an unfinished meet and verify it can be resumed.
+- [ ] Verify a date outside the season or overlapping meets involving the same club produce a useful correction message.
+- [ ] Step 5: review the complete setup. Edit a previous step and return to review. Verify invitations require explicit review and are never opened by an intermediate save.
+- [ ] Open invitations, then select **Manage this season**. Verify the next actions explain club responses, meet deadlines, and meet rosters.
+- [ ] Verify an opened season appears under Season workspaces and cannot be edited as a planning draft. No season roster deadline or player selection is required during setup.
 - [ ] Open Club invitations and team rosters from the second club's workspace.
 - [ ] Accept for the second club; verify the organizer cannot accept on its behalf.
 - [ ] Cancel an unused invitation, verify acceptance is blocked, then invite that club again.

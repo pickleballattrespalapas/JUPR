@@ -376,3 +376,39 @@ reusing players in the next meet, independent deadlines, unchanged history and
 next-meet lineups, stale revision protection, late substitutions, scope foreign
 keys, and refusal to change a started meet. Browser pilot steps are below in
 `docs/second_club_staging_pilot.md`.
+
+## Guided interclub setup (2026-09-08)
+
+The former long planning and invitation forms are now a five-step wizard:
+season details, participating clubs, divisions and eligibility, meet schedule,
+then review and invitations. `/admin/interclub` separates unfinished drafts from
+opened season workspaces. Existing drafts resume through the wizard, while
+opened seasons lead to club responses and individual meet rosters.
+
+Each Continue action saves the draft and next step. Save and exit also retains
+incomplete dates and meet details. Division eligibility rules now live in the
+saved draft so leaving setup does not reset them. The final review explicitly
+lists the clubs, rules and meets that will be fixed when invitations open.
+It requires acknowledgement, saves the reviewed draft, then opens invitations
+against the exact returned revision. Only the final action opens invitations;
+there is no email or player selection during setup. Missing second-club account
+guidance, timezone-aware meet inputs, season-date checks and shared-club overlap
+checks explain corrections at the relevant step.
+
+The API separates partial planning validation from complete invitation
+validation. Both use the same eligibility rule model. The invitation boundary
+checks complete dates/meets, at least two clubs, an upcoming meet, and the saved
+rules before calling the existing revision-locked transaction. The staging
+migration `interclub_setup_wizard` prevents further draft saves once invitations
+are open under the same season lock, preserving accepted terms. It changes no
+tables, grants, player records or ratings. Existing season rosters remain
+reference-only; each upcoming meet still gets its own lineup.
+
+Verification: 114 focused API/setup/deployment/navigation checks and the full
+component suite passed, including wizard resume, incomplete meets, saved rules,
+invalid/overlapping times, explicit review, duplicate clicks and stale context.
+Two rolled-back staging SQL scenarios verify draft/audit round trips, revoked
+access, exact revisions, opened-season protection and independent meet rosters.
+The Next build passed. Local browser verification could not run because this
+workspace blocks browser process sockets; desktop/mobile visual acceptance
+remains in the staging pilot checklist. No new database advisory findings.

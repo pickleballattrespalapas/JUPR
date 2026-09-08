@@ -1,13 +1,15 @@
 """Club-owned participation/meet rosters and organizer-only eligibility decisions."""
+from datetime import datetime, timezone
 from typing import Literal
 from uuid import UUID
 
 from fastapi import HTTPException, Query
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, PositiveInt, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, PositiveInt, ValidationError, model_validator
 
 from jupr_app.domain.admin.staff_policy import ADMIN_ROLES
 from services.api.admin_auth_routes import require_admin_assignments
 from services.api.auth import auth_header
+from services.api.interclub_models import DivisionRule, SeasonDraft
 
 SEASON_FIELDS = "id,organizer_club_id,source_revision,details,rules,opened_at"
 PARTICIPATION_FIELDS = "season_id,club_id,status,revision,updated_at"
@@ -18,18 +20,6 @@ HISTORY_FIELDS = "team_id,revision,name,roster,issues,status,late_change,submitt
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, allow_inf_nan=False)
-
-
-class DivisionRule(StrictModel):
-    min_rating: float | None = Field(default=None, ge=1, le=7)
-    max_rating: float | None = Field(default=None, ge=1, le=7)
-    women_required: int | None = Field(default=None, ge=0, le=4)
-
-    @model_validator(mode="after")
-    def ordered(self):
-        if self.min_rating is not None and self.max_rating is not None and self.min_rating > self.max_rating:
-            raise ValueError("Minimum rating cannot exceed maximum rating.")
-        return self
 
 
 class OpenRegistration(StrictModel):
@@ -133,6 +123,26 @@ def install_interclub_registration_routes(app, *, get_supabase_client):
     @app.post("/admin/clubs/{club_id}/interclub/registrations/{season_id}/open")
     def open_registration(club_id: str, season_id: UUID, payload: OpenRegistration, authorization: str | None = auth_header()):
         db, user = administrator(club_id, authorization)
+        rows = db.table("pcs_interclub_drafts").select("id,revision,draft").eq("id", str(season_id)).eq("organizer_club_id", club_id).limit(1).execute().data or []
+        if not rows:
+            raise HTTPException(404, "Season setup unavailable for this organizer.")
+        saved = rows[0]
+        if saved["revision"] != payload.expected_revision:
+            raise HTTPException(409, "This setup changed. Reload it before opening invitations.")
+        try:
+            draft = SeasonDraft.model_validate(saved["draft"])
+        except ValidationError as exc:
+            messages = [error["msg"].removeprefix("Value error, ") for error in exc.errors()]
+            raise HTTPException(422, "Complete season setup before opening invitations: " + "; ".join(messages[:3])) from exc
+        if len(draft.club_ids) < 2:
+            raise HTTPException(422, "Select at least two participating clubs before opening invitations.")
+        if not any(meet.starts_at > datetime.now(timezone.utc) for meet in draft.meets):
+            raise HTTPException(422, "Schedule at least one upcoming meet before opening invitations.")
+        rules = {d: r.model_dump() for d, r in payload.rules.items()}
+        if set(rules) != set(draft.divisions):
+            raise HTTPException(422, "Review eligibility rules for each selected division.")
+        if draft.registration_rules and rules != {d: r.model_dump() for d, r in draft.registration_rules.items()}:
+            raise HTTPException(409, "Eligibility rules changed. Save and review the setup before opening invitations.")
         season = call_rpc(db, "pcs_open_interclub_meet_registration", {**actor_params(user, club_id, season_id),
             "p_revision": payload.expected_revision, "p_rules": {d: r.model_dump() for d, r in payload.rules.items()}})
         return {"season": {key: season.get(key) for key in SEASON_FIELDS.split(",")}}

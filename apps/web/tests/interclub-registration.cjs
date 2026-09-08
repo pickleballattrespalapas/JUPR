@@ -21,38 +21,6 @@ const meet = { id: mid, season_id: sid, host_club_id: 'beta', club_ids: ['beta',
 const secondMeet = { ...meet, id: mid2, starts_at: '2099-02-10T18:00:00Z', revision: 1, deadline_editable: true };
 const team = { meet_id: mid, id: tid, club_id: 'beta', season_id: sid, name: 'Beta Blue', division: '3.5', revision: 1, withdrawn: false, status: 'needs_exception', roster: lineup, issues: [{ code: 'rating_above_maximum', message: 'Player exceeds rating limit.' }], late_change: true, decision_reason: null };
 
-async function opening() {
-  let requests = [], finish, exists = false;
-  global.fetch = async (url, options) => {
-    requests.push({ url, options });
-    return options.method ? new Promise(resolve => { finish = resolve; }) : reply({}, exists ? 200 : 404);
-  };
-  const Open = load('app/admin/interclub/OpenRegistration.tsx', { 'next/link': Link, '@/lib/interclubRegistration': helpers }).default;
-  const props = { api: 'https://api.test', clubId: 'alpha', accessToken: 'token', seasonId: sid, revision: 2, divisions: ['3.5'] };
-  let tree;
-  await act(async () => { tree = create(React.createElement(Open, props)); });
-  assert.equal(tree.root.findByProps({ 'aria-label': '3.5 maximum rating' }).props.value, '', 'Division labels do not imply a rating limit');
-  await act(async () => {
-    tree.root.findByProps({ 'aria-label': '3.5 maximum rating' }).props.onChange({ target: { value: '3.75' } });
-    tree.root.findByProps({ 'aria-label': '3.5 team composition' }).props.onChange({ target: { value: '2' } });
-  });
-  await act(async () => { void tree.root.findByType('form').props.onSubmit({ preventDefault() {} }); void tree.root.findByType('form').props.onSubmit({ preventDefault() {} }); });
-  const writes = requests.filter(r => r.options.method);
-  assert.equal(writes.length, 1);
-  assert.ok(writes[0].url.includes('/clubs/alpha/'));
-  const body = JSON.parse(writes[0].options.body);
-  assert.equal(body.expected_revision, 2);
-  assert.equal(Object.hasOwn(body, 'roster_deadline'), false, 'Season enrollment has no roster deadline');
-  assert.equal(tree.root.findAllByProps({ type: 'datetime-local' }).length, 0);
-  assert.deepEqual(body.rules, season.rules);
-  await act(async () => finish(reply({ detail: 'Draft changed. Reload.' }, 409)));
-  assert.equal(tree.root.findAllByType('form').length, 0, 'Conflicting open cannot be repeated blindly');
-  exists = true;
-  await act(async () => button(tree, 'Check again').props.onClick());
-  assert.ok(tree.root.findAllByType('a').some(a => a.props.href === `/admin/interclub/registrations?season=${sid}`));
-  await act(async () => tree.unmount());
-}
-
 async function clubsAndRosters() {
   let clubId = 'beta', identity = 'b', role = 'administrator', token = 'token-1';
   let requests = [], finish, teams = [], ownStatus = 'invited';
@@ -164,5 +132,5 @@ async function clubsAndRosters() {
   await act(async () => tree.unmount());
 }
 
-(async () => { await opening(); await clubsAndRosters(); console.log('Interclub registration: meet-specific lineups and deadlines, no season roster lock, acceptance, scoped players, stale saves, closed history and account/meet changes passed.'); })()
+(async () => { await clubsAndRosters(); console.log('Interclub registration: meet-specific lineups and deadlines, no season roster lock, acceptance, scoped players, stale saves, closed history and account/meet changes passed.'); })()
   .catch(e => { console.error(e); process.exitCode = 1; });

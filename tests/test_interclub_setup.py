@@ -44,3 +44,22 @@ def test_rpc_uses_route_club_and_verified_actor(monkeypatch):
  r=TestClient(app).put('/admin/clubs/real-club/interclub/setup',json={'season_id':'00000000-0000-0000-0000-000000000001','expected_revision':0,'draft':draft(),'p_club_id':'forged','p_actor_id':'forged'})
  assert r.status_code==200
  assert calls[0]['p_club_id']=='real-club' and calls[0]['p_actor_id']=='verified'
+
+
+def test_partial_setup_retains_progress_rules_and_unfinished_meets(monkeypatch):
+ calls=[]
+ monkeypatch.setattr(routes,'authenticate_bearer',lambda _:SimpleNamespace(user_id='verified',email='test@example.com'))
+ monkeypatch.setattr(routes,'resolve_admin_role',lambda **_:SimpleNamespace(role='administrator',assigned=True))
+ db=SimpleNamespace(rpc=lambda name,args:(calls.append(args) or SimpleNamespace(execute=lambda:SimpleNamespace(data={'revision':1,'draft':args['p_draft']}))))
+ app=FastAPI();routes.install_interclub_setup_routes(app,get_supabase_client=lambda:db)
+ partial=dict(name='',start_date=None,end_date=None,club_ids=['a'],divisions=['3.5'],setup_step=3,registration_rules={'3.5':dict(min_rating=None,max_rating=3.75,women_required=2)},meets=[dict(host_club_id='',club_ids=[],starts_at=None)])
+ r=TestClient(app).put('/admin/clubs/a/interclub/setup',json={'season_id':'00000000-0000-0000-0000-000000000001','expected_revision':0,'draft':partial})
+ assert r.status_code==200
+ saved=r.json()['season']['draft']
+ assert saved['setup_step']==3 and saved['registration_rules']['3.5']['max_rating']==3.75 and saved['meets'][0]['starts_at'] is None
+ with pytest.raises(ValidationError):routes.SeasonDraft(**saved)
+
+@pytest.mark.parametrize('patch',[dict(setup_step=5),dict(registration_rules={'3.5':dict(min_rating=4,max_rating=3)}),dict(timezone='bad-zone')])
+def test_invalid_wizard_metadata_is_rejected(patch):
+ from services.api.interclub_models import PlanningDraft
+ with pytest.raises(ValidationError):PlanningDraft(**patch)
