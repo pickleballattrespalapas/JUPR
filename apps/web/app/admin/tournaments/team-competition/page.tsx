@@ -1,3 +1,4 @@
+import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import { redirect } from "next/navigation";
 import TournamentPhaseNav from "@/components/TournamentPhaseNav";
 import { readTournamentRouteContext } from "@/lib/tournamentRouteContext";
@@ -6,6 +7,7 @@ import TeamTournamentAdminPanel from "./TeamTournamentAdminPanel";
 type Props = { searchParams?: Record<string, string | string[] | undefined> };
 
 export default function TeamTournamentAdminPage({ searchParams }: Props) {
+  const { clubId } = requireAdminWorkspace();
   const context = readTournamentRouteContext(searchParams);
   if (!context.tournamentId) redirect("/admin/tournaments");
 
@@ -20,7 +22,7 @@ export default function TeamTournamentAdminPage({ searchParams }: Props) {
         Choose one event format, reveal only its applicable rules, then review the summary before saving.
       </p>
       <TeamTournamentAdminPanel
-        clubId="tres_palapas"
+        clubId={clubId}
         initialTournamentId={context.tournamentId}
         initialTournamentName={context.tournamentName}
         initialDrawId={context.drawId}

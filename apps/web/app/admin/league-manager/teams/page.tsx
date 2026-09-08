@@ -1,3 +1,4 @@
+import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import { redirect } from "next/navigation";
 import { getAdminLeagueManagerApiBaseUrl, getAdminLeagueManagerStatus } from "@/lib/adminLeagueManagerApi";
 import { isTeamLeagueType, leagueRouteHref, readLeagueRouteContext } from "@/lib/leagueRouteContext";
@@ -15,7 +16,7 @@ export default async function AdminTeamLeaguesPage({ searchParams }: Props) {
     redirect(leagueRouteHref("/admin/league-manager/league", context));
   }
 
-  const clubId = "tres_palapas";
+  const { clubId } = requireAdminWorkspace();
   const { data: status, error } = await getAdminLeagueManagerStatus(clubId);
   return (
     <section>

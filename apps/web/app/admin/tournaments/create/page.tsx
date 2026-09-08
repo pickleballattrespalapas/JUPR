@@ -1,8 +1,9 @@
+import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import { getAdminTournamentApiBaseUrl, getAdminTournamentStatus } from "@/lib/adminTournamentApi";
 import TournamentCreatePanel from "./TournamentCreatePanel";
 
 export default async function AdminTournamentCreatePage() {
-  const clubId = "tres_palapas";
+  const { clubId } = requireAdminWorkspace();
   const { data, error } = await getAdminTournamentStatus(clubId);
 
   return (

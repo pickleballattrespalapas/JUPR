@@ -1,3 +1,4 @@
+import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import Link from "next/link";
 import { getAdminLeagueManagerApiBaseUrl, getAdminLeagueManagerStatus } from "@/lib/adminLeagueManagerApi";
 import TopPlayersPrintablePanel from "./TopPlayersPrintablePanel";
@@ -5,7 +6,7 @@ import TopPlayersPrintablePanel from "./TopPlayersPrintablePanel";
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 
 export default async function TopPlayersPrintablePage({ searchParams }: { searchParams?: { limit?: string } }) {
-  const clubId = "tres_palapas";
+  const { clubId, clubSlug } = requireAdminWorkspace();
   const limit = Math.max(5, Math.min(Number(searchParams?.limit || 50) || 50, 200));
   const { data: status, error } = await getAdminLeagueManagerStatus(clubId);
 
@@ -23,7 +24,7 @@ export default async function TopPlayersPrintablePage({ searchParams }: { search
 
       <article className="no-print" style={{ ...cardStyle, marginBottom: "1rem" }}>
         <p style={{ marginTop: 0, color: "#475569" }}>Use the browser print dialog to save as PDF. The optional <code>?limit=100</code> query only changes the maximum row count; active and minimum-game policies cannot be bypassed from the browser.</p>
-        <Link href="/admin">Operations cockpit</Link> · <Link href="/admin/league-manager">League Manager</Link> · <Link href="/clubs/tres-palapas/leaderboards">Public leaderboard</Link>
+        <Link href="/admin">Operations cockpit</Link> · <Link href="/admin/league-manager">League Manager</Link> · <Link href={`/clubs/${encodeURIComponent(clubSlug)}/leaderboards`}>Public leaderboard</Link>
       </article>
       {status ? <TopPlayersPrintablePanel apiBase={getAdminLeagueManagerApiBaseUrl()} clubId={clubId} limit={limit} status={status} /> : null}
     </section>

@@ -6,10 +6,14 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { signOutAdminSession } from "@/lib/adminAuthClient";
 import { useAdminSession } from "@/lib/useAdminSession";
+import { useAvailableWorkspaces } from "@/lib/useAvailableWorkspaces";
+import { AdminWorkspaceContext } from "@/lib/useAdminWorkspace";
+import { ADMIN_WORKSPACE_CHANGE, readBrowserWorkspace, sameWorkspace, type AdminWorkspace } from "@/lib/adminWorkspace";
 import styles from "./AdminShell.module.css";
 
 type Props = {
   children: ReactNode;
+  workspace: AdminWorkspace | null;
 };
 
 type AdminLink = {
@@ -33,6 +37,8 @@ const adminGroups: AdminGroup[] = [
         href: "/admin",
         active: (pathname) => pathname === "/admin"
       },
+      { label: "Club staff", href: "/admin/staff", active: path => path === "/admin/staff" },
+      { label: "Interclub seasons", href: "/admin/interclub", active: path => path === "/admin/interclub" },
       {
         label: "Match Uploader",
         href: "/admin/match-uploader",
@@ -138,25 +144,25 @@ const adminGroups: AdminGroup[] = [
       },
       {
         label: "Club Home ↗",
-        href: "/clubs/tres-palapas",
+        href: "/clubs/{club}",
         active: () => false,
         newTab: true
       },
       {
         label: "Leagues ↗",
-        href: "/clubs/tres-palapas/leagues",
+        href: "/clubs/{club}/leagues",
         active: () => false,
         newTab: true
       },
       {
         label: "Tournaments ↗",
-        href: "/clubs/tres-palapas/tournaments",
+        href: "/clubs/{club}/tournaments",
         active: () => false,
         newTab: true
       },
       {
         label: "Leaderboards ↗",
-        href: "/clubs/tres-palapas/leaderboards",
+        href: "/clubs/{club}/leaderboards",
         active: () => false,
         newTab: true
       }
@@ -179,10 +185,12 @@ function SidebarLink({ item, pathname }: { item: AdminLink; pathname: string }) 
   );
 }
 
-export default function AdminShell({ children }: Props) {
+export default function AdminShell({ children, workspace }: Props) {
   const pathname = usePathname() || "/admin";
   const router = useRouter();
-  const { session, accessToken } = useAdminSession();
+  const { session, accessToken, loading } = useAdminSession();
+  const { workspaces, error, loaded, retry } = useAvailableWorkspaces(accessToken, session?.user?.id || session?.user?.email || accessToken);
+  const [contextChanged, setContextChanged] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(
@@ -190,6 +198,33 @@ export default function AdminShell({ children }: Props) {
   );
   const authPage =
     pathname === "/admin/login" || pathname === "/admin/reset-password";
+  const globalPage = pathname === "/admin/select-club" || pathname === "/admin/platform";
+  const activeClub = workspaces.find(club => club.club_id === workspace?.clubId && club.club_slug === workspace?.clubSlug);
+
+  useEffect(() => {
+    if (authPage || globalPage || !accessToken || !workspace) return;
+    const check = () => setContextChanged(!sameWorkspace(readBrowserWorkspace(), workspace));
+    check();
+    window.addEventListener("storage", check);
+    window.addEventListener("focus", check);
+    window.addEventListener(ADMIN_WORKSPACE_CHANGE, check);
+    const timer = window.setInterval(check, 1000);
+    // Check before any click/submit so a second tab cannot change the cookie
+    // between a periodic check and an action or navigation in this tab.
+    const guard = (event: Event) => {
+      if (event.target instanceof Element && event.target.closest("[data-workspace-reload]")) return;
+      if (!sameWorkspace(readBrowserWorkspace(), workspace)) {
+        event.preventDefault(); event.stopPropagation(); setContextChanged(true);
+      }
+    };
+    document.addEventListener("click", guard, true);
+    document.addEventListener("submit", guard, true);
+    return () => {
+      window.removeEventListener("storage", check); window.removeEventListener("focus", check);
+      window.removeEventListener(ADMIN_WORKSPACE_CHANGE, check); window.clearInterval(timer);
+      document.removeEventListener("click", guard, true); document.removeEventListener("submit", guard, true);
+    };
+  }, [workspace, authPage, globalPage, accessToken]);
 
   useEffect(() => {
     const activeGroup = adminGroups.find((group) =>
@@ -202,7 +237,15 @@ export default function AdminShell({ children }: Props) {
     });
   }, [pathname]);
 
-  if (authPage || !accessToken) return <>{children}</>;
+  if (authPage || globalPage) return <>{children}</>;
+  if (loading) return <p role="status">Checking club access…</p>;
+  if (!accessToken) return <section><h1>Admin sign-in required</h1><Link href={`/admin/login?next=${encodeURIComponent(pathname)}`}>Sign in</Link></section>;
+  if (!workspace) return <section><h1>Choose a club workspace</h1><Link href="/admin/select-club">Choose club</Link></section>;
+  if (contextChanged) return <section><h1>Club selection changed</h1><p>A different club was selected in another tab. Reload to open the selected club.</p><button data-workspace-reload onClick={() => window.location.assign("/admin")}>Reload workspace</button></section>;
+  if (error) return <p role="alert">{error} <button onClick={retry}>Try again</button></p>;
+  if (!loaded) return <p role="status">Loading club workspace…</p>;
+  if (!activeClub || !session?.capabilities?.assignments.some(assignment => assignment.club_id === workspace.clubId)) return <section><h1>Choose an available club</h1><p>Your account does not currently have access to this workspace.</p><Link href="/admin/select-club">Choose club</Link></section>;
+  const groups = adminGroups.map(group => ({ ...group, links: group.links.map(item => ({ ...item, href: item.href.replace("/clubs/{club}", `/clubs/${encodeURIComponent(activeClub.club_slug)}`) })) }));
 
   async function signOut() {
     if (signingOut) return;
@@ -250,12 +293,14 @@ export default function AdminShell({ children }: Props) {
           <>
             <div className={styles.identity}>
               <p className={styles.eyebrow}>Admin workspace</p>
+              <strong>{activeClub.club_name}</strong>
+              <p><Link href="/admin/select-club">Switch club</Link></p>
               <p className={styles.email}>
                 {session?.user?.email || "Authorized staff account"}
               </p>
             </div>
 
-            {adminGroups.map((group) => {
+            {groups.map((group) => {
               const collapsed = Boolean(collapsedGroups[group.label]);
               const activeGroup = group.links.some((item) => item.active(pathname));
               const groupId = `admin-group-${group.label
@@ -314,7 +359,10 @@ export default function AdminShell({ children }: Props) {
           </p>
         )}
       </aside>
-      <div className={styles.content}>{children}</div>
+      <div className={styles.content}>
+        <p className={styles.eyebrow} aria-label="Current club">{activeClub.club_name}</p>
+        <AdminWorkspaceContext.Provider key={workspace.clubId} value={workspace}>{children}</AdminWorkspaceContext.Provider>
+      </div>
     </div>
   );
 }

@@ -135,3 +135,62 @@ eligibility checks, meet scoring, organizer approval and rating replay remain
 future increments. Plan entitlements and billing remain unenforced. Staging
 verification includes API authorization/scheduling tests, database rollback
 checks for revision conflicts/audit/privileges, and the web production build.
+
+## Multi-club workspace increment (September 8, 2026)
+
+The earlier account/staff and season-draft work did not yet make daily admin
+operations usable for a second club. Login requested Tres capabilities by
+default, and 46 admin entry points supplied Tres IDs or slugs directly.
+
+This increment removes that prerequisite gap:
+- Login discovers all current club assignments for the verified identity.
+- `/admin/select-club` lists only assigned club names and roles, including
+  draft club accounts that still need onboarding.
+- The admin workspace names the current club and offers Switch club.
+- Players, Match Uploader/Log, leagues, tournament phases/live operations,
+  generators, communications, staff and interclub planning use the same scope.
+- Public links follow the current club; public navigation follows its URL.
+- A club switch starts at `/admin` with a full reload. Prior record IDs, forms
+  and client/router caches cannot carry across to the newly selected club.
+- The selection cookie is navigation context, never authorization. The shell
+  checks both current capabilities and assigned-club identity before mounting
+  client tools; protected APIs still independently authorize every operation.
+- Other tabs detect a changed selection and block clicks/submissions until
+  reloaded. A late response cannot replace another signed-in identity's club
+  list, and refreshing the same user's token preserves the selected workspace.
+
+No schema, production, billing, role grant, invitation, email delivery or rating
+mutation is included. Existing club data remains separate. Cookie-free sessions
+must select a club before opening a club operation. The platform dashboard is
+still independently authorized and available without a selected club.
+
+### Next delivery stages
+
+1. **Second-club acceptance and onboarding completion.** Exercise a second-club
+   administrator, a multi-club administrator and a scoped operator against
+   staging. Complete account invitation/acceptance and administrator onboarding
+   readiness before opening public self-service signup. Expand the central
+   public club directory/site map, which still starts with Tres.
+2. **Interclub participation and rosters.** Convert proposed clubs into audited
+   invitations and club-admin acceptance. Each club submits its own four-player
+   teams using its own directory. Add eligibility facts, roster versions and
+   organizer exceptions; never expose whole directories or contact details.
+3. **Meet operations.** Confirm host/court schedules, grant eligible meet staff,
+   then add check-in, individual game scoring, standings and results review.
+   Host authority remains separate from organizer rule/approval authority.
+4. **Rating approval and corrections.** Snapshot organizer-approved meet
+   revisions; apply league ratings and represented-home-club ratings through
+   retry-safe jobs. Verify duplicate approvals, partial failures and replay of
+   corrections interleaved with local club games before enabling rating writes.
+5. **Plan enforcement and commercial onboarding.** Apply the agreed staff and
+   feature limits, trials, proration, downgrades and three-day payment grace
+   period. Keep records accessible when paid operations pause. Launch public
+   signup only after these rules and onboarding are enforced.
+
+Validation: 71 focused Python tests; executable React tests for all-club login,
+selection/cookie validation, cross-tab action blocking, revoked access, scoped
+server data and mutation-panel props, stale identity responses and token refresh;
+existing component suite; Next production build with type/lint checks; migration
+source guard and whitespace checks. The local cloud-browser URL is blocked by
+its network policy, so authenticated real-browser acceptance remains a staging
+pilot task. Do not represent these local checks as that acceptance.

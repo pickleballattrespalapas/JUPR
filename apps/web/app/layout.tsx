@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import type { CSSProperties, ReactNode } from "react";
-import Link from "next/link";
+import PublicFooterNav from "@/components/PublicFooterNav";
 import PublicSiteHeader from "@/components/PublicSiteHeader";
 import { InteractionProvider } from "@/components/interaction";
 
@@ -60,23 +60,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               <span style={{ color: "#475569" }}>
                 Follow your club’s ratings, matches, leagues, and events.
               </span>
-              <nav
-                style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}
-                aria-label="Footer navigation"
-              >
-                <Link href="/clubs/tres-palapas/leagues">Leagues</Link>
-                <Link href="/clubs/tres-palapas/tournaments">Tournaments</Link>
-                <Link href="/admin/login">Staff sign in</Link>
-                <Link href="/site-map">Site map</Link>
-                <Link href="/clubs/tres-palapas/badge-codex">Badges & Trophies</Link>
-                <Link href="/clubs/tres-palapas/matches">Matches</Link>
-                <Link href="/how-ratings-work">How ratings work</Link>
-                <Link href="/faq">FAQ</Link>
-                <Link href="/privacy">Privacy</Link>
-                <Link href="/terms">Terms</Link>
-                <Link href="/support">Contact</Link>
-                <Link href="/data-corrections">Data corrections</Link>
-              </nav>
+              <PublicFooterNav />
             </footer>
           </div>
         </InteractionProvider>

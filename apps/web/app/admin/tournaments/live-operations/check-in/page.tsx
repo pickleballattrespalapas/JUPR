@@ -1,3 +1,4 @@
+import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
 import TournamentPhaseNav from "@/components/TournamentPhaseNav";
@@ -10,6 +11,7 @@ type Props = {
 };
 
 export default function TournamentCheckInPage({ searchParams }: Props) {
+  const { clubId } = requireAdminWorkspace();
   const context = readTournamentRouteContext(searchParams);
   if (!context.tournamentId) redirect("/admin/tournaments");
 
@@ -29,7 +31,7 @@ export default function TournamentCheckInPage({ searchParams }: Props) {
       <Suspense fallback={<p>Loading tournament-day check-in…</p>}>
         <TournamentCheckInPanel
           apiBase={getAdminTournamentApiBaseUrl()}
-          clubId="tres_palapas"
+          clubId={clubId}
           initialDayId={context.dayId}
           tournamentId={context.tournamentId}
         />

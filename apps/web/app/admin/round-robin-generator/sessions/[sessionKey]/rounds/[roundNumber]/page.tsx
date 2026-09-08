@@ -1,3 +1,4 @@
+import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import GeneratorRoundRunner from "@/app/admin/play-generators/GeneratorRoundRunner";
 
 type Props = {
@@ -9,10 +10,11 @@ function apiBase(): string | null {
 }
 
 export default function RoundRobinRoundPage({ params }: Props) {
+  const { clubId } = requireAdminWorkspace();
   return (
     <GeneratorRoundRunner
       apiBase={apiBase()}
-      clubId="tres_palapas"
+      clubId={clubId}
       generatorKind="round_robin"
       sessionKey={params.sessionKey}
       roundNumber={Math.max(1, Number(params.roundNumber) || 1)}

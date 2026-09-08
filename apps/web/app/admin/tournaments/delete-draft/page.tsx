@@ -1,3 +1,4 @@
+import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import { redirect } from "next/navigation";
 import { getAdminTournamentApiBaseUrl, getAdminTournamentStatus } from "@/lib/adminTournamentApi";
 import DeleteDraftPanel from "./DeleteDraftPanel";
@@ -9,7 +10,7 @@ export default async function AdminTournamentDeleteDraftPage({ searchParams }: P
   const context = readTournamentRouteContext(searchParams);
   if (!context.tournamentId) redirect("/admin/tournaments");
 
-  const clubId = "tres_palapas";
+  const { clubId } = requireAdminWorkspace();
   const { data, error } = await getAdminTournamentStatus(clubId);
 
   return (

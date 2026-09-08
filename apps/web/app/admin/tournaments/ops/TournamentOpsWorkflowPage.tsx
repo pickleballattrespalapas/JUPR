@@ -1,3 +1,4 @@
+import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import TournamentPhaseNav from "@/components/TournamentPhaseNav";
 import {
   getAdminTournamentApiBaseUrl,
@@ -24,7 +25,7 @@ export default async function TournamentOpsWorkflowPage({
   tournamentName,
   initialDrawId = null
 }: Props) {
-  const clubId = "tres_palapas";
+  const { clubId } = requireAdminWorkspace();
   const { data, error } = await getAdminTournamentStatus(clubId);
   const phase = workflow === "results" || workflow === "publish" ? "publish" : "live";
 

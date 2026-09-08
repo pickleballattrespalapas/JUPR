@@ -1,3 +1,4 @@
+import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import { redirect } from "next/navigation";
 import TournamentPhaseNav from "@/components/TournamentPhaseNav";
 import TournamentCommercePanel from "./TournamentCommercePanel";
@@ -6,6 +7,7 @@ import { readTournamentRouteContext } from "@/lib/tournamentRouteContext";
 type Props = { searchParams?: Record<string, string | string[] | undefined> };
 
 export default function AdminTournamentCommercePage({ searchParams }: Props) {
+  const { clubId } = requireAdminWorkspace();
   const context = readTournamentRouteContext(searchParams);
   if (!context.tournamentId) redirect("/admin/tournaments");
 
@@ -20,7 +22,7 @@ export default function AdminTournamentCommercePage({ searchParams }: Props) {
         Configure extras and bundles, then track offline payment, pickup, fulfillment, and recovery without rewriting prior orders.
       </p>
       <TournamentCommercePanel
-        clubId="tres_palapas"
+        clubId={clubId}
         tournamentId={context.tournamentId}
         tournamentName={context.tournamentName || context.tournamentId}
       />

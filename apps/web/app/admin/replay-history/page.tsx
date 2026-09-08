@@ -1,3 +1,4 @@
+import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import Link from "next/link";
 import { getAdminReplayApiBaseUrl, getAdminReplayStatus } from "@/lib/adminReplayApi";
 import ReplayHistoryForm from "./ReplayHistoryForm";
@@ -5,7 +6,7 @@ import ReplayHistoryForm from "./ReplayHistoryForm";
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 
 export default async function AdminReplayHistoryPage() {
-  const clubId = "tres_palapas";
+  const { clubId } = requireAdminWorkspace();
   const { data, error } = await getAdminReplayStatus(clubId);
 
   return (

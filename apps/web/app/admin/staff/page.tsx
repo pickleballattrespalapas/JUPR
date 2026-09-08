@@ -1,4 +1,5 @@
 "use client";
+import { useAdminWorkspace } from "@/lib/useAdminWorkspace";
 
 import Link from "next/link";
 import { ConfirmAction } from "@/components/ConfirmAction";
@@ -14,8 +15,8 @@ export default function StaffPage() {
   const { session, accessToken, loading } = useAdminSession();
   const assignments = session?.capabilities?.assignments || [];
   const clubs = assignments.filter(a => ["super_admin", "club_owner", "administrator"].includes(a.role));
-  const [club, setClub] = useState("");
-  const clubId = club || clubs[0]?.club_id || "";
+  const { clubId } = useAdminWorkspace();
+  const canManage = clubs.some(club => club.club_id === clubId);
   const [rows, setRows] = useState<Staff[]>([]);
   const [targets, setTargets] = useState<{program_type: string; resource_id: string; label: string}[]>([]);
   const [email, setEmail] = useState("");
@@ -27,7 +28,7 @@ export default function StaffPage() {
   const [revision, setRevision] = useState(0);
   const api = getAdminPlayerEditorApiBaseUrl();
   useEffect(() => {
-    if (!accessToken || !clubId || !api) return;
+    if (!accessToken || !clubId || !api || !canManage) return;
     const controller = new AbortController();
     setRows([]); setTargets([]);
     fetch(`${api}/admin/clubs/${encodeURIComponent(clubId)}/staff`, { headers: { Authorization: `Bearer ${accessToken}` }, signal: controller.signal })
@@ -37,7 +38,7 @@ export default function StaffPage() {
       .then(async response => { const data = await response.json(); if (!response.ok) throw new Error("Unable to load program choices."); setTargets(data.targets); })
       .catch(error => { if (error.name !== "AbortError") setMessage(error.message); });
     return () => controller.abort();
-  }, [accessToken, clubId, api, revision]);
+  }, [accessToken, clubId, api, revision, canManage]);
   async function save(target?: Staff) {
     if (!api || busy) { if (target) throw new Error("Staff service is not ready."); return; }
     setBusy(true); setMessage("");
@@ -56,10 +57,9 @@ export default function StaffPage() {
     finally { setBusy(false); }
   }
   if (loading) return <p>Loading staff access…</p>;
-  if (!clubs.length) return <p>Club administrator access is required. <Link href="/admin/login">Sign in</Link></p>;
+  if (!canManage) return <p>Club administrator access is required. <Link href="/admin/login">Sign in</Link></p>;
   return <section style={{ maxWidth: 960, margin: "0 auto" }}>
     <h1>Club staff</h1><p>Assign administrators and operators. Each person signs in with their own account.</p>
-    <label>Club <select value={clubId} onChange={e => { setClub(e.target.value); setEmail(""); setMessage(""); }} disabled={busy}>{clubs.map(a => <option key={a.club_id} value={a.club_id}>{a.club_id.replaceAll("_", " ")}</option>)}</select></label>
     <form onSubmit={e => { e.preventDefault(); void save(); }} style={{ display: "grid", gap: 12, margin: "24px 0", padding: 20, border: "1px solid #cbd5e1", borderRadius: 12 }}>
       <h2>{rows.some(r => r.email === email) ? "Edit staff access" : "Add staff"}</h2>
       <label>Email <input type="email" required value={email} onChange={e => setEmail(e.target.value)} disabled={busy}/></label>

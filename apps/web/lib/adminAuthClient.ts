@@ -188,10 +188,6 @@ export function getAdminApiBaseUrl(): string | null {
   return cleanBaseUrl(process.env.NEXT_PUBLIC_JUPR_API_BASE_URL) || null;
 }
 
-export function getDefaultAdminClubId(): string {
-  return String(process.env.NEXT_PUBLIC_JUPR_ADMIN_CLUB_ID || "tres_palapas").trim() || "tres_palapas";
-}
-
 export function safeAdminNextPath(value: string | null | undefined, fallback = "/admin"): string {
   const requested = String(value || "").trim();
   if (!requested || !requested.startsWith("/") || requested.startsWith("//") || requested.includes("\\") || /[\u0000-\u001f]/.test(requested)) {
@@ -365,7 +361,7 @@ export async function sendPasswordResetEmail(email: string, redirectTo?: string)
 
 export async function authorizeAdminSession(
   session: AdminSession,
-  requestedClubId = getDefaultAdminClubId()
+  requestedClubId = ""
 ): Promise<AdminSession> {
   const apiBase = getAdminApiBaseUrl();
   if (!apiBase) throw new Error("JUPR admin API configuration is missing.");
@@ -399,7 +395,7 @@ export async function authorizeAdminSession(
 
 export async function authorizeAndSaveAdminSession(
   session: AdminSession,
-  requestedClubId = getDefaultAdminClubId(),
+  requestedClubId = "",
   options: { preserveOnUnavailable?: boolean } = {}
 ): Promise<AdminSession> {
   try {
@@ -453,7 +449,7 @@ export async function refreshAdminSession(session = loadAdminSession()): Promise
 }
 
 export async function restoreAuthorizedAdminSession(
-  requestedClubId = getDefaultAdminClubId(),
+  requestedClubId = "",
   options: { changeSource?: string } = {}
 ): Promise<AdminSession | null> {
   if (!canUseBrowserStorage()) return null;

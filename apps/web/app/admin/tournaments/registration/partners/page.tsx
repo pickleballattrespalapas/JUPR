@@ -1,3 +1,4 @@
+import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import TournamentPhaseNav from "@/components/TournamentPhaseNav";
@@ -13,6 +14,7 @@ const cardStyle = {
 };
 
 export default function TournamentPartnersPage({ searchParams }: Props) {
+  const { clubSlug } = requireAdminWorkspace();
   const context = readTournamentRouteContext(searchParams);
   if (!context.tournamentId) redirect("/admin/tournaments");
   const partnerBoardParams = new URLSearchParams({
@@ -20,7 +22,7 @@ export default function TournamentPartnersPage({ searchParams }: Props) {
   });
   if (context.drawId) partnerBoardParams.set("draw", context.drawId);
   const partnerBoardHref =
-    `/clubs/tres-palapas/tournament-partner-board?${partnerBoardParams.toString()}`;
+    `/clubs/${encodeURIComponent(clubSlug)}/tournament-partner-board?${partnerBoardParams.toString()}`;
 
   return (
     <section>
