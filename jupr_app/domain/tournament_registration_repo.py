@@ -3911,6 +3911,21 @@ def build_public_tournament_roster_state(
             "age_bracket": _public_age_bracket(member),
         }
 
+    def _public_combined_rating(
+        event: dict[str, Any], entry: dict[str, Any], members: list[dict[str, Any]]
+    ) -> float | None:
+        if (
+            str(event.get("eligibility_mode") or "").strip().upper() != "COMBINED_RATING_CAP"
+            or _public_entry_type(entry.get("entry_type")) != "Team"
+            or len(members) != 2
+        ):
+            return None
+        ratings = [_optional_float(member.get("skill")) for member in members]
+        if any(rating is None or rating <= 0 for rating in ratings):
+            return None
+        # Match the individual ratings already displayed on the public roster.
+        return round(sum(rating for rating in ratings if rating is not None), 2)
+
     registrations_by_event: list[dict[str, Any]] = []
     confirmed_teams: list[dict[str, Any]] = []
     pending_partner_requests: list[dict[str, Any]] = []
@@ -3995,6 +4010,7 @@ def build_public_tournament_roster_state(
                 "status": _public_status(status),
                 "entry_type": _public_entry_type(entry.get("entry_type")),
                 "members": members,
+                "combined_rating": _public_combined_rating(event_option, entry, members),
             }
             registrations_by_event.append(event_row)
             event_rows.append(event_row)
