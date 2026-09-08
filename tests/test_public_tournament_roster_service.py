@@ -1,10 +1,30 @@
 from __future__ import annotations
 
 import json
+import pytest
 
 from jupr_app.services.public_tournament_registration_service import submit_public_tournament_registration
 from jupr_app.services.public_tournament_roster_service import build_public_tournament_roster_page
 from tests.test_public_tournament_registration_service import FakeSupabase, fake_storage
+
+
+@pytest.mark.parametrize("event_type,partner_mode", [("SINGLES", "NONE"), ("DOUBLES", "NEEDS_PARTNER")])
+def test_public_roster_counts_only_active_registrations(event_type, partner_mode):
+    storage = fake_storage()
+    storage["tournament_event_options"][0].update({"event_type": event_type, "partner_required": event_type != "SINGLES"})
+    storage["tournament_registrations"] = [
+        {"id": key, "tournament_id": "t1", "email": f"{key}@example.com", "display_name": name, "status": status, "submitted_at": "2026-06-01T10:00:00Z", "wants_partner_board_contact": True}
+        for key, name, status in [("active", "Active Player", "confirmed"), ("cancelled", "Cancelled Player", "cancelled")]
+    ]
+    storage["tournament_registration_selections"] = [
+        {"id": f"selection-{key}", "tournament_id": "t1", "registration_id": key, "registration_day_id": "day1", "event_option_id": "event1", "partner_mode": partner_mode, "show_on_partner_board": True}
+        for key in ["active", "cancelled"]
+    ]
+    payload = build_public_tournament_roster_page(FakeSupabase(storage), club_id="club-1", registration_slug="tres-open")
+    assert payload["summary"]["total_registrations"] == 1
+    assert payload["summary"]["total_players"] == 1
+    assert len(payload["roster"]["registrations_by_event"]) == 1
+    assert "Cancelled Player" not in json.dumps(payload["roster"])
 
 
 def test_public_tournament_roster_page_is_public_safe_after_registration() -> None:
