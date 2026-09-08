@@ -115,6 +115,11 @@ type SetupDetail = {
   settings: Record<string, unknown>;
   days: SetupRecord[];
   event_options: SetupRecord[];
+  registration_readiness?: {
+    available_division_count: number;
+    ready_division_count: number;
+    divisions_to_open: string[];
+  };
   sponsor_logo_urls?: Record<string, string>;
   builder_draft?: Record<string, unknown> | null;
   publish_impact?: Record<string, unknown> | null;
@@ -2319,9 +2324,14 @@ async function saveResolutionDraft() {
     publishedConfiguration
   );
   const publishedSetupReady = publishedSetupState.review === "in-progress";
+  const registrationReadiness = detail?.registration_readiness;
+  const registrationHasNoDivisions =
+    safeString(publishedSettings.registration_status).toLowerCase() === "open" &&
+    registrationReadiness?.available_division_count === 0;
   const registrationCanOpen = Boolean(
     publicationStatus === "current" &&
-      publishedSetupReady
+      publishedSetupReady &&
+      (!registrationReadiness || registrationReadiness.ready_division_count > 0)
   );
   const registrationStatus = safeString(publishedSettings.registration_status || "draft");
   const settingsConfirmation =
@@ -3343,11 +3353,15 @@ function renderDivisions() {
       {
         key: "review" as TournamentSetupStep,
         label: "Review",
-        complete: ready && unresolvedBlockers.length === 0 && unresolvedCommunications.length === 0,
+        complete: ready && unresolvedBlockers.length === 0 && unresolvedCommunications.length === 0 && !registrationHasNoDivisions,
         draft: impactReview
           ? `${warnings.length} warning(s) · ${unresolvedBlockers.length} registration blocker(s) · ${unresolvedCommunications.length} communication impact(s)`
           : "Impact review calculating",
-        published: registrationStatus.toLowerCase() === "open" ? "Registration open" : "Registration not open"
+        published: registrationHasNoDivisions
+          ? "Registration is open, but no divisions are available"
+          : registrationStatus.toLowerCase() === "open"
+            ? `Registration open${registrationReadiness ? ` · ${registrationReadiness.available_division_count} available division${registrationReadiness.available_division_count === 1 ? "" : "s"}` : ""}`
+            : "Registration not open"
       }
     ];
 
@@ -3754,7 +3768,27 @@ function renderDivisions() {
         <article style={cardStyle}>
           <h3 style={{ marginTop: 0 }}>Open registration</h3>
           <p style={{ color: "#475569" }}>Make the published tournament available to registrants. Offline payment remains the only payment mode.</p>
-          {registrationStatus.toLowerCase() === "open" ? (
+          {registrationHasNoDivisions ? (
+            <div role="alert">
+              <p style={{ color: "#b91c1c", fontWeight: 800 }}>Registration is open, but players cannot select any divisions.</p>
+              {registrationReadiness && registrationReadiness.ready_division_count > 0 ? (
+                <>
+                  <p>The published divisions are still marked Draft. Make them available to finish opening registration.</p>
+                  <ConfirmAction
+                    triggerLabel="Make published divisions available"
+                    title="Make published divisions available?"
+                    description="Open the published, enabled divisions for registration. Unpublished edits stay private."
+                    confirmLabel="Make divisions available"
+                    confirmationText={settingsConfirmation}
+                    busy={busy}
+                    onConfirm={openRegistration}
+                  />
+                </>
+              ) : (
+                <p>Enable a division on an enabled tournament day and publish the setup before accepting registrations.</p>
+              )}
+            </div>
+          ) : registrationStatus.toLowerCase() === "open" ? (
             <p style={{ color: "#166534", fontWeight: 800 }}>Registration is already open.</p>
           ) : (
             <ConfirmAction
@@ -3763,7 +3797,7 @@ function renderDivisions() {
               description="Open registration using the published tournament, registration window, policies, divisions, prices, and Players Needing Partners settings."
               confirmLabel="Yes, open registration"
               confirmationText={settingsConfirmation}
-              disabled={!(setupPublishedThisSession || registrationCanOpen)}
+              disabled={!(setupPublishedThisSession || registrationCanOpen) || registrationReadiness?.ready_division_count === 0}
               busy={busy}
               onConfirm={openRegistration}
             />
