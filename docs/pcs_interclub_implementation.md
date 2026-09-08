@@ -223,5 +223,48 @@ submission, stale writes, audit, cross-club denial, revoked access and active-cl
 status. Test records were rolled back. No new database security advisor findings.
 Authenticated browser acceptance remains a staging pilot task.
 
-Next: staff account invitation/acceptance and the second-club pilot, followed by
-interclub participation, team rosters and organizer eligibility decisions.
+## Staff invitation increment (September 8, 2026)
+
+New staff additions in `/admin/staff` now create email-bound invitations instead
+of immediately granting access. The administrator selects the role, operator
+scopes and optional access end date, then copies a seven-day invitation link.
+The list shows pending, accepted, cancelled and expired invitations. Existing
+active assignments remain editable; removed or expired staff can be invited again.
+Creating an invitation does not send email or create an Auth account.
+
+The recipient opens `/admin/accept-invitation`, signs in with the invited email,
+reviews the club and permissions, and explicitly accepts. This page can authenticate
+an account that has no staff assignments yet. Only successful acceptance refreshes
+admin capabilities and opens the invited club. Other club assignments remain intact.
+Single-club accounts continue to sign in directly to their club; accounts with
+multiple assignments retain the club selector.
+
+The service-only invitation transaction shares the staff advisory lock and checks
+the inviter's current authority, the recipient's confirmed Auth email, invitation
+expiry, and the original staff assignment snapshot. A narrowly scoped identity
+helper checks Auth without granting the API database role access to the user table.
+Creation and acceptance are retry-safe. Replays cannot restore revoked access or
+overwrite a newer assignment. Club access and invitation audit records commit
+together. The table has RLS, no browser policies and no anon/authenticated grants.
+
+Recipients can request an email sign-in link, including for a new account. The
+server claims a matching valid invitation before generating a Supabase magic-link
+token; the credential goes only to the invited mailbox, never to the inviting
+administrator or an API response. Callback origins come from server configuration,
+and credential fragments are removed before verification. Requests are limited
+to one per minute and five per invitation. Non-live email modes, including staging
+redirect mode, stop before creating an Auth user/token or sending any mail.
+Staging stays `dry_run`: use an existing confirmed test account to accept.
+
+Validation: 135 focused API, permissions, auth and deployment checks; executable
+staff/recipient component scenarios; full component suite; Next build; and
+`tests/sql/staff_invitation_transaction.sql` on staging under the actual API role.
+The transaction test covers no grant before acceptance, verified/wrong emails,
+expiry, cancellation, revoked inviter, newer assignments, retry/replay, preserved
+scopes/expiry, email throttling, audits and cross-club isolation. All database
+fixtures were rolled back. No new security warnings; the intentional private
+invitation table adds one informational RLS-without-policy advisor entry.
+Authenticated browser acceptance and real email delivery remain unclaimed.
+
+Next: finish the second-club pilot, then interclub participation invitations,
+club-admin acceptance, team rosters and organizer eligibility decisions.

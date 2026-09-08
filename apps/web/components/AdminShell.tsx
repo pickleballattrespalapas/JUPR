@@ -199,7 +199,7 @@ export default function AdminShell({ children, workspace }: Props) {
   );
   const authPage =
     pathname === "/admin/login" || pathname === "/admin/reset-password";
-  const globalPage = pathname === "/admin/select-club" || pathname === "/admin/platform";
+  const globalPage = pathname === "/admin/select-club" || pathname === "/admin/platform" || pathname === "/admin/accept-invitation";
   const activeClub = workspaces.find(club => club.club_id === workspace?.clubId && club.club_slug === workspace?.clubSlug);
   const canChoose = canChooseAdminWorkspace(workspaces);
 
