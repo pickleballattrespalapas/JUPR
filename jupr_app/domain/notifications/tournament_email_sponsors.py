@@ -55,15 +55,21 @@ def _html_groups(sponsors: list[dict] | None) -> tuple[str, str]:
     rows = _visible(sponsors)
     images = sponsor_inline_images(rows)
     groups: dict[str, list[str]] = {tier: [] for tier in TIERS}
+    credits: list[str] = []
     for index, row in enumerate(rows):
         tier = row.get("tier") if row.get("tier") in TIERS else "supporting"
         name = escape(str(row["name"]))
         website = _website(row.get("website"))
         linked_name = f'<a href="{escape(website, quote=True)}" style="color:#1e3a5f">{name}</a>' if website else name
         title = "Presented by " if tier == "presenting" else ""
-        size = "22" if tier == "presenting" else "16"
+        size = "18" if tier == "presenting" else "16"
         content = f'<p style="margin:0 0 8px;font-size:{size}px;font-weight:bold">{title}{linked_name}</p>'
         cid = f"tournament-sponsor-{index}"
+        if tier == "presenting":
+            credit = f'<td style="padding:12px 16px 12px 0;font-size:14px;line-height:1.4;vertical-align:middle">Presented by <strong>{linked_name}</strong></td>'
+            if cid in images:
+                credit += f'<td width="120" align="right" style="padding:12px 0;vertical-align:middle"><img src="cid:{cid}" alt="{name}" width="120" style="display:block;width:120px;max-width:100%;height:auto;border:0"></td>'
+            credits.append(f'<tr>{credit}</tr>')
         if cid in images:
             content += f'<p style="margin:8px 0"><img src="cid:{cid}" alt="{name}" width="200" style="display:block;width:200px;max-width:100%;height:auto;border:0"></p>'
         for key in ("level", "public_description"):
@@ -71,18 +77,18 @@ def _html_groups(sponsors: list[dict] | None) -> tuple[str, str]:
                 content += '<p style="margin:6px 0;line-height:1.5">' + escape(str(row[key])).replace("\n", "<br>") + '</p>'
         if website:
             content += f'<p style="margin:6px 0;overflow-wrap:anywhere"><a href="{escape(website, quote=True)}">Visit {name}</a></p>'
-        groups[tier].append(f'<tr><td style="padding:16px 0">{content}</td></tr>')
+        groups[tier].append(f'<tr><td style="padding:16px 0;font-size:14px;line-height:1.5">{content}</td></tr>')
 
     def table(content: str) -> str:
         return '<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="width:100%;border-collapse:collapse">' + content + '</table>'
 
-    header = table("".join(groups["presenting"])) if groups["presenting"] else ""
-    footer = ""
+    header = '<div style="margin-bottom:24px;border-bottom:1px solid #e2e8f0">' + table("".join(credits)) + '</div>' if credits else ""
+    footer = table("".join(groups["presenting"])) if groups["presenting"] else ""
     for tier, label in (("premier", "Supporting sponsors"), ("supporting", "Community sponsors")):
         if groups[tier]:
             footer += f'<h2 style="font-size:18px;margin:20px 0 0">{label}</h2>' + table("".join(groups[tier]))
     if footer:
-        footer = '<div style="margin-top:24px;border-top:1px solid #e2e8f0">' + footer + '</div>'
+        footer = '<div style="margin-top:32px;padding-top:8px;border-top:1px solid #e2e8f0">' + footer + '</div>'
     return header, footer
 
 
@@ -92,21 +98,30 @@ def with_sponsors_html(body: str, sponsors: list[dict] | None) -> str:
         return body
     if header:
         body = body.replace("</h1>", "</h1>" + header, 1)
-    return body.replace("</body>", footer + "</body>", 1)
+    body = body.replace('<h1>', '<h1 style="font-size:24px;line-height:1.3;margin:0 0 12px">', 1)
+    # Inline styles and a presentation table also work in email clients that
+    # strip stylesheets. Leave the background unset for native dark-mode colors.
+    container = '<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="width:100%;max-width:680px;border-collapse:collapse"><tr><td style="font-family:Arial,sans-serif;font-size:16px;line-height:1.6;padding:8px 0">'
+    body = re.sub(r"(<body\b[^>]*>)", lambda match: match.group(1) + container, body, count=1)
+    return body.replace("</body>", footer + "</td></tr></table></body>", 1)
 
 
 def with_sponsors_text(body: str, sponsors: list[dict] | None) -> str:
     groups: dict[str, list[str]] = {tier: [] for tier in TIERS}
+    credits: list[str] = []
     for row in _visible(sponsors):
         tier = row.get("tier") if row.get("tier") in TIERS else "supporting"
         lines = [str(row["name"])]
+        if tier == "presenting":
+            credits.append("Presented by " + str(row["name"]))
+            lines[0] = "Presented by " + lines[0]
         lines.extend(str(row[key]) for key in ("level", "public_description") if row.get(key))
         if website := _website(row.get("website")):
             lines.append(website)
         groups[tier].append("\n".join(lines))
-    header = "\n\n".join("Presented by " + row for row in groups["presenting"])
-    footer = "\n\n".join(label + "\n" + "\n\n".join(groups[tier])
-                         for tier, label in (("premier", "Supporting sponsors"), ("supporting", "Community sponsors")) if groups[tier])
+    header = "\n".join(credits)
+    footer = "\n\n".join((label + "\n" if label else "") + "\n\n".join(groups[tier])
+                         for tier, label in (("presenting", ""), ("premier", "Supporting sponsors"), ("supporting", "Community sponsors")) if groups[tier])
     return "\n\n".join(part for part in (header, body, footer) if part)
 
 

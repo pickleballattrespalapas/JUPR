@@ -45,18 +45,24 @@ def sponsors():
     ]
 
 
-def test_title_sponsor_precedes_message_and_supporting_sponsors_follow_it():
+def test_compact_title_credit_precedes_message_and_full_sponsor_details_follow_it():
     html = with_sponsors_html("<html><body><h1>Baja Classic</h1><p>Your message</p></body></html>", sponsors())
     text = with_sponsors_text("Your message", sponsors())
     assert html.index("Baja Classic") < html.index("Presented by") < html.index("Your message") < html.index("Supporting sponsors") < html.index("Community sponsors")
+    for rendered in (html, text):
+        header, footer = rendered.split("Your message", 1)
+        assert header.count("Presented by") == footer.count("Presented by") == 1
+        assert "Official Real Estate Partner" not in header
+        assert "Local knowledge for 25 years." not in header
+        assert footer.index("Presented by") < footer.index("Official Real Estate Partner") < footer.index("Local knowledge for 25 years.") < footer.index("Supporting sponsors")
     assert "Homes &amp; Land" in html
     assert "Local knowledge for 25 years." in html
-    assert 'src="cid:tournament-sponsor-0"' in html
+    assert html.count('src="cid:tournament-sponsor-0"') == 2
     assert 'href="https://example.com/?a=1&amp;b=2"' in html
     assert "https://example.com/?a=1&b=2" in text
     assert "Hidden Sponsor" not in html + text
     assert "cid:" not in sponsor_preview_html(html, sponsors())
-    assert "data:image/png;base64," in sponsor_preview_html(html, sponsors())
+    assert sponsor_preview_html(html, sponsors()).count("data:image/png;base64,") == 2
 
 
 def test_sponsor_content_is_escaped_and_unsafe_urls_are_not_links():
@@ -67,6 +73,7 @@ def test_sponsor_content_is_escaped_and_unsafe_urls_are_not_links():
     assert "<script>" not in html and "<img src=x" not in html
     assert "javascript:" not in html and "Private amount" not in html
     assert "&lt;script&gt;" in html
+    assert html.count("Presented by") == 2  # The full feature also appears without lower tiers.
 
 
 def test_no_sponsors_keeps_original_message():
@@ -138,6 +145,9 @@ def test_every_tournament_template_includes_sponsors(module, html_builder, text_
     text = getattr(module, text_builder)(**args, email_sponsors=sponsors())
     assert "Presented by" in html and "Presented by Homes & Land" in text
     assert "Equipment Co" in html and "Community Co" in text
+    for rendered in (html, text):
+        assert rendered.count("Presented by") == 2
+        assert rendered.index("Local knowledge for 25 years.") > rendered.rindex("Presented by")
 
 
 def test_confirmation_includes_sponsors_without_changing_event_or_payment_details():
@@ -147,6 +157,8 @@ def test_confirmation_includes_sponsors_without_changing_event_or_payment_detail
     text = confirmation.build_tournament_registration_confirmation_text(vm)
     assert "Registration confirmed" in html and "Presented by Homes & Land" in text
     assert "Total due:" in html and "Equipment Co" in html
+    assert html.index("Total due:") < html.rindex("Presented by")
+    assert text.index("Total due:") < text.rindex("Presented by")
 
 
 def test_smtp_message_embeds_png_copies_and_keeps_plain_text(monkeypatch):
@@ -171,5 +183,5 @@ def test_smtp_message_embeds_png_copies_and_keeps_plain_text(monkeypatch):
     assert images[0].get_payload(decode=True) == image_bytes("PNG")
     bodies = {part.get_content_type(): part.get_payload(decode=True).decode() for part in mime.walk() if part.get_content_type() in {"text/plain", "text/html"}}
     assert "Presented by Homes & Land" in bodies["text/plain"]
-    assert 'src="cid:tournament-sponsor-0"' in bodies["text/html"]
+    assert bodies["text/html"].count('src="cid:tournament-sponsor-0"') == 2
     assert "signed" not in bodies["text/html"] and "PRIVATE" not in str(mime)
