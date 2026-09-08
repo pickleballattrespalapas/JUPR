@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useAdminSession } from "@/lib/useAdminSession";
 import { getAdminPlayerEditorApiBaseUrl } from "@/lib/adminPlayerEditorApi";
+import OpenRegistration from "./OpenRegistration";
 
 type Club = {id:string;name:string;slug:string};
 type Meet = {host_club_id:string;club_ids:string[];starts_at:string;duration_minutes:number;courts:number};
@@ -13,6 +14,10 @@ const fresh = ():Season => ({id:crypto.randomUUID(),revision:0,draft:{name:"Sout
 const toggle = (values:string[],value:string) => values.includes(value)?values.filter(v=>v!==value):[...values,value];
 function localTime(value:string) { if(!value) return ""; const parts=new Intl.DateTimeFormat("en-CA",{timeZone:"America/Mazatlan",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date(value));const get=(type:string)=>parts.find(p=>p.type===type)?.value;return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}`; }
 export default function InterclubPage() {
+ const {session}=useAdminSession(); const {clubId}=useAdminWorkspace();
+ return <InterclubPlanner key={`${clubId}:${session?.user?.id || session?.user?.email || ""}`} />;
+}
+function InterclubPlanner() {
  const {session,accessToken,loading}=useAdminSession(); const api=getAdminPlayerEditorApiBaseUrl();
  const assignments=(session?.capabilities?.assignments||[]).filter(a=>["super_admin","administrator","club_owner"].includes(a.role));
  const { clubId } = useAdminWorkspace();
@@ -34,7 +39,7 @@ export default function InterclubPage() {
  const draft=season?.draft;const selected=choices.filter(c=>draft?.club_ids.includes(c.id));
  return <section style={{maxWidth:1000,margin:"0 auto",padding:24}}>
  <h1>Interclub seasons</h1><p>Plan the Southern BCS season: clubs, divisions, hosts, and meet dates.</p>
- <p>These are working drafts. Club invitations, team rosters, scoring, and rating approval are not open yet.</p>
+ <p>Save a season plan, then set its registration rules and invite clubs below. <Link href="/admin/interclub/registrations">Club invitations and team rosters</Link></p>
  <p><button disabled={!loaded||busy} onClick={()=>{setSeason(fresh());setMessage("");}}>New season</button> <button disabled={busy} onClick={()=>setReload(n=>n+1)}>Reload saved drafts</button></p>
  <nav aria-label="Saved seasons">{seasons.map(s=><button key={s.id} disabled={busy} onClick={()=>setSeason(s)}>{s.draft.name} · {s.draft.start_date}</button>)}</nav>
  {message&&<p role="status">{message}</p>}
@@ -52,5 +57,8 @@ export default function InterclubPage() {
  <button type="button" onClick={()=>edit({meets:draft.meets.filter((_,i)=>i!==index)})}>Remove from draft</button></fieldset>)}
  <button type="button" disabled={busy||draft.meets.length>=100} onClick={()=>edit({meets:[...draft.meets,{host_club_id:"",club_ids:[],starts_at:"",duration_minutes:180,courts:4}]})}>Add meet</button>
  <button disabled={busy||!api} type="submit">{busy?"Saving…":"Save season draft"}</button></form>}
+ {season && season.revision > 0 && api && !busy && (JSON.stringify(season.draft) === JSON.stringify(seasons.find(s => s.id === season.id)?.draft)
+  ? <OpenRegistration key={`${season.id}:${season.revision}`} api={api} clubId={clubId} accessToken={accessToken} seasonId={season.id} revision={season.revision} divisions={season.draft.divisions} />
+  : <p>Save your planning changes before opening club invitations.</p>)}
  <p><Link href="/admin">Club operations</Link> · <Link href="/admin/staff">Club staff</Link></p></section>;
 }

@@ -69,6 +69,28 @@ authorized in an appropriate environment.
 - [ ] Verify admin activity log records the correct `club_id` for every write attempt.
 - [ ] Verify worker runs are scoped to the selected club.
 
+### Interclub participation and teams
+
+- [ ] As organizer, save a season with two or more proposed clubs and the required divisions.
+- [ ] Set a future roster deadline, explicit rating limits and any required team composition, then open invitations.
+- [ ] Confirm later planning edits do not silently change the open registration's rules or dates.
+- [ ] Open Club invitations and team rosters from the second club's workspace.
+- [ ] Accept for the second club; verify the organizer cannot accept on its behalf.
+- [ ] Cancel an unused invitation, verify acceptance is blocked, then invite that club again.
+- [ ] Submit four distinct active players from the represented club; verify other clubs' players are unavailable.
+- [ ] Verify a player cannot join two of that club's teams in the same division.
+- [ ] As organizer, verify only submitted roster names, starting ratings and eligibility facts are visible.
+- [ ] Submit a roster outside a configured limit; verify it needs an organizer exception.
+- [ ] Confirm the represented/host club cannot approve the exception; approve or decline with an organizer reason.
+- [ ] Edit that roster; verify the old lineup and decision stay in history and a new violation needs a new decision.
+- [ ] Verify a valid substitution after the deadline can be submitted; a late new team needs organizer review.
+- [ ] Withdraw a team, then verify its players can join another team and its history remains available.
+- [ ] Verify stale roster saves and stale organizer approvals require reload without overwriting newer work.
+- [ ] Verify switching accounts or clubs while a save is pending cannot show an old success in the new workspace.
+- [ ] Confirm entering or approving a roster changes no home-club or league ratings.
+
+Meet operations and rating approval remain separate future increments.
+
 ### Data isolation
 
 - [ ] Confirm matches are club-scoped.
