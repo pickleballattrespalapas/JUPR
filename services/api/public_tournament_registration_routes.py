@@ -22,6 +22,7 @@ from jupr_app.services.public_tournament_registration_service import (
     DuplicateTournamentRegistrationError,
     build_public_tournament_registration_confirmation,
     build_public_tournament_registration_page,
+    resolve_public_tournament_partner_profile,
     resolve_public_tournament_registration_profile,
     submit_public_tournament_registration,
 )
@@ -95,6 +96,14 @@ class PublicTournamentRegistrationProfileResolutionRequest(BaseModel):
     email: str
     age: int
     gender: str
+    website: str | None = None
+
+
+class PublicTournamentPartnerProfileResolutionRequest(BaseModel):
+    tournament_id: str | None = None
+    registration_slug: str | None = None
+    name: str = Field(min_length=1, max_length=160)
+    email: str | None = Field(default=None, max_length=320)
     website: str | None = None
 
 
@@ -207,6 +216,23 @@ def install_public_tournament_registration_routes(
                 supabase,
                 club_id=club_id,
                 payload=_dump_model(payload),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"club": public_club_payload(club, club_slug), **result}
+
+    @app.post("/clubs/{club_slug}/tournament-registration/partner-profile-resolution")
+    def resolve_club_tournament_partner_profile(
+        club_slug: str,
+        payload: PublicTournamentPartnerProfileResolutionRequest,
+    ) -> dict[str, Any]:
+        require_public_intake_or_403()
+        club = get_club(club_slug)
+        club_id = str(club.get("id") or club.get("club_id") or club_slug)
+        supabase: Client = get_supabase_client()
+        try:
+            result = resolve_public_tournament_partner_profile(
+                supabase, club_id=club_id, payload=_dump_model(payload),
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

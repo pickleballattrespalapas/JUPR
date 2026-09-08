@@ -34,6 +34,7 @@ import FourPlayerTeamRegistrationCard, {
 } from "@/components/tournaments/FourPlayerTeamRegistrationCard";
 import EditLinkRequestForm from "./EditLinkRequestForm";
 import TournamentCommerceChooser from "./TournamentCommerceChooser";
+import TournamentPartnerDetails, { type TournamentPartnerDetailsValue } from "@/components/tournaments/TournamentPartnerDetails";
 
 type TournamentRegistrationFormProps = {
   clubSlug: string;
@@ -66,15 +67,8 @@ type ProfileState = {
   singlesSkill: string;
 };
 
-type PartnerState = {
+type PartnerState = TournamentPartnerDetailsValue & {
   mode: "NONE" | "HAS_PARTNER" | "NEEDS_PARTNER";
-  name: string;
-  email: string;
-  phone: string;
-  duprId: string;
-  skill: string;
-  age: string;
-  gender: string;
   note: string;
   showOnBoard: boolean;
 };
@@ -470,6 +464,9 @@ export default function TournamentRegistrationForm({
       if (partner.mode === "HAS_PARTNER") {
         if (!partner.name.trim() || !partner.email.trim() || !partner.age.trim() || !partner.gender || !partner.skill.trim()) {
           return `${event.division_name}: partner name, email, age, gender, and starting skill are required.`;
+        }
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(partner.email.trim())) {
+          return `${event.division_name}: enter a valid partner email address.`;
         }
         const partnerSkill = numericValue(partner.skill);
         if (partnerSkill == null || partnerSkill < 1 || partnerSkill > 7) {
@@ -873,21 +870,14 @@ export default function TournamentRegistrationForm({
                             </select>
                           </label>
                           {partner.mode === "HAS_PARTNER" ? (
-                            <>
-                              <p style={{ color: "#475569", margin: 0 }}>
-                                Add your partner’s details here. They don’t need
-                                to register separately.
-                              </p>
-                              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.5rem" }}>
-                                <label>Partner name *<br /><input required aria-label={`${eventOption.division_name} partner name`} value={partner.name} onChange={(event) => updatePartner(eventOption.id, { name: event.target.value })} style={inputStyle} /></label>
-                                <label>Partner email *<br /><input required aria-label={`${eventOption.division_name} partner email`} type="email" value={partner.email} onChange={(event) => updatePartner(eventOption.id, { email: event.target.value })} style={inputStyle} /></label>
-                                <label>Partner age *<br /><input required aria-label={`${eventOption.division_name} partner age`} type="number" min="1" max="120" value={partner.age} onChange={(event) => updatePartner(eventOption.id, { age: event.target.value })} style={inputStyle} /></label>
-                                <label>Partner gender *<br /><select required aria-label={`${eventOption.division_name} partner gender`} value={partner.gender} onChange={(event) => updatePartner(eventOption.id, { gender: event.target.value })} style={inputStyle}><option value="">Select</option><option>Women</option><option>Men</option><option>Non-binary</option><option>Other</option><option>Prefer not to say</option></select></label>
-                                <label>Partner starting skill *<br /><input required aria-label={`${eventOption.division_name} partner skill`} type="number" min="1" max="7" step="0.01" value={partner.skill} onChange={(event) => updatePartner(eventOption.id, { skill: event.target.value })} style={inputStyle} /></label>
-                                <label>Partner phone<br /><input aria-label={`${eventOption.division_name} partner phone`} value={partner.phone} onChange={(event) => updatePartner(eventOption.id, { phone: event.target.value })} style={inputStyle} /></label>
-                                <label>Partner DUPR ID<br /><input aria-label={`${eventOption.division_name} partner DUPR ID`} value={partner.duprId} onChange={(event) => updatePartner(eventOption.id, { duprId: event.target.value })} style={inputStyle} /></label>
-                              </div>
-                            </>
+                            <TournamentPartnerDetails
+                              clubSlug={clubSlug}
+                              tournamentId={tournamentId}
+                              registrationSlug={registrationSlug}
+                              labelPrefix={eventOption.division_name}
+                              value={partner}
+                              onChange={(patch) => updatePartner(eventOption.id, patch)}
+                            />
                           ) : (
                             <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
                               <input type="checkbox" checked={partner.showOnBoard} disabled={!eventOption.partner_board_enabled} onChange={(event) => updatePartner(eventOption.id, { showOnBoard: event.target.checked })} /> List me as looking for a partner in this division
