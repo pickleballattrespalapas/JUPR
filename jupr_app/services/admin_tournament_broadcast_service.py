@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID, uuid5
 
+from jupr_app.config import EMAIL_MODE_DRY_RUN
+from jupr_app.services.tournament_broadcast_edit_link_service import build_tournament_broadcast_edit_links
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.domain.notifications.player_profile_update_repo import (
     claim_communications_admin_operation,
@@ -77,7 +79,7 @@ def create_tournament_broadcast(supabase: Any, *, club_id: str, tournament_id: s
         operation_key: str, preview_fingerprint: str, registration_ids: list[str],
         subject: str, message: str, include_cancelled: bool,
         confirmation_text: str, actor_email: str, actor_role: str,
-        include_registration_events: bool = False) -> dict:
+        include_registration_events: bool = False, include_registration_edit_links: bool = False) -> dict:
     _authorize(supabase, club_id, tournament_id)
     require_staging_communications_mutations()
     if confirmation_text != CONFIRM_SEND:
@@ -88,6 +90,8 @@ def create_tournament_broadcast(supabase: Any, *, club_id: str, tournament_id: s
         preview_fingerprint=preview_fingerprint, actor_email=actor_email.lower())
     if include_registration_events:
         request["include_registration_events"] = True
+    if include_registration_edit_links:
+        request["include_registration_edit_links"] = True
     if not request["registration_ids"] or not request["subject"] or not request["message"]:
         raise ValueError("Select participants and enter a subject and message.")
     if "\x00" in message or len(subject) > 200 or len(message) > 10000:
@@ -102,7 +106,8 @@ def create_tournament_broadcast(supabase: Any, *, club_id: str, tournament_id: s
     preview = build_admin_tournament_broadcast_preview(supabase, club_id=club_id,
         tournament_id=tournament_id, registration_ids=registration_ids,
         subject=subject, message=message, include_cancelled=include_cancelled,
-        include_registration_events=include_registration_events)
+        include_registration_events=include_registration_events,
+        include_registration_edit_links=include_registration_edit_links)
     if not preview.get("send_available"):
         raise ValueError(preview.get("send_unavailable_reason") or "Email sending is unavailable.")
     if preview.get("preview_fingerprint") != preview_fingerprint:
@@ -111,6 +116,8 @@ def create_tournament_broadcast(supabase: Any, *, club_id: str, tournament_id: s
         validate_email_address(recipient["email"], field_name="Participant email")
     review = {key: preview[key] for key in ("recipients", "preview", "delivery_mode", "sender")}
     review["email_sponsors"] = preview.get("email_sponsors") or []
+    if include_registration_edit_links:
+        review["edit_link_context"] = preview["edit_link_context"]
     request["review"] = review
     _audit(supabase, club_id=club_id, actor_email=actor_email, actor_role=actor_role,
         operation_key=operation_key, action="tournament_broadcast_confirmed",
@@ -153,6 +160,7 @@ def get_tournament_broadcast(supabase: Any, *, club_id: str, tournament_id: str,
     return {"ok": True, "operation_key": operation_key, "subject": request["review"]["preview"]["subject"],
         "message": request["message"], "created_at": row.get("created_at"),
         "include_registration_events": request.get("include_registration_events", False),
+        "include_registration_edit_links": request.get("include_registration_edit_links", False),
         "delivery_mode": request["review"]["delivery_mode"], "sender": request["review"]["sender"],
         "recipients": results, "recipient_count": len(results),
         "pending_count": sum(result["status"] == "pending" for result in results)}
@@ -191,9 +199,10 @@ def send_tournament_broadcast_recipient(supabase: Any, *, club_id: str, tourname
         tournament_id=tournament_id, registration_ids=request["registration_ids"],
         subject=request["subject"], message=request["message"], include_cancelled=request["include_cancelled"],
         include_sponsor_logos=False, reviewed_email_sponsors=review.get("email_sponsors"),
-        include_registration_events=request.get("include_registration_events", False))
+        include_registration_events=request.get("include_registration_events", False),
+        include_registration_edit_links=request.get("include_registration_edit_links", False))
     if preview["preview_fingerprint"] != request["preview_fingerprint"]:
-        raise ValueError("Participant details changed, registration events changed, or the email's sponsor details changed. Review the results and preview a new email for the remaining participants.")
+        raise ValueError("Participant details changed, registration events changed, sponsor details changed, or edit links changed. Review the results and preview a new email for the remaining participants.")
     _audit(supabase, club_id=club_id, actor_email=actor_email, actor_role=actor_role,
         operation_key=operation_key, action="tournament_broadcast_recipient_intent",
         details={"recipient_index": recipient_index, "attempt_id": child_key})
@@ -214,11 +223,17 @@ def send_tournament_broadcast_recipient(supabase: Any, *, club_id: str, tourname
     if not claimed:
         raise RuntimeError("The email claim was not confirmed. Check the email results before continuing.")
     try:
+        edit_links = None
+        if request.get("include_registration_edit_links"):
+            # A dry run never issues working bearer links. Live links start their
+            # normal 48-hour lifetime here, even when a batch is resumed later.
+            edit_links = recipient["registration_edit_links"] if review["delivery_mode"] == EMAIL_MODE_DRY_RUN else build_tournament_broadcast_edit_links(
+                tournament_id=tournament_id, recipient=recipient, context=review["edit_link_context"])
         delivery = send_tournament_registrant_broadcast_email(
             tournament_name="", recipient_email=recipient["email"], recipient_name=recipient["name"],
             subject=review["preview"]["subject"], message=request["message"],
             personalize_greeting=False, message_id=child_key, email_sponsors=review.get("email_sponsors"),
-            registration_events=recipient.get("registration_events"))
+            registration_events=recipient.get("registration_events"), registration_edit_links=edit_links)
         result = {"status": delivery["status"], "provider_message_id": delivery.get("provider_message_id"),
             "detail": "Accepted by the mail server." if delivery["status"] == "sent" else "Test only; no participant email was sent."}
     except Exception:

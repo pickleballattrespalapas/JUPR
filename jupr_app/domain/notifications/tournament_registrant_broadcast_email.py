@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 from html import escape
 from typing import Any
+from urllib.parse import urlsplit
 
 from jupr_app.config import EMAIL_MODE_DRY_RUN, EMAIL_MODE_LIVE, EMAIL_MODE_STAGING_REDIRECT, SMTPConfig, get_email_mode, get_env_or_default
 from jupr_app.domain.notifications.tournament_email_sponsors import with_sponsors_html, with_sponsors_text, sponsor_inline_images
@@ -68,6 +69,30 @@ def build_tournament_registrant_broadcast_subject(*, tournament_name: str, subje
     return f"{tournament}: {clean_subject}" if tournament and tournament.lower() not in clean_subject.lower() else clean_subject
 
 
+def _registration_edit_sections(registrations: list[dict] | None) -> tuple[str, str]:
+    if not registrations:
+        return "", ""
+    html = '<h2 style="font-size:20px;margin-top:24px">Edit your registration</h2>'
+    text = ["Edit your registration"]
+    for registration in registrations:
+        name = _safe_text(registration.get("name")) or "Registrant"
+        url = _safe_text(registration.get("edit_url"))
+        style = "display:inline-block;background:#2563eb;color:#ffffff;padding:12px 18px;text-decoration:none;border-radius:6px;font-weight:bold"
+        html += f"<p><strong>{escape(name)}</strong></p>"
+        if url:
+            parsed = urlsplit(url)
+            if parsed.scheme not in {"https", "http"} or not parsed.hostname or parsed.username or parsed.password:
+                raise ValueError("Invalid registration edit URL.")
+            html += f'<p><a href="{escape(url, quote=True)}" style="{style}">Edit Registration</a></p>'
+            text.extend([name, f"Edit Registration: {url}", ""])
+        else:
+            # The admin preview shows the button without exposing a bearer link.
+            html += f'<p><span role="link" aria-disabled="true" style="{style}">Edit Registration</span></p>'
+            text.extend([name, "Edit Registration: [Personal link added when this email is sent]", ""])
+    expiry = "Each private edit link expires 48 hours after this email is sent."
+    return html + f'<p style="font-size:12px;color:#6b7280">{expiry}</p>', "\n".join([*text, expiry, "", ""])
+
+
 def build_tournament_registrant_broadcast_email_html(
     *,
     tournament_name: str,
@@ -77,17 +102,20 @@ def build_tournament_registrant_broadcast_email_html(
     personalize_greeting: bool = True,
     email_sponsors: list[dict] | None = None,
     registration_events: list[dict] | None = None,
+    registration_edit_links: list[dict] | None = None,
 ) -> str:
     greeting_name = _safe_text(recipient_name) or "there"
     greeting = f"<p>Hi {escape(greeting_name)},</p>" if personalize_greeting else ""
     tournament_line = f"<p><strong>Tournament:</strong> {escape(_safe_text(tournament_name))}</p>" if personalize_greeting else ""
     events_html, _ = _registration_events_sections(registration_events)
+    edit_html, _ = _registration_edit_sections(registration_edit_links)
     return with_sponsors_html(f"""<!doctype html><html><body style=\"font-family:Arial,sans-serif;color:#1f2937\">
 <h1>{escape(_safe_text(subject) or 'Tournament update')}</h1>
 {greeting}
 {tournament_line}
 <p>{_message_html(message)}</p>
 {events_html}
+{edit_html}
 <p style=\"color:#6b7280;font-size:12px\">You are receiving this because you registered for this tournament.</p>
 </body></html>""", email_sponsors)
 
@@ -101,11 +129,13 @@ def build_tournament_registrant_broadcast_email_text(
     personalize_greeting: bool = True,
     email_sponsors: list[dict] | None = None,
     registration_events: list[dict] | None = None,
+    registration_edit_links: list[dict] | None = None,
 ) -> str:
     greeting_name = _safe_text(recipient_name) or "there"
     _, events_text = _registration_events_sections(registration_events)
+    _, edit_text = _registration_edit_sections(registration_edit_links)
     if not personalize_greeting:
-        return with_sponsors_text(f"{_safe_text(subject)}\n\n{_safe_text(message)}\n\n{events_text}You are receiving this because you registered for this tournament.", email_sponsors)
+        return with_sponsors_text(f"{_safe_text(subject)}\n\n{_safe_text(message)}\n\n{events_text}{edit_text}You are receiving this because you registered for this tournament.", email_sponsors)
     return with_sponsors_text("\n".join(
         [
             _safe_text(subject) or "Tournament update",
@@ -116,7 +146,7 @@ def build_tournament_registrant_broadcast_email_text(
             "",
             _safe_text(message),
             "",
-            events_text + "You are receiving this because you registered for this tournament.",
+            events_text + edit_text + "You are receiving this because you registered for this tournament.",
         ]
     ), email_sponsors)
 
@@ -133,6 +163,7 @@ def send_tournament_registrant_broadcast_email(
     message_id: str | None = None,
     email_sponsors: list[dict] | None = None,
     registration_events: list[dict] | None = None,
+    registration_edit_links: list[dict] | None = None,
 ) -> dict[str, str]:
     original_to_email = _safe_text(recipient_email)
     if not original_to_email:
@@ -166,6 +197,7 @@ def send_tournament_registrant_broadcast_email(
             personalize_greeting=personalize_greeting,
             email_sponsors=email_sponsors,
             registration_events=registration_events,
+            registration_edit_links=registration_edit_links,
         ),
         text_body=build_tournament_registrant_broadcast_email_text(
             tournament_name=tournament_name,
@@ -175,6 +207,7 @@ def send_tournament_registrant_broadcast_email(
             personalize_greeting=personalize_greeting,
             email_sponsors=email_sponsors,
             registration_events=registration_events,
+            registration_edit_links=registration_edit_links,
         ),
         chart_png_bytes=None,
         smtp_config=smtp_config,
