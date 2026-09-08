@@ -1,6 +1,8 @@
 {
-  "enabled": false,
-  "recipients": [],
-  "approved_at": null,
-  "expires_at": null
+  "enabled": true,
+  "recipient_hashes": [
+    "40133e8d810743721b01c7576ee7b39beb0fbd2189c19d6b6dfa6eacd6932ac6"
+  ],
+  "approved_at": "2026-09-08T19:22:20+00:00",
+  "expires_at": "2026-09-15T19:22:20+00:00"
 }
