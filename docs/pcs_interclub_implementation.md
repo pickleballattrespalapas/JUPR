@@ -266,5 +266,71 @@ fixtures were rolled back. No new security warnings; the intentional private
 invitation table adds one informational RLS-without-policy advisor entry.
 Authenticated browser acceptance and real email delivery remain unclaimed.
 
-Next: finish the second-club pilot, then interclub participation invitations,
-club-admin acceptance, team rosters and organizer eligibility decisions.
+## Interclub participation and rosters increment (September 8, 2026)
+
+An organizer can now open registration from a saved season at `/admin/interclub`.
+The registration captures that draft's exact revision and invites all proposed
+clubs in their PCS workspace. Later planning edits do not alter the registration
+that clubs accepted. Each division has explicit optional minimum/maximum player
+ratings and an optional four-player gender composition. A division label does
+not silently impose a rating limit. Rules and season details cannot be edited
+after registration opens in this increment.
+
+`/admin/interclub/registrations` lists the current club's organized seasons and
+invitations. Each invited club's administrator accepts or declines for that club;
+organizers can cancel an unused invitation or invite a declined/cancelled club
+again. Organizers cannot accept on another club's behalf. Accepted participation
+does not grant staff roles, directory access, or access to another club's tools.
+Invitations are in-app records only; no messages are sent.
+
+Accepted clubs submit named four-player teams using active players from their
+own directory. Team division is fixed after first submission. A player can belong
+to only one current team per represented club/division; another division remains
+possible. Unrated, inactive, missing or cross-club players cannot be submitted.
+The player's first season entry captures `players.rating / 400` from the represented
+club as an immutable starting league rating. That seed is reused for eligibility
+and subsequent rosters, even when the home-club rating later changes. This does
+not write ratings or transfer players between clubs.
+
+Every submission creates a roster version with names, starting ratings, gender
+facts and eligibility issues. Rating/composition violations save as Needs organizer
+exception and remain ineligible until an organizer administrator approves that
+exact version with a reason. A denial is also recorded. Replacing players creates
+a new version and never carries forward an old exception. Valid updates after
+the roster deadline are allowed and labelled late; newly entered late teams need
+an organizer exception. Withdrawing a team releases its current player places
+and preserves the roster history; it can be restored through a new roster version.
+
+Only the represented club can edit or withdraw a team. Organizer administrators
+can review submitted teams and their eligibility history, but receive no other
+club's player directory, player contact data, or source player IDs. Participants
+see only their own teams. A composite player/club foreign key enforces ownership
+below the API, and current lineup uniqueness is constrained in the database.
+Registration writes share the staff and season locks, repeat role/expiry checks,
+reject stale revisions and commit their audit together. The current-roster view
+joins each team to its exact current version in one database read. All new tables
+and the view are private to the service role; the view uses security-invoker RLS.
+
+The UI blocks duplicate submits, preserves unsaved rosters during token refresh,
+discards responses after account/club changes, and requires reload after stale or
+uncertain saves. Players and teams have explicit pagination; history shows the
+latest 50 versions while the full history remains stored. The season selector
+loads the latest 100 organized seasons and latest 100 club invitations.
+
+Validation: 127 focused API, role, planning and deployment checks; full component
+suite including rule opening, acceptance, four-player selection, revisions,
+privacy/role boundaries and stale account responses; Next build/type/lint checks;
+and `tests/sql/interclub_registration_transaction.sql` on staging. The rollback
+test exercised real service-role submissions, source ownership constraints,
+invitation cancellation/retry, frozen seeds, late changes, organizer decisions,
+version history, withdrawn places and atomic audits. No fixtures were retained.
+No new reported security advisor findings. Authenticated browser pilot acceptance
+remains pending.
+
+Next: validate organizer and second-club accounts with the pilot checklist, then
+build meet staffing, check-in, courts and individual game scoring. Meet lineups
+must bind to roster versions before play; registration eligibility alone must
+not be treated as an approved result or permission to write ratings. Scheduling
+changes after clubs accept need an explicit future change/notification workflow.
+Player merges involving an interclub entry must preserve its represented-club
+and historical source identity; the FK deliberately prevents silent deletion.
