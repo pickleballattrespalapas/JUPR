@@ -42,6 +42,7 @@ def setup(monkeypatch):
               "clubs":[dict(id=c,name=c.title(),slug=c) for c in ("alpha","beta","gamma")],
               "players":[dict(id=i,club_id="beta",name=f"Player {i}",rating=1600,gender="female",active=True,email="private@example.test") for i in range(1,5)] + [dict(id=99,club_id="gamma",name="Private other club player",active=True,rating=1800)],
               "pcs_interclub_entries":[dict(season_id=sid,club_id="beta",player_id=1,starting_rating=3.2)]}
+    tables["pcs_interclub_drafts"]=[dict(id=sid,organizer_club_id="alpha",revision=2,draft={**season["details"],"start_date":"2099-01-01","end_date":"2099-03-31","registration_rules":season["rules"],"meets":[dict(host_club_id="beta",club_ids=["beta","gamma"],starts_at=meet["starts_at"],duration_minutes=180,courts=4)]})]
     state = dict(meet=meet,user=user,assignment=assignment,season=season,participation=participation,team=team,tables=tables,calls=[],reads=[],error="")
     def table(name): state["reads"].append(name); return Query(tables[name])
     def rpc(name, params):
@@ -226,3 +227,19 @@ def test_started_meet_keeps_history_but_player_picker_is_closed(setup):
     assert c.get(meet_base(s,"beta")+f"/teams/{s['team']['id']}/history").status_code==200
     assert c.get(meet_base(s,"beta")+"/players").status_code==409
     assert "players" not in s["reads"]
+
+
+@pytest.mark.parametrize("patch",[dict(name=""),dict(start_date=None),dict(club_ids=["beta"]),dict(meets=[]),dict(meets=[dict(host_club_id="beta",club_ids=["beta","gamma"],starts_at=None)]),dict(registration_rules={"3.5":dict(max_rating=4)})])
+def test_incomplete_or_unreviewed_setup_cannot_open_invitations(setup,patch):
+    c,s=setup; s["tables"]["pcs_interclub_drafts"][0]["draft"].update(patch)
+    r=c.post(base(s)+"/open",json={"expected_revision":2,"rules":s["season"]["rules"]})
+    assert r.status_code in (409,422) and not s["calls"]
+
+
+def test_open_requires_current_saved_setup_owned_by_this_organizer(setup):
+    c,s=setup
+    s["tables"]["pcs_interclub_drafts"][0]["revision"]=3
+    assert c.post(base(s)+"/open",json={"expected_revision":2,"rules":s["season"]["rules"]}).status_code==409
+    s["tables"]["pcs_interclub_drafts"][0]["organizer_club_id"]="gamma"
+    assert c.post(base(s)+"/open",json={"expected_revision":3,"rules":s["season"]["rules"]}).status_code==404
+    assert not s["calls"]

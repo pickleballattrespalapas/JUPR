@@ -62,8 +62,11 @@ begin
   perform public.pcs_open_interclub_registration(actor,actor_email,org,sid,1,rules,now()+interval '7 days');
   raise exception 'Old season open contract still writable';
  exception when serialization_failure then null; end;
+ begin
  perform public.pcs_save_interclub_draft(actor,actor_email,org,sid,1,jsonb_build_object('name','Edited draft','start_date',(current_date+10)::text,
   'end_date',(current_date+90)::text,'timezone','America/Mazatlan','divisions',jsonb_build_array('Open'),'club_ids',jsonb_build_array(home,other),'meets','[]'::jsonb));
+  raise exception 'Opened setup was editable';
+ exception when serialization_failure then null; end;
  if (select details->>'name' from public.pcs_interclub_seasons where id=sid)<>'Coastal League' then raise exception 'Planning edit changed accepted terms'; end if;
  begin
   perform public.pcs_save_interclub_meet_roster(actor,actor_email,home,sid,mid,2,tid,0,'Home Blue','3.5',ids[1:4]);
