@@ -72,19 +72,24 @@ authorized in an appropriate environment.
 ### Interclub participation and teams
 
 - [ ] As organizer, save a season with two or more proposed clubs and the required divisions.
-- [ ] Set a future roster deadline, explicit rating limits and any required team composition, then open invitations.
+- [ ] Set explicit rating limits and any required team composition, then open invitations without a season roster deadline.
 - [ ] Confirm later planning edits do not silently change the open registration's rules or dates.
 - [ ] Open Club invitations and team rosters from the second club's workspace.
 - [ ] Accept for the second club; verify the organizer cannot accept on its behalf.
 - [ ] Cancel an unused invitation, verify acceptance is blocked, then invite that club again.
-- [ ] Submit four distinct active players from the represented club; verify other clubs' players are unavailable.
-- [ ] Verify a player cannot join two of that club's teams in the same division.
+- [ ] Select an upcoming meet and submit four distinct active players from the represented club; verify other clubs' players are unavailable.
+- [ ] Verify a player cannot join two of that club's teams in the same meet and division. Verify that player can join a team at the next meet.
 - [ ] As organizer, verify only submitted roster names, starting ratings and eligibility facts are visible.
-- [ ] Submit a roster outside a configured limit; verify it needs an organizer exception.
+- [ ] Submit a meet roster outside a configured limit; verify it needs an organizer exception.
 - [ ] Confirm the represented/host club cannot approve the exception; approve or decline with an organizer reason.
 - [ ] Edit that roster; verify the old lineup and decision stay in history and a new violation needs a new decision.
-- [ ] Verify a valid substitution after the deadline can be submitted; a late new team needs organizer review.
-- [ ] Withdraw a team, then verify its players can join another team and its history remains available.
+- [ ] Set a meet deadline before the first submission. Verify a valid substitution after that deadline can be submitted until the meet starts; a late new team needs organizer review for that meet.
+- [ ] Withdraw a team from one meet, then verify its players can join another team at that meet, its history remains available, and the next meet's lineup is unchanged.
+- [ ] Switch to the next meet; verify no lineup is carried over and a different set of available players can be chosen.
+- [ ] Verify organizer approval at one meet does not approve an exception at another meet.
+- [ ] Switch meets while a save is pending; verify no old roster or success appears in the newly selected meet.
+- [ ] Verify a started meet shows its roster history without edit, withdrawal or exception controls.
+- [ ] Verify old season submissions, if any, are reference-only and never populate future meets automatically.
 - [ ] Verify stale roster saves and stale organizer approvals require reload without overwriting newer work.
 - [ ] Verify switching accounts or clubs while a save is pending cannot show an old success in the new workspace.
 - [ ] Confirm entering or approving a roster changes no home-club or league ratings.

@@ -8,7 +8,6 @@ export default function OpenRegistration({ api, clubId, accessToken, seasonId, r
 }) {
   const [status, setStatus] = useState("loading");
   const [rules, setRules] = useState<Record<string, DivisionRule>>(() => Object.fromEntries(divisions.map(d => [d, { min_rating: null, max_rating: null, women_required: null }])));
-  const [deadline, setDeadline] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [reload, setReload] = useState(0);
@@ -32,7 +31,7 @@ export default function OpenRegistration({ api, clubId, accessToken, seasonId, r
     try {
       const response = await fetch(`${url}/open`, { method: "POST", signal: controller.signal,
         headers: { Authorization: `Bearer ${token.current}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ expected_revision: revision, rules, roster_deadline: new Date(deadline).toISOString() }) });
+        body: JSON.stringify({ expected_revision: revision, rules }) });
       const data = await response.json();
       if (controller.signal.aborted) return;
       if (!response.ok) { if ([409, 503].includes(response.status)) setStatus("error"); throw new Error(apiError(data, "Unable to open invitations.")); }
@@ -43,13 +42,12 @@ export default function OpenRegistration({ api, clubId, accessToken, seasonId, r
   return <section style={{ marginTop: 32, padding: 20, border: "1px solid #cbd5e1", borderRadius: 12 }}>
     <h2>Club invitations</h2>
     {status === "loading" && <p>Checking invitations…</p>}
-    {status === "open" && <p><Link href={`/admin/interclub/registrations?season=${seasonId}`}>Open club responses and team rosters</Link>. Later changes to the planning draft do not change this open registration.</p>}
+    {status === "open" && <p><Link href={`/admin/interclub/registrations?season=${seasonId}`}>Open club responses and meet rosters</Link>. Later changes to the planning draft do not change this open registration.</p>}
     {status === "error" && <p>Reload to check whether invitations are already open. <button disabled={busy} onClick={() => setReload(n => n + 1)}>Check again</button></p>}
     {status === "unopened" && <form onSubmit={e => { e.preventDefault(); void open(); }}>
-      <p>Set the eligibility rules before inviting the proposed clubs. Season details and these rules are fixed once invitations open. Clubs receive the invitation in their workspace; no email is sent.</p>
+      <p>Set the eligibility rules before inviting the proposed clubs. These eligibility rules apply throughout the season. Clubs choose their available players separately for each meet. Clubs receive the invitation in their workspace; no email is sent.</p>
       <fieldset disabled={busy} style={{ display: "grid", gap: 16 }}><legend>Registration rules</legend>
-        <label>Roster deadline (your device’s local time) <input required type="datetime-local" value={deadline} onChange={e => setDeadline(e.target.value)} /></label>
-        <p>Ratings are captured from the represented club when each player first enters the season. Blank limits mean no rating restriction. Valid substitutions remain allowed after the deadline.</p>
+        <p>Ratings are captured from the represented club when each player first enters the season. Blank limits mean no rating restriction. Set roster deadlines for individual meets after opening invitations.</p>
         {divisions.map(division => <fieldset key={division}><legend>{division}</legend>
           <label>Minimum starting rating <input aria-label={`${division} minimum rating`} type="number" min={1} max={7} step="0.001" value={rules[division].min_rating ?? ""} onChange={e => ruleEdit(division, "min_rating", e.target.value)} /></label>{" "}
           <label>Maximum starting rating <input aria-label={`${division} maximum rating`} type="number" min={1} max={7} step="0.001" value={rules[division].max_rating ?? ""} onChange={e => ruleEdit(division, "max_rating", e.target.value)} /></label>{" "}
