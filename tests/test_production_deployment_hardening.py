@@ -215,9 +215,9 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         ROOT / "supabase/migrations",
     )
 
-    assert len(versions) == 111
+    assert len(versions) == 113
     assert {"20260906004056", "20260906005541", "20260906052216", "20260908052027", "20260908060747", "20260908060948", "20260908151701", "20260908173710"}.issubset(versions)
-    assert versions[-34:] == (
+    assert versions[-36:] == (
         "20261030010000",
         "20261101000000",
         "20261102000000",
@@ -252,12 +252,15 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         "20261109001200",
         "20261109001300",
         "20261109001400",
+        "20261109004000",
+        "20261109004100",
     )
     assert {"20260908155131", "20260908164204"}.issubset(versions)
-    assert len(names) == 111
+    assert len(names) == 113
     assert all("XX" not in version for version in versions)
-    assert len(contract["required_ledger_names"]) == 111
+    assert len(contract["required_ledger_names"]) == 113
     assert {"club_staff_scopes", "pcs_platform_onboarding", "club_admin_settings", "staff_invitations", "staff_invitation_verified_identity", "interclub_participation_rosters", "interclub_meet_rosters", "interclub_setup_wizard", "interclub_club_invitations"}.issubset(contract["required_ledger_names"])
+    assert {"fix_combined_rating_registration_save", "fix_team_tournament_touch_row_fields"}.issubset(contract["required_ledger_names"])
     assert "tournament_sponsor_logo_storage" in contract["required_ledger_names"]
     assert "rating_calculation_versioning" in contract["required_ledger_names"]
     assert "badge_plain_requirements" in contract["required_ledger_names"]
@@ -423,7 +426,7 @@ def test_preflight_accepts_only_matching_protected_project_and_config() -> None:
     )
 
     assert errors == []
-    assert migrations[-1] == "20261109001400"
+    assert migrations[-1] == "20261109004100"
 
     wrong_project_errors, _ = verifier.preflight_errors(
         _production_env(
