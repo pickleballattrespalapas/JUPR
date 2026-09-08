@@ -154,6 +154,7 @@ export type PublicTournamentRosterEntry = {
   status?: string | null;
   entry_type?: string | null;
   members: PublicTournamentRosterMember[];
+  combined_rating?: number | null;
 };
 
 export type PublicTournamentNeedsPartnerEntry = {
