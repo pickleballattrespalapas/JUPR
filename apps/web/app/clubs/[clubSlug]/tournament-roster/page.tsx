@@ -388,6 +388,11 @@ export default async function TournamentRosterPage({
                           </li>
                         ))}
                       </ul>
+                      {entry.combined_rating != null ? (
+                        <p style={{ margin: "0.65rem 0 0", fontWeight: 700 }}>
+                          Combined rating: {entry.combined_rating.toFixed(2)}
+                        </p>
+                      ) : null}
                     </div>
                   );
                 })}
