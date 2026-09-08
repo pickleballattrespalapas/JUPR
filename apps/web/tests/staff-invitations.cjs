@@ -80,7 +80,7 @@ async function staffScreen() {
   await act(async () => tree.unmount());
 }
 
-async function recipientScreen() {
+async function recipientScreen(clubJoin = false) {
   let requests = [], authorized = [], selected = [], finish;
   const raw = { access_token: 'recipient-token', expires_at: Date.now() + 600000, user: { id: 'recipient', email: invitation.email } };
   global.fetch = async (url, options) => {
@@ -91,7 +91,7 @@ async function recipientScreen() {
     return reply({ invitation, club: { id: 'beta', slug: 'beta', name: 'Beta Club' } });
   };
   const Page = load('app/admin/accept-invitation/AcceptInvitation.tsx', {
-    'next/link': link, 'next/navigation': { useSearchParams: () => new URLSearchParams({ invitation: id }) },
+    'next/link': link, 'next/navigation': { useSearchParams: () => new URLSearchParams({ invitation: id, ...(clubJoin ? { kind: "club" } : {}) }) },
     '@/lib/adminAuthClient': {
       getAdminApiBaseUrl: () => 'https://api.example.test', consumeStaffInvitationSession: async () => null,
       signInWithPassword: async () => raw, refreshAdminSession: async s => s,
@@ -118,6 +118,8 @@ async function recipientScreen() {
   await act(async () => button(tree, 'Accept invitation').props.onClick());
   await act(async () => finish(reply({ invitation: { ...invitation, status: 'accepted' } })));
   assert.equal(authorized.length, 1);
+  assert.ok(requests.filter(r => !r.url.endsWith('/workspaces')).every(r => r.url.includes(clubJoin ? '/club-invitations/' : '/staff-invitations/')));
+  if (clubJoin) assert.ok(JSON.stringify(tree.toJSON()).includes('set up this club in PCS'));
   assert.equal(selected[0].club_id, 'beta', 'Acceptance opens the invited club, preserving other assignments');
   await act(async () => tree.unmount());
 }
@@ -145,6 +147,6 @@ async function authLink() {
 }
 
 (async () => {
-  await staffScreen(); await recipientScreen(); await authLink();
+  await staffScreen(); await recipientScreen(); await recipientScreen(true); await authLink();
   console.log('Staff invitations: scoped creation, retries, links, cancellation, editing, account changes, explicit acceptance and private email sign-in passed.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

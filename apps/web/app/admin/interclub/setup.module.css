@@ -72,5 +72,11 @@
 .saved { font-size: .82rem; color: #526174; }
 .meetCard { margin-top: 16px; }
 .meetCard .toolbar { justify-content: space-between; }
+.invitePanel { border-top: 1px solid #d5dfea; padding-top: 24px; margin-top: 16px; }
+.invitePanel h3 { margin: 0; }
+.invitePanel p { margin: 8px 0; }
+.invitationList { display: grid; gap: 14px; margin-top: 24px; }
+.invitationRow { min-width: 0; border: 1px solid #d5dfea; border-radius: 10px; background: #f8fafc; padding: 18px; }
+.invitationRow .toolbar { margin-top: 12px; }
 @media (max-width: 780px) { .steps { grid-template-columns: repeat(3, minmax(0, 1fr)); } .ruleGrid { grid-template-columns: 1fr 1fr; } .ruleGrid > :last-child { grid-column: 1 / -1; } }
 @media (max-width: 520px) { .page { padding: 4px 0 24px; } .panel, .card { padding: 18px; } .grid, .choices, .nextSteps, .ruleGrid { grid-template-columns: 1fr; } .steps { gap: 5px; } .steps button { flex-direction: column; padding: 8px; font-size: .73rem; } .footer { gap: 12px; } .review dl { grid-template-columns: 1fr; gap: 2px; } .review dd { margin-bottom: 8px; } }

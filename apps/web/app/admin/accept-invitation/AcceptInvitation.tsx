@@ -8,15 +8,16 @@ import { AvailableWorkspace, selectAdminWorkspace } from "@/lib/adminWorkspace";
 import { StaffInvitation, describeStaffScopes } from "@/lib/staffInvitations";
 import styles from "./invitation.module.css";
 
-type Review = { invitation: StaffInvitation; club: { id: string; slug: string; name: string } };
+type Review = { invitation: StaffInvitation; club: { id: string; slug: string; name: string }; organizer?: { name: string } };
 
 export default function AcceptInvitation() {
-  const id = useSearchParams().get("invitation") || "";
-  return <InvitationContent key={id} id={id} />;
+  const params = useSearchParams(), id = params.get("invitation") || "", clubJoin = params.get("kind") === "club";
+  return <InvitationContent key={`${clubJoin}:${id}`} id={id} clubJoin={clubJoin} />;
 }
 
-function InvitationContent({ id }: { id: string }) {
+function InvitationContent({ id, clubJoin }: { id: string; clubJoin: boolean }) {
   const api = getAdminApiBaseUrl();
+  const invitationRoot = `${api}/${clubJoin ? "club-invitations" : "staff-invitations"}/${encodeURIComponent(id)}`;
   const [session, setSession] = useState<AdminSession | null>(null);
   const [ready, setReady] = useState(false);
   const [review, setReview] = useState<Review | null>(null);
@@ -44,7 +45,7 @@ function InvitationContent({ id }: { id: string }) {
     setReview(null);
     if (!session || !api || !id) return;
     const controller = new AbortController();
-    fetch(`${api}/staff-invitations/${encodeURIComponent(id)}`, {
+    fetch(invitationRoot, {
       headers: { Authorization: `Bearer ${session.access_token}` }, cache: "no-store", signal: controller.signal
     }).then(async response => {
       const data = await response.json();
@@ -52,7 +53,7 @@ function InvitationContent({ id }: { id: string }) {
       if (!controller.signal.aborted) { setReview(data); setMessage(""); }
     }).catch(error => { if (!controller.signal.aborted) setMessage(error.message); });
     return () => controller.abort();
-  }, [api, id, session, revision]);
+  }, [api, id, invitationRoot, session, revision]);
 
   async function perform(action: () => Promise<void>) {
     if (pending.current) return;
@@ -65,7 +66,7 @@ function InvitationContent({ id }: { id: string }) {
     if (!session || !review || !api) return;
     const current = await refreshAdminSession(session);
     if (!current) throw new Error("Sign in again to accept this invitation.");
-    const response = await fetch(`${api}/staff-invitations/${encodeURIComponent(id)}/accept`, {
+    const response = await fetch(`${invitationRoot}/accept`, {
       method: "POST", headers: { Authorization: `Bearer ${current.access_token}` }
     });
     const data = await response.json();
@@ -87,7 +88,7 @@ function InvitationContent({ id }: { id: string }) {
   if (!id || !/^[0-9a-f-]{36}$/i.test(id)) return <section className={styles.card}><h1>Staff invitation</h1><p>Open the full invitation link shared by your club administrator.</p></section>;
   if (!ready) return <p role="status">Checking sign-in…</p>;
   return <section className={styles.card}>
-    <p className={styles.eyebrow}>Club staff</p><h1>Review your invitation</h1>
+    <p className={styles.eyebrow}>{clubJoin ? "Join your club" : "Club staff"}</p><h1>Review your invitation</h1>
     <p>Sign in with the invited email. You will see the club and permissions before accepting.</p>
     {!api && <p role="alert">The invitation service is unavailable.</p>}
     {!session ? <form className={styles.form} onSubmit={event => {
@@ -101,7 +102,7 @@ function InvitationContent({ id }: { id: string }) {
       <button disabled={busy || !api}>Sign in to review</button>
       <p>New account or prefer email? Request a sign-in link using your invited email.</p>
       <button type="button" disabled={busy || !api || !email.trim()} onClick={() => void perform(async () => {
-        const response = await fetch(`${api}/staff-invitations/${encodeURIComponent(id)}/sign-in`, {
+        const response = await fetch(`${invitationRoot}/sign-in`, {
           method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email })
         });
         const data = await response.json();
@@ -113,6 +114,7 @@ function InvitationContent({ id }: { id: string }) {
       <button disabled={busy} onClick={() => { setSession(null); setReview(null); setMessage(""); setPassword(""); }}>Use another account</button>
       {review ? <div className={styles.details}>
         <h2>{review.club.name}</h2>
+        {clubJoin && <p>{review.organizer?.name || "An interclub organizer"} invited you to set up this club in PCS. Accept to manage its players, staff and meet rosters. You can review season invitations in your club workspace.</p>}
         <p><strong>{review.invitation.role === "administrator" ? "Administrator" : "Operator"}</strong></p>
         <p>{review.invitation.role === "administrator" ? "Full club control, including staff and all programs." : describeStaffScopes(review.invitation.scopes)}</p>
         <p>Invited email: {review.invitation.email}</p>

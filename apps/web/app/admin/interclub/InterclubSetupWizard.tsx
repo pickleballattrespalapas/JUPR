@@ -5,6 +5,7 @@ import type { DivisionRule, RegistrationSeason } from "@/lib/interclubRegistrati
 import { apiError, composition } from "@/lib/interclubRegistration";
 import { ClubChoice, PlanningDraft, PlanningMeet, PlanningSeason, divisionChoices, emptyRule, firstIncompleteStep, meetLocalTime, meetUtcTime, normalizeDraft, setupSteps, stepIssues } from "@/lib/interclubSetup";
 import styles from "./setup.module.css";
+import ClubInvitationPanel, { ClubJoinInvitation, InviteClubInput } from "./ClubInvitationPanel";
 
 class SetupRequestError extends Error {
   constructor(message: string, readonly needsReload: boolean) { super(message); }
@@ -29,6 +30,10 @@ export default function InterclubSetupWizard({ api, club, accessToken, initialSe
   const [blocked, setBlocked] = useState(false), [reviewed, setReviewed] = useState(false);
   const [errors, setErrors] = useState<string[]>([]), [message, setMessage] = useState("");
   const [search, setSearch] = useState("");
+  const [clubOptions, setClubOptions] = useState(choices);
+  const [clubInvitations, setClubInvitations] = useState<ClubJoinInvitation[]>([]);
+  const [invitationsLoading, setInvitationsLoading] = useState(false), [invitationError, setInvitationError] = useState("");
+  const [invitationReload, setInvitationReload] = useState(0);
   const [opened, setOpened] = useState<RegistrationSeason | null>(null);
   const token = useRef(accessToken); token.current = accessToken;
   const request = useRef<AbortController | null>(null), pending = useRef(false), heading = useRef<HTMLHeadingElement | null>(null);
@@ -36,10 +41,29 @@ export default function InterclubSetupWizard({ api, club, accessToken, initialSe
   const dirty = season.revision === 0 || JSON.stringify(season.draft) !== savedDraft;
   const disabled = busy || blocked || checking;
   const draft = season.draft;
-  const clubName = (id: string) => choices.find(c => c.id === id)?.name || id;
-  const selectedClubs = choices.filter(c => draft.club_ids.includes(c.id));
+  const clubName = (id: string) => clubOptions.find(c => c.id === id)?.name || id;
+  const selectedClubs = clubOptions.filter(c => draft.club_ids.includes(c.id));
+  const invitationRoot = `${root}/setup/${season.id}/club-invitations`;
   const when = (value: string | null) => value ? new Date(value).toLocaleString(undefined, { timeZone: draft.timezone, dateStyle: "medium", timeStyle: "short" }) : "Date not set";
 
+  useEffect(() => { setClubOptions(choices); }, [choices]);
+  useEffect(() => {
+    if ((step !== 1 && !opened) || season.revision === 0 || checking) return;
+    const controller = new AbortController();
+    setInvitationsLoading(true); setInvitationError("");
+    fetch(invitationRoot, { headers: { Authorization: `Bearer ${token.current}` }, cache: "no-store", signal: controller.signal })
+      .then(async response => {
+        const data = await response.json();
+        if (!response.ok) throw new Error("Could not load club invitations. Refresh the club list to try again.");
+        if (!controller.signal.aborted) {
+          setClubInvitations(data.invitations);
+          setClubOptions(old => [...old.filter(c => !data.clubs.some((club: ClubChoice) => club.id === c.id)), ...data.clubs]);
+          if (opened) setBlocked(false);
+        }
+      }).catch(error => { if (!controller.signal.aborted) setInvitationError(error.message); })
+      .finally(() => { if (!controller.signal.aborted) setInvitationsLoading(false); });
+    return () => controller.abort();
+  }, [invitationRoot, step, checking, opened, invitationReload, season.revision]);
   useEffect(() => {
     const controller = new AbortController();
     if (initialSeason.revision > 0) {
@@ -71,8 +95,8 @@ export default function InterclubSetupWizard({ api, club, accessToken, initialSe
   function editRule(division: string, field: keyof DivisionRule, value: string) { edit({ registration_rules: { ...draft.registration_rules, [division]: { ...(draft.registration_rules[division] || emptyRule()), [field]: value === "" ? null : Number(value) } } }); }
   function goTo(target: number) { if (target > step) { const missing = firstIncompleteStep(draft); if (missing < target) { setStep(missing); setErrors(stepIssues(draft, missing)); return; } } setStep(target); setErrors([]); setMessage(""); setReviewed(false); }
 
-  async function jsonRequest(url: string, controller: AbortController, body?: object) {
-    const response = await fetch(url, { method: body ? (url.endsWith("/open") ? "POST" : "PUT") : "GET", headers: { Authorization: `Bearer ${token.current}`, ...(body ? { "Content-Type": "application/json" } : {}) },
+  async function jsonRequest(url: string, controller: AbortController, body?: object, method?: string) {
+    const response = await fetch(url, { method: method || (body ? (url.endsWith("/open") ? "POST" : "PUT") : "GET"), headers: { Authorization: `Bearer ${token.current}`, ...(body ? { "Content-Type": "application/json" } : {}) },
       ...(body ? { body: JSON.stringify(body) } : {}), cache: "no-store", signal: controller.signal });
     const data = await response.json();
     if (!response.ok) throw new SetupRequestError(apiError(data, "Unable to save setup."), response.status === 409 || response.status >= 500);
@@ -117,14 +141,55 @@ export default function InterclubSetupWizard({ api, club, accessToken, initialSe
       if (controller.signal.aborted) return;
       const row = data.seasons.find((s: PlanningSeason) => s.id === season.id);
       if (row) { const next = { ...row, draft: normalizeDraft(row.draft) }; setSeason(next); setSavedDraft(JSON.stringify(next.draft)); setStep(Math.min(next.draft.setup_step, firstIncompleteStep(next.draft))); onSaved(next); }
-      setReviewed(false); setBlocked(false); setMessage(row ? "Saved setup reloaded." : "This draft has not been saved yet. You can try saving again.");
+      setReviewed(false); setBlocked(false); setInvitationReload(n => n + 1); setMessage(row ? "Saved setup reloaded." : "This draft has not been saved yet. You can try saving again.");
     }, true);
+  }
+
+  async function inviteClub(input: InviteClubInput): Promise<boolean> {
+    let created = false;
+    await run(async controller => {
+      const data = await jsonRequest(invitationRoot, controller, { ...input, expected_revision: season.revision, draft: normalizeDraft({ ...draft, setup_step: 1 }) }, "POST");
+      if (controller.signal.aborted) return;
+      const saved = { ...data.season, draft: normalizeDraft(data.season.draft) } as PlanningSeason;
+      setSeason(saved); setSavedDraft(JSON.stringify(saved.draft)); onSaved(saved);
+      setClubOptions(old => [...old.filter(c => c.id !== data.club.id), data.club]);
+      setClubInvitations(old => [...old.filter(i => i.id !== data.invitation.id), data.invitation]);
+      setSearch(""); setReviewed(false); setMessage(`${data.club.name} is selected and saved. Share its invitation link below.`); created = true;
+    });
+    return created;
+  }
+  function updateClubInvitation(invitation: ClubJoinInvitation, action: "cancel" | "renew", email: string) {
+    void run(async controller => {
+      const data = await jsonRequest(`${invitationRoot}/${invitation.id}`, controller, { action, email, expected_revision: invitation.revision }, "POST");
+      if (!controller.signal.aborted) {
+        setClubInvitations(old => old.map(i => i.id === invitation.id ? data.invitation : i));
+        setMessage(action === "cancel" ? (opened ? "Account invitation cancelled. Season participation is unchanged." : "Account invitation cancelled. Uncheck the club above if it will not participate.") : "Invitation updated. Share its link with the administrator.");
+      }
+    });
+  }
+  function refreshClubs() {
+    void run(async controller => {
+      try {
+        const all: ClubChoice[] = []; let offset: number | null = 0;
+        while (offset !== null) {
+          const data = await jsonRequest(`${root}/club-choices?offset=${offset}`, controller);
+          if (controller.signal.aborted) return;
+          all.push(...data.clubs); offset = data.next_offset;
+        }
+        setClubOptions(all); setInvitationReload(n => n + 1); setMessage("Club list refreshed.");
+      } catch { throw new SetupRequestError("Could not refresh the club list. Try again.", false); }
+    });
   }
 
   if (opened) return <section className={styles.panel}>
     <p className={styles.eyebrow}>Season setup complete</p><h2>{opened.details.name}</h2>
     <div className={styles.success}><strong>Club invitations are open.</strong><p>Continue in the season workspace to see responses and prepare each meet.</p></div>
     <SetupNextSteps />
+    <button disabled={busy || invitationsLoading} onClick={() => setInvitationReload(n => n + 1)}>Refresh club account invitations</button>
+    {invitationError && <p role="alert">{invitationError}</p>}
+    {errors.map(error => <p role="alert" key={error}>{error}</p>)}
+    {message && <p role="status">{message}</p>}
+    <ClubInvitationPanel allowCreate={false} disabled={disabled || invitationsLoading || Boolean(invitationError)} atClubLimit invitations={clubInvitations} onInvite={inviteClub} onUpdate={updateClubInvitation} />
     <div className={styles.toolbar}><Link className={`${styles.button} ${styles.primary}`} href={`/admin/interclub/registrations?season=${opened.id}`}>Manage this season</Link><button onClick={onClose}>Back to interclub leagues</button></div>
   </section>;
 
@@ -148,15 +213,17 @@ export default function InterclubSetupWizard({ api, club, accessToken, initialSe
           </div></fieldset>
         </>}
         {step === 1 && <>
-          <p className={styles.muted}>Choose the clubs you want to invite. Include {club.name} if your club will also play.</p>
-          {choices.length < 2 && <div className={styles.note}><strong>Another club account is needed.</strong><p>An interclub season needs at least two clubs. A PCS Super Admin can add the other club in PCS administration.</p></div>}
+          <p className={styles.muted}>Select existing clubs or invite a new club below. Include {club.name} if your club will also play. Choose at least two clubs to continue.</p>
           <fieldset disabled={disabled} className={styles.form}>
-            {choices.length > 6 && <label className={styles.field}>Find a club<input type="search" value={search} onChange={e => setSearch(e.target.value)} /></label>}
-            <div className={styles.choices}>{choices.filter(c => c.name.toLowerCase().includes(search.toLowerCase())).map(c => <label className={styles.choice} data-selected={draft.club_ids.includes(c.id)} key={c.id}><input aria-label={c.name} type="checkbox" disabled={disabled || (!draft.club_ids.includes(c.id) && draft.club_ids.length >= 32)} checked={draft.club_ids.includes(c.id)} onChange={() => toggleClub(c.id)} /><span>{c.name}{c.id === club.id && <small>Your club · organizer</small>}</span></label>)}</div>
+            <label className={styles.field}>Find an existing club<input aria-label="Find an existing club" type="search" value={search} onChange={e => setSearch(e.target.value)} /></label>
+            <div className={styles.choices}>{clubOptions.filter(c => c.name.toLowerCase().includes(search.toLowerCase())).map(c => <label className={styles.choice} data-selected={draft.club_ids.includes(c.id)} key={c.id}><input aria-label={c.name} type="checkbox" disabled={disabled || (!draft.club_ids.includes(c.id) && draft.club_ids.length >= 32)} checked={draft.club_ids.includes(c.id)} onChange={() => toggleClub(c.id)} /><span>{c.name}{c.id === club.id && <small>Your club · organizer</small>}</span></label>)}</div>
+            {!clubOptions.some(c => c.name.toLowerCase().includes(search.toLowerCase())) && <p>No clubs match. Invite a new club below.</p>}
           </fieldset>
-          <p><strong>{draft.club_ids.length} clubs selected</strong> · Choose at least two.</p>
-          <p className={styles.muted}>Missing a club? Save and exit, then ask a PCS Super Admin to add its account in <Link href="/admin/platform">PCS administration</Link>.</p>
-          <div className={styles.note}>You’ll review the full setup before opening invitations. Selecting clubs here does not invite them yet.</div>
+          <div className={styles.toolbar}><p><strong>{draft.club_ids.length} {draft.club_ids.length === 1 ? "club" : "clubs"} selected</strong></p><button disabled={disabled} onClick={refreshClubs}>Refresh club list</button></div>
+          {invitationsLoading && <p role="status">Loading club invitations…</p>}
+          {invitationError && <p role="alert">{invitationError}</p>}
+          <ClubInvitationPanel disabled={disabled || invitationsLoading || Boolean(invitationError)} atClubLimit={draft.club_ids.length >= 32} invitations={clubInvitations} onInvite={inviteClub} onUpdate={updateClubInvitation} />
+          <p className={styles.muted}>New club invitations let administrators join PCS now. After you review the divisions and meet schedule in Step 5, every selected club receives the season invitation in its workspace.</p>
         </>}
         {step === 2 && <>
           <p className={styles.muted}>Choose your divisions and who can play in each. All teams have four players.</p>

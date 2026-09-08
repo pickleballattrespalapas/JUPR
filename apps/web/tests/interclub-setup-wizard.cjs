@@ -8,10 +8,12 @@ function load(file, mocks = {}) {
 }
 const registration = load('lib/interclubRegistration.ts'), helpers = load('lib/interclubSetup.ts');
 const Link = ({ children, ...props }) => React.createElement('a', props, children);
-const Wizard = load('app/admin/interclub/InterclubSetupWizard.tsx', { 'next/link': Link, '@/lib/interclubRegistration': registration, '@/lib/interclubSetup': helpers, './setup.module.css': {} }).default;
+const Panel = load('app/admin/interclub/ClubInvitationPanel.tsx', { './setup.module.css': {} }).default;
+const Wizard = load('app/admin/interclub/InterclubSetupWizard.tsx', { 'next/link': Link, '@/lib/interclubRegistration': registration, '@/lib/interclubSetup': helpers, './setup.module.css': {}, './ClubInvitationPanel': Panel }).default;
 const sid = '00000000-0000-4000-8000-000000000011';
 Object.defineProperty(global, 'crypto', { value: { randomUUID: () => sid }, configurable: true });
 global.window = new EventTarget();
+window.location = { origin: "https://staging.example.test" };
 const clubs = [{ id: 'alpha', name: 'Tres Palapas', slug: 'alpha' }, { id: 'beta', name: 'Visiting Club', slug: 'beta' }];
 const reply = (data, status = 200) => ({ ok: status < 400, status, json: async () => data });
 const nodeText = node => typeof node === 'string' ? node : node.children.map(nodeText).join('');
@@ -24,6 +26,7 @@ function newProps(initialSeason = helpers.newSeason()) { return { api: 'https://
 async function completeJourney() {
   let stored, opened = null, finish, requests = [], saved = [], closed = 0;
   global.fetch = async (url, options) => {
+    if (url.endsWith("/club-invitations")) return reply({ invitations: [], clubs: [] });
     requests.push({ url, options });
     if (options.method === 'PUT') {
       const body = JSON.parse(options.body);
@@ -50,7 +53,8 @@ async function completeJourney() {
   assert.equal(requests.length, 1, 'Duplicate continue saves once');
   assert.equal(requests[0].options.headers.Authorization, 'Bearer token-2');
   assert.equal(stored.draft.setup_step, 1);
-  assert.ok(text(tree).includes('Another club account is needed.'));
+  assert.ok(button(tree, 'Invite a new club'));
+  assert.ok(!text(tree).includes('PCS administration'));
   await click(tree, 'Save and continue'); assert.equal(requests.length, 1);
   props = { ...props, choices: clubs }; await act(async () => tree.update(React.createElement(Wizard, props)));
   await act(async () => tree.root.findByProps({ 'aria-label': 'Tres Palapas' }).props.onChange());
@@ -100,6 +104,7 @@ async function conflictsAndContext() {
   const original = { ...helpers.newSeason(), revision: 2 }; original.draft.name = 'Saved season';
   let requests = [], conflict = true, deferred, saveCount = 0;
   global.fetch = async (url, options) => {
+    if (url.endsWith("/club-invitations")) return reply({ invitations: [], clubs: [] });
     requests.push({ url, options });
     if (options.method === 'PUT') return conflict ? reply({ detail: 'Setup changed. Reload.' }, 409) : new Promise(resolve => { deferred = resolve; });
     return url.endsWith('/setup') ? reply({ seasons: [original] }) : reply({}, 404);
@@ -116,11 +121,93 @@ async function conflictsAndContext() {
   await act(async () => tree.unmount()); assert.equal(signal.aborted, true);
   await act(async () => deferred(reply({ season: { ...original, revision: 3 } })));
   assert.equal(saveCount, before, 'Old club/account request cannot publish a saved result after unmount');
-  global.fetch = async () => reply({ season: { id: sid, details: { name: 'Opened season' } } });
+  global.fetch = async url => url.endsWith('/club-invitations') ? reply({ invitations: [], clubs: [] }) : reply({ season: { id: sid, details: { name: 'Opened season' } } });
   await act(async () => { tree = create(React.createElement(Wizard, props)); });
   assert.equal(tree.root.findAllByType('input').length, 0, 'Opened season cannot be edited as a draft');
   assert.ok(text(tree).includes('Manage this season'));
   await act(async () => tree.unmount());
+}
+
+async function inviteDuringClubSelection() {
+  const initial = { ...helpers.newSeason(), revision: 1 };
+  initial.draft = { ...initial.draft, name: 'Southern BCS', start_date: '2099-01-01', end_date: '2099-03-31', club_ids: ['alpha'], setup_step: 1 };
+  const added = { id: 'la-ribera', name: 'La Ribera', slug: 'la-ribera' };
+  let stored = initial, invitations = [], requests = [], finish, saved = [], mode = 'normal', copied;
+  Object.defineProperty(global, 'navigator', { configurable: true, value: { clipboard: { writeText: async value => { copied = value; } } } });
+  global.fetch = async (url, options) => {
+    requests.push({ url, options });
+    if (url.includes('/club-choices?')) return reply({ clubs: [clubs[0], ...(invitations.length ? [added] : [])], next_offset: null });
+    if (url.endsWith('/club-invitations') && options.method === 'POST') {
+      const body = JSON.parse(options.body); assert.equal(body.expected_revision, stored.revision);
+      stored = { id: sid, revision: stored.revision + 1, draft: { ...body.draft, club_ids: [...body.draft.club_ids, added.id] } };
+      invitations = [{ id: body.invitation_id, club_id: added.id, club_name: added.name, email: body.email, revision: 1, status: 'pending', expires_at: '2099-01-01T00:00:00Z' }];
+      return new Promise(resolve => { finish = () => resolve(mode === 'uncertain' ? reply({ detail: 'Could not confirm invitation.' }, 503) : reply({ season: stored, invitation: invitations[0], club: added })); });
+    }
+    if (url.endsWith('/club-invitations')) return reply({ invitations, clubs: invitations.length ? [added] : [] });
+    if (url.includes('/club-invitations/') && options.method === 'POST') {
+      const body = JSON.parse(options.body); assert.equal(body.expected_revision, invitations[0].revision);
+      invitations = [{ ...invitations[0], revision: invitations[0].revision + 1, email: body.email, status: body.action === 'cancel' ? 'cancelled' : 'pending' }];
+      return reply({ invitation: invitations[0] });
+    }
+    if (options.method === 'PUT') { const body = JSON.parse(options.body); stored = { id: sid, revision: stored.revision + 1, draft: body.draft }; return reply({ season: stored }); }
+    if (url.endsWith('/setup')) return reply({ seasons: [stored] });
+    return mode === 'opened' ? reply({ season: { id: sid, details: stored.draft } }) : reply({}, 404);
+  };
+  let tree, props = { ...newProps(initial), choices: [clubs[0]], onSaved: s => saved.push(s) };
+  await act(async () => { tree = create(React.createElement(Wizard, props)); });
+  await click(tree, 'Save and continue'); assert.ok(text(tree).includes('at least two'));
+  assert.equal(requests.filter(r => ['PUT', 'POST'].includes(r.options.method)).length, 0);
+  await fill(tree, 'Find an existing club', 'La Ribera'); assert.ok(text(tree).includes('No clubs match'));
+  await click(tree, 'Invite a new club');
+  await fill(tree, 'New club name', 'La Ribera'); await fill(tree, 'New club administrator email', ' NEW@EXAMPLE.TEST ');
+  props = { ...props, accessToken: 'latest-token' }; await act(async () => tree.update(React.createElement(Wizard, props)));
+  const form = tree.root.findByType('form');
+  await act(async () => { void form.props.onSubmit({ preventDefault() {} }); void form.props.onSubmit({ preventDefault() {} }); });
+  assert.equal(requests.filter(r => r.options.method === 'POST').length, 1, 'Duplicate submission creates one club');
+  assert.equal(requests.at(-1).options.headers.Authorization, 'Bearer latest-token');
+  assert.equal(button(tree, 'Saving…').props.disabled, true); await act(async () => finish());
+  assert.ok(tree.root.findByProps({ 'aria-label': 'La Ribera' }).props.checked);
+  assert.deepEqual(saved.at(-1).draft.club_ids, ['alpha', added.id]);
+  await click(tree, 'Copy invitation link');
+  assert.equal(copied, `https://staging.example.test/admin/accept-invitation?invitation=${sid}&kind=club`);
+  await click(tree, 'Save and exit'); await act(async () => tree.unmount());
+  props = { ...props, initialSeason: stored };
+  await act(async () => { tree = create(React.createElement(Wizard, props)); });
+  assert.ok(tree.root.findByProps({ 'aria-label': 'La Ribera' }).props.checked, 'Invited club and link survive reopen with old directory cache');
+  await click(tree, 'Update or renew invitation'); await fill(tree, 'Update email for La Ribera', 'corrected@example.test');
+  await act(async () => tree.root.findByType('form').props.onSubmit({ preventDefault() {} }));
+  assert.equal(invitations[0].email, 'corrected@example.test');
+  await click(tree, 'Cancel invitation'); assert.ok(text(tree).includes('Invitation cancelled'));
+  await click(tree, 'Update or renew invitation');
+  await act(async () => tree.root.findByType('form').props.onSubmit({ preventDefault() {} }));
+  assert.equal(invitations[0].status, 'pending');
+  await click(tree, 'Save and continue'); assert.ok(tree.root.findByProps({ 'aria-label': '3.5 maximum rating' }));
+  assert.ok(!requests.some(r => r.url.endsWith('/open') || r.url.includes('/admin/platform')));
+  await act(async () => tree.unmount());
+  // Reload must recover an invitation committed before a lost response.
+  stored = initial; invitations = []; mode = 'uncertain'; props = { ...props, initialSeason: initial };
+  await act(async () => { tree = create(React.createElement(Wizard, props)); });
+  await click(tree, 'Invite a new club'); await fill(tree, 'New club name', 'La Ribera'); await fill(tree, 'New club administrator email', 'new@example.test');
+  await act(async () => { void tree.root.findByType('form').props.onSubmit({ preventDefault() {} }); });
+  await act(async () => finish());
+  assert.equal(tree.root.findByProps({ 'aria-label': 'New club name' }).props.value, 'La Ribera');
+  assert.equal(button(tree, 'Save and continue').props.disabled, true);
+  const count = requests.filter(r => r.options.method === 'POST').length;
+  await click(tree, 'Reload saved setup'); assert.ok(tree.root.findByProps({ 'aria-label': 'La Ribera' }).props.checked);
+  assert.equal(requests.filter(r => r.options.method === 'POST').length, count); await act(async () => tree.unmount());
+  mode = 'opened';
+  await act(async () => { tree = create(React.createElement(Wizard, { ...props, initialSeason: stored })); });
+  assert.equal(button(tree, 'Invite a new club'), undefined, 'New clubs cannot change an opened season');
+  assert.ok(button(tree, 'Copy invitation link'), 'Pending onboarding invitations stay accessible after the season opens');
+  await click(tree, 'Cancel invitation');
+  assert.equal(invitations[0].status, 'cancelled'); await act(async () => tree.unmount());
+  stored = initial; invitations = []; mode = 'normal';
+  await act(async () => { tree = create(React.createElement(Wizard, props)); });
+  await click(tree, 'Invite a new club'); await fill(tree, 'New club name', 'La Ribera'); await fill(tree, 'New club administrator email', 'new@example.test');
+  await act(async () => { void tree.root.findByType('form').props.onSubmit({ preventDefault() {} }); });
+  const signal = requests.at(-1).options.signal, before = saved.length;
+  await act(async () => tree.unmount()); assert.equal(signal.aborted, true); await act(async () => finish());
+  assert.equal(saved.length, before, 'Club change aborts the old invitation result');
 }
 
 function timezoneChecks() {
@@ -130,4 +217,4 @@ function timezoneChecks() {
   assert.throws(() => helpers.meetUtcTime('2027-03-14T02:30', 'America/New_York'), /clock change/);
   assert.throws(() => helpers.meetUtcTime('2027-11-07T01:30', 'America/New_York'), /clock change/);
 }
-(async () => { timezoneChecks(); await completeJourney(); await conflictsAndContext(); console.log('Interclub wizard: saved steps/rules/partial meets, validation, timezone conversion, final review, duplicate actions, stale context and opened-season handoff passed.'); })().catch(e => { console.error(e); process.exitCode = 1; });
+(async () => { timezoneChecks(); await completeJourney(); await conflictsAndContext(); await inviteDuringClubSelection(); console.log('Interclub wizard: inline club creation/selection, invitation links and renewal, saved progress, uncertain responses, duplicate actions, stale context and opened-season management passed.'); })().catch(e => { console.error(e); process.exitCode = 1; });

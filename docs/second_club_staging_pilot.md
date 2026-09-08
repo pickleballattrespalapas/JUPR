@@ -122,3 +122,20 @@ Meet operations and rating approval remain separate future increments.
 - No billing.
 - No public signup.
 - No production multi-club launch.
+
+
+### Invite a missing club from Step 2
+
+1. Reopen Southern BCS and stay on **Participating clubs**. Select Tres if it plays.
+2. Choose **Invite a new club**, enter its name and the email of a confirmed staging
+   test account, and choose **Create club invitation**.
+3. Verify the club is selected, progress is saved, and its invitation link appears.
+   Copy that link; staging does not send email.
+4. In a separate browser profile, open the link, sign in with the invited email,
+   review the club and accept. Verify the recipient opens only that club and keeps
+   any other pre-existing club assignments. The organizer gains no access to it.
+5. Back in Step 2, refresh the club list to see **Administrator joined**, then
+   continue through divisions, meets and final review. No season roster is required.
+6. For an unaccepted invitation, test correcting the email, cancelling and renewing.
+   After the season opens, these controls remain under **Club account invitations**
+   on its season card. The season workspace still controls acceptance and meet rosters.

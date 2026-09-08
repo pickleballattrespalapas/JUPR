@@ -61,7 +61,7 @@ def invitation_rpc(db, **params):
         raise HTTPException(503, "Could not confirm the invitation update. Reload before retrying.") from exc
 
 
-def send_invitation_sign_in(db, row):
+def send_invitation_sign_in(db, row, *, club_join=False):
     # Authentication links must never be redirected to a staging mailbox. Stop
     # before creating an Auth user/token in every non-live email mode.
     if get_email_mode() != EMAIL_MODE_LIVE:
@@ -76,7 +76,8 @@ def send_invitation_sign_in(db, row):
         raise ValueError("No authentication token generated")
     # The fragment stays out of request/referrer logs. Only the recipient gets
     # this credential; the staff list/API response contains just invitation IDs.
-    link = f"{origin.rstrip('/')}/admin/accept-invitation?invitation={row['id']}#" + urlencode({"staff_token_hash": token_hash})
+    kind = "&kind=club" if club_join else ""
+    link = f"{origin.rstrip('/')}/admin/accept-invitation?invitation={row['id']}{kind}#" + urlencode({"staff_token_hash": token_hash})
     send_email_with_inline_chart(
         to_email=row["email"], subject="Sign in to review your club staff invitation",
         html_body=f'<p>You requested a sign-in link to review a club staff invitation.</p><p><a href="{escape(link, quote=True)}">Sign in and review invitation</a></p><p>You will review the club and access before accepting. If you did not request this, ignore this email.</p>',
