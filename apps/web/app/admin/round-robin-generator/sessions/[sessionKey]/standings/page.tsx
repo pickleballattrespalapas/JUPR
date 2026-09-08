@@ -1,3 +1,4 @@
+import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import GeneratorStandings from "@/app/admin/play-generators/GeneratorStandings";
 
 type Props = { params: { sessionKey: string } };
@@ -7,5 +8,6 @@ function apiBase(): string | null {
 }
 
 export default function RoundRobinStandingsPage({ params }: Props) {
-  return <GeneratorStandings apiBase={apiBase()} clubId="tres_palapas" sessionKey={params.sessionKey} />;
+  const { clubId } = requireAdminWorkspace();
+  return <GeneratorStandings apiBase={apiBase()} clubId={clubId} sessionKey={params.sessionKey} />;
 }

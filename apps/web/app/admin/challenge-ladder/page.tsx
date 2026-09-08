@@ -1,3 +1,4 @@
+import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import Link from "next/link";
 import ChallengeLadderAdminPanel from "./ChallengeLadderAdminPanel";
 
@@ -22,7 +23,7 @@ async function loadStatus(clubId: string): Promise<{ data: StatusResponse | null
 }
 
 export default async function ChallengeLadderAdminPage() {
-  const clubId = "tres_palapas";
+  const { clubId, clubSlug } = requireAdminWorkspace();
   const { data: status, error } = await loadStatus(clubId);
   return (
     <section>
@@ -31,7 +32,7 @@ export default async function ChallengeLadderAdminPage() {
       <p style={{ color: "#334155", maxWidth: "860px" }}>Review ladder tiers, player eligibility, challenge buckets, and resolve challenges through guarded staff actions.</p>
       {error ? <article style={{ ...cardStyle, background: "#fff7ed", color: "#9a3412" }}>Challenge Ladder status unavailable. {error}</article> : null}
       <ChallengeLadderAdminPanel apiBase={apiBase()} clubId={clubId} status={status} />
-      <p style={{ marginTop: "1rem" }}><Link href="/clubs/tres-palapas/challenge-ladder">Public ladder</Link> · <Link href="/admin/match-log">Match Log</Link> · <Link href="/admin">Operations cockpit</Link></p>
+      <p style={{ marginTop: "1rem" }}><Link href={`/clubs/${encodeURIComponent(clubSlug)}/challenge-ladder`}>Public ladder</Link> · <Link href="/admin/match-log">Match Log</Link> · <Link href="/admin">Operations cockpit</Link></p>
     </section>
   );
 }

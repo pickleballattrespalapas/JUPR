@@ -17,9 +17,7 @@ type NavigationItem = {
   staff?: boolean;
 };
 
-const clubBase = "/clubs/tres-palapas";
-
-const navigationItems: NavigationItem[] = [
+const navigationItems = (clubBase: string): NavigationItem[] => [
   {
     label: "Home",
     href: "/",
@@ -146,7 +144,7 @@ export default function PublicSiteHeader({
         />
       </div>
       <nav className={styles.nav} aria-label="Primary navigation">
-        {navigationItems.map((item) => {
+        {navigationItems(pathname.match(/^\/clubs\/[^/]+/)?.[0] || "/clubs/tres-palapas").map((item) => {
           const active = item.active(pathname);
           return (
             <Link

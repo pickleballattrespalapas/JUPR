@@ -93,6 +93,6 @@ async function fetchJson<T>(path: string): Promise<ApiResult<T>> {
   }
 }
 
-export async function getAdminWeeklyRecapStatus(clubId = "tres_palapas"): Promise<ApiResult<AdminWeeklyRecapStatusResponse>> {
+export async function getAdminWeeklyRecapStatus(clubId: string): Promise<ApiResult<AdminWeeklyRecapStatusResponse>> {
   return fetchJson<AdminWeeklyRecapStatusResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/weekly-recap/status`);
 }

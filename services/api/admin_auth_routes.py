@@ -82,6 +82,28 @@ def require_admin_assignments(
 def install_admin_auth_routes(app, *, get_supabase_client) -> None:
     """Install the verified JWT -> JUPR capability boundary used by admin login."""
 
+    @app.get("/admin/auth/workspaces")
+    def get_admin_workspaces(
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        _, assignments = require_admin_assignments(
+            get_supabase_client=get_supabase_client, authorization=authorization,
+        )
+        club_ids = sorted({row["club_id"] for row in assignments})
+        try:
+            # Only assigned club identities are disclosed, including draft accounts
+            # whose administrators need access to complete onboarding.
+            clubs = get_supabase_client().table("clubs").select(
+                "id,slug,name"
+            ).in_("id", club_ids).order("name").execute().data or []
+        except Exception as exc:
+            raise HTTPException(503, "Club workspaces are temporarily unavailable.") from exc
+        return {"workspaces": [
+            {"club_id": row["id"], "club_slug": row["slug"], "club_name": row["name"],
+             "roles": sorted({a["role"] for a in assignments if a["club_id"] == row["id"]})}
+            for row in clubs if row["id"] in club_ids
+        ]}
+
     @app.get("/admin/auth/capabilities")
     def get_admin_auth_capabilities(
         club_id: str | None = Query(default=None),

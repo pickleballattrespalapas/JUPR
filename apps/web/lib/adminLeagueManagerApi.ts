@@ -312,10 +312,10 @@ async function fetchJson<T>(path: string): Promise<ApiResult<T>> {
   }
 }
 
-export async function getAdminLeagueManagerStatus(clubId = "tres_palapas"): Promise<ApiResult<AdminLeagueManagerStatusResponse>> {
+export async function getAdminLeagueManagerStatus(clubId: string): Promise<ApiResult<AdminLeagueManagerStatusResponse>> {
   return fetchJson<AdminLeagueManagerStatusResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/status`);
 }
 
-export async function getAdminLeagueLiveStatus(clubId = "tres_palapas"): Promise<ApiResult<AdminLeagueLiveStatusResponse>> {
+export async function getAdminLeagueLiveStatus(clubId: string): Promise<ApiResult<AdminLeagueLiveStatusResponse>> {
   return fetchJson<AdminLeagueLiveStatusResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live/status`);
 }

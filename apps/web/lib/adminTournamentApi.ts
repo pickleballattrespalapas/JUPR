@@ -543,14 +543,14 @@ async function fetchJson<T>(path: string): Promise<ApiResult<T>> {
   }
 }
 
-export async function getAdminTournamentStatus(clubId = "tres_palapas"): Promise<ApiResult<AdminTournamentStatusResponse>> {
+export async function getAdminTournamentStatus(clubId: string): Promise<ApiResult<AdminTournamentStatusResponse>> {
   if (process.env.JUPR_INTERACTION_TEST_HARNESS === "1") {
     return { data: { enabled: true, status: "local_test_harness", warnings: [] }, error: null };
   }
   return fetchJson<AdminTournamentStatusResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/status`);
 }
 
-export async function getAdminTournamentLiveStatus(clubId = "tres_palapas"): Promise<ApiResult<AdminTournamentLiveStatusResponse>> {
+export async function getAdminTournamentLiveStatus(clubId: string): Promise<ApiResult<AdminTournamentLiveStatusResponse>> {
   if (process.env.JUPR_INTERACTION_TEST_HARNESS === "1") {
     return {
       data: {

@@ -1,4 +1,5 @@
 "use client";
+import { useAdminWorkspace } from "@/lib/useAdminWorkspace";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useAdminSession } from "@/lib/useAdminSession";
@@ -14,26 +15,26 @@ function localTime(value:string) { if(!value) return ""; const parts=new Intl.Da
 export default function InterclubPage() {
  const {session,accessToken,loading}=useAdminSession(); const api=getAdminPlayerEditorApiBaseUrl();
  const assignments=(session?.capabilities?.assignments||[]).filter(a=>["super_admin","administrator","club_owner"].includes(a.role));
- const [club,setClub]=useState("");const clubId=club||assignments[0]?.club_id||"";
+ const { clubId } = useAdminWorkspace();
+ const canManage = assignments.some(assignment => assignment.club_id === clubId);
  const [choices,setChoices]=useState<Club[]>([]);const [seasons,setSeasons]=useState<Season[]>([]);const [season,setSeason]=useState<Season|null>(null);
  const [busy,setBusy]=useState(false);const [message,setMessage]=useState("");const [loaded,setLoaded]=useState(false);const [reload,setReload]=useState(0);
- useEffect(()=>{if(!api||!clubId||!accessToken)return;const controller=new AbortController();setLoaded(false);setSeason(null);setSeasons([]);setChoices([]);
+ useEffect(()=>{if(!api||!clubId||!accessToken||!canManage)return;const controller=new AbortController();setLoaded(false);setSeason(null);setSeasons([]);setChoices([]);
  const headers={Authorization:`Bearer ${accessToken}`};
  async function load(){try{
  const r=await fetch(`${api}/admin/clubs/${encodeURIComponent(clubId)}/interclub/setup`,{headers,signal:controller.signal});const data=await r.json();if(!r.ok)throw new Error(data.detail||"Unable to load seasons.");
  const all:Club[]=[];let offset:number|null=0;while(offset!==null){const r: Response=await fetch(`${api}/admin/clubs/${encodeURIComponent(clubId)}/interclub/club-choices?offset=${offset}`,{headers,signal:controller.signal});const d: {clubs: Club[]; next_offset: number | null}=await r.json();if(!r.ok)throw new Error("Unable to load club choices.");all.push(...d.clubs);offset=d.next_offset;}
  if(!controller.signal.aborted){setSeasons(data.seasons);setChoices(all);setLoaded(true);}
  }catch(e){if(!controller.signal.aborted)setMessage(e instanceof Error?e.message:"Unable to load.");}}void load();return()=>controller.abort();
- },[api,clubId,accessToken,reload]);
+ },[api,clubId,accessToken,reload,canManage]);
  function edit(patch:Partial<Draft>){setSeason(s=>s?{...s,draft:{...s.draft,...patch}}:s);}
  function meetEdit(index:number,patch:Partial<Meet>){if(season)edit({meets:season.draft.meets.map((m,i)=>i===index?{...m,...patch}:m)});}
  async function save(){if(!season||!api||busy)return;setBusy(true);setMessage("");try{const r=await fetch(`${api}/admin/clubs/${encodeURIComponent(clubId)}/interclub/setup`,{method:"PUT",headers:{Authorization:`Bearer ${accessToken}`,"Content-Type":"application/json"},body:JSON.stringify({season_id:season.id,expected_revision:season.revision,draft:season.draft})});const d=await r.json();if(!r.ok){const detail=Array.isArray(d.detail)?d.detail.map((e:{msg:string})=>e.msg.replace(/^Value error, /,"")).join(" "):d.detail;throw new Error(detail||"Unable to save.");}setSeason(d.season);setSeasons(old=>[d.season,...old.filter(s=>s.id!==d.season.id)]);setMessage("Season draft saved.");}catch(e){setMessage(e instanceof Error?e.message:"Unable to save.");}finally{setBusy(false);}}
- if(loading)return <p>Loading…</p>;if(!assignments.length)return <p>Sign in as a club administrator to plan an interclub season. <Link href="/admin/login">Sign in</Link></p>;
+ if(loading)return <p>Loading…</p>;if(!canManage)return <p>Sign in as a club administrator to plan an interclub season. <Link href="/admin/login">Sign in</Link></p>;
  const draft=season?.draft;const selected=choices.filter(c=>draft?.club_ids.includes(c.id));
  return <section style={{maxWidth:1000,margin:"0 auto",padding:24}}>
  <h1>Interclub seasons</h1><p>Plan the Southern BCS season: clubs, divisions, hosts, and meet dates.</p>
  <p>These are working drafts. Club invitations, team rosters, scoring, and rating approval are not open yet.</p>
- <label>Organizing club <select disabled={busy} value={clubId} onChange={e=>{setClub(e.target.value);setMessage("");}}>{assignments.map(a=><option key={a.club_id} value={a.club_id}>{a.club_id.replaceAll("_"," ")}</option>)}</select></label>
  <p><button disabled={!loaded||busy} onClick={()=>{setSeason(fresh());setMessage("");}}>New season</button> <button disabled={busy} onClick={()=>setReload(n=>n+1)}>Reload saved drafts</button></p>
  <nav aria-label="Saved seasons">{seasons.map(s=><button key={s.id} disabled={busy} onClick={()=>setSeason(s)}>{s.draft.name} · {s.draft.start_date}</button>)}</nav>
  {message&&<p role="status">{message}</p>}

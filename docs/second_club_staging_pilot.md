@@ -6,19 +6,19 @@ Validate JUPR multi-club behavior in staging using a non-production second club 
 
 ## Prerequisites
 
-- Staging Supabase is verified and currently used for `Test` branch validation.
+- Staging Supabase is verified and currently used for `staging` branch validation.
 - `clubs` table migration is applied in staging.
 - Club-scoped admin roles are implemented and enforceable.
 - Public leaderboards are working for club-scoped reads.
 - Staging email safety is enabled (non-production routing/allowlist guardrails).
-- Next admin score entry remains disabled unless explicitly testing auth behavior in staging.
+- Staging follows the persistent-open policy in `AGENTS.md`; email stays `dry_run`.
 
 ## Setup checklist
 
 - [ ] Create a second club row in staging (non-production tenant only).
 - [ ] Create a small set of staging-only players for the second club.
 - [ ] Create league metadata for the second club.
-- [ ] Assign `club_owner`, `organizer`, and `scorekeeper` roles scoped to the second club.
+- [ ] Assign `administrator` and scoped `operator` roles scoped to the second club.
 - [ ] Confirm Tres Palapas staging data remains separate after setup.
 
 ## Validation checklist
@@ -31,8 +31,16 @@ Validate JUPR multi-club behavior in staging using a non-production second club 
 
 ### Admin
 
-- [ ] Verify second-club scorekeeper cannot access Tres Palapas write operations.
-- [ ] Verify Tres Palapas scorekeeper cannot write second-club matches.
+- [ ] A second-club-only account can sign in and choose its club by name.
+- [ ] A multi-club account can switch clubs and lands on the chosen admin home.
+- [ ] Players, leagues, tournaments and communications use the selected club.
+- [ ] Switching in a second tab blocks actions in an older tab until reload.
+- [ ] Reload/back navigation cannot restore actionable controls from another club.
+- [ ] Staff and interclub pages follow the same selected club.
+- [ ] Expired/revoked assignments cannot open a workspace.
+
+- [ ] Verify second-club operator cannot access Tres Palapas write operations.
+- [ ] Verify Tres Palapas operator cannot write second-club matches.
 - [ ] Verify admin activity log records the correct `club_id` for every write attempt.
 - [ ] Verify worker runs are scoped to the selected club.
 

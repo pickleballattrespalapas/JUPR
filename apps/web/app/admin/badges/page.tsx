@@ -1,3 +1,4 @@
+import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import Link from "next/link";
 import { getAdminBadgeDiagnosticsApiBaseUrl, getAdminBadgeDiagnosticsStatus } from "@/lib/adminBadgeDiagnosticsApi";
 import BadgeDiagnosticsPanel from "./BadgeDiagnosticsPanel";
@@ -6,7 +7,7 @@ import BadgeManagementPanel from "./BadgeManagementPanel";
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 
 export default async function AdminBadgeDiagnosticsPage() {
-  const clubId = "tres_palapas";
+  const { clubId, clubSlug } = requireAdminWorkspace();
   const { data: status, error } = await getAdminBadgeDiagnosticsStatus(clubId);
 
   return (
@@ -36,7 +37,7 @@ export default async function AdminBadgeDiagnosticsPage() {
 
       </details>
       <p style={{ marginTop: "1rem" }}>
-        <Link href="/clubs/tres-palapas/badge-codex">Public Badges & Trophies</Link> · <Link href="/admin/replay-history">Replay History</Link> · <Link href="/admin">Operations cockpit</Link>
+        <Link href={`/clubs/${encodeURIComponent(clubSlug)}/badge-codex`}>Public Badges & Trophies</Link> · <Link href="/admin/replay-history">Replay History</Link> · <Link href="/admin">Operations cockpit</Link>
       </p>
     </section>
   );

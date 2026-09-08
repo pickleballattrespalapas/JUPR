@@ -1,9 +1,10 @@
+import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import Link from "next/link";
 import { getAdminLeagueManagerApiBaseUrl, getAdminLeagueManagerStatus } from "@/lib/adminLeagueManagerApi";
 import LeagueManagerPanel from "./LeagueManagerPanel";
 
 export default async function AdminLeagueManagerPage() {
-  const clubId = "tres_palapas";
+  const { clubId } = requireAdminWorkspace();
   const { data: status, error } = await getAdminLeagueManagerStatus(clubId);
 
   return (

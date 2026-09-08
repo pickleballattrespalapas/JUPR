@@ -1,3 +1,4 @@
+import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
 import { getAdminTournamentApiBaseUrl, getAdminTournamentStatus } from "@/lib/adminTournamentApi";
@@ -13,7 +14,7 @@ export default async function AdminTournamentRegistrationManagementPage({ search
   const context = readTournamentRouteContext(searchParams);
   if (!context.tournamentId) redirect("/admin/tournaments");
 
-  const clubId = "tres_palapas";
+  const { clubId } = requireAdminWorkspace();
   const { data, error } = await getAdminTournamentStatus(clubId);
 
   return (

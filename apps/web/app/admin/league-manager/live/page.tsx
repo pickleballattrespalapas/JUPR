@@ -1,3 +1,4 @@
+import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import { redirect } from "next/navigation";
 import { getClubPlayers } from "@/lib/api";
 import { getAdminLeagueLiveStatus, getAdminLeagueManagerStatus, getAdminLeagueManagerApiBaseUrl } from "@/lib/adminLeagueManagerApi";
@@ -14,8 +15,7 @@ export default async function LeagueManagerLivePage({ searchParams }: Props) {
   if (!context.leagueId) redirect("/admin/league-manager");
   const leagueName = context.leagueName || context.leagueId;
 
-  const clubSlug = "tres-palapas";
-  const clubId = "tres_palapas";
+  const { clubId, clubSlug } = requireAdminWorkspace();
   const [{ data: leagueStatus, error: leagueError }, { data: liveDomainStatus, error: liveDomainError }, { data: uploaderStatus, error: uploaderError }, { data: playersData, error: playersError }] = await Promise.all([
     getAdminLeagueManagerStatus(clubId),
     getAdminLeagueLiveStatus(clubId),

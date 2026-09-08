@@ -1,3 +1,4 @@
+import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import Link from "next/link";
 import { getAdminWeeklyRecapApiBaseUrl, getAdminWeeklyRecapStatus } from "@/lib/adminWeeklyRecapApi";
 import WeeklyRecapAdminPanel from "./WeeklyRecapAdminPanel";
@@ -7,7 +8,7 @@ const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: 
 type PageProps = { searchParams?: { week_start?: string; print?: string } };
 
 export default async function AdminWeeklyRecapPage({ searchParams }: PageProps) {
-  const clubId = "tres_palapas";
+  const { clubId, clubSlug } = requireAdminWorkspace();
   const { data: status, error } = await getAdminWeeklyRecapStatus(clubId);
 
   return (
@@ -33,7 +34,7 @@ export default async function AdminWeeklyRecapPage({ searchParams }: PageProps) 
       {status ? <WeeklyRecapAdminPanel apiBase={getAdminWeeklyRecapApiBaseUrl()} clubId={clubId} status={status} initialWeekStart={searchParams?.week_start || ""} printMode={["1", "true", "yes"].includes(String(searchParams?.print || "").toLowerCase())} /> : null}
 
       <p style={{ marginTop: "1rem" }}>
-        <Link href="/clubs/tres-palapas/weekly-recap">Public weekly recap</Link> · <Link href="/admin/player-updates">Player Updates</Link> · <Link href="/admin">Operations cockpit</Link>
+        <Link href={`/clubs/${encodeURIComponent(clubSlug)}/weekly-recap`}>Public weekly recap</Link> · <Link href="/admin/player-updates">Player Updates</Link> · <Link href="/admin">Operations cockpit</Link>
       </p>
     </section>
   );

@@ -1,11 +1,11 @@
 "use client";
+import { useAdminWorkspace } from "@/lib/useAdminWorkspace";
 
 import Link from "next/link";
 import { useState } from "react";
 import {
   clearAdminSession,
   getAdminAuthConfig,
-  getDefaultAdminClubId,
   signOutAdminSession
 } from "@/lib/adminAuthClient";
 import type { AdminSession } from "@/lib/adminAuthClient";
@@ -231,7 +231,7 @@ export default function AdminOperationsCockpit() {
     loading: sessionLoading,
     message: sessionMessage
   } = useAdminSession();
-  const clubId = getDefaultAdminClubId();
+  const { clubId } = useAdminWorkspace();
   const [data, setData] = useState<AdminOperationsStatusResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);

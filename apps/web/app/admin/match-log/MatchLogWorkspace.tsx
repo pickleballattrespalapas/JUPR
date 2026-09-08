@@ -1,4 +1,5 @@
 "use client";
+import { useAdminWorkspace } from "@/lib/useAdminWorkspace";
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -116,7 +117,7 @@ function DuplicateGroupCard({ group, resolved = false }: { group: AdminDuplicate
 }
 
 export default function MatchLogWorkspace({ searchParams, mode }: MatchLogWorkspaceProps) {
-  const clubId = "tres_palapas";
+  const { clubId } = useAdminWorkspace();
   const { accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
   const apiBase = getAdminApiBaseUrl();
   const [rawData, setRawData] = useState<AdminMatchLogResponse | null>(null);
@@ -266,6 +267,7 @@ export default function MatchLogWorkspace({ searchParams, mode }: MatchLogWorksp
   }, [
     accessToken,
     apiBase,
+    clubId,
     contextIdsParam,
     contextTypeParam,
     endDateParam,
