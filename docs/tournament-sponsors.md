@@ -26,10 +26,17 @@ project `sijpxjxvdtrehmqvirfi` before the staging merge.
 
 Registration confirmations, registration edit links, participant broadcasts,
 partner requests and updates, and four-player team invitations include published,
-visible sponsors automatically. Presenting sponsors appear below the email title;
-Supporting and Community sponsors follow the message. Names, public tier labels,
-descriptions and website links appear in both HTML and plain text. Private notes
-and unpublished setup changes are excluded.
+visible sponsors automatically. A compact “Presented by” credit and small logo
+appear below the email title. The presenting sponsor's name and full-size logo
+repeat after the message, registration details, and action buttons, followed by
+their public tier label, description, and website link. Supporting and Community
+sponsors follow that feature. Plain text uses the same order, with only a short
+credit at the top. Private notes and unpublished setup changes are excluded.
+
+Sponsored emails use a readable content width and line spacing. Communications
+gives the organizer's message larger text, while sponsor details sit below a
+divider. Repeated logos reference the same embedded image, so the extra placement
+does not add another attachment.
 
 Uploaded logos are embedded as PNG MIME parts, so delivered emails do not depend
 on expiring storage URLs. Images are resized and limited to 64 KB each / 256 KB
@@ -54,7 +61,7 @@ deployment handoff described in `AGENTS.md`.
 
 The Communications composer offers **Include registration events**, off by default.
 It appends the selected player's event names, days/dates, and partner names or
-partner-needed status below the organizer's message and above lower-tier sponsors.
+partner-needed status below the organizer's message and above the full sponsor details.
 Each recipient receives only the selected registrations associated with their
 email address. Shared inboxes receive one copy with separately named player
 sections; other registrations sharing that address are not added automatically.
