@@ -46,17 +46,19 @@ def test_broadcast_email_body_is_personal_and_does_not_expose_recipient_list():
 
 
 
-def test_event_details_are_escaped_and_appear_between_message_and_supporting_sponsors():
+def test_events_and_edit_buttons_precede_full_title_sponsor_details():
     options = dict(tournament_name="Baja", recipient_name="Alex", subject="Schedule", message="Organizer message",
         personalize_greeting=False, registration_events=[{"name": "Alex <script>", "events": [
             {"division": "Mixed <Open>", "day": "Day 1", "event_date": "2026-11-19", "partner_name": 'Sam <img src=x onerror=alert(1)>'}]}],
-        email_sponsors=[{"name": "Title Sponsor", "tier": "presenting"}, {"name": "Supporting Sponsor", "tier": "premier"}])
+        registration_edit_links=[{"name": "Alex", "edit_url": "https://example.test/edit?t=fixture"}],
+        email_sponsors=[{"name": "Title Sponsor", "tier": "presenting", "public_description": "Sponsor description"}, {"name": "Supporting Sponsor", "tier": "premier"}])
     html = build_tournament_registrant_broadcast_email_html(**options)
     text = build_tournament_registrant_broadcast_email_text(**options)
     assert "Alex &lt;script&gt;" in html and "Mixed &lt;Open&gt;" in html
     assert "<img src=x" not in html
     assert "Nov 19, 2026" in text and "Partner: Sam" in text
-    assert html.index("Title Sponsor") < html.index("Organizer message") < html.index("Your registration events") < html.index("Supporting Sponsor")
+    for rendered in (html, text):
+        assert rendered.index("Title Sponsor") < rendered.index("Organizer message") < rendered.index("Your registration events") < rendered.index("Edit Registration") < rendered.rindex("Presented by") < rendered.index("Sponsor description") < rendered.index("Supporting Sponsor")
 
 
 def test_edit_buttons_escape_names_and_urls_and_preserve_sponsors():

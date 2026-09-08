@@ -113,7 +113,7 @@ def build_tournament_registrant_broadcast_email_html(
 <h1>{escape(_safe_text(subject) or 'Tournament update')}</h1>
 {greeting}
 {tournament_line}
-<p>{_message_html(message)}</p>
+<p style="font-size:18px;line-height:1.65;margin:24px 0">{_message_html(message)}</p>
 {events_html}
 {edit_html}
 <p style=\"color:#6b7280;font-size:12px\">You are receiving this because you registered for this tournament.</p>
