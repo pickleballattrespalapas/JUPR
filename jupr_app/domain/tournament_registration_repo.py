@@ -4057,7 +4057,7 @@ def build_public_tournament_roster_state(
         "players_needing_partners": players_needing_partners,
         "partner_board_entries": partner_board_entries,
         "summary": {
-            "total_registrations": int(state.get("summary", {}).get("total_registrations") or 0),
+            "total_registrations": int(state.get("summary", {}).get("active_registrations", state.get("summary", {}).get("total_registrations")) or 0),
             "total_players": len(unique_players),
             "players_needing_partners": len(unique_partner_player_keys),
             "partner_board_entries": len(partner_board_entries),

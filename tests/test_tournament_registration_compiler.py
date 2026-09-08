@@ -1,4 +1,47 @@
 from jupr_app.domain.tournament_registration_compiler import compile_tournament_registration_state
+import pytest
+
+
+@pytest.mark.parametrize("inactive_status", ["cancelled", " CANCELED ", "WITHDRAWN"])
+def test_inactive_entries_are_removed_before_roster_pairing_and_capacity(inactive_status):
+    registrations = [
+        {"id": "inactive", "email": "inactive@example.com", "display_name": "Inactive Player", "status": inactive_status, "submitted_at": "2026-06-01T10:00:00Z"},
+        {"id": "active", "email": "active@example.com", "display_name": "Active Player", "status": "confirmed", "submitted_at": "2026-06-02T10:00:00Z"},
+    ]
+    selections = [
+        {"id": f"{registration}-{event}", "registration_id": registration, "registration_day_id": "day", "event_option_id": event, "partner_mode": "NONE" if event == "singles" else "NEEDS_PARTNER", "show_on_partner_board": True}
+        for registration in ["inactive", "active"] for event in ["singles", "doubles"]
+    ]
+    state = compile_tournament_registration_state(
+        tournament={"id": "t"}, settings={}, days=[{"id": "day"}],
+        event_options=[
+            {"id": "singles", "registration_day_id": "day", "event_type": "SINGLES", "capacity_teams": 1},
+            {"id": "doubles", "registration_day_id": "day", "event_type": "DOUBLES", "partner_required": True, "public_partner_board": True},
+        ],
+        registrations=registrations, selections=selections,
+        partner_links=[{"id": "old-link", "event_option_id": "doubles", "status": "CONFIRMED", "selection1_id": "inactive-doubles", "selection2_id": "active-doubles"}],
+    )
+    entries = {roster["event_option_id"]: roster["entries"] for roster in state["event_rosters"]}
+    assert entries["singles"][0]["status"] == "CONFIRMED", "The cancelled entry must not consume capacity"
+    assert entries["doubles"][0]["status"] == "NEEDS_PARTNER", "An old team link must not keep a cancelled teammate public"
+    assert all(len(rows) == 1 for rows in entries.values())
+    assert all(member["display_name"] == "Active Player" for rows in entries.values() for row in rows for member in row["members"])
+    assert len(state["registrations"]) == 2, "Cancellation history remains available to admins"
+    assert state["summary"]["active_registrations"] == 1
+    assert state["summary"]["total_selections"] == 2
+    assert [row["registration_id"] for row in state["partner_board"]] == ["active"]
+
+
+def test_latest_cancelled_legacy_duplicate_does_not_revive_earlier_entry():
+    state = _linked_state(
+        registrations=[
+            {"id": "old", "email": "same@example.com", "status": "confirmed", "submitted_at": "2026-06-01T10:00:00Z"},
+            {"id": "latest", "email": "SAME@example.com", "status": "cancelled", "submitted_at": "2026-06-02T10:00:00Z"},
+        ],
+        selections=[{"id": "old-selection", "registration_id": "old", "event_option_id": "singles-35", "registration_day_id": "day-1", "partner_mode": "NONE"}],
+    )
+    assert state["summary"]["active_registrations"] == 0
+    assert all(not roster["entries"] for roster in state["event_rosters"])
 
 
 def _state(*, selections):

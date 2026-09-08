@@ -1328,10 +1328,22 @@ def compile_tournament_registration_state(
         selections,
     )
     reg_lookup = {str(row.get("id")): row for row in merged_regs}
+    inactive_registration_ids = {
+        str(row.get("id"))
+        for row in merged_regs
+        if str(row.get("status") or "").strip().lower()
+        in {"cancelled", "canceled", "withdrawn"}
+    }
 
     # Basic validation
     valid_selections: list[dict[str, Any]] = []
     for selection in merged_selections:
+        # Keep cancelled registrations in the admin records, but exclude their
+        # entries before pairing and capacity checks. Filtering after roster
+        # compilation can leave a cancelled partner in a confirmed team or use
+        # a place that should be available to another player.
+        if str(selection.get("registration_id")) in inactive_registration_ids:
+            continue
         event = event_lookup.get(str(selection.get("event_option_id")))
         day = day_lookup.get(str(selection.get("registration_day_id")))
         if not event or not day:
@@ -1418,6 +1430,7 @@ def compile_tournament_registration_state(
         "issues": issues,
         "summary": {
             "total_registrations": len(merged_regs),
+            "active_registrations": len(merged_regs) - len(inactive_registration_ids),
             "total_selections": len(valid_selections),
             "confirmed_entries": sum(1 for row in summary_entries if row.get("status") == "CONFIRMED"),
             "admin_confirmed_entries": sum(1 for row in summary_entries if row.get("status") == "ADMIN_CONFIRMED"),
