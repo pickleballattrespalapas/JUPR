@@ -92,11 +92,12 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
   const [broadcastMessage, setBroadcastMessage] = useState("");
   const [includeCancelled, setIncludeCancelled] = useState(false);
   const [includeRegistrationEvents, setIncludeRegistrationEvents] = useState(false);
+  const [includeRegistrationEditLinks, setIncludeRegistrationEditLinks] = useState(false);
   const [selectedRegistrationIds, setSelectedRegistrationIds] = useState<string[]>([]);
   const [broadcastPreview, setBroadcastPreview] = useState<AdminTournamentBroadcastPreviewResponse | null>(null);
   const [broadcastPreviewScope, setBroadcastPreviewScope] = useState("");
   const [previewBusy, setPreviewBusy] = useState(false);
-  const previewScope = JSON.stringify([accessToken, apiBase, clubId, initialTournamentId, selectedTournamentId, selectedRegistrationIds, includeCancelled, includeRegistrationEvents, broadcastSubject, broadcastMessage]);
+  const previewScope = JSON.stringify([accessToken, apiBase, clubId, initialTournamentId, selectedTournamentId, selectedRegistrationIds, includeCancelled, includeRegistrationEvents, includeRegistrationEditLinks, broadcastSubject, broadcastMessage]);
   const previewRequest = useLatestRequestGuard(previewScope, clearBroadcastPreview);
   const currentPreview = broadcastPreviewScope === previewScope ? broadcastPreview : null;
 
@@ -310,6 +311,7 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
             message: broadcastMessage,
             include_cancelled: includeCancelled,
             include_registration_events: includeRegistrationEvents,
+            include_registration_edit_links: includeRegistrationEditLinks,
             preview_recipient_email: previewRecipientEmail,
             registration_ids: requestedIds
           })
@@ -318,6 +320,9 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
       if (!previewRequest.isCurrent(generation)) return;
       if (includeRegistrationEvents && payload.include_registration_events !== true) {
         throw new Error("Registration events could not be included. Refresh the page and preview again.");
+      }
+      if (includeRegistrationEditLinks && payload.include_registration_edit_links !== true) {
+        throw new Error("Edit Registration buttons could not be included. Refresh the page and preview again.");
       }
       if (previewRecipientEmail && payload.preview.to_email !== previewRecipientEmail) {
         throw new Error("The requested recipient preview could not be verified. Preview again.");
@@ -430,6 +435,8 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
             <label style={{ display: "block", marginTop: "0.75rem" }}><strong>Message</strong><br /><textarea value={broadcastMessage} disabled={busy} maxLength={10000} onChange={(event) => setBroadcastMessage(event.target.value)} rows={6} style={inputStyle} /></label>
             <label style={{ display: "block", marginTop: "0.75rem" }}><input type="checkbox" checked={includeRegistrationEvents} disabled={busy} onChange={(event) => setIncludeRegistrationEvents(event.target.checked)} /> Include registration events</label>
             <p style={{ color: "#475569", marginTop: "0.35rem" }}>Add each selected player’s events, dates, and partner details below your message. Players sharing an email address are listed separately in one email.</p>
+            <label style={{ display: "block", marginTop: "0.75rem" }}><input type="checkbox" checked={includeRegistrationEditLinks} disabled={busy} onChange={(event) => setIncludeRegistrationEditLinks(event.target.checked)} /> Include Edit Registration button</label>
+            <p style={{ color: "#475569", marginTop: "0.35rem" }}>Give each selected player a private link to edit their registration. Links expire after 48 hours.</p>
             <p><button type="button" onClick={() => previewBroadcast()} disabled={busy || previewBusy || !selectedRegistrations.length || !broadcastSubject.trim() || !broadcastMessage.trim()} style={buttonStyle}>{previewBusy ? "Building preview…" : "Preview recipients"}</button></p>
             {currentPreview ? (
               <div style={{ background: "#f8fafc", borderRadius: "10px", padding: "0.75rem" }}>
@@ -457,7 +464,7 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
             ) : null}
             <TournamentEmailDelivery clubId={clubId} tournamentId={detail.tournament.id} accessToken={accessToken}
               apiBase={apiBase} preview={currentPreview} previewScope={previewScope} subject={broadcastSubject}
-              message={broadcastMessage} includeCancelled={includeCancelled} includeRegistrationEvents={includeRegistrationEvents} busy={busy || previewBusy} onBusy={setBusy} requestJson={requestJson} />
+              message={broadcastMessage} includeCancelled={includeCancelled} includeRegistrationEvents={includeRegistrationEvents} includeRegistrationEditLinks={includeRegistrationEditLinks} busy={busy || previewBusy} onBusy={setBusy} requestJson={requestJson} />
           </article>
 
           <article style={cardStyle}>

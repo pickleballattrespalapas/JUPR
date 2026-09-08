@@ -48,6 +48,7 @@ async function main() {
   let deferNext = false;
   let resolvePreview;
   let legacyApi = false;
+  let legacyEditApi = false;
   let renderer;
   global.fetch = async (url, options = {}) => {
     if (url.endsWith("broadcast-preview")) {
@@ -60,10 +61,11 @@ async function main() {
       const payload = {
         selected_registration_ids: legacyApi ? undefined : body.registration_ids,
         include_registration_events: legacyApi ? undefined : body.include_registration_events,
+        include_registration_edit_links: legacyEditApi ? undefined : body.include_registration_edit_links,
         recipient_count: emails.size,
         recipients: [...emails].map(([email, row]) => ({ name: row.display_name, email })),
         recipient_csv: [...emails.keys()].join("\n"),
-        preview: { to_email: body.preview_recipient_email || [...emails.keys()][0], to_name: "Selected participant", text: `Preview: ${body.message}`, html: `<html><body><h1>Email</h1><p>Presented by Homes and Land</p><p>${body.message}</p>${body.include_registration_events ? `<h2>Your registration events</h2><p>Events for ${body.preview_recipient_email || [...emails.keys()][0]}</p>` : ""}<h2>Supporting sponsors</h2></body></html>` }
+        preview: { to_email: body.preview_recipient_email || [...emails.keys()][0], to_name: "Selected participant", text: `Preview: ${body.message}`, html: `<html><body><h1>Email</h1><p>Presented by Homes and Land</p><p>${body.message}</p>${body.include_registration_events ? `<h2>Your registration events</h2><p>Events for ${body.preview_recipient_email || [...emails.keys()][0]}</p>` : ""}${body.include_registration_edit_links ? `<span aria-disabled="true">Edit Registration for ${body.preview_recipient_email || [...emails.keys()][0]}</span>` : ""}<h2>Supporting sponsors</h2></body></html>` }
       };
       if (deferNext) { deferNext = false; return new Promise(resolve => { resolvePreview = () => resolve(response(payload)); }); }
       return response(payload);
@@ -82,6 +84,7 @@ async function main() {
     const select = async (name, checked = true) => act(async () => checkbox(name).props.onChange({ target: { checked } }));
     const setContent = async (label, value) => act(async () => root.findAllByType("label").find(l => text(l).startsWith(label)).findByType(label === "Message" ? "textarea" : "input").props.onChange({ target: { value } }));
     const toggleEvents = async checked => act(async () => root.findAllByType("label").find(l => text(l) === " Include registration events").findByType("input").props.onChange({ target: { checked } }));
+    const toggleEditLinks = async checked => act(async () => root.findAllByType("label").find(l => text(l) === " Include Edit Registration button").findByType("input").props.onChange({ target: { checked } }));
     const toggleCancelled = async checked => act(async () => root.findAllByType("label").find(l => text(l) === " Include cancelled registrations").findByType("input").props.onChange({ target: { checked } }));
 
     assert.equal(button("Preview recipients").props.disabled, true);
@@ -104,6 +107,13 @@ async function main() {
     assert.match(emailFrame.props.srcDoc, /default-src 'none'/);
     assert.match(emailFrame.props.srcDoc, /img-src data:/);
     assert.equal(requests.at(-1).include_registration_events, false);
+    assert.equal(requests.at(-1).include_registration_edit_links, false);
+    await toggleEditLinks(true);
+    assert.equal(button("Download recipient CSV"), undefined, "Edit buttons invalidate the previous review");
+    await act(async () => button("Preview recipients").props.onClick());
+    assert.equal(requests.at(-1).include_registration_edit_links, true);
+    assert.equal(requests.at(-1).include_registration_events, false, "Edit buttons work without event details");
+    assert.match(root.findByProps({ title: "Tournament email preview" }).props.srcDoc, /Edit Registration for alex@example.com/);
     await toggleEvents(true);
     assert.equal(button("Download recipient CSV"), undefined, "Event option invalidates the previous review");
     await act(async () => button("Preview recipients").props.onClick());
@@ -121,6 +131,8 @@ async function main() {
     assert.deepEqual(requests.at(-1).registration_ids, ["alex", "beth"], "Preview selection does not change the audience");
     assert.match(root.findByProps({ title: "Tournament email preview" }).props.srcDoc, /Events for beth@example.com/);
     assert.doesNotMatch(root.findByProps({ title: "Tournament email preview" }).props.srcDoc, /Events for alex@example.com/);
+    assert.match(root.findByProps({ title: "Tournament email preview" }).props.srcDoc, /Edit Registration for beth@example.com/);
+    assert.doesNotMatch(root.findByProps({ title: "Tournament email preview" }).props.srcDoc, /Edit Registration for alex@example.com/);
     await act(async () => root.findByProps({ "aria-label": "Remove Alex from selection" }).props.onClick());
     assert.match(text(root), /1 participant selected · 1 email recipient/);
     await changeSearch("");
@@ -141,6 +153,18 @@ async function main() {
     await toggleEvents(false);
     await act(async () => resolvePreview());
     assert.equal(button("Download recipient CSV"), undefined, "A late response cannot restore events after the option changes");
+    deferNext = true;
+    await act(async () => { void button("Preview recipients").props.onClick(); });
+    await toggleEditLinks(false);
+    await act(async () => resolvePreview());
+    assert.equal(button("Download recipient CSV"), undefined, "A late response cannot restore edit buttons after the option changes");
+    await toggleEditLinks(true);
+    legacyEditApi = true;
+    await act(async () => button("Preview recipients").props.onClick());
+    assert.match(text(root), /Edit Registration buttons could not be included/);
+    assert.equal(button("Download recipient CSV"), undefined, "An older API cannot silently omit requested edit buttons");
+    legacyEditApi = false;
+    await toggleEditLinks(false);
     deferNext = true;
     await act(async () => { void button("Preview recipients").props.onClick(); });
     await select("Beth");

@@ -110,3 +110,25 @@ def test_event_option_passes_from_api_review_to_saved_delivery(api):
     key = created.json()["operation_key"]
     sent = client.post(f"{ROOT}/{key}/recipients/0/send", headers=headers, json={"confirmation_text": CONFIRM_SEND})
     assert sent.json()["status"] == "dry_run"
+
+
+def test_edit_button_option_passes_through_preview_and_saved_send(api, monkeypatch):
+    db, client, headers = api
+    monkeypatch.setenv("JUPR_REGISTRATION_EDIT_SECRET", "api-test-only-explicit-registration-secret-1234")
+    monkeypatch.setenv("JUPR_WEB_BASE_URL", "https://registration.example.test")
+    db.tables["clubs"] = [{"id": "club", "slug": "tres-palapas"}]
+    body = {key: value for key, value in prepare(db, include_registration_edit_links=True).items()
+            if key not in {"club_id", "tournament_id", "actor_email", "actor_role"}}
+    preview = client.post(ROOT.rsplit("/", 1)[0]+"/broadcast-preview", headers=headers, json=body)
+    assert preview.status_code == 200
+    assert preview.json()["include_registration_edit_links"] is True
+    assert "Edit Registration" in preview.json()["preview"]["html"]
+    assert "edit_token=" not in preview.text
+    created = client.post(ROOT, json=body, headers=headers)
+    assert created.status_code == 200
+    assert created.json()["include_registration_edit_links"] is True
+    key = created.json()["operation_key"]
+    sent = client.post(f"{ROOT}/{key}/recipients/0/send", headers=headers, json={"confirmation_text": CONFIRM_SEND})
+    assert sent.json()["status"] == "dry_run"
+    assert client.get(f"{ROOT}/{key}", headers=headers).json()["include_registration_edit_links"] is True
+    assert "edit_token=" not in str(db.tables["communications_admin_operations"])

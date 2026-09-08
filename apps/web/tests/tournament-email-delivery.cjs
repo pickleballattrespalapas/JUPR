@@ -39,6 +39,7 @@ async function scenario() {
       const payload = JSON.parse(options.body);
       stored ||= { operation_key: payload.operation_key, subject: "Baja: Update", message: payload.message,
         include_registration_events: payload.include_registration_events,
+        include_registration_edit_links: payload.include_registration_edit_links,
         recipients: structuredClone(recipients), pending_count: 2, recipient_count: 2, delivery_mode: "live", sender: preview.sender };
       return structuredClone(stored);
     }
@@ -53,12 +54,13 @@ async function scenario() {
     return structuredClone(stored);
   };
   let props = { clubId: "club", tournamentId: "baja", accessToken: "fixture", apiBase: "http://fixture.local", preview,
-    previewScope: "scope1", subject: "Update", message: "Hi Alex,\nHello.", includeCancelled: false, includeRegistrationEvents: true, busy: false, onBusy() {}, requestJson };
+    previewScope: "scope1", subject: "Update", message: "Hi Alex,\nHello.", includeCancelled: false, includeRegistrationEvents: true, includeRegistrationEditLinks: true, busy: false, onBusy() {}, requestJson };
   let renderer;
   await act(async () => { renderer = create(React.createElement(Component, props)); });
   const action = prefix => renderer.root.findAllByType(ConfirmAction).find(row => row.props.triggerLabel.startsWith(prefix));
   const sendRequests = () => requests.filter(r => r.url.endsWith("/send"));
   assert.equal(sendRequests().length, 0, "Loading and reviewing must not send");
+  assert.match(action("Send email").props.description, /private Edit Registration button/);
   const staleConfirm = action("Send email").props.onConfirm;
   props = { ...props, previewScope: "changed", preview: null };
   await act(async () => renderer.update(React.createElement(Component, props)));
@@ -71,6 +73,7 @@ async function scenario() {
   await act(async () => { completion = await action("Send email").props.onConfirm(confirmText); });
   assert.equal(completion.status, "uncertain");
   assert.equal(requests.find(r => r.method === "POST" && r.url.endsWith("broadcasts")).body.include_registration_events, true);
+  assert.equal(requests.find(r => r.method === "POST" && r.url.endsWith("broadcasts")).body.include_registration_edit_links, true);
   assert.equal(sendRequests().length, 1, "Stop on lost response, rather than send the rest blindly");
   await act(async () => { await completion.onRecover(); });
   assert.match(text(renderer.root), /1 sent · 1 not sent/);
@@ -81,6 +84,7 @@ async function scenario() {
   assert.match(sendRequests()[1].url, /recipients\/1\/send$/, "Resume sends only the remaining person");
   assert.match(text(renderer.root), /2 sent/);
   assert.match(text(renderer.root), /includes that recipient’s registration events/);
+  assert.match(text(renderer.root), /private Edit Registration button/);
   assert.equal(action("Continue sending"), undefined);
   await act(async () => renderer.unmount());
 
@@ -91,6 +95,7 @@ async function scenario() {
   await act(async () => historyButton.props.onClick());
   assert.match(text(renderer.root), /2 sent/);
   assert.match(text(renderer.root), /includes that recipient’s registration events/);
+  assert.match(text(renderer.root), /private Edit Registration button/);
   assert.equal(sendRequests().length, 2);
   await act(async () => renderer.unmount());
 
