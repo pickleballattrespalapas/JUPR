@@ -179,9 +179,6 @@ export default async function TournamentRosterPage({
   const eventChoices = orderedChoices(entries.map((entry) => entry.event_family));
   const divisionChoices = orderedChoices(entries.map((entry) => entry.division));
   const statusChoices = orderedChoices(entries.map(statusLabel));
-  const registeredEntries = entries.filter(
-    (entry) => statusLabel(entry) === "Registered"
-  ).length;
   const query = selectedQuery(tournament.id, settings?.registration_slug);
   const queryPrefix = query ? `?${query}` : "";
 
@@ -246,7 +243,7 @@ export default async function TournamentRosterPage({
         >
           <div><strong>Sign-ups</strong><br />{data?.summary?.total_registrations ?? 0}</div>
           <div><strong>Players</strong><br />{data?.summary?.total_players ?? 0}</div>
-          <div><strong>Confirmed entries</strong><br />{registeredEntries}</div>
+          <div><strong>Total entries</strong><br />{entries.length}</div>
           <div><strong>Looking for partners</strong><br />{data?.summary?.players_needing_partners ?? 0}</div>
           <div><strong>Registration deadline</strong><br />{dateTimeLabel(settings?.registration_close_at)}</div>
         </div>

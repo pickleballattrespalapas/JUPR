@@ -604,7 +604,10 @@ export async function getClubTournamentRoster(
   if (params?.tournamentId) query.set("tournament_id", params.tournamentId);
   if (params?.registrationSlug) query.set("registration_slug", params.registrationSlug);
   const suffix = query.toString() ? `?${query.toString()}` : "";
-  return fetchJson<TournamentRosterResponse>(`/clubs/${clubSlug}/tournament-roster${suffix}`);
+  // Roster and partner-board reads must reflect the most recent saved entry.
+  return fetchJson<TournamentRosterResponse>(`/clubs/${clubSlug}/tournament-roster${suffix}`, {
+    cache: "no-store"
+  });
 }
 
 export async function submitClubTournamentRegistration(
