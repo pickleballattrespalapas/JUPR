@@ -144,6 +144,25 @@ function normalizedGender(value?: string | null): "MEN" | "WOMEN" | "OTHER" | ""
   return text ? "OTHER" : "";
 }
 
+const registrationGenders = ["Women", "Men", "Non-binary", "Other", "Prefer not to say"];
+
+export function normalizeRegistrationGender(value?: string | null): string {
+  const text = String(value || "").trim();
+  const gender = normalizedGender(text);
+  if (gender === "MEN") return "Men";
+  if (gender === "WOMEN") return "Women";
+  const key = text.toLowerCase().replace(/[^a-z]/g, "");
+  return registrationGenders.find((option) => option.toLowerCase().replace(/[^a-z]/g, "") === key) ?? text;
+}
+
+export function registrationGenderOptions(value?: string | null): string[] {
+  const gender = normalizeRegistrationGender(value);
+  // Preserve an unfamiliar saved value instead of silently submitting a blank.
+  return gender && !registrationGenders.includes(gender)
+    ? [...registrationGenders, gender]
+    : registrationGenders;
+}
+
 function finiteNumber(value?: number | null): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
