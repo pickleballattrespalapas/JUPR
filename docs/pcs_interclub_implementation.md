@@ -334,3 +334,45 @@ not be treated as an approved result or permission to write ratings. Scheduling
 changes after clubs accept need an explicit future change/notification workflow.
 Player merges involving an interclub entry must preserve its represented-club
 and historical source identity; the FK deliberately prevents silent deletion.
+
+
+## Meet rosters (2026-09-08 correction)
+
+Joe clarified that travel makes a fixed season roster unsuitable. Clubs enroll
+for the season, but submit four available players separately for each scheduled
+meet. The roster workspace now selects a meet, defaults to the next upcoming
+one, and shows only that meet's teams, revisions and eligibility decisions.
+Nothing is automatically copied from the previous meet. The same player and
+team name can be used at multiple meets; duplicate player places are blocked
+only within the same club, meet and division.
+
+Opening season invitations no longer asks for a roster deadline. Each scheduled
+meet receives its own deadline, initially its start time. Before the first team
+submits, the organizer can set an earlier future deadline for that meet. Valid
+substitutions remain allowed after the deadline until the meet starts. A newly
+submitted late team requires an exception for that meet. Once the meet starts,
+lineups and decisions are read-only history in this registration workspace;
+future live-operations corrections need their own explicit workflow.
+
+Existing season submissions are preserved as reference-only history, without
+assigning them to a meet or reserving player places at future meets. The former
+season write endpoints and RPCs require reload. Starting league ratings remain
+captured once per represented club/player/season when that player first enters
+a meet; players can join at any later meet. This does not lock season membership
+or change home-club ratings. Season eligibility rules and accepted schedule
+snapshots remain unchanged by roster edits.
+
+Meet IDs and season ownership are checked by the API, transactions and composite
+foreign keys. Writes carry both meet and roster revisions and share the existing
+staff/season locks. Meet switches abort pending responses and discard the old
+editor. Organizer views retain only submitted eligibility facts, and a club's
+player picker remains private to that club.
+
+Validation passed: 132 focused Python checks, including API meet/season/club
+isolation and old-client rejection; the full component suite;
+component checks for separate lineups/deadlines and switching during a save; and
+an isolated, rolled-back SQL scenario with two meets. The SQL scenario proves
+reusing players in the next meet, independent deadlines, unchanged history and
+next-meet lineups, stale revision protection, late substitutions, scope foreign
+keys, and refusal to change a started meet. Browser pilot steps are below in
+`docs/second_club_staging_pilot.md`.
