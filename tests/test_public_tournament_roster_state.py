@@ -1,7 +1,48 @@
 import json
 
+import pytest
+
 from jupr_app.domain import tournament_registration_repo as repo
 from jupr_app.domain.tournament_public_references import build_public_tournament_reference
+
+
+@pytest.mark.parametrize(
+    ("mode", "entry_type", "skills", "expected"),
+    [
+        ("COMBINED_RATING_CAP", "confirmed_team", ["5.24", "3.47"], 8.71),
+        ("COMBINED_RATING_CAP", "confirmed_team", [5.2, 3.0], 8.2),
+        ("COMBINED_RATING_CAP", "confirmed_team", [7.1, 3.47], 10.57),
+        ("STANDARD", "confirmed_team", ["5.24", "3.47"], None),
+        ("COMBINED_RATING_CAP", "needs_partner", ["5.24"], None),
+        ("COMBINED_RATING_CAP", "pending_partner_request", ["5.24", "3.47"], None),
+        ("COMBINED_RATING_CAP", "confirmed_team", ["5.24", None], None),
+        ("COMBINED_RATING_CAP", "confirmed_team", ["5.24", "Unrated"], None),
+        ("COMBINED_RATING_CAP", "confirmed_team", ["5.24", "NaN"], None),
+        ("COMBINED_RATING_CAP", "confirmed_team", ["5.24", 0], None),
+    ],
+)
+def test_public_roster_combines_only_complete_rated_teams(monkeypatch, mode, entry_type, skills, expected):
+    compiled_state = {
+        "event_options": [{"id": "mixed", "eligibility_mode": mode}],
+        "event_rosters": [{
+            "event_option_id": "mixed",
+            "entries": [{
+                "entry_type": entry_type,
+                "status": "CONFIRMED",
+                "members": [
+                    {"display_name": f"Player {index + 1}", "skill": skill}
+                    for index, skill in enumerate(skills)
+                ],
+            }],
+        }],
+    }
+    monkeypatch.setattr(repo, "build_registration_state", lambda *_args: compiled_state)
+
+    state = repo.build_public_tournament_roster_state(None, {"id": "test"}, {}, [], [])
+
+    row = state["registrations_by_event"][0]
+    assert row["combined_rating"] == expected
+    assert [member["skill"] for member in row["members"]] == skills
 
 
 def test_public_roster_includes_all_registered_statuses_and_needs_partner_only_list(monkeypatch):
