@@ -40,6 +40,10 @@ const content = node => typeof node === "string" ? node : (node.children || []).
 
 async function verifyPublicLegacyGenders() {
   const submissions = [];
+  const PartnerDetails = load("components/tournaments/TournamentPartnerDetails.tsx", {
+    "@/lib/tournamentRegistrationEligibility": eligibility,
+    "@/lib/tournamentRegistrationApi": {}
+  }).default;
   const PublicEditForm = load("app/clubs/[clubSlug]/tournament-registration/edit/EditTournamentRegistrationForm.tsx", {
     "next/link": { __esModule: true, default: ({ children }) => children },
     "@/lib/tournamentRegistrationEligibility": eligibility,
@@ -49,6 +53,7 @@ async function verifyPublicLegacyGenders() {
         return { data: { registration_id: "reg-edit", confirmation_token: "fixture-confirmation" } };
       }
     },
+    "@/components/tournaments/TournamentPartnerDetails": { __esModule: true, default: PartnerDetails },
     "@/components/interaction": { InteractionDialog: ({ children }) => React.createElement("div", { role: "dialog" }, children) },
     "../TournamentCommerceChooser": { __esModule: true, default: () => null }
   }).default;
