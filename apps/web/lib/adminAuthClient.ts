@@ -559,6 +559,47 @@ export async function consumeStaffInvitationSession(): Promise<AdminSession | nu
   return normalizeSession(payload);
 }
 
+// The invited recipient has authenticated but has no club grant yet. Password
+// setup uses their own bearer session, never an admin credential or recovery bypass.
+export async function setInvitationPassword(password: string, session: AdminSession): Promise<AdminSession> {
+  if (password.length < ADMIN_PASSWORD_MIN_LENGTH) {
+    throw new Error(`Use at least ${ADMIN_PASSWORD_MIN_LENGTH} characters for your password.`);
+  }
+  if (!session?.access_token || session.recovery) throw new Error("Verify your email again to set a password.");
+  const current = await refreshAdminSession(session);
+  const config = getAdminAuthConfig();
+  if (!current || !config) throw new Error("Your sign-in expired. Request another verification link.");
+  let response: Response;
+  try {
+    response = await fetch(`${config.supabaseUrl}/auth/v1/user`, {
+      method: "PUT",
+      headers: {
+        apikey: config.supabaseAnonKey,
+        Authorization: `Bearer ${current.access_token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ password })
+    });
+  } catch {
+    throw new Error("Could not confirm your password was saved. Try signing in with the new password, or request another verification link.");
+  }
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    const detail = authResponseError(payload);
+    if (payload?.code === "same_password" || detail.includes("same password") || detail.includes("different from the old")) {
+      throw new Error("That is already your password. Choose a different one, or continue with your existing password.");
+    }
+    if (payload?.code === "weak_password" || detail.includes("weak") || detail.includes("password should") || detail.includes("password must") || detail.includes("at least")) {
+      throw new Error("Choose a longer, unique password that meets the account password requirements.");
+    }
+    if (response.status === 401 || response.status === 403 || payload?.code === "reauthentication_needed") {
+      throw new Error("Your sign-in needs to be verified again. Request another verification link.");
+    }
+    throw new Error("Unable to save your password right now. Try again, or request another verification link.");
+  }
+  return current;
+}
+
 async function exchangeRecoveryCode(code: string): Promise<AdminSession> {
   const config = getAdminAuthConfig();
   const verifier = consumeRecoveryVerifier();
