@@ -58,7 +58,7 @@ const auth={getAdminApiBaseUrl:()=> 'https://test.invalid',signOutAdminSession:a
  const authClient=load('lib/adminAuthClient.ts');process.env.NEXT_PUBLIC_JUPR_API_BASE_URL='https://test.invalid';const urls=[];
  global.fetch=async url=>(urls.push(url),{ok:true,status:200,json:async()=>({authorized:true,user:{},assignments:[{club_id:'beta',role:'operator'}]})});
  await authClient.authorizeAdminSession({access_token:'fixture'});await authClient.authorizeAdminSession({access_token:'fixture'},'beta');assert.deepEqual(urls,['https://test.invalid/admin/auth/capabilities','https://test.invalid/admin/auth/capabilities?club_id=beta']);
- const available=load('lib/useAvailableWorkspaces.ts',{'./adminAuthClient':auth});let oldResponse,refreshResponse;
+ const available=load('lib/useAvailableWorkspaces.ts',{'./adminAuthClient':auth,'./adminWorkspace':workspace});let oldResponse,refreshResponse;
  global.fetch=(url,r)=>r.headers.Authorization==='Bearer old'?new Promise(resolve=>oldResponse=resolve):r.headers.Authorization==='Bearer refreshed'?new Promise(resolve=>refreshResponse=resolve):Promise.resolve({ok:true,json:async()=>({workspaces:[beta]})});
  function Read({token,identity}){const v=available.useAvailableWorkspaces(token,identity);return React.createElement('span',null,v.workspaces.map(w=>w.club_id).join(','));}
  await act(async()=>tree=create(React.createElement(Read,{token:'old',identity:'old-user'})));await act(async()=>tree.update(React.createElement(Read,{token:'new',identity:'new-user'})));
