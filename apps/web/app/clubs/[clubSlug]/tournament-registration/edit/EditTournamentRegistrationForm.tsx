@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import TournamentPartnerDetails, { type TournamentPartnerDetailsValue } from "@/components/tournaments/TournamentPartnerDetails";
 import { FormEvent, useCallback, useMemo, useState } from "react";
 import {
   PublicRegistrationEditRegistration,
@@ -49,7 +50,7 @@ type EditTournamentRegistrationFormProps = {
 type EventSelectionDraft = Omit<
   PublicRegistrationSelectionPayload,
   "event_option_id" | "registration_day_id" | "partner_mode"
->;
+> & { partner_profile_id?: string };
 
 const cardStyle = {
   border: "1px solid #e2e8f0",
@@ -599,6 +600,16 @@ export default function EditTournamentRegistrationForm({
       {editingEventId && eventById.get(editingEventId) ? (() => {
         const eventOption = eventById.get(editingEventId)!;
         const prior = selectionDrafts[editingEventId];
+        const partnerValue: TournamentPartnerDetailsValue = {
+          name: prior?.partner_name || "",
+          email: prior?.partner_email || "",
+          phone: prior?.partner_phone || "",
+          duprId: prior?.partner_dupr_id || "",
+          skill: String(prior?.partner_skill ?? ""),
+          age: String(prior?.partner_age ?? ""),
+          gender: prior?.partner_gender || "",
+          profileId: prior?.partner_profile_id || ""
+        };
         const mode =
           partnerModes[editingEventId] ||
           (eventOption.partner_required ? "NEEDS_PARTNER" : "NONE");
@@ -647,15 +658,23 @@ export default function EditTournamentRegistrationForm({
                 </select>
               </label>
               {mode === "HAS_PARTNER" ? (
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.5rem" }}>
-                  <label>Partner name<br /><input defaultValue={prior?.partner_name || ""} onChange={(event) => updateSelectionDraft(editingEventId, { partner_name: event.target.value })} required style={{ width: "100%" }} /></label>
-                  <label>Partner email<br /><input defaultValue={prior?.partner_email || ""} onChange={(event) => updateSelectionDraft(editingEventId, { partner_email: event.target.value })} type="email" required style={{ width: "100%" }} /></label>
-                  <label>Partner phone<br /><input defaultValue={prior?.partner_phone || ""} onChange={(event) => updateSelectionDraft(editingEventId, { partner_phone: event.target.value })} style={{ width: "100%" }} /></label>
-                  <label>Partner DUPR ID<br /><input defaultValue={prior?.partner_dupr_id || ""} onChange={(event) => updateSelectionDraft(editingEventId, { partner_dupr_id: event.target.value })} style={{ width: "100%" }} /></label>
-                  <label>Partner skill<br /><input defaultValue={prior?.partner_skill ?? ""} onChange={(event) => updateSelectionDraft(editingEventId, { partner_skill: numberOrNull(event.target.value) })} type="number" min="1" max="7" step="0.01" style={{ width: "100%" }} /></label>
-                  <label>Partner age<br /><input defaultValue={prior?.partner_age ?? ""} type="number" min="1" max="120" required onChange={(event) => updateSelectionDraft(editingEventId, { partner_age: numberOrNull(event.target.value) })} style={{ width: "100%" }} /></label>
-                  <label>Partner gender<br /><select value={prior?.partner_gender || ""} required onChange={(event) => updateSelectionDraft(editingEventId, { partner_gender: event.target.value })} style={{ width: "100%" }}><option value="">Select</option>{registrationGenderOptions(prior?.partner_gender).map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
-                </div>
+                <TournamentPartnerDetails
+                  key={editingEventId}
+                  clubSlug={clubSlug}
+                  tournamentId={tournamentId}
+                  registrationSlug={registrationSlug}
+                  labelPrefix={eventOption.division_name}
+                  value={partnerValue}
+                  onChange={(patch) => {
+                    const next = { ...partnerValue, ...patch };
+                    updateSelectionDraft(editingEventId, {
+                      partner_name: next.name, partner_email: next.email,
+                      partner_phone: next.phone, partner_dupr_id: next.duprId,
+                      partner_skill: numericState(next.skill), partner_age: numericState(next.age),
+                      partner_gender: next.gender, partner_profile_id: next.profileId
+                    });
+                  }}
+                />
               ) : null}
               {mode === "NEEDS_PARTNER" ? (
                 <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>

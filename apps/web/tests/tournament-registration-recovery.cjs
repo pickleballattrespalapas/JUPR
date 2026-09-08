@@ -31,6 +31,7 @@ const Form = load(registration + "TournamentRegistrationForm.tsx", {
     "@/lib/tournamentSkillEligibility": load("lib/tournamentSkillEligibility.ts")
   }),
   "@/lib/tournamentTeamCompetitionApi": {},
+  "@/components/tournaments/TournamentPartnerDetails": { default: () => null },
   "@/components/tournaments/FourPlayerTeamRegistrationCard": { default: () => null, TEAM_SLOTS: [] },
   "./EditLinkRequestForm": { default: EditForm },
   "./TournamentCommerceChooser": { default: () => null }
