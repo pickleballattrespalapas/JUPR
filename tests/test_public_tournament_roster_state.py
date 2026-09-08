@@ -11,12 +11,14 @@ from jupr_app.domain.tournament_public_references import build_public_tournament
     [
         ("COMBINED_RATING_CAP", "confirmed_team", ["5.24", "3.47"], 8.71),
         ("COMBINED_RATING_CAP", "confirmed_team", [5.2, 3.0], 8.2),
+        ("COMBINED_RATING_CAP", "confirmed_team", [7.1, 3.47], 10.57),
         ("STANDARD", "confirmed_team", ["5.24", "3.47"], None),
         ("COMBINED_RATING_CAP", "needs_partner", ["5.24"], None),
         ("COMBINED_RATING_CAP", "pending_partner_request", ["5.24", "3.47"], None),
         ("COMBINED_RATING_CAP", "confirmed_team", ["5.24", None], None),
         ("COMBINED_RATING_CAP", "confirmed_team", ["5.24", "Unrated"], None),
         ("COMBINED_RATING_CAP", "confirmed_team", ["5.24", "NaN"], None),
+        ("COMBINED_RATING_CAP", "confirmed_team", ["5.24", 0], None),
     ],
 )
 def test_public_roster_combines_only_complete_rated_teams(monkeypatch, mode, entry_type, skills, expected):

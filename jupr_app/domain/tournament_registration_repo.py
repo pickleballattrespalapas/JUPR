@@ -3921,7 +3921,7 @@ def build_public_tournament_roster_state(
         ):
             return None
         ratings = [_optional_float(member.get("skill")) for member in members]
-        if any(rating is None or not 1 <= rating <= 7 for rating in ratings):
+        if any(rating is None or rating <= 0 for rating in ratings):
             return None
         # Match the individual ratings already displayed on the public roster.
         return round(sum(rating for rating in ratings if rating is not None), 2)
