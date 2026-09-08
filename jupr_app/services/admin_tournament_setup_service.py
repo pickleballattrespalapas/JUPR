@@ -29,6 +29,8 @@ from jupr_app.domain.tournament_registration_repo import (
     list_registration_days,
     list_registrations,
     list_registration_selections,
+    is_day_enabled,
+    public_event_option_visibility,
     publish_registration_configuration,
     save_builder_draft,
     upsert_registration_settings,
@@ -446,6 +448,34 @@ def list_admin_tournament_setup_tournaments(supabase: Any, *, club_id: str, incl
     return {"ok": True, "mode": "tournament_setup_list", "tournaments": tournaments, "count": len(tournaments)}
 
 
+def _registration_division_readiness(
+    days: list[dict[str, Any]], events: list[dict[str, Any]], *, registration_status: str = "draft"
+) -> dict[str, Any]:
+    """Use the public registration day/visibility rules on published rows only."""
+    enabled_days = {str(day.get("id")) for day in days if is_day_enabled(day)}
+    enabled_events = [
+        event for event in events
+        if _bool(event.get("enabled", True))
+        and str(event.get("registration_day_id") or "") in enabled_days
+    ]
+    available = [
+        event for event in enabled_events
+        if public_event_option_visibility(event) == "selectable"
+    ]
+    # Reopening the whole tournament may restore closed divisions. An already
+    # open tournament must retain any divisions that staff closed individually.
+    openable_statuses = {"draft", "closed"} if registration_status == "closed" else {"draft"}
+    pending = [
+        event for event in enabled_events
+        if str(event.get("status") or "draft").strip().lower() in openable_statuses
+    ]
+    return {
+        "available_division_count": len(available),
+        "ready_division_count": len(available) + len(pending),
+        "divisions_to_open": [str(event["id"]) for event in pending],
+    }
+
+
 def get_admin_tournament_setup_detail(supabase: Any, *, club_id: str, tournament_id: str) -> dict[str, Any]:
     _assert_enabled()
     tournament = _get_tournament_for_club(supabase, club_id=str(club_id), tournament_id=str(tournament_id))
@@ -483,6 +513,9 @@ def get_admin_tournament_setup_detail(supabase: Any, *, club_id: str, tournament
         "settings": _settings_payload(settings),
         "days": days,
         "event_options": events,
+        "registration_readiness": _registration_division_readiness(
+            days, events, registration_status=str(settings.get("registration_status") or "draft")
+        ),
         "builder_draft": draft,
         "publish_impact": impact,
         "publish_impact_warning": impact_warning,
@@ -1230,9 +1263,38 @@ def update_admin_tournament_setup_settings(
     for key in ("waitlist_enabled", "partner_board_enabled"):
         if key in payload:
             payload[key] = _bool(payload.get(key), default=True)
+    opening = payload.get("registration_status") == "open"
+    events = [dict(row) for row in list_event_options(supabase, str(tournament_id))] if opening else []
+    readiness = _registration_division_readiness(
+        list_registration_days(supabase, str(tournament_id)), events,
+        registration_status=str(before.get("registration_status") or "draft"),
+    ) if opening else None
+    if opening:
+        if str(tournament.get("status") or "").upper() != "ACTIVE":
+            raise ValueError("Publish and activate the tournament before opening registration.")
+        if not readiness["ready_division_count"]:
+            raise ValueError(
+                "No published divisions are available for registration. "
+                "Enable a division on an enabled tournament day and publish the setup first."
+            )
     if dry_run:
         return {"ok": True, "mode": "tournament_setup_settings_preflight", "dry_run": True, "write_count": 0, "patch": payload}
-    updated = upsert_registration_settings(supabase, payload)
+    opened_ids = readiness["divisions_to_open"] if readiness else []
+    if opened_ids:
+        # Prepare published divisions before switching registration on. The
+        # tournament-wide gate continues to block intake if this write fails.
+        opened = _safe_rows(
+            supabase.table("tournament_event_options")
+            .update({"status": "open"})
+            .eq("tournament_id", str(tournament_id))
+            .in_("id", opened_ids)
+            .in_("status", ["draft", "closed"])
+            .execute()
+        )
+        if {str(row.get("id")) for row in opened} != set(opened_ids):
+            raise RuntimeError("Division availability changed. Reload tournament setup before opening registration.")
+    # A status-only request must preserve the published dates, venue and rules.
+    updated = upsert_registration_settings(supabase, {**before, **payload})
     warnings = _audit(
         supabase,
         club_id=str(club_id),
@@ -1240,11 +1302,17 @@ def update_admin_tournament_setup_settings(
         actor_role=actor_role,
         action_type="tournament_setup_settings_update",
         entity_id=str(tournament_id),
-        before_json={"settings": _settings_payload(before)},
-        after_json={"settings": _settings_payload(updated)},
+        before_json={
+            "settings": _settings_payload(before),
+            "divisions": [{"id": row["id"], "status": row.get("status")} for row in events if str(row["id"]) in opened_ids],
+        },
+        after_json={
+            "settings": _settings_payload(updated),
+            "divisions": [{"id": event_id, "status": "open"} for event_id in opened_ids],
+        },
         source=source,
     )
-    return {"ok": True, "mode": "tournament_setup_settings_update", "settings": _settings_payload(updated), "warnings": warnings}
+    return {"ok": True, "mode": "tournament_setup_settings_update", "settings": _settings_payload(updated), "opened_division_count": len(opened_ids), "warnings": warnings}
 
 
 def save_admin_tournament_setup_draft(

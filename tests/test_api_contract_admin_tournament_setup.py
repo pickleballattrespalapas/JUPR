@@ -23,6 +23,7 @@ class FakeQuery:
         self.table_name = table_name
         self.filters = []
         self.neq_filters = []
+        self.in_filters = []
         self.limit_value = None
         self.insert_payload = None
         self.upsert_payload = None
@@ -38,6 +39,10 @@ class FakeQuery:
 
     def neq(self, key, value):
         self.neq_filters.append((key, value))
+        return self
+
+    def in_(self, key, values):
+        self.in_filters.append((key, {str(value) for value in values}))
         return self
 
     def order(self, *_args, **_kwargs):
@@ -70,6 +75,8 @@ class FakeQuery:
             scoped = [row for row in scoped if str(row.get(key)) == str(expected)]
         for key, expected in self.neq_filters:
             scoped = [row for row in scoped if str(row.get(key)) != str(expected)]
+        for key, values in self.in_filters:
+            scoped = [row for row in scoped if str(row.get(key)) in values]
         if self.delete_flag:
             self.storage[self.table_name] = [row for row in rows if row not in scoped]
             return SimpleNamespace(data=scoped, count=len(scoped))
@@ -261,6 +268,9 @@ def test_staging_shell_create_retries_by_idempotency_key_without_duplicate(
 
 def test_tournament_setup_settings_confirmation(monkeypatch):
     supabase = FakeSupabase()
+    supabase.storage["tournaments"][0]["status"] = "ACTIVE"
+    supabase.storage["tournament_registration_days"] = [{"id": "day1", "tournament_id": "t1", "enabled": True}]
+    supabase.storage["tournament_event_options"] = [{"id": "event1", "tournament_id": "t1", "registration_day_id": "day1", "enabled": True, "status": "draft"}]
     install_env(monkeypatch, supabase)
     client = TestClient(app)
 
