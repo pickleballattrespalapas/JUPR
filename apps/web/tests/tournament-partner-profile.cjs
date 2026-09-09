@@ -13,6 +13,7 @@ function load(relative, overrides = {}) {
   compiled.paths = Module._nodeModulePaths(path.dirname(filename));
   const originalRequire = compiled.require.bind(compiled);
   compiled.require = name => {
+    if (name === "@/lib/tournamentRegistrationProfile") return load("lib/tournamentRegistrationProfile.ts");
     const override = overrides[name];
     return override ? ("default" in override ? { __esModule: true, ...override } : override) : originalRequire(name);
   };
@@ -30,7 +31,7 @@ let lookupResponse = async () => ({ data: { profile_candidates: [candidate] } })
 const lookups = [];
 const submissions = [];
 const api = {
-  resolveClubTournamentPartnerProfile: async (club, payload) => { lookups.push({ club, ...payload }); return lookupResponse(); },
+  resolveClubTournamentPartnerProfile: async (club, payload) => { lookups.push({ club, ...payload }); return payload.name === "Fixture Player" ? { data: { profile_candidates: [] } } : lookupResponse(); },
   resolveClubTournamentRegistrationProfile: async () => ({ data: { can_start_new: true, profile_candidates: [] } }),
   submitClubTournamentRegistration: async (_club, payload) => { submissions.push(payload); return { error: "Fixture stops before saving" }; },
   submitClubTournamentRegistrationEdit: async (_club, payload) => { submissions.push(payload); return { error: "Fixture stops before saving" }; }
@@ -63,7 +64,7 @@ let renderer;
 const button = name => renderer.root.findAllByType("button").find(node => content(node) === name);
 const field = name => renderer.root.findByProps({ "aria-label": name });
 const change = (name, value) => act(async () => field(name).props.onChange({ target: { value } }));
-const choosePartner = () => act(async () => renderer.root.findAllByType("input").find(node => node.props.type === "radio" && content(node.parent).includes("Fixture Partner")).props.onChange());
+const settle = () => act(async () => new Promise(resolve => setTimeout(resolve, 275)));
 
 async function testNewRegistration() {
   await act(async () => { renderer = create(React.createElement(NewForm, props)); });
@@ -79,10 +80,10 @@ async function testNewRegistration() {
   assert.match(content(renderer.root.findByProps({ id: "partner-note-help-mixed" })), /Visible to everyone/);
   await change("Below 9 partner plan", "HAS_PARTNER");
   await change("Below 9 partner name", "Fixture Partner");
-  await act(async () => button("Find partner profile").props.onClick());
+  await settle();
   assert.equal(lookups.at(-1).name, "Fixture Partner");
   assert.equal(lookups.at(-1).email, null, "A profile can be found before entering email, age or gender");
-  await choosePartner();
+  assert.ok(renderer.root.findAllByType("input").some(node => node.props.type === "radio" && node.props.checked && content(node.parent).includes("Fixture Partner")), "The exact matching partner is selected without a click");
   assert.equal(field("Below 9 partner skill").props.value, "3.4");
   assert.equal(renderer.root.findAllByProps({ "aria-label": "Below 9 partner DUPR ID" }).length, 0);
   // Adding contact details must preserve the explicitly selected profile.
@@ -126,14 +127,15 @@ async function testEditing() {
   assert.match(content(renderer.root.findByProps({ id: "edit-staff-notes-help" })), /do not appear on the public Partner Board/);
   assert.match(content(renderer.root.findByProps({ id: "edit-partner-note-help" })), /Visible to everyone/);
   await act(async () => renderer.root.findByProps({ "aria-describedby": "edit-partner-note-help" }).props.onChange({ target: { value: "Updated public partner message" } }));
-  await act(async () => button("Find partner profile").props.onClick());
-  await choosePartner();
+  await settle();
+  assert.ok(renderer.root.findAllByType("input").some(node => node.props.type === "radio" && node.props.checked && content(node.parent).includes("Fixture Partner")), "The exact matching partner is selected without a click");
   assert.equal(field("Below 9 partner skill").props.value, "3.4", "Profile selection updates controlled edit fields");
   assert.equal(field("Below 9 partner gender").props.value, "Women");
   await act(async () => renderer.root.findByProps({ title: "Edit event" }).props.onRequestClose());
   await act(async () => button("Edit event").props.onClick());
   assert.equal(renderer.root.findAllByProps({ "aria-label": "Below 9 partner DUPR ID" }).length, 0);
   await act(async () => renderer.root.findByProps({ title: "Edit event" }).props.onRequestClose());
+  await act(async () => new Promise(resolve => setTimeout(resolve, 275)));
   const original = global.FormData;
   global.FormData = class { get(name) { return { first_name: "Fixture", last_name: "Player", age: "40", gender: "Men", doubles_skill: "4.5", terms_accepted: "on", notes: staffNotes }[name] ?? null; } };
   try { await act(async () => renderer.root.findByType("form").props.onSubmit({ preventDefault() {}, currentTarget: {} })); }
@@ -172,6 +174,29 @@ async function testLookupRaceAndFallback() {
   await act(async () => renderer.unmount());
 }
 
+async function testDuplicatePartnerChoice() {
+  let currentValue;
+  function Host({ revision }) {
+    const [value, setValue] = React.useState({ name: "Fixture Partner", email: "", age: "", gender: "", skill: "", phone: "", duprId: "" });
+    currentValue = value;
+    return React.createElement(PartnerDetails, { ...props, key: revision, labelPrefix: "Partner", value, onChange: patch => setValue(current => ({ ...current, ...patch })) });
+  }
+  lookupResponse = async () => ({ data: { profile_match_kind: "name_exact", profile_candidates: [candidate, { ...candidate, id: "other-profile" }] } });
+  await act(async () => { renderer = create(React.createElement(Host, { revision: 1 })); });
+  await settle();
+  assert.equal(currentValue.profileChoiceRequired, true, "Duplicate partner names cannot silently continue as None");
+  assert.equal(renderer.root.findAllByType("input").some(node => node.props.type === "radio" && node.props.checked), false);
+  await act(async () => renderer.root.findAllByType("input").find(node => node.props.type === "radio" && content(node.parent).includes("None of these")).props.onChange());
+  assert.equal(currentValue.profileChoiceRequired, false);
+  await change("Partner partner skill", "3.6");
+  const count = lookups.length;
+  await act(async () => renderer.update(React.createElement(Host, { revision: 2 })));
+  await settle();
+  assert.equal(lookups.length, count, "Reopening an event respects an explicit None choice");
+  assert.equal(field("Partner partner skill").props.value, "3.6");
+  await act(async () => renderer.unmount());
+}
+
 async function main() {
   const previousWindow = global.window;
   global.window = { location: { hash: "" }, addEventListener() {}, removeEventListener() {} };
@@ -179,6 +204,7 @@ async function main() {
     await testNewRegistration();
     await testEditing();
     await testLookupRaceAndFallback();
+    await testDuplicatePartnerChoice();
     console.log("Partner profiles: new/edit flows, prefill, eligibility, identity boundary, stale responses and manual fallback passed.");
   } finally { if (renderer) await act(async () => renderer.unmount()); global.window = previousWindow; }
 }

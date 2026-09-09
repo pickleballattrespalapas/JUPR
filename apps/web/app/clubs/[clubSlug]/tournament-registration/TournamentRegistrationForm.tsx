@@ -32,6 +32,7 @@ import FourPlayerTeamRegistrationCard, {
   newTeamRegistrationDraft,
   validateTeamRegistrationDraft
 } from "@/components/tournaments/FourPlayerTeamRegistrationCard";
+import { automaticRegistrationProfile } from "@/lib/tournamentRegistrationProfile";
 import EditLinkRequestForm from "./EditLinkRequestForm";
 import TournamentCommerceChooser from "./TournamentCommerceChooser";
 import TournamentPartnerDetails, { type TournamentPartnerDetailsValue } from "@/components/tournaments/TournamentPartnerDetails";
@@ -229,6 +230,8 @@ export default function TournamentRegistrationForm({
     doublesSkill: "",
     singlesSkill: ""
   });
+  const profileRequestId = useRef(0);
+  const [profileChoiceMade, setProfileChoiceMade] = useState(false);
   const [resolution, setResolution] = useState<PublicRegistrationProfileResolutionResponse | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [partnerDetails, setPartnerDetails] = useState<Record<string, PartnerState>>({});
@@ -294,7 +297,9 @@ export default function TournamentRegistrationForm({
   function resetWizard(nextMode: "choose" | "new" | "edit" = "choose") {
     setMode(nextMode);
     setStep(1);
+    profileRequestId.current += 1;
     setResolution(null);
+    setProfileChoiceMade(false);
     setSelectedIds([]);
     setPartnerDetails({});
     setPartnerConsent(false);
@@ -329,6 +334,15 @@ export default function TournamentRegistrationForm({
 
   function updateContact(key: keyof ContactState, value: string) {
     setContact((current) => ({ ...current, [key]: value }));
+    if (["firstName", "lastName", "email"].includes(key)) {
+      profileRequestId.current += 1;
+      setPending(false);
+      setResolution(null);
+      setProfileChoiceMade(false);
+      setProfile((current) => current.candidateId || key !== "email"
+        ? { candidateId: "", displayName: "", duprId: "", doublesSkill: "", singlesSkill: "" }
+        : current);
+    }
   }
 
   function updateProfile(key: keyof ProfileState, value: string) {
@@ -387,43 +401,57 @@ export default function TournamentRegistrationForm({
       setError("Age must be between 1 and 120.");
       return;
     }
+    const request = ++profileRequestId.current;
     setPending(true);
-    const response = await resolveClubTournamentRegistrationProfile(clubSlug, {
-      tournament_id: tournamentId,
-      registration_slug: registrationSlug || null,
-      first_name: contact.firstName,
-      last_name: contact.lastName,
-      email: contact.email,
-      age,
-      gender: contact.gender,
-      website: ""
-    });
-    setPending(false);
-    if (response.error || !response.data) {
-      setError(response.error || "We couldn’t continue your registration. Please try again.");
-      return;
+    try {
+      const response = await resolveClubTournamentRegistrationProfile(clubSlug, {
+        tournament_id: tournamentId,
+        registration_slug: registrationSlug || null,
+        first_name: contact.firstName,
+        last_name: contact.lastName,
+        email: contact.email,
+        age,
+        gender: contact.gender,
+        website: ""
+      });
+      if (request !== profileRequestId.current) return;
+      if (response.error || !response.data) {
+        setError(response.error || "We couldn’t continue your registration. Please try again.");
+        return;
+      }
+      if (!response.data.can_start_new) {
+        setRecoveryEmail(contact.email.trim());
+        setMode("edit");
+        setError(response.data.status === "closed"
+          ? response.data.registration_closed_reason || "Registration is closed." : null);
+        return;
+      }
+      const fullName = `${contact.firstName.trim()} ${contact.lastName.trim()}`.trim();
+      const candidates = response.data.profile_candidates;
+      setResolution(response.data);
+      // Back/Continue must preserve the player's explicit choice, including None.
+      if (!profileChoiceMade || (profile.candidateId && !candidates.some((row) => row.id === profile.candidateId))) {
+        const candidate = automaticRegistrationProfile(candidates, fullName, response.data.profile_match_kind);
+        if (candidate) selectCandidate(candidate);
+        else {
+          setProfile((current) => ({ ...current, candidateId: "", displayName: current.displayName || fullName }));
+          setProfileChoiceMade(candidates.length === 0);
+        }
+      }
+      setStep(2);
+    } catch {
+      if (request === profileRequestId.current) setError("We couldn’t look up your profile. Please try again.");
+    } finally {
+      if (request === profileRequestId.current) setPending(false);
     }
-    if (!response.data.can_start_new) {
-      setRecoveryEmail(contact.email.trim());
-      setMode("edit");
-      setError(
-        response.data.status === "closed"
-          ? response.data.registration_closed_reason || "Registration is closed."
-          : null
-      );
-      return;
-    }
-    setResolution(response.data);
-    setProfile((current) => ({
-      ...current,
-      displayName: current.displayName || `${contact.firstName.trim()} ${contact.lastName.trim()}`.trim()
-    }));
-    setStep(2);
   }
 
   function selectCandidate(candidate: PublicRegistrationPlayer | null) {
+    setProfileChoiceMade(true);
     if (!candidate) {
-      setProfile((current) => ({ ...current, candidateId: "" }));
+      setProfile((current) => current.candidateId
+        ? { candidateId: "", displayName: `${contact.firstName.trim()} ${contact.lastName.trim()}`, duprId: "", doublesSkill: "", singlesSkill: "" }
+        : current);
       return;
     }
     setProfile({
@@ -440,6 +468,9 @@ export default function TournamentRegistrationForm({
     for (const id of selectedIds) {
       const event = eventById.get(id);
       if (!event) return "A selected event is no longer available.";
+      const partner = partnerDetails[id] || emptyPartnerState(event);
+      if (partner?.mode === "HAS_PARTNER" && partner.profileLookupPending) return "Please wait while we find your partner’s profile.";
+      if (partner?.mode === "HAS_PARTNER" && partner.profileChoiceRequired) return "Choose your partner’s profile, or select None of these is my partner.";
       const reason = publicEventEligibilityReason(event, eligibilityProfile);
       if (reason) return `${event.division_name}: ${reason}`;
       if (
@@ -454,7 +485,6 @@ export default function TournamentRegistrationForm({
         if (teamError) return `${event.division_name}: ${teamError}`;
         continue;
       }
-      const partner = partnerDetails[id] || emptyPartnerState(event);
       if (event.partner_required && !["HAS_PARTNER", "NEEDS_PARTNER"].includes(partner.mode)) {
         return `${event.division_name}: choose whether you have or need a partner.`;
       }
@@ -500,6 +530,10 @@ export default function TournamentRegistrationForm({
 
   function advanceFromProfile() {
     setError(null);
+    if (resolution?.profile_candidates.length && !profileChoiceMade) {
+      setError("Choose your profile, or select None of these is me before continuing.");
+      return;
+    }
     if (!profile.displayName.trim()) {
       setError("Enter the display name tournament staff should use.");
       return;
@@ -804,7 +838,9 @@ export default function TournamentRegistrationForm({
           <h2 style={{ marginTop: 0 }}>2. Player profile</h2>
           <p style={{ color: "#475569" }}>
             {resolution?.profile_candidates.length
-              ? "Is this you? Choose a profile below, or continue without one."
+              ? profile.candidateId
+                ? "Your matching profile is selected. Check the details below, then continue."
+                : "Choose your profile, or select None of these is me."
               : "We didn’t find a matching player profile. You can still continue."}
           </p>
           {resolution?.profile_candidates.length ? (
@@ -814,7 +850,7 @@ export default function TournamentRegistrationForm({
                   <input type="radio" name="profile_candidate" checked={profile.candidateId === candidate.id} onChange={() => selectCandidate(candidate)} /> {candidateLabel(candidate)}
                 </label>
               ))}
-              <label style={{ padding: "0.4rem" }}><input type="radio" name="profile_candidate" checked={!profile.candidateId} onChange={() => selectCandidate(null)} /> None of these is me</label>
+              <label style={{ padding: "0.4rem" }}><input type="radio" name="profile_candidate" checked={profileChoiceMade && !profile.candidateId} onChange={() => selectCandidate(null)} /> None of these is me</label>
             </div>
           ) : null}
           <aside style={{ borderLeft: "4px solid #2563eb", padding: "0.65rem 0.8rem", background: "#eff6ff", marginBottom: "1rem" }}>
