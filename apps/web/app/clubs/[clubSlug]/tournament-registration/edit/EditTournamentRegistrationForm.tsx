@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import TournamentPartnerDetails, { type TournamentPartnerDetailsValue } from "@/components/tournaments/TournamentPartnerDetails";
-import { FormEvent, useCallback, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   PublicRegistrationEditRegistration,
   PublicRegistrationEditSelection,
@@ -10,7 +10,8 @@ import {
   PublicRegistrationPlayer,
   PublicRegistrationSelectionPayload,
   PublicRegistrationDay,
-  submitClubTournamentRegistrationEdit
+  submitClubTournamentRegistrationEdit,
+  resolveClubTournamentPartnerProfile
 } from "@/lib/tournamentRegistrationApi";
 import {
   formatCommerceMoney,
@@ -33,6 +34,7 @@ import {
 } from "@/lib/tournamentRegistrationEligibility";
 import { InteractionDialog } from "@/components/interaction";
 import TournamentCommerceChooser from "../TournamentCommerceChooser";
+import { automaticRegistrationProfile } from "@/lib/tournamentRegistrationProfile";
 
 type EditTournamentRegistrationFormProps = {
   clubSlug: string;
@@ -52,7 +54,12 @@ type EditTournamentRegistrationFormProps = {
 type EventSelectionDraft = Omit<
   PublicRegistrationSelectionPayload,
   "event_option_id" | "registration_day_id" | "partner_mode"
-> & { partner_profile_id?: string };
+> & {
+  partner_profile_id?: string;
+  partner_profile_choice_made?: boolean;
+  partner_profile_lookup_pending?: boolean;
+  partner_profile_choice_required?: boolean;
+};
 
 const cardStyle = {
   border: "1px solid #e2e8f0",
@@ -174,6 +181,17 @@ export default function EditTournamentRegistrationForm({
   );
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
   const [addEventOpen, setAddEventOpen] = useState(false);
+  const [firstName, setFirstName] = useState(registration.first_name || "");
+  const [lastName, setLastName] = useState(registration.last_name || "");
+  const [displayName, setDisplayName] = useState(registration.display_name || "");
+  const [duprId, setDuprId] = useState(registration.dupr_id || "");
+  const [profileCandidates, setProfileCandidates] = useState<PublicRegistrationPlayer[]>([]);
+  const [profileCandidateId, setProfileCandidateId] = useState("");
+  const [profileChoiceMade, setProfileChoiceMade] = useState(false);
+  const [profileLookupPending, setProfileLookupPending] = useState(!registration.player_id && Boolean(registration.first_name && registration.last_name));
+  const [profileLookupError, setProfileLookupError] = useState<string | null>(null);
+  const profileRequestId = useRef(0);
+  const profileDetailsVersion = useRef(0);
   const [gender, setGender] = useState(() => normalizeRegistrationGender(registration.gender));
   const [ageDraft, setAgeDraft] = useState(String(registration.age ?? ""));
   const [doublesSkill, setDoublesSkill] = useState(String(registration.doubles_skill ?? ""));
@@ -194,6 +212,72 @@ export default function EditTournamentRegistrationForm({
 
   const eventById = useMemo(() => new Map(events.map((event) => [event.id, event])), [events]);
   const linkedPlayer = useMemo(() => players.find((player) => player.id === String(registration.player_id ?? "")) ?? null, [players, registration.player_id]);
+  const selectedProfileRef = useRef("");
+  const selectProfile = useCallback((candidate: PublicRegistrationPlayer | null) => {
+    setProfileCandidateId(candidate?.id || "");
+    setProfileChoiceMade(true);
+    if (candidate) {
+      setDisplayName(candidate.display_name);
+      setDuprId(candidate.dupr_id || "");
+      setDoublesSkill(candidate.doubles_skill == null ? "" : String(candidate.doubles_skill));
+      setSinglesSkill(candidate.singles_skill == null ? "" : String(candidate.singles_skill));
+    } else if (selectedProfileRef.current) {
+      setDisplayName("");
+      setDuprId("");
+      setDoublesSkill("");
+      setSinglesSkill("");
+    }
+    selectedProfileRef.current = candidate?.id || "";
+  }, []);
+
+  useEffect(() => {
+    if (registration.player_id || !firstName.trim() || !lastName.trim()) {
+      setProfileLookupPending(false);
+      return;
+    }
+    const request = ++profileRequestId.current;
+    const detailsVersion = profileDetailsVersion.current;
+    const fullName = `${firstName.trim()} ${lastName.trim()}`;
+    setProfileLookupPending(true);
+    const timer = setTimeout(async () => {
+      try {
+        // This public lookup also works for players who already registered.
+        const response = await resolveClubTournamentPartnerProfile(clubSlug, {
+          tournament_id: tournamentId, registration_slug: registrationSlug || null,
+          name: fullName, email: null
+        });
+        if (request !== profileRequestId.current) return;
+        if (response.error || !response.data) {
+          setProfileLookupError("We couldn’t find your profile right now. You can still enter your details and save.");
+          return;
+        }
+        const candidates = response.data.profile_candidates;
+        setProfileCandidates(candidates);
+        const candidate = automaticRegistrationProfile(candidates, fullName, response.data.profile_match_kind);
+        // A delayed lookup must not overwrite details the player just typed.
+        if (candidate && profileDetailsVersion.current === detailsVersion) selectProfile(candidate);
+        else setProfileChoiceMade(candidates.length === 0);
+      } catch {
+        if (request === profileRequestId.current) setProfileLookupError("We couldn’t find your profile right now. You can still enter your details and save.");
+      } finally {
+        if (request === profileRequestId.current) setProfileLookupPending(false);
+      }
+    }, 250);
+    return () => { clearTimeout(timer); profileRequestId.current += 1; };
+  }, [clubSlug, tournamentId, registrationSlug, registration.player_id, firstName, lastName, selectProfile]);
+
+  function changeName(part: "first" | "last", name: string) {
+    profileRequestId.current += 1;
+    if (part === "first") setFirstName(name);
+    else setLastName(name);
+    setProfileCandidates([]);
+    setProfileLookupError(null);
+    setProfileLookupPending(!registration.player_id && Boolean(name.trim() && (part === "first" ? lastName : firstName).trim()));
+    if (profileCandidateId) selectProfile(null);
+    setProfileChoiceMade(false);
+    setProfileCandidateId("");
+  }
+
   const eligibilityProfile = useMemo(() => ({
     gender,
     age: numericState(ageDraft),
@@ -312,6 +396,14 @@ export default function EditTournamentRegistrationForm({
     setError(null);
     if (!textValue(formData, "first_name") || !textValue(formData, "last_name")) {
       setError("Enter your first and last name in Player information before saving.");
+      return;
+    }
+    if (profileLookupPending || eventIds.some((id) => partnerModes[id] === "HAS_PARTNER" && selectionDrafts[id]?.partner_profile_lookup_pending)) {
+      setError("Please wait while we find the matching profiles.");
+      return;
+    }
+    if ((profileCandidates.length && !profileChoiceMade) || eventIds.some((id) => partnerModes[id] === "HAS_PARTNER" && selectionDrafts[id]?.partner_profile_choice_required)) {
+      setError("Choose a matching profile, or select None of these before saving.");
       return;
     }
     const submittedAge = numberOrNull(formData.get("age"));
@@ -478,16 +570,16 @@ export default function EditTournamentRegistrationForm({
           </p>
         ) : null}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
-          <label>First name<br /><input name="first_name" defaultValue={registration.first_name || ""} required style={{ width: "100%" }} /></label>
-          <label>Last name<br /><input name="last_name" defaultValue={registration.last_name || ""} required style={{ width: "100%" }} /></label>
-          <label>Display name<br /><input name="display_name" defaultValue={registration.display_name || ""} placeholder="Optional if first/last entered" style={{ width: "100%" }} /></label>
+          <label>First name<br /><input name="first_name" value={firstName} onChange={(event) => changeName("first", event.target.value)} required style={{ width: "100%" }} /></label>
+          <label>Last name<br /><input name="last_name" value={lastName} onChange={(event) => changeName("last", event.target.value)} required style={{ width: "100%" }} /></label>
+          <label>Display name<br /><input name="display_name" value={displayName} onChange={(event) => { profileDetailsVersion.current += 1; setDisplayName(event.target.value); }} placeholder="Optional if first/last entered" style={{ width: "100%" }} /></label>
           <label>Email<br /><input name="email" type="email" value={registration.email} disabled style={{ width: "100%" }} /></label>
           <label>Phone<br /><input name="phone" defaultValue={registration.phone || ""} style={{ width: "100%" }} /></label>
-          <label>DUPR ID<br /><input name="dupr_id" defaultValue={registration.dupr_id || ""} style={{ width: "100%" }} /></label>
-          <label>Doubles skill<br /><input name="doubles_skill" value={linkedPlayer?.doubles_skill ?? doublesSkill} onChange={(event) => setDoublesSkill(event.target.value)} disabled={linkedPlayer?.doubles_skill != null} type="number" min="1" max="7" step="0.01" style={{ width: "100%" }} /></label>
+          {linkedPlayer || profileCandidateId ? <input type="hidden" name="dupr_id" value={duprId} /> : <label>DUPR ID<br /><input name="dupr_id" value={duprId} onChange={(event) => { profileDetailsVersion.current += 1; setDuprId(event.target.value); }} style={{ width: "100%" }} /></label>}
+          <label>Doubles skill<br /><input name="doubles_skill" value={linkedPlayer?.doubles_skill ?? doublesSkill} onChange={(event) => { profileDetailsVersion.current += 1; setDoublesSkill(event.target.value); }} disabled={linkedPlayer?.doubles_skill != null} type="number" min="1" max="7" step="0.01" style={{ width: "100%" }} /></label>
           <label>
             Singles skill<br />
-            <input name="singles_skill" aria-label="Singles skill" aria-describedby={linkedPlayer?.singles_skill == null ? "edit-singles-skill-help" : undefined} value={linkedPlayer?.singles_skill ?? singlesSkill} onChange={(event) => setSinglesSkill(event.target.value)} disabled={linkedPlayer?.singles_skill != null} type="number" min="1" max="7" step="0.01" style={{ width: "100%" }} />
+            <input name="singles_skill" aria-label="Singles skill" aria-describedby={linkedPlayer?.singles_skill == null ? "edit-singles-skill-help" : undefined} value={linkedPlayer?.singles_skill ?? singlesSkill} onChange={(event) => { profileDetailsVersion.current += 1; setSinglesSkill(event.target.value); }} disabled={linkedPlayer?.singles_skill != null} type="number" min="1" max="7" step="0.01" style={{ width: "100%" }} />
             {linkedPlayer?.singles_skill == null ? (
               <span id="edit-singles-skill-help" style={{ display: "block", color: "#64748b", fontSize: "0.9rem", marginTop: "0.35rem" }}>
                 No singles rating? Enter your current level or leave it blank.
@@ -497,6 +589,24 @@ export default function EditTournamentRegistrationForm({
           <label>Age<br /><input name="age" value={ageDraft} onChange={(event) => setAgeDraft(event.target.value)} type="number" min="1" max="120" required style={{ width: "100%" }} /></label>
           <label>Gender<br /><select name="gender" value={gender} onChange={(event) => setGender(event.target.value)} style={{ width: "100%" }}><option value="">Select</option>{registrationGenderOptions(gender).map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
         </div>
+        {linkedPlayer ? <p role="status">Profile selected: <strong>{linkedPlayer.display_name}</strong></p> : null}
+        {profileLookupPending ? <p role="status">Finding your player profile…</p> : null}
+        {profileLookupError ? <p role="status">{profileLookupError}</p> : null}
+        {profileCandidates.length ? (
+          <fieldset style={{ marginTop: "1rem", border: "1px solid #cbd5e1", borderRadius: "8px", padding: "0.75rem" }}>
+            <legend>{profileCandidateId ? "Your matching profile is selected" : "Choose your player profile"}</legend>
+            <div style={{ display: "grid", gap: "0.65rem" }}>
+              {profileCandidates.map((candidate) => (
+                <label key={candidate.id}>
+                  <input type="radio" name="registration_profile" required checked={profileCandidateId === candidate.id} onChange={() => selectProfile(candidate)} />
+                  {" "}{candidate.display_name} · Doubles {candidate.doubles_skill ?? "not set"} · Singles {candidate.singles_skill ?? "not set"}
+                </label>
+              ))}
+              <label><input type="radio" name="registration_profile" required checked={profileChoiceMade && !profileCandidateId} onChange={() => selectProfile(null)} /> None of these is me</label>
+            </div>
+            <p style={{ color: "#475569", marginBottom: 0 }}>Check your details before saving. An organizer will confirm the profile belongs to you.</p>
+          </fieldset>
+        ) : null}
       </section>
 
       <section style={cardStyle}>
@@ -651,7 +761,10 @@ export default function EditTournamentRegistrationForm({
           skill: String(prior?.partner_skill ?? ""),
           age: String(prior?.partner_age ?? ""),
           gender: prior?.partner_gender || "",
-          profileId: prior?.partner_profile_id || ""
+          profileId: prior?.partner_profile_id || "",
+          profileChoiceMade: prior?.partner_profile_choice_made,
+          profileLookupPending: prior?.partner_profile_lookup_pending,
+          profileChoiceRequired: prior?.partner_profile_choice_required
         };
         const mode =
           partnerModes[editingEventId] ||
@@ -704,12 +817,18 @@ export default function EditTournamentRegistrationForm({
                   labelPrefix={eventOption.division_name}
                   value={partnerValue}
                   onChange={(patch) => {
-                    const next = { ...partnerValue, ...patch };
                     updateSelectionDraft(editingEventId, {
-                      partner_name: next.name, partner_email: next.email,
-                      partner_phone: next.phone, partner_dupr_id: next.duprId,
-                      partner_skill: numericState(next.skill), partner_age: numericState(next.age),
-                      partner_gender: next.gender, partner_profile_id: next.profileId
+                      ...(patch.name !== undefined ? { partner_name: patch.name } : {}),
+                      ...(patch.email !== undefined ? { partner_email: patch.email } : {}),
+                      ...(patch.phone !== undefined ? { partner_phone: patch.phone } : {}),
+                      ...(patch.duprId !== undefined ? { partner_dupr_id: patch.duprId } : {}),
+                      ...(patch.skill !== undefined ? { partner_skill: numericState(patch.skill) } : {}),
+                      ...(patch.age !== undefined ? { partner_age: numericState(patch.age) } : {}),
+                      ...(patch.gender !== undefined ? { partner_gender: patch.gender } : {}),
+                      ...(patch.profileId !== undefined ? { partner_profile_id: patch.profileId } : {}),
+                      ...(patch.profileChoiceMade !== undefined ? { partner_profile_choice_made: patch.profileChoiceMade } : {}),
+                      ...(patch.profileLookupPending !== undefined ? { partner_profile_lookup_pending: patch.profileLookupPending } : {}),
+                      ...(patch.profileChoiceRequired !== undefined ? { partner_profile_choice_required: patch.profileChoiceRequired } : {}),
                     });
                   }}
                 />

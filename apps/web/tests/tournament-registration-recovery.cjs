@@ -13,6 +13,7 @@ function load(relative, overrides = {}) {
   compiled.paths = Module._nodeModulePaths(path.dirname(filename));
   const originalRequire = compiled.require.bind(compiled);
   compiled.require = name => {
+    if (name === "@/lib/tournamentRegistrationProfile") return load("lib/tournamentRegistrationProfile.ts");
     const override = overrides[name];
     return override ? ("default" in override ? { __esModule: true, ...override } : override) : originalRequire(name);
   };
