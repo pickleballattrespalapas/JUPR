@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type CSSProperties } from "react";
 import {
   PublicRegistrationPlayer,
   resolveClubTournamentPartnerProfile
@@ -9,6 +9,8 @@ import {
   formatRegistrationRating,
   registrationGenderOptions
 } from "@/lib/tournamentRegistrationEligibility";
+
+import { automaticRegistrationProfile } from "@/lib/tournamentRegistrationProfile";
 
 export type TournamentPartnerDetailsValue = {
   name: string;
@@ -20,6 +22,9 @@ export type TournamentPartnerDetailsValue = {
   duprId: string;
   // A browser prefill choice, never submitted as a verified player link.
   profileId?: string;
+  profileChoiceMade?: boolean;
+  profileLookupPending?: boolean;
+  profileChoiceRequired?: boolean;
 };
 
 type Props = {
@@ -48,6 +53,10 @@ export default function TournamentPartnerDetails({
 }: Props) {
   const choiceId = useId();
   const requestId = useRef(0);
+  const detailsVersion = useRef(0);
+  const lookupTimer = useRef<ReturnType<typeof setTimeout>>();
+  const onChangeRef = useRef(onChange);
+  useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
   const [candidates, setCandidates] = useState<PublicRegistrationPlayer[] | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -60,18 +69,23 @@ export default function TournamentPartnerDetails({
     setError(null);
     onChange({
       ...(value.profileId && patch.name !== undefined ? { skill: "", duprId: "" } : {}),
-      ...patch, profileId: patch.name !== undefined ? "" : value.profileId
+      ...patch, profileId: patch.name !== undefined ? "" : value.profileId,
+      ...(patch.name !== undefined ? { profileChoiceMade: false, profileLookupPending: Boolean(patch.name.trim()), profileChoiceRequired: false } : {})
     });
   }
 
-  async function findProfile() {
-    if (!value.name.trim() || value.profileId) return;
+  const findProfile = useCallback(async (retry = false) => {
+    if (!value.name.trim() || value.profileId || (value.profileChoiceMade && !retry)) return;
     if (value.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.email.trim())) {
       setError("Enter a valid partner email address, or leave it blank while finding their profile.");
+      onChangeRef.current({ profileLookupPending: false });
       return;
     }
+    clearTimeout(lookupTimer.current);
     const id = ++requestId.current;
+    const version = detailsVersion.current;
     setPending(true);
+    onChangeRef.current({ profileLookupPending: true });
     setError(null);
     try {
       const result = await resolveClubTournamentPartnerProfile(clubSlug, {
@@ -85,26 +99,47 @@ export default function TournamentPartnerDetails({
         setError(result.error || "We couldn’t look up your partner. Try again, or enter their details below.");
         return;
       }
-      setCandidates(result.data.profile_candidates);
+      const rows = result.data.profile_candidates;
+      setCandidates(rows);
+      const candidate = automaticRegistrationProfile(rows, value.name, result.data.profile_match_kind);
+      onChangeRef.current(candidate && version === detailsVersion.current ? {
+        profileId: candidate.id, profileChoiceMade: true, profileChoiceRequired: false,
+        skill: candidate.doubles_skill == null ? "" : String(candidate.doubles_skill),
+        duprId: String(candidate.dupr_id || "")
+      } : { profileChoiceMade: rows.length === 0, profileChoiceRequired: rows.length > 0 });
     } catch {
       if (id === requestId.current) {
         setError("We couldn’t look up your partner. Try again, or enter their details below.");
       }
     } finally {
-      if (id === requestId.current) setPending(false);
+      if (id === requestId.current) {
+        setPending(false);
+        onChangeRef.current({ profileLookupPending: false });
+      }
     }
-  }
+  }, [clubSlug, tournamentId, registrationSlug, value.name, value.email, value.profileId, value.profileChoiceMade]);
+
+  useEffect(() => {
+    if (!value.name.trim() || value.profileId || value.profileChoiceMade) return;
+    onChangeRef.current({ profileLookupPending: true });
+    lookupTimer.current = setTimeout(() => { void findProfile(); }, 250);
+    return () => {
+      clearTimeout(lookupTimer.current);
+      requestId.current += 1;
+      onChangeRef.current({ profileLookupPending: false });
+    };
+  }, [findProfile, value.name, value.profileId, value.profileChoiceMade]);
 
   function selectProfile(candidate: PublicRegistrationPlayer | null) {
     requestId.current += 1;
     setPending(false);
     setError(null);
     onChange(candidate ? {
-      profileId: candidate.id,
+      profileId: candidate.id, profileChoiceMade: true, profileLookupPending: false, profileChoiceRequired: false,
       name: candidate.display_name,
       skill: candidate.doubles_skill == null ? "" : String(candidate.doubles_skill),
       duprId: String(candidate.dupr_id || "")
-    } : { profileId: "", skill: "", duprId: "" });
+    } : { profileId: "", ...(value.profileId ? { skill: "", duprId: "" } : {}), profileChoiceMade: true, profileLookupPending: false, profileChoiceRequired: false });
   }
 
   return (
@@ -126,13 +161,13 @@ export default function TournamentPartnerDetails({
         </label>
       </div>
       {!value.profileId ? (
-        <button type="button" onClick={findProfile} disabled={pending || !value.name.trim()} style={buttonStyle}>
+        <button type="button" onClick={() => { void findProfile(true); }} disabled={pending || !value.name.trim()} style={buttonStyle}>
           {pending ? "Finding partner profile…" : "Find partner profile"}
         </button>
       ) : (
         <p role="status" style={{ margin: 0, color: "#166534" }}>
           Profile selected: <strong>{value.name}</strong>. Check their details below.
-          {" "}<button type="button" onClick={() => { selectProfile(null); setCandidates(null); }} style={buttonStyle}>Change profile</button>
+          {" "}<button type="button" onClick={() => selectProfile(null)} style={buttonStyle}>Change profile</button>
         </p>
       )}
       {error ? <p role="alert" style={{ color: "#b91c1c", margin: 0 }}>{error}</p> : null}
@@ -142,12 +177,12 @@ export default function TournamentPartnerDetails({
           <div style={{ display: "grid", gap: "0.5rem" }}>
             {candidates.map((candidate) => (
               <label key={candidate.id}>
-                <input type="radio" name={choiceId} checked={value.profileId === candidate.id}
+                <input type="radio" name={choiceId} required checked={value.profileId === candidate.id}
                   onChange={() => selectProfile(candidate)} /> {candidate.display_name}
                 {" · "}{candidate.doubles_skill == null ? "Doubles rating not set" : `Doubles ${formatRegistrationRating(candidate.doubles_skill)}`}
               </label>
             ))}
-            <label><input type="radio" name={choiceId} checked={!value.profileId}
+            <label><input type="radio" name={choiceId} required checked={Boolean(value.profileChoiceMade && !value.profileId)}
               onChange={() => selectProfile(null)} /> None of these is my partner</label>
           </div>
         </fieldset>
@@ -157,11 +192,11 @@ export default function TournamentPartnerDetails({
       <div style={gridStyle}>
         <label>Partner age *<br /><input required aria-label={`${labelPrefix} partner age`} type="number" min="1" max="120" value={value.age} onChange={(event) => onChange({ age: event.target.value })} style={inputStyle} /></label>
         <label>Partner gender *<br /><select required aria-label={`${labelPrefix} partner gender`} value={value.gender} onChange={(event) => onChange({ gender: event.target.value })} style={inputStyle}><option value="">Select</option>{registrationGenderOptions(value.gender).map((gender) => <option key={gender} value={gender}>{gender}</option>)}</select></label>
-        <label>Partner starting skill *<br /><input required aria-label={`${labelPrefix} partner skill`} type="number" min="1" max="7" step="0.01" value={value.skill} onChange={(event) => onChange({ skill: event.target.value })} style={inputStyle} /></label>
+        <label>Partner starting skill *<br /><input required aria-label={`${labelPrefix} partner skill`} type="number" min="1" max="7" step="0.01" value={value.skill} onChange={(event) => { detailsVersion.current += 1; onChange({ skill: event.target.value }); }} style={inputStyle} /></label>
       </div>
       <div style={gridStyle}>
         <label>Partner phone<br /><input aria-label={`${labelPrefix} partner phone`} type="tel" value={value.phone} onChange={(event) => onChange({ phone: event.target.value })} style={inputStyle} /></label>
-        {!value.profileId ? <label>Partner DUPR ID<br /><input aria-label={`${labelPrefix} partner DUPR ID`} value={value.duprId} onChange={(event) => onChange({ duprId: event.target.value })} style={inputStyle} /></label> : null}
+        {!value.profileId ? <label>Partner DUPR ID<br /><input aria-label={`${labelPrefix} partner DUPR ID`} value={value.duprId} onChange={(event) => { detailsVersion.current += 1; onChange({ duprId: event.target.value }); }} style={inputStyle} /></label> : null}
       </div>
     </div>
   );

@@ -13,7 +13,7 @@ function load(relative, overrides = {}) {
   compiled.filename = filename;
   compiled.paths = Module._nodeModulePaths(path.dirname(filename));
   const originalRequire = compiled.require.bind(compiled);
-  compiled.require = name => overrides[name] || originalRequire(name);
+  compiled.require = name => name === "@/lib/tournamentRegistrationProfile" ? load("lib/tournamentRegistrationProfile.ts") : overrides[name] || originalRequire(name);
   compiled._compile(ts.transpileModule(fs.readFileSync(filename, "utf8"), {
     compilerOptions: { esModuleInterop: true, jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }
   }).outputText, filename);
@@ -42,13 +42,14 @@ async function verifyPublicLegacyGenders() {
   const submissions = [];
   const PartnerDetails = load("components/tournaments/TournamentPartnerDetails.tsx", {
     "@/lib/tournamentRegistrationEligibility": eligibility,
-    "@/lib/tournamentRegistrationApi": {}
+    "@/lib/tournamentRegistrationApi": { resolveClubTournamentPartnerProfile: async () => ({ data: { profile_candidates: [] } }) }
   }).default;
   const PublicEditForm = load("app/clubs/[clubSlug]/tournament-registration/edit/EditTournamentRegistrationForm.tsx", {
     "next/link": { __esModule: true, default: ({ children }) => children },
     "@/lib/tournamentCommerceApi": {},
     "@/lib/tournamentRegistrationEligibility": eligibility,
     "@/lib/tournamentRegistrationApi": {
+      resolveClubTournamentPartnerProfile: async () => ({ data: { profile_candidates: [] } }),
       submitClubTournamentRegistrationEdit: async (_club, payload) => {
         submissions.push(payload);
         return { data: { registration_id: "reg-edit", confirmation_token: "fixture-confirmation" } };
@@ -79,6 +80,7 @@ async function verifyPublicLegacyGenders() {
         await act(async () => renderer.root.findAllByType("button").find(node => content(node) === "Edit event").props.onClick());
         const partnerField = renderer.root.findAllByType("label").find(node => content(node).startsWith("Partner gender"));
         assert.equal(partnerField.findByType("select").props.value, canonical, "Partner aliases must also populate their selected option");
+        await act(async () => new Promise(resolve => setTimeout(resolve, 275)));
         const formValues = { first_name: "Fixture", last_name: "Player", age: "51", gender: gender.props.value, doubles_skill: "4.5", terms_accepted: "on" };
         global.FormData = class { get(name) { return formValues[name] ?? null; } };
         await act(async () => renderer.root.findByType("form").props.onSubmit({ preventDefault() {}, currentTarget: {} }));
