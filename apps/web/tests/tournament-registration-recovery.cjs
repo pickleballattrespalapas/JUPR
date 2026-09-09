@@ -24,7 +24,10 @@ function load(relative, overrides = {}) {
 
 const registration = "app/clubs/[clubSlug]/tournament-registration/";
 const api = { requestClubTournamentRegistrationEditLink: () => assert.fail("rendering must not send email") };
-const EditForm = load(registration + "EditLinkRequestForm.tsx", { "@/lib/tournamentRegistrationApi": api }).default;
+const EditForm = load(registration + "EditLinkRequestForm.tsx", {
+  "@/lib/tournamentRegistrationApi": api,
+  "@/components/interaction": { InteractionDialog: () => null }
+}).default;
 const Form = load(registration + "TournamentRegistrationForm.tsx", {
   "@/lib/tournamentRegistrationApi": api,
   "@/lib/tournamentRegistrationEligibility": load("lib/tournamentRegistrationEligibility.ts", {

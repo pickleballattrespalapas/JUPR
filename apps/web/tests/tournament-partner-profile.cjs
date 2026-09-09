@@ -52,6 +52,7 @@ const NewForm = load(base + "TournamentRegistrationForm.tsx", {
 }).default;
 const EditForm = load(base + "edit/EditTournamentRegistrationForm.tsx", {
   ...shared, "next/link": { default: ({ children }) => children },
+  "@/lib/tournamentCommerceApi": {},
   "@/components/interaction": { InteractionDialog: ({ children, actions }) => React.createElement("div", { role: "dialog" }, children, actions) },
   "../TournamentCommerceChooser": { default: () => null }
 }).default;
@@ -129,10 +130,10 @@ async function testEditing() {
   await choosePartner();
   assert.equal(field("Below 9 partner skill").props.value, "3.4", "Profile selection updates controlled edit fields");
   assert.equal(field("Below 9 partner gender").props.value, "Women");
-  await act(async () => button("Apply event changes").props.onClick());
+  await act(async () => renderer.root.findByProps({ title: "Edit event" }).props.onRequestClose());
   await act(async () => button("Edit event").props.onClick());
   assert.equal(renderer.root.findAllByProps({ "aria-label": "Below 9 partner DUPR ID" }).length, 0);
-  await act(async () => button("Apply event changes").props.onClick());
+  await act(async () => renderer.root.findByProps({ title: "Edit event" }).props.onRequestClose());
   const original = global.FormData;
   global.FormData = class { get(name) { return { first_name: "Fixture", last_name: "Player", age: "40", gender: "Men", doubles_skill: "4.5", terms_accepted: "on", notes: staffNotes }[name] ?? null; } };
   try { await act(async () => renderer.root.findByType("form").props.onSubmit({ preventDefault() {}, currentTarget: {} })); }
