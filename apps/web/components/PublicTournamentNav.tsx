@@ -4,6 +4,7 @@ import styles from "./PublicTournamentNav.module.css";
 export type PublicTournamentModule =
   | "overview"
   | "registration"
+  | "edit-registration"
   | "roster"
   | "partner-board"
   | "results";
@@ -30,6 +31,7 @@ function tournamentQuery(
 function normalizedModule(value: string): PublicTournamentModule {
   if (
     value === "registration" ||
+    value === "edit-registration" ||
     value === "roster" ||
     value === "partner-board" ||
     value === "results"
@@ -49,6 +51,7 @@ export function publicTournamentHref(
   const paths: Record<PublicTournamentModule, string> = {
     overview: `${base}/tournaments`,
     registration: `${base}/tournament-registration`,
+    "edit-registration": `${base}/tournament-registration/manage`,
     roster: `${base}/tournament-roster`,
     "partner-board": `${base}/tournament-partner-board`,
     results: `${base}/tournament-results`
@@ -72,6 +75,7 @@ export default function PublicTournamentNav({
   const items: Array<[PublicTournamentModule, string]> = [
     ["overview", "Tournament Home"],
     ["registration", "Register"],
+    ["edit-registration", "Edit my registration"],
     ["roster", "Roster"],
     ["partner-board", "Players Needing Partners"],
     ["results", "Live & Results"]
