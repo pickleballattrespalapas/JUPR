@@ -448,7 +448,7 @@ export default async function TournamentPartnerBoardPage({
                     </p>
                     {entry.note ? (
                       <p style={{ margin: "0.45rem 0 0", color: "#475569" }}>
-                        <strong>Note:</strong> {entry.note}
+                        <strong>Public partner note:</strong> {entry.note}
                       </p>
                     ) : null}
                     <p style={{ margin: "0.45rem 0 0" }}>

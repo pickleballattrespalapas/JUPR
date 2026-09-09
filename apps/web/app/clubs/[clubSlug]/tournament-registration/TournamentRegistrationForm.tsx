@@ -794,7 +794,8 @@ export default function TournamentRegistrationForm({
               </select>
             </label>
           </div>
-          <label style={{ display: "block", marginTop: "0.75rem" }}>Notes for tournament staff<br /><textarea aria-label="Notes for tournament staff" rows={3} value={contact.notes} onChange={(event) => updateContact("notes", event.target.value)} style={inputStyle} /></label>
+          <label style={{ display: "block", marginTop: "0.75rem" }}>Notes for tournament staff<br /><textarea aria-label="Notes for tournament staff" aria-describedby="staff-notes-help" rows={3} value={contact.notes} onChange={(event) => updateContact("notes", event.target.value)} style={inputStyle} /></label>
+          <p id="staff-notes-help" style={{ margin: "0.35rem 0 0", color: "#475569", fontSize: "0.9rem" }}>These notes are shared with tournament staff and do not appear on the public Partner Board.</p>
         </section>
       ) : null}
 
@@ -883,7 +884,8 @@ export default function TournamentRegistrationForm({
                               <input type="checkbox" checked={partner.showOnBoard} disabled={!eventOption.partner_board_enabled} onChange={(event) => updatePartner(eventOption.id, { showOnBoard: event.target.checked })} /> List me as looking for a partner in this division
                             </label>
                           )}
-                          <label>Partner note<br /><textarea aria-label={`${eventOption.division_name} partner note`} rows={2} value={partner.note} onChange={(event) => updatePartner(eventOption.id, { note: event.target.value })} style={inputStyle} /></label>
+                          <label>Public partner note (optional)<br /><textarea aria-label={`${eventOption.division_name} public partner note`} aria-describedby={`partner-note-help-${eventOption.id}`} rows={2} value={partner.note} onChange={(event) => updatePartner(eventOption.id, { note: event.target.value })} style={inputStyle} /></label>
+                          <p id={`partner-note-help-${eventOption.id}`} style={{ margin: 0, color: "#475569", fontSize: "0.9rem" }}>Visible to everyone when you are listed in Players Needing Partners. Use Notes for tournament staff for private messages to organizers.</p>
                         </div>
                       ) : null}
                     </article>

@@ -68,10 +68,14 @@ async function testNewRegistration() {
   await act(async () => { renderer = create(React.createElement(NewForm, props)); });
   await act(async () => button("Start a registration").props.onClick());
   for (const [name, value] of [["First name", "Fixture"], ["Last name", "Player"], ["Email", "player@example.invalid"], ["Age", "40"], ["Gender", "Men"]]) await change(name, value);
+  await change("Notes for tournament staff", "Private staff message");
+  assert.match(content(renderer.root.findByProps({ id: "staff-notes-help" })), /do not appear on the public Partner Board/);
   await act(async () => button("Continue").props.onClick());
   await change("Doubles skill", "4.5");
   await act(async () => button("Continue to events").props.onClick());
   await act(async () => field("Mixed Below 9").props.onChange({ target: { checked: true } }));
+  await change("Below 9 public partner note", "Public partner message");
+  assert.match(content(renderer.root.findByProps({ id: "partner-note-help-mixed" })), /Visible to everyone/);
   await change("Below 9 partner plan", "HAS_PARTNER");
   await change("Below 9 partner name", "Fixture Partner");
   await act(async () => button("Find partner profile").props.onClick());
@@ -106,15 +110,21 @@ async function testNewRegistration() {
   assert.equal(selection.partner_skill, 3.4);
   assert.equal(selection.partner_dupr_id, candidate.dupr_id);
   assert.equal(selection.partner_email, "partner@example.invalid");
+  assert.equal(selection.partner_note, "Public partner message");
+  assert.equal(submissions.at(-1).notes, "Private staff message", "Public partner notes and private staff notes must remain separate when saving");
   assert.equal(selection.partner_player_id, undefined, "A public suggestion must not become a verified identity link");
   assert.equal(selection.profileId, undefined);
   await act(async () => renderer.unmount());
 }
 
 async function testEditing() {
-  const registration = { id: "reg", email: "player@example.invalid", first_name: "Fixture", last_name: "Player", age: 40, gender: "Men", doubles_skill: 4.5 };
+  const registration = { id: "reg", email: "player@example.invalid", first_name: "Fixture", last_name: "Player", age: 40, gender: "Men", doubles_skill: 4.5, notes: "Existing private staff message" };
   await act(async () => { renderer = create(React.createElement(EditForm, { ...props, registration, editToken: "fixture", players: [], selections: [{ id: "selection", event_option_id: "mixed", partner_mode: "HAS_PARTNER", partner_name: "Fixture Partner", partner_email: "partner@example.invalid", partner_age: 70, partner_gender: "Female", partner_skill: 2.5 }] })); });
   await act(async () => button("Edit event").props.onClick());
+  const staffNotes = renderer.root.findByProps({ name: "notes" }).props.defaultValue;
+  assert.match(content(renderer.root.findByProps({ id: "edit-staff-notes-help" })), /do not appear on the public Partner Board/);
+  assert.match(content(renderer.root.findByProps({ id: "edit-partner-note-help" })), /Visible to everyone/);
+  await act(async () => renderer.root.findByProps({ "aria-describedby": "edit-partner-note-help" }).props.onChange({ target: { value: "Updated public partner message" } }));
   await act(async () => button("Find partner profile").props.onClick());
   await choosePartner();
   assert.equal(field("Below 9 partner skill").props.value, "3.4", "Profile selection updates controlled edit fields");
@@ -124,7 +134,7 @@ async function testEditing() {
   assert.equal(renderer.root.findAllByProps({ "aria-label": "Below 9 partner DUPR ID" }).length, 0);
   await act(async () => button("Apply event changes").props.onClick());
   const original = global.FormData;
-  global.FormData = class { get(name) { return { first_name: "Fixture", last_name: "Player", age: "40", gender: "Men", doubles_skill: "4.5", terms_accepted: "on" }[name] ?? null; } };
+  global.FormData = class { get(name) { return { first_name: "Fixture", last_name: "Player", age: "40", gender: "Men", doubles_skill: "4.5", terms_accepted: "on", notes: staffNotes }[name] ?? null; } };
   try { await act(async () => renderer.root.findByType("form").props.onSubmit({ preventDefault() {}, currentTarget: {} })); }
   finally { global.FormData = original; }
   const selection = submissions.at(-1).selections[0];
@@ -132,6 +142,8 @@ async function testEditing() {
   assert.equal(selection.partner_gender, "Women");
   assert.equal(selection.partner_profile_id, undefined);
   assert.equal(selection.id, "selection");
+  assert.equal(selection.partner_note, "Updated public partner message");
+  assert.equal(submissions.at(-1).notes, "Existing private staff message", "Editing the public note must preserve the separate staff note");
   await act(async () => renderer.unmount());
 }
 

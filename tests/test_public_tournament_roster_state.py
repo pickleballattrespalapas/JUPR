@@ -234,16 +234,19 @@ def test_partner_board_player_identity_groups_divisions_without_merging_same_nam
                 "selection_id": "sel-primary-womens",
                 "registration_id": "reg-alex-primary",
                 "event_option_id": "event-womens",
+                "note": "Prefer the left side",
             },
             {
                 "selection_id": "sel-primary-mixed",
                 "registration_id": "reg-alex-primary",
                 "event_option_id": "event-mixed",
+                "note": "Available Saturday afternoon",
             },
             {
                 "selection_id": "sel-distinct-womens",
                 "registration_id": "reg-alex-distinct",
                 "event_option_id": "event-womens",
+                "note": "Prefer the right side",
             },
         ],
         "event_rosters": [
@@ -354,6 +357,45 @@ def test_partner_board_player_identity_groups_divisions_without_merging_same_nam
     assert "distinct.private@example.com" not in serialized
     assert "555-010-1000" not in serialized
     assert "555-010-2000" not in serialized
+
+
+@pytest.mark.parametrize("partner_note", [None, "", "Prefer the left side"])
+def test_partner_board_note_never_falls_back_to_private_roster_or_registration_notes(monkeypatch, partner_note):
+    compiled_state = {
+        "settings": {"partner_board_enabled": True},
+        "event_options": [{"id": "event-1", "partner_board_enabled": True, "status": "open"}],
+        "registrations": [{
+            "id": "reg-1",
+            "wants_partner_board_contact": True,
+            "notes": "Private staff instructions",
+        }],
+        "partner_board": [{
+            "selection_id": "sel-1",
+            "registration_id": "reg-1",
+            "event_option_id": "event-1",
+            **({"note": partner_note} if partner_note is not None else {}),
+        }],
+        "event_rosters": [{
+            "event_option_id": "event-1",
+            "entries": [{
+                "status": "NEEDS_PARTNER",
+                "members": [{"display_name": "Fixture Player"}],
+                "source_registration_ids": ["reg-1"],
+                "source_selection_ids": ["sel-1"],
+                "notes": "Private roster instructions",
+            }],
+        }],
+    }
+    monkeypatch.setattr(repo, "build_registration_state", lambda *_args: compiled_state)
+
+    public_state = repo.build_public_tournament_roster_state(None, {"id": "t-1"}, {}, [], [])
+
+    for field in ("players_needing_partners", "partner_board_entries"):
+        assert len(public_state[field]) == 1
+        assert public_state[field][0]["note"] == (partner_note or "")
+    assert "Private staff instructions" not in json.dumps(public_state)
+    assert "Private roster instructions" not in json.dumps(public_state)
+    assert compiled_state["registrations"][0]["notes"] == "Private staff instructions"
 
 
 def test_public_roster_null_state_and_email_fallback_fail_closed(monkeypatch):
