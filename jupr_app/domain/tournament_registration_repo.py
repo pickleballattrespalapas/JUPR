@@ -3945,8 +3945,8 @@ def build_public_tournament_roster_state(
         and str(row.get("status") or "draft").strip().lower()
         in {"open", "tentative", "confirmed", "published", "active"}
     }
-    board_selection_ids = {
-        str(row.get("selection_id") or "")
+    public_board_by_selection = {
+        str(row.get("selection_id") or ""): row
         for row in (state.get("partner_board") or [])
         if public_board_enabled
         and str(row.get("selection_id") or "")
@@ -4045,10 +4045,12 @@ def build_public_tournament_roster_state(
                     "event_label": event_row["event_label"],
                     "skill": primary.get("skill"),
                     "age_bracket": primary.get("age_bracket"),
-                    "note": _public_note(entry.get("notes")),
+                    # Only the explicit partner-board note is public. Generic
+                    # roster/registration notes must never be a fallback.
+                    "note": _public_note((public_board_by_selection.get(source_selection_id) or {}).get("note")),
                 }
                 if (
-                    source_selection_id in board_selection_ids
+                    source_selection_id in public_board_by_selection
                     and source_registration_id in contact_registration_ids
                 ):
                     players_needing_partners.append(dict(needs_partner_row))
