@@ -17,6 +17,20 @@ export type PartnerPlayerGroup = {
   entries: PartnerListing[];
 };
 
+export function groupPartnerNotes(
+  entries: PartnerListing[]
+): { note: string; entries: PartnerListing[] }[] {
+  const notes = new Map<string, { note: string; entries: PartnerListing[] }>();
+  for (const entry of entries) {
+    const note = String(entry.note || "").replace(/\s+/g, " ").trim();
+    if (!note) continue;
+    const existing = notes.get(note);
+    if (existing) existing.entries.push(entry);
+    else notes.set(note, { note, entries: [entry] });
+  }
+  return Array.from(notes.values());
+}
+
 export function groupPartnerEntries(
   entries: PartnerListing[]
 ): PartnerPlayerGroup[] {

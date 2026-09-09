@@ -12,7 +12,7 @@ import {
 } from "@/lib/tournamentRegistrationApi";
 import PairingInterestPanel from "./PairingInterestPanel";
 import PartnerRequestReviewPanel from "./PartnerRequestReviewPanel";
-import { groupPartnerEntries } from "@/lib/tournamentPartnerBoard";
+import { groupPartnerEntries, groupPartnerNotes } from "@/lib/tournamentPartnerBoard";
 
 type Props = {
   params: { clubSlug: string };
@@ -178,7 +178,10 @@ export default async function TournamentPartnerBoardPage({
     ? partnerEntries.filter((entry) => eventKey(entry) === selectedEvent)
     : partnerEntries;
   const playerGroups = groupPartnerEntries(partnerEntries);
-  const visiblePlayerGroups = groupPartnerEntries(visibleEntries);
+  const visiblePlayerGroups = groupPartnerEntries(visibleEntries).map((group) => ({
+    ...group,
+    notes: groupPartnerNotes(group.entries)
+  }));
   const selectedQuery = boardQuery({
     tournamentId: tournament.id,
     registrationSlug: settings?.registration_slug
@@ -423,6 +426,23 @@ export default async function TournamentPartnerBoardPage({
                   Looking in {group.entries.length} division{group.entries.length === 1 ? "" : "s"}
                 </p>
               </header>
+              {group.notes.length ? (
+                <section data-testid="partner-player-notes" style={{ display: "grid", gap: "0.4rem" }}>
+                  <h3 style={{ margin: 0, fontSize: "1rem" }}>
+                    Public partner {group.notes.length === 1 ? "note" : "notes"}
+                  </h3>
+                  {group.notes.map(({ note, entries }) => (
+                    <div key={note}>
+                      {group.notes.length > 1 ? (
+                        <p style={{ margin: "0 0 0.2rem", color: "#475569", fontSize: "0.9rem", fontWeight: 650 }}>
+                          {Array.from(new Set(entries.map(eventLabel))).join("; ")}
+                        </p>
+                      ) : null}
+                      <p style={{ margin: 0, color: "#475569", overflowWrap: "anywhere" }}>{note}</p>
+                    </div>
+                  ))}
+                </section>
+              ) : null}
               <div style={{ display: "grid", gap: "0.65rem" }}>
                 {group.entries.map((entry) => (
                   <section
@@ -446,11 +466,6 @@ export default async function TournamentPartnerBoardPage({
                     <p style={{ margin: "0.35rem 0 0", color: "#475569" }}>
                       Rating {entry.skill || "not listed"} · {entry.age_bracket || "Any age"}
                     </p>
-                    {entry.note ? (
-                      <p style={{ margin: "0.45rem 0 0", color: "#475569" }}>
-                        <strong>Public partner note:</strong> {entry.note}
-                      </p>
-                    ) : null}
                     <p style={{ margin: "0.45rem 0 0" }}>
                       <Link
                         href={`/clubs/${params.clubSlug}/tournament-partner-board${queryWithEdit}#${entryAnchor(
