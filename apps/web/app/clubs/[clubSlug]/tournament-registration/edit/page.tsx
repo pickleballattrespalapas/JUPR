@@ -1,4 +1,5 @@
 import PublicTournamentSponsors from "@/components/PublicTournamentSponsors";
+import PublicTournamentNav, { publicTournamentHref } from "@/components/PublicTournamentNav";
 import Link from "next/link";
 import { getClubTournamentRegistrationEdit } from "@/lib/tournamentRegistrationApi";
 import EditTournamentRegistrationForm from "./EditTournamentRegistrationForm";
@@ -35,8 +36,9 @@ export default async function EditTournamentRegistrationPage({ params, searchPar
         Edit Tournament Registration
       </p>
       <PublicTournamentSponsors clubSlug={clubSlug} tournamentId={tournament?.id} placement="header" title={tournament?.name ?? "Edit registration"} />
+      <PublicTournamentNav clubSlug={clubSlug} tournamentId={tournament?.id ?? searchParams?.tournament_id} registrationSlug={settings?.registration_slug ?? searchParams?.tournament} active="edit-registration" />
       <p style={{ color: "#334155", maxWidth: "820px" }}>
-        Use the link we emailed you to update your registration.
+        Open an event to change your partner or remove the event. Save changes when you’re done.
       </p>
 
       {error ? (
@@ -51,7 +53,7 @@ export default async function EditTournamentRegistrationPage({ params, searchPar
                   ? "Registration changes are temporarily unavailable. Please try again later."
                   : "This edit link is invalid or expired. Request a new one."}
           </p>
-          <Link href={`/clubs/${clubSlug}/tournament-registration`}>Back to tournament registration</Link>
+          <Link href={publicTournamentHref(clubSlug, "edit-registration", tournament?.id ?? searchParams?.tournament_id, settings?.registration_slug ?? searchParams?.tournament)}>Request a new edit link</Link>
         </article>
       ) : null}
 

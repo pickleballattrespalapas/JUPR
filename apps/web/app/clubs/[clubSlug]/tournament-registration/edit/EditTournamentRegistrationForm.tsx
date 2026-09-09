@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import TournamentPartnerDetails, { type TournamentPartnerDetailsValue } from "@/components/tournaments/TournamentPartnerDetails";
-import { FormEvent, useCallback, useMemo, useState } from "react";
+import { FormEvent, useCallback, useMemo, useRef, useState } from "react";
 import {
   PublicRegistrationEditRegistration,
   PublicRegistrationEditSelection,
@@ -13,6 +13,8 @@ import {
   submitClubTournamentRegistrationEdit
 } from "@/lib/tournamentRegistrationApi";
 import {
+  formatCommerceMoney,
+  quoteTournamentCommerce,
   TournamentCommerceCatalog,
   TournamentCommerceOrder,
   TournamentCommerceQuote,
@@ -58,6 +60,14 @@ const cardStyle = {
   padding: "1rem",
   background: "white"
 };
+
+const eventButtonStyle = {
+  minHeight: "48px", padding: "0.75rem 1rem", borderRadius: "10px",
+  border: "1px solid #cbd5e1", background: "white", font: "inherit",
+  fontSize: "1.125rem", fontWeight: 800, cursor: "pointer"
+};
+
+const saveAgreement = "By saving changes, you confirm that your information is correct and agree to the tournament rules and refund policy.";
 
 function numberOrNull(value: FormDataEntryValue | null): number | null {
   const text = String(value ?? "").trim();
@@ -129,6 +139,9 @@ export default function EditTournamentRegistrationForm({
   commerce,
   commerceOrder
 }: EditTournamentRegistrationFormProps) {
+  const formRef = useRef<HTMLFormElement>(null);
+  const eventEditorRef = useRef<HTMLFieldSetElement>(null);
+  const savingRef = useRef(false);
   const initialSelectionIds = selections.map((selection) => selection.event_option_id).filter(Boolean);
   const [selectedIds, setSelectedIds] = useState<string[]>(initialSelectionIds);
   const [partnerModes, setPartnerModes] = useState<Record<string, "NONE" | "HAS_PARTNER" | "NEEDS_PARTNER">>(() => {
@@ -278,26 +291,39 @@ export default function EditTournamentRegistrationForm({
       ...current,
       [eventId]: { ...(current[eventId] || {}), ...patch }
     }));
-    if (commerce?.available && commerceQuote) {
-      setCommerceQuote(null);
-      setCommerceIdempotencyKey(crypto.randomUUID());
-    }
   }
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    await saveRegistration(new FormData(event.currentTarget));
+  }
+
+  async function saveEvent(remove = false) {
+    if (!formRef.current || savingRef.current) return;
+    if (!remove) {
+      const controls = eventEditorRef.current?.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("input, select, textarea");
+      if (controls && Array.from(controls).some((control) => !control.reportValidity())) return;
+    }
+    await saveRegistration(new FormData(formRef.current), remove ? selectedIds.filter((id) => id !== editingEventId) : selectedIds);
+  }
+
+  async function saveRegistration(formData: FormData, eventIds = selectedIds) {
+    if (savingRef.current) return;
     setError(null);
-    const formData = new FormData(event.currentTarget);
+    if (!textValue(formData, "first_name") || !textValue(formData, "last_name")) {
+      setError("Enter your first and last name in Player information before saving.");
+      return;
+    }
     const submittedAge = numberOrNull(formData.get("age"));
     if (submittedAge == null || submittedAge < 1 || submittedAge > 120) {
       setError("Enter an age between 1 and 120 before choosing or saving events.");
       return;
     }
-    if (!selectedIds.length) {
-      setError("Select at least one event.");
+    if (!eventIds.length) {
+      setError("Keep at least one event in your registration. To cancel your entire registration, contact the organizer.");
       return;
     }
-    const ineligible = selectedIds
+    const ineligible = eventIds
       .map((id) => eventById.get(id))
       .filter((row): row is PublicRegistrationEvent => Boolean(row))
       .map((row) => ({
@@ -312,13 +338,7 @@ export default function EditTournamentRegistrationForm({
       setError(`${ineligible.row.division_name}: ${ineligible.reason}`);
       return;
     }
-    if (commerce?.available && !commerceQuote) {
-      setError(
-        "Update your total before saving. You can choose zero extras."
-      );
-      return;
-    }
-    const payloadSelections: Array<PublicRegistrationSelectionPayload & { id?: string }> = selectedIds.map((eventId) => {
+    const payloadSelections: Array<PublicRegistrationSelectionPayload & { id?: string }> = eventIds.map((eventId) => {
       const eventOption = eventById.get(eventId);
       const prior = selectionByEventId.get(eventId) ?? (eventOption ? selectionByFamily.get(publicEventFamilyKey(eventOption)) : undefined);
       const mode = partnerModes[eventId] ?? (eventOption?.partner_required ? "NEEDS_PARTNER" : "NONE");
@@ -342,69 +362,89 @@ export default function EditTournamentRegistrationForm({
       };
     });
 
+    savingRef.current = true;
     setPending(true);
-    const response = await submitClubTournamentRegistrationEdit(clubSlug, {
-      edit_token: editToken,
-      expected_updated_at: registration.updated_at,
-      expected_selection_versions: selections.map((selection) => ({ id: selection.id, updated_at: selection.updated_at })),
-      tournament_id: tournamentId,
-      registration_slug: registrationSlug || null,
-      first_name: textValue(formData, "first_name"),
-      last_name: textValue(formData, "last_name"),
-      display_name: textValue(formData, "display_name"),
-      email: registration.email,
-      phone: textValue(formData, "phone"),
-      player_id: registration.player_id ?? null,
-      dupr_id: textValue(formData, "dupr_id"),
-      doubles_skill: numberOrNull(formData.get("doubles_skill")),
-      singles_skill: numberOrNull(formData.get("singles_skill")),
-      age: submittedAge,
-      gender: textValue(formData, "gender"),
-      notes: textValue(formData, "notes"),
-      wants_partner_board_contact: formData.get("wants_partner_board_contact") === "on",
-      terms_accepted: formData.get("terms_accepted") === "on",
-      website: textValue(formData, "website"),
-      selections: payloadSelections,
-      commerce: commerce?.available
-        ? {
-            item_selections: commerceSelections,
-            expected_quote_fingerprint:
-              commerceQuote?.quote_fingerprint || "",
-            idempotency_key: commerceIdempotencyKey,
-            expected_order_updated_at: commerceOrder?.updated_at || null
-          }
-        : null
-    });
-    setPending(false);
-
-    if (response.error || !response.data?.registration_id) {
-      if (response.status === 409 && response.current_quote) {
-        const nextQuote = response.current_quote;
-        if (
-          (nextQuote?.quote_fingerprint || null) !==
-          (commerceQuote?.quote_fingerprint || null)
-        ) {
-          setCommerceIdempotencyKey(crypto.randomUUID());
+    try {
+      let reviewedQuote = commerceQuote;
+      if (commerce?.available && (!reviewedQuote || [...reviewedQuote.request.event_option_ids].sort().join(",") !== [...eventIds].sort().join(","))) {
+        const quoted = await quoteTournamentCommerce(clubSlug, {
+          tournament_id: tournamentId, registration_id: registration.id,
+          event_option_ids: eventIds, item_selections: commerceSelections
+        });
+        if (quoted.error || !quoted.data?.quote) {
+          setError(quoted.error || "We couldn’t update your total. Please try saving again.");
+          return;
         }
-        setCommerceSelections(nextQuote.request.item_selections || []);
-        setCommerceQuote(nextQuote);
-        setError(
-          "The total changed. Review the updated price before saving."
-        );
+        reviewedQuote = quoted.data.quote;
+        setCommerceQuote(reviewedQuote);
+        const previousTotal = commerceQuote?.total_minor ?? commerceOrder?.total_minor ?? commerceOrder?.quote?.total_minor;
+        if (reviewedQuote.total_minor !== previousTotal) {
+          setError(`Your updated total is ${formatCommerceMoney(reviewedQuote.total_minor)}. Review it, then ${eventIds.length < selectedIds.length ? "choose Remove event" : "save changes"} to confirm.`);
+          return;
+        }
+      }
+      const response = await submitClubTournamentRegistrationEdit(clubSlug, {
+        edit_token: editToken,
+        expected_updated_at: registration.updated_at,
+        expected_selection_versions: selections.map((selection) => ({ id: selection.id, updated_at: selection.updated_at })),
+        tournament_id: tournamentId,
+        registration_slug: registrationSlug || null,
+        first_name: textValue(formData, "first_name"),
+        last_name: textValue(formData, "last_name"),
+        display_name: textValue(formData, "display_name"),
+        email: registration.email,
+        phone: textValue(formData, "phone"),
+        player_id: registration.player_id ?? null,
+        dupr_id: textValue(formData, "dupr_id"),
+        doubles_skill: numberOrNull(formData.get("doubles_skill")),
+        singles_skill: numberOrNull(formData.get("singles_skill")),
+        age: submittedAge,
+        gender: textValue(formData, "gender"),
+        notes: textValue(formData, "notes"),
+        wants_partner_board_contact: formData.get("wants_partner_board_contact") === "on",
+        terms_accepted: true,
+        website: textValue(formData, "website"),
+        selections: payloadSelections,
+        commerce: commerce?.available
+          ? {
+              item_selections: commerceSelections,
+              expected_quote_fingerprint:
+                reviewedQuote?.quote_fingerprint || "",
+              idempotency_key: commerceIdempotencyKey,
+              expected_order_updated_at: commerceOrder?.updated_at || null
+            }
+          : null
+      });
+
+      if (response.error || !response.data?.registration_id) {
+        if (response.status === 409 && response.current_quote) {
+          const nextQuote = response.current_quote;
+          if (
+            (nextQuote?.quote_fingerprint || null) !==
+            (commerceQuote?.quote_fingerprint || null)
+          ) {
+            setCommerceIdempotencyKey(crypto.randomUUID());
+          }
+          setCommerceSelections(nextQuote.request.item_selections || []);
+          setCommerceQuote(nextQuote);
+          setError(
+            "The total changed. Review the updated price before saving."
+          );
+          return;
+        }
+        setError(response.error || "We couldn’t save your changes. Please try again.");
         return;
       }
-      setError(response.error || "We couldn’t save your changes. Please try again.");
-      return;
+      setSuccess({
+        confirmationToken: response.data.confirmation_token || "",
+        deliveryStatus: response.data.email_delivery?.status || response.data.confirmation_delivery?.status || "unknown"
+      });
+    } catch {
+      setError("We couldn’t confirm that your changes were saved. Check your connection and try again.");
+    } finally {
+      savingRef.current = false;
+      setPending(false);
     }
-    if (!response.data.confirmation_token) {
-      setError("We saved your changes but couldn’t open the confirmation page. Contact the organizer before trying again.");
-      return;
-    }
-
-    setSuccess({
-      confirmationToken: response.data.confirmation_token,
-      deliveryStatus: response.data.email_delivery?.status || response.data.confirmation_delivery?.status || "unknown"
-    });
   }
 
   if (success) {
@@ -418,13 +458,13 @@ export default function EditTournamentRegistrationForm({
             ? "Your changes were saved, but we couldn’t send the confirmation email."
             : "Your changes were saved."}
         </p>
-        <Link href={`/clubs/${clubSlug}/tournament-registration/confirmation?${query.toString()}`}>View updated registration</Link>
+        {success.confirmationToken ? <Link href={`/clubs/${clubSlug}/tournament-registration/confirmation?${query.toString()}`}>View updated registration</Link> : <p>Your changes are saved. Contact the organizer if you need a copy of your updated registration.</p>}
       </section>
     );
   }
 
   return (
-    <form onSubmit={onSubmit} style={{ display: "grid", gap: "1rem" }}>
+    <form ref={formRef} onSubmit={onSubmit} aria-busy={pending} style={{ display: "grid", gap: "1rem" }}>
       <input type="text" name="website" autoComplete="off" tabIndex={-1} style={{ position: "absolute", left: "-10000px" }} aria-hidden="true" />
 
       <section style={cardStyle}>
@@ -462,7 +502,7 @@ export default function EditTournamentRegistrationForm({
       <section style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Registered events</h2>
         <p style={{ color: "#475569" }}>
-          Edit any event below, then save your changes.
+          Open an event, make your changes, and select Save changes to finish.
         </p>
         <div style={{ display: "grid", gap: "0.65rem" }}>
           {selectedIds.map((eventId) => {
@@ -502,13 +542,16 @@ export default function EditTournamentRegistrationForm({
                 </div>
                 <button
                   type="button"
-                  onClick={() => setEditingEventId(eventId)}
+                  onClick={() => { setError(null); setEditingEventId(eventId); }}
+                  disabled={pending}
                   style={{
                     border: "1px solid #0f172a",
                     borderRadius: "9px",
                     padding: "0.5rem 0.75rem",
                     background: "white",
-                    fontWeight: 800
+                    fontWeight: 800,
+                    fontSize: "1.125rem",
+                    minHeight: "48px"
                   }}
                 >
                   Edit event
@@ -523,7 +566,7 @@ export default function EditTournamentRegistrationForm({
         <button
           type="button"
           onClick={() => setAddEventOpen(true)}
-          disabled={!visibleEvents.some((event) => (
+          disabled={pending || !visibleEvents.some((event) => (
             !selectedIds.includes(event.id)
               && event.selectable
               && !publicEventEligibilityReason(event, eligibilityProfile)
@@ -616,7 +659,7 @@ export default function EditTournamentRegistrationForm({
         return (
           <InteractionDialog
             open={Boolean(editingEventId)}
-            phase="ready"
+            phase={pending ? "working" : error ? "error" : "ready"}
             title="Edit event"
             description={publicTournamentEventLabel(eventOption.event_family_label, eventOption.division_name)}
             onRequestClose={() => setEditingEventId(null)}
@@ -624,39 +667,34 @@ export default function EditTournamentRegistrationForm({
               <>
                 <button
                   type="button"
-                  onClick={() => {
-                    toggleEvent(editingEventId, false);
-                    setEditingEventId(null);
-                  }}
-                  style={{ color: "#b91c1c" }}
+                  onClick={() => saveEvent(true)}
+                  disabled={pending}
+                  style={{ ...eventButtonStyle, color: "#b91c1c", borderColor: "#b91c1c" }}
                 >
                   Remove event
                 </button>
-                <button type="button" onClick={() => setEditingEventId(null)} style={{ fontWeight: 800 }}>
-                  Apply event changes
+                <button type="button" onClick={() => saveEvent()} disabled={pending} style={{ ...eventButtonStyle, background: "#0f172a", borderColor: "#0f172a", color: "white" }}>
+                  {pending ? "Saving…" : "Save changes"}
                 </button>
               </>
             )}
           >
             <h3>{publicTournamentEventLabel(eventOption.event_family_label, eventOption.division_name)}</h3>
             <p style={{ color: "#475569" }}>{scheduledDaysLabel(eventOption, dayById) || "Schedule TBD"}<br />{eventMeta(eventOption)}</p>
-            <div style={{ display: "grid", gap: "0.6rem" }}>
-              <label>Partner status<br />
-                <select
-                  value={mode}
-                  onChange={(event) =>
-                    setPartnerModes((current) => ({
-                      ...current,
-                      [editingEventId]: event.target.value as "NONE" | "HAS_PARTNER" | "NEEDS_PARTNER"
-                    }))
-                  }
-                  style={{ width: "100%" }}
-                >
-                  {!eventOption.partner_required ? <option value="NONE">No partner needed</option> : null}
-                  {eventOption.partner_required ? <option value="HAS_PARTNER">I have a partner</option> : null}
-                  {eventOption.partner_required ? <option value="NEEDS_PARTNER">I need a partner</option> : null}
-                </select>
-              </label>
+            <fieldset ref={eventEditorRef} disabled={pending} style={{ display: "grid", gap: "0.85rem", border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+              {eventOption.partner_required ? (
+                <fieldset style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+                  <legend style={{ fontSize: "1.125rem", fontWeight: 800, marginBottom: "0.5rem" }}>Do you have a partner?</legend>
+                  <div style={{ display: "grid", gap: "0.6rem" }}>
+                    {(["NEEDS_PARTNER", "HAS_PARTNER"] as const).map((choice) => (
+                      <label key={choice} style={{ display: "flex", gap: "0.75rem", alignItems: "center", minHeight: "48px", padding: "0.75rem", border: `2px solid ${mode === choice ? "#2563eb" : "#cbd5e1"}`, borderRadius: "10px", background: mode === choice ? "#eff6ff" : "white", fontSize: "1.125rem", cursor: "pointer" }}>
+                        <input type="radio" name="event_partner_mode" value={choice} checked={mode === choice} onChange={() => setPartnerModes((current) => ({ ...current, [editingEventId]: choice }))} />
+                        <span><strong>{choice === "HAS_PARTNER" ? "I have a partner" : "I need a partner"}</strong><span style={{ display: "block", fontSize: "1rem", color: "#475569" }}>{choice === "HAS_PARTNER" ? "Add or change my partner’s details." : "Keep my registration without a partner for now."}</span></span>
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+              ) : <p>No partner is needed for this event.</p>}
               {mode === "HAS_PARTNER" ? (
                 <TournamentPartnerDetails
                   key={editingEventId}
@@ -676,19 +714,26 @@ export default function EditTournamentRegistrationForm({
                   }}
                 />
               ) : null}
-              {mode === "NEEDS_PARTNER" ? (
-                <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-                  <input
-                    type="checkbox"
-                    defaultChecked={Boolean(prior?.show_on_partner_board)}
-                    disabled={!eventOption.partner_board_enabled}
-                    onChange={(event) => updateSelectionDraft(editingEventId, { show_on_partner_board: event.target.checked })}
-                  /> List me as looking for a partner in this event
-                </label>
+              {mode === "NEEDS_PARTNER" && eventOption.partner_board_enabled ? (
+                <section style={{ background: "#f8fafc", borderRadius: "10px", padding: "0.85rem" }}>
+                  <h4 style={{ margin: "0 0 0.5rem" }}>Partner Board visibility</h4>
+                  <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(prior?.show_on_partner_board)}
+                      aria-describedby="edit-partner-board-help"
+                      onChange={(event) => updateSelectionDraft(editingEventId, { show_on_partner_board: event.target.checked })}
+                    /> Show my name on the public Partner Board
+                  </label>
+                  <p id="edit-partner-board-help" style={{ color: "#475569", marginBottom: 0 }}>This only controls whether other players can find you. Found a partner? Choose “I have a partner” above to add them.</p>
+                </section>
               ) : null}
-              <label>Public partner note (optional)<br /><textarea aria-describedby="edit-partner-note-help" defaultValue={prior?.partner_note || ""} onChange={(event) => updateSelectionDraft(editingEventId, { partner_note: event.target.value })} rows={2} style={{ width: "100%" }} /></label>
+              <label>Public partner note (optional)<br /><textarea aria-describedby="edit-partner-note-help" value={prior?.partner_note || ""} onChange={(event) => updateSelectionDraft(editingEventId, { partner_note: event.target.value })} rows={2} style={{ width: "100%", font: "inherit" }} /></label>
               <p id="edit-partner-note-help" style={{ margin: 0, color: "#475569", fontSize: "0.9rem" }}>Visible to everyone when you are listed in Players Needing Partners. Use Notes for organizers for private messages to tournament staff.</p>
-            </div>
+            </fieldset>
+            {commerce?.available && commerceQuote ? <p><strong>Registration total: {formatCommerceMoney(commerceQuote.total_minor)}</strong></p> : null}
+            <p style={{ color: "#475569", fontSize: "1rem" }}>{saveAgreement}</p>
+            {error ? <p role="alert" data-dialog-focus tabIndex={-1} style={{ color: "#b91c1c", fontSize: "1.125rem" }}>{error}</p> : null}
           </InteractionDialog>
         );
       })() : null}
@@ -714,13 +759,11 @@ export default function EditTournamentRegistrationForm({
         <label style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginTop: "0.75rem" }}>
           <input name="wants_partner_board_contact" type="checkbox" defaultChecked={Boolean(registration.wants_partner_board_contact)} /> The organizers may contact me about finding a partner.
         </label>
-        <label style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginTop: "0.75rem" }}>
-          <input name="terms_accepted" type="checkbox" required /> My information is correct, and I agree to the tournament rules and refund policy.
-        </label>
+        <p style={{ color: "#475569" }}>{saveAgreement}</p>
       </section>
 
-      {error ? <p style={{ color: "#b91c1c" }}>{error}</p> : null}
-      <button type="submit" disabled={pending || !visibleEvents.length} style={{ padding: "0.75rem 1rem", borderRadius: "10px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 700 }}>
+      {error && !editingEventId ? <p role="alert" style={{ color: "#b91c1c" }}>{error}</p> : null}
+      <button type="submit" disabled={pending || !visibleEvents.length} style={{ ...eventButtonStyle, borderColor: "#0f172a", background: "#0f172a", color: "white" }}>
         {pending ? "Saving…" : "Save registration changes"}
       </button>
     </form>
