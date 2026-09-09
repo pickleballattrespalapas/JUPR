@@ -12,7 +12,7 @@ function load(relative, overrides = {}) {
   compiled.filename = filename;
   compiled.paths = Module._nodeModulePaths(path.dirname(filename));
   const originalRequire = compiled.require.bind(compiled);
-  compiled.require = name => overrides[name] ? { __esModule: true, ...overrides[name] } : originalRequire(name);
+  compiled.require = name => name === "@/lib/tournamentRegistrationProfile" ? load("lib/tournamentRegistrationProfile.ts") : overrides[name] ? { __esModule: true, ...overrides[name] } : originalRequire(name);
   compiled._compile(ts.transpileModule(fs.readFileSync(filename, "utf8"), {
     compilerOptions: { esModuleInterop: true, jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }
   }).outputText, filename);
@@ -44,6 +44,7 @@ const Form = load(base + "edit/EditTournamentRegistrationForm.tsx", {
     quoteTournamentCommerce: async (_club, payload) => { quotes.push(payload); return quoteResponse(); }
   },
   "@/lib/tournamentRegistrationApi": {
+    resolveClubTournamentPartnerProfile: async () => ({ data: { profile_candidates: [] } }),
     submitClubTournamentRegistrationEdit: async (_club, payload) => { submissions.push(payload); return submitResponse(); }
   }
 }).default;
@@ -72,6 +73,7 @@ const mount = async (patch = {}) => {
   await act(async () => { renderer = create(React.createElement(Form, { ...props, ...patch }), {
     createNodeMock: element => element.type === "form" ? {} : element.type === "fieldset" ? { querySelectorAll: () => [] } : null
   }); });
+  await act(async () => new Promise(resolve => setTimeout(resolve, 275)));
   await act(async () => button("Edit event").props.onClick());
 };
 
