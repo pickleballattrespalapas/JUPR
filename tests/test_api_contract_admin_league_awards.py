@@ -188,7 +188,10 @@ def test_admin_league_awards_badge_verification_includes_context_type():
     assert _verify_badge_rows(supabase, club_id="club", expected=expected) == expected
 
 
-def test_admin_league_awards_persists_freeze_preview_and_override_reason(monkeypatch):
+@pytest.mark.parametrize("environment", ["test", "production"])
+def test_admin_league_awards_persists_freeze_preview_and_override_reason(monkeypatch, environment):
+    monkeypatch.setenv("JUPR_ENV", environment)
+    monkeypatch.setenv("JUPR_PRODUCTION_WRITE_POLICY", "enabled")
     tables = _storage()
     supabase = FakeSupabase(tables)
     _install(monkeypatch, supabase)
@@ -253,7 +256,10 @@ def test_admin_league_awards_persists_freeze_preview_and_override_reason(monkeyp
     assert tables["leagues_metadata"][0]["end_awards"]["workflow"]["override_notes"][override_key]
 
 
-def test_admin_league_awards_mint_never_false_succeeds_and_same_key_retries(monkeypatch):
+@pytest.mark.parametrize("environment", ["test", "production"])
+def test_admin_league_awards_mint_never_false_succeeds_and_same_key_retries(monkeypatch, environment):
+    monkeypatch.setenv("JUPR_ENV", environment)
+    monkeypatch.setenv("JUPR_PRODUCTION_WRITE_POLICY", "enabled")
     tables = _storage()
     supabase = FakeSupabase(tables)
     _install(monkeypatch, supabase)
@@ -330,7 +336,10 @@ def test_admin_league_awards_mint_fails_closed_when_badge_definitions_are_missin
     assert workflow_after["mint"]["attempt_count"] == 0
 
 
-def test_admin_league_awards_archive_requires_verified_mint_and_is_idempotent(monkeypatch):
+@pytest.mark.parametrize("environment", ["test", "production"])
+def test_admin_league_awards_archive_requires_verified_mint_and_is_idempotent(monkeypatch, environment):
+    monkeypatch.setenv("JUPR_ENV", environment)
+    monkeypatch.setenv("JUPR_PRODUCTION_WRITE_POLICY", "enabled")
     tables = _storage()
     supabase = FakeSupabase(tables)
     _install(monkeypatch, supabase)
@@ -382,8 +391,16 @@ def test_admin_league_awards_writes_require_separate_flag(monkeypatch):
     assert "disabled" in response.json()["detail"].lower()
 
 
+@pytest.mark.parametrize("closed_gate", [
+    ("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE", "0"),
+    ("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER", "0"),
+    ("JUPR_PRODUCTION_WRITE_POLICY", "read_only"),
+    ("JUPR_PRODUCTION_WRITE_POLICY", ""),
+    ("SUPABASE_SERVICE_ROLE_KEY", ""),
+    ("JUPR_ENV", ""),
+])
 def test_admin_league_awards_production_refusal_precedes_data_access(
-    monkeypatch,
+    monkeypatch, closed_gate,
 ):
     monkeypatch.setenv("JUPR_ENV", "production")
     monkeypatch.setenv("JUPR_PRODUCTION_WRITE_POLICY", "enabled")
@@ -391,6 +408,7 @@ def test_admin_league_awards_production_refusal_precedes_data_access(
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE", "1")
     monkeypatch.setenv("SUPABASE_URL", "http://example.local")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "server-only-test-key")
+    monkeypatch.setenv(*closed_gate)
     monkeypatch.setattr(
         "services.api.main.create_client",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
@@ -408,7 +426,72 @@ def test_admin_league_awards_production_refusal_precedes_data_access(
     )
 
     assert response.status_code == 403
-    assert "staging-only" in response.json()["detail"].lower()
+    from jupr_app.services.admin_league_manager_service import (
+        is_admin_league_awards_write_enabled,
+        league_awards_write_unavailable_reason,
+    )
+
+    assert is_admin_league_awards_write_enabled() is False
+    assert league_awards_write_unavailable_reason()
+
+
+def test_production_award_setup_saves_and_reloads_only_the_selected_club(monkeypatch):
+    tables = _storage()
+    tables["leagues_metadata"][0]["status"] = "draft"
+    tables["leagues_metadata"].append({
+        "club_id": "other-club", "league_name": "Open", "status": "draft", "awards_config": {},
+    })
+    _install(monkeypatch, FakeSupabase(tables))
+    monkeypatch.setenv("JUPR_ENV", "production")
+    monkeypatch.setenv("JUPR_PRODUCTION_WRITE_POLICY", "enabled")
+    client = TestClient(app)
+    path = "/admin/clubs/club/league-manager/leagues/Open/awards"
+    headers = {"Authorization": "Bearer local"}
+
+    loaded = client.get(path, headers=headers)
+    assert loaded.status_code == 200
+    assert loaded.json()["writes_enabled"] is True
+    assert loaded.json()["writes_unavailable_reason"] is None
+    assert loaded.json()["wizard"]["status"] == "not_started"
+
+    config = {"categories": {"most_wins": {"enabled": True, "depth": 3, "minimum": 32}}}
+    saved = client.put(path + "/config", headers=headers, json={
+        "awards_config": config, "expected_config_version": 0,
+    })
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["awards_config_version"] == 1
+
+    recovered = client.get(path, headers=headers)
+    assert recovered.json()["league"]["awards_config"] == config
+    assert tables["leagues_metadata"][1]["awards_config"] == {}
+
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE", "0")
+    disabled = client.get(path, headers=headers)
+    assert disabled.json()["writes_enabled"] is False
+    assert "disabled for this site" in disabled.json()["writes_unavailable_reason"]
+    blocked = client.put(path + "/config", headers=headers, json={
+        "awards_config": {}, "expected_config_version": 1,
+    })
+    assert blocked.status_code == 403
+    assert tables["leagues_metadata"][0]["awards_config"] == config
+
+
+def test_production_award_setup_still_requires_club_permission(monkeypatch):
+    tables = _storage()
+    _install(monkeypatch, FakeSupabase(tables))
+    monkeypatch.setenv("JUPR_ENV", "production")
+    monkeypatch.setenv("JUPR_PRODUCTION_WRITE_POLICY", "enabled")
+    monkeypatch.setattr(
+        "services.api.admin_league_manager_routes.resolve_admin_role",
+        lambda **_kwargs: SimpleNamespace(role="public"),
+    )
+    response = TestClient(app).put(
+        "/admin/clubs/club/league-manager/leagues/Open/awards/config",
+        headers={"Authorization": "Bearer local"},
+        json={"awards_config": {}, "expected_config_version": 0},
+    )
+    assert response.status_code == 403
+    assert tables["leagues_metadata"][0]["awards_config"] == {"default_min_games": 2, "default_depth": 1}
 
 
 def test_admin_league_awards_strict_audit_fails_before_freeze_mutation(monkeypatch):

@@ -34,7 +34,8 @@ def test_league_awards_fastapi_exposes_separate_recoverable_actions() -> None:
 
 def test_league_awards_mint_requires_read_after_write_verification() -> None:
     service = (ROOT / "jupr_app/services/admin_league_awards_service.py").read_text()
-    assert "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE" in service
+    guard = (ROOT / "jupr_app/services/admin_league_manager_service.py").read_text()
+    assert "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE" in guard
     assert "SUPABASE_SERVICE_ROLE_KEY" in service
     assert "_verify_badge_rows" in service
     assert "Badge mint could not be verified" in service
