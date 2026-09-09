@@ -24,7 +24,11 @@ from jupr_app.domain.league_analytics import (
     compute_league_player_analytics,
     compute_team_league_analytics,
 )
-from jupr_app.services.admin_league_manager_service import is_admin_league_manager_enabled
+from jupr_app.services.admin_league_manager_service import (
+    is_admin_league_awards_write_enabled,
+    is_admin_league_manager_enabled,
+    league_awards_write_unavailable_reason,
+)
 
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
 CONFIRM_CLOSE_LEAGUE = "CLOSE LEAGUE"
@@ -32,7 +36,6 @@ CONFIRM_FREEZE_AWARDS = "FREEZE LEAGUE AWARDS"
 CONFIRM_MINT_AWARDS = "MINT AWARDS"
 CONFIRM_ARCHIVE_LEAGUE = "ARCHIVE LEAGUE"
 AWARDS_WORKFLOW_VERSION = 3
-AWARDS_WRITE_FLAG = "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE"
 TOP_PERFORMER_BADGE_SEED_MIGRATION = "supabase/migrations/20260720014744_seed_top_performer_badges.sql"
 REQUIRED_TOP_PERFORMER_BADGE_IDS = tuple(sorted(set(TOP_PERFORMER_BADGE_IDS.values())))
 _IDEMPOTENCY_KEY_RE = re.compile(r"^[A-Za-z0-9._:-]{8,160}$")
@@ -52,19 +55,10 @@ def _truthy_env(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in TRUTHY_ENV_VALUES
 
 
-def is_admin_league_awards_write_enabled() -> bool:
-    return is_admin_league_manager_enabled() and _truthy_env(AWARDS_WRITE_FLAG)
-
-
 def _require_write_gate() -> None:
-    if os.getenv("JUPR_ENV", "").strip().lower() == "production":
-        raise PermissionError("League Awards writes are staging-only and disabled in production.")
-    if not is_admin_league_manager_enabled():
-        raise PermissionError("Next League Manager is disabled.")
-    if not _truthy_env(AWARDS_WRITE_FLAG):
-        raise PermissionError(f"League Awards writes are disabled. Enable {AWARDS_WRITE_FLAG} for the staging pilot.")
-    if not os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip():
-        raise PermissionError("League Awards writes require the FastAPI SUPABASE_SERVICE_ROLE_KEY.")
+    reason = league_awards_write_unavailable_reason()
+    if reason:
+        raise PermissionError(reason)
 
 
 def require_admin_league_awards_write() -> None:
@@ -1073,6 +1067,7 @@ def _response(
         "eligible_players": list(eligible_players or []),
         "wizard": dict(workflow),
         "writes_enabled": is_admin_league_awards_write_enabled(),
+        "writes_unavailable_reason": league_awards_write_unavailable_reason(),
         "service_role_ready": bool(os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()),
         "badge_candidate_count": int(mint.get("verified_count") or 0),
         "badge_expected_count": int(mint.get("expected_count") or 0),

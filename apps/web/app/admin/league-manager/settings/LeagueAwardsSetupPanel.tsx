@@ -31,6 +31,8 @@ type AwardsSetupResponse = {
   award_catalog?: AwardCatalogRow[];
   awards_config_version?: number;
   writes_enabled?: boolean;
+  writes_unavailable_reason?: string | null;
+  service_role_ready?: boolean;
   wizard?: { status?: string };
 };
 
@@ -123,7 +125,7 @@ export default function LeagueAwardsSetupPanel({ apiBase, clubId, leagueName, le
   }
 
   async function save() {
-    if (!state) return;
+    if (!state || !canEdit || busy) return;
     const categories: Record<string, unknown> = {};
     for (const category of state.award_catalog || []) {
       const draft = drafts[category.key];
@@ -179,7 +181,12 @@ export default function LeagueAwardsSetupPanel({ apiBase, clubId, leagueName, le
     });
   }, [state]);
   const isDraft = leagueStatus === "draft";
-  const canEdit = isDraft && state?.writes_enabled === true && state?.wizard?.status === "not_started";
+  const canEdit = isDraft && state?.writes_enabled === true && state?.service_role_ready === true && state?.wizard?.status === "not_started";
+  const readOnlyReason = !isDraft
+    ? "Award setup is locked after the league starts."
+    : state?.wizard?.status !== "not_started"
+      ? "Award setup is locked because final award review has started."
+      : state?.writes_unavailable_reason || "Award setup changes are currently unavailable. Please try again later.";
   const hasChanges = JSON.stringify(drafts) !== JSON.stringify(loadedDrafts);
 
   return (
@@ -225,7 +232,7 @@ export default function LeagueAwardsSetupPanel({ apiBase, clubId, leagueName, le
               ))}
             </div>
           ) : <p style={{ color: "#64748b" }}>No award categories were configured for this league.</p>}
-          {isDraft && !canEdit ? <p style={{ color: "#92400e" }}>Award setup changes are currently unavailable.</p> : null}
+          <p style={{ color: "#92400e" }}>{readOnlyReason}</p>
         </>
       ) : null}
       {message ? <p role="status" style={{ color: /unable|error|must|unavailable/i.test(message) ? "#b91c1c" : "#166534" }}>{message}</p> : null}

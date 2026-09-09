@@ -363,7 +363,7 @@ jobs:
               "$RUNNER_TEMP/production-rollback-snapshot.json"
           )"
           case "$live_feature_profile" in
-            baseline|pre_email|release) ;;
+            baseline|pre_email|pre_awards|release) ;;
             *)
               echo "::error title=Live feature profile rejected::The pre-deploy runtime is not an exact reviewed production profile."
               exit 2
@@ -693,7 +693,7 @@ jobs:
               "$RUNNER_TEMP/production-rollback-snapshot.json"
           )"
           case "$rollback_feature_profile" in
-            baseline|pre_email|release) ;;
+            baseline|pre_email|pre_awards|release) ;;
             *)
               echo "::error title=Rollback feature profile rejected::The saved baseline is not an exact reviewed production profile."
               exit 2

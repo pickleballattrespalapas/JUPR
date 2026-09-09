@@ -34,7 +34,8 @@ def test_league_awards_fastapi_exposes_separate_recoverable_actions() -> None:
 
 def test_league_awards_mint_requires_read_after_write_verification() -> None:
     service = (ROOT / "jupr_app/services/admin_league_awards_service.py").read_text()
-    assert "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE" in service
+    guard = (ROOT / "jupr_app/services/admin_league_manager_service.py").read_text()
+    assert "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE" in guard
     assert "SUPABASE_SERVICE_ROLE_KEY" in service
     assert "_verify_badge_rows" in service
     assert "Badge mint could not be verified" in service
@@ -64,7 +65,7 @@ def test_league_awards_staging_gate_is_closed_at_rest_and_available_only_in_its_
     assert staging["env"][flag] == "0"
     assert expected_write_flags("none")[flag] is False
     assert expected_write_flags("league-awards")[flag] is True
-    assert production["env"][flag] == "0"
+    assert production["env"][flag] == "1"
 
 
 def test_league_awards_manual_evidence_keeps_parity_partial() -> None:
