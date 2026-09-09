@@ -74,7 +74,8 @@ def test_public_tournament_roster_page_is_public_safe_after_registration() -> No
     assert "builder_draft_json" not in payload["settings"]
 
 
-def test_public_tournament_roster_projection_denies_private_fields_and_contact_values() -> None:
+@pytest.mark.parametrize("partner_note", [None, "", "Text me at +1 555-010-9988 or casey.private@example.com"])
+def test_public_tournament_roster_projection_denies_private_fields_and_contact_values(partner_note) -> None:
     storage = fake_storage()
     supabase = FakeSupabase(storage)
 
@@ -90,6 +91,7 @@ def test_public_tournament_roster_projection_denies_private_fields_and_contact_v
             "dupr_id": "PRIVATE-DUPR-42",
             "doubles_skill": 3.75,
             "age": 47,
+            "notes": "Staff only: please discuss my scheduling accommodation privately.",
             "wants_partner_board_contact": True,
             "terms_accepted": True,
             "selections": [
@@ -97,7 +99,7 @@ def test_public_tournament_roster_projection_denies_private_fields_and_contact_v
                     "event_option_id": "event1",
                     "partner_mode": "NEEDS_PARTNER",
                     "show_on_partner_board": True,
-                    "partner_note": "Text me at +1 555-010-9988 or casey.private@example.com",
+                    "partner_note": partner_note,
                 }
             ],
         },
@@ -133,11 +135,16 @@ def test_public_tournament_roster_projection_denies_private_fields_and_contact_v
     assert "casey.private@example.com" not in serialized
     assert "555-010-9988" not in serialized
     assert "PRIVATE-DUPR-42" not in serialized
+    assert "Staff only:" not in serialized
+    assert storage["tournament_registrations"][0]["notes"] == "Staff only: please discuss my scheduling accommodation privately."
     assert result["registration_id"] not in serialized
     board_entry = roster["players_needing_partners"][0]
     assert board_entry["board_entry_key"].startswith("tr_")
     assert board_entry["age_bracket"] == "40-49"
-    assert board_entry["note"].count("[contact removed]") == 2
+    if partner_note:
+        assert board_entry["note"].count("[contact removed]") == 2
+    else:
+        assert board_entry["note"] == ""
 
 
 def test_public_tournament_roster_reports_missing_schema() -> None:

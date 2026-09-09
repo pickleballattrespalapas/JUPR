@@ -686,7 +686,8 @@ export default function EditTournamentRegistrationForm({
                   /> List me as looking for a partner in this event
                 </label>
               ) : null}
-              <label>Partner note<br /><textarea defaultValue={prior?.partner_note || ""} onChange={(event) => updateSelectionDraft(editingEventId, { partner_note: event.target.value })} rows={2} style={{ width: "100%" }} /></label>
+              <label>Public partner note (optional)<br /><textarea aria-describedby="edit-partner-note-help" defaultValue={prior?.partner_note || ""} onChange={(event) => updateSelectionDraft(editingEventId, { partner_note: event.target.value })} rows={2} style={{ width: "100%" }} /></label>
+              <p id="edit-partner-note-help" style={{ margin: 0, color: "#475569", fontSize: "0.9rem" }}>Visible to everyone when you are listed in Players Needing Partners. Use Notes for organizers for private messages to tournament staff.</p>
             </div>
           </InteractionDialog>
         );
@@ -708,7 +709,8 @@ export default function EditTournamentRegistrationForm({
 
       <section style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Notes and policies</h2>
-        <label>Notes for organizers<br /><textarea name="notes" defaultValue={registration.notes || ""} rows={4} style={{ width: "100%" }} /></label>
+        <label>Notes for organizers<br /><textarea name="notes" aria-describedby="edit-staff-notes-help" defaultValue={registration.notes || ""} rows={4} style={{ width: "100%" }} /></label>
+        <p id="edit-staff-notes-help" style={{ margin: "0.35rem 0 0", color: "#475569", fontSize: "0.9rem" }}>These notes are shared with tournament staff and do not appear on the public Partner Board.</p>
         <label style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginTop: "0.75rem" }}>
           <input name="wants_partner_board_contact" type="checkbox" defaultChecked={Boolean(registration.wants_partner_board_contact)} /> The organizers may contact me about finding a partner.
         </label>

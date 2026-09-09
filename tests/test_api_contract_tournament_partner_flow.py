@@ -183,7 +183,7 @@ def test_partner_board_request_review_decline_cancel_accept_and_stale_contract(p
 
 def test_partner_board_public_projection_hides_nonconsenting_needs_partner_entry(partner_client):
     api, storage = partner_client
-    visible_registration, _visible_selection, _visible_token = _register(
+    visible_registration, visible_selection, _visible_token = _register(
         api,
         storage,
         first_name="Visible",
@@ -199,6 +199,10 @@ def test_partner_board_public_projection_hides_nonconsenting_needs_partner_entry
     )
     private_row = next(row for row in storage["tournament_registrations"] if row["email"] == "private@example.com")
     private_row["wants_partner_board_contact"] = False
+    visible_row = next(row for row in storage["tournament_registrations"] if row["id"] == visible_registration)
+    visible_row["notes"] = "Private message for tournament staff"
+    visible_entry_selection = next(row for row in storage["tournament_registration_selections"] if row["id"] == visible_selection)
+    visible_entry_selection["partner_note"] = "Public message for potential partners"
 
     response = api.get("/clubs/tres-palapas/tournament-roster", params={"registration_slug": "tres-open"})
 
@@ -215,3 +219,13 @@ def test_partner_board_public_projection_hides_nonconsenting_needs_partner_entry
     assert visible_registration not in str(visible_entry)
     assert "visible@example.com" not in str(payload).lower()
     assert "private@example.com" not in str(payload).lower()
+    assert visible_entry["note"] == "Public message for potential partners"
+    assert "Private message for tournament staff" not in response.text
+
+    # Removing a public note must not publish the remaining private staff note.
+    visible_entry_selection["partner_note"] = ""
+    response = api.get("/clubs/tres-palapas/tournament-roster", params={"registration_slug": "tres-open"})
+    assert response.status_code == 200
+    assert response.json()["roster"]["partner_board_entries"][0]["note"] == ""
+    assert "Private message for tournament staff" not in response.text
+    assert visible_row["notes"] == "Private message for tournament staff"

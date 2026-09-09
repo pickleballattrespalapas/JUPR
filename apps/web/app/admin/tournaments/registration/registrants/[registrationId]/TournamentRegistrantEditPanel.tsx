@@ -1253,8 +1253,9 @@ export default function TournamentRegistrantEditPanel({
                   </label>
                 ) : null}
                 {draftEventUsesPartner ? <label>
-                  <strong>Partner note</strong><br />
-                  <textarea value={selectionDraft.partnerNote} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerNote: event.target.value }))} rows={3} style={inputStyle} />
+                  <strong>Public partner note</strong><br />
+                  <textarea aria-describedby="admin-partner-note-help" value={selectionDraft.partnerNote} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerNote: event.target.value }))} rows={3} style={inputStyle} />
+                  <span id="admin-partner-note-help" style={{ display: "block", color: "#475569", fontSize: "0.9rem" }}>Visible to everyone when this player is listed in Players Needing Partners. Use Admin notes for private information.</span>
                 </label> : null}
               </div>
             ) : null}
