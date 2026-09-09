@@ -99,6 +99,7 @@ type AwardsResponse = {
   eligible_players?: EligiblePlayer[];
   wizard: AwardsWizard;
   writes_enabled?: boolean;
+  writes_unavailable_reason?: string | null;
   service_role_ready?: boolean;
   badge_definitions_ready?: boolean;
   badge_definition_count?: number;
@@ -430,7 +431,7 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
         {!busy && !leagues.length ? <p style={{ color: "#64748b" }}>No leagues are available.</p> : null}
         {message ? <p role="status" style={{ color: messageIsError ? "#b91c1c" : "#166534" }}>{message}</p> : null}
         {wizard ? <p style={{ color: "#475569" }}>Saved step: <strong>{workflowStatus.replace(/_/g, " ")}</strong> · Revision <strong>{wizard.revision || 0}</strong> · League status <strong>{shortValue(state?.league?.status)}</strong></p> : null}
-        {state && !writeReady ? <p style={{ color: "#92400e" }}>Awards editing is closed for this staging test. The saved workflow, current award leaders, and measurable results remain available to review.</p> : null}
+        {state && !writeReady ? <p style={{ color: "#92400e" }}>{state.writes_unavailable_reason || "Awards editing is currently unavailable. Saved awards and current leaders remain available to review."}</p> : null}
         {state && state.badge_definitions_ready !== true ? (
           <p role="alert" style={{ color: "#92400e" }}>Badge publishing is unavailable until all required award definitions are ready.</p>
         ) : null}

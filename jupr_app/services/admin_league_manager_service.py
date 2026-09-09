@@ -4,7 +4,10 @@ import json
 import os
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
-from jupr_app.services.staging_write_guard import staging_league_manager_writes_enabled
+from jupr_app.services.staging_write_guard import (
+    staging_league_manager_writes_enabled,
+    staging_write_wave_allows,
+)
 
 from jupr_app.domain.leagues import normalize_league_status
 
@@ -29,7 +32,25 @@ def is_admin_league_manager_enabled() -> bool:
 
 
 def is_admin_league_awards_write_enabled() -> bool:
-    return is_admin_league_manager_enabled() and _truthy_env("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE")
+    return league_awards_write_unavailable_reason() is None
+
+
+def league_awards_write_unavailable_reason() -> str | None:
+    """Use the same runtime prerequisites for Awards reads and mutations."""
+
+    disabled = "Awards editing is disabled for this site. Saved awards remain available to review."
+    environment = os.getenv("JUPR_ENV", "").strip().lower()
+    if not staging_league_manager_writes_enabled():
+        return disabled
+    if environment == "staging" and not staging_write_wave_allows("league-awards"):
+        return disabled
+    if environment == "production" and os.getenv("JUPR_PRODUCTION_WRITE_POLICY", "").strip().lower() != "enabled":
+        return disabled
+    if not is_admin_league_manager_enabled() or not _truthy_env("JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE"):
+        return disabled
+    if not os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip():
+        return "Awards editing is temporarily unavailable. Please try again later."
+    return None
 
 
 def _safe_rows(resp: Any) -> list[dict[str, Any]]:
