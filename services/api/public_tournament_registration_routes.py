@@ -49,6 +49,7 @@ class PublicTournamentCommerceSelectionRequest(BaseModel):
 
 
 class PublicTournamentRegistrationRequest(BaseModel):
+    partner_invitation_token: str | None = Field(default=None, max_length=4000)
     tournament_id: str | None = None
     registration_slug: str | None = None
     first_name: str | None = None

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from typing import Any
+from jupr_app.domain.tournament_public_references import build_public_tournament_reference
 
 from jupr_app.domain.tournament_registration_repo import (
     build_public_tournament_roster_state,
@@ -174,6 +175,23 @@ def build_public_tournament_roster_page(
     public_events.sort(key=lambda item: (item.get("registration_day_id") or "", str(item.get("event_family_label") or ""), str(item.get("division_name") or "")))
 
     roster_state = build_public_tournament_roster_state(supabase, tournament, settings, days_raw, events_raw)
+    # An accepted guest invitation holds this division while the requester
+    # registers. Keep it off both public partner lists during that reservation.
+    reservations = supabase.table("tournament_partner_invitations").select("target_selection_id,requester_selection_id,expires_at")\
+        .eq("tournament_id", str(tournament["id"])).eq("status", "RESERVED").execute().data or []
+    from datetime import timezone
+    reserved_keys = {
+        build_public_tournament_reference(tournament_id=str(tournament["id"]), namespace="partner-board-selection", source_id=str(selection_id))
+        for row in reservations
+        if datetime.fromisoformat(str(row["expires_at"]).replace("Z", "+00:00")) > datetime.now(timezone.utc)
+        for selection_id in (row.get("target_selection_id"), row.get("requester_selection_id")) if selection_id
+    }
+    for key in ("players_needing_partners", "partner_board_entries"):
+        roster_state[key] = [row for row in roster_state.get(key, []) if row.get("board_entry_key") not in reserved_keys]
+    if isinstance(roster_state.get("summary"), dict):
+        entries = roster_state["partner_board_entries"]
+        roster_state["summary"]["partner_board_entries"] = len(entries)
+        roster_state["summary"]["players_needing_partners"] = len({row.get("player_entry_key") or row.get("player_name") for row in entries})
     return {
         "available": True,
         "setup_error": None,
