@@ -33,6 +33,8 @@ import FourPlayerTeamRegistrationCard, {
   validateTeamRegistrationDraft
 } from "@/components/tournaments/FourPlayerTeamRegistrationCard";
 import { automaticRegistrationProfile } from "@/lib/tournamentRegistrationProfile";
+import { usePartnerInvitationRegistration, PartnerInvitationRegistrationNotice } from "@/components/tournaments/usePartnerInvitationRegistration";
+import { invitationReturnPath } from "@/lib/tournamentPartnerInvitations";
 import EditLinkRequestForm from "./EditLinkRequestForm";
 import TournamentCommerceChooser from "./TournamentCommerceChooser";
 import TournamentPartnerDetails, { type TournamentPartnerDetailsValue } from "@/components/tournaments/TournamentPartnerDetails";
@@ -202,6 +204,8 @@ export default function TournamentRegistrationForm({
   overview
 }: TournamentRegistrationFormProps) {
   const formRef = useRef<HTMLDivElement>(null);
+  const partnerInvitation = usePartnerInvitationRegistration(clubSlug);
+  const invitedEventId = partnerInvitation.invitation?.registration_prefill?.event_option_id;
   const [mode, setMode] = useState<"choose" | "new" | "edit">("choose");
   // Confirmation emails/pages already link to this anchor. Open the same
   // recovery form used by the chooser instead of rendering a second form.
@@ -257,6 +261,15 @@ export default function TournamentRegistrationForm({
     emailStatus?: string | null;
   } | null>(null);
   const [createdTeamEventIds, setCreatedTeamEventIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    const prefill = partnerInvitation.invitation?.registration_prefill;
+    if (!prefill) return;
+    const parts = prefill.name.trim().split(/\s+/);
+    setContact(current => ({ ...current, firstName: parts[0] || "", lastName: parts.slice(1).join(" "), email: prefill.email }));
+    setMode("new");
+    setSelectedIds(current => Array.from(new Set([...current, prefill.event_option_id])));
+  }, [partnerInvitation.invitation]);
 
   const selectableEvents = useMemo(() => events.filter((event) => event.selectable), [events]);
   const eventById = useMemo(() => new Map(events.map((event) => [event.id, event])), [events]);
@@ -607,6 +620,7 @@ export default function TournamentRegistrationForm({
     },
     teamSetupNeedsAttention = false
   ): string {
+    if (partnerInvitation.token) return invitationReturnPath(clubSlug, partnerInvitation.token);
     const query = new URLSearchParams({
       confirmation_token: saved.confirmationToken
     });
@@ -619,6 +633,9 @@ export default function TournamentRegistrationForm({
 
   async function submitRegistration() {
     setError(null);
+    if (partnerInvitation.token && (!partnerInvitation.invitation || partnerInvitation.error)) {
+      setError(partnerInvitation.error || "Please wait while we verify your partner request."); return;
+    }
     const selectionError = validateSelections();
     if (selectionError) {
       setStep(3);
@@ -644,6 +661,7 @@ export default function TournamentRegistrationForm({
     let saved = savedRegistration;
     if (!saved) {
       const response = await submitClubTournamentRegistration(clubSlug, {
+        partner_invitation_token: partnerInvitation.token || null,
         tournament_id: tournamentId,
         registration_slug: registrationSlug || null,
         first_name: contact.firstName,
@@ -811,6 +829,7 @@ export default function TournamentRegistrationForm({
 
       {step === 1 ? (
         <section style={cardStyle} data-testid="registration-step-contact">
+          <PartnerInvitationRegistrationNotice invitation={partnerInvitation.invitation} error={partnerInvitation.error} />
           <h2 style={{ marginTop: 0 }}>1. Name and contact</h2>
           <p style={{ color: "#475569" }}>
             We use your age and gender to show eligible divisions. Only
@@ -891,10 +910,11 @@ export default function TournamentRegistrationForm({
                   return (
                     <article key={eventOption.id} style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: selected ? "#f8fafc" : "white" }}>
                       <label style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start" }}>
-                        <input type="checkbox" aria-label={`${eventOption.event_family_label} ${eventOption.division_name}`} checked={selected} onChange={(event) => toggleEvent(eventOption.id, event.target.checked)} />
+                        <input type="checkbox" aria-label={`${eventOption.event_family_label} ${eventOption.division_name}`} checked={selected} disabled={eventOption.id === invitedEventId} onChange={(event) => toggleEvent(eventOption.id, event.target.checked)} />
                         <span><strong>{publicTournamentEventLabel(eventOption.event_family_label, eventOption.division_name)}</strong><br /><span style={{ color: "#64748b" }}>{scheduledDaysLabel(eventOption, daysById) || "Schedule TBD"}<br />{eventMeta(eventOption)}</span></span>
                       </label>
-                      {selected &&
+                      {selected && eventOption.id === invitedEventId ? <p>Partner: <strong>{partnerInvitation.invitation?.target_name}</strong>. PCS will add your partner automatically after registration.</p> : null}
+                      {selected && eventOption.id !== invitedEventId &&
                       eventOption.partner_required &&
                       String(
                         eventOption.competition_format || ""
@@ -982,7 +1002,7 @@ export default function TournamentRegistrationForm({
                 String(event.competition_format || "").toUpperCase() ===
                 "FOUR_PLAYER_TEAM"
                   ? `Team: ${teamDraft?.teamName || "not named"}`
-                  : event.partner_required
+                  : id === invitedEventId ? `Partner: ${partnerInvitation.invitation?.target_name} (automatic pairing)` : event.partner_required
                 ? partner.mode === "HAS_PARTNER" ? `Partner: ${partner.name}` : "Needs partner"
                 : isDoublesEvent(event) ? "Registered as an individual" : "Singles";
               return <li key={id}>{scheduledDaysLabel(event, daysById) || "Schedule TBD"} · {publicTournamentEventLabel(event.event_family_label, event.division_name)} · {entryLabel}</li>;

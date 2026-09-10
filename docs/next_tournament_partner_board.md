@@ -1,124 +1,107 @@
-# Next Tournament Partner Board
+# Tournament Partner Board and email invitations
 
-This is the automated-ready contract for the public Tournament Partner Board
-migration. Streamlit remains available as the operator fallback until the final
-manual parity session signs off this page.
+## Player flow
 
-## Functional flow
+The public `/clubs/[clubSlug]/tournament-partner-board` lists consenting players
+by division. Each listing has a visible **Request to partner** button. Anyone may
+open the form, enter their name, email and personal message, and submit it without
+first finding a registration edit link. The listed player's email stays private.
 
-- Public route: `/clubs/[clubSlug]/tournament-partner-board`.
-- Public reads come from `GET /clubs/{club_slug}/tournament-roster`, using the
-  explicit `roster.partner_board_entries` projection. The broader
-  `players_needing_partners` roster list is not treated as contact consent.
-- A requester opens the board through their secure registration edit link and
-  sends interest for one compatible selection in the same tournament/division.
-- The requested player reviews incoming requests through their own edit token and
-  may accept or decline. The requester may cancel an outgoing pending request.
-- Acceptance creates one confirmed team, switches both selections to
-  `HAS_PARTNER`, removes both from the public board, and cancels every competing
-  pending request involving either selection.
-- Query support matches registration pages: `registration_slug` / `tournament`
-  and `tournament_id`.
-- Public entries expose event, division, skill, age bracket, and an allowlisted
-  note plus an opaque board reference; they never expose database row IDs.
+Anonymous senders confirm their email through **Send my partner request** before
+the message is delivered. A sender using their own valid registration edit link
+is already verified. The recipient receives the message with a large **Accept
+partnership** email button. That opens a private, simple confirmation page; the
+player clicks **Confirm partnership** to accept. Opening a link alone never sends
+mail or changes registration data, including when email software scans links.
 
-All writes are FastAPI-mediated. The browser never initializes Supabase, never
-receives the service-role key, and never sends email directly.
+When both players are registered in that division and eligible, acceptance:
 
-## Deterministic and stale-state behavior
+- creates the canonical confirmed team;
+- updates both selections to `HAS_PARTNER`;
+- removes both players from the Partner Board for that division;
+- cancels competing invitations and legacy partner requests;
+- sends a confirmation to both players.
 
-The partner board intentionally omits email, phone, exact age, DUPR IDs, and
-database row IDs. Direct pairing actions require a valid registration edit
-token; the browser sends an opaque board-entry key and FastAPI resolves it
-against the current tournament before writing.
+If the sender still needs that division's registration, acceptance reserves the
+partnership and emails them a registration link. Their own name, email and division
+are prefilled. Saving the linked new or edited registration completes pairing
+automatically. The private request page also offers **I've registered — finish
+pairing** if registration was completed separately or a connection interrupted
+completion. Registration saves survive email or pairing-service failure.
 
-`20260719194500_public_partner_pairing_lifecycle.sql` provides two service-role-only,
-`SECURITY INVOKER` RPCs:
+Reservations and request links expire 14 days after the initial request. Either
+player may cancel a reservation. A reserved target cannot be claimed by a second
+request or by the legacy pairing flow. Expired reservations no longer hide the
+player from the board. Existing registration-edit-token request review remains
+available for older requests.
 
-- `create_tournament_partner_request(...)` uses the foundation's universal
-  registration/selection lock order, validates that both selections are still
-  compatible, and returns the existing pending row for an exact retry. A partial
-  unique index prevents concurrent duplicate requests.
-- `transition_tournament_partner_request(...)` handles accept, decline, and cancel
-  under the same lock protocol. Acceptance locks the complete competing-request
-  graph before creating the team and cancelling conflicts. Repeating the same
-  completed action succeeds idempotently and does not repeat notification
-  delivery. A different action against terminal state returns an HTTP `409`
-  stale-state response after actor ownership is checked.
+## API and transaction boundary
 
-The Python domain service is still the application authority: it verifies the
-edit token/club/registration, selects the allowed transition, invokes the
-transaction boundary, and builds only public-safe responses.
+All reads/writes are FastAPI-mediated. Browsers never connect to Supabase or send
+mail directly. New endpoints under
+`/clubs/{club_slug}/tournament-registration/partner-invitations` are:
 
-## Privacy and notification safety
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /partner-invitations` | Save an idempotent form submission and send verification or the request |
+| `POST /partner-invitations/review` | Read the scoped private request; no mutation |
+| `POST /partner-invitations/respond` | Verify, accept, decline, cancel, complete registration pairing or retry failed email |
 
-- A public board entry requires the global and event partner-board switches,
-  selection-level display consent (`show_on_partner_board`), and
-  registration-level contact consent (`wants_partner_board_contact`). Needing a
-  partner alone is not consent. Withdrawing consent or disabling the board makes
-  a pending acceptance stale and cancels it without creating a team.
-- Public request/review payloads are allowlisted and omit email, phone, partner
-  contact, DUPR ID, notes, and edit tokens.
-- Pairing emails contain names and a secure board action link, never requester or
-  target contact details.
-- `JUPR_TOURNAMENT_PARTNER_CONTACT_DENYLIST` accepts comma-separated exact email
-  addresses or `@domain` entries. Denied recipients are skipped without exposing
-  that address in a public response.
-- Writes survive SMTP or configuration failure. The response reports only reduced
-  delivery statuses (`dry_run`, `staging_redirect`, `sent`, `skipped`, `failed`,
-  or `not_repeated`).
-- Staging must use `JUPR_EMAIL_MODE=dry_run` or `staging_redirect`; unrestricted
-  live delivery is not part of automated acceptance.
+The route supports the existing tournament ID/registration-slug context.
+`20260909203736_partner_email_invitations.sql` adds private invitation and delivery
+tables, invoker RPCs, expiry/idempotency controls and reservation protection on
+canonical team links. New tables have RLS enabled and no browser role access.
+All new RPCs are callable by `service_role` only, with an empty search path.
 
-## Automated evidence
+Acceptance uses the existing universal registration/selection lock order and
+canonical `create_tournament_partner_request` /
+`transition_tournament_partner_request` functions. Registration, selection and
+event versions are checked inside the transaction against the profiles validated
+by Python. Concurrent or stale requests cannot produce two partners for one
+selection. Gender, age, skill and imported-draw restrictions use the same rules
+as normal registration.
 
-- `tests/test_public_tournament_partner_lifecycle_schema.py`: locks, unique pending
-  pair, atomic team creation/cancellation, and service-role-only grants.
-- `tests/test_public_tournament_partner_lifecycle.py`: exact retry, ownership,
-  decline/cancel, accept, competing cancellation, stale state, and privacy.
-- `tests/test_public_tournament_pairing_email_service.py` and
-  `tests/test_tournament_pairing_lifecycle_email.py`: no-repeat delivery,
-  write-survives-mail-failure, denylist behavior, and contact-safe copy.
-- `tests/test_api_contract_tournament_partner_flow.py`: complete FastAPI lifecycle
-  including idempotent retries and HTTP `409` stale behavior.
-- `apps/web/e2e/tournament-partner-board.parity.spec.ts`: public privacy boundary
-  plus a disposable create/review/cancel browser/API flow when the documented
-  staging fixture variables are supplied.
+## Privacy and delivery
 
-## Staging fixture and rollback
+- Public listings require global/event board enablement, selection display consent
+  and registration contact consent. Availability and consent are checked again
+  on acceptance. Reserved and paired selections are omitted from public lists.
+- Public entries contain only allowlisted player/division information and an
+  opaque board reference. Recipient emails, phone numbers, exact ages, DUPR IDs,
+  database row IDs and private registration tokens are not returned on the board.
+- Email capabilities are signed, expire, and are bound to the invitation, club,
+  tournament, participant role and email hash. They cannot serve as registration
+  edit tokens. URLs carry them in fragments; requests use POST bodies and
+  `no-store`/`no-referrer`. An email-address change invalidates an old target link.
+- The sender explicitly sees that their own email will be shared privately with
+  the recipient for replies. The target email is never shown in the request form.
+  Target links cannot fetch sender registration edit capabilities or prefill data.
+- Anonymous requests are verified before contacting the target. A honeypot and
+  an atomic limit of five new requests per sender email per hour reduce abuse.
+  Exact retries retain the same request identity and do not consume another slot.
+- Email messages escape personal text and honor
+  `JUPR_TOURNAMENT_PARTNER_CONTACT_DENYLIST`. A durable per-message delivery claim
+  avoids repeated notifications; failed/stuck attempts can be retried. SMTP
+  response loss cannot guarantee exactly-once delivery, but never repeats pairing.
+- Staging remains `JUPR_EMAIL_MODE=dry_run`. No real-player email is part of
+  automated validation. Production deployment requires separate authorization.
 
-The mutating browser check is opt-in and requires a disposable requester and board
-target that are not imported into a draw:
+## Validation
 
-```text
-STAGING_PARTNER_TOURNAMENT_ID
-STAGING_PARTNER_REGISTRATION_SLUG
-STAGING_PARTNER_REQUESTER_EDIT_TOKEN
-STAGING_PARTNER_REQUESTER_SELECTION_ID
-STAGING_PARTNER_TARGET_BOARD_ENTRY_KEY
-```
+- `tests/test_partner_email_invitations.py`: signed/scoped links, privacy, sender
+  identity, API actions, registration handoff, delivery safety and save recovery.
+- `tests/sql/partner_email_invitation_lifecycle.sql`: real PostgreSQL transaction
+  checks for verification, repeated requests/acceptance, registered pairing,
+  reservation and registration completion, competing requests, stale versions,
+  private grants and deduplicated delivery claims. The disposable fixture runs
+  inside a transaction and rolls back completely.
+- `apps/web/tests/tournament-partner-invitations.cjs`: form submission and retry,
+  read-only email landing, explicit confirmation, roster confirmation and
+  registration handoff. Included in `npm run test:component`.
+- Existing registration create/edit, legacy partner lifecycle, API contract,
+  component, type/build and migration/parity guards remain required.
 
-The automated browser flow always finishes by cancelling the request and verifies
-the terminal `CANCELLED` state. The final manual session will separately exercise
-acceptance on disposable registrations, inspect redirected email, verify competing
-request cancellation, and restore the fixture through registration edit or the
-Streamlit fallback.
-
-The migration deliberately refuses to guess which row to keep if historical exact
-duplicate pending requests exist. Its `JUPR_PARTNER_DUPLICATE_PENDING` preflight
-must be resolved through the existing operator fallback before retrying; it never
-silently deletes registration relationship data.
-
-## Stack integration assumptions
-
-This slice was developed from the parity foundation commit and is intended to sit
-after the registration wizard PR. During stack integration:
-
-1. retain the registration PR's required-field/profile/partner policy changes;
-2. retain this slice's consent-filtered `partner_board_entries` projection;
-3. retain the earlier stable edit-token secret/preflight behavior; and
-4. apply the canonical Supabase lifecycle migration after the server-only Data API
-   lockdown migration, then deploy FastAPI before Next.
-
-No matrix row moves to `Done` in this PR. That happens only after the consolidated
-manual acceptance session.
+The migration and rollback-only SQL fixture were verified on the isolated staging
+project `sijpxjxvdtrehmqvirfi`. Staging readiness additionally requires the matching
+Fly/Vercel commit and successful `staging-handoff-<sha>` artifact as described in
+`AGENTS.md`. No production migration or deployment is included.

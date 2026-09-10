@@ -502,6 +502,11 @@ def submit_public_tournament_registration_edit(
     tournament_id = str(verified.get("tournament_id") or "").strip()
     registration_id = str(verified.get("registration_id") or "").strip()
     _require_token_bound_registration_slug(bundle, payload.get("registration_slug"))
+    invitation_token = str(payload.get("partner_invitation_token") or "")
+    if invitation_token:
+        from jupr_app.services.public_tournament_partner_invitation_service import validate_invitation_registration
+        validate_invitation_registration(supabase, club_id=str(club_id), tournament_id=tournament_id,
+            token=invitation_token, payload={**payload, "email": registration.get("email")})
     if registration_has_imported_draw_selection(
         supabase,
         tournament_id=tournament_id,
@@ -594,6 +599,11 @@ def submit_public_tournament_registration_edit(
         atomic_edit=True,
         commerce_transaction=commerce_transaction,
     )
+    pairing = None
+    if invitation_token:
+        from jupr_app.services.public_tournament_partner_invitation_service import finish_invitation_registration
+        pairing = finish_invitation_registration(supabase, club_id=str(club_id), club_slug=str(club_slug or club_id),
+            token=invitation_token, registration_id=str(result.get("registration_id") or ""))
     delivery = build_registration_confirmation_delivery(
         supabase,
         club_id=str(club_id),
@@ -637,5 +647,6 @@ def submit_public_tournament_registration_edit(
         "selection_count": result.get("selection_count"),
         "commerce_order": result.get("commerce_order"),
         "confirmation_delivery": confirmation_delivery,
+        "partner_invitation": pairing,
         **delivery,
     }

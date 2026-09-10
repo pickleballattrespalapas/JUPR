@@ -32,6 +32,8 @@ import {
   publicTournamentDayLabel,
   publicTournamentEventLabel
 } from "@/lib/tournamentRegistrationEligibility";
+import { usePartnerInvitationRegistration, PartnerInvitationRegistrationNotice } from "@/components/tournaments/usePartnerInvitationRegistration";
+import { invitationReturnPath } from "@/lib/tournamentPartnerInvitations";
 import { InteractionDialog } from "@/components/interaction";
 import TournamentCommerceChooser from "../TournamentCommerceChooser";
 import { automaticRegistrationProfile } from "@/lib/tournamentRegistrationProfile";
@@ -147,8 +149,15 @@ export default function EditTournamentRegistrationForm({
   commerceOrder
 }: EditTournamentRegistrationFormProps) {
   const formRef = useRef<HTMLFormElement>(null);
+  const partnerInvitation = usePartnerInvitationRegistration(clubSlug);
   const eventEditorRef = useRef<HTMLFieldSetElement>(null);
   const savingRef = useRef(false);
+  useEffect(() => {
+    const prefill = partnerInvitation.invitation?.registration_prefill;
+    if (!prefill) return;
+    setSelectedIds(current => Array.from(new Set([...current, prefill.event_option_id])));
+    setPartnerModes(current => ({ ...current, [prefill.event_option_id]: "NEEDS_PARTNER" }));
+  }, [partnerInvitation.invitation]);
   const initialSelectionIds = selections.map((selection) => selection.event_option_id).filter(Boolean);
   const [selectedIds, setSelectedIds] = useState<string[]>(initialSelectionIds);
   const [partnerModes, setPartnerModes] = useState<Record<string, "NONE" | "HAS_PARTNER" | "NEEDS_PARTNER">>(() => {
@@ -392,6 +401,9 @@ export default function EditTournamentRegistrationForm({
   }
 
   async function saveRegistration(formData: FormData, eventIds = selectedIds) {
+    if (partnerInvitation.token && (!partnerInvitation.invitation || partnerInvitation.error)) {
+      setError(partnerInvitation.error || "Please wait while we verify your partner request."); return;
+    }
     if (savingRef.current) return;
     setError(null);
     if (!textValue(formData, "first_name") || !textValue(formData, "last_name")) {
@@ -476,6 +488,7 @@ export default function EditTournamentRegistrationForm({
         }
       }
       const response = await submitClubTournamentRegistrationEdit(clubSlug, {
+        partner_invitation_token: partnerInvitation.token || null,
         edit_token: editToken,
         expected_updated_at: registration.updated_at,
         expected_selection_versions: selections.map((selection) => ({ id: selection.id, updated_at: selection.updated_at })),
@@ -527,6 +540,7 @@ export default function EditTournamentRegistrationForm({
         setError(response.error || "We couldn’t save your changes. Please try again.");
         return;
       }
+      if (partnerInvitation.token) { window.location.assign(invitationReturnPath(clubSlug, partnerInvitation.token)); return; }
       setSuccess({
         confirmationToken: response.data.confirmation_token || "",
         deliveryStatus: response.data.email_delivery?.status || response.data.confirmation_delivery?.status || "unknown"
@@ -557,6 +571,7 @@ export default function EditTournamentRegistrationForm({
 
   return (
     <form ref={formRef} onSubmit={onSubmit} aria-busy={pending} style={{ display: "grid", gap: "1rem" }}>
+      <PartnerInvitationRegistrationNotice invitation={partnerInvitation.invitation} error={partnerInvitation.error} />
       <input type="text" name="website" autoComplete="off" tabIndex={-1} style={{ position: "absolute", left: "-10000px" }} aria-hidden="true" />
 
       <section style={cardStyle}>
@@ -752,6 +767,7 @@ export default function EditTournamentRegistrationForm({
 
       {editingEventId && eventById.get(editingEventId) ? (() => {
         const eventOption = eventById.get(editingEventId)!;
+        const invitedEvent = partnerInvitation.invitation?.registration_prefill?.event_option_id === editingEventId;
         const prior = selectionDrafts[editingEventId];
         const partnerValue: TournamentPartnerDetailsValue = {
           name: prior?.partner_name || "",
@@ -781,7 +797,7 @@ export default function EditTournamentRegistrationForm({
                 <button
                   type="button"
                   onClick={() => saveEvent(true)}
-                  disabled={pending}
+                  disabled={pending || invitedEvent}
                   style={{ ...eventButtonStyle, color: "#b91c1c", borderColor: "#b91c1c" }}
                 >
                   Remove event
@@ -795,7 +811,7 @@ export default function EditTournamentRegistrationForm({
             <h3>{publicTournamentEventLabel(eventOption.event_family_label, eventOption.division_name)}</h3>
             <p style={{ color: "#475569" }}>{scheduledDaysLabel(eventOption, dayById) || "Schedule TBD"}<br />{eventMeta(eventOption)}</p>
             <fieldset ref={eventEditorRef} disabled={pending} style={{ display: "grid", gap: "0.85rem", border: 0, padding: 0, margin: 0, minWidth: 0 }}>
-              {eventOption.partner_required ? (
+              {invitedEvent ? <p>Partner: <strong>{partnerInvitation.invitation?.target_name}</strong>. PCS will add your partner automatically when you save. Keep this division selected to complete the partnership.</p> : eventOption.partner_required ? (
                 <fieldset style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
                   <legend style={{ fontSize: "1.125rem", fontWeight: 800, marginBottom: "0.5rem" }}>Do you have a partner?</legend>
                   <div style={{ display: "grid", gap: "0.6rem" }}>
@@ -808,7 +824,7 @@ export default function EditTournamentRegistrationForm({
                   </div>
                 </fieldset>
               ) : <p>No partner is needed for this event.</p>}
-              {mode === "HAS_PARTNER" ? (
+              {!invitedEvent && mode === "HAS_PARTNER" ? (
                 <TournamentPartnerDetails
                   key={editingEventId}
                   clubSlug={clubSlug}
@@ -833,7 +849,7 @@ export default function EditTournamentRegistrationForm({
                   }}
                 />
               ) : null}
-              {mode === "NEEDS_PARTNER" && eventOption.partner_board_enabled ? (
+              {!invitedEvent && mode === "NEEDS_PARTNER" && eventOption.partner_board_enabled ? (
                 <section style={{ background: "#f8fafc", borderRadius: "10px", padding: "0.85rem" }}>
                   <h4 style={{ margin: "0 0 0.5rem" }}>Partner Board visibility</h4>
                   <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>

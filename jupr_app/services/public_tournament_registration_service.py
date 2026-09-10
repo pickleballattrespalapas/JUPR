@@ -1431,6 +1431,10 @@ def submit_public_tournament_registration(
     tournament_id = str(tournament.get("id") or "").strip()
     if not tournament_id:
         raise ValueError("Tournament registration was not found.")
+    invitation_token = str(payload.get("partner_invitation_token") or "")
+    if invitation_token:
+        from jupr_app.services.public_tournament_partner_invitation_service import validate_invitation_registration
+        validate_invitation_registration(supabase, club_id=str(club_id), tournament_id=tournament_id, token=invitation_token, payload=payload)
     commerce_available = bool(
         isinstance(page.get("commerce"), dict)
         and page["commerce"].get("available")
@@ -1489,6 +1493,11 @@ def submit_public_tournament_registration(
         if "registration already exists" in str(exc).lower():
             raise DuplicateTournamentRegistrationError(str(exc)) from exc
         raise
+    pairing = None
+    if invitation_token:
+        from jupr_app.services.public_tournament_partner_invitation_service import finish_invitation_registration
+        pairing = finish_invitation_registration(supabase, club_id=str(club_id), club_slug=str(club_slug or club_id),
+            token=invitation_token, registration_id=str(result.get("registration_id") or ""))
     delivery = build_registration_confirmation_delivery(
         supabase,
         club_id=str(club_id),
@@ -1505,6 +1514,7 @@ def submit_public_tournament_registration(
         "submitted_at": result.get("submitted_at"),
         "selection_count": result.get("selection_count"),
         "commerce_order": result.get("commerce_order"),
+        "partner_invitation": pairing,
         **delivery,
     }
 
