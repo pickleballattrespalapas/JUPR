@@ -61,6 +61,16 @@ def _unsafe_fastapi_route_inventory() -> set[tuple[str, str]]:
     return inventory
 
 
+@pytest.mark.parametrize("suffix", ["", "/review", "/respond"])
+def test_partner_invitation_routes_keep_exact_intake_and_closed_staging_guards(suffix: str) -> None:
+    path = "/clubs/tres-palapas/tournament-registration/partner-invitations" + suffix
+    assert wave_allows_request("open", "POST", path)
+    assert wave_allows_request("public-intake-auth", "POST", path)
+    assert not wave_allows_request(NO_WRITE_WAVE, "POST", path)
+    assert not wave_allows_request("communications", "POST", path)
+    assert not wave_allows_request("public-intake-auth", "POST", path + "/extra")
+
+
 def test_every_unsafe_fastapi_route_has_an_exact_nonstale_wave_classification() -> None:
     inventory = _unsafe_fastapi_route_inventory()
     manifest = {
