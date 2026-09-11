@@ -7,9 +7,9 @@ by division. Each listing has a visible **Request to partner** button. Anyone ma
 open the form, enter their name, email and personal message, and submit it without
 first finding a registration edit link. The listed player's email stays private.
 
-Anonymous senders confirm their email through **Send my partner request** before
-the message is delivered. A sender using their own valid registration edit link
-is already verified. The recipient receives the message with a large **Accept
+The original **Send request** button immediately emails the message to the listed
+player. Senders do not confirm their email or return to the website to send it.
+The recipient receives the message with a large **Accept
 partnership** email button. That opens a private, simple confirmation page; the
 player clicks **Confirm partnership** to accept. Opening a link alone never sends
 mail or changes registration data, including when email software scans links.
@@ -43,7 +43,7 @@ mail directly. New endpoints under
 
 | Endpoint | Purpose |
 | --- | --- |
-| `POST /partner-invitations` | Save an idempotent form submission and send verification or the request |
+| `POST /partner-invitations` | Save an idempotent form submission and immediately email the request |
 | `POST /partner-invitations/review` | Read the scoped private request; no mutation |
 | `POST /partner-invitations/respond` | Verify, accept, decline, cancel, complete registration pairing or retry failed email |
 
@@ -76,7 +76,12 @@ as normal registration.
 - The sender explicitly sees that their own email will be shared privately with
   the recipient for replies. The target email is never shown in the request form.
   Target links cannot fetch sender registration edit capabilities or prefill data.
-- Anonymous requests are verified before contacting the target. A honeypot and
+- Anonymous requests are sent directly; this does not mark the typed address as
+  verified. Automatic pairing requires matching registration name and email.
+  Private sender links are delivered only to that mailbox, and only those links
+  can expose their registration edit capability. Existing verification links
+  remain usable for requests created before direct sending was introduced.
+  A honeypot and
   an atomic limit of five new requests per sender email per hour reduce abuse.
   Exact retries retain the same request identity and do not consume another slot.
 - Email messages escape personal text and honor

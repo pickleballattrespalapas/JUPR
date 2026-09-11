@@ -157,7 +157,7 @@ def test_public_form_has_no_token_and_review_never_mutates(context, monkeypatch)
     app = FastAPI()
     routes.install_public_tournament_pairing_routes(app, get_club=lambda _: {"id": "club"}, get_supabase_client=lambda: db, public_club_payload=lambda *a: {})
     monkeypatch.setattr(routes, "require_public_intake_or_403", lambda: None)
-    monkeypatch.setattr(routes, "create_invitation", lambda *a, **k: {"ok": True, "status": "UNVERIFIED", "notification_status": {"verify_requester": "dry_run"}})
+    monkeypatch.setattr(routes, "create_invitation", lambda *a, **k: {"ok": True, "status": "PENDING", "notification_status": {"request_target": "dry_run"}})
     with TestClient(app) as client:
         response = client.post("/clubs/fixture/tournament-registration/partner-invitations", json={"tournament_id": "tournament", "board_entry_key": "opaque", "name": "Casey Guest", "email": "casey@example.com", "message": "Hello", "request_key": "12345678901234567890"})
         assert response.status_code == 200 and response.headers["cache-control"] == "no-store"
@@ -165,3 +165,69 @@ def test_public_form_has_no_token_and_review_never_mutates(context, monkeypatch)
         review = client.post("/clubs/fixture/tournament-registration/partner-invitations/review", json={"token": service._token(row, ctx, "target")})
         assert review.status_code == 200 and row["status"] == "PENDING"
         assert client.get("/clubs/fixture/tournament-registration/partner-invitations/respond").status_code == 405
+
+
+def test_anonymous_send_delivers_to_target_immediately_without_verifying_sender(context, monkeypatch):
+    db, row, ctx = context
+    row["verified_at"] = None
+    payload = dict(tournament_id="tournament", board_entry_key="opaque", name=row["requester_name"],
+        email=row["requester_email"], message=row["message"], request_key="same-browser-submission")
+    monkeypatch.setattr(service, "_selection_by_public_entry_key", lambda *a, **k: ctx["target"])
+    monkeypatch.setattr(service, "load_tournament_email_sponsors", lambda *a, **k: [])
+    sent = []
+    def send(**kwargs):
+        sent.append(kwargs)
+        return "dry_run"
+    monkeypatch.setattr(service, "send_partner_invitation_email", send)
+    def rpc(_db, name, args):
+        if name == "create_tournament_partner_invitation":
+            assert args["p_invitation"]["send_directly"] is True
+            assert args["p_invitation"]["verified"] is False
+            return dict(row)
+        assert name == "claim_partner_invitation_delivery"
+        assert args["p_kind"] == "request_target", "The sender must never receive a verification email"
+        deliveries = db.storage.setdefault("tournament_partner_invitation_deliveries", [])
+        if deliveries:
+            return False
+        deliveries.append(dict(invitation_id=row["id"], kind="request_target", status="sending", attempt_id=args["p_attempt_id"]))
+        return True
+    monkeypatch.setattr(service, "_rpc", rpc)
+    for _ in range(2):
+        result = service.create_invitation(db, club_id="club", club_slug="fixture", payload=payload)
+        assert result == {"ok": True, "status": "PENDING", "notification_status": {"request_target": "dry_run"}}
+        assert "@" not in json.dumps(result) and "token" not in json.dumps(result)
+    assert len(sent) == 1
+    assert sent[0]["to_email"] == ctx["target_registration"]["email"]
+    assert sent[0]["message"] == payload["message"]
+    assert sent[0]["action_label"] == "Accept partnership"
+    assert row["verified_at"] is None
+
+
+def test_direct_sender_private_email_link_can_complete_registration(context):
+    db, row, ctx = context
+    row.update(verified_at=None, status="RESERVED")
+    token = service._token(row, ctx, "requester")
+    result = service.review_invitation(db, club_id="club", club_slug="fixture", token=token)
+    assert result["registration_prefill"]["email"] == row["requester_email"]
+    service.validate_invitation_registration(db, club_id="club", tournament_id="tournament", token=token,
+        payload={"email": row["requester_email"], "selections": [{"event_option_id": "doubles", "partner_mode": "NEEDS_PARTNER"}]})
+    assert row["verified_at"] is None, "Review stays read-only"
+
+
+def test_direct_sender_registration_requires_matching_name_and_email(context):
+    db, row, ctx = context
+    row["verified_at"] = None
+    registration = dict(id="requester", email=row["requester_email"], display_name="Different Person",
+        tournament_id="tournament", status="CONFIRMED")
+    db.storage["tournament_registrations"].append(registration)
+    with pytest.raises(ValueError, match="does not match"):
+        service._requester_registration(db, row)
+    registration["display_name"] = "  CASEY   GUEST  "
+    assert service._requester_registration(db, row)["id"] == "requester"
+
+
+def test_honeypot_does_not_send_email_or_save_invitation(context, monkeypatch):
+    db, _, _ = context
+    monkeypatch.setattr(service, "_rpc", lambda *a, **k: pytest.fail("Honeypot persisted data"))
+    monkeypatch.setattr(service, "_notify", lambda *a, **k: pytest.fail("Honeypot sent email"))
+    assert service.create_invitation(db, club_id="club", club_slug="fixture", payload={"website": "spam"})["status"] == "PENDING"
