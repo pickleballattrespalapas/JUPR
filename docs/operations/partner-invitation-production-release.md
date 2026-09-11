@@ -82,3 +82,12 @@ Release the API and migration first while the current form still supports both
 API responses. After the exact API deployment succeeds, activate the updated
 form wording and its component test. Keep production email live and writes
 enabled. Verification must not send unsolicited player test messages.
+
+Production migration ledger version: `20260911140741`. It is already applied;
+do not reapply it. Both updated functions remain service-only invokers, and
+production Security Advisor findings are unchanged.
+
+The API release candidate is `02f98dc497cdca138ce17f9f7b58d555c173027e`.
+Activate the two form files from reviewed staging PR #1404 only after its exact
+production API deployment succeeds. Website and API SHAs intentionally differ;
+this activation changes no API code, database schema or runtime settings.

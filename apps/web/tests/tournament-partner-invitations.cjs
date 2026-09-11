@@ -33,7 +33,7 @@ async function main() {
     "@/components/interaction/types": load("components/interaction/types.ts"),
     "@/lib/tournamentPartnerInvitations": { partnerInvitationRequest: async (_club, action, payload) => {
       calls.push({ action, payload });
-      return { status: "UNVERIFIED", notification_status: { verification: failDelivery ? "failed" : "dry_run" } };
+      return { status: "PENDING", notification_status: { request_target: failDelivery ? "failed" : "dry_run" } };
     } }
   }).default;
   let renderer;
@@ -53,7 +53,10 @@ async function main() {
   assert.equal(calls[1].payload.board_entry_key, "opaque-reference");
   assert.equal(calls[1].payload.email, "sender@example.com");
   assert.ok(!("target_email" in calls[1].payload));
-  assert.match(JSON.stringify(sent), /Check your email/);
+  assert.match(JSON.stringify(sent), /Request sent to Alex Player/);
+  assert.doesNotMatch(JSON.stringify(sent), /Check your email|confirmation link|Send my partner request/);
+  assert.equal(content(renderer.root.findByType("button")), "Request sent");
+  assert.doesNotMatch(content(renderer.root), /confirm your email/);
   await act(async () => renderer.unmount());
 
   global.window = { location: { hash: "#token=private-fixture-link" } };

@@ -28,7 +28,7 @@ export default function PartnerInvitationPanel({ apiBase, clubSlug, tournamentId
   return <>
     <button type="button" onClick={start} disabled={sent || !entry.board_entry_key}
       style={{ marginTop: "0.8rem", padding: "0.8rem 1rem", minHeight: "48px", borderRadius: "10px", border: 0, background: "#174f43", color: "white", fontSize: "1.05rem", fontWeight: 750, cursor: "pointer" }}>
-      {sent ? "Request started" : "Request to partner"}
+      {sent ? "Request sent" : "Request to partner"}
     </button>
     <FormDialog open={open} mode="create" title={`Request to partner with ${entry.player_name || "this player"}`}
       description={`${entry.event_day_label || ""} · ${entry.division || "Division"}`}
@@ -44,9 +44,7 @@ export default function PartnerInvitationPanel({ apiBase, clubSlug, tournamentId
             throw new Error("Your request is saved, but the email couldn’t be sent. Click Send request to try delivery again.");
           }
           setSent(true);
-          return result.status === "UNVERIFIED"
-            ? actionSuccess("Check your email", `We’ve sent you a confirmation link. Open it and click “Send my partner request” to deliver your message to ${entry.player_name}.`)
-            : actionSuccess(`Request sent to ${entry.player_name}`, "They can accept from their email. PCS will pair your registrations automatically, or guide you through registration if needed.");
+          return actionSuccess(`Request sent to ${entry.player_name}`, "We’ve emailed them your message. We’ll email you when they respond and pair your registrations when they accept, or guide you through registration if needed.");
         } catch (error) {
           throw new InteractionActionError(error instanceof Error ? error.message : "We couldn’t send your request. Please try again.");
         }
@@ -59,7 +57,7 @@ export default function PartnerInvitationPanel({ apiBase, clubSlug, tournamentId
         <label>Your message<textarea required rows={5} maxLength={2000} value={message} onChange={event => changed(() => setMessage(event.target.value))} style={inputStyle} /></label>
         <label aria-hidden="true" style={{ position: "absolute", left: "-10000px" }}>Website<input tabIndex={-1} autoComplete="off" value={website} onChange={event => setWebsite(event.target.value)} /></label>
         <p style={{ margin: 0, color: "#475569" }}>Their email stays private. Your email will be shared only with this player so they can reply.</p>
-        {!editToken ? <p style={{ margin: 0, color: "#475569" }}>We’ll send you a link to confirm your email before delivering your request.</p> : null}
+        <p style={{ margin: 0, color: "#475569" }}>Click Send request to email them your message. We’ll email you when they respond.</p>
       </div>
     </FormDialog>
   </>;
