@@ -11,7 +11,8 @@ This document tracks the public Tournament Roster migration from Streamlit to Ne
 - Public-safe summary cards for registrations, players, waitlist, and players needing partners.
 - Grouped roster entries by day/event/division.
 - Day, event, division, and status filters with shareable query strings and row anchors.
-- Explicit `Registered`, `Waitlist`, `Needs Partner`, `Pending Partner Request`, and fail-closed `Review` labels.
+- Explicit `Registered`, `Waitlist`, `Needs Partner`, `Pending Partner Request`, `Pending Registration`, and fail-closed `Review` labels.
+- Accepted guest reservations show both names immediately, with the requester marked `Pending registration`; totals count actual registrations until the requester completes the form and the canonical team is confirmed.
 - Registration open/close window display.
 - Public-safe “players looking for partners” visibility.
 - Public-safe skill and age-bracket metadata plus direct partner-board deep links.

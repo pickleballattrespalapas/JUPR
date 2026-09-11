@@ -99,6 +99,27 @@ async function main() {
   assert.equal(registrationContext.token, "private-fixture-link");
   assert.deepEqual(registrationContext.invitation.registration_prefill, state.registration_prefill);
   await act(async () => renderer.unmount());
+  const RosterPage = load("app/clubs/[clubSlug]/tournament-roster/page.tsx", {
+    "next/link": { __esModule: true, default: Link },
+    "next/navigation": { redirect: () => { throw Error("Unexpected redirect"); } },
+    "@/components/PublicTournamentSponsors": { __esModule: true, default: () => null },
+    "@/components/PublicTournamentModuleHeader": { __esModule: true, default: () => null },
+    "@/lib/tournamentRegistrationApi": { getClubTournamentRoster: async () => ({ data: {
+      tournament: { id: "fixture", name: "Fixture Tournament" }, settings: { registration_slug: "fixture-tournament" },
+      summary: { total_registrations: 1, total_players: 1 },
+      roster: { registrations_by_event: [{ public_entry_key: "opaque-entry", status: "Pending Registration", entry_type: "Team",
+        event_day_label: "Day 1", event_family: "Mixed", division: "Below 9", members: [
+          { display_name: "Alex Player" }, { display_name: "Sam Sender", registration_pending: true }
+        ] }] }
+    } }) }
+  }).default;
+  const rosterPage = await RosterPage({ params: { clubSlug: "fixture" }, searchParams: { tournament: "fixture-tournament", status: "Pending registration" } });
+  await act(async () => { renderer = create(rosterPage); });
+  assert.match(content(renderer.root), /Alex Player/);
+  assert.match(content(renderer.root), /Sam Sender · Pending registration/);
+  assert.match(content(renderer.root), /Showing 1 of 1 entries/);
+  assert.ok(renderer.root.findAllByType("option").some(node => content(node) === "Pending registration"));
+  await act(async () => renderer.unmount());
   console.log("Partner invitations: private form, retry identity, read-only email landing, explicit acceptance, roster confirmation and registration handoff passed.");
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });
