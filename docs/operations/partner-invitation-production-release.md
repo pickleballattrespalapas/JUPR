@@ -62,3 +62,23 @@ short-lived `sbp_fc` credential scoped to production project
 `dnoockbwfenunhcibwfn`, Database: Read. Keep values out of source, logs, chat and
 artifacts. Use a fresh single-parent release trigger after production HEAD moves;
 do not bypass provenance checks or reapply the completed schema migration.
+
+## Direct sending update
+
+Joe reported that sender email verification plus a second website confirmation
+made the original Send request action unnecessarily difficult. The follow-up
+sends the player their message immediately. It retains recipient acceptance,
+private email links, rate limits, retry identity and automatic pairing.
+
+The additive `20260911135628_direct_partner_request_delivery.sql` migration
+supports direct delivery without marking a typed email as verified. Existing
+verification links still work; applying it sends no stored requests. The real
+rollback-only staging SQL fixture passed for registered pairing, guest
+reservation/completion, name matching, stale state, duplicate actions and grants.
+104 staging and 134 production focused Python tests passed, along with the full
+component suite, TypeScript and the Next build. Advisor categories are unchanged.
+
+Release the API and migration first while the current form still supports both
+API responses. After the exact API deployment succeeds, activate the updated
+form wording and its component test. Keep production email live and writes
+enabled. Verification must not send unsolicited player test messages.

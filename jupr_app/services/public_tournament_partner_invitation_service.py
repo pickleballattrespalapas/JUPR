@@ -104,15 +104,17 @@ def _verified(db: Any, club_id: str, token: str) -> tuple[dict, dict, str]:
     return row, ctx, claims["role"]
 
 
-def _requester_registration(db: Any, row: dict, registration_id: str | None = None) -> dict | None:
+def _requester_registration(db: Any, row: dict, registration_id: str | None = None, *, email_verified: bool = False) -> dict | None:
     rows = [_one(db, "tournament_registrations", registration_id)] if registration_id else _rows(
         db.table("tournament_registrations").select("*").eq("tournament_id", str(row["tournament_id"])).execute())
     normalize = lambda name: re.sub(r"\s+", " ", str(name or "")).strip().casefold()
     email_matches = [r for r in rows if str(r.get("tournament_id")) == str(row["tournament_id"])
         and _clean_email(r.get("email")) == row["requester_email"] and _registration_is_active(r)]
-    if len(email_matches) == 1:
+    if len(email_matches) == 1 and (row.get("verified_at") or email_verified):
         return email_matches[0]
     matches = [r for r in email_matches if normalize(_display_name(r)) == normalize(row["requester_name"])]
+    if len(email_matches) == 1 and not matches:
+        raise ValueError("The name on this request does not match the sender’s registration. Ask them to resend using their full registered name.")
     if len(matches) > 1 or email_matches and not matches:
         raise ValueError("More than one registration matches your details. Open your registration edit link to send this request.")
     return matches[0] if matches else None
@@ -209,7 +211,7 @@ def _notify(db: Any, row: dict, ctx: dict, club_slug: str) -> dict[str, str]:
 
 def create_invitation(db: Any, *, club_id: str, club_slug: str, payload: dict) -> dict:
     if payload.get("website"):
-        return {"ok": True, "status": "UNVERIFIED", "notification_status": {}}
+        return {"ok": True, "status": "PENDING", "notification_status": {}}
     tournament, settings, _, events = get_public_tournament_bundle(db, club_id=str(club_id),
         tournament_id=payload.get("tournament_id"), registration_slug=payload.get("registration_slug"))
     if not tournament or not settings or not settings.get("partner_board_enabled"):
@@ -239,16 +241,19 @@ def create_invitation(db: Any, *, club_id: str, club_slug: str, payload: dict) -
     row = _rpc(db, "create_tournament_partner_invitation", {"p_invitation": {
         "id": "pinv_" + uuid4().hex, "club_id": str(club_id), "tournament_id": tid,
         "target_selection_id": target["id"], "requester_name": name, "requester_email": email,
-        "message": message, "request_key": payload["request_key"], "verified": verified}})
+        "message": message, "request_key": payload["request_key"], "verified": verified,
+        "send_directly": True}})
     # Anonymous responses always have the same shape; no tokens, contact details,
     # registration lookup results, or target email leave this boundary.
     notices = _notify(db, row, _context(db, row), club_slug)
-    return {"ok": True, "status": "PENDING" if verified else "UNVERIFIED", "notification_status": notices}
+    return {"ok": True, "status": "PENDING", "notification_status": notices}
 
 
 def review_invitation(db: Any, *, club_id: str, club_slug: str, token: str) -> dict:
     row, ctx, role = _verified(db, club_id, token)
-    requester = _requester_registration(db, row) if row.get("verified_at") else None
+    # A requester capability is sent only to their mailbox, never returned by
+    # the public form. Possession still proves email ownership for edit links.
+    requester = _requester_registration(db, row, email_verified=role == "requester") if role == "requester" or row.get("verified_at") else None
     status = "EXPIRED" if _expired(row) and row["status"] not in TERMINAL else row["status"]
     if status in {"UNVERIFIED", "PENDING", "RESERVED"} and not _available(ctx):
         status = "CANCELLED"
@@ -297,7 +302,7 @@ def act_on_invitation(db: Any, *, club_id: str, club_slug: str, token: str, acti
 
 def validate_invitation_registration(db: Any, *, club_id: str, tournament_id: str, token: str, payload: dict) -> None:
     row, _, role = _verified(db, club_id, token)
-    if role != "requester" or str(row["tournament_id"]) != str(tournament_id) or row["verified_at"] is None:
+    if role != "requester" or str(row["tournament_id"]) != str(tournament_id):
         raise ValueError("Use the registration link from your partner request email.")
     if _clean_email(payload.get("email")) != row["requester_email"]:
         raise ValueError("Use the same email address as your partner request.")
