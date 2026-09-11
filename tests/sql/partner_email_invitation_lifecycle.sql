@@ -37,13 +37,22 @@ begin
     perform public.transition_tournament_partner_invitation(prefix || '_one','accept');
   exception when others then rejected := sqlerrm like '%sender must confirm%'; end;
   if not rejected then raise exception 'unverified request could be accepted'; end if;
-  perform public.transition_tournament_partner_invitation(prefix || '_one','verify');
+  request_data := request_data || jsonb_build_object('send_directly',true);
+  created := public.create_tournament_partner_invitation(request_data);
+  if created->>'status' <> 'PENDING' or created->>'verified_at' is not null then raise exception 'direct send did not preserve unverified email state'; end if;
   perform public.create_tournament_partner_invitation(request_data || jsonb_build_object('id',prefix || '_competing','request_key',prefix || '_key2','requester_name','Fixture 3','requester_email','fixture3@example.invalid','verified',true));
   select jsonb_build_object('requester_registration',r.updated_at,'target_registration',tr.updated_at,
     'requester_selection',s.updated_at,'target_selection',ts.updated_at,'event',e.updated_at) into versions
     from public.tournament_registrations r,public.tournament_registrations tr,
       public.tournament_registration_selections s,public.tournament_registration_selections ts,public.tournament_event_options e
     where r.id=prefix || '_reg1' and tr.id=prefix || '_reg2' and s.id=prefix || '_sel1' and ts.id=prefix || '_sel2' and e.id=eid;
+  update public.tournament_partner_invitations set requester_name='Different Person' where id=prefix || '_one';
+  rejected := false;
+  begin
+    perform public.transition_tournament_partner_invitation(prefix || '_one','accept',prefix || '_sel1',versions);
+  exception when others then rejected := sqlerrm like '%name on this request%'; end;
+  if not rejected then raise exception 'direct request paired a different registered name'; end if;
+  update public.tournament_partner_invitations set requester_name='Fixture 1' where id=prefix || '_one';
   result := public.transition_tournament_partner_invitation(prefix || '_one','accept',prefix || '_sel1',versions);
   if result->>'status' <> 'COMPLETED' then raise exception 'registered players were not paired'; end if;
   if (select count(*) from public.tournament_registration_team_members where tournament_id=tid and status='ACTIVE') <> 2 then raise exception 'incorrect team membership'; end if;
@@ -52,7 +61,7 @@ begin
   if not (public.transition_tournament_partner_invitation(prefix || '_one','accept',prefix || '_sel1',versions)->>'idempotent')::boolean then raise exception 'repeated accept not idempotent'; end if;
 
   request_data := request_data || jsonb_build_object('id',prefix || '_guest','request_key',prefix || '_key3',
-    'target_selection_id',prefix || '_sel4','requester_name','Guest New','requester_email','guest@example.invalid','verified',true);
+    'target_selection_id',prefix || '_sel4','requester_name','Guest New','requester_email','guest@example.invalid','verified',false);
   perform public.create_tournament_partner_invitation(request_data);
   result := public.transition_tournament_partner_invitation(prefix || '_guest','accept');
   if result->>'status' <> 'RESERVED' then raise exception 'guest partnership not reserved'; end if;
@@ -87,6 +96,11 @@ begin
   if (select status from public.tournament_partner_invitations where id=prefix || '_stale') <> 'PENDING' then raise exception 'failed acceptance changed invitation'; end if;
   perform public.transition_tournament_partner_invitation(prefix || '_stale','decline');
   if (select status from public.tournament_partner_invitations where id=prefix || '_stale') <> 'DECLINED' then raise exception 'decline failed'; end if;
+  request_data := request_data || jsonb_build_object('id',prefix || '_legacy','request_key',prefix || '_key5',
+    'requester_name','Fixture 5','requester_email','fixture5@example.invalid','send_directly',false);
+  perform public.create_tournament_partner_invitation(request_data);
+  result := public.transition_tournament_partner_invitation(prefix || '_legacy','verify');
+  if result->>'status' <> 'PENDING' or result->>'verified_at' is null then raise exception 'existing verification link stopped working'; end if;
   if not public.claim_partner_invitation_delivery(prefix || '_one','completed_target','first') then raise exception 'first delivery not claimed'; end if;
   if public.claim_partner_invitation_delivery(prefix || '_one','completed_target','second') then raise exception 'duplicate delivery was claimed'; end if;
   if has_table_privilege('anon','public.tournament_partner_invitations','select')
