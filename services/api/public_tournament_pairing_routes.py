@@ -3,11 +3,15 @@ from __future__ import annotations
 from importlib import import_module
 from typing import Any
 
-from fastapi import HTTPException, Query
-from pydantic import BaseModel
+from fastapi import HTTPException, Query, Response
+from pydantic import BaseModel, Field
 from supabase import Client
 from jupr_app.services.production_tournament_guard import require_production_tournament_writes
 from services.api.staging_write_guard import require_public_intake_or_403
+from jupr_app.services.public_tournament_partner_invitation_service import (
+    InvitationConflictError, InvitationRateLimitError,
+    create_invitation, review_invitation, act_on_invitation,
+)
 
 
 _partner_service = import_module("jupr_app.services.public_tournament_partner" + "_request_service")
@@ -35,6 +39,23 @@ class PublicTournamentPartnerAcceptPayload(BaseModel):
     website: str | None = None
 
 
+class PartnerInvitationPayload(BaseModel):
+    tournament_id: str
+    registration_slug: str | None = None
+    board_entry_key: str = Field(min_length=1, max_length=100)
+    name: str = Field(default="", max_length=160)
+    email: str = Field(default="", max_length=320)
+    message: str = Field(min_length=1, max_length=2000)
+    request_key: str = Field(min_length=20, max_length=100, pattern=r"^[a-zA-Z0-9_-]+$")
+    edit_token: str | None = Field(default=None, max_length=4000)
+    website: str | None = Field(default=None, max_length=200)
+
+
+class PartnerInvitationActionPayload(BaseModel):
+    token: str = Field(min_length=1, max_length=4000)
+    action: str = Field(default="review", max_length=30)
+
+
 def install_public_tournament_pairing_routes(
     app,
     *,
@@ -43,6 +64,45 @@ def install_public_tournament_pairing_routes(
     public_club_payload,
 ) -> None:
     """Register public tournament pairing-interest routes."""
+
+    @app.post("/clubs/{club_slug}/tournament-registration/partner-invitations")
+    def send_partner_invitation(club_slug: str, payload: PartnerInvitationPayload, response: Response) -> dict[str, Any]:
+        require_public_intake_or_403()
+        response.headers["Cache-Control"] = "no-store"
+        club = get_club(club_slug)
+        club_id = str(club.get("id") or club.get("club_id") or club_slug)
+        try:
+            return create_invitation(get_supabase_client(), club_id=club_id, club_slug=club_slug, payload=payload.model_dump())
+        except InvitationRateLimitError as exc:
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
+        except InvitationConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/clubs/{club_slug}/tournament-registration/partner-invitations/review")
+    def get_partner_invitation(club_slug: str, payload: PartnerInvitationActionPayload, response: Response) -> dict[str, Any]:
+        # A read-only POST keeps capability tokens out of URLs and access logs.
+        response.headers["Cache-Control"] = "no-store"
+        club = get_club(club_slug)
+        club_id = str(club.get("id") or club.get("club_id") or club_slug)
+        try:
+            return review_invitation(get_supabase_client(), club_id=club_id, club_slug=club_slug, token=payload.token)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/clubs/{club_slug}/tournament-registration/partner-invitations/respond")
+    def respond_partner_invitation(club_slug: str, payload: PartnerInvitationActionPayload, response: Response) -> dict[str, Any]:
+        require_public_intake_or_403()
+        response.headers["Cache-Control"] = "no-store"
+        club = get_club(club_slug)
+        club_id = str(club.get("id") or club.get("club_id") or club_slug)
+        try:
+            return act_on_invitation(get_supabase_client(), club_id=club_id, club_slug=club_slug, token=payload.token, action=payload.action)
+        except InvitationConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/clubs/{club_slug}/tournament-registration/pairing-requests")
     def list_club_tournament_pairing_requests(

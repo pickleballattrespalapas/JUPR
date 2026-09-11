@@ -216,6 +216,7 @@ export type PublicRegistrationSelectionPayload = {
 };
 
 export type PublicRegistrationSubmitPayload = {
+  partner_invitation_token?: string | null;
   tournament_id?: string | null;
   registration_slug?: string | null;
   first_name?: string | null;

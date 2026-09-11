@@ -86,6 +86,7 @@ def send_email_with_inline_chart(
     smtp_config: SMTPConfig | None = None,
     message_id: str | None = None,
     inline_png_images: dict[str, bytes] | None = None,
+    reply_to: str | None = None,
 ) -> str:
     cfg = _smtp_config_dict(smtp_config)
 
@@ -101,8 +102,11 @@ def send_email_with_inline_chart(
     )
     msg["Message-ID"] = rfc_message_id
     msg["Date"] = formatdate(localtime=False, usegmt=True)
-    if cfg.get("reply_to"):
-        msg["Reply-To"] = str(cfg["reply_to"]).strip()
+    reply_address = str(reply_to or cfg.get("reply_to") or "").strip()
+    if reply_address:
+        if "\r" in reply_address or "\n" in reply_address:
+            raise ValueError("Invalid reply address.")
+        msg["Reply-To"] = reply_address
 
     normalized_unsubscribe_url = str(unsubscribe_url or "").strip()
     if normalized_unsubscribe_url:

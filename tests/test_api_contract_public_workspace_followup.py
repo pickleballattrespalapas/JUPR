@@ -59,9 +59,13 @@ def test_partner_board_is_a_selected_tournament_workspace() -> None:
     assert "groupPartnerEntries" in page
     assert "visiblePlayerGroups.map" in page
     assert "group.entries.map" in page
-    assert "Want to connect with a player?" in page
     assert "PartnerRequestReviewPanel" in page
-    assert "PairingInterestPanel" in page
+    assert "<PartnerInvitationPanel" in page
+    assert "PairingInterestPanel" not in page
+    invitation = read("app/clubs/[clubSlug]/tournament-partner-board/PartnerInvitationPanel.tsx")
+    assert "Request to partner" in invitation
+    assert "Your message" in invitation
+    assert "Their email stays private" in invitation
     assert "data.tournaments.map" not in page
     assert "PublicTournamentRouteNav" not in layout
     assert 'redirect(`/clubs/${params.clubSlug}/tournaments`)' in page
