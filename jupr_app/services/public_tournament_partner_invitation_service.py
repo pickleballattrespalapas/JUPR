@@ -152,6 +152,15 @@ def _pairing_candidate(db: Any, row: dict, ctx: dict, registration_id: str | Non
         "requester_selection": selections[0].get("updated_at"), "target_selection": ctx["target"].get("updated_at")}
 
 
+def _registration_url(row: dict, ctx: dict, club_slug: str, token: str, registration: dict | None) -> str:
+    query = {"tournament": ctx["settings"]["registration_slug"]} if ctx["settings"].get("registration_slug") else {"tournament_id": str(row["tournament_id"])}
+    base = f"/clubs/{club_slug}/tournament-registration"
+    if registration:
+        base += "/edit"
+        query["edit_token"] = build_registration_edit_token(tournament_id=str(row["tournament_id"]), registration_id=registration["id"], email=registration["email"])
+    return f"{base}?{urlencode(query)}#partner_invitation={token}"
+
+
 def _deliver(db: Any, row: dict, ctx: dict, club_slug: str, kind: str) -> str:
     requester = _requester_registration(db, row) if row.get("verified_at") else None
     requester_name = _display_name(requester) if requester else row["requester_name"]
@@ -169,7 +178,7 @@ def _deliver(db: Any, row: dict, ctx: dict, club_slug: str, kind: str) -> str:
     copies = {
         "verify_requester": ("Confirm your partner request", "Confirm your email to send your message and partner request.", "Send my partner request"),
         "request_target": (f"{requester_name} would like to partner with you", "Read their message below. Accepting will pair your registrations automatically. If they still need to register, your partnership will be reserved until they finish.", "Accept partnership"),
-        "reserved_requester": ("Your partner request was accepted", "Your partnership is reserved. Complete registration for this division and PCS will pair you automatically. Your reservation lasts until " + str(row['expires_at'])[:10] + ".", "Complete registration"),
+        "reserved_requester": ("Your partner request was accepted", f"{_display_name(ctx['target_registration'])} accepted your partner request. You’re now listed together on the roster as pending registration. Your division and partner are already selected—complete your registration to confirm your team. Your reservation lasts until " + str(row['expires_at'])[:10] + ".", "Complete registration"),
         "reserved_target": ("Your partnership is reserved", "We’ve asked your partner to complete registration. PCS will finish pairing you automatically when they do. Your reservation lasts until " + str(row['expires_at'])[:10] + ".", "View partnership"),
         "completed_requester": ("You’re partnered up!", "Both registrations are now paired for this division and your team is on the roster.", "View partnership"),
         "completed_target": ("You’re partnered up!", "Both registrations are now paired for this division and your team is on the roster.", "View partnership"),
@@ -179,12 +188,19 @@ def _deliver(db: Any, row: dict, ctx: dict, club_slug: str, kind: str) -> str:
     }
     title, description, label = copies[kind]
     try:
+        token = _token(row, ctx, role)
+        action_url = _action_url(club_slug, token)
+        if kind == "reserved_requester":
+            # Deliver the private registration capability only to the requester’s
+            # mailbox. Existing registrants edit their entry instead of duplicating it.
+            registration = _requester_registration(db, row, email_verified=True)
+            action_url = _public_web_base_url().rstrip("/") + _registration_url(row, ctx, club_slug, token, registration)
         status = send_partner_invitation_email(to_email=address, title=title, description=description,
             tournament_name=ctx["tournament"]["name"], division_name=ctx["event"].get("label") or ctx["event"].get("division_name") or "Division",
             requester_name=requester_name, target_name=_display_name(ctx["target_registration"]),
             message=row["message"] if kind in {"verify_requester", "request_target"} else "",
             requester_email=row["requester_email"] if kind == "request_target" else "",
-            action_url=_action_url(club_slug, _token(row, ctx, role)), action_label=label,
+            action_url=action_url, action_label=label,
             sponsors=load_tournament_email_sponsors(db, club_id=row["club_id"], tournament_id=str(row["tournament_id"])))
     except Exception:
         status = "failed"
@@ -271,13 +287,7 @@ def review_invitation(db: Any, *, club_id: str, club_slug: str, token: str) -> d
         "board_url": f"/clubs/{club_slug}/tournament-partner-board?{query}",
         "roster_url": f"/clubs/{club_slug}/tournament-roster?{query}"}
     if role == "requester" and status in {"PENDING", "RESERVED"}:
-        registration = requester
-        base = f"/clubs/{club_slug}/tournament-registration"
-        if registration:
-            edit = build_registration_edit_token(tournament_id=str(row["tournament_id"]), registration_id=registration["id"], email=registration["email"])
-            base += "/edit"
-            query += "&" + urlencode({"edit_token": edit})
-        result["registration_url"] = f"{base}?{query}#partner_invitation={token}"
+        result["registration_url"] = _registration_url(row, ctx, club_slug, token, requester)
         # These are the verified sender's own details, only on their private link.
         result["registration_prefill"] = {"name": result["requester_name"], "email": row["requester_email"], "event_option_id": row["event_option_id"]}
     return result

@@ -27,7 +27,7 @@ export function PartnerInvitationRegistrationNotice({ invitation, error }: { inv
   return <aside style={{ padding: "1rem", background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: "12px", marginBottom: "1rem" }}>
     <strong>{invitation.division_name} · Partner: {invitation.target_name}</strong>
     <p style={{ marginBottom: 0 }}>{invitation.status === "RESERVED"
-      ? "Your partnership is reserved. Complete your registration and PCS will add your partner automatically when you save."
+      ? "Your partner accepted! You’re listed together on the roster as pending registration. Your division and partner are already selected. Complete this form to confirm your team."
       : "Your partner request has been sent. Complete your registration now and PCS will pair you automatically if they accept."}</p>
   </aside>;
 }
