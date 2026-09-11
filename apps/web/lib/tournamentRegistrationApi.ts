@@ -143,6 +143,7 @@ export type PublicTournamentRosterMember = {
   display_name: string;
   skill?: string | number | null;
   age_bracket?: string | null;
+  registration_pending?: boolean;
 };
 
 export type PublicTournamentRosterEntry = {

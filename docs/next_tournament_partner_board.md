@@ -63,6 +63,20 @@ as normal registration.
 
 ## Privacy and delivery
 
+When a recipient accepts a request from someone who still needs to register for
+the division, the existing reservation appears on the public roster immediately:
+both names are listed with `Pending registration`, and the requester is marked as
+awaiting registration. These display entries do not increase registered-player
+totals or create confirmed teams. Expired/cancelled reservations disappear; a
+completed registration replaces the display with the canonical confirmed team.
+
+The acceptance email's `Complete registration` button opens the registration form
+directly, with the division and accepted partner preselected. Existing registrants
+receive their private edit form to add the division instead of creating another
+registration. The requester capability remains in the URL fragment, and only the
+requester's email receives any registration edit capability. Repeated acceptance
+does not resend the email.
+
 - Public listings require global/event board enablement, selection display consent
   and registration contact consent. Availability and consent are checked again
   on acceptance. Reserved and paired selections are omitted from public lists.
