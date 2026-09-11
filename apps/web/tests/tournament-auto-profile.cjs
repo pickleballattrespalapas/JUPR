@@ -12,6 +12,8 @@ function load(relative, overrides = {}) {
   compiled.paths = Module._nodeModulePaths(path.dirname(filename));
   const original = compiled.require.bind(compiled);
   compiled.require = name => {
+    if (name === "@/components/tournaments/usePartnerInvitationRegistration") return { usePartnerInvitationRegistration: () => ({ token: "", invitation: null, error: "" }), PartnerInvitationRegistrationNotice: () => null };
+    if (name === "@/lib/tournamentPartnerInvitations") return { invitationReturnPath: () => "" };
     if (name === "@/lib/tournamentRegistrationProfile") return profileHelpers;
     const value = overrides[name];
     return value ? { __esModule: true, ...value } : original(name);
