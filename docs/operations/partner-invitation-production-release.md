@@ -22,38 +22,43 @@ The accepted staging feature is PR #1399, staging SHA
   Security Advisor added only the two intentional private-table INFO findings;
   the existing Auth leaked-password warning was unchanged.
 
-## Deployment blocker and temporary page hold
+## Initial deployment hold
 
-The production API release trigger created candidate `ecf20444`.
-[Workflow run 34560310024](https://github.com/pickleballattrespalapas/JUPR/actions/runs/34560310024)
-captured the rollback identity, then stopped before any Fly runtime mutation.
-The Supabase read-only migration attestation endpoint rejected the protected
-`SUPABASE_PROD_DATABASE_READ_TOKEN` credential with HTTP 401.
-The live API remains `39645c15`; SMTP and runtime activation steps were skipped.
+The first API release candidate, `ecf20444`, stopped before runtime mutation
+because the deployment's Supabase Database Read token returned HTTP 401.
+[Run 34560310024](https://github.com/pickleballattrespalapas/JUPR/actions/runs/34560310024)
+captured the prior API image (`39645c15`) for rollback.
+PR #1402 restored the previous partner-board page while the credential was renewed.
 No test invitations or customer emails were sent.
 
-The production web deployed successfully ahead of the blocked API. Until the
-credential is renewed, the partner-board page and its two source assertions are
-restored to their exact pre-release `880363b7` content. Existing registration-link
-partner contact remains available. The new API implementation, private response
-page, registration handoff, and additive migration are retained for completion.
+## Resumed production release
 
-## Resume
+Joe confirmed the replacement credential was saved. The new API candidate is
+`e26ff6376e7f15e157ba3ec87875c1f2183e2718`.
+[Run 34563209898](https://github.com/pickleballattrespalapas/JUPR/actions/runs/34563209898)
+passed production migration attestation, SMTP authentication without sending,
+and registration signing checks with the renewed credential.
 
-1. The production owner must replace `SUPABASE_PROD_DATABASE_READ_TOKEN` in the
-   GitHub `production` environment with a valid, short-lived `sbp_fc` credential
-   scoped only to production project `dnoockbwfenunhcibwfn`, Database: Read.
-   Keep credential values out of chat, source, logs, and artifacts.
-2. Restore these three files from `ecf20444509eaad577191e1985fec75d2a407ec0`
-   onto the current production branch in a reviewed PR:
-   - `apps/web/app/clubs/[clubSlug]/tournament-partner-board/page.tsx`
-   - `tests/test_next_tournament_partner_board_source.py`
-   - `tests/test_api_contract_public_workspace_followup.py`
-3. Recheck the current migration ledger and release tests, then merge. Create a
-   fresh, single-parent production release-trigger commit using the existing
-   workflow contract. An old run will reject a moved production HEAD; do not
-   weaken or bypass that provenance check or the migration attestation gate.
-4. Verify the exact live API/web identities, SMTP authentication, current enabled
-   production write/email profiles, private form, and signed-link error handling.
-   Use the previously tested staging lifecycle for pairing verification; do not
-   send unsolicited production test requests to players.
+This release deploys the prepared API first, while retaining the existing working
+partner page. The page activation restores these files to their accepted
+`ecf20444` content only after the API run succeeds:
+
+- `apps/web/app/clubs/[clubSlug]/tournament-partner-board/page.tsx`
+- `tests/test_next_tournament_partner_board_source.py`
+- `tests/test_api_contract_public_workspace_followup.py`
+
+The website activation changes only those three files and this release record;
+its later web SHA therefore differs from the API SHA without changing API code.
+Production migration, email and enabled write settings are preserved.
+
+Acceptance requires a successful exact-candidate API run, the completed Vercel
+website deployment, the visible private request form, and rejection of invalid
+signed links. The pairing lifecycle was tested on isolated staging. Production
+verification must not send unsolicited test requests to players.
+
+For a future credential replacement, renew the existing protected GitHub
+`production` environment secret `SUPABASE_PROD_DATABASE_READ_TOKEN` with a
+short-lived `sbp_fc` credential scoped to production project
+`dnoockbwfenunhcibwfn`, Database: Read. Keep values out of source, logs, chat and
+artifacts. Use a fresh single-parent release trigger after production HEAD moves;
+do not bypass provenance checks or reapply the completed schema migration.

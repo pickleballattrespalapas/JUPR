@@ -5,12 +5,9 @@ import PublicTournamentModuleHeader from "@/components/PublicTournamentModuleHea
 import {
   getClubTournamentRegistrationEdit,
   getClubTournamentRoster,
-  type PublicRegistrationDay,
-  type PublicRegistrationEditSelection,
-  type PublicRegistrationEvent,
   type PublicTournamentNeedsPartnerEntry
 } from "@/lib/tournamentRegistrationApi";
-import PairingInterestPanel from "./PairingInterestPanel";
+import PartnerInvitationPanel from "./PartnerInvitationPanel";
 import PartnerRequestReviewPanel from "./PartnerRequestReviewPanel";
 import { groupPartnerEntries, groupPartnerNotes } from "@/lib/tournamentPartnerBoard";
 
@@ -64,30 +61,6 @@ function eventKey(entry: PublicTournamentNeedsPartnerEntry): string {
 
 function entryAnchor(entry: PublicTournamentNeedsPartnerEntry): string {
   return `partner-${slugify(entry.board_entry_key || entry.player_name || "player")}`;
-}
-
-function requesterSelectionsForEntry(
-  entry: PublicTournamentNeedsPartnerEntry,
-  selections: PublicRegistrationEditSelection[],
-  events: PublicRegistrationEvent[],
-  days: PublicRegistrationDay[]
-): PublicRegistrationEditSelection[] {
-  const dayById = new Map(days.map((day) => [day.id, day]));
-  const eventById = new Map(events.map((event) => [event.id, event]));
-  const targetKey = eventKey(entry);
-  return selections.filter((selection) => {
-    const event = eventById.get(String(selection.event_option_id || ""));
-    if (!event) return false;
-    const day = dayById.get(event.registration_day_id);
-    return (
-      slugify(
-        [
-          day?.label || "Day",
-          eventName(event.event_family_label, event.division_name)
-        ].join(" · ")
-      ) === targetKey
-    );
-  });
 }
 
 function boardQuery({
@@ -186,13 +159,6 @@ export default async function TournamentPartnerBoardPage({
     tournamentId: tournament.id,
     registrationSlug: settings?.registration_slug
   });
-  const queryWithEdit = boardQuery({
-    tournamentId: tournament.id,
-    registrationSlug: settings?.registration_slug,
-    editToken: editToken || null,
-    event: selectedEvent,
-    partnerRequestId: selectedPartnerRequestId
-  });
   const apiBase =
     process.env.JUPR_API_BASE_URL ||
     process.env.NEXT_PUBLIC_JUPR_API_BASE_URL ||
@@ -207,7 +173,7 @@ export default async function TournamentPartnerBoardPage({
         registrationSlug={settings?.registration_slug || null}
         active="partner-board"
         kicker="Players Needing Partners"
-        description="Looking for a doubles partner? Browse players below, then use your registration link to connect."
+        description="Find a player and click Request to partner. Send a message, then pair up when they accept."
       />
 
       {error ? (
@@ -261,8 +227,7 @@ export default async function TournamentPartnerBoardPage({
           <div>
             <h2 style={{ marginTop: 0 }}>Players needing partners</h2>
             <p style={{ marginBottom: 0, color: "#475569" }}>
-              Choose an event, then use your registration link to contact a
-              player or reply to a request.
+              Choose an event and click Request to partner beside a player. Their email stays private.
             </p>
           </div>
           <span
@@ -294,34 +259,6 @@ export default async function TournamentPartnerBoardPage({
           <div><strong>Tournament players</strong><br />{data?.summary?.total_players ?? 0}</div>
         </div>
       </article>
-
-      {!editToken ? (
-        <article
-          style={{
-            ...cardStyle,
-            marginBottom: "1rem",
-            display: "flex",
-            justifyContent: "space-between",
-            gap: "1rem",
-            flexWrap: "wrap",
-            alignItems: "center"
-          }}
-        >
-          <div>
-            <h2 style={{ margin: 0 }}>Want to connect with a player?</h2>
-            <p style={{ margin: "0.35rem 0 0", color: "#475569" }}>
-              Request your registration link. We&apos;ll keep your contact details
-              private until you connect.
-            </p>
-          </div>
-          <Link
-            href={`/clubs/${params.clubSlug}/tournament-registration${selectedQuery}`}
-            style={{ fontWeight: 800 }}
-          >
-            Request edit link
-          </Link>
-        </article>
-      ) : null}
 
       {editToken && editResponse.data ? (
         <PartnerRequestReviewPanel
@@ -468,7 +405,7 @@ export default async function TournamentPartnerBoardPage({
                     </p>
                     <p style={{ margin: "0.45rem 0 0" }}>
                       <Link
-                        href={`/clubs/${params.clubSlug}/tournament-partner-board${queryWithEdit}#${entryAnchor(
+                        href={`/clubs/${params.clubSlug}/tournament-partner-board${selectedQuery}#${entryAnchor(
                           entry
                         )}`}
                         style={{ fontWeight: 800 }}
@@ -476,22 +413,13 @@ export default async function TournamentPartnerBoardPage({
                         Share this listing
                       </Link>
                     </p>
-                    {editToken && editResponse.data ? (
-                      <PairingInterestPanel
-                        apiBase={apiBase}
-                        clubSlug={params.clubSlug}
-                        tournamentId={tournament.id}
-                        registrationSlug={settings?.registration_slug || null}
-                        editToken={editToken}
-                        requesterSelections={requesterSelectionsForEntry(
-                          entry,
-                          editResponse.data.selections || [],
-                          data?.events || [],
-                          data?.days || []
-                        )}
-                        boardEntries={[entry]}
-                      />
-                    ) : null}
+                    <PartnerInvitationPanel
+                      apiBase={apiBase} clubSlug={params.clubSlug} tournamentId={tournament.id}
+                      registrationSlug={settings?.registration_slug || null} entry={entry}
+                      editToken={editResponse.data ? editToken : undefined}
+                      senderName={editResponse.data?.registration.display_name || ""}
+                      senderEmail={editResponse.data?.registration.email || ""}
+                    />
                   </section>
                 ))}
               </div>

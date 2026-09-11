@@ -22,7 +22,9 @@ def test_partner_board_uses_consent_projection_and_fastapi_only():
     assert "group.entries.map" in page
     assert 'data-testid="partner-player-card"' in page
     assert 'data-testid="partner-division-listing"' in page
-    assert "boardEntries={[entry]}" in page
+    assert "entry={entry}" in page
+    assert "PartnerInvitationPanel" in page
+    assert "${queryWithEdit}#" not in page  # Shared links must not grant registration access.
     assert "pairing-interest" in interest
     assert "pairing-requests" in review
     combined = "\n".join([page, interest, review]).lower()
