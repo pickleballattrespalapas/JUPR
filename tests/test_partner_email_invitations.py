@@ -2,6 +2,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 import json
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from fastapi import FastAPI
@@ -231,3 +232,54 @@ def test_honeypot_does_not_send_email_or_save_invitation(context, monkeypatch):
     monkeypatch.setattr(service, "_rpc", lambda *a, **k: pytest.fail("Honeypot persisted data"))
     monkeypatch.setattr(service, "_notify", lambda *a, **k: pytest.fail("Honeypot sent email"))
     assert service.create_invitation(db, club_id="club", club_slug="fixture", payload={"website": "spam"})["status"] == "PENDING"
+
+
+@pytest.mark.parametrize("already_registered", [False, True])
+def test_acceptance_emails_requester_a_direct_prefilled_registration_link_once(context, monkeypatch, already_registered):
+    db, row, ctx = context
+    row["verified_at"] = None
+    if already_registered:
+        db.storage["tournament_registrations"].append(dict(id="existing-requester", tournament_id="tournament",
+            display_name=row["requester_name"], email=row["requester_email"], status="CONFIRMED"))
+    monkeypatch.setattr(service, "_pairing_candidate", lambda *a, **k: (None, {}))
+    sent, claims = [], set()
+    def rpc(_db, name, args):
+        if name == "transition_tournament_partner_invitation":
+            assert args["p_action"] == "accept"
+            row["status"] = "RESERVED"
+            return dict(row)
+        assert name == "claim_partner_invitation_delivery"
+        kind = args["p_kind"]
+        if kind in claims: return False
+        claims.add(kind)
+        db.storage.setdefault("tournament_partner_invitation_deliveries", []).append(
+            dict(invitation_id=row["id"], kind=kind, status="sending", attempt_id=args["p_attempt_id"]))
+        return True
+    monkeypatch.setattr(service, "_rpc", rpc)
+    monkeypatch.setattr(service, "load_tournament_email_sponsors", lambda *a, **k: [])
+    def send(**kwargs):
+        sent.append(kwargs)
+        return "dry_run"
+    monkeypatch.setattr(service, "send_partner_invitation_email", send)
+    for _ in range(2):
+        result = service.act_on_invitation(db, club_id="club", club_slug="fixture", token=service._token(row, ctx, "target"), action="accept")
+        assert result["status"] == "RESERVED" and "registration_url" not in result
+    assert len(sent) == 2, "Repeated acceptance must not send duplicate emails"
+    requester_mail = next(mail for mail in sent if mail["to_email"] == row["requester_email"])
+    target_mail = next(mail for mail in sent if mail["to_email"] == ctx["target_registration"]["email"])
+    assert requester_mail["title"] == "Your partner request was accepted"
+    assert "Alex Player accepted" in requester_mail["description"]
+    assert requester_mail["action_label"] == "Complete registration"
+    url = urlsplit(requester_mail["action_url"])
+    assert url.netloc == "fixture.invalid"
+    assert url.path == "/clubs/fixture/tournament-registration" + ("/edit" if already_registered else "")
+    assert parse_qs(url.query)["tournament"] == ["fixture"]
+    token = parse_qs(url.fragment)["partner_invitation"][0]
+    reviewed = service.review_invitation(db, club_id="club", club_slug="fixture", token=token)
+    assert reviewed["registration_prefill"] == {"name": row["requester_name"], "email": row["requester_email"], "event_option_id": "doubles"}
+    assert reviewed["target_name"] == "Alex Player"
+    if already_registered:
+        edit = verify_registration_edit_token(parse_qs(url.query)["edit_token"][0])
+        assert edit["registration_id"] == "existing-requester"
+    assert "/tournament-partner-request#token=" in target_mail["action_url"]
+    assert "edit_token" not in target_mail["action_url"] and "partner_invitation=" not in target_mail["action_url"]

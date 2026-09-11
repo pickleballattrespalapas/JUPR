@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
+import re
 from typing import Any
 from jupr_app.domain.tournament_public_references import build_public_tournament_reference
 
@@ -37,6 +38,14 @@ def _safe_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _pending_partner_name(value: Any) -> str:
+    name = _clean_text(value, limit=160)
+    # Apply the roster's public-name policy to names submitted in invitation forms.
+    if not name or re.search(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", name, re.IGNORECASE) or re.search(r"(?<!\w)(?:\+?\d[\s().-]*){7,}\d(?!\w)", name):
+        return "Player"
+    return name
 
 
 def _public_tournament(row: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -177,15 +186,32 @@ def build_public_tournament_roster_page(
     roster_state = build_public_tournament_roster_state(supabase, tournament, settings, days_raw, events_raw)
     # An accepted guest invitation holds this division while the requester
     # registers. Keep it off both public partner lists during that reservation.
-    reservations = supabase.table("tournament_partner_invitations").select("target_selection_id,requester_selection_id,expires_at")\
+    reservations = supabase.table("tournament_partner_invitations").select("target_selection_id,requester_selection_id,requester_name,expires_at")\
         .eq("tournament_id", str(tournament["id"])).eq("status", "RESERVED").execute().data or []
-    from datetime import timezone
+    reservations = [row for row in reservations
+        if datetime.fromisoformat(str(row["expires_at"]).replace("Z", "+00:00")) > datetime.now(timezone.utc)]
     reserved_keys = {
         build_public_tournament_reference(tournament_id=str(tournament["id"]), namespace="partner-board-selection", source_id=str(selection_id))
         for row in reservations
-        if datetime.fromisoformat(str(row["expires_at"]).replace("Z", "+00:00")) > datetime.now(timezone.utc)
         for selection_id in (row.get("target_selection_id"), row.get("requester_selection_id")) if selection_id
     }
+    reserved_entries = {
+        build_public_tournament_reference(tournament_id=str(tournament["id"]), namespace="roster-entry", source_id=str(row["target_selection_id"])): row
+        for row in reservations if row.get("target_selection_id")
+    }
+    for entry in roster_state.get("registrations_by_event", []):
+        reservation = reserved_entries.get(entry.get("public_entry_key"))
+        if not reservation or entry.get("status") != "Needs Partner" or len(entry.get("members", [])) != 1:
+            continue
+        # This is a public display of an accepted reservation, not a registration
+        # or confirmed team. Keep all registration/player totals authoritative.
+        entry["status"] = "Pending Registration"
+        entry["entry_type"] = "Team"
+        entry["members"] = [*entry["members"], {
+            "display_name": _pending_partner_name(reservation.get("requester_name")),
+            "skill": None, "age_bracket": None, "registration_pending": True,
+        }]
+        entry["combined_rating"] = None
     for key in ("players_needing_partners", "partner_board_entries"):
         roster_state[key] = [row for row in roster_state.get(key, []) if row.get("board_entry_key") not in reserved_keys]
     if isinstance(roster_state.get("summary"), dict):

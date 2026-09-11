@@ -88,6 +88,7 @@ function statusLabel(entry: PublicTournamentRosterEntry): string {
   if (value === "waitlist") return "Waitlisted";
   if (value === "needs partner") return "Needs a partner";
   if (value === "pending partner request") return "Partner request pending";
+  if (value === "pending registration") return "Pending registration";
   return "Under review";
 }
 
@@ -95,7 +96,7 @@ function statusStyle(status: string) {
   if (status === "Registered") {
     return { background: "#dcfce7", borderColor: "#86efac", color: "#166534" };
   }
-  if (status === "Needs a partner" || status === "Partner request pending") {
+  if (status === "Needs a partner" || status === "Partner request pending" || status === "Pending registration") {
     return { background: "#fef3c7", borderColor: "#fde68a", color: "#92400e" };
   }
   if (status === "Waitlisted") {
@@ -106,6 +107,7 @@ function statusStyle(status: string) {
 
 function memberLabel(member: PublicTournamentRosterMember): string {
   const details = [
+    member.registration_pending ? "Pending registration" : null,
     member.skill ? `Rating ${member.skill}` : null,
     member.age_bracket || null
   ].filter(Boolean);

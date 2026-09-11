@@ -5,6 +5,7 @@ const path = require("node:path");
 const React = require("react");
 const { act, create } = require("react-test-renderer");
 const ts = require("typescript");
+let invitationContext = { token: "", invitation: null, error: "" };
 
 function load(relative, overrides = {}) {
   const filename = path.resolve(__dirname, "..", relative);
@@ -13,7 +14,7 @@ function load(relative, overrides = {}) {
   compiled.paths = Module._nodeModulePaths(path.dirname(filename));
   const originalRequire = compiled.require.bind(compiled);
   compiled.require = name => {
-    if (name === "@/components/tournaments/usePartnerInvitationRegistration") return { usePartnerInvitationRegistration: () => ({ token: "", invitation: null, error: "" }), PartnerInvitationRegistrationNotice: () => null };
+    if (name === "@/components/tournaments/usePartnerInvitationRegistration") return { usePartnerInvitationRegistration: () => invitationContext, PartnerInvitationRegistrationNotice: () => null };
     if (name === "@/lib/tournamentPartnerInvitations") return { invitationReturnPath: () => "" };
     if (name === "@/lib/tournamentRegistrationProfile") return load("lib/tournamentRegistrationProfile.ts");
     const override = overrides[name];
@@ -199,6 +200,47 @@ async function testDuplicatePartnerChoice() {
   await act(async () => renderer.unmount());
 }
 
+async function testAcceptedInvitationPrefill() {
+  invitationContext = { token: "private-accepted-invitation", error: "", invitation: {
+    status: "RESERVED", role: "requester", target_name: "Accepted Partner", division_name: "Mixed Below 9",
+    registration_prefill: { name: "Fixture Player", email: "player@example.invalid", event_option_id: "mixed" }
+  } };
+  lookupResponse = async () => ({ data: { profile_candidates: [] } });
+  await act(async () => { renderer = create(React.createElement(NewForm, props)); });
+  assert.equal(button("Start a registration"), undefined, "The email link opens the registration form directly");
+  assert.equal(field("First name").props.value, "Fixture");
+  assert.equal(field("Last name").props.value, "Player");
+  assert.equal(field("Email").props.value, "player@example.invalid");
+  await change("Age", "40");
+  await change("Gender", "Men");
+  await act(async () => button("Continue").props.onClick());
+  await change("Doubles skill", "4.5");
+  await act(async () => button("Continue to events").props.onClick());
+  assert.equal(field("Mixed Below 9").props.checked, true);
+  assert.equal(field("Mixed Below 9").props.disabled, true);
+  assert.match(content(renderer.root), /Partner: Accepted Partner/);
+  assert.equal(renderer.root.findAllByProps({ "aria-label": "Below 9 partner plan" }).length, 0);
+  await act(async () => button("Review registration").props.onClick());
+  await act(async () => renderer.root.findAllByType("input").find(node => node.props.type === "checkbox").props.onChange({ target: { checked: true } }));
+  await act(async () => button("Submit registration").props.onClick());
+  assert.equal(submissions.at(-1).partner_invitation_token, invitationContext.token);
+  assert.equal(submissions.at(-1).selections[0].event_option_id, "mixed");
+  assert.equal(submissions.at(-1).selections[0].partner_mode, "NEEDS_PARTNER", "The invitation completes canonical pairing after saving");
+  await act(async () => renderer.unmount());
+
+  const registration = { id: "reg", email: "player@example.invalid", first_name: "Fixture", last_name: "Player", age: 40, gender: "Men", doubles_skill: 4.5 };
+  await act(async () => { renderer = create(React.createElement(EditForm, { ...props, registration, editToken: "fixture", players: [], selections: [] })); });
+  assert.match(content(renderer.root), /Partner: Accepted Partner/, "Existing registrants see the accepted partner on their added division");
+  const original = global.FormData;
+  global.FormData = class { get(name) { return { first_name: "Fixture", last_name: "Player", age: "40", gender: "Men", doubles_skill: "4.5", terms_accepted: "on" }[name] ?? null; } };
+  try { await act(async () => renderer.root.findByType("form").props.onSubmit({ preventDefault() {}, currentTarget: {} })); }
+  finally { global.FormData = original; }
+  assert.equal(submissions.at(-1).partner_invitation_token, invitationContext.token);
+  assert.equal(submissions.at(-1).selections[0].event_option_id, "mixed");
+  await act(async () => renderer.unmount());
+  invitationContext = { token: "", invitation: null, error: "" };
+}
+
 async function main() {
   const previousWindow = global.window;
   global.window = { location: { hash: "" }, addEventListener() {}, removeEventListener() {} };
@@ -207,6 +249,7 @@ async function main() {
     await testEditing();
     await testLookupRaceAndFallback();
     await testDuplicatePartnerChoice();
+    await testAcceptedInvitationPrefill();
     console.log("Partner profiles: new/edit flows, prefill, eligibility, identity boundary, stale responses and manual fallback passed.");
   } finally { if (renderer) await act(async () => renderer.unmount()); global.window = previousWindow; }
 }

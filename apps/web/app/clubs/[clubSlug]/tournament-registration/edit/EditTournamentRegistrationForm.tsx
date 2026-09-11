@@ -661,7 +661,9 @@ export default function EditTournamentRegistrationForm({
                     {schedule || "Schedule TBD"} · {eventMeta(eventOption)}
                   </p>
                   <span style={{ color: "#475569" }}>
-                    Partner: {partnerStatusLabel(mode)}
+                    Partner: {eventId === partnerInvitation.invitation?.registration_prefill?.event_option_id
+                      ? partnerInvitation.invitation.target_name
+                      : partnerStatusLabel(mode)}
                   </span>
                   {eligibilityReason ? <p role="alert" style={{ color: "#b91c1c", marginBottom: 0 }}>{eligibilityReason} Update the player details or choose another division before saving.</p> : null}
                 </div>
