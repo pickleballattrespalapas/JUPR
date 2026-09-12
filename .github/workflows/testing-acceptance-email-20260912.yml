@@ -1,8 +1,8 @@
-name: Send Testing the updated acceptance email once
+name: Retry Testing's registration email and capture its receipt
 
 on:
   push:
-    branches: [ops/testing-acceptance-20260912]
+    branches: [ops/testing-acceptance-retry-20260912]
     paths:
       - .github/workflows/testing-acceptance-email-20260912.yml
       - scripts/testing_acceptance_email_20260912.py
@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: testing-acceptance-email-20260912
+  group: testing-acceptance-email-retry-20260912
   cancel-in-progress: false
 
 jobs:
@@ -29,8 +29,8 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_REPOSITORY" = pickleballattrespalapas/JUPR
-          test "$GITHUB_REF" = refs/heads/ops/testing-acceptance-20260912
-          test "$(git rev-parse HEAD^)" = 65f08d1b0eb5d39e741d8f05af96f1f3b222658c
+          test "$GITHUB_REF" = refs/heads/ops/testing-acceptance-retry-20260912
+          test "$(git rev-parse HEAD^)" = d26ac50cda2fd0d32508a45b6d2e56102589a287
           python -m py_compile scripts/testing_acceptance_email_20260912.py
       - name: Set up pinned flyctl
         uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1

@@ -11,16 +11,21 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import os
+import smtplib
+from unittest.mock import patch
 from uuid import uuid4
 
-from jupr_app.config import get_email_mode
+from jupr_app.config import get_email_mode, get_smtp_config
 from jupr_app.data.client import make_supabase
+from jupr_app.domain.notifications.smtp_mailer import send_email_with_inline_chart
+from jupr_app.domain.notifications.tournament_partner_invitation_email import invitation_email
+from jupr_app.domain.notifications.tournament_email_sponsors import sponsor_inline_images
 from jupr_app.services import public_tournament_partner_invitation_service as svc
 
 INVITATION_ID = "pinv_c659519207064c7d967ac7006b54194b"
 TOURNAMENT_ID = "563b7922-ae92-41d4-8286-75fe9846e944"
 EMAIL_HASH = "5b8f8552f594869988693a1db3f1c7a0f3789639161e4aca62436556ec03c0e7"
-KIND = "reserved_requester_prefilled_resend_20260912"
+KIND = "reserved_requester_nonreceipt_retry_20260912"
 DELIVERIES = "tournament_partner_invitation_deliveries"
 EXPECTED_API_SHA = "65f08d1b0eb5d39e741d8f05af96f1f3b222658c"
 
@@ -50,7 +55,7 @@ def run(db, *, send: bool = False) -> dict:
     url = svc._public_web_base_url().rstrip("/") + review["registration_url"]
     require(url.startswith("https://pickleballclubsandwich.com/clubs/tres-palapas/tournament-registration") and "#partner_invitation=" in url, "Registration URL invalid")
     message = dict(
-        to_email=row["requester_email"], title="Your partner request was accepted",
+        to_email=row["requester_email"], title="Testing: Joe accepted - complete your Baja Classic registration",
         description="Joe Baumann accepted your partner request. You’re now listed together on the roster as pending registration. Your division and partner are already selected—complete your registration to confirm your team. Your reservation lasts until " + str(row["expires_at"])[:10] + ".",
         tournament_name=ctx["tournament"]["name"], division_name=review["division_name"],
         requester_name=row["requester_name"], target_name="Joe Baumann", message="",
@@ -61,18 +66,34 @@ def run(db, *, send: bool = False) -> dict:
     if prior:
         return {"ok": prior[0]["status"] == "sent", "status": "already_" + prior[0]["status"], "messages_sent": 0}
     if not send:
-        return {"ok": True, "status": "ready", "requester": "Testing", "partner": "Joe Baumann", "division": review["division_name"], "messages_sent": 0}
+        cfg = get_smtp_config()
+        return {"ok": True, "status": "ready", "requester": "Testing", "partner": "Joe Baumann", "division": review["division_name"], "smtp_host": cfg.host, "from_email": cfg.from_email, "messages_sent": 0}
 
+    html, plain = invitation_email(**{key: value for key, value in message.items() if key != "to_email"})
+    images = sponsor_inline_images(message["sponsors"])
     attempt = uuid4().hex
     # Plain insert: the existing primary key also prevents concurrent replays.
     db.table(DELIVERIES).insert({"invitation_id": INVITATION_ID, "kind": KIND, "status": "sending", "attempt_id": attempt}).execute()
     status = "delivery_unknown"
+    smtp_codes = []
+    original_data = smtplib.SMTP.data
+    def capture_ack(server, content):
+        code, response = original_data(server, content)
+        smtp_codes.append(code)
+        return code, response
     try:
-        status = svc.send_partner_invitation_email(**message)
+        # Capture the server's DATA acknowledgment without logging message text,
+        # credentials or private registration links. This is a separate process.
+        with patch.object(smtplib.SMTP, "data", capture_ack):
+            message_id = send_email_with_inline_chart(to_email=message["to_email"], subject=message["title"],
+                html_body=html, text_body=plain, chart_png_bytes=None, inline_png_images=images,
+                message_id=attempt)
+        status = "sent"
     finally:
         db.table(DELIVERIES).update({"status": status, "updated_at": datetime.now(timezone.utc).isoformat()}).eq("invitation_id", INVITATION_ID).eq("kind", KIND).eq("attempt_id", attempt).execute()
     require(status == "sent", "Email was not sent live")
-    return {"ok": True, "status": status, "requester": "Testing", "partner": "Joe Baumann", "messages_sent": 1}
+    return {"ok": True, "status": status, "requester": "Testing", "partner": "Joe Baumann", "messages_sent": 1,
+            "message_id": message_id, "smtp_data_response_codes": smtp_codes}
 
 
 def main() -> int:
@@ -85,6 +106,8 @@ def main() -> int:
     except Exception as exc:
         # Never log email capabilities, addresses, credentials or provider output.
         result = {"ok": False, "error_type": type(exc).__name__}
+        if isinstance(exc, smtplib.SMTPResponseException):
+            result["smtp_code"] = int(exc.smtp_code)
     print(json.dumps(result, sort_keys=True))
     return 0 if result["ok"] else 1
 
