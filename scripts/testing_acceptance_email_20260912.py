@@ -25,7 +25,9 @@ from jupr_app.services import public_tournament_partner_invitation_service as sv
 INVITATION_ID = "pinv_c659519207064c7d967ac7006b54194b"
 TOURNAMENT_ID = "563b7922-ae92-41d4-8286-75fe9846e944"
 EMAIL_HASH = "5b8f8552f594869988693a1db3f1c7a0f3789639161e4aca62436556ec03c0e7"
-KIND = "reserved_requester_nonreceipt_retry_20260912"
+# Joe explicitly requested this additional attempt on September 12 after
+# receiving other mail. Keep it separate from the two earlier delivery records.
+KIND = "reserved_requester_user_retry_20260912"
 DELIVERIES = "tournament_partner_invitation_deliveries"
 EXPECTED_API_SHA = "65f08d1b0eb5d39e741d8f05af96f1f3b222658c"
 
@@ -55,7 +57,7 @@ def run(db, *, send: bool = False) -> dict:
     url = svc._public_web_base_url().rstrip("/") + review["registration_url"]
     require(url.startswith("https://pickleballclubsandwich.com/clubs/tres-palapas/tournament-registration") and "#partner_invitation=" in url, "Registration URL invalid")
     message = dict(
-        to_email=row["requester_email"], title="Testing: Joe accepted - complete your Baja Classic registration",
+        to_email=row["requester_email"], title="Testing: Joe accepted - your Baja Classic registration link",
         description="Joe Baumann accepted your partner request. You’re now listed together on the roster as pending registration. Your division and partner are already selected—complete your registration to confirm your team. Your reservation lasts until " + str(row["expires_at"])[:10] + ".",
         tournament_name=ctx["tournament"]["name"], division_name=review["division_name"],
         requester_name=row["requester_name"], target_name="Joe Baumann", message="",
