@@ -479,48 +479,23 @@ confirmation and failure recovery, no role grant before acceptance, wrong accoun
 duplicate submissions, email capability failures and non-live email restrictions.
 No schema migration or change to season setup, club selection or meet rosters.
 
-## Controlled invitation email pilot (prepared September 8, 2026)
+## Staging multi-club pilot using the existing account (September 15, 2026)
 
-The full new-account journey needs a real mailbox. An existing account can test
-acceptance, but it cannot establish that a new recipient receives verification,
-sets a first password and signs into the newly assigned club successfully.
+Joe chose to continue testing with the existing verified staging sign-in, without
+SMTP or another account. La Ribera's account invitation was renewed for that
+identity and accepted through `pcs_interclub_club_invitation`, retaining its
+verified-email, organizer-authority, current-revision and audit checks.
 
-The restricted test path is configured in
-`config/staging_invitation_email_test.json`. Joe approved one actual test inbox
-on September 8; the seven-day window ends September 15 at 19:22:20 UTC. The public
-repository holds only the SHA-256 digest of the normalized address. The invitation
-record retains the actual email. Configuration permits at most three mailbox
-digests, an approval time and an expiry no more than seven days later. No wildcard,
-redirected mailbox or `.invalid` address is accepted. Configuration changes go
-through the normal staging PR, build and deployment process.
+The same identity now has its existing Tres Palapas role plus administrator access
+to La Ribera. La Ribera's onboarding status is `in_progress`. The staff assignment
+is active and bound to the existing Auth user. Passwords and authentication rules
+were not changed. Season participation and meet lineups remain manual actions.
 
-The runtime requires the isolated staging Fly app, Supabase project and canonical
-web origin, `JUPR_EMAIL_MODE=dry_run`, and configured SMTP with TLS. The invitation
-email endpoints are the only callers of this exception. Other staging mail
-remains in its existing dry-run mode. Both the request and final sender check the
-approved address before any Auth user/token creation; the normal invitation
-claim still checks validity, email binding and rate limits. Messages carry
-`[PCS staging test]` in the subject and go only to the invited, approved address.
-No token is exposed in the API response, list, handoff or organizer screen.
+The unused email pilot is disabled in `config/staging_invitation_email_test.json`,
+with no recipient digests or approval window. General staging mail stays in
+`dry_run`. No verification email was sent or needs to be sent for this pilot.
 
-Staging health and its handoff report activation, recipient count, expiry and
-SMTP configuration readiness, without revealing addresses or credentials. A
-missing/invalid configuration, expired window, incorrect environment or missing
-TLS/SMTP keeps delivery disabled. Delivery activation does not send any mail by
-itself: the recipient must request the verification link from their invitation.
-
-After activation, the manual pilot is:
-
-1. Update La Ribera's pending invitation to the approved real test address.
-2. Open its link in a separate browser session and choose **Create account**.
-3. Request and receive the verification email; follow the link.
-4. Set and confirm a password, review La Ribera, then accept the invitation.
-5. Sign out and sign in with the new email/password. Confirm only La Ribera is
-   available to this single-club account; Tres remains in the organizer's account.
-6. Continue the season invitation and choose a lineup for an upcoming meet.
-
-La Ribera's existing pending invitation has been renewed for the approved inbox.
-The staging SMTP configuration is still missing, so delivery remains blocked even
-with the approved recipient configuration. See [staging mail setup](staging_invitation_email_setup.md)
-for the remaining secure configuration and manual acceptance steps. No email
-delivery or mailbox ownership test has been completed yet.
+Follow [the multi-club testing walkthrough](staging_invitation_email_setup.md) to
+switch between organizer and participant workspaces and continue the season setup.
+This tests a multi-club administrator; a separate-account pilot remains useful for
+single-club administrator acceptance later.

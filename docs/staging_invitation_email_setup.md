@@ -1,84 +1,39 @@
-# Finish the invitation email test
+# Test multiple clubs with the existing staging sign-in
 
-The new-account flow is ready in the application: verify email, choose a password,
-review the invitation, and accept club administrator access. La Ribera's pending
-invitation now uses the test inbox Joe approved in chat. No staging Auth account
-exists for that inbox yet, and no email has been sent.
+Updated September 15, 2026. Joe chose to test club operations without configuring
+SMTP or creating another account. The invitation email pilot is disabled and its
+recipient approval has been cleared.
 
-The approved test window ends **September 15, 2026 at 19:22:20 UTC**. Only the
-approved mailbox can receive invitation verification mail during this window.
-General staging email remains `JUPR_EMAIL_MODE=dry_run`.
+La Ribera's club account invitation has been reassigned to Joe's existing verified
+staging identity and accepted through the normal guarded invitation transaction.
+That identity now has its existing Tres Palapas role and an administrator
+assignment for La Ribera. Both are ordinary club assignments checked on each API
+request. No password, Auth user, verification flag, or authentication rule changed.
 
-## Remaining step: configure staging mail
+## Start testing
 
-The API currently reports `smtp_ready=false`. Its SMTP settings are not available
-in the workspace, and the connected tools cannot manage Fly secrets. The mail
-provider credentials must be added through Fly by someone with access.
+1. Open [staging club selection](https://jupr-git-staging-pickleballattrespalapas1.vercel.app/admin/select-club)
+   using the existing staff sign-in. If La Ribera is missing from a session opened
+   before the assignment was added, sign out and sign in again.
+2. Open **Tres Palapas** to continue organizing the **Southern BCS** season under
+   **Interclub seasons**. Select La Ribera in the participating-clubs step.
+3. Finish the divisions, meet schedule, and review steps, then open season
+   invitations when ready.
+4. Use **Switch club** to open **La Ribera**. Use the interclub invitations and
+   meet-roster workspace to respond as the participating club.
+5. Add test players through each club's own **Players** page. Choose a lineup for
+   each upcoming meet; a season does not lock one roster for every meet.
 
-Use only the Fly app **`juprleagues-api-staging`**. Enter the mail provider's
-settings as app secrets; do not paste passwords into chat or commit them to this
-repository. Use an SMTP credential authorized for this staging test.
+The club account invitation is already accepted. Accepting a season invitation
+and choosing lineups remain explicit actions for manual testing.
 
-| Setting | Value to enter |
-| --- | --- |
-| `SMTP_HOST` | SMTP server supplied by the mail provider |
-| `SMTP_PORT` | Provider's STARTTLS port |
-| `SMTP_USERNAME` | Provider's SMTP username |
-| `SMTP_PASSWORD` | Provider's SMTP password or SMTP API credential |
-| `SMTP_FROM_EMAIL` | Sender address verified with that provider |
-| `SMTP_USE_TLS` | `true` |
-| `SMTP_FROM_NAME` | `PCS Staging` |
+This route tests a single signed-in person administering multiple clubs. A later
+pilot with a separate existing account can test the experience of an administrator
+assigned to only one club. New-account email delivery is outside this test.
 
-The provider supplies the sending credentials; the recipient's Gmail password is
-not used. Leave the existing general email and player-update flags unchanged.
+## Environment
 
-Fly stores these as encrypted app secrets and injects them when the app starts.
-See [Fly's app secrets documentation](https://fly.io/docs/apps/secrets/).
-
-If using Fly's CLI, import a local file containing the settings as `NAME=VALUE`
-pairs. Keep the file outside this repository and use its actual path:
-
-```sh
-fly secrets import --app juprleagues-api-staging < /path/to/staging-mail.env
-```
-
-The import applies secrets and updates the app. If secrets were added using
-`--stage`, apply them with:
-
-```sh
-fly secrets deploy --app juprleagues-api-staging
-```
-
-See [Fly's secret import reference](https://fly.io/docs/flyctl/secrets-import/).
-Do not print secret values or use debug logging to verify them.
-
-## Run the account test
-
-1. Refresh the recipient's existing La Ribera invitation in a private browser
-   window, separate from the organizer's sign-in.
-2. Choose **Create account** and enter the approved test address.
-3. Select **Email me a verification link**. The email's subject begins with
-   **[PCS staging test]**. Allow a minute before retrying; each invitation permits
-   at most five requests.
-4. Open the verification link from the inbox. Choose and confirm a new password.
-5. Review La Ribera's administrator invitation and explicitly accept it.
-6. Sign out and sign in with the new email/password. This account should open
-   La Ribera directly; Tres remains associated with the organizer's account.
-7. Continue the interclub setup and select players for an upcoming meet.
-
-If the page still says email is unavailable, the mail settings, approved window,
-or staging environment check have not passed. Staging health reports only safe
-status: `invitation_email_test.smtp_ready`, `active`, `reason`, and `expires_at`.
-`smtp_ready=true` confirms configuration is present; receiving the message is the
-delivery test. No role is granted before verified, explicit acceptance.
-
-## Configuration maintenance
-
-The approved inbox is stored as a lowercase SHA-256 digest in
-`config/staging_invitation_email_test.json`, not as plaintext in this public
-repository. The runtime normalizes the entered address and compares its digest.
-This preserves exact-address matching and rejects unusable mailbox syntax before
-Auth token creation. Digests are identifiers, not passwords or encryption.
-
-To close the pilot early, deploy the same config with `enabled=false`. It stops
-automatically at the recorded expiry even if SMTP remains configured.
+All data changes apply only to the isolated staging project and La Ribera test
+club. General mail remains `JUPR_EMAIL_MODE=dry_run`; the optional invitation mail
+configuration has `enabled=false` and no recipients. No SMTP setup is needed for
+this test. The club and staff audit records preserve the invitation changes.
