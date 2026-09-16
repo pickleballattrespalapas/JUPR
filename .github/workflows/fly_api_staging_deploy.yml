@@ -30,6 +30,15 @@ on:
         description: "Club ID used by staging admin verification"
         required: true
         default: "tres_palapas"
+      qa_admin:
+        description: "Dedicated three-club QA browser checks (provision only for explicit account setup)"
+        required: true
+        type: choice
+        default: test
+        options:
+          - test
+          - provision
+          - off
       write_wave:
         description: "Staging write posture. Normal staging deployments remain open; select none only to close writes temporarily."
         required: true
@@ -548,6 +557,68 @@ jobs:
             apps/web/test-results
           if-no-files-found: warn
           retention-days: 30
+
+      - name: Set up Node for club QA
+        if: steps.staging-posture.outputs.write_wave == 'open' && github.event.inputs.qa_admin != 'off'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install club QA browser
+        if: steps.staging-posture.outputs.write_wave == 'open' && github.event.inputs.qa_admin != 'off'
+        working-directory: apps/web
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      - name: Prepare dedicated staging QA account session
+        id: club-qa-auth
+        if: steps.staging-posture.outputs.write_wave == 'open' && github.event.inputs.qa_admin != 'off'
+        shell: bash
+        env:
+          QA_MODE: ${{ github.event.inputs.qa_admin || 'test' }}
+          STAGING_API_BASE_URL: "https://juprleagues-api-staging.fly.dev"
+          STAGING_SUPABASE_URL: "https://sijpxjxvdtrehmqvirfi.supabase.co"
+          STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+          STAGING_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          args=()
+          # One-time provisioning is authorized by the PR that introduces this
+          # helper. Later deployments never recreate a removed account or role.
+          if [ "$QA_MODE" = provision ] || git diff --diff-filter=A --name-only "$GITHUB_SHA^1" "$GITHUB_SHA" | grep -Fxq 'scripts/prepare_staging_qa.py'; then
+            args+=(--provision)
+          fi
+          python scripts/prepare_staging_qa.py "${args[@]}" --report-dir "$RUNNER_TEMP/staging-handoff"
+
+      - name: Test dedicated admin across three clubs
+        if: steps.club-qa-auth.outcome == 'success'
+        working-directory: apps/web
+        shell: bash
+        env:
+          JUPR_EXPECTED_STAGING_API_ORIGIN: "https://juprleagues-api-staging.fly.dev"
+          JUPR_EXPECTED_STAGING_AUTH_ORIGIN: "https://sijpxjxvdtrehmqvirfi.supabase.co"
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          set -euo pipefail
+          handoff="$RUNNER_TEMP/staging-handoff/staging-handoff.json"
+          test "$(jq -r '.candidate_sha' "$handoff")" = "$GITHUB_SHA"
+          test "$(jq -r '.status' "$handoff")" = ready_for_manual_testing
+          deployment_origin="$(jq -r '.deployment.vercel_deployment_origin' "$handoff")"
+          [[ "$deployment_origin" =~ ^https://[a-z0-9]([a-z0-9-]{0,180}[a-z0-9])?-[a-z0-9]{8,64}-pickleballattrespalapas1\.vercel\.app$ ]]
+          export STAGING_WEB_BASE_URL="$deployment_origin"
+          export JUPR_ATTESTED_VERCEL_DEPLOYMENT_ORIGIN="$deployment_origin"
+          npx playwright test e2e/multiclub-qa.staging.spec.ts --retries=0 --forbid-only --reporter=line
+          printf '%s\n' '{"status":"passed","clubs":3,"checks":["workspace_switching","separate_rosters","website_controls","outside_club_denied","sign_out"],"business_writes":false}' > "$RUNNER_TEMP/staging-handoff/qa-browser.json"
+
+      - name: End dedicated QA session
+        if: always() && steps.club-qa-auth.outcome != 'skipped' && steps.club-qa-auth.outcome != ''
+        env:
+          STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+          STAGING_SUPABASE_URL: "https://sijpxjxvdtrehmqvirfi.supabase.co"
+        run: python scripts/prepare_parity_staging_session.py cleanup --report-dir "$RUNNER_TEMP/staging-handoff"
 
       - name: Upload successful staging handoff
         if: steps.staging-posture.outputs.write_wave == 'open'

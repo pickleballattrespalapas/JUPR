@@ -102,6 +102,35 @@ deployment change mid-run. It expects the original fixture counts; manual
 testing can legitimately change those counts. The SQL verification script also
 expects the original roster revisions and upcoming meets.
 
-Authenticated browser switching and independent single-club-account acceptance
-remain manual checks. The automated authorization tests cover the single-club
-permission rules; this fixture uses one account assigned to all three clubs.
+## Dedicated automated test administrator
+
+`pcs-staging-qa@example.invalid` is a separate staging Auth identity, with
+administrator access only to La Ribera, Cabo and La Paz. It has no platform
+administrator assignment and cannot manage Tres. The address is deliberately
+non-deliverable: the account has no password and does not need SMTP.
+
+`scripts/prepare_staging_qa.py` provisions it only with explicit `--provision`.
+The staging deploy workflow provisions once when that script is first added;
+later deployments reuse the same identity without restoring deleted or revoked
+assignments. Manual dispatch supports `qa_admin: provision`, `test`, or `off`.
+Never substitute an existing person's identity or give this account production
+access. Club staff controls can revoke its three assignments when no longer needed.
+
+The workflow uses the existing staging Auth Admin secret to generate and redeem
+a sign-in token without email. The resulting one-hour session is kept inside
+the runner; no token, password, service key or browser storage is included in
+artifacts. An always-running cleanup ends refreshability after the test. Access
+JWTs can remain valid until expiry. Vercel's existing CI protection secret grants
+the runner access to the attested deployment; the application still authenticates
+and authorizes the real Supabase session normally.
+
+`apps/web/e2e/multiclub-qa.staging.spec.ts` checks the real club selector, cookie
+context, separate player IDs, website draft visibility controls, share URLs,
+statistics controls, preview, denied access to Tres, and sign-out. It does not
+save drafts or publish pages. The exact-candidate handoff includes `qa-account.json`
+and `qa-browser.json` after a successful run. This is automated browser acceptance;
+interactive browser access still requires the browser's secure sign-in flow.
+
+Independent single-club-account acceptance remains a separate manual check.
+The automated authorization tests cover those permission rules; this QA identity
+intentionally has access to the three fixture clubs for switching tests.
