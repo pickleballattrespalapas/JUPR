@@ -66,12 +66,12 @@ test("dedicated QA admin switches three clubs and previews website controls", as
       const visibility = page.getByRole("combobox", { name: "Visibility for Players", exact: true });
       const original = await visibility.inputValue();
       await visibility.selectOption(original === "private" ? "public" : "private");
-      await expect(page.getByText("Unsaved changes", { exact: true })).toBeVisible();
+      await expect(page.getByText(/^Unsaved changes\b/)).toBeVisible();
       await expect(page.getByRole("button", { name: "Save draft", exact: true })).toBeEnabled();
       await expect(page.getByRole("textbox", { name: "Link to Players", exact: true })).toHaveValue(`${origin}/clubs/${club.id}/players`);
       page.once("dialog", dialog => dialog.accept());
       await page.reload();
-      await expect(page.getByText("Unsaved changes", { exact: true })).toHaveCount(0);
+      await expect(page.getByText(/^Unsaved changes\b/)).toHaveCount(0);
       await page.getByRole("button", { name: "Page visibility", exact: true }).click();
       await expect(page.getByRole("combobox", { name: "Visibility for Players", exact: true })).toHaveValue(original);
       await page.getByRole("button", { name: "Stats & information", exact: true }).click();
