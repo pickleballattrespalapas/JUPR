@@ -17,7 +17,7 @@ def test_public_header_uses_leagues_and_tournaments_hubs() -> None:
     links = read("lib/clubSite.ts")
     assert '"Leagues", "leagues"' in links
     assert '"Tournaments", "tournaments"' in links
-    assert "CLUB_LINKS.map" in club_layout
+    assert "publicClubLinks(doc).map" in club_layout
     assert 'href="/clubs"' in club_layout
     assert 'label: "Find my club"' in header
     assert 'label: "Create a club"' in header
@@ -25,8 +25,8 @@ def test_public_header_uses_leagues_and_tournaments_hubs() -> None:
     assert "PublicSiteHeader" in layout
     assert "PublicFooterNav" in layout
     footer = read("components/PublicFooterNav.tsx")
-    assert 'href={`${clubBase}/leagues`}' in footer
-    assert 'href={`${clubBase}/tournaments`}' in footer
+    assert 'href="/clubs"' in footer
+    assert "clubBase" not in footer  # Global footer cannot disclose private sections.
 
 
 def test_admin_sidebar_is_authorized_session_only_and_collapsible() -> None:
@@ -116,7 +116,9 @@ def test_leagues_hub_lists_active_leagues_and_opens_league_home() -> None:
     assert "Team Leagues" not in leagues
     assert "Club Leaderboards" not in leagues
     assert "ClubSiteContent" in club
-    assert "CLUB_LINKS.map" in read("components/ClubSiteContent.tsx")
+    content = read("components/ClubSiteContent.tsx")
+    assert "publicClubLinks(doc)" in content
+    assert "links.map" in content
     assert 'href="/clubs"' in site_map
     assert "getClubDirectory" in sitemap
     assert 'visibility!=="listed"' in sitemap

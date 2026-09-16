@@ -91,6 +91,10 @@ global.fetch = async (url, options = {}) => {
     assert.match(markup, /href="\/clubs\/alpha\/leaderboards"/);
     assert.doesNotMatch(markup, /href="\/clubs\/alpha\/pages\/members"/);
   }
+  const Footer = load("components/PublicFooterNav.tsx").default;
+  const footer = html(Footer, {});
+  assert.doesNotMatch(footer, /href="\/clubs\/alpha\//, "Global footer outside the provider must not advertise private club pages");
+  assert.match(footer, /href="\/clubs"/);
   const block = { id: "links", kind: "links", heading: "", text: "", url: "", alt: "", span: 12, align: "left", tone: "plain", padding: "small" };
   const withBlocks = { ...doc, pages: [{ ...doc.pages[0], blocks: [block, { ...block, id: "button", kind: "button", text: "Hidden target", url: "/clubs/alpha/players" }] }] };
   assert.doesNotMatch(html(Content, { document: withBlocks, slug: "alpha" }), /Hidden target|href="\/clubs\/alpha\/players"/);
