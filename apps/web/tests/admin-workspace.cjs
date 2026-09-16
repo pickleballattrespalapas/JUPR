@@ -4,9 +4,9 @@ function load(file, mocks={}) {
  const output=ts.transpileModule(fs.readFileSync(path.join(__dirname,'..',file),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX,esModuleInterop:true}}).outputText;
  const mod={exports:{}};new Function('require','module','exports',output)(name=>Object.hasOwn(mocks,name)?mocks[name]:require(name),mod,mod.exports);return mod.exports;
 }
-const events=new Map(),docEvents=new Map();let cookie='',destination='',pathname='/admin';
+const events=new Map(),docEvents=new Map();let cookie='',destination='',pathname='/admin',allowCookies=true;
 global.crypto=require('node:crypto').webcrypto;global.localStorage={setItem(){}};global.location={protocol:'https:'};
-global.document={get cookie(){return cookie;},set cookie(value){cookie=value.split(';')[0];},addEventListener:(n,f)=>docEvents.set(n,f),removeEventListener:n=>docEvents.delete(n)};
+global.document={get cookie(){return cookie;},set cookie(value){if(allowCookies)cookie=value.split(';')[0];},addEventListener:(n,f)=>docEvents.set(n,f),removeEventListener:n=>docEvents.delete(n)};
 global.window={location:{assign:v=>destination=v},addEventListener:(n,f)=>events.set(n,f),removeEventListener:n=>events.delete(n),dispatchEvent:e=>events.get(e.type)?.(e),setInterval:()=>1,clearInterval(){}};
 global.Element=class{closest(){return null;}};
 const workspace=load('lib/adminWorkspace.ts'), context=load('lib/useAdminWorkspace.tsx');
@@ -33,7 +33,31 @@ const auth={getAdminApiBaseUrl:()=> 'https://test.invalid',signOutAdminSession:a
  workspace.selectAdminWorkspace(beta);session.capabilities.assignments=[{club_id:'alpha',role:'administrator'}];
  await act(async()=>tree=create(React.createElement(Shell,{workspace:selected},React.createElement(Child))));
  assert.equal(tree.root.findAllByType('input').length,0,'Revoked assignment cannot mount protected controls');assert.equal(mounted,1);await act(async()=>tree.unmount());
- const Picker=load('app/admin/select-club/page.tsx',{'next/link':link,'@/lib/useAdminSession':{useAdminSession:()=>({accessToken:'fixture',session,loading:false})},'@/lib/useAvailableWorkspaces':availableMock,'@/lib/adminWorkspace':workspace}).default;
+ const Cards=load('app/admin/select-club/ClubWorkspaceCards.tsx',{'./selector.module.css':{}}).default;
+ const Picker=load('app/admin/select-club/page.tsx',{'next/link':link,'@/lib/useAdminSession':{useAdminSession:()=>({accessToken:'fixture',session,loading:false})},'@/lib/useAvailableWorkspaces':availableMock,'@/lib/adminWorkspace':workspace,'./ClubWorkspaceCards':Cards,'./selector.module.css':{}}).default;
+ availableClubs=[alpha,beta];
+ for(const club of availableClubs){
+   cookie='';destination='';await act(async()=>tree=create(React.createElement(Picker)));
+   const card=tree.root.findByProps({'aria-label':`Open ${club.club_name}`});
+   assert.equal(card.type,'button','The whole card is a native keyboard-accessible button');
+   assert.equal(card.findByType('strong').children.join(''),club.club_name,'The club name is inside the clickable card');
+   assert.equal(card.findAllByType('button').length,1,'No nested button competes with the card action');
+   await act(async()=>card.props.onClick());
+   assert.deepEqual(workspace.readBrowserWorkspace(),{clubId:club.club_id,clubSlug:club.club_slug});
+   assert.equal(destination,'/admin','Card activation opens the chosen workspace');
+   assert.ok(tree.root.findAllByType('button').every(button=>button.props.disabled),'Another selection is blocked while navigating');
+   await act(async()=>tree.unmount());
+ }
+ cookie='';destination='';allowCookies=false;
+ await act(async()=>tree=create(React.createElement(Picker)));
+ await act(async()=>tree.root.findByProps({'aria-label':`Open ${beta.club_name}`}).props.onClick());
+ assert.equal(destination,'','A failed selection never navigates into the wrong club');
+ assert.match(tree.root.findByProps({role:'alert'}).children.join(''),/Allow cookies/);
+ assert.ok(tree.root.findAllByType('button').every(button=>!button.props.disabled),'A failed selection can be retried');
+ allowCookies=true;
+ await act(async()=>tree.root.findByProps({'aria-label':`Open ${beta.club_name}`}).props.onClick());
+ assert.equal(destination,'/admin');assert.equal(workspace.readBrowserWorkspace().clubId,'beta');
+ assert.equal(tree.root.findAllByProps({role:'alert'}).length,0);await act(async()=>tree.unmount());
  availableClubs=[alpha];destination='';
  await act(async()=>tree=create(React.createElement(Picker)));
  assert.equal(destination,'/admin','A single-club account opens automatically');assert.equal(workspace.readBrowserWorkspace().clubId,'alpha');await act(async()=>tree.unmount());
