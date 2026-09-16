@@ -1,3 +1,4 @@
+import { Display } from "@/components/ClubDisplay";
 import PublicTournamentSponsors from "@/components/PublicTournamentSponsors";
 import Link from "next/link";
 import PublicTournamentNav from "@/components/PublicTournamentNav";
@@ -120,7 +121,7 @@ export default async function TournamentRegistrationPage({
           commerce={data.commerce ?? null}
           overview={
             <>
-              <div
+              <Display field="registration_schedule"><div
                   style={{
                     display: "grid",
                     gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
@@ -143,9 +144,9 @@ export default async function TournamentRegistrationPage({
                     <br />
                     {selectableCount}
                   </article>
-                </div>
+                </div></Display>
 
-              {venueMapQuery ? (
+              <Display field="registration_description">{venueMapQuery ? (
                 <article style={{ ...cardStyle, marginBottom: "1rem" }}>
                   <h2 style={{ marginTop: 0 }}>Venue</h2>
                   {settings?.location_name ? <p><strong>{settings.location_name}</strong></p> : null}
@@ -171,7 +172,7 @@ export default async function TournamentRegistrationPage({
                     </div>
                   ) : null}
                 </article>
-              ) : null}
+              ) : null}</Display>
             </>
           }
         />

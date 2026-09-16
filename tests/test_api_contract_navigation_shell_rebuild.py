@@ -13,14 +13,14 @@ def test_public_header_uses_leagues_and_tournaments_hubs() -> None:
     header = read("components/PublicSiteHeader.tsx")
     layout = read("app/layout.tsx")
 
-    assert 'label: "Leagues"' in header
-    assert 'href: `${clubBase}/leagues`' in header
-    assert 'label: "Tournaments"' in header
-    assert 'href: `${clubBase}/tournaments`' in header
-    assert 'label: "Register"' not in header
-    assert 'label: "Roster"' not in header
-    assert 'label: "Partner Board"' not in header
-    assert 'pathname.startsWith(`${clubBase}/tournament-`)' in header
+    club_layout = read("components/ClubSiteHeader.tsx")
+    links = read("lib/clubSite.ts")
+    assert '"Leagues", "leagues"' in links
+    assert '"Tournaments", "tournaments"' in links
+    assert "CLUB_LINKS.map" in club_layout
+    assert 'href="/clubs"' in club_layout
+    assert 'label: "Find my club"' in header
+    assert 'label: "Create a club"' in header
     assert 'pathname.startsWith("/admin/")' in header
     assert "PublicSiteHeader" in layout
     assert "PublicFooterNav" in layout
@@ -115,14 +115,12 @@ def test_leagues_hub_lists_active_leagues_and_opens_league_home() -> None:
     assert "Explore this league" in league_home
     assert "Team Leagues" not in leagues
     assert "Club Leaderboards" not in leagues
-    assert 'title: "Leagues"' in club
-    assert 'href: `${base}/leagues`' in club
-    assert 'title: "Tournaments"' in club
-    assert 'href: `${base}/tournaments`' in club
-    assert '"Leagues", "/clubs/tres-palapas/leagues"' in site_map
-    assert '"Tournaments", "/clubs/tres-palapas/tournaments"' in site_map
-    assert '"/clubs/tres-palapas/leagues"' in sitemap
-    assert '"/clubs/tres-palapas/tournaments"' in sitemap
+    assert "ClubSiteContent" in club
+    assert "CLUB_LINKS.map" in read("components/ClubSiteContent.tsx")
+    assert 'href="/clubs"' in site_map
+    assert "getClubDirectory" in sitemap
+    assert 'visibility!=="listed"' in sitemap
+    assert "/clubs/tres-palapas" not in site_map + sitemap
 
 
 def test_selected_league_modules_are_dedicated_pages_without_legacy_switchers() -> None:

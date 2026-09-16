@@ -1,3 +1,4 @@
+import { Display } from "@/components/ClubDisplay";
 import PublicTournamentSponsors from "@/components/PublicTournamentSponsors";
 import Link from "next/link";
 import PublicTournamentNav from "@/components/PublicTournamentNav";
@@ -235,8 +236,8 @@ function DrawResults({ draw }: { draw: PublicTournamentDrawResult }) {
                     <th scope="row" style={{ textAlign: "left", padding: "0.45rem" }}>
                       {row.team_name}{row.retired ? " · Withdrawn" : ""}
                     </th>
-                    <td style={{ textAlign: "right", padding: "0.45rem" }}>{row.wins ?? 0}</td>
-                    <td style={{ textAlign: "right", padding: "0.45rem" }}>{row.losses ?? 0}</td>
+                    <Display field="records"><td style={{ textAlign: "right", padding: "0.45rem" }}>{row.wins ?? 0}</td></Display>
+                    <Display field="records"><td style={{ textAlign: "right", padding: "0.45rem" }}>{row.losses ?? 0}</td></Display>
                     <td style={{ textAlign: "right", padding: "0.45rem" }}>{row.points_for ?? 0}</td>
                     <td style={{ textAlign: "right", padding: "0.45rem" }}>{row.points_against ?? 0}</td>
                     <td style={{ textAlign: "right", padding: "0.45rem" }}>{row.differential ?? 0}</td>
@@ -349,11 +350,11 @@ function DrawResults({ draw }: { draw: PublicTournamentDrawResult }) {
               <article key={game.public_game_key} style={{ border: "1px solid #cbd5e1", borderRadius: "10px", padding: "0.75rem", background: "#f8fafc" }}>
                 <strong>{gameTitle(game)}</strong>
                 <p style={{ margin: "0.4rem 0" }}>{game.team_a_name} vs. {game.team_b_name}</p>
-                <p style={{ margin: 0, fontWeight: 800 }}>{scoreText(game)}</p>
+                <Display field="result_scores"><p style={{ margin: 0, fontWeight: 800 }}>{scoreText(game)}</p></Display>
                 {seriesGameScoresText(game) ? (
-                  <p style={{ margin: "0.25rem 0 0", color: "#475569", fontSize: "0.85rem" }}>
+                  <Display field="result_scores"><p style={{ margin: "0.25rem 0 0", color: "#475569", fontSize: "0.85rem" }}>
                     {seriesGameScoresText(game)}
-                  </p>
+                  </p></Display>
                 ) : null}
               </article>
             ))}
@@ -369,11 +370,11 @@ function DrawResults({ draw }: { draw: PublicTournamentDrawResult }) {
               <div key={game.public_game_key} style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap", borderBottom: "1px solid #e2e8f0", paddingBottom: "0.5rem" }}>
                 <span><strong>{gameTitle(game)}</strong> · {game.team_a_name} vs. {game.team_b_name}</span>
                 <span style={{ textAlign: "right" }}>
-                  <strong>{scoreText(game)}</strong>
+                  <Display field="result_scores"><strong>{scoreText(game)}</strong></Display>
                   {seriesGameScoresText(game) ? (
-                    <small style={{ display: "block", marginTop: "0.2rem", color: "#475569" }}>
+                    <Display field="result_scores"><small style={{ display: "block", marginTop: "0.2rem", color: "#475569" }}>
                       {seriesGameScoresText(game)}
-                    </small>
+                    </small></Display>
                   ) : null}
                 </span>
               </div>

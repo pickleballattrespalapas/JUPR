@@ -282,7 +282,7 @@ def test_public_navigation_does_not_advertise_protected_admin_tools() -> None:
     assert "<PublicFooterNav />" in layout
     assert '<Link href="/admin/login">Staff sign in</Link>' in footer
     assert 'href="/admin/tools"' not in footer
-    assert '["Staff sign-in", "/admin/login"]' in home
+    assert '<Link href="/admin/login">Staff sign in</Link>' in home
     assert '["Operations cockpit", "/admin"]' not in route_map
     assert '["Admin Tools", "/admin/tools"]' not in route_map
     assert '"/admin"' not in sitemap

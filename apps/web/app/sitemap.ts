@@ -1,52 +1,17 @@
 import type { MetadataRoute } from "next";
-
-const publicRoutes = [
-  "/",
-  "/site-map",
-  "/clubs/tres-palapas",
-  "/clubs/tres-palapas/leagues",
-  "/clubs/tres-palapas/tournaments",
-  "/clubs/tres-palapas/live",
-  "/clubs/tres-palapas/leaderboards",
-  "/clubs/tres-palapas/match-explorer",
-  "/clubs/tres-palapas/league-results",
-  "/clubs/tres-palapas/team-leagues",
-  "/clubs/tres-palapas/badge-codex",
-  "/clubs/tres-palapas/challenge-ladder",
-  "/clubs/tres-palapas/weekly-recap",
-  "/clubs/tres-palapas/tournament-registration",
-  "/clubs/tres-palapas/tournament-roster",
-  "/clubs/tres-palapas/tournament-partner-board",
-  "/clubs/tres-palapas/tournament-team-results",
-  "/clubs/tres-palapas/players",
-  "/clubs/tres-palapas/matches",
-  "/how-ratings-work",
-  "/faq",
-  "/privacy",
-  "/terms",
-  "/support",
-  "/contact",
-  "/data-corrections",
-  "/profile-privacy",
-  "/verified-updates",
-  "/email-preferences"
-];
-
-function baseUrl(): string {
-  return (
-    process.env.NEXT_PUBLIC_JUPR_WEB_BASE_URL ||
-    process.env.JUPR_WEB_BASE_URL ||
-    "https://pickleballclubsandwich.com"
-  ).replace(/\/$/, "");
-}
-
-export default function sitemap(): MetadataRoute.Sitemap {
-  const origin = baseUrl();
-  const now = new Date();
-  return publicRoutes.map((path) => ({
-    url: `${origin}${path}`,
-    lastModified: now,
-    changeFrequency: "weekly",
-    priority: path === "/" ? 1 : 0.7
-  }));
+import { getClubDirectory, getPublicSite } from "@/lib/clubSiteServer";
+import { CLUB_LINKS, clubPageHref } from "@/lib/clubSite";
+export const dynamic = "force-dynamic";
+export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
+  const origin=(process.env.NEXT_PUBLIC_JUPR_WEB_BASE_URL||process.env.JUPR_WEB_BASE_URL||"https://pickleballclubsandwich.com").replace(/\/$/,"");
+  const routes=["/","/clubs","/create-club","/site-map","/how-ratings-work","/faq","/privacy","/terms","/support"];
+  try {
+    let offset=0,total=1;
+    while(offset<total){const data=await getClubDirectory("",offset);if(!data)break;total=data.total;
+      for(const club of data.clubs){const site=await getPublicSite(club.slug);if(!site||site.document.visibility!=="listed")continue;
+        routes.push(`/clubs/${club.slug}`,...CLUB_LINKS.map(([,p])=>`/clubs/${club.slug}/${p}`),...site.document.pages.filter(p=>p.slug!=="home").map(p=>clubPageHref(club.slug,p.slug)));}
+      if(!data.clubs.length)break;offset+=data.limit;
+    }
+  } catch { return routes.filter(p=>!p.startsWith("/clubs/")).map(path=>({url:`${origin}${path}`})); }
+  return routes.map(path=>({url:`${origin}${path}`,changeFrequency:"weekly",priority:path==="/"?1:.7}));
 }

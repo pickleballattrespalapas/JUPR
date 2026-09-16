@@ -1,3 +1,4 @@
+import { Display } from "@/components/ClubDisplay";
 import Link from "next/link";
 import { getClubMatch, type PublicMatchPlayer, type PublicRatingSnapshotEntry } from "@/lib/api";
 import { publicMatchTypeLabel } from "@/lib/publicMatchLabels";
@@ -74,7 +75,7 @@ export default async function MatchDetailPage({ params }: MatchDetailPageProps) 
   const team2Won = match.winner === "team_2";
 
   return (
-    <section>
+    <Display field="rating_changes"><section>
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
         {data?.club?.name ?? clubSlug} · Match detail
       </p>
@@ -128,6 +129,6 @@ export default async function MatchDetailPage({ params }: MatchDetailPageProps) 
       ) : null}
 
       <p style={{ marginTop: "1rem" }}><Link href={`/clubs/${clubSlug}/matches`}>Back to matches</Link></p>
-    </section>
+    </section></Display>
   );
 }
