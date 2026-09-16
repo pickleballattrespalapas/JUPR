@@ -1,5 +1,5 @@
 import { Display } from "@/components/ClubDisplay";
-import Link from "next/link";
+import Link from "@/components/PublicClubLink";
 import { getClubPlayers } from "@/lib/api";
 import type { PublicPlayer } from "@/lib/api";
 

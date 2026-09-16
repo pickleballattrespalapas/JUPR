@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import Link from "@/components/PublicClubLink";
 import TournamentPartnerDetails, { type TournamentPartnerDetailsValue } from "@/components/tournaments/TournamentPartnerDetails";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {

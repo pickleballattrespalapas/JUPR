@@ -54,6 +54,7 @@ export type SiteDocument = {
   accent: string;
   visibility: "listed" | "unlisted";
   display: DisplaySettings;
+  page_visibility?: Partial<Record<ClubPageKey, PageVisibility>>;
   pages: SitePage[];
 };
 export type PublicSite = {
@@ -99,6 +100,61 @@ export const CLUB_LINKS = [
   ["Badges & trophies", "badge-codex"],
   ["Interclub leagues", "interclub"],
 ] as const;
+
+export type ClubPageKey = (typeof CLUB_LINKS)[number][1];
+export type PageVisibility = "public" | "private";
+export type PageNavigationSettings = Pick<SiteDocument, "page_visibility"> & {
+  pages: Pick<SitePage, "slug" | "in_navigation">[];
+};
+export const PAGE_SCOPE_LABELS: Record<ClubPageKey, string> = {
+  players: "Player directory and individual profiles",
+  leaderboards: "Club leaderboards",
+  leagues: "Leagues, team leagues, results and challenge ladder",
+  tournaments: "Tournament pages, registration, rosters and results",
+  matches: "Match history and individual match details",
+  play: "Play tools, generators and live sessions",
+  "match-explorer": "Match Explorer",
+  "weekly-recap": "Weekly recap",
+  "badge-codex": "Badges and trophies catalogue",
+  interclub: "This club’s interclub league list",
+};
+export function publicClubLinks(doc: PageNavigationSettings) {
+  return CLUB_LINKS.filter(([, key]) => doc.page_visibility?.[key] !== "private");
+}
+// All routes in a section inherit its discovery setting. A shared deep link
+// still opens normally, including a player profile or tournament registration.
+export function clubPageSection(href: string, slug: string): string | null {
+  let parts: string[];
+  try {
+    parts = new URL(href, "https://pcs.invalid").pathname
+      .split("/").filter(Boolean).map(decodeURIComponent);
+  } catch {
+    return null;
+  }
+  if (parts[0] !== "clubs" || parts[1] !== slug) return null;
+  const section = parts[2] || "home";
+  if (section === "pages") return `pages/${parts[3] || ""}`;
+  if (section === "league-results" || section === "challenge-ladder" || section.startsWith("team-league")) {
+    return "leagues";
+  }
+  if (section.startsWith("tournament-")) return "tournaments";
+  if (["live", "round-robin-generator", "ladder-generator", "team-match-generator", "play-generators"].includes(section)) {
+    return "play";
+  }
+  if (section === "verified-updates") return "players";
+  return section;
+}
+export function publicClubPage(doc: PageNavigationSettings, slug: string, href: string) {
+  const section = clubPageSection(href, slug);
+  if (section?.startsWith("pages/")) {
+    return doc.pages.find((p) => p.slug === section.slice(6))?.in_navigation !== false;
+  }
+  return doc.page_visibility?.[section as ClubPageKey] !== "private";
+}
+export function canLinkClubPage(doc: PageNavigationSettings, slug: string, href: string, currentPath = "") {
+  return publicClubPage(doc, slug, href) ||
+    (!!currentPath && clubPageSection(href, slug) === clubPageSection(currentPath, slug));
+}
 
 export function safeSiteUrl(url: string): string | undefined {
   if (!url || /[\u0000-\u0020\\]/.test(url)) return undefined;

@@ -55,7 +55,7 @@ const NewForm = load(base + "TournamentRegistrationForm.tsx", {
   "./EditLinkRequestForm": { default: () => null }, "./TournamentCommerceChooser": { default: () => null }
 }).default;
 const EditForm = load(base + "edit/EditTournamentRegistrationForm.tsx", {
-  ...shared, "next/link": { default: ({ children }) => children },
+  ...shared, "@/components/PublicClubLink": { default: ({ children }) => children },
   "@/lib/tournamentCommerceApi": {},
   "@/components/interaction": { InteractionDialog: ({ children, actions }) => React.createElement("div", { role: "dialog" }, children, actions) },
   "../TournamentCommerceChooser": { default: () => null }

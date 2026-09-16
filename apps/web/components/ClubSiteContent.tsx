@@ -2,7 +2,9 @@
 /* eslint-disable @next/next/no-img-element */
 import Link from "next/link";
 import {
-  CLUB_LINKS,
+  publicClubLinks,
+  canLinkClubPage,
+  clubPageHref,
   accentTextColor,
   safeImageUrl,
   safeSiteUrl,
@@ -19,6 +21,7 @@ export default function ClubSiteContent({
   pageSlug?: string;
 }) {
   const page = doc.pages.find((p) => p.slug === pageSlug);
+  const links = publicClubLinks(doc);
   if (!page) return <p>This page is unavailable.</p>;
   return (
     <div>
@@ -77,7 +80,7 @@ export default function ClubSiteContent({
                 {block.text && <figcaption>{block.text}</figcaption>}
               </figure>
             )}
-            {block.kind === "button" && safeSiteUrl(block.url) && (
+            {block.kind === "button" && safeSiteUrl(block.url) && canLinkClubPage(doc, slug, block.url, clubPageHref(slug, pageSlug)) && (
               <a className={styles.button} href={safeSiteUrl(block.url)}>
                 {block.text || "Learn more"}
               </a>
@@ -85,7 +88,7 @@ export default function ClubSiteContent({
             {block.kind === "divider" && <hr />}
             {block.kind === "links" && (
               <div className={styles.actions}>
-                {CLUB_LINKS.map(([label, path]) => (
+                {links.map(([label, path]) => (
                   <Link
                     className={styles.button}
                     key={path}
@@ -99,11 +102,11 @@ export default function ClubSiteContent({
           </section>
         ))}
       </div>
-      {pageSlug === "home" && (
+      {pageSlug === "home" && links.length > 0 && (
         <section>
           <h2>Around the club</h2>
           <div className={styles.grid}>
-            {CLUB_LINKS.map(([label, path]) => (
+            {links.map(([label, path]) => (
               <Link
                 key={path}
                 className={styles.cardLink}

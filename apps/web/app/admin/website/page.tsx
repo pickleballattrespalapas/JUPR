@@ -19,6 +19,7 @@ import ClubSiteContent from "@/components/ClubSiteContent";
 import { ClubDisplayProvider, Display } from "@/components/ClubDisplay";
 import styles from "@/components/ClubWebsite.module.css";
 import editor from "./website.module.css";
+import PageVisibilityEditor from "./PageVisibilityEditor";
 
 export default function WebsitePage() {
   const { clubId } = useAdminWorkspace();
@@ -320,6 +321,7 @@ function WebsiteEditor({
         {[
           ["identity", "Club introduction"],
           ["pages", "Pages & layout"],
+          ["visibility", "Page visibility"],
           ["display", "Stats & information"],
           ["preview", "Preview & publish"],
         ].map(([value, label]) => (
@@ -496,16 +498,14 @@ function WebsiteEditor({
                     />
                   </label>
                   <label>
-                    <span>
-                      <input
-                        type="checkbox"
-                        checked={page.in_navigation}
-                        onChange={(e) =>
-                          updatePage({ in_navigation: e.target.checked })
-                        }
-                      />{" "}
-                      Show in club navigation
-                    </span>
+                    Page visibility
+                    <select
+                      value={page.in_navigation ? "public" : "private"}
+                      onChange={(e) => updatePage({ in_navigation: e.target.value === "public" })}
+                    >
+                      <option value="public">Public</option>
+                      <option value="private">Private · link only</option>
+                    </select>
                   </label>
                   <div className={styles.actions}>
                     <button
@@ -748,6 +748,9 @@ function WebsiteEditor({
             </div>
           </div>
         )}
+        {tab === "visibility" && (
+          <PageVisibilityEditor site={site} document={doc} onChange={change} />
+        )}
         {tab === "display" && (
           <div className={`${styles.card} ${styles.form}`}>
             <h2>Choose what visitors see</h2>
@@ -794,6 +797,9 @@ function WebsiteEditor({
                   : "Publication will make the website accessible by link without listing it."}
               </p>
               <div className={styles.actions}>
+                <button type="button" className={styles.button} onClick={() => setTab("visibility")}>
+                  Edit page visibility
+                </button>
                 <label>
                   Preview page{" "}
                   <select

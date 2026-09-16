@@ -57,7 +57,7 @@ const NewForm = load(base + "TournamentRegistrationForm.tsx", {
   "./EditLinkRequestForm": { default: () => null }, "./TournamentCommerceChooser": { default: () => null }
 }).default;
 const EditForm = load(base + "edit/EditTournamentRegistrationForm.tsx", {
-  ...shared, "next/link": { default: ({ children }) => children }, "../TournamentCommerceChooser": { default: () => null }
+  ...shared, "@/components/PublicClubLink": { default: ({ children }) => children }, "../TournamentCommerceChooser": { default: () => null }
 }).default;
 const event = { id: "singles", registration_day_id: "day", event_family_label: "Singles", division_name: "Open", event_type: "SINGLES", skill_mode: "OPEN", selectable: true };
 const props = { clubSlug: "fixture", tournamentId: "t1", registrationSlug: "fixture-tournament", registrationOpen: true, days: [{ id: "day", label: "Day 1" }], events: [event] };

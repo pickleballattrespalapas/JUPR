@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import Link from "@/components/PublicClubLink";
 import { useParams } from "next/navigation";
 
 export default function LeaderboardsError({ reset }: { error: Error & { digest?: string }; reset: () => void }) {

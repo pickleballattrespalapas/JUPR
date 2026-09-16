@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import Link from "@/components/PublicClubLink";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";

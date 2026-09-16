@@ -13,13 +13,25 @@ This release implements the public design agreed in the questionnaire. It target
 
 ## Administrator workflow
 
-**Club website** is in the admin sidebar. The editor has introduction, pages/layout, stats/information, and preview tabs.
+**Club website** is in the admin sidebar. The editor has introduction, pages/layout, page visibility, stats/information, and preview tabs.
 
 1. Edit the public identity, visitor information, logo and accent color.
 2. Add custom pages, choose their addresses/navigation order, and add/reorder text, image, button, divider or club-link blocks. Choose widths (quarter to full row), alignment, background and spacing; blocks stack on phones.
 3. Choose player-table statistics, profile sections, leaderboard columns, and registration/results information. These are presentation settings, not new data-access permissions; required registration fields remain present.
 4. Save a draft. Preview desktop/mobile content and example display settings.
 5. Publish when ready. Text, layout, logo and visibility changes stay separate from the live snapshot until publication. Unpublish retains the draft. Restore published version discards draft changes explicitly.
+
+### Public pages and private shared links
+
+In **Page visibility**, choose **Public** or **Private · link only** for Players, Leaderboards, Leagues, Tournaments, Match history, Play, Match Explorer, Weekly recap, Badges & trophies, Interclub leagues, and each custom page. The draft preview also has an **Edit page visibility** shortcut beside the homepage preview.
+
+- Public sections appear in the club header, Around the club cards, and club-link blocks. Listed clubs include these pages in the sitemap.
+- Private sections stay available at the same URL for anyone with the link, without an account. Their links disappear from public navigation, and their pages receive noindex/nofollow. This is a discovery setting, not a confidential-data access control. Names and scores in other public results remain visible as text; links to private profiles or match details are removed.
+- A section’s choice also applies to related routes: private Players includes profiles; private Tournaments includes registration, rosters and results; private Leagues includes team leagues and challenge ladder; private Play includes generators and live sessions. After opening a private section by link, its internal navigation still works.
+- Each row shows the current live setting and a **Copy link** control. Links use the current site’s origin and point to the published page. New pages and unpublished websites must be published before sharing.
+- **Save draft → Preview draft → Publish website** applies the choices together. Changing a draft never changes the live navigation. **Stats & information** continues to control the information shown within the consistent page layouts.
+
+The added `page_visibility` document field requires no database migration. Older documents with no field retain all standard sections as public. Existing custom-page `in_navigation` settings map to Public/Private. Club-level listed/unlisted settings remain independent.
 
 PNG/JPEG/WebP images up to 220 KB may be uploaded directly; larger images use HTTPS URLs. No arbitrary HTML/scripts are executed. Limits: 20 pages, 40 blocks per page, 2 MB website document. Club operational settings remain separate from website drafts.
 

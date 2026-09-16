@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/PublicClubLink";
 import { publicLeagueHomeHref } from "@/components/PublicLeagueNav";
 import { getClubLeagueResults } from "@/lib/api";
 

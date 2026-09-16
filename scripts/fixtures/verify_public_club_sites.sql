@@ -8,7 +8,7 @@ begin
  if actor is null then raise exception 'Existing fixture administrator required'; end if;
  select md5(string_agg(to_jsonb(s)::text,',' order by club_id)) into protected from public.pcs_club_sites s where club_id<>'cabo-test-club';
  select to_jsonb(s) into original from public.pcs_club_sites s where club_id='cabo-test-club';
- doc:=original->'draft'||'{"name":"PRIVATE DRAFT CHECK","visibility":"listed"}'::jsonb;
+ doc:=original->'draft'||'{"name":"PRIVATE DRAFT CHECK","visibility":"listed","page_visibility":{"players":"private","tournaments":"private"}}'::jsonb;
  saved:=public.pcs_write_club_site(actor,actor_email,'cabo-test-club',(original->>'revision')::integer,'save',doc);
  if saved->'published' is distinct from original->'published' then raise exception 'Draft leaked to published site'; end if;
  begin
@@ -21,6 +21,7 @@ begin
  exception when insufficient_privilege then null; end;
  saved:=public.pcs_write_club_site(actor,actor_email,'cabo-test-club',(saved->>'revision')::integer,'publish',null);
  if saved->'published'->>'name'<>'PRIVATE DRAFT CHECK' then raise exception 'Publication not atomic'; end if;
+ if saved->'published'->'page_visibility' is distinct from doc->'page_visibility' then raise exception 'Page visibility not published atomically'; end if;
  if not exists(select 1 from public.pcs_public_club_directory where slug='cabo-test-club' and name='PRIVATE DRAFT CHECK') then raise exception 'Published listed site missing'; end if;
  doc:=doc||'{"visibility":"unlisted"}'::jsonb;
  saved:=public.pcs_write_club_site(actor,actor_email,'cabo-test-club',(saved->>'revision')::integer,'save',doc);
@@ -44,5 +45,5 @@ begin
  or has_function_privilege('authenticated','public.pcs_write_club_site(uuid,text,text,integer,text,jsonb)','execute')
  or has_function_privilege('anon','public.pcs_create_own_club(uuid,text,text,text,jsonb)','execute') then raise exception 'Direct public access granted'; end if;
 end $$;
-select 'passed: draft isolation, revision conflicts, foreign identity denial, listed/unlisted/unpublish, other-club isolation, verified signup, duplicate club protection, service-only grants' as checks;
+select 'passed: draft and page visibility isolation, revision conflicts, foreign identity denial, listed/unlisted/unpublish, other-club isolation, verified signup, duplicate club protection, service-only grants' as checks;
 rollback;

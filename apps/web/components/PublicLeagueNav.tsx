@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/PublicClubLink";
 import styles from "./PublicLeagueNav.module.css";
 
 export type PublicLeagueModule = "home" | "overall" | "weekly" | "player";

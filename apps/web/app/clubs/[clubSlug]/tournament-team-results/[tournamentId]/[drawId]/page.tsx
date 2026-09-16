@@ -1,5 +1,5 @@
 import PublicTournamentSponsors from "@/components/PublicTournamentSponsors";
-import Link from "next/link";
+import Link from "@/components/PublicClubLink";
 import { getPublicTeamTournamentResults } from "@/lib/tournamentTeamCompetitionApi";
 import styles from "@/components/tournaments/TournamentTeamCompetition.module.css";
 

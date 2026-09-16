@@ -31,7 +31,7 @@ const quotes = [];
 let submitResponse;
 let quoteResponse;
 const Form = load(base + "edit/EditTournamentRegistrationForm.tsx", {
-  "next/link": { default: Link },
+  "@/components/PublicClubLink": { default: Link },
   "@/components/interaction": { InteractionDialog: Dialog },
   "@/components/tournaments/TournamentPartnerDetails": { default: ({ value, onChange }) => React.createElement("input", { "aria-label": "Partner name", value: value.name, onChange: event => onChange({ name: event.target.value }) }) },
   "../TournamentCommerceChooser": { default: ({ onReviewChange, initialSelections }) => {
@@ -177,7 +177,7 @@ async function verifyRecovery() {
 
 async function verifyNavigation() {
   if (renderer) await act(async () => renderer.unmount());
-  const nav = load("components/PublicTournamentNav.tsx", { "next/link": { default: Link }, "./PublicTournamentNav.module.css": { default: {} } });
+  const nav = load("components/PublicTournamentNav.tsx", { "@/components/PublicClubLink": { default: Link }, "./PublicTournamentNav.module.css": { default: {} } });
   await act(async () => { renderer = create(React.createElement(nav.default, { ...props, active: "edit-registration" })); });
   const edit = renderer.root.findAllByType("a").find(node => text(node) === "Edit my registration");
   assert.equal(edit.props.href, "/clubs/fixture-club/tournament-registration/manage?tournament=fixture-tournament");

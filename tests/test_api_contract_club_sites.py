@@ -75,6 +75,31 @@ def test_save_publication_identity_and_conflict_handling(setup):
     s['error']='42501';assert c.post('/admin/clubs/alpha/site/publish',json={'revision':5}).status_code==403
     assert c.put('/admin/clubs/alpha/site',json={**payload,'actor_id':'forged'}).status_code==422
 
+def test_page_visibility_round_trip_uses_published_snapshot_and_keeps_shared_access(setup):
+    c, state, db = setup
+    draft = SiteDocument(name='New draft', page_visibility={'players':'private', 'matches':'private'}).model_dump()
+    assert c.put('/admin/clubs/alpha/site',json={'revision':5,'document':draft}).status_code == 200
+    _, args = state['calls'][-1]
+    assert args['p_document']['page_visibility'] == {'players':'private', 'matches':'private'}
+    row = state['tables']['pcs_club_sites'][0]
+    row['draft'] = draft
+    assert c.get('/public/clubs/alpha/site').json()['document']['page_visibility'] == {}
+    row['published'] = deepcopy(draft)
+    shared = c.get('/public/clubs/alpha/site')
+    assert shared.status_code == 200
+    assert shared.json()['document']['page_visibility']['players'] == 'private'
+    # A private section is unlisted, not authenticated. Keep direct public access.
+    assert routes.published_site(db, 'alpha')['club_id'] == 'alpha'
+    assert c.get('/public/clubs/beta/site').status_code == 404
+
+@pytest.mark.parametrize('visibility', [{'admin':'private'}, {'players':'secret'}, {'players':False}, None])
+def test_page_visibility_rejects_unknown_sections_or_states(setup,visibility):
+    c, state, _ = setup
+    document = SiteDocument(name='Alpha').model_dump()
+    document['page_visibility'] = visibility
+    assert c.put('/admin/clubs/alpha/site',json={'revision':5,'document':document}).status_code == 422
+    assert not state['calls']
+
 def test_creation_never_accepts_requested_owner_or_existing_club_access(setup):
     c,s,_=setup
     assert c.post('/clubs/create',json={'name':'Beta','slug':'new-beta','owner_id':'other'}).status_code==422

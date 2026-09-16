@@ -48,7 +48,7 @@ const pageData = { tournament: { id: "fixture", name: "Test tournament" }, regis
 const Page = load(registration + "page.tsx", {
   "@/components/PublicTournamentSponsors": { default: () => null },
   "@/components/PublicTournamentNav": { default: () => null },
-  "next/link": { default: ({ children }) => children },
+  "@/components/PublicClubLink": { default: ({ children }) => children },
   "@/lib/tournamentRegistrationApi": { getClubTournamentRegistration: async () => ({ data: pageData }) },
   "./TournamentRegistrationForm": { default: Form }
 }).default;

@@ -94,6 +94,11 @@ class SiteDocument(StrictModel):
     accent: str = Field(default="#1d4ed8", pattern=r"^#[0-9a-fA-F]{6}$")
     visibility: Literal["listed", "unlisted"] = "unlisted"
     display: DisplaySettings = Field(default_factory=DisplaySettings)
+    page_visibility: dict[
+        Literal["players", "leaderboards", "leagues", "tournaments", "matches", "play",
+                "match-explorer", "weekly-recap", "badge-codex", "interclub"],
+        Literal["public", "private"],
+    ] = Field(default_factory=dict)
     pages: list[SitePage] = Field(default_factory=lambda: [SitePage(slug="home", title="Home")], min_length=1, max_length=20)
 
     @field_validator("logo_url")
