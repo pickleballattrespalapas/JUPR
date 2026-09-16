@@ -1,3 +1,4 @@
+import { Display } from "@/components/ClubDisplay";
 import Link from "next/link";
 import { getClubLeagueResults, getClubPlayerProfile, type LeagueAwardProgressRow, type LeagueResultsResponse, type PublicMatch, type PublicRatingHistoryPoint, type PublicRelationship } from "@/lib/api";
 import { publicBadgeRarityLabel } from "@/lib/badgeApi";
@@ -207,21 +208,21 @@ export default async function PlayerProfilePage({ params, searchParams }: Player
 
       <nav aria-label="Player profile sections" style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
         {(["overview", "ratings", "positions", "trophies", "social", "matches", "badges"] as SectionKey[]).map((item) => (
-          <Link key={item} data-testid={`player-section-${item}`} aria-current={item === section ? "page" : undefined} href={pageHref({ clubSlug, playerId, section: item, league: selectedLeague, history: historyView })} style={{ ...pillStyle, background: item === section ? "#dbeafe" : "white", fontWeight: item === section ? 800 : 600 }}>
+          <Display key={item} field={item === "overview" ? "result_summary" : item === "badges" ? "badges" : `profile_${item}`}><Link data-testid={`player-section-${item}`} aria-current={item === section ? "page" : undefined} href={pageHref({ clubSlug, playerId, section: item, league: selectedLeague, history: historyView })} style={{ ...pillStyle, background: item === section ? "#dbeafe" : "white", fontWeight: item === section ? 800 : 600 }}>
             {item === "overview" ? "Overview" : item === "positions" ? "League positions" : item === "trophies" ? "Trophy case" : item === "badges" ? "Badge cabinet" : item[0].toUpperCase() + item.slice(1)}
-          </Link>
+          </Link></Display>
         ))}
         <Link href={`/clubs/${clubSlug}/verified-updates?player_id=${encodeURIComponent(String(player.id))}`} style={{ ...pillStyle, background: "white", fontWeight: 700 }}>Request verified updates</Link>
       </nav>
 
       <div data-testid="player-summary-cards" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(165px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
-        <article style={cardStyle}><strong>Doubles / overall</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{ratingLabel(player.rating_jupr)}</div></article>
-        <article style={cardStyle}><strong>Singles</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{ratingLabel(player.singles_rating_jupr)}</div></article>
-        <article style={cardStyle}><strong>Doubles record</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{player.wins ?? 0}-{player.losses ?? 0}</div><small>{pctLabel(player.wins, player.losses)}</small></article>
-        <article style={cardStyle}><strong>Singles record</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{player.singles_wins ?? 0}-{player.singles_losses ?? 0}</div><small>{pctLabel(player.singles_wins, player.singles_losses)}</small></article>
-        <article style={cardStyle}><strong>Major honors</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{awards.trophy_count ?? awards.trophies.length}</div><small>Trophy case</small></article>
-        <article style={cardStyle}><strong>Badges earned</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{awards.badge_award_count}</div><small>{awards.prestige_total} prestige</small></article>
-        <article style={cardStyle}><strong>Last played</strong><div style={{ fontSize: "1.35rem", fontWeight: 800 }}>{formatDate(player.last_game_at)}</div><small>{player.is_active === false ? "Inactive" : "Active"}</small></article>
+        <Display field="ratings"><article style={cardStyle}><strong>Doubles / overall</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{ratingLabel(player.rating_jupr)}</div></article></Display>
+        <Display field="singles"><article style={cardStyle}><strong>Singles</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{ratingLabel(player.singles_rating_jupr)}</div></article></Display>
+        <Display field="records"><article style={cardStyle}><strong>Doubles record</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{player.wins ?? 0}-{player.losses ?? 0}</div><small>{pctLabel(player.wins, player.losses)}</small></article></Display>
+        <Display field="singles"><article style={cardStyle}><strong>Singles record</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{player.singles_wins ?? 0}-{player.singles_losses ?? 0}</div><small>{pctLabel(player.singles_wins, player.singles_losses)}</small></article></Display>
+        <Display field="profile_trophies"><article style={cardStyle}><strong>Major honors</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{awards.trophy_count ?? awards.trophies.length}</div><small>Trophy case</small></article></Display>
+        <Display field="badges"><article style={cardStyle}><strong>Badges earned</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{awards.badge_award_count}</div><small>{awards.prestige_total} prestige</small></article></Display>
+        <Display field="last_played"><article style={cardStyle}><strong>Last played</strong><div style={{ fontSize: "1.35rem", fontWeight: 800 }}>{formatDate(player.last_game_at)}</div><small>{player.is_active === false ? "Inactive" : "Active"}</small></article></Display>
       </div>
 
       {sectionVisible(section, "overview") ? (
@@ -240,7 +241,7 @@ export default async function PlayerProfilePage({ params, searchParams }: Player
         </section>
       ) : null}
 
-      {sectionVisible(section, "positions") ? (
+<Display field="profile_positions">      {sectionVisible(section, "positions") ? (
         <section id="positions" data-testid="player-league-positions" style={{ display: "grid", gap: "1rem", marginBottom: "1rem" }}>
           <article style={cardStyle}>
             <h2 style={{ marginTop: 0 }}>League positions</h2>
@@ -270,9 +271,9 @@ export default async function PlayerProfilePage({ params, searchParams }: Player
             );
           })}
         </section>
-      ) : null}
+      ) : null}</Display>
 
-      {sectionVisible(section, "ratings") ? (
+<Display field="profile_ratings">      {sectionVisible(section, "ratings") ? (
         <section id="ratings" data-testid="player-ratings" style={{ display: "grid", gap: "1rem", marginBottom: "1rem" }}>
           <article style={cardStyle}>
             <h2 style={{ marginTop: 0 }}>Rating history</h2>
@@ -303,9 +304,9 @@ export default async function PlayerProfilePage({ params, searchParams }: Player
             )}
           </article>
         </section>
-      ) : null}
+      ) : null}</Display>
 
-      {sectionVisible(section, "trophies") ? (
+<Display field="profile_trophies">      {sectionVisible(section, "trophies") ? (
         <section id="trophies" data-testid="player-trophies" style={{ display: "grid", gap: "1rem", marginBottom: "1rem" }}>
           <article style={cardStyle}>
             <h2 style={{ marginTop: 0 }}>Trophy case</h2>
@@ -313,9 +314,9 @@ export default async function PlayerProfilePage({ params, searchParams }: Player
             {awards.trophies.length === 0 ? <p style={{ color: "#475569" }}>No end-of-league awards or tournament podium honors yet.</p> : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.75rem" }}>{awards.trophies.map((trophy, index) => <div key={`${trophy.badge_id}-${trophy.earned_at ?? index}`} data-testid="player-trophy" style={{ border: "1px solid #f59e0b", borderRadius: "12px", padding: "0.85rem", background: "#fffbeb" }}><strong>🏆 {trophy.title}</strong><p style={{ margin: "0.35rem 0" }}>{trophy.placement ? `Place #${trophy.placement}` : "Major award"}{trophy.context_label ? ` · ${trophy.context_label}` : ""}</p><small>{formatDate(trophy.earned_at)}</small></div>)}</div>}
           </article>
         </section>
-      ) : null}
+      ) : null}</Display>
 
-      {sectionVisible(section, "badges") ? (
+<Display field="badges">      {sectionVisible(section, "badges") ? (
         <section id="badges" data-testid="player-badges" style={{ display: "grid", gap: "1rem", marginBottom: "1rem" }}>
           <article style={cardStyle}>
             <h2 style={{ marginTop: 0 }}>Badge cabinet</h2>
@@ -323,9 +324,9 @@ export default async function PlayerProfilePage({ params, searchParams }: Player
             {awards.badges.length === 0 ? <p style={{ color: "#475569" }}>No badges earned yet.</p> : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>{awards.badges.map((badge) => <article key={badge.badge_id} data-testid="player-badge" style={{ border: "1px solid #cbd5e1", borderRadius: "12px", padding: "0.85rem" }}><strong>🏅 {badge.name}{badge.count > 1 ? ` ×${badge.count}` : ""}</strong><p style={{ margin: "0.35rem 0", color: "#475569" }}>{badge.category} · {badge.prestige} prestige{badge.rarity ? ` · ${publicBadgeRarityLabel(badge.rarity)}` : ""}</p><p style={{ margin: "0.35rem 0" }}><strong>How to earn it:</strong> {badge.requirements ?? "Requirements are unavailable."}</p><small>Last earned {formatDate(badge.last_earned_at)}</small>{badge.achievements?.length ? <details style={{ marginTop: ".5rem" }}><summary>Earned achievements</summary><ul>{badge.achievements.map(achievement => <li key={achievement.id}>{achievement.detail} <small>· {formatDate(achievement.earned_at)}</small></li>)}</ul></details> : null}</article>)}</div>}
           </article>
         </section>
-      ) : null}
+      ) : null}</Display>
 
-      {sectionVisible(section, "social") ? (
+<Display field="profile_social">      {sectionVisible(section, "social") ? (
         <section id="social" data-testid="player-social" style={{ ...cardStyle, marginBottom: "1rem" }}>
           <h2 style={{ marginTop: 0 }}>Club Social results</h2>
           {social.available ? <p><strong>{social.identity.linked ? "Club Social activity is connected to this profile." : "No Club Social activity is connected to this profile."}</strong></p> : null}
@@ -350,9 +351,9 @@ export default async function PlayerProfilePage({ params, searchParams }: Player
             </div>
           </div>
         </section>
-      ) : null}
+      ) : null}</Display>
 
-      {sectionVisible(section, "matches") ? (
+<Display field="profile_matches">      {sectionVisible(section, "matches") ? (
         <section id="matches" data-testid="player-match-history" style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>{historyView === "all" ? "Full match history" : "Recent matches"}</h2>
           <p style={{ color: "#475569" }}>Each match is labeled Singles or Doubles. Rating changes appear when they&apos;re available.</p>
@@ -366,7 +367,7 @@ export default async function PlayerProfilePage({ params, searchParams }: Player
           </tbody></table></div>}
           {data.history.has_more && historyView === "all" ? <p style={{ color: "#92400e" }}>Showing the newest {data.history.history_limit} matches. Search club match history to find older matches.</p> : null}
         </section>
-      ) : null}
+      ) : null}</Display>
 
       <p style={{ marginTop: "1rem" }}><Link href={`/clubs/${clubSlug}/players`}>Back to active players</Link><span style={{ color: "#64748b" }}> · </span><Link href={`/clubs/${clubSlug}/matches?q=${encodeURIComponent(player.name)}`}>Search this player in match history</Link><span style={{ color: "#64748b" }}> · </span><Link href={`/clubs/${clubSlug}/match-explorer?me=${encodeURIComponent(String(player.id))}`}>Use in Match Explorer</Link></p>
     </section>

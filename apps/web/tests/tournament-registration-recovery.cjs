@@ -16,6 +16,8 @@ function load(relative, overrides = {}) {
     if (name === "@/components/tournaments/usePartnerInvitationRegistration") return { usePartnerInvitationRegistration: () => ({ token: "", invitation: null, error: "" }), PartnerInvitationRegistrationNotice: () => null };
     if (name === "@/lib/tournamentPartnerInvitations") return { invitationReturnPath: () => "" };
     if (name === "@/lib/tournamentRegistrationProfile") return load("lib/tournamentRegistrationProfile.ts");
+    if (name === "@/components/ClubDisplay") return load("components/ClubDisplay.tsx");
+    if (name === "@/lib/clubSite") return load("lib/clubSite.ts");
     const override = overrides[name];
     return override ? ("default" in override ? { __esModule: true, ...override } : override) : originalRequire(name);
   };

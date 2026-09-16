@@ -168,7 +168,7 @@ def test_public_leaderboards_compat_alias_matches_primary_contract(client):
     assert compat.json() == primary.json()
 
 
-def test_get_club_falls_back_to_existing_underscore_club_id(monkeypatch):
+def test_club_lookup_does_not_bypass_publication_when_schema_unavailable(monkeypatch):
     class FakeResponse:
         def __init__(self, data):
             self.data = data
@@ -202,12 +202,11 @@ def test_get_club_falls_back_to_existing_underscore_club_id(monkeypatch):
     monkeypatch.setattr("services.api.main.get_supabase_client", lambda: FakeSupabase())
     response = TestClient(app).get("/clubs/tres-palapas")
 
-    assert response.status_code == 200
-    assert response.json()["id"] == "tres_palapas"
-    assert response.json()["slug"] == "tres-palapas"
+    assert response.status_code == 503
+    assert "tres_palapas" not in response.text
 
 
-def test_get_known_public_club_survives_supabase_lookup_failure(monkeypatch):
+def test_known_club_fails_closed_when_publication_cannot_be_checked(monkeypatch):
     class BrokenSupabase:
         def table(self, _table_name):
             raise RuntimeError("Supabase unavailable")
@@ -216,8 +215,5 @@ def test_get_known_public_club_survives_supabase_lookup_failure(monkeypatch):
 
     response = TestClient(app).get("/clubs/tres-palapas")
 
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["id"] == "tres_palapas"
-    assert payload["slug"] == "tres-palapas"
-    assert payload["name"] == "Tres Palapas"
+    assert response.status_code == 503
+    assert "Tres Palapas" not in response.text

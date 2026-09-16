@@ -1,87 +1,27 @@
 import Link from "next/link";
-
-const cardStyle = {
-  border: "1px solid #e2e8f0",
-  borderRadius: "14px",
-  padding: "1rem",
-  background: "white"
-};
-
-const primaryLinks = [
-  ["Open Tres Palapas", "/clubs/tres-palapas"],
-  ["View leaderboards", "/clubs/tres-palapas/leaderboards"],
-  ["Explore matches", "/clubs/tres-palapas/matches"],
-  ["Open site map", "/site-map"]
-];
-
-const featureGroups = [
-  {
-    title: "Ratings and results",
-    description: "Find leaderboards, results, player profiles, match history, badges, and matchup tools in one place.",
-    links: [
-      ["Leaderboards", "/clubs/tres-palapas/leaderboards"],
-      ["League Results", "/clubs/tres-palapas/league-results"],
-      ["Players", "/clubs/tres-palapas/players"],
-      ["Matches", "/clubs/tres-palapas/matches"],
-      ["Match Explorer", "/clubs/tres-palapas/match-explorer"],
-      ["Badges & Trophies", "/clubs/tres-palapas/badge-codex"]
-    ]
-  },
-  {
-    title: "Events and tournaments",
-    description: "Register for a tournament, browse the roster, find a partner, follow live events, read weekly recaps, or join the challenge ladder.",
-    links: [
-      ["Register", "/clubs/tres-palapas/tournament-registration"],
-      ["Roster", "/clubs/tres-palapas/tournament-roster"],
-      ["Players Needing Partners", "/clubs/tres-palapas/tournament-partner-board"],
-      ["Play tools", "/clubs/tres-palapas/play"],
-      ["Weekly Recap", "/clubs/tres-palapas/weekly-recap"],
-      ["Challenge Ladder", "/clubs/tres-palapas/challenge-ladder"]
-    ]
-  },
-  {
-    title: "Help and support",
-    description: "Find answers, request a correction, or contact support. Club staff can sign in separately.",
-    links: [
-      ["Ratings explainer", "/how-ratings-work"],
-      ["FAQ", "/faq"],
-      ["Support", "/support"],
-      ["Data corrections", "/data-corrections"],
-      ["Staff sign-in", "/admin/login"],
-      ["Site map", "/site-map"]
-    ]
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+import { getPublicSite } from "@/lib/clubSiteServer";
+import { LAST_CLUB_COOKIE, validClubSlug } from "@/lib/clubSite";
+import styles from "@/components/ClubWebsite.module.css";
+export const dynamic = "force-dynamic";
+export default async function Home({ searchParams }: { searchParams?: { welcome?: string } }) {
+  const slug = cookies().get(LAST_CLUB_COOKIE)?.value || "";
+  let remembered = false;
+  if (!searchParams?.welcome && validClubSlug(slug)) {
+    try { remembered = Boolean(await getPublicSite(slug)); } catch { /* Homepage remains available during an API outage. */ }
   }
-];
-
-export default function HomePage() {
-  return (
-    <section>
-      <div style={{ maxWidth: "820px", marginBottom: "1.5rem" }}>
-        <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
-          Live ratings for pickleball clubs
-        </p>
-        <h1 style={{ margin: "0 0 0.75rem", fontSize: "clamp(2rem, 5vw, 3.5rem)", lineHeight: 1.05 }}>
-          Pickleball Club Sandwich is the new home for club leagues, events, and ratings.
-        </h1>
-        <p style={{ marginTop: 0, fontSize: "1.1rem", color: "#334155" }}>
-          Follow scores and ratings, register for tournaments, find partners, and catch up on club news—all in one place.
-        </p>
-        <p style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-          {primaryLinks.map(([label, href]) => <Link key={href} href={href} style={{ fontWeight: 800 }}>{label}</Link>)}
-        </p>
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "1rem", marginBottom: "1.5rem" }}>
-        {featureGroups.map((group) => (
-          <article key={group.title} style={cardStyle}>
-            <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>{group.title}</h2>
-            <p style={{ color: "#475569" }}>{group.description}</p>
-            <div style={{ display: "flex", gap: "0.55rem", flexWrap: "wrap" }}>
-              {group.links.map(([label, href]) => <Link key={href} href={href}>{label}</Link>)}
-            </div>
-          </article>
-        ))}
-      </div>
-    </section>
-  );
+  if (remembered) redirect(`/clubs/${slug}`);
+  return <section className={styles.page}>
+    <div className={styles.hero}><p className={styles.eyebrow}>Pickleball Club Sandwich</p><h1>Your club. Your players.<br/>More time on court.</h1>
+      <p>A home for your pickleball community. Find club information, follow player ratings and match results, and keep up with leagues and tournaments.</p>
+      <div className={styles.actions}><Link className={styles.primary} href="/clubs">Find my club →</Link><Link className={styles.button} href="/create-club">Create a club</Link></div>
+    </div>
+    <div className={styles.grid}>
+      <article className={styles.card}><h2>A home for every club</h2><p>Discover your club’s people, programs and visitor information. Everyone can browse; players don’t need an account.</p></article>
+      <article className={styles.card}><h2>Follow the action</h2><p>Explore ratings, player profiles, match history and competitions, all in your club’s own space.</p></article>
+      <article className={styles.card}><h2>Connect through competition</h2><p>Follow interclub leagues from participating clubs, with one view of the whole league’s schedule, results and standings.</p></article>
+    </div>
+    <section className={styles.card}><h2>Run a club?</h2><p>Set up your club website, manage players and events, and choose when to publish. Customize your pages and the information your community sees.</p><div className={styles.actions}><Link className={styles.primary} href="/create-club">Get started</Link><Link href="/admin/login">Staff sign in</Link></div></section>
+  </section>;
 }

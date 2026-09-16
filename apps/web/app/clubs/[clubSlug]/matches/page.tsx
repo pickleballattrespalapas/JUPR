@@ -1,3 +1,4 @@
+import { Display } from "@/components/ClubDisplay";
 import Link from "next/link";
 import { getClubMatches, type PublicMatch } from "@/lib/api";
 import { publicMatchTypeLabel } from "@/lib/publicMatchLabels";
@@ -114,12 +115,12 @@ export default async function MatchesPage({ params, searchParams }: MatchesPageP
 
       {matches.length > 0 ? (
         <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
+<Display field="result_summary">          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
             <article style={cardStyle}><strong>Recorded matches</strong><br />{matches.length}</article>
             <article style={cardStyle}><strong>Scored matches</strong><br />{scoredCount}</article>
             <article style={cardStyle}><strong>Leagues</strong><br />{leagues.length}</article>
             <article style={cardStyle}><strong>Latest match</strong><br />{latestMatch ? formatMatchDate(latestMatch.date) : "—"}</article>
-          </div>
+          </div></Display>
 
           <div style={{ display: "grid", gap: "0.75rem", marginBottom: "1rem" }}>
             {q ? <p style={{ margin: 0, color: "#475569" }}>Search filter: <strong>{q}</strong> · <Link href={pageHref({ clubSlug, league: selectedLeague, sort: selectedSort })}>clear search</Link></p> : null}
@@ -150,7 +151,7 @@ export default async function MatchesPage({ params, searchParams }: MatchesPageP
                 <tr>
                   <th style={thStyle}>Date</th>
                   <th style={thStyle}>Team 1</th>
-                  <th style={thStyle}>Score</th>
+                  <Display field="result_scores"><th style={thStyle}>Score</th></Display>
                   <th style={thStyle}>Team 2</th>
                   <th style={thStyle}>League</th>
                   <th style={thStyle}>Type</th>
@@ -165,7 +166,7 @@ export default async function MatchesPage({ params, searchParams }: MatchesPageP
                     <tr key={`${match.id ?? index}`} id={match.id ? matchAnchor(match.id) : undefined} style={{ background: selected ? "#eff6ff" : undefined }}>
                       <td style={tdStyle}>{match.id ? <Link href={detailHref}>{formatMatchDate(match.date)}</Link> : formatMatchDate(match.date)}</td>
                       <td style={tdStyle}>{teamLabel(clubSlug, match.team_1)}</td>
-                      <td style={tdStyle}>{match.id ? <Link href={detailHref}>{scoreLabel(match)}</Link> : scoreLabel(match)}</td>
+                      <Display field="result_scores"><td style={tdStyle}>{match.id ? <Link href={detailHref}>{scoreLabel(match)}</Link> : scoreLabel(match)}</td></Display>
                       <td style={tdStyle}>{teamLabel(clubSlug, match.team_2)}</td>
                       <td style={tdStyle}>{match.league ?? "—"}</td>
                       <td style={tdStyle}>{publicMatchTypeLabel(match.match_type)}</td>

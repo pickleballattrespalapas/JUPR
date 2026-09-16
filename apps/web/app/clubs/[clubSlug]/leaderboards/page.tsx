@@ -1,3 +1,4 @@
+import { Display } from "@/components/ClubDisplay";
 import Link from "next/link";
 import { getClubLeaderboard } from "@/lib/api";
 import type { LeaderboardBadge, LeaderboardEntry } from "@/lib/api";
@@ -398,7 +399,7 @@ export default async function ClubLeaderboardPage({ params, searchParams }: Lead
             <caption style={{ position: "absolute", width: "1px", height: "1px", padding: 0, margin: "-1px", overflow: "hidden", clip: "rect(0, 0, 0, 0)", whiteSpace: "nowrap", border: 0 }}>
               {selectedLeague === "OVERALL" ? "Overall" : selectedLeague} leaderboard standings
             </caption>
-            <thead><tr><th style={thStyle}>Rank</th><th style={thStyle}>Player</th><th style={thStyle}>Rating</th><th style={thStyle}>Gain</th><th style={thStyle}>Gap</th><th style={thStyle}>Games</th><th style={thStyle}>W-L</th><th style={thStyle}>Win %</th><th style={thStyle}>Qualification</th><th style={thStyle}>Badges</th><th style={thStyle}>Status</th></tr></thead>
+            <thead><tr><th style={thStyle}>Rank</th><th style={thStyle}>Player</th><Display field="ratings"><th style={thStyle}>Rating</th></Display><Display field="rating_changes"><th style={thStyle}>Gain</th></Display><Display field="rating_changes"><th style={thStyle}>Gap</th></Display><Display field="match_counts"><th style={thStyle}>Games</th></Display><Display field="records"><th style={thStyle}>W-L</th></Display><Display field="win_percentage"><th style={thStyle}>Win %</th></Display><Display field="qualification"><th style={thStyle}>Qualification</th></Display><Display field="badges"><th style={thStyle}>Badges</th></Display><Display field="player_status"><th style={thStyle}>Status</th></Display></tr></thead>
             <tbody>
               {entries.map((entry, index) => {
                 const snapshotPlayerId = data.snapshot?.player_id;
@@ -412,15 +413,15 @@ export default async function ClubLeaderboardPage({ params, searchParams }: Lead
                       <strong>{entry.player_id != null ? <Link href={playerHref(clubSlug, entry.player_id)}>{entry.player_name}</Link> : entry.player_name}</strong>
                       {snapshotLink ? <><br /><Link href={snapshotLink} style={{ fontSize: "0.8rem" }}>view summary</Link></> : null}
                     </td>
-                    <td style={tdStyle}>{ratingLabel(entry.rating_jupr)}</td>
-                    <td style={{ ...tdStyle, color: Number(entry.rating_gain_jupr ?? 0) < 0 ? "#b91c1c" : "#166534" }}>{signedRatingLabel(entry.rating_gain_jupr)}</td>
-                    <td style={tdStyle}>{entry.gap_jupr == null ? "Leader" : ratingLabel(entry.gap_jupr)}</td>
-                    <td style={tdStyle}>{matchesPlayed(entry)}</td>
-                    <td style={tdStyle}>{entry.wins ?? 0}-{entry.losses ?? 0}</td>
-                    <td style={tdStyle}>{percentLabel(entry.win_pct)}</td>
-                    <td style={tdStyle}>{qualificationLabel(entry, overall)}</td>
-                    <td style={tdStyle}><BadgeStrip clubSlug={clubSlug} entry={entry} /></td>
-                    <td style={tdStyle}>{entry.is_active === false ? "Inactive" : "Active"}</td>
+                    <Display field="ratings"><td style={tdStyle}>{ratingLabel(entry.rating_jupr)}</td></Display>
+                    <Display field="rating_changes"><td style={{ ...tdStyle, color: Number(entry.rating_gain_jupr ?? 0) < 0 ? "#b91c1c" : "#166534" }}>{signedRatingLabel(entry.rating_gain_jupr)}</td></Display>
+                    <Display field="rating_changes"><td style={tdStyle}>{entry.gap_jupr == null ? "Leader" : ratingLabel(entry.gap_jupr)}</td></Display>
+                    <Display field="match_counts"><td style={tdStyle}>{matchesPlayed(entry)}</td></Display>
+                    <Display field="records"><td style={tdStyle}>{entry.wins ?? 0}-{entry.losses ?? 0}</td></Display>
+                    <Display field="win_percentage"><td style={tdStyle}>{percentLabel(entry.win_pct)}</td></Display>
+                    <Display field="qualification"><td style={tdStyle}>{qualificationLabel(entry, overall)}</td></Display>
+                    <Display field="badges"><td style={tdStyle}><BadgeStrip clubSlug={clubSlug} entry={entry} /></td></Display>
+                    <Display field="player_status"><td style={tdStyle}>{entry.is_active === false ? "Inactive" : "Active"}</td></Display>
                   </tr>
                 );
               })}

@@ -997,47 +997,34 @@ def get_club(club_slug: str) -> dict[str, Any]:
     slug = str(club_slug).strip()
     if not slug:
         raise HTTPException(status_code=400, detail="club_slug is required")
-    known_fallback = _known_public_club_fallback(slug)
     try:
-        supabase = get_supabase_client()
-    except Exception as exc:
-        if known_fallback:
-            return known_fallback
-        LOGGER.exception("Club lookup is unavailable")
-        raise HTTPException(status_code=503, detail="Club information is temporarily unavailable.") from exc
-    club_fields = "id,slug,name,tagline,support_email,public_base_url,logo_url,primary_color,is_active"
-    club_minimal_fields = "id,slug,name"
-    rows: list[dict[str, Any]] = []
-    try:
-        rows = supabase.table("clubs").select(club_fields).eq("slug", slug).limit(1).execute().data or []
+        db = get_supabase_client()
+        fields = "id,slug,name,tagline,support_email,public_base_url,logo_url,primary_color,is_active,public_site_status"
+        rows = db.table("clubs").select(fields).eq("slug", slug).limit(1).execute().data or []
         if not rows:
             for club_id in _club_lookup_candidates(slug):
-                rows = supabase.table("clubs").select(club_fields).eq("id", club_id).limit(1).execute().data or []
-                if rows:
-                    break
-    except Exception:
+                rows = db.table("clubs").select(fields).eq("id", club_id).limit(1).execute().data or []
+                if rows: break
+    except Exception as exc:
+        raise HTTPException(503, "Club information is temporarily unavailable.") from exc
+    if not rows:
+        raise HTTPException(404, "club not found")
+    row = rows[0]
+    if row.get("public_site_status") == "draft" or row.get("is_active") is False:
+        raise HTTPException(404, "Club website is not published.")
+    # Once migrated, public identity is the published snapshot, never an edit
+    # to operational club settings. Database outages fail closed.
+    if row.get("public_site_status") == "published":
         try:
-            rows = supabase.table("clubs").select(club_minimal_fields).eq("slug", slug).limit(1).execute().data or []
-            if not rows:
-                for club_id in _club_lookup_candidates(slug):
-                    rows = supabase.table("clubs").select(club_minimal_fields).eq("id", club_id).limit(1).execute().data or []
-                    if rows:
-                        break
-        except Exception:
-            rows = []
-    if rows:
-        row = rows[0] or {}
-        return {"id": row.get("id"), "slug": row.get("slug") or slug, "name": row.get("name") or _display_name_from_slug(slug), "tagline": row.get("tagline"), "support_email": row.get("support_email"), "public_base_url": row.get("public_base_url"), "logo_url": row.get("logo_url"), "primary_color": row.get("primary_color"), "is_active": row.get("is_active", True)}
-    for club_id in _club_lookup_candidates(slug):
-        try:
-            fallback = supabase.table("players").select("club_id").eq("club_id", club_id).limit(1).execute().data or []
-        except Exception:
-            fallback = []
-        if fallback:
-            return {"id": str(fallback[0].get("club_id") or club_id), "slug": slug, "name": _display_name_from_slug(slug), "tagline": None, "support_email": None, "public_base_url": None, "logo_url": None, "primary_color": None, "is_active": True}
-    if known_fallback:
-        return known_fallback
-    raise HTTPException(status_code=404, detail="club not found")
+            sites = db.table("pcs_club_sites").select("published").eq("club_id", row["id"]).limit(1).execute().data or []
+        except Exception as exc:
+            raise HTTPException(503, "Club information is temporarily unavailable.") from exc
+        if not sites or not sites[0].get("published"):
+            raise HTTPException(404, "Club website is not published.")
+        doc = sites[0]["published"]
+        row = {**row, "name": doc["name"], "tagline": doc.get("description", ""),
+               "logo_url": doc.get("logo_url"), "primary_color": doc.get("accent")}
+    return {key: row.get(key) for key in ("id", "slug", "name", "tagline", "public_base_url", "logo_url", "primary_color", "is_active")}
 
 
 install_public_match_explorer_routes(app, get_club=get_club, get_supabase_client=get_supabase_client, public_club_payload=_public_club_payload)
@@ -1452,3 +1439,9 @@ from services.api.club_join_invitation_routes import install_club_join_invitatio
 install_club_join_invitation_routes(app, get_supabase_client=get_supabase_client)
 from services.api.interclub_registration_routes import install_interclub_registration_routes
 install_interclub_registration_routes(app, get_supabase_client=get_supabase_client)
+
+from services.api.club_site_routes import install_club_site_routes
+install_club_site_routes(app, get_supabase_client=get_supabase_client)
+
+from services.api.interclub_public_routes import install_interclub_public_routes
+install_interclub_public_routes(app, get_supabase_client=get_supabase_client)

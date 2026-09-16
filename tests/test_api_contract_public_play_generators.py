@@ -40,7 +40,7 @@ def test_public_modules_mirror_generator_functionality_without_official_publish(
     runner = read("apps/web/app/clubs/[clubSlug]/play-generators/PublicGeneratorRoundRunner.tsx")
     header = read("apps/web/components/PublicSiteHeader.tsx")
     live = read("apps/web/app/clubs/[clubSlug]/live/page.tsx")
-    assert 'label: "Play"' in header
+    assert '"Play", "play"' in read("apps/web/lib/clubSite.ts")
     assert "Round-Robin Generator" in read("apps/web/app/clubs/[clubSlug]/play/page.tsx")
     assert "Ladder Generator" in read("apps/web/app/clubs/[clubSlug]/play/page.tsx")
     assert "Download CSV" in workspace
