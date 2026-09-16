@@ -1,5 +1,5 @@
 import { Display } from "@/components/ClubDisplay";
-import Link from "next/link";
+import Link from "@/components/PublicClubLink";
 import { getClubLeagueResults, getClubPlayerProfile, type LeagueAwardProgressRow, type LeagueResultsResponse, type PublicMatch, type PublicRatingHistoryPoint, type PublicRelationship } from "@/lib/api";
 import { publicBadgeRarityLabel } from "@/lib/badgeApi";
 import { publicSocialEventTypeLabel } from "@/lib/publicMatchLabels";

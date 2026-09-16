@@ -1,6 +1,6 @@
 import Link from "next/link";
 import {
-  CLUB_LINKS,
+  publicClubLinks,
   clubPageHref,
   safeImageUrl,
   type SiteDocument,
@@ -36,7 +36,7 @@ export default function ClubSiteHeader({
       </header>
       <nav className={styles.nav} aria-label="Club navigation">
         <Link href={`/clubs/${slug}`}>Home</Link>
-        {CLUB_LINKS.map(([label, path]) => (
+        {publicClubLinks(doc).map(([label, path]) => (
           <Link key={path} href={`/clubs/${slug}/${path}`}>
             {label}
           </Link>

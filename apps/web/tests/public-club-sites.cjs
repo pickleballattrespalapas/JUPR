@@ -91,8 +91,8 @@ function load(file) {
     (n) => {
       if (n.endsWith(".css")) return {};
       if (Object.hasOwn(mocks, n)) return mocks[n];
-      if (n.startsWith("@/")) {
-        let f = n.slice(2);
+      if (n.startsWith("@/") || n.startsWith(".")) {
+        let f = n.startsWith("@/") ? n.slice(2) : path.join(path.dirname(file), n);
         return load(
           fs.existsSync(path.join(__dirname, "..", f + ".tsx"))
             ? f + ".tsx"

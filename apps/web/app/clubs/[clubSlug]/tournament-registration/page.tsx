@@ -1,6 +1,6 @@
 import { Display } from "@/components/ClubDisplay";
 import PublicTournamentSponsors from "@/components/PublicTournamentSponsors";
-import Link from "next/link";
+import Link from "@/components/PublicClubLink";
 import PublicTournamentNav from "@/components/PublicTournamentNav";
 import { getClubTournamentRegistration } from "@/lib/tournamentRegistrationApi";
 import TournamentRegistrationForm from "./TournamentRegistrationForm";

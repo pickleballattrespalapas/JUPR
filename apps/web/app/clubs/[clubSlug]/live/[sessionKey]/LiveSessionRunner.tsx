@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import Link from "@/components/PublicClubLink";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { PublicLiveMatch, PublicLiveSessionDetail } from "@/lib/api";
 import { publicLiveErrorText } from "@/lib/publicLiveErrorText";

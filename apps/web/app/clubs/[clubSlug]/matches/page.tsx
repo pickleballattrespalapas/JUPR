@@ -1,5 +1,5 @@
 import { Display } from "@/components/ClubDisplay";
-import Link from "next/link";
+import Link from "@/components/PublicClubLink";
 import { getClubMatches, type PublicMatch } from "@/lib/api";
 import { publicMatchTypeLabel } from "@/lib/publicMatchLabels";
 

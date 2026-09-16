@@ -1,6 +1,6 @@
 import PublicTournamentSponsors from "@/components/PublicTournamentSponsors";
 import PublicTournamentNav, { publicTournamentHref } from "@/components/PublicTournamentNav";
-import Link from "next/link";
+import Link from "@/components/PublicClubLink";
 import { getClubTournamentRegistrationEdit } from "@/lib/tournamentRegistrationApi";
 import EditTournamentRegistrationForm from "./EditTournamentRegistrationForm";
 

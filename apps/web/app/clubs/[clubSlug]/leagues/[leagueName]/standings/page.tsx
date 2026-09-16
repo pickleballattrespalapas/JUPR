@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/PublicClubLink";
 import PublicLeagueNav from "@/components/PublicLeagueNav";
 import { LeagueAwardRaceGrid } from "@/components/LeagueAwardRace";
 import LeaguePlayerRoster from "@/components/LeaguePlayerRoster";

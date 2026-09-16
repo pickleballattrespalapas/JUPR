@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/PublicClubLink";
 import { LeagueAwardRaceGrid } from "@/components/LeagueAwardRace";
 import { getPublicTeamLeague, teamLeagueApiBaseUrl } from "@/lib/teamLeagueApi";
 import TeamLeagueRegistrationForm from "./TeamLeagueRegistrationForm";

@@ -1,18 +1,10 @@
 "use client";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
 
 export default function PublicFooterNav() {
-  const pathname = usePathname() || "/";
-  const clubBase = pathname.match(/^\/clubs\/[^/]+/)?.[0];
-  const admin = pathname === "/admin" || pathname.startsWith("/admin/");
+  // Club navigation lives inside ClubLayout, where published visibility applies.
+  // This global footer is outside that context and only advertises PCS pages.
   return <nav style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }} aria-label="Footer navigation">
-    {!admin && clubBase && <>
-      <Link href={`${clubBase}/leagues`}>Leagues</Link>
-      <Link href={`${clubBase}/tournaments`}>Tournaments</Link>
-      <Link href={`${clubBase}/badge-codex`}>Badges &amp; Trophies</Link>
-      <Link href={`${clubBase}/matches`}>Matches</Link>
-    </>}
     <Link href="/?welcome=1">Powered by PCS</Link>
     <Link href="/clubs">Find a club</Link>
     <Link href="/admin/login">Staff sign in</Link>

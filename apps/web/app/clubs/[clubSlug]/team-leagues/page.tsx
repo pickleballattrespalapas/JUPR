@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/PublicClubLink";
 import { getPublicTeamLeagues } from "@/lib/teamLeagueApi";
 
 type Props = {

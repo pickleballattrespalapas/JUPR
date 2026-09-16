@@ -1,5 +1,5 @@
 import PublicTournamentSponsors from "@/components/PublicTournamentSponsors";
-import Link from "next/link";
+import Link from "@/components/PublicClubLink";
 import { redirect } from "next/navigation";
 import PublicTournamentModuleHeader from "@/components/PublicTournamentModuleHeader";
 import {
