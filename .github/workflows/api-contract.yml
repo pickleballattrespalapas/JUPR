@@ -43,6 +43,8 @@ jobs:
             tests/test_tournament_email_sponsors.py \
             tests/test_api_admin_score_entry_disabled.py \
             tests/test_check_staging_environment.py \
+            tests/test_prepare_staging_qa.py \
+            tests/test_prepare_parity_staging_session.py \
             tests/test_smoke_public_web.py \
             tests/test_staging_deployment_config.py
 
