@@ -30,6 +30,7 @@ from jupr_app.services.public_tournament_registration_service import (
     _safe_bool,
     _safe_float,
     _safe_int,
+    _safe_rows,
     build_registration_confirmation_delivery,
     build_validated_public_registration_save_payload,
     build_public_tournament_registration_page,
@@ -92,6 +93,101 @@ def _selection_public_payload(selection: dict[str, Any]) -> dict[str, Any]:
         "show_on_partner_board": _safe_bool(selection.get("show_on_partner_board")),
         "updated_at": selection.get("updated_at"),
     }
+
+
+def _selections_with_confirmed_partners(
+    supabase: Any,
+    *,
+    tournament_id: str,
+    registration_id: str,
+    selections: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Resolve reciprocal entries only inside the verified edit-link scope.
+
+    Automatic pairing deliberately leaves the reciprocal selection's free-text
+    partner fields empty. The confirmed team, not those fields, identifies the
+    partner. Keep the selection IDs and versions intact for the atomic save.
+    """
+    selected = {
+        str(row.get("id") or ""): row
+        for row in selections
+        if str(row.get("partner_mode") or "").upper() == "HAS_PARTNER"
+    }
+    if not selected:
+        return selections
+    partners: dict[str, tuple[str, str]] = {}
+    for side, other_side in (("1", "2"), ("2", "1")):
+        links = _safe_rows(
+            supabase.table("tournament_registration_team_links")
+            .select("event_option_id,selection1_id,selection2_id,registration1_id,registration2_id")
+            .eq("tournament_id", tournament_id)
+            .eq(f"registration{side}_id", registration_id)
+            .in_(f"selection{side}_id", list(selected))
+            .in_("status", ["CONFIRMED", "ADMIN_CONFIRMED"])
+            .execute()
+        )
+        for link in links:
+            selection_id = str(link.get(f"selection{side}_id") or "")
+            selection = selected.get(selection_id)
+            partner_id = str(link.get(f"registration{other_side}_id") or "")
+            partner_selection_id = str(link.get(f"selection{other_side}_id") or "")
+            if (
+                selection
+                and str(link.get("event_option_id") or "") == str(selection.get("event_option_id") or "")
+                and partner_id and partner_id != registration_id
+                and partner_selection_id
+            ):
+                if selection_id in partners:
+                    raise TournamentRegistrationRelationshipLockedError(
+                        "This event has conflicting partner records. Please contact tournament staff."
+                    )
+                partners[selection_id] = (partner_id, partner_selection_id)
+    if not partners:
+        return selections
+    partner_entries = {
+        str(row.get("id") or ""): row
+        for row in _safe_rows(
+            supabase.table("tournament_registration_selections")
+            .select("id,registration_id,event_option_id")
+            .eq("tournament_id", tournament_id)
+            .in_("id", [value[1] for value in partners.values()])
+            .execute()
+        )
+    }
+    registrations = {
+        str(row.get("id") or ""): row
+        for row in _safe_rows(
+            supabase.table("tournament_registrations")
+            .select("id,display_name,first_name,last_name,email,doubles_skill,age,gender")
+            .eq("tournament_id", tournament_id)
+            .in_("id", [value[0] for value in partners.values()])
+            .neq("status", "cancelled")
+            .execute()
+        )
+    }
+    resolved = []
+    for selection in selections:
+        partner_id, partner_selection_id = partners.get(str(selection.get("id") or ""), ("", ""))
+        entry = partner_entries.get(partner_selection_id) or {}
+        partner = registrations.get(partner_id)
+        if (
+            partner
+            and str(entry.get("registration_id") or "") == partner_id
+            and str(entry.get("event_option_id") or "") == str(selection.get("event_option_id") or "")
+        ):
+            selection = {
+                **selection,
+                "partner_name": partner.get("display_name") or " ".join(
+                    str(partner.get(key) or "").strip() for key in ("first_name", "last_name")
+                ).strip(),
+                "partner_email": partner.get("email"),
+                "partner_skill": partner.get("doubles_skill"),
+                "partner_age": partner.get("age"),
+                "partner_gender": partner.get("gender"),
+                "show_on_partner_board": False,
+            }
+        resolved.append(selection)
+    return resolved
 
 
 def _stable_edit_secret() -> str:
@@ -477,7 +573,15 @@ def build_public_tournament_registration_edit_page(
         "edit_token_valid": True,
         "edit_token_expires_at": verified.get("exp"),
         "registration": _registration_public_payload(registration),
-        "selections": [_selection_public_payload(selection) for selection in (bundle.get("selections") or [])],
+        "selections": [
+            _selection_public_payload(selection)
+            for selection in _selections_with_confirmed_partners(
+                supabase,
+                tournament_id=tid,
+                registration_id=str(registration.get("id") or ""),
+                selections=list(bundle.get("selections") or []),
+            )
+        ],
         "total_price_usd": float(bundle.get("total_price_usd") or 0),
     }
 
