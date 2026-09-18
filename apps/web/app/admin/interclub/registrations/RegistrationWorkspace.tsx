@@ -8,6 +8,10 @@ import { useAdminWorkspace } from "@/lib/useAdminWorkspace";
 import { InterclubTeam, MeetRegistrationDetail, RegistrationDetail, RegistrationSeason, RosterVersion, apiError, composition, rosterStatus } from "@/lib/interclubRegistration";
 import styles from "./registrations.module.css";
 
+function loadErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && !(error instanceof TypeError) && !(error instanceof SyntaxError) ? error.message : fallback;
+}
+
 export default function RegistrationWorkspace({ initialSeasonId }: { initialSeasonId: string }) {
   const { session, accessToken, loading } = useAdminSession();
   const { clubId } = useAdminWorkspace();
@@ -23,16 +27,18 @@ function ClubRegistrations({ clubId, accessToken, initialSeasonId }: { clubId: s
   const [selected, setSelected] = useState(initialSeasonId);
   const [error, setError] = useState("");
   const [loaded, setLoaded] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [reload, setReload] = useState(0);
   const token = useRef(accessToken); token.current = accessToken;
   useEffect(() => {
-    const controller = new AbortController(); setLoaded(false); setError("");
-    if (!api) { setError("Interclub registration is unavailable."); return; }
+    const controller = new AbortController(); setLoaded(false); setLoading(true); setError("");
+    if (!api) { setError("Interclub registration is unavailable."); setLoading(false); return; }
     fetch(`${api}/admin/clubs/${encodeURIComponent(clubId)}/interclub/registrations`, { headers: { Authorization: `Bearer ${token.current}` }, cache: "no-store", signal: controller.signal })
       .then(async response => {
         const data = await response.json(); if (!response.ok) throw new Error(apiError(data, "Unable to load club invitations."));
         if (!controller.signal.aborted) { setSeasons(data.seasons); setSelected(old => data.seasons.some((s: RegistrationSeason) => s.id === old) ? old : data.seasons[0]?.id || ""); setLoaded(true); }
-      }).catch(e => { if (!controller.signal.aborted) setError(e.message); });
+      }).catch(e => { if (!controller.signal.aborted) setError(loadErrorMessage(e, "Unable to load club invitations. Try again.")); })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [api, clubId, reload]);
   return <section className={styles.page}>
@@ -41,12 +47,13 @@ function ClubRegistrations({ clubId, accessToken, initialSeasonId }: { clubId: s
     <p><Link href="/admin/interclub">Back to interclub leagues and setup</Link></p>
     <div className={styles.toolbar}>
       <label>Season <select value={selected} onChange={e => setSelected(e.target.value)} disabled={!loaded}>
-        {!seasons.length && <option value="">No open invitations</option>}
+        {!seasons.length && <option value="">{loading ? "Loading invitations…" : loaded ? "No open invitations" : "Choose a season"}</option>}
         {seasons.map(s => <option key={s.id} value={s.id}>{s.details.name} · {s.details.start_date}{s.organizer_club_id === clubId ? " · Organizer" : ""}</option>)}
       </select></label>
-      <button onClick={() => setReload(n => n + 1)}>Refresh invitations</button>
+      <button disabled={loading} onClick={() => setReload(n => n + 1)}>{error ? "Retry loading invitations" : "Refresh invitations"}</button>
     </div>
     {error && <p role="alert">{error}</p>}
+    {loading && <p role="status">Loading club invitations…</p>}
     {loaded && !seasons.length && <p>Your club has no season invitations yet. Organizers open invitations from a saved season plan.</p>}
     {loaded && selected && api && <SeasonRegistration key={`${selected}:${reload}`} api={api} clubId={clubId} accessToken={accessToken} seasonId={selected} />}
   </section>;
@@ -56,6 +63,8 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId }: { api: strin
   const root = `${api}/admin/clubs/${encodeURIComponent(clubId)}/interclub/registrations/${seasonId}`;
   const token = useRef(accessToken); token.current = accessToken;
   const [data, setData] = useState<RegistrationDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [blocked, setBlocked] = useState(false);
@@ -64,12 +73,13 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId }: { api: strin
   const pending = useRef(false), mutation = useRef<AbortController | null>(null);
   useEffect(() => () => { mutation.current?.abort(); }, [root]);
   useEffect(() => {
-    const controller = new AbortController(); setData(null); setBlocked(false);
+    const controller = new AbortController(); setData(null); setLoading(true); setLoadError(""); setBlocked(false);
     fetch(root, { headers: { Authorization: `Bearer ${token.current}` }, cache: "no-store", signal: controller.signal })
       .then(async response => {
         const next = await response.json(); if (!response.ok) throw new Error(apiError(next, "Unable to load this season."));
         if (!controller.signal.aborted) { setData(next); setSelectedMeet(old => next.meets.some((m: { id: string }) => m.id === old) ? old : next.meets.find((m: { roster_open: boolean }) => m.roster_open)?.id || next.meets[0]?.id || ""); }
-      }).catch(e => { if (!controller.signal.aborted) setMessage(e.message); });
+      }).catch(e => { if (!controller.signal.aborted) setLoadError(loadErrorMessage(e, "Unable to load this season. Try again.")); })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [root, reload]);
 
@@ -105,9 +115,11 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId }: { api: strin
   const clubName = (id: string) => data?.clubs.find(c => c.id === id)?.name || id;
   const when = (value: string) => new Date(value).toLocaleString(undefined, { timeZone: data?.season.details.timezone });
   return <>
-    <div className={styles.toolbar}><button disabled={busy} onClick={() => { setMessage(""); setReload(n => n + 1); }}>Reload season</button>{blocked && <span>Reload before making another change. Your draft remains below for reference.</span>}</div>
+    <div className={styles.toolbar}><button disabled={busy || loading} onClick={() => { setMessage(""); setReload(n => n + 1); }}>{loadError ? "Retry loading season" : "Reload season"}</button>{blocked && <span>Reload before making another change. Your draft remains below for reference.</span>}</div>
+    {loadError && <p role="alert" className={styles.notice}>{loadError}</p>}
     {message && <p role="status" className={styles.notice}>{message}</p>}
-    {!data ? <p>Loading season…</p> : <>
+    {loading && <p role="status">Loading season…</p>}
+    {data && <>
       <h2>{data.season.details.name}</h2>
       <p>Organized by {clubName(data.season.organizer_club_id)} · {data.season.details.start_date} to {data.season.details.end_date}</p>
       <ol className={styles.nextSteps} aria-label="Season next steps">
@@ -154,6 +166,8 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId }: { api: strin
 function MeetRegistration({ root, accessToken, clubId, seasonData }: { root: string; accessToken: string; clubId: string; seasonData: RegistrationDetail }) {
   const token = useRef(accessToken); token.current = accessToken;
   const [data, setData] = useState<MeetRegistrationDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [blocked, setBlocked] = useState(false);
@@ -162,12 +176,13 @@ function MeetRegistration({ root, accessToken, clubId, seasonData }: { root: str
   const pending = useRef(false), mutation = useRef<AbortController | null>(null);
   useEffect(() => () => { mutation.current?.abort(); }, [root]);
   useEffect(() => {
-    const controller = new AbortController(); setData(null); setEditor(null); setBlocked(false);
+    const controller = new AbortController(); setData(null); setLoading(true); setLoadError(""); setEditor(null); setBlocked(false);
     fetch(root, { headers: { Authorization: `Bearer ${token.current}` }, cache: "no-store", signal: controller.signal })
       .then(async response => {
         const next = await response.json(); if (!response.ok) throw new Error(apiError(next, "Unable to load this meet."));
         if (!controller.signal.aborted) setData(next);
-      }).catch(e => { if (!controller.signal.aborted) setMessage(e.message); });
+      }).catch(e => { if (!controller.signal.aborted) setLoadError(loadErrorMessage(e, "Unable to load this meet. Try again.")); })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [root, reload]);
 
@@ -206,9 +221,11 @@ function MeetRegistration({ root, accessToken, clubId, seasonData }: { root: str
   const ownMeet = Boolean(data?.meet.club_ids.includes(clubId) && seasonData.own_participation?.status === "accepted");
   const revision = { expected_meet_revision: data?.meet.revision };
   return <section>
-    <div className={styles.toolbar}><button disabled={busy} onClick={() => { setMessage(""); setDeadline(""); setReload(n => n + 1); }}>Reload meet</button>{blocked && <span>Reload before making another change. Your draft remains below for reference.</span>}</div>
+    <div className={styles.toolbar}><button disabled={busy || loading} onClick={() => { setMessage(""); setDeadline(""); setReload(n => n + 1); }}>{loadError ? "Retry loading meet" : "Reload meet"}</button>{blocked && <span>Reload before making another change. Your draft remains below for reference.</span>}</div>
+    {loadError && <p role="alert" className={styles.notice}>{loadError}</p>}
     {message && <p role="status" className={styles.notice}>{message}</p>}
-    {!data ? <p>Loading meet…</p> : <>
+    {loading && <p role="status">Loading meet…</p>}
+    {data && <>
       <h3>{when(data.meet.starts_at)} · {clubName(data.meet.host_club_id)}</h3>
       <p>{data.meet.club_ids.map(clubName).join(", ")} · {data.meet.courts} courts</p>
       <p>Roster deadline for this meet: {when(data.meet.roster_deadline)} ({seasonData.season.details.timezone}).</p>

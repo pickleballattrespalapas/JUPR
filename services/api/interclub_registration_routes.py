@@ -1,5 +1,6 @@
 """Club-owned participation/meet rosters and organizer-only eligibility decisions."""
 from datetime import datetime, timezone
+import json
 from typing import Literal
 from uuid import UUID
 
@@ -160,7 +161,9 @@ def install_interclub_registration_routes(app, *, get_supabase_client):
         clubs = db.table("clubs").select("id,name,slug").in_("id", list(set(season["details"]["club_ids"] + [season["organizer_club_id"]]))).execute().data or []
         meet_query = db.table("pcs_interclub_meet_workspaces").select(MEET_FIELDS).eq("season_id", str(season_id))
         if not organizer:
-            meet_query = meet_query.contains("club_ids", [club_id])
+            # club_ids is JSONB. A Python list is encoded by PostgREST's client
+            # as a PostgreSQL array literal, which is invalid for this column.
+            meet_query = meet_query.contains("club_ids", json.dumps([club_id]))
         meets = meet_query.order("starts_at").order("id").limit(100).execute().data or []
         return {"season": season, "meets": meets, "is_organizer": organizer, "own_participation": own, "participations": participations, "clubs": clubs,
                 "teams": [safe_roster(row, own_club=row["club_id"] == club_id) for row in teams[:100]],

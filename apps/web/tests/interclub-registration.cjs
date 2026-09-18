@@ -132,5 +132,56 @@ async function clubsAndRosters() {
   await act(async () => tree.unmount());
 }
 
-(async () => { await clubsAndRosters(); console.log('Interclub registration: meet-specific lineups and deadlines, no season roster lock, acceptance, scoped players, stale saves, closed history and account/meet changes passed.'); })()
+async function loadFailuresCanBeRetried() {
+  const requests = [];
+  global.fetch = (url, options) => new Promise((resolve, reject) => requests.push({ url, options, resolve, reject }));
+  const Page = load('app/admin/interclub/registrations/RegistrationWorkspace.tsx', {
+    'next/link': Link, '@/lib/adminAuthClient': { getAdminApiBaseUrl: () => 'https://api.test' }, '@/lib/interclubRegistration': helpers,
+    '@/lib/useAdminWorkspace': { useAdminWorkspace: () => ({ clubId: 'beta' }) },
+    '@/lib/useAdminSession': { useAdminSession: () => ({ accessToken: 'token', loading: false, session: { user: { id: 'b' }, capabilities: { assignments: [{ club_id: 'beta', role: 'administrator' }] } } }) },
+    '@/components/ConfirmAction': { ConfirmAction: () => null }, './registrations.module.css': {}
+  }).default;
+  let tree;
+  const content = () => JSON.stringify(tree.toJSON());
+  await act(async () => { tree = create(React.createElement(Page, { initialSeasonId: sid })); });
+  assert.ok(content().includes('Loading club invitations…'));
+  assert.equal(button(tree, 'Refresh invitations').props.disabled, true);
+  await act(async () => requests.at(-1).reject(new TypeError('Load failed')));
+  assert.ok(content().includes('Unable to load club invitations. Try again.'));
+  assert.ok(!content().includes('Loading club invitations…'));
+  assert.ok(!content().includes('Your club has no season invitations yet.'));
+  await act(async () => button(tree, 'Retry loading invitations').props.onClick());
+  assert.equal(tree.root.findAllByProps({ role: 'alert' }).length, 0);
+  await act(async () => requests.at(-1).resolve(reply({ seasons: [season] })));
+  assert.ok(content().includes('Loading season…'));
+  assert.equal(button(tree, 'Reload season').props.disabled, true);
+  await act(async () => requests.at(-1).reject(new TypeError('Load failed')));
+  assert.ok(content().includes('Unable to load this season. Try again.'));
+  assert.ok(!content().includes('Loading season…'), 'A failed season request must stop the loading message');
+  assert.equal(button(tree, 'Accept season invitation'), undefined);
+  await act(async () => button(tree, 'Retry loading season').props.onClick());
+  assert.equal(tree.root.findAllByProps({ role: 'alert' }).length, 0);
+  await act(async () => requests.at(-1).resolve(reply({ season, meets: [meet], is_organizer: false,
+    own_participation: { season_id: sid, club_id: 'beta', status: 'invited', revision: 1 }, participations: [],
+    clubs: [{ id: 'beta', name: 'Beta Club', slug: 'beta' }], teams: [], next_team_offset: null })));
+  assert.ok(button(tree, 'Accept season invitation'));
+  assert.ok(content().includes('Loading meet…'));
+  await act(async () => requests.at(-1).resolve(reply({ detail: 'This meet is temporarily unavailable.' }, 503)));
+  assert.ok(content().includes('This meet is temporarily unavailable.'));
+  assert.ok(!content().includes('Loading meet…'), 'A failed meet request must stop the loading message');
+  await act(async () => button(tree, 'Retry loading meet').props.onClick());
+  await act(async () => requests.at(-1).resolve(reply({ meet, teams: [], next_team_offset: null })));
+  assert.ok(content().includes('No teams submitted for this meet yet.'));
+  assert.equal(tree.root.findAllByProps({ role: 'alert' }).length, 0);
+  // Lost access is still enforced, and old season details are removed on a failed reload.
+  await act(async () => button(tree, 'Reload season').props.onClick());
+  await act(async () => requests.at(-1).resolve(reply({ detail: 'Your club no longer has access to this season.' }, 403)));
+  assert.ok(content().includes('Your club no longer has access to this season.'));
+  assert.equal(button(tree, 'Accept season invitation'), undefined);
+  assert.ok(!content().includes('Loading season…'));
+  assert.ok(requests.every(r => r.url.includes('/clubs/beta/') && r.options.headers.Authorization === 'Bearer token' && !r.options.method));
+  await act(async () => tree.unmount());
+}
+
+(async () => { await clubsAndRosters(); await loadFailuresCanBeRetried(); console.log('Interclub registration: meet-specific lineups, deadlines, acceptance, scoped players, stale saves, account/meet changes, load failures and retries passed.'); })()
   .catch(e => { console.error(e); process.exitCode = 1; });

@@ -127,6 +127,47 @@ test("dedicated QA admin switches three clubs and previews website controls", as
       await page.getByRole("button", { name: "Preview draft", exact: true }).click();
       await expect(page.getByRole("button", { name: "Publish website", exact: true })).toBeVisible();
       // No saves or publication: preserve Joe's in-progress drafts and live sites.
+
+      const invitationsResponse = page.waitForResponse(r => new URL(r.url()).pathname === `/admin/clubs/${club.id}/interclub/registrations` && r.request().method() === "GET");
+      await page.goto("/admin/interclub/registrations");
+      const invitations = await invitationsResponse;
+      expect(invitations.status()).toBe(200);
+      const seasons = (await invitations.json()).seasons;
+      expect(seasons.length, "The isolation season must be available").toBeGreaterThan(0);
+      await expect(page.getByRole("heading", { name: seasons[0].details.name, exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Reload season", exact: true })).toBeEnabled();
+      for (const season of seasons) {
+        const seasonPath = `/admin/clubs/${club.id}/interclub/registrations/${season.id}`;
+        const seasonResponse = page.waitForResponse(r => new URL(r.url()).pathname === seasonPath && r.request().method() === "GET");
+        await page.goto(`/admin/interclub/registrations?season=${season.id}`);
+        const response = await seasonResponse;
+        expect(response.status(), `${club.name}: ${season.details.name} season request`).toBe(200);
+        const details = await response.json();
+        await expect(page.getByRole("heading", { name: season.details.name, exact: true })).toBeVisible();
+        await expect(page.getByText("Loading season…", { exact: true })).toHaveCount(0);
+        const organizer = season.organizer_club_id === club.id;
+        expect(details.is_organizer).toBe(organizer);
+        expect(details.meets.map((m: { club_ids: string[] }) => organizer || m.club_ids.includes(club.id)).every(Boolean)).toBe(true);
+        if (!organizer) expect(details.participations.every((p: { club_id: string }) => p.club_id === club.id)).toBe(true);
+        if (details.own_participation?.status === "invited") {
+          await expect(page.getByRole("button", { name: "Accept season invitation", exact: true })).toBeEnabled();
+        }
+        if (details.meets.length) {
+          const meet = page.getByRole("combobox", { name: "Meet", exact: true });
+          const meetId = await meet.inputValue();
+          const reloadMeet = page.getByRole("button", { name: "Reload meet", exact: true });
+          await expect(reloadMeet).toBeEnabled();
+          const meetResponse = page.waitForResponse(r => new URL(r.url()).pathname === `${seasonPath}/meets/${meetId}` && r.request().method() === "GET");
+          await reloadMeet.click();
+          const rosterResult = await meetResponse;
+          expect(rosterResult.status()).toBe(200);
+          const roster = await rosterResult.json();
+          expect(roster.meet.season_id).toBe(season.id);
+          expect(roster.teams.every((t: { club_id: string; meet_id: string }) => t.meet_id === meetId && (organizer || t.club_id === club.id))).toBe(true);
+          await expect(page.getByText("Loading meet…", { exact: true })).toHaveCount(0);
+        }
+      }
+      // Inspect invitations and rosters only; do not accept, decline or edit them.
       await page.getByRole("link", { name: "Switch club", exact: true }).click();
       await expect(page.getByRole("heading", { name: "Choose your club" })).toBeVisible();
     });

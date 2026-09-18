@@ -126,8 +126,10 @@ and authorizes the real Supabase session normally.
 
 `apps/web/e2e/multiclub-qa.staging.spec.ts` checks the real club selector, cookie
 context, separate player IDs, website draft visibility controls, share URLs,
-statistics controls, preview, denied access to Tres, and sign-out. It does not
-save drafts or publish pages. It also checks that club creation starts with club
+statistics controls, preview, denied access to Tres, and sign-out. It opens every
+available interclub season from each test club and verifies season/meet requests,
+invitation controls, participant scoping, and organizer visibility. It does not
+accept invitations, change rosters, save drafts or publish pages. It also checks that club creation starts with club
 details, preserves them on refresh, fits a phone viewport, and asks a signed-in
 administrator to confirm their account in Step 2 before review. It stops before creating a new club so the QA
 account retains its three-club boundary. The exact-candidate handoff includes `qa-account.json`
