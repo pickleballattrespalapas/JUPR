@@ -10,6 +10,36 @@ const clubs = [
 // Use the existing protected-deployment CI bootstrap. No sign-in bypass is
 // shipped in the app: FastAPI verifies the real, short-lived Supabase JWT.
 test.use({ trace: "off", video: "off", screenshot: "off" });
+test("club creation starts with club details and preserves them before account setup", async ({ page, context }) => {
+  await bootstrapStagingContext(context);
+  const creationRequests: string[] = [];
+  page.on("request", request => {
+    if (request.method() === "POST" && /\/(clubs\/create|auth\/v1\/(signup|token))/.test(request.url())) creationRequests.push(request.url());
+  });
+  await page.goto("/create-club");
+  await expect(page.getByRole("heading", { name: "Club details", exact: true })).toBeVisible();
+  await expect(page.getByLabel("Administrator email", { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("Password", { exact: true })).toHaveCount(0);
+  await page.getByLabel("Club name", { exact: true }).fill("Baja Travelers QA");
+  await expect(page.getByLabel("Club web address", { exact: true })).toHaveValue("baja-travelers-qa");
+  await page.getByRole("button", { name: "Continue →", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Administrator", exact: true })).toBeVisible();
+  await expect(page.getByText("Baja Travelers QA", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "New administrator", exact: true })).toBeDisabled();
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Administrator", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "← Club details", exact: true }).click();
+  await expect(page.getByLabel("Club name", { exact: true })).toHaveValue("Baja Travelers QA");
+  await page.getByLabel("Club web address", { exact: true }).fill("baja-custom-qa");
+  await page.getByLabel("Club name", { exact: true }).fill("Baja Visitors QA");
+  await expect(page.getByLabel("Club web address", { exact: true })).toHaveValue("baja-custom-qa");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "Continue →", exact: true }).scrollIntoViewIfNeeded();
+  await expect(page.getByRole("button", { name: "Continue →", exact: true })).toBeInViewport();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  expect(creationRequests, "Draft setup must not create accounts, send emails or create a club").toEqual([]);
+});
+
 test("dedicated QA admin switches three clubs and previews website controls", async ({ page, context }) => {
   test.setTimeout(180_000);
   const token = process.env.STAGING_ADMIN_BEARER_TOKEN || "";
@@ -26,6 +56,17 @@ test("dedicated QA admin switches three clubs and previews website controls", as
       access_token, token_type: "bearer", user: { email },
     }));
   }, { token, email, origin });
+
+  await test.step("signed-in administrator can review a new club without re-entering credentials", async () => {
+    await page.goto("/create-club");
+    await page.getByLabel("Club name", { exact: true }).fill("QA Club Creation Preview");
+    await page.getByRole("button", { name: "Continue →", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Review and create", exact: true })).toBeVisible();
+    await expect(page.getByText(email, { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Create club →", exact: true })).toBeEnabled();
+    await expect(page.getByLabel("Password", { exact: true })).toHaveCount(0);
+    // Review only. Preserve the dedicated QA identity's three-club assignment boundary.
+  });
 
   const workspacesResponse = page.waitForResponse(r => r.url() === `${expectedApiOrigin}/admin/auth/workspaces` && r.request().method() === "GET");
   await page.goto("/admin/select-club");

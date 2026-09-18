@@ -127,7 +127,10 @@ and authorizes the real Supabase session normally.
 `apps/web/e2e/multiclub-qa.staging.spec.ts` checks the real club selector, cookie
 context, separate player IDs, website draft visibility controls, share URLs,
 statistics controls, preview, denied access to Tres, and sign-out. It does not
-save drafts or publish pages. The exact-candidate handoff includes `qa-account.json`
+save drafts or publish pages. It also checks that club creation starts with club
+details, preserves them on refresh, fits a phone viewport, and takes a signed-in
+administrator directly to review. It stops before creating a new club so the QA
+account retains its three-club boundary. The exact-candidate handoff includes `qa-account.json`
 and `qa-browser.json` after a successful run. This is automated browser acceptance;
 interactive browser access still requires the browser's secure sign-in flow.
 
