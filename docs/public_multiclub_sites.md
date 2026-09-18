@@ -35,7 +35,17 @@ The added `page_visibility` document field requires no database migration. Older
 
 PNG/JPEG/WebP images up to 220 KB may be uploaded directly; larger images use HTTPS URLs. No arbitrary HTML/scripts are executed. Limits: 20 pages, 40 blocks per page, 2 MB website document. Club operational settings remain separate from website drafts.
 
-**Create a club** accepts an existing verified administrator login or a new administrator account with email verification. Creation atomically binds the authenticated user to the new club as administrator. Existing slugs cannot be claimed. The website starts unpublished. Staging keeps email disabled: use an existing verified test login; no SMTP or verification bypass was added.
+### Create a club
+
+`/create-club` starts with **Club details → Administrator → Review and create**.
+
+1. Enter the club name and web address immediately, before signing in. The address is suggested from the name and remains editable. Location, logo and visitor information can be added in the website editor afterward.
+2. Create a new administrator account or use an existing one. Already signed-in administrators proceed directly to review. Staging uses an existing verified test login because account emails remain disabled.
+3. Review the club and its administrator, then explicitly choose **Create club**. Signing in or confirming an email never creates a club by itself. The new workspace opens after creation; its website starts unpublished.
+
+Club details are saved in this browser for 24 hours, including across refreshes and email-verification returns. This draft contains no email, password or token and is cleared after creation. If browser storage is unavailable, the form still works within the current tab. A taken address returns to the details step without clearing the club name. An expired session returns to administrator setup with details intact.
+
+Creation still atomically binds the verified authenticated user to the new club as administrator. Existing slugs cannot be claimed. This flow adds no database migration, SMTP configuration, or verification bypass. `tests/club-creation.cjs` covers the account and creation transitions; the staging QA browser suite checks the anonymous entry and signed-in review paths without creating extra fixture clubs.
 
 ## Interclub league websites
 
