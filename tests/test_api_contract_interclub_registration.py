@@ -1,9 +1,12 @@
+import json
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from httpx import Client, MockTransport, Response
+from postgrest import SyncPostgrestClient
 
 from services.api import admin_auth_routes, interclub_registration_routes as routes
 
@@ -14,7 +17,10 @@ class Query:
     def select(self, fields): self.columns = fields; return self
     def eq(self, key, value): self.filters.append(lambda row: row.get(key) == value); return self
     def is_(self, key, value): self.filters.append(lambda row: row.get(key) is None); return self
-    def contains(self, key, values): self.filters.append(lambda row: set(values).issubset(row.get(key, []))); return self
+    def contains(self, key, values):
+        values = json.loads(values) if isinstance(values, str) else values
+        self.filters.append(lambda row: set(values).issubset(row.get(key, [])))
+        return self
     def in_(self, key, values): self.filters.append(lambda row: row.get(key) in values); return self
     def ilike(self, key, value): self.filters.append(lambda row: value.strip("%").lower() in row[key].lower()); return self
     def order(self, *_args, **_kwargs): return self
@@ -54,7 +60,8 @@ def setup(monkeypatch):
             return SimpleNamespace(data=data)
         return SimpleNamespace(execute=execute)
     monkeypatch.setattr(admin_auth_routes,"authenticate_bearer",lambda _: user)
-    app = FastAPI(); routes.install_interclub_registration_routes(app,get_supabase_client=lambda:SimpleNamespace(table=table,rpc=rpc))
+    state["db"] = SimpleNamespace(table=table,rpc=rpc)
+    app = FastAPI(); routes.install_interclub_registration_routes(app,get_supabase_client=lambda:state["db"])
     return TestClient(app),state
 
 
@@ -201,6 +208,72 @@ def test_meet_not_in_this_season_or_club_is_unavailable(setup):
         assert c.get(base(s,"beta")+"/meets/"+hidden["id"]+suffix).status_code==404
     s["meet"]["season_id"]=str(uuid4())
     assert c.get(meet_base(s,"beta")).status_code==404
+
+
+@pytest.mark.parametrize("club", ["beta", "alpha"])
+def test_season_meet_filter_uses_jsonb_over_postgrest_and_preserves_club_scope(setup, monkeypatch, club):
+    """Exercise the real SDK: list containment is serialized as a SQL array, not JSONB."""
+    c, s = setup
+    s["assignment"]["club_id"] = club
+    hidden_meet = {**s["meet"], "id": str(uuid4()), "club_ids": ["alpha", "gamma"]}
+    other_season_meet = {**s["meet"], "id": str(uuid4()), "season_id": str(uuid4())}
+    s["tables"]["pcs_interclub_meet_workspaces"].extend([hidden_meet, other_season_meet])
+    s["tables"]["pcs_interclub_participations"].append({**s["participation"], "club_id": "gamma"})
+    s["tables"]["clubs"].append(dict(id="delta", name="Unrelated club", slug="delta"))
+    other_team = {**s["team"], "id": str(uuid4()), "club_id": "gamma", "name": "Gamma team"}
+    s["tables"]["pcs_interclub_current_rosters"].extend([
+        other_team,
+        {**s["team"], "id": str(uuid4()), "meet_id": None, "name": "Beta archived team"},
+        {**other_team, "id": str(uuid4()), "meet_id": None, "name": "Gamma archived team"},
+    ])
+    requests = []
+
+    def respond(request):
+        assert request.method == "GET"
+        assert request.url.path.endswith("/pcs_interclub_meet_workspaces")
+        params = request.url.params
+        requests.append(params)
+        rows = s["tables"]["pcs_interclub_meet_workspaces"]
+        for field in ("season_id", "id"):
+            if field in params:
+                assert params[field].startswith("eq.")
+                rows = [row for row in rows if row[field] == params[field][3:]]
+        if "club_ids" in params:
+            assert params["club_ids"].startswith("cs.")
+            try:
+                club_ids = json.loads(params["club_ids"][3:])
+            except json.JSONDecodeError:
+                # Match PostgreSQL's rejection of the SDK's SQL-array {beta} literal.
+                return Response(400, json={"code": "22P02", "message": "invalid input syntax for type json", "details": None, "hint": None})
+            assert isinstance(club_ids, list)
+            rows = [row for row in rows if set(club_ids).issubset(row["club_ids"])]
+        columns = params["select"].split(",")
+        return Response(200, json=[{key: row.get(key) for key in columns} for row in rows])
+
+    original_table = s["db"].table
+    with Client(transport=MockTransport(respond), trust_env=False) as http_client:
+        db = SyncPostgrestClient("https://postgrest.example.test/rest/v1", http_client=http_client)
+        monkeypatch.setattr(s["db"], "table", lambda name: db.table(name) if name == "pcs_interclub_meet_workspaces" else original_table(name))
+        response = c.get(base(s, club))
+        assert response.status_code == 200
+        data = response.json()
+        assert {meet["id"] for meet in data["meets"]} == ({s["meet"]["id"], hidden_meet["id"]} if club == "alpha" else {s["meet"]["id"]})
+        assert {entry["club_id"] for entry in data["participations"]} == ({"beta", "gamma"} if club == "alpha" else {"beta"})
+        assert {team["club_id"] for team in data["teams"]} == ({"beta", "gamma"} if club == "alpha" else {"beta"})
+        assert {entry["id"] for entry in data["clubs"]} == {"alpha", "beta", "gamma"}
+        assert "private" not in response.text and "email" not in response.text and "phone" not in response.text
+        assert ("player_id" in data["teams"][0]["roster"][0]) == (club == "beta")
+        assert requests[0]["season_id"] == f"eq.{s['season']['id']}"
+        if club == "beta":
+            assert json.loads(requests[0]["club_ids"][3:]) == ["beta"]
+        else:
+            assert "club_ids" not in requests[0]
+
+        meet_response = c.get(meet_base(s, club))
+        assert meet_response.status_code == 200
+        assert {team["club_id"] for team in meet_response.json()["teams"]} == ({"beta", "gamma"} if club == "alpha" else {"beta"})
+        assert c.get(base(s, club) + "/meets/" + hidden_meet["id"]).status_code == (200 if club == "alpha" else 404)
+        assert c.get(base(s, club) + "/meets/" + other_season_meet["id"]).status_code == 404
 
 
 def test_old_season_write_urls_and_deadline_payload_require_reload(setup):
