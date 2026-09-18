@@ -117,6 +117,131 @@ def test_registration_edit_page_verifies_token_and_hydrates_registration(monkeyp
     assert "internal_seed_notes" not in payload["events"][0]
 
 
+def _confirmed_reciprocal_registration(monkeypatch):
+    supabase, storage, registration_id, token = _registered_supabase(monkeypatch)
+    registration = storage["tournament_registrations"][0]
+    registration.update({"doubles_skill": 3.71, "gender": "Women", "age": 69})
+    storage["players"][0]["rating"] = 3.71 * 400
+    event = storage["tournament_event_options"][0]
+    event.update({
+        "label": "Women's Doubles 3.5", "division_name": "Women's Doubles 3.5",
+        "event_family_label": "Women's Doubles", "event_type": "GENDER_DOUBLES",
+        "gender_restriction": "WOMEN", "partner_required": True,
+        "skill_label": "3.5", "skill_mode": "SKILL_BRACKET", "eligibility_mode": "STANDARD",
+    })
+    selection = storage["tournament_registration_selections"][0]
+    selection.update({"partner_mode": "HAS_PARTNER", "partner_name": None, "partner_email": None})
+    partner = {
+        **registration, "id": "reg-partner", "player_id": None,
+        "first_name": "Sam", "last_name": "Partner", "display_name": "Sam Partner",
+        "email": "partner@example.com", "doubles_skill": 3.52, "age": 61,
+    }
+    storage["tournament_registrations"].append(partner)
+    storage["tournament_registration_selections"].append({
+        **selection, "id": "sel-partner", "registration_id": partner["id"],
+        "partner_name": registration["display_name"], "partner_email": registration["email"],
+    })
+    storage["tournament_registration_team_links"] = [{
+        "id": "confirmed-team", "tournament_id": "t1", "event_option_id": event["id"],
+        "status": "ADMIN_CONFIRMED", "registration1_id": partner["id"],
+        "registration2_id": registration_id, "selection1_id": "sel-partner",
+        "selection2_id": selection["id"],
+    }]
+    return supabase, storage, registration_id, token
+
+
+@pytest.mark.parametrize("reverse_link", [False, True])
+def test_edit_page_resolves_confirmed_partner_without_rewriting_reciprocal_entry(monkeypatch, reverse_link):
+    supabase, storage, registration_id, token = _confirmed_reciprocal_registration(monkeypatch)
+    link = storage["tournament_registration_team_links"][0]
+    if reverse_link:
+        for prefix in ("registration", "selection"):
+            link[f"{prefix}1_id"], link[f"{prefix}2_id"] = link[f"{prefix}2_id"], link[f"{prefix}1_id"]
+    stored = deepcopy(storage["tournament_registration_selections"][0])
+
+    page = build_public_tournament_registration_edit_page(supabase, club_id="club-1", edit_token=token)
+
+    selection = page["selections"][0]
+    assert selection["id"] == stored["id"]
+    assert selection["updated_at"] == stored["updated_at"]
+    assert selection["partner_name"] == "Sam Partner"
+    assert selection["partner_email"] == "partner@example.com"
+    assert selection["partner_skill"] == 3.52
+    assert selection["partner_age"] == 61
+    assert selection["partner_gender"] == "Women"
+    assert not selection["show_on_partner_board"]
+    assert storage["tournament_registration_selections"][0] == stored
+    assert not supabase.rpc_calls
+
+
+@pytest.mark.parametrize("invalid", [
+    "unconfirmed", "other_tournament", "other_registration", "other_event",
+    "partner_other_event", "partner_other_registration", "cancelled_partner",
+])
+def test_edit_page_does_not_resolve_partner_outside_confirmed_scope(monkeypatch, invalid):
+    supabase, storage, _registration_id, token = _confirmed_reciprocal_registration(monkeypatch)
+    link = storage["tournament_registration_team_links"][0]
+    if invalid == "unconfirmed":
+        link["status"] = "CANCELLED"
+    elif invalid == "other_tournament":
+        link["tournament_id"] = "t2"
+    elif invalid == "other_registration":
+        link["registration2_id"] = "someone-else"
+    elif invalid == "other_event":
+        link["event_option_id"] = "other-event"
+    elif invalid == "partner_other_event":
+        storage["tournament_registration_selections"][1]["event_option_id"] = "other-event"
+    elif invalid == "partner_other_registration":
+        storage["tournament_registration_selections"][1]["registration_id"] = "someone-else"
+    elif invalid == "cancelled_partner":
+        storage["tournament_registrations"][1]["status"] = "cancelled"
+
+    page = build_public_tournament_registration_edit_page(supabase, club_id="club-1", edit_token=token)
+
+    assert page["selections"][0]["partner_name"] == ""
+    assert page["selections"][0]["partner_email"] == ""
+    assert not supabase.rpc_calls
+
+
+def test_reciprocal_partner_can_save_while_removing_unwanted_division(monkeypatch):
+    supabase, storage, registration_id, token = _confirmed_reciprocal_registration(monkeypatch)
+    day = storage["tournament_registration_days"][0]
+    storage["tournament_registration_days"].append({**day, "id": "other-day", "sort_order": 2})
+    event = storage["tournament_event_options"][0]
+    storage["tournament_event_options"].append({
+        **event, "id": "event4", "registration_day_id": "other-day",
+        "skill_label": "4.0", "division_name": "Women's Doubles 4.0",
+    })
+    primary_selection = storage["tournament_registration_selections"][0]
+    storage["tournament_registration_selections"].append({
+        **primary_selection, "id": "unwanted-entry", "event_option_id": "event4",
+        "registration_day_id": "other-day", "partner_mode": "NEEDS_PARTNER", "sort_order": 2,
+    })
+    team_before = deepcopy(storage["tournament_registration_team_links"])
+    partner_before = deepcopy(storage["tournament_registration_selections"][1])
+    page = build_public_tournament_registration_edit_page(supabase, club_id="club-1", edit_token=token)
+
+    result = submit_public_tournament_registration_edit(
+        supabase, club_id="club-1", edit_token=token,
+        payload={
+            **page["registration"], **_edit_versions(storage), "tournament_id": "t1",
+            "terms_accepted": True,
+            "selections": [row for row in page["selections"] if row["id"] != "unwanted-entry"],
+        },
+    )
+
+    assert result["ok"] is True
+    saved = [row for row in storage["tournament_registration_selections"] if row["registration_id"] == registration_id]
+    assert len(saved) == 1
+    assert saved[0]["id"] == primary_selection["id"]
+    assert saved[0]["partner_name"] == "Sam Partner"
+    assert saved[0]["partner_email"] == "partner@example.com"
+    assert storage["tournament_registration_team_links"] == team_before
+    assert next(row for row in storage["tournament_registration_selections"] if row["id"] == "sel-partner") == partner_before
+    assert len(supabase.rpc_calls) == 1
+    assert supabase.rpc_calls[0][0] == PUBLIC_REGISTRATION_EDIT_RPC
+
+
 def test_registration_edit_submit_updates_existing_registration_and_locks_email(monkeypatch) -> None:
     supabase, storage, registration_id, token = _registered_supabase(monkeypatch)
     storage["tournament_registrations"][0]["age_bracket"] = "50+"
