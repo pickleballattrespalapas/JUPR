@@ -57,7 +57,7 @@ export default function CreateClubPage() {
       if (!mounted.current) return;
       setSession(restored);
       if (draft && !clubDetailsError(draft.name, draft.slug) && draft.step > 1) {
-        setStep(restored ? 3 : 2);
+        setStep(restored && draft.step === 3 ? 3 : 2);
       }
     }).catch(() => {
       if (mounted.current && draft && draft.step > 1 && !clubDetailsError(draft.name, draft.slug)) {
@@ -108,7 +108,7 @@ export default function CreateClubPage() {
     const invalid = clubDetailsError(name, slug);
     if (invalid) { setError(invalid); return; }
     setName(name.trim());
-    goTo(session ? 3 : 2);
+    goTo(2);
   }
 
   async function authenticate() {
@@ -233,8 +233,11 @@ export default function CreateClubPage() {
         {clubSummary}
         <p className={layout.intro}>Connect the account that will manage {name}. Your club details are ready.</p>
         {session ? <>
-          <p>Administrator: <strong>{session.user?.email || "your verified account"}</strong></p>
-          <button className={styles.primary} disabled={busy} onClick={() => goTo(3)}>Review your club →</button>
+          <div className={styles.notice}>
+            <p>Signed in as <strong>{session.user?.email || "your verified account"}</strong>.</p>
+            <p>This account will administer <strong>{name}</strong>. You can manage multiple clubs with the same account.</p>
+          </div>
+          <button className={styles.primary} disabled={busy} onClick={() => goTo(3)}>Use this account →</button>
         </> : <>
           {emailEnabled === false && <p className={styles.notice}>For staging testing, use your existing test administrator account. New account verification emails are turned off here.</p>}
           {optionsLoaded && emailEnabled === null && <p className={styles.notice}>New account setup could not be checked. You can continue with an existing account.</p>}
@@ -285,7 +288,7 @@ export default function CreateClubPage() {
         {created && <p className={styles.notice} role="status">Your club was created. Open it below, or <Link href="/admin/select-club">choose it from your clubs</Link>.</p>}
         {error && <p className={styles.error} role="alert">{error}</p>}
         <div className={layout.footer}>
-          <button className={styles.button} disabled={busy || !!created} onClick={() => goTo(1)}>Edit club details</button>
+          <button className={styles.button} disabled={busy || !!created} onClick={() => goTo(2)}>← Administrator</button>
           <button className={styles.primary} disabled={busy} onClick={() => void perform(create)}>
             {busy ? "Please wait…" : created ? "Open your new club →" : "Create club →"}
           </button>

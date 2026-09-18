@@ -40,12 +40,17 @@ PNG/JPEG/WebP images up to 220 KB may be uploaded directly; larger images use HT
 `/create-club` starts with **Club details → Administrator → Review and create**.
 
 1. Enter the club name and web address immediately, before signing in. The address is suggested from the name and remains editable. Location, logo and visitor information can be added in the website editor afterward.
-2. Create a new administrator account or use an existing one. Already signed-in administrators proceed directly to review. Staging uses an existing verified test login because account emails remain disabled.
+2. Create a new administrator account or use an existing one. Already signed-in administrators still see this step: confirm the displayed account with **Use this account**, then continue to review. Staging uses an existing verified test login because account emails remain disabled.
 3. Review the club and its administrator, then explicitly choose **Create club**. Signing in or confirming an email never creates a club by itself. The new workspace opens after creation; its website starts unpublished.
 
 Club details are saved in this browser for 24 hours, including across refreshes and email-verification returns. This draft contains no email, password or token and is cleared after creation. If browser storage is unavailable, the form still works within the current tab. A taken address returns to the details step without clearing the club name. An expired session returns to administrator setup with details intact.
 
 Creation still atomically binds the verified authenticated user to the new club as administrator. Existing slugs cannot be claimed. This flow adds no database migration, SMTP configuration, or verification bypass. `tests/club-creation.cjs` covers the account and creation transitions; the staging QA browser suite checks the anonymous entry and signed-in review paths without creating extra fixture clubs.
+
+Club display names may repeat. Web addresses must be unique, including addresses
+belonging to unpublished clubs. A repeated name initially suggests the same web
+address; submitting an occupied address is rejected. Choosing another address
+creates a separate club with its own data and administrator assignment.
 
 ## Interclub league websites
 

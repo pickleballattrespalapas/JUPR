@@ -57,14 +57,21 @@ test("dedicated QA admin switches three clubs and previews website controls", as
     }));
   }, { token, email, origin });
 
-  await test.step("signed-in administrator can review a new club without re-entering credentials", async () => {
+  await test.step("signed-in administrator confirms their account in Step 2 before review", async () => {
     await page.goto("/create-club");
     await page.getByLabel("Club name", { exact: true }).fill("QA Club Creation Preview");
     await page.getByRole("button", { name: "Continue →", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Administrator", exact: true })).toBeVisible();
+    await expect(page.getByText(email, { exact: true })).toBeVisible();
+    await page.reload();
+    await expect(page.getByRole("heading", { name: "Administrator", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Use this account →", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Review and create", exact: true })).toBeVisible();
     await expect(page.getByText(email, { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Create club →", exact: true })).toBeEnabled();
     await expect(page.getByLabel("Password", { exact: true })).toHaveCount(0);
+    await page.getByRole("button", { name: "← Administrator", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Administrator", exact: true })).toBeVisible();
     // Review only. Preserve the dedicated QA identity's three-club assignment boundary.
   });
 
