@@ -264,6 +264,7 @@ const button = (label) =>
   await act(async () =>
     tree.root.findByType("form").props.onSubmit({ preventDefault() {} }),
   );
+  await act(async () => button("Use this account →").props.onClick());
   assert.ok(text(tree.toJSON()).includes("Review and create"));
   await act(async () => button("Create club →").props.onClick());
   assert.deepEqual(JSON.parse(network.at(-1).options.body), {

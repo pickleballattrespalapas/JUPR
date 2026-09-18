@@ -118,12 +118,22 @@ async function signIn() {
   await unmount();
 
   await start({ session }); await clubDetails();
-  assert.equal(tree.root.findAllByProps({ type: "password" }).length, 0, "Existing session skips account entry");
+  assert.equal(text(tree.root.findByProps({ id: "creation-step" })), "Administrator", "A signed-in administrator still sees Step 2");
+  assert.match(text(tree.toJSON()), /test@example.invalid/);
+  assert.equal(tree.root.findAllByProps({ type: "password" }).length, 0, "Existing accounts need confirmation, not another password");
+  await unmount(); await mount();
+  assert.equal(text(tree.root.findByProps({ id: "creation-step" })), "Administrator", "Refreshing Step 2 does not skip it");
+  assert.equal(writes().length, 0);
+  await click("Use this account →");
+  await click("← Administrator");
+  assert.equal(text(tree.root.findByProps({ id: "creation-step" })), "Administrator", "Review can return to administrator confirmation");
+  await click("Use this account →");
   createReply = response({ detail: "That club address is already in use. Choose another address." }, 409);
   await click("Create club →");
   assert.equal(tree.root.findByProps({ id: "club-name" }).props.value, "Baja Pickleball");
   assert.match(text(tree.toJSON()), /already in use/);
   await fill("club-address", "another-club"); await submit();
+  await click("Use this account →");
   failRefresh = true;
   await click("Create club →");
   assert.match(text(tree.toJSON()), /Sign in again/);
@@ -132,6 +142,7 @@ async function signIn() {
   await unmount();
 
   await start({ session }); await clubDetails();
+  await click("Use this account →");
   failAuthorize = true;
   await click("Create club →");
   assert.match(text(tree.toJSON()), /Your club was created/);
@@ -157,6 +168,8 @@ async function signIn() {
   assert.equal(tree.root.findAllByProps({ type: "password" }).length, 0);
   await unmount(); restored = session; await mount();
   assert.match(text(tree.toJSON()), /Baja Pickleball/);
+  assert.ok(button("Use this account →"), "Verification callback returns to administrator confirmation");
+  await click("Use this account →");
   assert.ok(button("Create club →"), "Verification callback resumes review with club details");
   assert.equal(writes().length, 1, "Verification does not auto-create the club");
   await unmount();
