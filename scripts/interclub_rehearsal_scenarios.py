@@ -1,7 +1,7 @@
 """Real API scenarios; service access is restricted to synthetic fixture setup."""
 from collections import Counter
 from copy import deepcopy
-from datetime import timedelta
+from datetime import datetime, timedelta
 from itertools import combinations
 import json
 import time
@@ -36,7 +36,11 @@ def new_meet(r, s, phase="regular", clubs=None):
 
 def prepare(r, s, m, *, phase="regular", partial=(), mixed=False):
     r.open_dates(s)
-    when = now()-timedelta(days=2)
+    # Keep successive rehearsed meets two days apart. Real scheduling guards
+    # also apply to fixture time travel; finals must follow regular-season play.
+    index = next(i for i, meet in enumerate(s["meets"]) if meet["id"] == m["id"])
+    first_days_ago = 14 if s["label"] == "incidents" else 4
+    when = now()-timedelta(days=first_days_ago-2*index)
     deadline = when-timedelta(hours=1)
     r.move_meet(s,m,now()+timedelta(days=3),deadline)
     for division in s["divisions"]:
@@ -179,7 +183,7 @@ def full_season(r):
     games(invalid)[0].update(status="completed",a=11,b=10,played_at=iso(now()-timedelta(days=3)))
     r.api("PUT", root, {"expected_revision":b["revision"],"document":invalid}, expected=(422,))
     r.api("GET", "/public/interclub/"+s["id"], actor=None, expected=(404,))
-    complete = r.complete(b["document"], now()-timedelta(days=3))
+    complete = r.complete(b["document"], datetime.fromisoformat(m["starts_at"]))
     b = r.save(s, m, b, complete)
     r.api("PUT", root, {"expected_revision":b["revision"]-1,"document":complete}, expected=(409,))
     r.check(not workspace(r,s)["standings"]["divisions"], "saved drafts do not become official standings")
@@ -215,7 +219,7 @@ def full_season(r):
     fb = None
     for division in s["divisions"]:
         fb = r.generated(s,final,phase="final",division=division,pair=s["clubs"][:2],format="mlp",revision=fb["revision"] if fb else 0)
-    fd = r.complete(fb["document"],now()-timedelta(days=2),final_tie=True)
+    fd = r.complete(fb["document"],datetime.fromisoformat(final["starts_at"]),final_tie=True)
     fb = r.approve(s,final,r.save(s,final,fb,fd))
     rating_evidence(r,s,fb,12)
     cup = workspace(r,s)["club_cup"]
@@ -233,7 +237,7 @@ def incidents(r):
     s = r.season("incidents",club_count=2)
     m = s["meets"][0]
     b = prepare(r,s,m)
-    doc = r.complete(b["document"],now()-timedelta(days=2))
+    doc = r.complete(b["document"],datetime.fromisoformat(m["starts_at"]))
     encounter = doc["encounters"][0]
     women = encounter["pairings"][0]
     women["games"][1].update(status="retired",a=8,b=2,winner="b",injury_reason="Synthetic injury rehearsal")
@@ -247,7 +251,7 @@ def incidents(r):
                                 ("weather-partial",[],"partial"),("weather-cancelled",[],"cancelled")]:
         m = new_meet(r,s)
         b = prepare(r,s,m,partial=partial)
-        doc = r.complete(b["document"],now()-timedelta(days=2))
+        doc = r.complete(b["document"],datetime.fromisoformat(m["starts_at"]))
         if mode != "normal":
             doc["weather"] = "finalized_partial"
             for pairing in doc["encounters"][0]["pairings"][(1 if mode=="partial" else 0):]:
@@ -260,7 +264,7 @@ def incidents(r):
     # A delay can be saved without prematurely making any score official.
     m = new_meet(r,s)
     b = prepare(r,s,m,mixed=True)
-    doc = r.complete(b["document"],now()-timedelta(days=2))
+    doc = r.complete(b["document"],datetime.fromisoformat(m["starts_at"]))
     doc["weather"] = "delay"
     for game in doc["encounters"][0]["pairings"][1]["games"][1:]:
         game.update(status="pending",a=None,b=None,winner=None,played_at=None)
@@ -301,7 +305,7 @@ def qualifier(r):
     s = r.season("qualifying-playoff",club_count=3)
     m = s["meets"][0]
     b = prepare(r,s,m)
-    b = r.approve(s,m,r.save(s,m,b,r.complete(b["document"],now()-timedelta(days=2),cycle=True)))
+    b = r.approve(s,m,r.save(s,m,b,r.complete(b["document"],datetime.fromisoformat(m["starts_at"]),cycle=True)))
     q = workspace(r,s)["standings"]["qualification"]["3.5"]
     r.check(q["status"] == "playoff_required" and set(q["playoff_required"]) == set(s["clubs"]),"unresolved three-way tie requires a playoff rather than arbitrary finalists")
     m = new_meet(r,s,"qualifier")
@@ -310,7 +314,7 @@ def qualifier(r):
     for pair in combinations(s["clubs"],2):
         b = r.generated(s,m,phase="qualifier",division="3.5",pair=pair,format="mlp",revision=b["revision"] if b else 0)
     r.check(len(b["document"]["encounters"]) == 3,"qualifying packet contains all three pairwise matchups")
-    b = r.approve(s,m,r.save(s,m,b,r.complete(b["document"],now()-timedelta(days=2))))
+    b = r.approve(s,m,r.save(s,m,b,r.complete(b["document"],datetime.fromisoformat(m["starts_at"]))))
     rating_evidence(r,s,b,12)
     result = workspace(r,s)
     q = result["standings"]["qualification"]["3.5"]
