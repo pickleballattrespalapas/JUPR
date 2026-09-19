@@ -1,0 +1,79 @@
+import { expect, test } from "@playwright/test";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { bootstrapStagingContext, expectedApiOrigin } from "./support/staging";
+
+// This private fixture stays outside uploaded artifacts. The session was issued
+// by staging Auth to a synthetic user restricted to this run's synthetic clubs.
+test.use({ trace: "off", video: "off", screenshot: "off", timezoneId: "UTC" });
+test("interclub paper packet, score entry, approval and public results", async ({ page, context }) => {
+  test.setTimeout(300_000);
+  const state = JSON.parse(readFileSync(process.env.JUPR_INTERCLUB_REHEARSAL_STATE!, "utf8"));
+  expect(state.marker).toBe("interclub-functional-rehearsal-v1");
+  expect(state.sha).toBe(process.env.GITHUB_SHA);
+  const origin = process.env.JUPR_ATTESTED_VERCEL_DEPLOYMENT_ORIGIN!;
+  const user = state.users[0];
+  const club = state.clubs[0];
+  const season = state.seasons.find((s: { label: string }) => s.label === "incidents");
+  const official = state.seasons.find((s: { label: string }) => s.label === "full-season");
+  const reportDir = process.env.JUPR_INTERCLUB_REHEARSAL_REPORT!;
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await bootstrapStagingContext(context);
+  await context.addInitScript(({ token: access_token, email, origin }) => {
+    if (location.origin === origin) localStorage.setItem("jupr_admin_session_v1", JSON.stringify({
+      access_token, token_type: "bearer", user: { email },
+    }));
+  }, { token: user.token, email: user.email, origin });
+  await context.addCookies([{ name: "jupr_admin_workspace_v1", value: encodeURIComponent(JSON.stringify({ clubId: club, clubSlug: club })),
+    url: origin, secure: true, sameSite: "Lax" }]);
+  const route = `/admin/interclub/competition?season=${season.id}&meet=${season.browser_meet}`;
+  await page.goto(route);
+  await expect(page.getByRole("heading", { name: "Meet score draft", exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("button", { name: "Review and submit meet", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Print meet packet", exact: true })).toBeEnabled();
+  await page.emulateMedia({ media: "print" });
+  await page.pdf({ path: join(reportDir, "interclub-paper-packet.pdf"), format: "A4", printBackground: true });
+  await page.emulateMedia({ media: "screen" });
+  const labels: Record<string,string> = { women: "Women’s doubles", men: "Men’s doubles" };
+  const played = new Date(Date.now()-60_000).toISOString().slice(0,16);
+  for (const encounter of season.browser_batch.document.encounters) {
+    for (const pairing of encounter.pairings) {
+      for (let i=0;i<pairing.games.length;i++) {
+        await page.getByLabel(`${labels[pairing.kind]} game ${i+1} status`, { exact: true }).selectOption("completed");
+        await page.getByLabel(`${pairing.id} game ${i+1} club A score`, { exact: true }).fill("11");
+        await page.getByLabel(`${pairing.id} game ${i+1} club B score`, { exact: true }).fill("9");
+      }
+    }
+  }
+  for (const input of await page.getByLabel("Actual time played (your device’s time)", { exact: true }).all()) await input.fill(played);
+  await expect(page.getByLabel("Season", { exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Print meet packet", exact: true })).toBeDisabled();
+  const apiRoot = `${expectedApiOrigin}/admin/clubs/${club}/interclub/competition/${season.id}/meets/${season.browser_meet}/regular`;
+  const save = page.waitForResponse(r => r.url() === apiRoot && r.request().method() === "PUT");
+  await page.getByRole("button", { name: "Save all draft scores", exact: true }).first().click();
+  expect((await save).status()).toBe(200);
+  await expect(page.getByText("All draft changes saved", { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Review and submit meet", exact: true })).toBeEnabled();
+  await page.getByRole("button", { name: "Review and submit meet", exact: true }).click();
+  await page.getByRole("button", { name: "Submit all official scores", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Awaiting organizer approval", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Review official approval", exact: true }).click();
+  const approval = page.waitForResponse(r => r.url() === apiRoot+"/approve" && r.request().method() === "POST", { timeout: 90_000 });
+  await page.getByRole("button", { name: "Approve this revision", exact: true }).click();
+  const result = await approval;
+  expect(result.status()).toBe(200);
+  expect((await result.json()).ratings.status).toBe("completed");
+  await expect(page.getByRole("heading", { name: "Official meet results", exact: true })).toBeVisible();
+  await expect(page.getByText("Rating updates: completed", { exact: true })).toBeVisible();
+  await page.screenshot({ path: join(reportDir,"interclub-approved-meet.png"), fullPage: true });
+  await context.clearCookies({ name: "jupr_admin_workspace_v1" });
+  await page.goto(`/interclub/${official.id}`);
+  await expect(page.getByText(new RegExp(`Rehearsal ${state.run} full-season`)).first()).toBeVisible();
+  await expect(page.getByText("Club Cup", { exact: false }).first()).toBeVisible();
+  await expect(page.getByText("Private revised note", { exact: false })).toHaveCount(0);
+  expect(errors).toEqual([]);
+  writeFileSync(join(reportDir,"interclub-browser.json"),JSON.stringify({ status:"passed",candidate_sha:state.sha,
+    checks:["paper_packet_pdf","six_game_ui_entry","dirty_navigation_lock","draft_reload","whole_meet_submission","organizer_approval","both_rating_streams","public_cup","no_browser_exceptions"] },null,2));
+});

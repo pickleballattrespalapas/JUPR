@@ -39,6 +39,11 @@ on:
           - test
           - provision
           - off
+      interclub_rehearsal:
+        description: "Run the isolated interclub functional rehearsal and revoke its synthetic staff afterward"
+        required: false
+        type: boolean
+        default: false
       write_wave:
         description: "Staging write posture. Normal staging deployments remain open; select none only to close writes temporarily."
         required: true
@@ -619,6 +624,67 @@ jobs:
           STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
           STAGING_SUPABASE_URL: "https://sijpxjxvdtrehmqvirfi.supabase.co"
         run: python scripts/prepare_parity_staging_session.py cleanup --report-dir "$RUNNER_TEMP/staging-handoff"
+
+      - name: Select isolated interclub rehearsal
+        id: interclub-rehearsal
+        if: steps.staging-posture.outputs.write_wave == 'open' && github.event.inputs.qa_admin != 'off'
+        shell: bash
+        env:
+          REQUESTED: ${{ github.event.inputs.interclub_rehearsal }}
+        run: |
+          set -euo pipefail
+          if [ "$REQUESTED" = true ] || git diff --name-only "$GITHUB_SHA^1" "$GITHUB_SHA" | grep -Eq '^(scripts/(run_interclub_rehearsal|interclub_rehearsal_scenarios)\.py|apps/web/e2e/interclub-rehearsal.staging.spec.ts)$'; then
+            echo 'run=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Rehearse interclub API and rating transactions
+        id: interclub-api
+        if: steps.interclub-rehearsal.outputs.run == 'true'
+        env:
+          STAGING_API_BASE_URL: "https://juprleagues-api-staging.fly.dev"
+          STAGING_SUPABASE_URL: "https://sijpxjxvdtrehmqvirfi.supabase.co"
+          STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+          STAGING_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
+        run: python -m scripts.run_interclub_rehearsal --report-dir "$RUNNER_TEMP/staging-handoff"
+
+      - name: Rehearse interclub browser and paper packet
+        if: steps.interclub-api.outcome == 'success'
+        working-directory: apps/web
+        shell: bash
+        env:
+          JUPR_EXPECTED_STAGING_API_ORIGIN: "https://juprleagues-api-staging.fly.dev"
+          JUPR_EXPECTED_STAGING_AUTH_ORIGIN: "https://sijpxjxvdtrehmqvirfi.supabase.co"
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          set -euo pipefail
+          handoff="$RUNNER_TEMP/staging-handoff/staging-handoff.json"
+          test "$(jq -r '.candidate_sha' "$handoff")" = "$GITHUB_SHA"
+          test "$(jq -r '.status' "$handoff")" = ready_for_manual_testing
+          deployment_origin="$(jq -r '.deployment.vercel_deployment_origin' "$handoff")"
+          [[ "$deployment_origin" =~ ^https://[a-z0-9]([a-z0-9-]{0,180}[a-z0-9])?-[a-z0-9]{8,64}-pickleballattrespalapas1\.vercel\.app$ ]]
+          export STAGING_WEB_BASE_URL="$deployment_origin"
+          export JUPR_ATTESTED_VERCEL_DEPLOYMENT_ORIGIN="$deployment_origin"
+          export JUPR_INTERCLUB_REHEARSAL_STATE="$RUNNER_TEMP/interclub-rehearsal-private.json"
+          export JUPR_INTERCLUB_REHEARSAL_REPORT="$RUNNER_TEMP/staging-handoff"
+          npx playwright test e2e/interclub-rehearsal.staging.spec.ts --retries=0 --forbid-only --reporter=line
+
+      - name: Revoke isolated interclub rehearsal access
+        if: always() && steps.interclub-api.outcome != 'skipped' && steps.interclub-api.outcome != ''
+        env:
+          STAGING_API_BASE_URL: "https://juprleagues-api-staging.fly.dev"
+          STAGING_SUPABASE_URL: "https://sijpxjxvdtrehmqvirfi.supabase.co"
+          STAGING_SUPABASE_ANON_KEY: ${{ secrets.STAGING_SUPABASE_ANON_KEY }}
+          STAGING_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
+        run: python -m scripts.run_interclub_rehearsal --cleanup --report-dir "$RUNNER_TEMP/staging-handoff"
+
+      - name: Upload failed interclub rehearsal report
+        if: failure() && steps.interclub-rehearsal.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: interclub-rehearsal-failure-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/staging-handoff/interclub-*
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Upload successful staging handoff
         if: steps.staging-posture.outputs.write_wave == 'open'
