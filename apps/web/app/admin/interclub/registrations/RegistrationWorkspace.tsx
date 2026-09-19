@@ -42,9 +42,8 @@ function ClubRegistrations({ clubId, accessToken, initialSeasonId }: { clubId: s
     return () => controller.abort();
   }, [api, clubId, reload]);
   return <section className={styles.page}>
-    <h1>Interclub season workspace</h1>
-    <p>Accept season invitations, then choose your available players for each upcoming meet.</p>
-    <p><Link href="/admin/interclub">Back to interclub leagues and setup</Link></p>
+    <p className={styles.back}><Link href="/admin/interclub">← Interclub leagues</Link></p>
+    <h1>Club invitations &amp; rosters</h1>
     <div className={styles.toolbar}>
       <label>Season <select value={selected} onChange={e => setSelected(e.target.value)} disabled={!loaded}>
         {!seasons.length && <option value="">{loading ? "Loading invitations…" : loaded ? "No open invitations" : "Choose a season"}</option>}
@@ -70,7 +69,15 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId }: { api: strin
   const [blocked, setBlocked] = useState(false);
   const [reload, setReload] = useState(0);
   const [selectedMeet, setSelectedMeet] = useState("");
+  const [responding, setResponding] = useState<"accept" | "decline" | null>(null);
+  const responseFocus = useRef(false), confirmation = useRef<HTMLHeadingElement | null>(null), rosters = useRef<HTMLElement | null>(null);
   const pending = useRef(false), mutation = useRef<AbortController | null>(null);
+  useEffect(() => {
+    if (responseFocus.current && data?.own_participation?.status !== "invited") {
+      confirmation.current?.focus({ preventScroll: true });
+      responseFocus.current = false;
+    }
+  }, [data?.own_participation?.status]);
   useEffect(() => () => { mutation.current?.abort(); }, [root]);
   useEffect(() => {
     const controller = new AbortController(); setData(null); setLoading(true); setLoadError(""); setBlocked(false);
@@ -83,9 +90,9 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId }: { api: strin
     return () => controller.abort();
   }, [root, reload]);
 
-  async function change(path: string, method: string, body: object, success: string): Promise<boolean> {
+  async function change(path: string, method: string, body: object, success: string, participationAction?: "accept" | "decline"): Promise<boolean> {
     if (pending.current || blocked) return false;
-    pending.current = true; setBusy(true); setMessage("");
+    pending.current = true; setBusy(true); setMessage(""); setResponding(participationAction || null);
     const controller = new AbortController(); mutation.current = controller;
     try {
       const response = await fetch(`${root}${path}`, { method, signal: controller.signal,
@@ -96,9 +103,17 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId }: { api: strin
         if ([409, 503].includes(response.status)) setBlocked(true);
         throw new Error(apiError(result, "Unable to save this change."));
       }
-      setMessage(success); setReload(n => n + 1); return true;
+      if (participationAction) {
+        if (result.participation?.club_id !== clubId || result.participation?.season_id !== seasonId) {
+          setBlocked(true); throw new Error("Could not confirm your club’s response. Reload the season to check its status.");
+        }
+        responseFocus.current = true;
+        setData(old => old ? { ...old, own_participation: result.participation,
+          participations: old.participations.map(p => p.club_id === clubId ? result.participation : p) } : old);
+      } else { setMessage(success); setReload(n => n + 1); }
+      return true;
     } catch (e) { if (!controller.signal.aborted) { setMessage(e instanceof Error ? e.message : "Unable to save this change."); if (e instanceof TypeError) setBlocked(true); } return false; }
-    finally { pending.current = false; if (!controller.signal.aborted) setBusy(false); }
+    finally { pending.current = false; if (!controller.signal.aborted) { setBusy(false); setResponding(null); } }
   }
   async function moreTeams() {
     if (!data || data.next_team_offset === null || pending.current) return;
@@ -113,52 +128,83 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId }: { api: strin
   }
   const disabled = busy || blocked;
   const clubName = (id: string) => data?.clubs.find(c => c.id === id)?.name || id;
-  const when = (value: string) => new Date(value).toLocaleString(undefined, { timeZone: data?.season.details.timezone });
+  const when = (value: string) => new Date(value).toLocaleString(undefined, { timeZone: data?.season.details.timezone, dateStyle: "medium", timeStyle: "short" });
+  const date = (value: string) => new Date(`${value}T12:00:00Z`).toLocaleDateString(undefined, { timeZone: "UTC", dateStyle: "medium" });
+  const status = data?.own_participation?.status;
+  const showRosters = data?.is_organizer || status === "accepted";
+  const nextMeet = data?.meets.find(meet => meet.roster_open && meet.club_ids.includes(clubId));
+  function prepareRoster() {
+    if (nextMeet) setSelectedMeet(nextMeet.id);
+    rosters.current?.focus({ preventScroll: true });
+    rosters.current?.scrollIntoView({ block: "start" });
+  }
   return <>
-    <div className={styles.toolbar}><button disabled={busy || loading} onClick={() => { setMessage(""); setReload(n => n + 1); }}>{loadError ? "Retry loading season" : "Reload season"}</button>{blocked && <span>Reload before making another change. Your draft remains below for reference.</span>}</div>
     {loadError && <p role="alert" className={styles.notice}>{loadError}</p>}
     {message && <p role="status" className={styles.notice}>{message}</p>}
+    {(!data || blocked) && <div className={styles.toolbar}><button disabled={busy || loading} onClick={() => { setMessage(""); setReload(n => n + 1); }}>{loadError ? "Retry loading season" : "Reload season"}</button>{blocked && <span>Reload to check the latest response before trying again.</span>}</div>}
     {loading && <p role="status">Loading season…</p>}
     {data && <>
-      <h2>{data.season.details.name}</h2>
-      <p>Organized by {clubName(data.season.organizer_club_id)} · {data.season.details.start_date} to {data.season.details.end_date}</p>
-      <ol className={styles.nextSteps} aria-label="Season next steps">
-        <li><strong>1. Club responses</strong><p>{data.is_organizer ? `${data.participations.filter(p => p.status === "accepted").length} of ${data.participations.length} clubs have accepted.` : data.own_participation?.status === "accepted" ? "Your club has accepted the season invitation." : data.own_participation?.status === "invited" ? "Respond to your club’s invitation below." : "Your club has not joined. Ask the organizer for a new invitation."}</p><a href="#club-responses">Review responses</a></li>
-        <li><strong>2. Prepare a meet</strong><p>Choose an upcoming meet. The organizer can set its roster deadline before teams submit.</p><a href="#meet-rosters">Choose a meet</a></li>
-        <li><strong>3. Submit meet rosters</strong><p>Each accepted club chooses four available players per team. Lineups can change at the next meet.</p></li>
-      </ol>
-      <details className={styles.card}><summary>Season details and eligibility rules</summary>
-      <div className={styles.scroll}><table className={styles.table}><caption>Season eligibility rules</caption><thead><tr><th>Division</th><th>Minimum rating</th><th>Maximum rating</th><th>Team</th></tr></thead><tbody>
-        {Object.entries(data.season.rules).map(([division, rule]) => <tr key={division}><td>{division}</td><td>{rule.min_rating ?? "No minimum"}</td><td>{rule.max_rating ?? "No maximum"}</td><td>{composition(rule)}</td></tr>)}
-      </tbody></table></div>
-      <p>Starting ratings come from the represented club when each player first enters this season. Those starting ratings stay fixed for this season’s eligibility checks.</p>
-      </details>
-      {data.own_participation && <section id={data.is_organizer ? undefined : "club-responses"} className={styles.card}><h3>{clubName(clubId)} participation</h3><p className={styles.tag}>{data.own_participation.status}</p>
-        {data.own_participation.status === "invited" && <div className={styles.toolbar}>
-          <button disabled={disabled} onClick={() => void change(`/participations/${encodeURIComponent(clubId)}`, "POST", { action: "accept", expected_revision: data.own_participation!.revision }, "Your club accepted the invitation. Choose an upcoming meet to submit its roster.")}>Accept season invitation</button>
-          <button disabled={disabled} onClick={() => void change(`/participations/${encodeURIComponent(clubId)}`, "POST", { action: "decline", expected_revision: data.own_participation!.revision }, "Your club declined the invitation.")}>Decline invitation</button>
-        </div>}
+      <header className={styles.seasonHeader}>
+        <h2>{data.season.details.name}</h2>
+        <p>{date(data.season.details.start_date)} – {date(data.season.details.end_date)} · Organized by {clubName(data.season.organizer_club_id)}</p>
+      </header>
+      {status === "invited" && <section className={`${styles.card} ${styles.invitation}`} aria-labelledby="invitation-title">
+        <p className={styles.eyebrow}>Invitation to your club</p>
+        <h3 id="invitation-title">{clubName(clubId)} is invited</h3>
+        <p>Accept to join {data.season.details.name}. You’ll choose available players separately for each meet.</p>
+        <div className={styles.toolbar}>
+          <button className={styles.primary} disabled={disabled} aria-busy={responding === "accept" || undefined} onClick={() => void change(`/participations/${encodeURIComponent(clubId)}`, "POST", { action: "accept", expected_revision: data.own_participation!.revision }, "", "accept")}>{responding === "accept" ? "Accepting…" : "Accept invitation"}</button>
+          <button disabled={disabled} aria-busy={responding === "decline" || undefined} onClick={() => void change(`/participations/${encodeURIComponent(clubId)}`, "POST", { action: "decline", expected_revision: data.own_participation!.revision }, "", "decline")}>{responding === "decline" ? "Declining…" : "Decline invitation"}</button>
+        </div>
+        <p className={styles.muted}>No player roster is required to accept.</p>
       </section>}
-      {data.is_organizer && <section id="club-responses" className={styles.card}><h3>Club responses</h3><div className={styles.scroll}><table className={styles.table}><thead><tr><th>Club</th><th>Response</th><th>Invitation</th></tr></thead><tbody>
+      {status === "accepted" && <section className={`${styles.card} ${styles.success}`} aria-labelledby="participation-confirmed">
+        <p className={styles.eyebrow}>Invitation accepted</p>
+        <h3 id="participation-confirmed" ref={confirmation} tabIndex={-1}>{clubName(clubId)} has joined</h3>
+        <p>Your place in {data.season.details.name} is confirmed. Next, prepare your club’s roster for an upcoming meet. Players can change from one meet to the next.</p>
+        {nextMeet && <p><strong>Next meet:</strong> {when(nextMeet.starts_at)} · {clubName(nextMeet.host_club_id)}</p>}
+        {data.meets.length > 0 ? <button className={styles.primary} onClick={prepareRoster}>{nextMeet ? "Prepare meet roster" : "View meet rosters"}</button> : <p>The organizer will share your meet schedule here.</p>}
+      </section>}
+      {status && !["invited", "accepted"].includes(status) && <section className={styles.card}>
+        <h3 ref={confirmation} tabIndex={-1}>{status === "declined" ? "Invitation declined" : "Invitation cancelled"}</h3>
+        <p>{clubName(clubId)} has not joined {data.season.details.name}. Ask {clubName(data.season.organizer_club_id)} for a new invitation if you want to take part.</p>
+      </section>}
+      {!showRosters && <details className={styles.card}>
+        <summary>Meet schedule for {clubName(clubId)} ({data.meets.length})</summary>
+        <p>Meet times are shown in {data.season.details.timezone}.</p>
+        {data.meets.length ? <ul className={styles.schedule}>{data.meets.map(meet => <li key={meet.id}><strong>{when(meet.starts_at)}</strong><span>Hosted by {clubName(meet.host_club_id)}</span></li>)}</ul> : <p>No meets are scheduled for your club yet.</p>}
+      </details>}
+      <details className={styles.card}><summary>Divisions and eligibility rules</summary>
+        <div className={styles.scroll}><table className={styles.table}><caption>Season eligibility rules</caption><thead><tr><th>Division</th><th>Minimum rating</th><th>Maximum rating</th><th>Team</th></tr></thead><tbody>
+          {Object.entries(data.season.rules).map(([division, rule]) => <tr key={division}><td>{division}</td><td>{rule.min_rating ?? "No minimum"}</td><td>{rule.max_rating ?? "No maximum"}</td><td>{composition(rule)}</td></tr>)}
+        </tbody></table></div>
+        <p>Starting ratings come from the represented club when each player first enters this season. Those starting ratings stay fixed for this season’s eligibility checks.</p>
+      </details>
+      {data.is_organizer && <section id="club-responses" className={styles.card}><h3>Club responses</h3>
+        <p>{data.participations.filter(p => p.status === "accepted").length} of {data.participations.length} clubs have accepted. Each club chooses its players separately for each meet.</p>
+        <div className={styles.scroll}><table className={styles.table}><thead><tr><th>Club</th><th>Response</th><th>Invitation</th></tr></thead><tbody>
         {data.participations.map(p => <tr key={p.club_id}><td>{clubName(p.club_id)}</td><td>{p.status}</td><td>
           {p.status === "invited" && <button disabled={disabled} onClick={() => void change(`/participations/${encodeURIComponent(p.club_id)}`, "POST", { action: "cancel", expected_revision: p.revision }, "Club invitation cancelled.")}>Cancel invitation</button>}
           {["declined", "cancelled"].includes(p.status) && <button disabled={disabled} onClick={() => void change(`/participations/${encodeURIComponent(p.club_id)}`, "POST", { action: "reinvite", expected_revision: p.revision }, "Club invited again.")}>Invite again</button>}
         </td></tr>)}
       </tbody></table></div></section>}
-      <h3 id="meet-rosters">Meet rosters</h3>
-      <p>Choose four players for each meet. Your lineup can change from one meet to the next.</p>
-      {!data.meets.length ? <p>No meets are scheduled for your club in this season.</p> : <>
-        <label>Meet <select aria-label="Meet" value={selectedMeet} onChange={e => setSelectedMeet(e.target.value)}>
-          {data.meets.map(meet => <option key={meet.id} value={meet.id}>{when(meet.starts_at)} · {clubName(meet.host_club_id)}{meet.roster_open ? "" : " · History"}</option>)}
-        </select></label>
-        {selectedMeet && <MeetRegistration key={selectedMeet} root={`${root}/meets/${selectedMeet}`} accessToken={accessToken} clubId={clubId} seasonData={data} />}
-      </>}
-      {data.teams.length > 0 && <details className={styles.card}><summary>Earlier season submissions (reference only)</summary>
-        <p>These were submitted before rosters moved to individual meets. Choose players again for each upcoming meet.</p>
-        {data.teams.map(team => <TeamCard key={`${team.id}:${team.revision}`} team={team} clubName={clubName(team.club_id)} root={root} accessToken={accessToken} own={false} organizer={false} disabled={true}
-          edit={() => {}} withdraw={async () => false} decide={async () => false} />)}
-        {data.next_team_offset !== null && <button disabled={disabled} onClick={() => void moreTeams()}>Load earlier submissions</button>}
-      </details>}
+      {showRosters && <section id="meet-rosters" ref={rosters} tabIndex={-1} className={styles.rosters} aria-label="Meet rosters">
+        <h3>Meet rosters</h3>
+        <p>Choose a meet, then add a team with four available players. Your lineup can change from one meet to the next.</p>
+        {!data.meets.length ? <p>No meets are scheduled for your club in this season.</p> : <>
+          <label>Meet <select aria-label="Meet" value={selectedMeet} onChange={e => setSelectedMeet(e.target.value)}>
+            {data.meets.map(meet => <option key={meet.id} value={meet.id}>{when(meet.starts_at)} · {clubName(meet.host_club_id)}{meet.roster_open ? "" : " · History"}</option>)}
+          </select></label>
+          {selectedMeet && <MeetRegistration key={selectedMeet} root={`${root}/meets/${selectedMeet}`} accessToken={accessToken} clubId={clubId} seasonData={data} />}
+        </>}
+        {data.teams.length > 0 && <details className={styles.card}><summary>Earlier season submissions (reference only)</summary>
+          <p>These were submitted before rosters moved to individual meets. Choose players again for each upcoming meet.</p>
+          {data.teams.map(team => <TeamCard key={`${team.id}:${team.revision}`} team={team} clubName={clubName(team.club_id)} root={root} accessToken={accessToken} own={false} organizer={false} disabled={true}
+            edit={() => {}} withdraw={async () => false} decide={async () => false} />)}
+          {data.next_team_offset !== null && <button disabled={disabled} onClick={() => void moreTeams()}>Load earlier submissions</button>}
+        </details>}
+      </section>}
+      {!blocked && <div className={styles.toolbar}><button disabled={busy || loading} onClick={() => { setMessage(""); setReload(n => n + 1); }}>Reload season</button></div>}
     </>}
   </>;
 }

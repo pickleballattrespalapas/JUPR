@@ -210,6 +210,51 @@ async function inviteDuringClubSelection() {
   assert.equal(saved.length, before, 'Club change aborts the old invitation result');
 }
 
+async function invitationDashboard() {
+  let clubId = 'beta', registrations = [
+    { id: 'invite', organizer_club_id: 'alpha', details: { name: 'Invited season', start_date: '2099-01-01', end_date: '2099-03-31' }, participation: { status: 'invited' } },
+    { id: 'joined', organizer_club_id: 'alpha', details: { name: 'Joined season', start_date: '2099-01-01', end_date: '2099-03-31' }, participation: { status: 'accepted' } },
+    { id: 'organized', organizer_club_id: 'beta', details: { name: 'Organized season', start_date: '2099-01-01', end_date: '2099-03-31' }, participation: { status: 'invited' } },
+    { id: 'declined', organizer_club_id: 'alpha', details: { name: 'Declined season', start_date: '2099-01-01', end_date: '2099-03-31' }, participation: { status: 'declined' } },
+    { id: 'cancelled', organizer_club_id: 'alpha', details: { name: 'Cancelled season', start_date: '2099-01-01', end_date: '2099-03-31' }, participation: { status: 'cancelled' } }
+  ];
+  const draft = { ...helpers.newSeason(), id: 'draft' }; draft.draft.name = 'Draft season';
+  const requests = [];
+  global.fetch = async (url, options) => {
+    requests.push({ url, options });
+    if (url.endsWith('/setup')) return reply({ seasons: [draft] });
+    if (url.endsWith('/registrations')) return reply({ seasons: registrations });
+    return reply({ clubs, next_offset: null });
+  };
+  const Home = load('app/admin/interclub/page.tsx', {
+    'next/link': Link, '@/lib/useAdminWorkspace': { useAdminWorkspace: () => ({ clubId }) },
+    '@/lib/useAdminSession': { useAdminSession: () => ({ accessToken: 'home-token', loading: false, session: { user: { id: 'staff' }, capabilities: { assignments: [{ club_id: clubId, role: 'administrator' }] } } }) },
+    '@/lib/adminPlayerEditorApi': { getAdminPlayerEditorApiBaseUrl: () => 'https://api.test' },
+    '@/lib/interclubRegistration': registration, '@/lib/interclubSetup': helpers, './InterclubSetupWizard': () => null, './setup.module.css': {}
+  }).default;
+  let tree;
+  await act(async () => { tree = create(React.createElement(Home)); });
+  assert.deepEqual(tree.root.findAllByType('h2').map(nodeText), ['Invitations to your club', 'Seasons your club has joined', 'Continue setup', 'Seasons your club organizes', 'Previous invitations']);
+  const card = name => tree.root.findAllByType('article').find(a => a.findAllByType('h3').some(h => nodeText(h) === name));
+  const links = name => card(name).findAllByType('a');
+  assert.ok(nodeText(card('Invited season')).includes('Visiting Club'));
+  assert.ok(nodeText(card('Invited season')).includes('Tres Palapas'), 'Invitation identifies its organizer');
+  assert.deepEqual(links('Invited season').map(nodeText), ['Review invitation']);
+  assert.equal(links('Invited season')[0].props.href, '/admin/interclub/registrations?season=invite');
+  assert.deepEqual(links('Joined season').map(nodeText), ['Prepare meet rosters']);
+  assert.ok(links('Organized season').some(a => nodeText(a) === 'Manage season'));
+  assert.ok(links('Organized season').some(a => a.props.href.includes('/publication?')));
+  for (const name of ['Declined season', 'Cancelled season']) assert.deepEqual(links(name).map(nodeText), ['View invitation']);
+  assert.ok(!links('Invited season').some(a => a.props.href.includes('/publication?')), 'Participating club is not offered organizer publishing');
+  assert.ok(requests.every(r => r.url.includes('/clubs/beta/') && !r.options.method), 'Dashboard only loads the current club');
+
+  clubId = 'alpha'; registrations = [];
+  await act(async () => tree.update(React.createElement(Home)));
+  assert.ok(!text(tree).includes('Invited season') && !text(tree).includes('Joined season'), 'Club switching removes the previous club invitation cards');
+  assert.equal(tree.root.findAllByType('h2').filter(h => nodeText(h) === 'Invitations to your club').length, 0);
+  await act(async () => tree.unmount());
+}
+
 function timezoneChecks() {
   assert.equal(helpers.meetUtcTime('2027-01-10T09:00', 'America/Mazatlan'), '2027-01-10T16:00:00.000Z');
   assert.equal(helpers.meetUtcTime('2027-07-10T09:00', 'America/New_York'), '2027-07-10T13:00:00.000Z');
@@ -217,4 +262,4 @@ function timezoneChecks() {
   assert.throws(() => helpers.meetUtcTime('2027-03-14T02:30', 'America/New_York'), /clock change/);
   assert.throws(() => helpers.meetUtcTime('2027-11-07T01:30', 'America/New_York'), /clock change/);
 }
-(async () => { timezoneChecks(); await completeJourney(); await conflictsAndContext(); await inviteDuringClubSelection(); console.log('Interclub wizard: inline club creation/selection, invitation links and renewal, saved progress, uncertain responses, duplicate actions, stale context and opened-season management passed.'); })().catch(e => { console.error(e); process.exitCode = 1; });
+(async () => { timezoneChecks(); await completeJourney(); await conflictsAndContext(); await inviteDuringClubSelection(); await invitationDashboard(); console.log('Interclub wizard: invitation dashboard, inline club creation/selection, invitation links and renewal, saved progress, uncertain responses, duplicate actions, stale context and opened-season management passed.'); })().catch(e => { console.error(e); process.exitCode = 1; });
