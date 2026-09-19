@@ -7,6 +7,7 @@ import { useAdminSession } from "@/lib/useAdminSession";
 import { useAdminWorkspace } from "@/lib/useAdminWorkspace";
 import { InterclubTeam, MeetRegistrationDetail, RegistrationDetail, RegistrationSeason, RosterVersion, apiError, composition, rosterStatus } from "@/lib/interclubRegistration";
 import styles from "./registrations.module.css";
+import { SeasonPlayerPool, MeetAvailability } from "./PlayerPoolPanels";
 
 function loadErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && !(error instanceof TypeError) && !(error instanceof SyntaxError) ? error.message : fallback;
@@ -69,6 +70,8 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId }: { api: strin
   const [blocked, setBlocked] = useState(false);
   const [reload, setReload] = useState(0);
   const [selectedMeet, setSelectedMeet] = useState("");
+  const [showPool, setShowPool] = useState(false);
+  const poolSection = useRef<HTMLElement | null>(null);
   const [responding, setResponding] = useState<"accept" | "decline" | null>(null);
   const responseFocus = useRef(false), confirmation = useRef<HTMLHeadingElement | null>(null), rosters = useRef<HTMLElement | null>(null);
   const pending = useRef(false), mutation = useRef<AbortController | null>(null);
@@ -79,6 +82,9 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId }: { api: strin
     }
   }, [data?.own_participation?.status]);
   useEffect(() => () => { mutation.current?.abort(); }, [root]);
+  useEffect(() => {
+    if (showPool) { poolSection.current?.focus({ preventScroll: true }); poolSection.current?.scrollIntoView({ block: "start" }); }
+  }, [showPool]);
   useEffect(() => {
     const controller = new AbortController(); setData(null); setLoading(true); setLoadError(""); setBlocked(false);
     fetch(root, { headers: { Authorization: `Bearer ${token.current}` }, cache: "no-store", signal: controller.signal })
@@ -161,9 +167,17 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId }: { api: strin
       {status === "accepted" && <section className={`${styles.card} ${styles.success}`} aria-labelledby="participation-confirmed">
         <p className={styles.eyebrow}>Invitation accepted</p>
         <h3 id="participation-confirmed" ref={confirmation} tabIndex={-1}>{clubName(clubId)} has joined</h3>
-        <p>Your place in {data.season.details.name} is confirmed. Next, prepare your club’s roster for an upcoming meet. Players can change from one meet to the next.</p>
+        <p>Your place in {data.season.details.name} is confirmed. Invite players to your season pool, ask who is available for each meet, then choose that meet’s lineup.</p>
+        <div className={styles.toolbar}>
+          <button className={styles.primary} onClick={() => setShowPool(true)}>Build season player pool</button>
+          {data.meets.length > 0 && <button onClick={prepareRoster}>{nextMeet ? "Prepare meet roster" : "View meet rosters"}</button>}
+        </div>
         {nextMeet && <p><strong>Next meet:</strong> {when(nextMeet.starts_at)} · {clubName(nextMeet.host_club_id)}</p>}
-        {data.meets.length > 0 ? <button className={styles.primary} onClick={prepareRoster}>{nextMeet ? "Prepare meet roster" : "View meet rosters"}</button> : <p>The organizer will share your meet schedule here.</p>}
+        {!data.meets.length && <p>The organizer will share your meet schedule here.</p>}
+      </section>}
+      {status === "accepted" && showPool && <section ref={poolSection} tabIndex={-1} className={styles.rosters} aria-label="Season player pool workspace">
+        <SeasonPlayerPool root={root} accessToken={accessToken} clubName={clubName(clubId)} season={data.season} />
+        <button onClick={() => setShowPool(false)}>Close player pool</button>
       </section>}
       {status && !["invited", "accepted"].includes(status) && <section className={styles.card}>
         <h3 ref={confirmation} tabIndex={-1}>{status === "declined" ? "Invitation declined" : "Invitation cancelled"}</h3>
@@ -219,6 +233,8 @@ function MeetRegistration({ root, accessToken, clubId, seasonData }: { root: str
   const [blocked, setBlocked] = useState(false);
   const [reload, setReload] = useState(0);
   const [editor, setEditor] = useState<{ team: InterclubTeam | null } | null>(null);
+  const [showAvailability, setShowAvailability] = useState(false);
+  const [responses, setResponses] = useState<{ member_id: string; player_id: string | null; name: string; status: string; member_status?: string }[] | null>(null);
   const pending = useRef(false), mutation = useRef<AbortController | null>(null);
   useEffect(() => () => { mutation.current?.abort(); }, [root]);
   useEffect(() => {
@@ -282,8 +298,13 @@ function MeetRegistration({ root, accessToken, clubId, seasonData }: { root: str
         <p>The default is the meet’s start time. Set an earlier deadline before the first team submits.</p>
         <button disabled={disabled || !deadline} type="submit">Save meet deadline</button>
       </form>}
+      {ownMeet && <>
+        <button aria-expanded={showAvailability} onClick={() => setShowAvailability(value => !value)}>{showAvailability ? "Hide player availability" : "Invite players & view availability"}</button>
+        {showAvailability && <MeetAvailability meetRoot={root} accessToken={accessToken} clubName={clubName(clubId)} season={seasonData.season} meet={data.meet} onResponses={setResponses} />}
+      </>}
       {ownMeet && data.meet.roster_open && <button disabled={disabled} onClick={() => setEditor({ team: null })}>Add a team for this meet</button>}
       {editor && <RosterEditor key={editor.team ? `${editor.team.id}:${editor.team.revision}` : "new"} root={root} accessToken={accessToken} clubName={clubName(clubId)} divisions={seasonData.season.details.divisions} team={editor.team} disabled={disabled}
+        responses={responses}
         cancel={() => setEditor(null)} save={(id, body) => change(`/teams/${id}`, "PUT", { ...body, ...revision }, "Roster submitted for this meet.")} />}
       <h4>{seasonData.is_organizer ? "Teams for this meet" : "Your club’s teams for this meet"}</h4>
       {!data.teams.length && <p>No teams submitted for this meet yet.</p>}
@@ -297,9 +318,10 @@ function MeetRegistration({ root, accessToken, clubId, seasonData }: { root: str
 }
 
 type PlayerChoice = { id: string; name: string; starting_rating: number | null };
-function RosterEditor({ root, accessToken, clubName, divisions, team, disabled, cancel, save }: {
+function RosterEditor({ root, accessToken, clubName, divisions, team, disabled, cancel, save, responses }: {
   root: string; accessToken: string; clubName: string; divisions: string[]; team: InterclubTeam | null; disabled: boolean; cancel: () => void;
   save: (id: string, body: object) => Promise<boolean>;
+  responses: { player_id: string | null; status: string; member_status?: string }[] | null;
 }) {
   const [id] = useState(() => team?.id || crypto.randomUUID());
   const [name, setName] = useState(team?.name || "");
@@ -311,6 +333,9 @@ function RosterEditor({ root, accessToken, clubName, divisions, team, disabled, 
   const [next, setNext] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [availableOnly, setAvailableOnly] = useState(false);
+  const responseByPlayer = new Map((responses || []).filter(r => r.player_id && r.member_status !== "withdrawn").map(r => [String(r.player_id), r.status]));
+  const visibleChoices = availableOnly ? choices.filter(player => responseByPlayer.get(player.id) === "available" || selected.some(p => p.id === player.id)) : choices;
   const token = useRef(accessToken); token.current = accessToken;
   useEffect(() => {
     const controller = new AbortController(); setLoading(true); setError("");
@@ -333,11 +358,14 @@ function RosterEditor({ root, accessToken, clubName, divisions, team, disabled, 
       <p>{selected.length} of 4 players selected. A player may be on only one of your club’s teams in each division for this meet.</p>
       {selected.length > 0 && <ul>{selected.map(player => <li key={player.id}>{player.name} · {player.starting_rating?.toFixed(3) ?? "No rating"} <button type="button" onClick={() => toggle(player)}>Remove {player.name}</button></li>)}</ul>}
       <label>Find a player in {clubName}<input type="search" maxLength={80} value={query} onChange={e => { setQuery(e.target.value); setOffset(0); }} /></label>
+      {responses !== null && <label><input type="checkbox" checked={availableOnly} onChange={e => setAvailableOnly(e.target.checked)} />Show only players who said they are available</label>}
+      {responses === null && <p>Open “Invite players &amp; view availability” to see meet responses alongside player names.</p>}
       {error && <p role="alert">{error}</p>}
-      <div className={styles.choices}>{choices.map(player => <label key={player.id}>
+      <div className={styles.choices}>{visibleChoices.map(player => <label key={player.id}>
         <input type="checkbox" checked={selected.some(p => p.id === player.id)} disabled={disabled || (selected.length === 4 && !selected.some(p => p.id === player.id))} onChange={() => toggle(player)} />
         {player.name} · {player.starting_rating?.toFixed(3) ?? "No rating"}
-      </label>)}{loading && <p>Loading players…</p>}{!loading && !error && !choices.length && <p>No active players found.</p>}</div>
+        {responseByPlayer.has(player.id) && <span> · {({available: "Available", maybe: "Unsure", unavailable: "Unavailable", invited: "Not replied", pending: "Not replied"} as Record<string, string>)[responseByPlayer.get(player.id)!] || "Not replied"}</span>}
+      </label>)}{loading && <p>Loading players…</p>}{!loading && !error && !visibleChoices.length && <p>{availableOnly ? "No available players in these results. Load more players or clear the filter." : "No active players found."}</p>}</div>
       {next !== null && <button type="button" disabled={loading || disabled} onClick={() => setOffset(next)}>More players</button>}
       <div className={styles.toolbar}><button type="submit" disabled={disabled || selected.length !== 4}>Submit four-player roster</button><button type="button" onClick={cancel}>Cancel roster edit</button></div>
     </fieldset>

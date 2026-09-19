@@ -3,7 +3,7 @@ const React = require('react'), ts = require('typescript'), { create, act } = re
 function load(file, mocks = {}) {
   const code = ts.transpileModule(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true } }).outputText;
   const module = { exports: {} };
-  new Function('require', 'module', 'exports', code)(n => Object.hasOwn(mocks, n) ? mocks[n] : require(n), module, module.exports);
+  new Function('require', 'module', 'exports', code)(n => n === './PlayerPoolPanels' ? { SeasonPlayerPool: p => React.createElement('section', { 'data-pool-root': p.root }), MeetAvailability: p => React.createElement('section', { 'data-availability-root': p.meetRoot, onResponses: p.onResponses }) } : Object.hasOwn(mocks, n) ? mocks[n] : require(n), module, module.exports);
   return module.exports;
 }
 const helpers = load('lib/interclubRegistration.ts');
@@ -70,6 +70,9 @@ async function clubsAndRosters() {
   assert.ok(textContent(tree).includes('beta Club has joined'));
   assert.ok(button(tree, 'Prepare meet roster'));
   assert.equal(focused.at(-1), 'participation-confirmed', 'Acceptance brings keyboard focus to the confirmation');
+  await act(async () => button(tree, 'Build season player pool').props.onClick());
+  assert.equal(tree.root.findAll(n => n.props['data-pool-root'])[0].props['data-pool-root'], `https://api.test/admin/clubs/beta/interclub/registrations/${sid}`);
+  await act(async () => button(tree, 'Close player pool').props.onClick());
   await act(async () => button(tree, 'Prepare meet roster').props.onClick());
   assert.equal(focused.at(-1), 'meet-rosters');
   assert.equal(scrolled.at(-1), 'meet-rosters', 'Next action brings the meet controls into view');
@@ -83,6 +86,20 @@ async function clubsAndRosters() {
   await act(async () => tree.root.findAllByProps({ type: 'checkbox' }).slice(0, 4).forEach(i => i.props.onChange()));
   assert.equal(button(tree, 'Submit four-player roster').props.disabled, false);
   assert.equal(tree.root.findAllByProps({ type: 'checkbox' })[4].props.disabled, true, 'Fifth player cannot be selected');
+  await act(async () => button(tree, 'Invite players & view availability').props.onClick());
+  await act(async () => tree.root.findAll(n => n.props['data-availability-root'])[0].props.onResponses([
+    { member_id: 'm1', player_id: '1', name: 'Player 1', status: 'available', member_status: 'withdrawn' },
+    { member_id: 'm2', player_id: '2', name: 'Player 2', status: 'available', member_status: 'active' },
+    { member_id: 'm5', player_id: '5', name: 'Player 5', status: 'unavailable', member_status: 'active' },
+  ]));
+  const availableFilter = () => tree.root.findAllByType('label').find(label => label.children.includes('Show only players who said they are available')).findByType('input');
+  await act(async () => availableFilter().props.onChange({ target: { checked: true } }));
+  assert.equal(tree.root.findAllByProps({ type: 'checkbox' }).length, 5, 'Availability filter preserves four selected players');
+  await act(async () => tree.root.findAllByProps({ type: 'checkbox' })[1].props.onChange());
+  assert.equal(tree.root.findAllByProps({ type: 'checkbox' }).length, 4, 'Withdrawn pool member is not suggested by their historical available reply');
+  await act(async () => availableFilter().props.onChange({ target: { checked: false } }));
+  assert.equal(tree.root.findAllByProps({ type: 'checkbox' }).length, 6, 'Clearing availability filter allows manual substitutes');
+  await act(async () => tree.root.findAllByProps({ type: 'checkbox' })[1].props.onChange());
   const beforeRefresh = requests.length; token = 'token-2';
   await act(async () => tree.update(React.createElement(Page, { initialSeasonId: sid })));
   assert.equal(requests.length, beforeRefresh, 'Token refresh preserves unsaved roster');
@@ -92,7 +109,7 @@ async function clubsAndRosters() {
   assert.ok(write.url.includes(`/meets/${mid}/teams/`), 'Roster writes identify the selected meet');
   assert.equal(write.options.method, 'PUT');
   assert.equal(write.options.headers.Authorization, 'Bearer token-2');
-  assert.deepEqual(JSON.parse(write.options.body), { expected_meet_revision: 2, expected_revision: 0, name: 'Beta Blue', division: '3.5', player_ids: ['1', '2', '3', '4'] });
+  assert.deepEqual(JSON.parse(write.options.body), { expected_meet_revision: 2, expected_revision: 0, name: 'Beta Blue', division: '3.5', player_ids: ['2', '3', '4', '1'] });
   await act(async () => finish(reply({ detail: 'Roster changed. Reload.' }, 409)));
   assert.equal(name().props.value, 'Beta Blue');
   assert.equal(tree.root.findByType('fieldset').props.disabled, true, 'Conflict preserves and disables the draft');

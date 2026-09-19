@@ -447,6 +447,7 @@ def test_every_communications_route_has_an_independent_service_guard() -> None:
         "admin_verified_updates_routes.py",
         "admin_weekly_recap_routes.py",
         "admin_tournament_routes.py",
+        "interclub_player_email_routes.py",
     ):
         source_path = ROOT / "services" / "api" / source_name
         tree = ast.parse(
@@ -483,3 +484,22 @@ def test_every_communications_route_has_an_independent_service_guard() -> None:
                     )
 
     assert guarded_routes == expected_routes
+
+
+@pytest.mark.parametrize("wave,method,path", [
+    ("public-intake-auth", "POST", "/public/interclub-signups/share"),
+    ("public-intake-auth", "POST", "/public/interclub-player-response/review"),
+    ("public-intake-auth", "POST", "/public/interclub-player-response/respond"),
+    ("admin-tools", "PUT", "/admin/clubs/alpha/interclub/registrations/season/pool"),
+    ("admin-tools", "PATCH", "/admin/clubs/alpha/interclub/registrations/season/pool/members/member"),
+    ("admin-tools", "PUT", "/admin/clubs/alpha/interclub/registrations/season/meets/meet/availability"),
+    ("communications", "POST", "/admin/clubs/alpha/interclub/player-pools/season/emails/preview"),
+    ("communications", "POST", "/admin/clubs/alpha/interclub/player-pools/season/emails"),
+    ("communications", "POST", "/admin/clubs/alpha/interclub/player-pools/season/emails/operation/recipients/0/send"),
+])
+def test_interclub_player_pool_routes_require_their_exact_reviewed_wave(wave, method, path):
+    assert wave_allows_request("open", method, path)
+    assert wave_allows_request(wave, method, path)
+    assert not wave_allows_request(NO_WRITE_WAVE, method, path)
+    assert not wave_allows_request("support-requests", method, path)
+    assert not wave_allows_request(wave, method, path + "/extra")

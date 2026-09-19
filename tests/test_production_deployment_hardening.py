@@ -215,9 +215,11 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         ROOT / "supabase/migrations",
     )
 
-    assert len(versions) == 117
+    assert len(versions) == 118
     assert {"20260916052824", "20260916060108"}.issubset(versions)
     assert "20260909203736" in versions
+    assert "20260919035344" in versions
+    assert "interclub_player_interest_and_availability" in contract["required_ledger_names"]
     assert {"20260906004056", "20260906005541", "20260906052216", "20260908052027", "20260908060747", "20260908060948", "20260908151701", "20260908173710"}.issubset(versions)
     assert versions[-36:] == (
         "20261030010000",
@@ -258,9 +260,9 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         "20261109004100",
     )
     assert {"20260908155131", "20260908164204"}.issubset(versions)
-    assert len(names) == 117
+    assert len(names) == 118
     assert all("XX" not in version for version in versions)
-    assert len(contract["required_ledger_names"]) == 117
+    assert len(contract["required_ledger_names"]) == 118
     assert {"public_club_sites", "public_club_directory_sort"}.issubset(contract["required_ledger_names"])
     assert "partner_email_invitations" in contract["required_ledger_names"]
     assert {"club_staff_scopes", "pcs_platform_onboarding", "club_admin_settings", "staff_invitations", "staff_invitation_verified_identity", "interclub_participation_rosters", "interclub_meet_rosters", "interclub_setup_wizard", "interclub_club_invitations"}.issubset(contract["required_ledger_names"])

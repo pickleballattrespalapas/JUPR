@@ -129,6 +129,9 @@ DORMANT_STAGING_WRITE_FLAGS = (
 STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
     NO_WRITE_WAVE: (),
     "public-intake-auth": (
+        ("POST", "/public/interclub-signups/{share_id}"),
+        ("POST", "/public/interclub-player-response/review"),
+        ("POST", "/public/interclub-player-response/respond"),
         ("POST", "/clubs/{club_slug}/support/intake"),
         ("POST", "/clubs/{club_slug}/verified-updates/request"),
         ("POST", "/clubs/{club_slug}/tournament-registration"),
@@ -155,6 +158,9 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
     "communications": (
         ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/registrations/broadcasts"),
         ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/registrations/broadcasts/{operation_key}/recipients/{recipient_index}/send"),
+        ("POST", "/admin/clubs/{club_id}/interclub/player-pools/{season_id}/emails/preview"),
+        ("POST", "/admin/clubs/{club_id}/interclub/player-pools/{season_id}/emails"),
+        ("POST", "/admin/clubs/{club_id}/interclub/player-pools/{season_id}/emails/{operation_key}/recipients/{recipient_index}/send"),
         ("POST", "/admin/clubs/{club_id}/player-updates/send-range"),
         ("POST", "/admin/clubs/{club_id}/player-updates/digests/preview"),
         ("POST", "/admin/clubs/{club_id}/player-updates/digests/queue"),
@@ -276,6 +282,9 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/admin/clubs/{club_id}/site/{action}"),
         ("PUT", "/admin/clubs/{club_id}/interclub/{season_id}/publication"),
         ("POST", "/admin/clubs/{club_id}/interclub/{season_id}/publication/{action}"),
+        ("PUT", "/admin/clubs/{club_id}/interclub/registrations/{season_id}/pool"),
+        ("PATCH", "/admin/clubs/{club_id}/interclub/registrations/{season_id}/pool/members/{member_id}"),
+        ("PUT", "/admin/clubs/{club_id}/interclub/registrations/{season_id}/meets/{meet_id}/availability"),
         ("PUT", "/admin/clubs/{club_id}/interclub/setup"),
         ("POST", "/admin/clubs/{club_id}/interclub/setup/{season_id}/club-invitations"),
         ("POST", "/admin/clubs/{club_id}/interclub/setup/{season_id}/club-invitations/{invitation_id}"),
