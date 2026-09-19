@@ -115,6 +115,7 @@ PUBLIC_LEADERBOARD_ENTRY_FIELDS = {
     "metric_value",
     "metric_display",
     "metric_sample",
+    "team_key",
 }
 PUBLIC_LEADERBOARD_BADGE_FIELDS = {"badge_id", "name", "prestige", "category", "icon_key", "rarity", "earned_at"}
 PUBLIC_LIVE_SESSION_SUMMARY_SELECT = "club_id,session_key,title,status,state,version,created_at,updated_at,last_seen_at,expires_at,completed_at"
@@ -495,6 +496,14 @@ def _normalize_public_leaderboard_rows(rows: list[dict[str, Any]]) -> list[dict[
     normalized: list[dict[str, Any]] = []
     for idx, row in enumerate(rows, start=1):
         clean = {key: row.get(key) for key in PUBLIC_LEADERBOARD_ENTRY_FIELDS if key in row}
+        if isinstance(row.get("team_members"), list):
+            clean["team_members"] = [
+                {"player_id": member["player_id"], "player_name": member["player_name"]}
+                for member in row["team_members"]
+                if isinstance(member, dict)
+                and isinstance(member.get("player_id"), (str, int))
+                and isinstance(member.get("player_name"), str)
+            ][:2]
         clean["badges"] = [
             {key: badge.get(key) for key in PUBLIC_LEADERBOARD_BADGE_FIELDS if key in badge}
             for badge in (row.get("badges") or [])

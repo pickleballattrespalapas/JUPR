@@ -82,6 +82,14 @@ global.fetch = async (url, options = {}) => {
   assert.equal(mutations.length, 0, "Invalid card depth cannot be saved");
   assert.match(text(tree.toJSON()), /show between 1 and 10 players/);
   await act(async () => field("Best partnership players to show").props.onChange({ target: { value: "2" } }));
+  await act(async () => field("Show Biggest upset card").props.onChange({ target: { checked: true } }));
+  await act(async () => field("Biggest upset teams to show").props.onChange({ target: { value: "11" } }));
+  await act(async () => button("Save draft").props.onClick());
+  assert.equal(mutations.length, 0, "Invalid team depth cannot be saved");
+  assert.match(text(tree.toJSON()), /Biggest upset: show between 1 and 10 teams/);
+  await act(async () => field("Biggest upset teams to show").props.onChange({ target: { value: "3" } }));
+  await act(async () => field("Biggest upset minimum upset wins together").props.onChange({ target: { value: "2" } }));
+  assert.match(text(tree.toJSON()), /minimum counts games the two teammates played together/);
   await act(async () => field("Timezone for All time statistics").props.onChange({ target: { value: "America/Phoenix" } }));
   await act(async () => button("Add season or date range").props.onClick());
   await act(async () => button("Save draft").props.onClick());
@@ -98,8 +106,8 @@ global.fetch = async (url, options = {}) => {
   const seasonId = select.findAllByType("option")[1].props.value;
   await act(async () => select.props.onChange({ target: { value: seasonId } }));
   await act(async () => button("Save draft").props.onClick());
-  assert.deepEqual(site.draft.leaderboard.cards, ["most_improved", "most_matches", "best_win_pct", "most_wins", "close_game_record", "best_partnership"]);
-  assert.deepEqual(site.draft.leaderboard.card_options, { close_game_record: { minimum: 6, depth: 3 }, best_partnership: { minimum: 8, depth: 2 } });
+  assert.deepEqual(site.draft.leaderboard.cards, ["most_improved", "most_matches", "best_win_pct", "most_wins", "close_game_record", "best_partnership", "biggest_upset"]);
+  assert.deepEqual(site.draft.leaderboard.card_options, { close_game_record: { minimum: 6, depth: 3 }, best_partnership: { minimum: 8, depth: 2 }, biggest_upset: { minimum: 2, depth: 3 } });
   assert.equal(site.draft.leaderboard.timezone, "America/Phoenix");
   assert.equal(site.draft.leaderboard.default_season_id, seasonId);
   assert.equal(site.draft.leaderboard.seasons[0].end_date, null);
@@ -111,6 +119,8 @@ global.fetch = async (url, options = {}) => {
   assert.equal(field("Best close-game record minimum close games").props.value, 6, "Card criteria survive a fresh load");
   assert.equal(field("Best close-game record players to show").props.value, 3);
   assert.equal(field("Best partnership minimum games with that partner").props.value, 8);
+  assert.equal(field("Biggest upset teams to show").props.value, 3, "Team depth survives a fresh load");
+  assert.equal(field("Biggest upset minimum upset wins together").props.value, 2);
   await act(async () => button("Publish website").props.onClick());
   assert.deepEqual(site.published.leaderboard, site.draft.leaderboard);
   await act(async () => field("Remove 2026–27 from leaderboard").props.onClick());
@@ -131,13 +141,14 @@ global.fetch = async (url, options = {}) => {
   let markup = await render({ season: seasonId });
   assert.equal(requests.at(-1).options.season, seasonId);
   const titles = [...markup.matchAll(/<h2[^>]*>([^<]+)<\/h2>/g)].map(match => match[1]);
-  assert.deepEqual(titles, ["Stu", "Most improved", "Most games played", "Best win %", "Most wins", "Best close-game record", "Best partnership"]);
+  assert.deepEqual(titles, ["Stu", "Most improved", "Most games played", "Best win %", "Most wins", "Best close-game record", "Best partnership", "Biggest upset"]);
   assert.doesNotMatch(markup, /data-testid="leaderboard-summary"/);
   assert.match(markup, /Sep 15, 2026 onward/);
   assert.match(markup, /Ratings and ranks show current standing/);
   assert.match(markup, /at least 10 recorded games/);
   assert.match(markup, /Minimum 6 close games/);
   assert.match(markup, /Minimum 8 games with that partner/);
+  assert.match(markup, /Minimum 2 upset wins together/);
   const searchForm = markup.match(/<form[^>]*data-testid="leaderboard-search-form"[\s\S]*?<\/form>/)[0];
   assert.ok(searchForm.includes(`name="season" value="${seasonId}"`), "Searching preserves the selected season");
   for (const match of markup.matchAll(/href="([^"]+)"[^>]*>(Next|Win %|See all|Share this player|view summary)<\/a>/g)) {
@@ -171,6 +182,14 @@ global.fetch = async (url, options = {}) => {
     { ...row, metric_value: -5, metric_display: "−5 points", metric_sample: 8 },
     { ...row, player_id: 2, player_name: "Pat", metric_value: 0, metric_display: "0 points", metric_sample: 8 },
   ];
+  const teamNames = [["Caleb Nguyen", "Camila Flores"], ["Rafael Torres", "Alex Rivera"], ["Sam & Pat", "Jo Chen"]];
+  data.highlights.biggest_upset = teamNames.map((names, index) => ({
+    player_id: null, player_name: names.join(" & "), rank: index + 1,
+    team_key: `${101 + index * 2}:${102 + index * 2}`,
+    team_members: names.map((player_name, memberIndex) => ({ player_id: 101 + index * 2 + memberIndex, player_name })),
+    metric_value: 0.5 - index / 10, metric_display: `+${(0.5 - index / 10).toFixed(3)} JUPR`, metric_sample: 2,
+  }));
+  data.highlights.average_margin = [201, 202, 203].map(player_id => ({ ...row, player_id, player_name: "Clover", metric_value: 4, metric_display: "+4.0 pts/game", metric_sample: 8 }));
   markup = await render();
   for (const key of data.leaderboard_settings.cards) assert.ok(markup.includes(LEADERBOARD_CARD_LABELS[key]), `${key} renders`);
   assert.match(markup, /75\.0% with Alex &amp; Sam · 8 games/);
@@ -178,6 +197,19 @@ global.fetch = async (url, options = {}) => {
   assert.match(markup, /width:100%;height:100%;border-radius:999px;background:#dc2626/);
   assert.match(markup, /width:0%;height:100%;border-radius:999px;background:#2563eb/, "A zero metric has an empty bar");
   assert.doesNotMatch(markup, /width:(?:NaN|Infinity|-)/, "Bars use finite, nonnegative widths");
+  const cardMarkup = (html, title) => [...html.matchAll(/<article\b[^>]*data-testid="leaderboard-highlight-card"[\s\S]*?<\/article>/g)]
+    .map(match => match[0]).find(card => card.includes(`>${title}</h2>`));
+  const upsetCard = cardMarkup(markup, "Biggest upset");
+  assert.equal((upsetCard.match(/data-testid="leaderboard-team-row"/g) || []).length, 3, "Top three upset places represent three teams");
+  assert.deepEqual([...upsetCard.matchAll(/data-testid="leaderboard-team-place"[^>]*>#(\d+)<\/span>/g)].map(match => Number(match[1])), [1, 2, 3]);
+  assert.deepEqual([...upsetCard.matchAll(/<a href="([^"]+)"/g)].map(match => match[1]),
+    [101, 102, 103, 104, 105, 106].map(id => `/clubs/tres-palapas/players/${id}`), "Each team's two names link to their own profile");
+  assert.match(upsetCard, /Sam &amp; Pat/);
+  assert.doesNotMatch(upsetCard, /players\/(?:null|undefined)/);
+  const marginCard = cardMarkup(markup, "Best average margin");
+  assert.deepEqual([...marginCard.matchAll(/<a href="([^"]+)"/g)].map(match => match[1]),
+    [201, 202, 203].map(id => `/clubs/tres-palapas/players/${id}`), "Distinct players remain separate even when their names match");
+  assert.doesNotMatch(marginCard, /leaderboard-team-(?:row|place)/, "Player cards keep their existing presentation");
   const displayColumns = { ratings: ["Rating"], records: ["W-L"], win_percentage: ["Win %"], match_counts: ["Games"], rating_changes: ["Gain", "Gap"] };
   for (const [displayField, hiddenColumns] of Object.entries(displayColumns)) {
     const gated = await render({}, { [displayField]: false });

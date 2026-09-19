@@ -157,6 +157,66 @@ def _display(kind: str, value: float, stats: dict[str, Any]) -> str:
     return f"{value:.0f} {kind}"
 
 
+def team_upset_highlights(
+    matches: list[dict[str, Any]], *, players: list[dict[str, Any]],
+    status: str, search: str, min_games: int, options: dict[str, int],
+) -> list[dict[str, Any]]:
+    """Rank each partnership once, using its largest qualifying upset.
+
+    Games and snapshot completeness belong to the unordered pair, so playing
+    with a different partner cannot qualify or disqualify this partnership.
+    ``matches`` is the same canonical period history used by the other cards.
+    """
+    players_by_id = {str(row["player_id"]): row for row in players}
+    pairs: dict[tuple[str, str], dict[str, Any]] = {}
+    for match in matches:
+        ratings = [_rating(match.get(f"{slot}_r")) for slot in _SLOTS]
+        complete = all(rating is not None for rating in ratings)
+        team_ratings = ((ratings[0] + ratings[1]) / 2, (ratings[2] + ratings[3]) / 2) if complete else None
+        for side in (0, 1):
+            pair = tuple(sorted(str(match[slot]) for slot in _SLOTS[side * 2:side * 2 + 2]))
+            if not all(pid in players_by_id for pid in pair):
+                continue
+            totals = pairs.setdefault(pair, {"games": 0, "rating_games": 0, "upset_wins": 0, "largest_upset": 0.0})
+            totals["games"] += 1
+            if team_ratings is None:
+                continue
+            totals["rating_games"] += 1
+            gap = team_ratings[1 - side] - team_ratings[side]
+            won = match["score_t1" if side == 0 else "score_t2"] > match["score_t2" if side == 0 else "score_t1"]
+            if won and (gap >= 0.25 or isclose(gap, 0.25, rel_tol=0, abs_tol=1e-12)):
+                totals["upset_wins"] += 1
+                totals["largest_upset"] = max(totals["largest_upset"], gap)
+
+    minimum = max(1, int(options.get("minimum", 0)))
+    depth = max(1, min(10, int(options.get("depth", 5))))
+    needle = search.casefold()
+    eligible = []
+    for pair, totals in pairs.items():
+        members = [players_by_id[pid] for pid in pair]
+        active = all(member.get("is_active") is True for member in members)
+        if (status == "active" and not active) or (status == "inactive" and active):
+            continue
+        if needle and not any(needle in str(member["player_name"]).casefold() for member in members):
+            continue
+        if totals["games"] < max(1, min_games) or totals["upset_wins"] < minimum:
+            continue
+        if totals["rating_games"] != totals["games"]:
+            continue
+        team_members = [{"player_id": member["player_id"], "player_name": member["player_name"]} for member in members]
+        eligible.append({
+            "team_key": ":".join(pair), "team_members": team_members,
+            "player_id": None, "player_name": " & ".join(member["player_name"] for member in team_members),
+            "club_id": members[0]["club_id"], "league_name": members[0]["league_name"],
+            "is_active": active, "matches_played": totals["games"],
+            "metric_value": totals["largest_upset"],
+            "metric_display": _display("upset", totals["largest_upset"], {}),
+            "metric_sample": totals["upset_wins"],
+        })
+    eligible.sort(key=lambda row: (-row["metric_value"], -row["metric_sample"], -row["matches_played"], row["team_key"]))
+    return [{**row, "rank": rank, "rank_position": rank} for rank, row in enumerate(eligible[:depth], start=1)]
+
+
 def overall_highlights(
     rows: list[dict[str, Any]], *, metrics: dict[str, dict[str, Any]],
     min_games: int, card_options: dict[str, dict[str, int]],
@@ -164,6 +224,11 @@ def overall_highlights(
     """Public-safe highlight entries; calculation details never leave this layer."""
     output: dict[str, list[dict[str, Any]]] = {}
     for key, (field, sample_field, kind) in LEADERBOARD_CARD_METRICS.items():
+        if key == "biggest_upset":
+            # This card is populated separately from complete partnerships,
+            # never by duplicating the same win into two individual entries.
+            output[key] = []
+            continue
         options = card_options.get(key) or {}
         minimum = int(options.get("minimum", 0))
         depth = max(1, min(10, int(options.get("depth", 5))))
