@@ -86,7 +86,17 @@ class DisplaySettings(StrictModel):
     registration_schedule: bool = True
 
 
-LeaderboardCard = Literal["highest_rating", "most_improved", "best_win_pct", "most_wins", "most_matches"]
+LeaderboardCard = Literal[
+    "highest_rating", "most_improved", "best_win_pct", "most_wins", "most_matches",
+    "hot_hand", "point_differential", "average_margin", "longest_win_streak",
+    "close_game_record", "biggest_upset", "most_upsets", "opponent_strength",
+    "over_performance", "best_partnership", "partner_variety", "playing_days",
+]
+
+
+class LeaderboardCardOptions(StrictModel):
+    minimum: int = Field(default=0, ge=0, le=10000)
+    depth: int = Field(default=5, ge=1, le=10)
 
 
 class LeaderboardSeason(StrictModel):
@@ -114,14 +124,20 @@ class LeaderboardSeason(StrictModel):
 class LeaderboardSettings(StrictModel):
     cards: list[LeaderboardCard] = Field(default_factory=lambda: [
         "highest_rating", "most_improved", "best_win_pct", "most_wins"
-    ], max_length=5)
+    ], max_length=17)
+    card_options: dict[LeaderboardCard, LeaderboardCardOptions] = Field(default_factory=dict)
     show_summary: bool = True
     seasons: list[LeaderboardSeason] = Field(default_factory=list, max_length=40)
     default_season_id: str | None = Field(default=None, max_length=80)
     min_games: int = Field(default=0, ge=0, le=10000)
+    timezone: str = Field(default="America/Mazatlan", max_length=100)
 
     @model_validator(mode="after")
     def unique_settings(self):
+        try:
+            ZoneInfo(self.timezone)
+        except (ZoneInfoNotFoundError, ValueError):
+            raise ValueError("Choose a valid leaderboard timezone.")
         if len(set(self.cards)) != len(self.cards):
             raise ValueError("Choose each leaderboard card only once.")
         ids = [season.id for season in self.seasons]

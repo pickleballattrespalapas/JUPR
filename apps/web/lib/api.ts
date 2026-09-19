@@ -1,4 +1,4 @@
-import type { LeaderboardSettings } from "@/lib/clubSite";
+import type { LeaderboardCard, LeaderboardSettings } from "@/lib/clubSite";
 
 export type ClubSummary = {
   id: string;
@@ -35,6 +35,9 @@ export type LeaderboardEntry = {
   badges?: LeaderboardBadge[];
   badge_count?: number;
   updated_at?: string | null;
+  metric_value?: number | null;
+  metric_display?: string | null;
+  metric_sample?: number | null;
 };
 
 export type LeaderboardBadge = {
@@ -81,13 +84,7 @@ export type LeaderboardResponse = {
     end_date: string | null;
     timezone: string | null;
   };
-  highlights: {
-    highest_rating: LeaderboardEntry[];
-    most_improved: LeaderboardEntry[];
-    best_win_pct: LeaderboardEntry[];
-    most_wins: LeaderboardEntry[];
-    most_matches?: LeaderboardEntry[];
-  };
+  highlights: Partial<Record<LeaderboardCard, LeaderboardEntry[]>>;
   pagination: { total: number; offset: number; limit: number; has_more: boolean };
 };
 

@@ -4,8 +4,8 @@ import { getClubLeaderboard } from "@/lib/api";
 import type { LeaderboardBadge, LeaderboardEntry } from "@/lib/api";
 import { publicBadgeRarityLabel } from "@/lib/badgeApi";
 import {
-  DEFAULT_LEADERBOARD_CARDS, LEADERBOARD_CARD_LABELS, leaderboardSettings,
-  type DisplayKey, type LeaderboardCard,
+  DEFAULT_LEADERBOARD_CARDS, LEADERBOARD_CARD_LABELS, LEADERBOARD_CARD_DETAILS, leaderboardSettings,
+  type LeaderboardCard,
 } from "@/lib/clubSite";
 
 type LeaderboardPageProps = {
@@ -127,17 +127,23 @@ function dateLabel(value: string): string {
   return new Intl.DateTimeFormat("en", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }).format(new Date(`${value}T00:00:00Z`));
 }
 
-const highlightPresentation: Record<LeaderboardCard, {
-  field: DisplayKey;
+const legacyHighlightPresentation: Partial<Record<LeaderboardCard, {
   value: (row: LeaderboardEntry) => number;
   detail: (row: LeaderboardEntry) => string;
-}> = {
-  highest_rating: { field: "ratings", value: row => Number(row.rating_jupr ?? 0), detail: row => ratingLabel(row.rating_jupr) },
-  most_improved: { field: "rating_changes", value: row => Number(row.rating_gain_jupr ?? 0), detail: row => signedRatingLabel(row.rating_gain_jupr) },
-  best_win_pct: { field: "win_percentage", value: row => Number(row.win_pct ?? 0), detail: row => percentLabel(row.win_pct) },
-  most_wins: { field: "records", value: row => Number(row.wins ?? 0), detail: row => `${Number(row.wins ?? 0)} wins` },
-  most_matches: { field: "match_counts", value: row => Number(row.matches_played ?? 0), detail: row => `${Number(row.matches_played ?? 0)} games` },
+}>> = {
+  highest_rating: { value: row => Number(row.rating_jupr ?? 0), detail: row => ratingLabel(row.rating_jupr) },
+  most_improved: { value: row => Number(row.rating_gain_jupr ?? 0), detail: row => signedRatingLabel(row.rating_gain_jupr) },
+  best_win_pct: { value: row => Number(row.win_pct ?? 0), detail: row => percentLabel(row.win_pct) },
+  most_wins: { value: row => Number(row.wins ?? 0), detail: row => `${Number(row.wins ?? 0)} wins` },
+  most_matches: { value: row => Number(row.matches_played ?? 0), detail: row => `${Number(row.matches_played ?? 0)} games` },
 };
+function highlightValue(key: LeaderboardCard, row: LeaderboardEntry): number {
+  const value = row.metric_value !== undefined ? row.metric_value : legacyHighlightPresentation[key]?.value(row);
+  return value != null && Number.isFinite(Number(value)) ? Number(value) : 0;
+}
+function highlightDetail(key: LeaderboardCard, row: LeaderboardEntry): string {
+  return row.metric_display ?? legacyHighlightPresentation[key]?.detail(row) ?? "—";
+}
 
 function matchesPlayed(entry: LeaderboardEntry): number {
   return Number(entry.matches_played ?? (entry.wins ?? 0) + (entry.losses ?? 0));
@@ -171,12 +177,14 @@ function BadgeStrip({ clubSlug, entry }: { clubSlug: string; entry: LeaderboardE
 
 function BarList({
   title,
+  description,
   rows,
   value,
   detail,
   clubSlug
 }: {
   title: string;
+  description: string;
   rows: LeaderboardEntry[];
   value: (row: LeaderboardEntry) => number;
   detail: (row: LeaderboardEntry) => string;
@@ -186,18 +194,19 @@ function BarList({
   return (
     <article style={cardStyle} data-testid="leaderboard-highlight-card">
       <h2 style={{ marginTop: 0, fontSize: "1.05rem" }}>{title}</h2>
+      <p style={{ color: "#475569", fontSize: ".85rem", marginTop: "-.3rem" }}>{description}</p>
       {!rows.length ? <p style={{ color: "#64748b", marginBottom: 0 }}>Not enough qualifying data yet.</p> : null}
       <div style={{ display: "grid", gap: "0.65rem" }}>
         {rows.map((row) => {
           const amount = value(row);
-          const width = max > 0 ? `${Math.max(4, Math.round((Math.abs(amount) / max) * 100))}%` : "0%";
+          const width = max > 0 && amount !== 0 ? `${Math.min(100, Math.max(4, Math.round((Math.abs(amount) / max) * 100)))}%` : "0%";
           return (
             <div key={`${title}-${row.player_id ?? row.player_name}`}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", fontSize: "0.86rem", marginBottom: "0.25rem" }}>
-                <span style={{ fontWeight: 700 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", fontSize: "0.86rem", marginBottom: "0.25rem", overflowWrap: "anywhere" }}>
+                <span style={{ fontWeight: 700, minWidth: 0 }}>
                   {row.player_id != null ? <Link href={playerHref(clubSlug, row.player_id)}>{row.player_name}</Link> : row.player_name}
                 </span>
-                <span style={{ color: "#475569" }}>{detail(row)}</span>
+                <span style={{ color: "#475569", textAlign: "right", minWidth: 0 }}>{detail(row)}</span>
               </div>
               <div style={{ height: "0.55rem", borderRadius: "999px", background: "#e2e8f0", overflow: "hidden" }}>
                 <div style={{ width, height: "100%", borderRadius: "999px", background: amount < 0 ? "#dc2626" : "#2563eb" }} />
@@ -393,7 +402,7 @@ export default async function ClubLeaderboardPage({ params, searchParams }: Lead
         <article style={cardStyle}><strong>Leaderboard groups</strong><br />{data.summary.leaderboard_scopes}</article>
       </div> : null}
 
-      {overall && settings.min_games > 0 ? <p style={{ color: "#475569" }} data-testid="leaderboard-performance-qualification">Performance cards require at least {settings.min_games} recorded game{settings.min_games === 1 ? "" : "s"} in this period. Highest rating includes everyone.</p> : null}
+      {overall && settings.min_games > 0 ? <p style={{ color: "#475569" }} data-testid="leaderboard-performance-qualification">Performance cards require at least {settings.min_games} recorded game{settings.min_games === 1 ? "" : "s"} in this period. Individual cards may have additional minimums.</p> : null}
 
       {selectedLeague && !overall ? (
         <p style={{ ...cardStyle, background: "#f8fafc", color: "#475569" }} data-testid="leaderboard-qualification-note">
@@ -428,8 +437,11 @@ export default async function ClubLeaderboardPage({ params, searchParams }: Lead
 
       {selectedLeague && (!overall || settings.cards.length > 0) ? <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "1rem", marginBottom: "1rem" }}>
         {(overall ? settings.cards : DEFAULT_LEADERBOARD_CARDS).map(key => {
-          const card = highlightPresentation[key];
-          return <Display key={key} field={card.field}><BarList title={LEADERBOARD_CARD_LABELS[key]} rows={data.highlights[key] ?? []} value={card.value} detail={card.detail} clubSlug={clubSlug} /></Display>;
+          const card = LEADERBOARD_CARD_DETAILS[key];
+          const minimum = overall ? settings.card_options?.[key]?.minimum ?? 0 : 0;
+          const description = `${card.description}${minimum > 0 ? ` Minimum ${minimum} ${card.sample}.` : ""}`;
+          return card.fields.reduceRight((child, field) => <Display key={`${key}-${field}`} field={field}>{child}</Display>,
+            <BarList title={LEADERBOARD_CARD_LABELS[key]} description={description} rows={data.highlights[key] ?? []} value={row => highlightValue(key, row)} detail={row => highlightDetail(key, row)} clubSlug={clubSlug} />);
         })}
       </div> : null}
 

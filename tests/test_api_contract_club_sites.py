@@ -83,6 +83,8 @@ def test_leaderboard_settings_save_dates_as_json_without_changing_publication(se
         'seasons': [{'id': 'winter', 'name': '2026–27', 'start_date': '2026-09-15',
                      'end_date': '2027-09-14', 'timezone': 'America/Mazatlan'}],
         'default_season_id': 'winter', 'min_games': 10,
+        'card_options': {'most_improved': {'minimum': 15, 'depth': 3}},
+        'timezone': 'America/Mazatlan',
     }
     doc = SiteDocument(name='Club', leaderboard=settings).model_dump(mode='json')
     response = c.put('/admin/clubs/alpha/site', json={'revision': 5, 'document': doc})
@@ -95,6 +97,13 @@ def test_leaderboard_settings_save_dates_as_json_without_changing_publication(se
 @pytest.mark.parametrize('settings', [
     {'cards': ['most_wins', 'most_wins']},
     {'cards': ['arbitrary_sql']},
+    {'card_options': {'unknown': {'minimum': 2}}},
+    {'card_options': {'close_game_record': {'minimum': -1}}},
+    {'card_options': {'most_upsets': {'minimum': 10001}}},
+    {'card_options': {'best_partnership': {'depth': 0}}},
+    {'card_options': {'playing_days': {'depth': 11}}},
+    {'card_options': {'hot_hand': {'sql': 'select *'}}},
+    {'timezone': 'not/a/zone'},
     {'default_season_id': 'missing'},
     {'min_games': -1},
     {'seasons': [{'id': 'all', 'name': 'Reserved', 'start_date': '2026-09-15'}]},
@@ -108,6 +117,27 @@ def test_invalid_leaderboard_settings_cannot_be_saved(setup, settings):
     doc['leaderboard'] = settings
     assert c.put('/admin/clubs/alpha/site', json={'revision': 5, 'document': doc}).status_code == 422
     assert not state['calls']
+
+
+def test_full_card_catalog_and_options_round_trip_through_publication(setup):
+    from jupr_app.domain.leaderboard_metrics import LEADERBOARD_CARD_KEYS
+    from services.api.club_site_models import LeaderboardSettings
+    c, state, _ = setup
+    settings = LeaderboardSettings(
+        cards=list(LEADERBOARD_CARD_KEYS),
+        card_options={key: {'minimum': 6, 'depth': 3} for key in LEADERBOARD_CARD_KEYS},
+        timezone='Pacific/Auckland',
+    ).model_dump(mode='json')
+    document = SiteDocument(name='Expanded choices', leaderboard=settings).model_dump(mode='json')
+    assert c.put('/admin/clubs/alpha/site', json={'revision': 5, 'document': document}).status_code == 200
+    saved = state['calls'][-1][1]['p_document']
+    assert saved['leaderboard'] == settings
+    row = state['tables']['pcs_club_sites'][0]
+    row['draft'] = saved
+    assert c.get('/public/clubs/alpha/site').json()['document']['leaderboard']['card_options'] == {}
+    row['published'] = deepcopy(saved)
+    public = c.get('/public/clubs/alpha/site').json()['document']['leaderboard']
+    assert public == settings
 
 def test_page_visibility_round_trip_uses_published_snapshot_and_keeps_shared_access(setup):
     c, state, db = setup

@@ -140,3 +140,41 @@ def test_unknown_season_returns_actionable_client_error(client, monkeypatch):
     response = client.get('/clubs/test-club/leaderboards?season=deleted')
     assert response.status_code == 422
     assert 'All time' in response.json()['detail']
+
+
+@pytest.mark.parametrize('suffix', ['', '/public'])
+def test_all_card_metrics_are_public_but_internal_calculations_are_not(client, monkeypatch, suffix):
+    from jupr_app.domain.leaderboard_metrics import LEADERBOARD_CARD_KEYS
+    from services.api import main
+    from services.api.club_site_models import LeaderboardSettings
+    previous = main.build_public_leaderboard
+    settings = LeaderboardSettings(
+        cards=list(LEADERBOARD_CARD_KEYS),
+        card_options={'best_partnership': {'minimum': 8, 'depth': 3}},
+        timezone='Pacific/Auckland',
+    ).model_dump(mode='json')
+
+    def build(db, **kwargs):
+        payload = previous(db, **kwargs)
+        payload['leaderboard_settings'] = settings
+        payload['highlights'] = {key: [{
+            **payload['leaderboard'][0], 'metric_value': 75.0,
+            'metric_display': '75.0% with Blair · 8 games', 'metric_sample': 8,
+            '_partners': {'private': 'internal calculation'},
+        }] for key in LEADERBOARD_CARD_KEYS}
+        payload['highlights']['private_metric'] = [{'email': 'hidden'}]
+        return payload
+
+    monkeypatch.setattr(main, 'build_public_leaderboard', build)
+    response = client.get(f'/clubs/test-club/leaderboards{suffix}')
+    assert response.status_code == 200
+    data = response.json()
+    assert data['leaderboard_settings'] == settings
+    assert data['period']['timezone'] == 'Pacific/Auckland'
+    assert set(data['highlights']) == set(LEADERBOARD_CARD_KEYS)
+    for rows in data['highlights'].values():
+        assert rows[0]['metric_value'] == 75.0
+        assert rows[0]['metric_display'] == '75.0% with Blair · 8 games'
+        assert rows[0]['metric_sample'] == 8
+        assert 'email' not in rows[0]
+        assert '_partners' not in rows[0]
