@@ -179,7 +179,7 @@ def test_public_meet_response_cannot_forge_identity_or_profile(setup, patch):
     assert not state["calls"]
 
 
-@pytest.mark.parametrize("code,status", [("42501", 403), ("P0002", 404), ("40001", 409),
+@pytest.mark.parametrize("code,status", [("42501", 403), ("P0002", 404), ("40001", 409), ("PT409", 409),
     ("23505", 409), ("22023", 422), ("54000", 429), ("unknown", 503)])
 def test_database_errors_are_safe_and_actionable(setup, code, status):
     _, state = setup
@@ -434,7 +434,7 @@ def test_personal_updates_send_capability_scope_nonce_and_expected_revision_to_a
     private_headers(response)
 
 
-@pytest.mark.parametrize("code,status", [("40001", 409), ("23505", 409), ("54000", 429)])
+@pytest.mark.parametrize("code,status", [("40001", 409), ("PT409", 409), ("23505", 409), ("54000", 429)])
 def test_public_signup_reports_atomic_retry_conflict_or_rate_limit_without_a_link(setup, code, status):
     client, state = setup
     state["error"] = code

@@ -106,7 +106,7 @@ def test_update_scopes_club_season_revision_and_email(setup,action):
       p_actor_id=s["user"].user_id,p_actor_email=s["user"].email,p_revision=1,p_email="new@example.test")
 
 
-@pytest.mark.parametrize("code,status",[("23505",409),("42501",403),("40001",409),("P0002",404),("22023",422),("other",503)])
+@pytest.mark.parametrize("code,status",[("23505",409),("42501",403),("40001",409),("PT409",409),("P0002",404),("22023",422),("other",503)])
 def test_safe_database_rejections(setup,code,status):
     c,s=setup; s["error"]=code
     r=c.post(s["root"],json=s["payload"])

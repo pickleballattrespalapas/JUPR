@@ -8,7 +8,7 @@ declare
  mid uuid; mid2 uuid; member_id uuid; member_nonce uuid; response_id uuid; response_nonce uuid;
  home_player bigint:=8000000000000+(random()*1000000000000)::bigint;
  away_player bigint:=8000000000000+(random()*1000000000000)::bigint;
- result jsonb; retry jsonb; signup jsonb; settings jsonb; share uuid;
+ result jsonb; retry jsonb; signup jsonb; settings jsonb; share uuid; entry_before jsonb;
  requester text:=repeat('a',64); table_name text;
 begin
  foreach table_name in array array['pcs_interclub_pool_settings','pcs_interclub_pool_members','pcs_interclub_availability_settings','pcs_interclub_availability_responses','pcs_interclub_pool_rate_buckets'] loop
@@ -55,6 +55,8 @@ begin
   raise exception 'Another club changed pool member';
  exception when no_data_found then null; end;
  perform public.pcs_interclub_pool_action(actor,actor_email,home,sid,'member',jsonb_build_object('member_id',member_id,'expected_revision',1,'player_id',home_player,'status','active'));
+ select to_jsonb(e) into entry_before from public.pcs_interclub_entries e where season_id=sid and player_id=home_player;
+ if entry_before is null then raise exception 'Approved linked player did not receive a season identity'; end if;
  select id into mid from public.pcs_interclub_meets where season_id=sid and plan_index=0;
  select id into mid2 from public.pcs_interclub_meets where season_id=sid and plan_index=1;
  perform public.pcs_interclub_pool_action(actor,actor_email,home,sid,'availability',jsonb_build_object('meet_id',mid,'expected_revision',0,'open',true,'deadline',now()+interval '18 days'));
@@ -66,7 +68,7 @@ begin
  begin
   perform public.pcs_interclub_pool_public_action('respond_meet',jsonb_build_object('id',response_id,'nonce',response_nonce,'season_id',sid,'club_id',home,'expected_revision',1,'status','maybe'),requester);
   raise exception 'Stale response overwritten';
- exception when serialization_failure then null; end;
+ exception when sqlstate 'PT409' then null; end;
  begin
   perform public.pcs_interclub_pool_public_action('respond_meet',jsonb_build_object('id',response_id,'nonce',gen_random_uuid(),'season_id',sid,'club_id',home,'expected_revision',2,'status','maybe'),requester);
   raise exception 'Wrong capability changed response';
@@ -80,7 +82,8 @@ begin
   raise exception 'Withdrawn member invited';
  exception when invalid_parameter_value then null; end;
  if (select count(*) from public.pcs_interclub_availability_responses where season_id=sid)<>2 then raise exception 'History was lost'; end if;
- if (select rating from public.players where id=home_player)<>1400 or exists(select 1 from public.pcs_interclub_entries where season_id=sid)
+ if (select rating from public.players where id=home_player)<>1400
+  or (select to_jsonb(e) from public.pcs_interclub_entries e where season_id=sid and player_id=home_player) is distinct from entry_before
   or exists(select 1 from public.pcs_interclub_teams where season_id=sid) then raise exception 'Availability altered ratings or lineups'; end if;
  settings:=public.pcs_interclub_pool_action(actor,actor_email,home,sid,'settings','{"expected_revision":1,"open":true,"rotate_link":true}');
  if (settings->>'share_id')::uuid=share then raise exception 'Share link did not rotate'; end if;

@@ -175,7 +175,7 @@ def test_history_is_private_to_owner_and_organizer_with_contact_redaction(setup)
     assert c.get(meet_base(s,"gamma")+f"/teams/{s['team']['id']}/history").status_code==404
 
 
-@pytest.mark.parametrize("code,status",[("42501",403),("40001",409),("23505",409),("22023",422),("P0002",404),("unknown",503)])
+@pytest.mark.parametrize("code,status",[("42501",403),("40001",409),("PT409",409),("23505",409),("22023",422),("P0002",404),("unknown",503)])
 def test_database_failures_are_actionable_without_internal_details(setup,code,status):
     c,s=setup; s["error"]=code
     r=c.post(base(s)+"/participations/beta",json={"expected_revision":2,"action":"cancel"})

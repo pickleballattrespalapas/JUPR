@@ -23,7 +23,7 @@ def site_rpc(db, function, params):
         return db.rpc(function, params).execute().data
     except Exception as exc:
         code = str(getattr(exc, "code", ""))
-        if code == "40001": raise HTTPException(409, "This draft changed. Reload before saving or publishing.") from exc
+        if code in {"40001", "PT409"}: raise HTTPException(409, "This draft changed. Reload before saving or publishing.") from exc
         if code == "42501": raise HTTPException(403, "Verified club administrator access required.") from exc
         if code == "23505": raise HTTPException(409, "That club address is already in use. Choose another address.") from exc
         if code in {"22023", "23514"}: raise HTTPException(422, "Check the website details and try again.") from exc

@@ -81,7 +81,7 @@ def call_rpc(db, name, params):
         code = getattr(exc, "code", "")
         if code == "42501":
             raise HTTPException(403, "Your club account cannot perform this action. Check its administrator access and season invitation.") from exc
-        if code == "40001":
+        if code in {"40001", "PT409"}:
             raise HTTPException(409, "This invitation, meet or roster changed, or the meet has started. Reload before continuing.") from exc
         if code == "23505":
             raise HTTPException(409, "A player or team name is already used by another team in this club, meet and division.") from exc

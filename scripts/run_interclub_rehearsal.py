@@ -87,11 +87,15 @@ class Rehearsal:
         elif token:
             headers["Authorization"] = f"Bearer {token}"
         req = Request(origin + path, data=json.dumps(payload).encode() if payload is not None else None, headers=headers, method=method)
+        started=time.monotonic()
+        self.last_request={"method":method,"path":path.split('?')[0]}
         try:
             with build_opener(NoRedirect).open(req, timeout=120) as response:
                 status, data = response.status, response.read()
         except HTTPError as exc:
             status, data = exc.code, exc.read()
+        except TimeoutError as exc:
+            raise RuntimeError(f"{method} {path.split('?')[0]} timed out") from exc
         try:
             result = json.loads(data) if data else None
         except ValueError:
@@ -99,6 +103,8 @@ class Rehearsal:
         if status not in expected:
             detail = (result or {}).get("detail", (result or {}).get("message", "Unexpected response")) if isinstance(result, dict) else "Unexpected response"
             raise RuntimeError(self.redact(f"{method} {path.split('?')[0]}: HTTP {status}; {detail}"))
+        if status == 409 and time.monotonic()-started>15:
+            raise AssertionError("An application conflict must return promptly without transaction retries")
         return result
 
     def db(self, method, table, payload=None, **filters):

@@ -133,6 +133,8 @@ def pool_rpc(db, name, params):
         return db.rpc(name, params).execute().data
     except Exception as exc:
         code = getattr(exc, "code", "")
+        if code == "PT409":
+            code = "40001"
         status, message = {
             "42501": (403, "Your club cannot perform this action. Check administrator access and accept its season invitation first."),
             "P0002": (404, "This signup or invitation is unavailable."),

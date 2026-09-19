@@ -36,20 +36,20 @@ begin
  begin
   perform public.pcs_publish_reviewed_interclub_publication(actor,email,home,sid,2,doc,sources);
   raise exception 'Changed meet published without review';
- exception when serialization_failure then null; end;
+ exception when sqlstate 'PT409' then null; end;
  update public.pcs_interclub_meets set revision=revision-1 where id=mid;
  update public.clubs set name='Changed name' where id=away;
  begin
   perform public.pcs_publish_reviewed_interclub_publication(actor,email,home,sid,2,doc,sources);
   raise exception 'Changed club published without review';
- exception when serialization_failure then null; end;
+ exception when sqlstate 'PT409' then null; end;
  update public.clubs set name='Publication Away' where id=away;
  insert into public.pcs_interclub_competition_batches(season_id,meet_id,phase,state,document,roster_sources,approved_document,approved_revision)
  values(sid,mid,'regular','approved','{}','[]','{}',1);
  begin
   perform public.pcs_publish_reviewed_interclub_publication(actor,email,home,sid,2,doc,sources);
   raise exception 'New official result published without review';
- exception when serialization_failure then null; end;
+ exception when sqlstate 'PT409' then null; end;
  if (select revision from public.pcs_interclub_publications where season_id=sid)<>2 then
   raise exception 'A failed review guard changed the publication'; end if;
  raise notice 'Reviewed publication, isolation, source changes and browser permissions passed';

@@ -49,7 +49,7 @@ begin
  begin
   perform public.pcs_review_interclub_pool_member(actor,actor_email,home,sid,late_member,2,true,'Stale retry');
   raise exception 'Stale approval accepted';
- exception when serialization_failure then null; end;
+ exception when sqlstate 'PT409' then null; end;
  result:=public.pcs_save_interclub_meet_roster(actor,actor_email,home,sid,mid,1,partial_team,0,'Women only','3.5',players[1:2],false);
  if jsonb_array_length(result->'roster'->'roster')<>2 or result->'roster'->>'status'<>'eligible' then raise exception 'Two-player regular roster requires ghosts or exception'; end if;
  perform public.pcs_save_interclub_meet_roster(actor,actor_email,home,sid,mid,1,partial_team,1,'','',array[]::bigint[],true);

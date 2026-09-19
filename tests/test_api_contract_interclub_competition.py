@@ -163,7 +163,7 @@ def test_public_reads_preserve_prior_approved_version_during_correction(setup):
     assert routes.approved_documents(s['db'],s['season']['id'])==[official]
 
 
-@pytest.mark.parametrize('code,status',[('42501',403),('40001',409),('22023',422),('P0002',404),('23505',409),('other',503)])
+@pytest.mark.parametrize('code,status',[('42501',403),('40001',409),('PT409',409),('22023',422),('P0002',404),('23505',409),('other',503)])
 def test_rpc_errors_are_safe_and_actionable(setup,code,status):
     client,s=setup;s['error']=code
     r=client.put(path(s),json=dict(expected_revision=1,document=s['saved']['document']))

@@ -30,7 +30,7 @@ begin
  begin
   perform public.pcs_save_interclub_draft(actor,actor_email,org,sid,1,draft);
   raise exception 'Stale save accepted';
- exception when serialization_failure then null; end;
+ exception when sqlstate 'PT409' then null; end;
  begin
   perform public.pcs_save_interclub_draft(actor,actor_email,guest,sid,2,draft);
   raise exception 'Other club overwrote draft';
@@ -49,7 +49,7 @@ begin
  begin
   perform public.pcs_save_interclub_draft(actor,actor_email,org,sid,3,draft||'{"name":"Misleading edit"}'::jsonb);
   raise exception 'Opened season still accepts planning edits';
- exception when serialization_failure then null; end;
+ exception when sqlstate 'PT409' then null; end;
  if (select revision from public.pcs_interclub_drafts where id=sid)<>3
  or (select count(*) from public.pcs_interclub_draft_audit where season_id=sid)<>3
  or (select details->>'name' from public.pcs_interclub_seasons where id=sid)<>'Coastal season'
