@@ -266,7 +266,8 @@ class Rehearsal:
 
     def move_meet(self, season, meet, when, deadline=None):
         self.db("PATCH","pcs_interclub_meets",{"starts_at":iso(when),"roster_deadline":iso(deadline or when-timedelta(hours=1))},id="eq."+meet["id"],season_id="eq."+season["id"])
-        return self.api("GET",self.registration(season["clubs"][0],season["id"])+"/meets/"+meet["id"])["meet"]
+        meet.update(self.api("GET",self.registration(season["clubs"][0],season["id"])+"/meets/"+meet["id"])["meet"])
+        return meet
 
     def generated(self, season, meet, *, phase="regular", division=None, pair=None, format="gender", revision=0):
         data={"expected_revision":revision,"format":format}

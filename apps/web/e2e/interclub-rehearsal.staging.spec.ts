@@ -78,7 +78,7 @@ test("interclub paper packet, score entry, approval and public results", async (
   await expect(publicPage.getByText("Private revised note", { exact: false })).toHaveCount(0);
   await publicPage.goto(`/interclub/signup/${official.signup[club].share_id}`);
   await publicPage.getByLabel("Your name", { exact: true }).fill("Browser Rehearsal Player");
-  await publicPage.getByLabel("Email", { exact: false }).fill(`browser-${state.run}@example.invalid`);
+  await publicPage.getByRole("textbox", { name: /^Email/ }).fill(`browser-${state.run}@example.invalid`);
   await publicPage.getByRole("checkbox",{ name:"3.5", exact:true }).check();
   await publicPage.getByRole("checkbox",{ name:/My club can email me invitations/ }).check();
   await publicPage.getByRole("button",{ name:"Join the season player pool", exact:true }).click();
