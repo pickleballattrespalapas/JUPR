@@ -128,7 +128,14 @@ and authorizes the real Supabase session normally.
 context, separate player IDs, website draft visibility controls, share URLs,
 statistics controls, preview, denied access to Tres, and sign-out. It opens every
 available interclub season from each test club and verifies season/meet requests,
-invitation controls, participant scoping, and organizer visibility. It does not
+invitation controls, participant scoping, and organizer visibility. Pending invitations
+appear first on Interclub leagues. **Review invitation** opens the season with a
+prominent **Accept invitation** action; acceptance confirms the club has joined in
+place and offers **Prepare meet roster**. Participant roster controls appear only
+after acceptance. The browser check follows these links, checks the acceptance
+button is visible without scrolling and verifies the accepted club's next action
+moves focus to its meet rosters. Component checks cover the actual accept/decline
+responses, retry, duplicate clicks, mismatched responses and club switching. It does not
 accept invitations, change rosters, save drafts or publish pages. It also checks that club creation starts with club
 details, preserves them on refresh, fits a phone viewport, and asks a signed-in
 administrator to confirm their account in Step 2 before review. It stops before creating a new club so the QA

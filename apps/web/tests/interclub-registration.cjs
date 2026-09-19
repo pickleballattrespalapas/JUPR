@@ -9,6 +9,11 @@ function load(file, mocks = {}) {
 const helpers = load('lib/interclubRegistration.ts');
 const Link = ({ children, ...p }) => React.createElement('a', p, children);
 const button = (tree, label) => tree.root.findAllByType('button').find(b => b.children.includes(label));
+const content = tree => JSON.stringify(tree.toJSON());
+const textContent = tree => {
+  const visit = node => typeof node === 'string' ? node : Array.isArray(node) ? node.map(visit).join('') : node ? visit(node.children || []) : '';
+  return visit(tree.toJSON());
+};
 const reply = (data, status = 200) => ({ ok: status < 400, status, json: async () => data });
 const mid = '00000000-0000-4000-8000-000000000003', mid2 = '00000000-0000-4000-8000-000000000004';
 const sid = '00000000-0000-4000-8000-000000000001', tid = '00000000-0000-4000-8000-000000000002';
@@ -44,16 +49,31 @@ async function clubsAndRosters() {
     '@/components/ConfirmAction': { ConfirmAction: ({ triggerLabel, onConfirm }) => React.createElement('button', { onClick: onConfirm }, triggerLabel) },
     './registrations.module.css': {}
   }).default;
-  let tree;
-  await act(async () => { tree = create(React.createElement(Page, { initialSeasonId: sid })); });
+  let tree; const focused = [], scrolled = [];
+  await act(async () => { tree = create(React.createElement(Page, { initialSeasonId: sid }), { createNodeMock: element => ({
+    focus() { focused.push(element.props.id); }, scrollIntoView() { scrolled.push(element.props.id); }
+  }) }); });
   assert.equal(button(tree, 'Add a team for this meet'), undefined);
   assert.ok(!requests.some(r => r.url.includes('/players')));
-  await act(async () => { void button(tree, 'Accept season invitation').props.onClick(); void button(tree, 'Accept season invitation').props.onClick(); });
+  assert.equal(tree.root.findAllByProps({ 'aria-label': 'Meet' }).length, 0, 'Pending invitation does not show meet roster controls');
+  assert.ok(!requests.some(r => r.url.includes('/meets/')), 'Pending invitation does not fetch meet details');
+  assert.ok(textContent(tree).includes('Coastal League') && textContent(tree).includes('alpha Club'));
+  const seasonReadsBeforeAcceptance = requests.filter(r => r.url.endsWith(`/registrations/${sid}`)).length;
+  await act(async () => { void button(tree, 'Accept invitation').props.onClick(); void button(tree, 'Accept invitation').props.onClick(); });
   assert.equal(requests.filter(r => r.options.method).length, 1);
+  assert.equal(button(tree, 'Accepting…').props.disabled, true);
   assert.ok(requests.at(-1).url.endsWith('/participations/beta'));
   assert.deepEqual(JSON.parse(requests.at(-1).options.body), { action: 'accept', expected_revision: 2 });
   ownStatus = 'accepted';
   await act(async () => finish(reply({ participation: participation() })));
+  assert.equal(requests.filter(r => r.url.endsWith(`/registrations/${sid}`)).length, seasonReadsBeforeAcceptance, 'Acceptance updates immediately without reloading the season');
+  assert.ok(textContent(tree).includes('beta Club has joined'));
+  assert.ok(button(tree, 'Prepare meet roster'));
+  assert.equal(focused.at(-1), 'participation-confirmed', 'Acceptance brings keyboard focus to the confirmation');
+  await act(async () => button(tree, 'Prepare meet roster').props.onClick());
+  assert.equal(focused.at(-1), 'meet-rosters');
+  assert.equal(scrolled.at(-1), 'meet-rosters', 'Next action brings the meet controls into view');
+  assert.equal(button(tree, 'Accept invitation'), undefined);
   assert.equal(button(tree, 'Add a team for this meet').props.disabled, false);
   await act(async () => button(tree, 'Add a team for this meet').props.onClick());
   assert.ok(requests.at(-1).url.includes(`/clubs/beta/interclub/registrations/${sid}/meets/${mid}/players`));
@@ -132,6 +152,99 @@ async function clubsAndRosters() {
   await act(async () => tree.unmount());
 }
 
+async function invitationResponses() {
+  let clubId = 'beta', organizer = false, status = 'invited', revision = 2;
+  let requests = [], finish;
+  const participation = () => ({ season_id: sid, club_id: clubId, status, revision });
+  global.fetch = async (url, options) => {
+    requests.push({ url, options });
+    if (options.method) return new Promise(resolve => { finish = resolve; });
+    if (url.endsWith('/registrations')) return reply({ seasons: [season] });
+    if (url.includes('/meets/')) return reply({ meet, teams: [], next_team_offset: null });
+    return reply({ season, meets: [meet], is_organizer: organizer, own_participation: participation(),
+      participations: [participation()], clubs: ['alpha', 'beta', 'gamma'].map(id => ({ id, name: `${id} Club`, slug: id })), teams: [], next_team_offset: null });
+  };
+  const Page = load('app/admin/interclub/registrations/RegistrationWorkspace.tsx', {
+    'next/link': Link, '@/lib/adminAuthClient': { getAdminApiBaseUrl: () => 'https://api.test' }, '@/lib/interclubRegistration': helpers,
+    '@/lib/useAdminWorkspace': { useAdminWorkspace: () => ({ clubId }) },
+    '@/lib/useAdminSession': { useAdminSession: () => ({ accessToken: 'token', loading: false, session: { user: { id: 'staff' }, capabilities: { assignments: [{ club_id: clubId, role: 'administrator' }] } } }) },
+    '@/components/ConfirmAction': { ConfirmAction: () => null }, './registrations.module.css': {}
+  }).default;
+  let tree;
+  const mount = async () => { await act(async () => { tree = create(React.createElement(Page, { initialSeasonId: sid })); }); };
+  await mount();
+  const respond = async label => { await act(async () => { void button(tree, label).props.onClick(); }); };
+  await respond('Accept invitation');
+  await act(async () => finish(reply({ detail: 'Invitation cannot be accepted right now.' }, 400)));
+  assert.ok(textContent(tree).includes('Invitation cannot be accepted right now.'));
+  assert.equal(button(tree, 'Accept invitation').props.disabled, false, 'A rejected request can be retried');
+  assert.equal(button(tree, 'Prepare meet roster'), undefined, 'Failed acceptance must not appear joined');
+  assert.ok(!requests.some(r => r.url.includes('/meets/')));
+  await respond('Accept invitation');
+  await act(async () => finish(reply({ detail: 'Invitation changed. Reload before responding.' }, 409)));
+  assert.equal(button(tree, 'Accept invitation').props.disabled, true);
+  const writes = requests.filter(r => r.options.method).length;
+  await respond('Accept invitation');
+  assert.equal(requests.filter(r => r.options.method).length, writes, 'Stale invitation revision blocks another write');
+  revision = 3;
+  await act(async () => button(tree, 'Reload season').props.onClick());
+  await respond('Decline invitation');
+  assert.equal(button(tree, 'Declining…').props.disabled, true);
+  assert.deepEqual(JSON.parse(requests.at(-1).options.body), { action: 'decline', expected_revision: 3 });
+  status = 'declined'; revision = 4;
+  await act(async () => finish(reply({ participation: participation() })));
+  assert.equal(button(tree, 'Accept invitation'), undefined);
+  assert.equal(button(tree, 'Prepare meet roster'), undefined);
+  assert.equal(tree.root.findAllByProps({ 'aria-label': 'Meet' }).length, 0);
+  assert.ok(!requests.some(r => r.url.includes('/meets/')), 'Declining does not load roster details');
+  await act(async () => tree.unmount());
+  await mount();
+  assert.equal(button(tree, 'Accept invitation'), undefined, 'Reopened declined invitation stays closed');
+  assert.equal(tree.root.findAllByProps({ 'aria-label': 'Meet' }).length, 0);
+  await act(async () => tree.unmount());
+
+  status = 'accepted';
+  await mount();
+  assert.ok(textContent(tree).includes('beta Club has joined'), 'Reopening an accepted invitation shows its saved outcome');
+  assert.ok(button(tree, 'Prepare meet roster'));
+  assert.equal(button(tree, 'Accept invitation'), undefined);
+  await act(async () => tree.unmount());
+
+  status = 'cancelled';
+  await mount();
+  assert.equal(button(tree, 'Accept invitation'), undefined);
+  assert.equal(tree.root.findAllByProps({ 'aria-label': 'Meet' }).length, 0, 'Cancelled invitation has no roster controls');
+  await act(async () => tree.unmount());
+
+  status = 'invited'; requests = [];
+  await mount();
+  await respond('Accept invitation');
+  const staleFinish = finish, signal = requests.at(-1).options.signal;
+  clubId = 'gamma';
+  await act(async () => tree.update(React.createElement(Page, { initialSeasonId: sid })));
+  assert.equal(signal.aborted, true, 'Club change cancels in-flight invitation acceptance');
+  await act(async () => staleFinish(reply({ participation: { season_id: sid, club_id: 'beta', status: 'accepted', revision: 5 } })));
+  assert.ok(!textContent(tree).includes('beta Club has joined'), 'Old club acceptance does not overwrite the selected club');
+  assert.equal(button(tree, 'Accept invitation').props.disabled, false);
+  assert.equal(tree.root.findAllByProps({ 'aria-label': 'Meet' }).length, 0);
+  await act(async () => tree.unmount());
+
+  await mount();
+  await respond('Accept invitation');
+  await act(async () => finish(reply({ participation: { season_id: sid, club_id: 'beta', status: 'accepted', revision: 5 } })));
+  assert.equal(button(tree, 'Accept invitation').props.disabled, true, 'Mismatched club response requires reloading');
+  assert.ok(textContent(tree).includes('Could not confirm your club’s response.'));
+  assert.equal(button(tree, 'Prepare meet roster'), undefined, 'Another club’s success cannot unlock roster controls');
+  await act(async () => tree.unmount());
+
+  clubId = 'alpha'; organizer = true;
+  await mount();
+  assert.ok(textContent(tree).includes('Club responses'));
+  assert.equal(tree.root.findAllByProps({ 'aria-label': 'Meet' }).length, 1, 'Organizer can manage meets before accepting its own participation');
+  assert.ok(button(tree, 'Accept invitation'));
+  await act(async () => tree.unmount());
+}
+
 async function loadFailuresCanBeRetried() {
   const requests = [];
   global.fetch = (url, options) => new Promise((resolve, reject) => requests.push({ url, options, resolve, reject }));
@@ -158,13 +271,14 @@ async function loadFailuresCanBeRetried() {
   await act(async () => requests.at(-1).reject(new TypeError('Load failed')));
   assert.ok(content().includes('Unable to load this season. Try again.'));
   assert.ok(!content().includes('Loading season…'), 'A failed season request must stop the loading message');
-  assert.equal(button(tree, 'Accept season invitation'), undefined);
+  assert.equal(button(tree, 'Accept invitation'), undefined);
   await act(async () => button(tree, 'Retry loading season').props.onClick());
   assert.equal(tree.root.findAllByProps({ role: 'alert' }).length, 0);
   await act(async () => requests.at(-1).resolve(reply({ season, meets: [meet], is_organizer: false,
-    own_participation: { season_id: sid, club_id: 'beta', status: 'invited', revision: 1 }, participations: [],
+    own_participation: { season_id: sid, club_id: 'beta', status: 'accepted', revision: 1 }, participations: [],
     clubs: [{ id: 'beta', name: 'Beta Club', slug: 'beta' }], teams: [], next_team_offset: null })));
-  assert.ok(button(tree, 'Accept season invitation'));
+  assert.ok(button(tree, 'Prepare meet roster'));
+  assert.equal(button(tree, 'Accept invitation'), undefined);
   assert.ok(content().includes('Loading meet…'));
   await act(async () => requests.at(-1).resolve(reply({ detail: 'This meet is temporarily unavailable.' }, 503)));
   assert.ok(content().includes('This meet is temporarily unavailable.'));
@@ -177,11 +291,11 @@ async function loadFailuresCanBeRetried() {
   await act(async () => button(tree, 'Reload season').props.onClick());
   await act(async () => requests.at(-1).resolve(reply({ detail: 'Your club no longer has access to this season.' }, 403)));
   assert.ok(content().includes('Your club no longer has access to this season.'));
-  assert.equal(button(tree, 'Accept season invitation'), undefined);
+  assert.equal(button(tree, 'Accept invitation'), undefined);
   assert.ok(!content().includes('Loading season…'));
   assert.ok(requests.every(r => r.url.includes('/clubs/beta/') && r.options.headers.Authorization === 'Bearer token' && !r.options.method));
   await act(async () => tree.unmount());
 }
 
-(async () => { await clubsAndRosters(); await loadFailuresCanBeRetried(); console.log('Interclub registration: meet-specific lineups, deadlines, acceptance, scoped players, stale saves, account/meet changes, load failures and retries passed.'); })()
+(async () => { await clubsAndRosters(); await invitationResponses(); await loadFailuresCanBeRetried(); console.log('Interclub registration: invitation outcomes, gated rosters, meet-specific lineups, deadlines, scoped players, stale saves, account/meet changes, load failures and retries passed.'); })()
   .catch(e => { console.error(e); process.exitCode = 1; });

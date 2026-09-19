@@ -129,17 +129,22 @@ test("dedicated QA admin switches three clubs and previews website controls", as
       // No saves or publication: preserve Joe's in-progress drafts and live sites.
 
       const invitationsResponse = page.waitForResponse(r => new URL(r.url()).pathname === `/admin/clubs/${club.id}/interclub/registrations` && r.request().method() === "GET");
-      await page.goto("/admin/interclub/registrations");
+      await page.goto("/admin/interclub");
       const invitations = await invitationsResponse;
       expect(invitations.status()).toBe(200);
       const seasons = (await invitations.json()).seasons;
       expect(seasons.length, "The isolation season must be available").toBeGreaterThan(0);
-      await expect(page.getByRole("heading", { name: seasons[0].details.name, exact: true })).toBeVisible();
-      await expect(page.getByRole("button", { name: "Reload season", exact: true })).toBeEnabled();
       for (const season of seasons) {
+        await page.goto("/admin/interclub");
+        const invitationLink = page.locator(`a[href="/admin/interclub/registrations?season=${season.id}"]`);
+        await expect(invitationLink).toBeVisible();
+        if (season.organizer_club_id !== club.id && season.participation?.status === "invited") {
+          await expect(page.getByRole("heading", { name: "Invitations to your club", exact: true })).toBeVisible();
+          await expect(invitationLink).toHaveText("Review invitation");
+        }
         const seasonPath = `/admin/clubs/${club.id}/interclub/registrations/${season.id}`;
         const seasonResponse = page.waitForResponse(r => new URL(r.url()).pathname === seasonPath && r.request().method() === "GET");
-        await page.goto(`/admin/interclub/registrations?season=${season.id}`);
+        await invitationLink.click();
         const response = await seasonResponse;
         expect(response.status(), `${club.name}: ${season.details.name} season request`).toBe(200);
         const details = await response.json();
@@ -150,9 +155,24 @@ test("dedicated QA admin switches three clubs and previews website controls", as
         expect(details.meets.map((m: { club_ids: string[] }) => organizer || m.club_ids.includes(club.id)).every(Boolean)).toBe(true);
         if (!organizer) expect(details.participations.every((p: { club_id: string }) => p.club_id === club.id)).toBe(true);
         if (details.own_participation?.status === "invited") {
-          await expect(page.getByRole("button", { name: "Accept season invitation", exact: true })).toBeEnabled();
+          const accept = page.getByRole("button", { name: "Accept invitation", exact: true });
+          await expect(accept).toBeEnabled();
+          await expect(accept).toBeInViewport();
+          expect(await accept.evaluate(el => getComputedStyle(el).cursor)).toBe("pointer");
+          expect((await accept.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+          await expect(page.getByRole("heading", { name: `${club.name} is invited`, exact: true })).toBeVisible();
         }
-        if (details.meets.length) {
+        const joined = details.own_participation?.status === "accepted";
+        if (joined) {
+          await expect(page.getByRole("heading", { name: `${club.name} has joined`, exact: true })).toBeVisible();
+          const prepare = page.getByRole("button", { name: "Prepare meet roster", exact: true });
+          if (details.meets.some((m: { roster_open: boolean; club_ids: string[] }) => m.roster_open && m.club_ids.includes(club.id))) {
+            await prepare.click();
+            await expect(page.getByRole("region", { name: "Meet rosters", exact: true })).toBeFocused();
+          }
+        }
+        if (!organizer && !joined) await expect(page.getByRole("combobox", { name: "Meet", exact: true })).toHaveCount(0);
+        if (details.meets.length && (organizer || joined)) {
           const meet = page.getByRole("combobox", { name: "Meet", exact: true });
           const meetId = await meet.inputValue();
           const reloadMeet = page.getByRole("button", { name: "Reload meet", exact: true });
