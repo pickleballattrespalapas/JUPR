@@ -49,7 +49,7 @@ global.fetch = async (url, options = {}) => {
 };
 
 (async () => {
-  const { leaderboardSettings, LEADERBOARD_CARD_LABELS, LEADERBOARD_CARD_DETAILS, LEADERBOARD_CARD_GROUPS } = load("lib/clubSite.ts");
+  const { leaderboardSettings, LEADERBOARD_CARD_LABELS, LEADERBOARD_CARD_GROUPS } = load("lib/clubSite.ts");
   assert.deepEqual(leaderboardSettings().seasons, [], "No season is created automatically for existing clubs");
   assert.deepEqual(leaderboardSettings().cards, ["highest_rating", "most_improved", "best_win_pct", "most_wins"], "New choices do not change existing clubs' selected cards");
   assert.deepEqual(leaderboardSettings().card_options, {});
@@ -144,8 +144,19 @@ global.fetch = async (url, options = {}) => {
     assert.ok(match[1].includes(`season=${seasonId}`), `${match[2]} preserves the selected season`);
   }
   markup = await render({ season: seasonId }, { match_counts: false, records: false });
-  assert.doesNotMatch(markup, /<h2[^>]*>Most games played|<h2[^>]*>Most wins/);
+  assert.match(markup, /<h2[^>]*>Most games played/);
+  assert.match(markup, /<h2[^>]*>Most wins/);
   assert.match(markup, /<h2[^>]*>Most improved/);
+  assert.doesNotMatch(markup, /<th\b[^>]*>(Games|W-L)<\/th>/, "Stats controls still hide table columns");
+
+  const savedCards = [...data.leaderboard_settings.cards];
+  data.leaderboard_settings.cards = ["most_improved", "most_wins", "average_margin", "biggest_upset"];
+  markup = await render({ season: seasonId }, { rating_changes: false });
+  assert.deepEqual([...markup.matchAll(/<h2[^>]*>([^<]+)<\/h2>/g)].map(match => match[1]),
+    ["Stu", "Most improved", "Most wins", "Best average margin", "Biggest upset"],
+    "All four selected cards appear even when rating gains are hidden elsewhere");
+  assert.doesNotMatch(markup, /<th\b[^>]*>(Gain|Gap)<\/th>/, "Showing Most improved does not enable Gain or Gap columns");
+  data.leaderboard_settings.cards = savedCards;
   data.period = { id: null, name: "All time", start_date: null, end_date: null, timezone: "UTC" };
   markup = await render({ season: "all" });
   assert.equal(requests.at(-1).options.season, "all");
@@ -167,11 +178,16 @@ global.fetch = async (url, options = {}) => {
   assert.match(markup, /width:100%;height:100%;border-radius:999px;background:#dc2626/);
   assert.match(markup, /width:0%;height:100%;border-radius:999px;background:#2563eb/, "A zero metric has an empty bar");
   assert.doesNotMatch(markup, /width:(?:NaN|Infinity|-)/, "Bars use finite, nonnegative widths");
-  for (const displayField of ["ratings", "records", "win_percentage", "match_counts", "rating_changes"]) {
+  const displayColumns = { ratings: ["Rating"], records: ["W-L"], win_percentage: ["Win %"], match_counts: ["Games"], rating_changes: ["Gain", "Gap"] };
+  for (const [displayField, hiddenColumns] of Object.entries(displayColumns)) {
     const gated = await render({}, { [displayField]: false });
     const renderedTitles = [...gated.matchAll(/<h2[^>]*>([^<]+)<\/h2>/g)].map(match => match[1]);
     for (const key of data.leaderboard_settings.cards) {
-      assert.equal(renderedTitles.includes(LEADERBOARD_CARD_LABELS[key]), !LEADERBOARD_CARD_DETAILS[key].fields.includes(displayField), `${key} honors ${displayField} visibility`);
+      assert.ok(renderedTitles.includes(LEADERBOARD_CARD_LABELS[key]), `Selected ${key} remains visible when ${displayField} is hidden elsewhere`);
+    }
+    const renderedColumns = [...gated.matchAll(/<th\b[^>]*>([^<]+)<\/th>/g)].map(match => match[1]);
+    for (const column of hiddenColumns) {
+      assert.ok(!renderedColumns.includes(column), `${column} table column still honors ${displayField}`);
     }
   }
   data.leaderboard_settings.cards = [];
@@ -181,6 +197,14 @@ global.fetch = async (url, options = {}) => {
   assert.match(markup, /leaderboard-summary/);
   assert.match(markup, /Highest rating/);
   assert.doesNotMatch(markup, /leaderboard-period-controls/);
+  const defaultLeagueCards = ["Highest rating", "Most improved", "Best win %", "Most wins"];
+  for (const [displayField, hiddenCard] of Object.entries({ ratings: "Highest rating", rating_changes: "Most improved", win_percentage: "Best win %", records: "Most wins" })) {
+    const gated = await render({ league: "Ladder" }, { [displayField]: false });
+    const renderedTitles = [...gated.matchAll(/<h2[^>]*>([^<]+)<\/h2>/g)].map(match => match[1]);
+    for (const title of defaultLeagueCards) {
+      assert.equal(renderedTitles.includes(title), title !== hiddenCard, `League card ${title} still honors ${displayField}`);
+    }
+  }
 
   process.env.JUPR_API_BASE_URL = "https://api.test";
   let requestedUrl;
@@ -191,5 +215,5 @@ global.fetch = async (url, options = {}) => {
   assert.equal(requestedUrl.searchParams.get("offset"), "50");
   await api.getClubLeaderboard("tres-palapas");
   assert.equal(requestedUrl.searchParams.has("season"), false, "Omitted season lets the API choose the published default");
-  console.log("Overall leaderboard: 17 grouped choices, persisted card depth/minimums, generic metrics, display gates, card order, season validation and draft/publish isolation passed.");
+  console.log("Overall leaderboard: 17 grouped choices, persisted card depth/minimums, generic metrics, independent Overall card visibility, preserved table/league display controls, card order, season validation and draft/publish isolation passed.");
 })().catch(error => { console.error(error); process.exitCode = 1; });
