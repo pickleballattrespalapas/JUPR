@@ -47,7 +47,7 @@ test("interclub paper packet, score entry, approval and public results", async (
     }
   }
   for (const input of await page.getByLabel("Actual time played (your device’s time)", { exact: true }).all()) await input.fill(played);
-  await expect(page.getByLabel("Season", { exact: true })).toBeDisabled();
+  await expect(page.getByRole("combobox", { name: /^Season/ })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Print meet packet", exact: true })).toBeDisabled();
   const apiRoot = `${expectedApiOrigin}/admin/clubs/${club}/interclub/competition/${season.id}/meets/${season.browser_meet}/regular`;
   const save = page.waitForResponse(r => r.url() === apiRoot && r.request().method() === "PUT");
