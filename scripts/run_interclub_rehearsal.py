@@ -133,7 +133,8 @@ class Rehearsal:
                                   "is_active": False, "status": "draft", "onboarding_status": "draft"} for i, club in enumerate(clubs)])
         for label, assigned, role, scopes in [("organizer", clubs, "administrator", []),
                                                ("participant", [clubs[1]], "administrator", []),
-                                               ("operator", [clubs[1]], "operator", [{"kind": "program_type", "program_type": "leagues", "resource_id": ""}])]:
+                                               ("operator", [clubs[1]], "operator", [{"kind": "program_type", "program_type": "leagues", "resource_id": ""}]),
+                                               ("nonhost", [clubs[2]], "administrator", [])]:
             email = f"qa-ic-{self.state['run']}-{label}@example.invalid"
             user = self.request(AUTH, "POST", "/auth/v1/admin/users", {"email": email, "email_confirm": True,
                 "app_metadata": {"pcs_rehearsal": MARKER, "run": self.state["run"]}}, service=True)
@@ -141,7 +142,7 @@ class Rehearsal:
             self.state["users"].append(row)
             self.persist()
             self.db("POST", "admin_role_assignments", [{"club_id": club, "user_id": user["id"], "email": email,
-                    "role": role, "scopes": scopes} for club in assigned])
+                    "role": role, "scopes": scopes, "expires_at":iso(now()+timedelta(hours=2))} for club in assigned])
             generated = self.request(AUTH, "POST", "/auth/v1/admin/generate_link", {"type": "magiclink", "email": email}, service=True)
             props = generated.get("properties", generated)
             token_hash = props.get("hashed_token")
@@ -285,7 +286,10 @@ class Rehearsal:
 
     def approve(self, season, meet, batch):
         root=self.competition(season["clubs"][0],season["id"],meet["id"],batch["phase"])
-        submitted=self.api("POST",root+"/submit",{"expected_revision":batch["revision"]})["batch"]
+        hostroot=self.competition(season["clubs"][1],season["id"],meet["id"],batch["phase"])
+        correction=bool(batch.get("approved_document"))
+        submitted=self.api("POST",(root if correction else hostroot)+"/submit",{"expected_revision":batch["revision"]},actor=0 if correction else 2)["batch"]
+        self.api("POST",hostroot+"/approve",{"expected_revision":submitted["revision"]},actor=2,expected=(403,))
         self.api("POST",self.competition(season["clubs"][1],season["id"],meet["id"],batch["phase"])+"/approve",
                  {"expected_revision":submitted["revision"]},actor=1,expected=(403,))
         approved=self.api("POST",root+"/approve",{"expected_revision":submitted["revision"]})
