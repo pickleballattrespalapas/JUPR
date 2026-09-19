@@ -148,7 +148,8 @@ class Rehearsal:
             self.state["users"].append(row)
             self.persist()
             self.db("POST", "admin_role_assignments", [{"club_id": club, "user_id": user["id"], "email": email,
-                    "role": role, "scopes": scopes, "expires_at":iso(now()+timedelta(hours=2))} for club in assigned])
+                    "role": role, "scopes": scopes,
+                    "expires_at": iso(now()+timedelta(hours=2)) if role == "operator" else None} for club in assigned])
             generated = self.request(AUTH, "POST", "/auth/v1/admin/generate_link", {"type": "magiclink", "email": email}, service=True)
             props = generated.get("properties", generated)
             token_hash = props.get("hashed_token")

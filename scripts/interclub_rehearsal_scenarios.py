@@ -4,6 +4,7 @@ from copy import deepcopy
 from datetime import timedelta
 from itertools import combinations
 import json
+import time
 from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
@@ -266,14 +267,27 @@ def incidents(r):
     b = r.save(s,m,b,doc)
     old = deepcopy(b["document"]["encounters"][0]["pairings"][0])
     root = r.competition(s["clubs"][0],s["id"],m["id"])
+    replay_deadline = now()+timedelta(seconds=20)
     b = r.api("POST",root+"/reschedule",{"expected_revision":b["revision"],"reason":"Synthetic weather replay",
-        "starts_at":iso(now()+timedelta(days=2)),"roster_deadline":iso(now()+timedelta(days=1))})["batch"]
+        "starts_at":iso(now()+timedelta(minutes=5)),"roster_deadline":iso(replay_deadline)})["batch"]
     pairs = b["document"]["encounters"][0]["pairings"]
     r.check(pairs[0] == old and all(g["status"]=="pending" and g["a"] is None for g in pairs[1]["games"]),"weather replay preserves completed pairing and resets all three games of unfinished pairing")
     for club in s["clubs"]:
         r.roster(s,m,club,"3.5",alternate=True)
     b = r.api("POST",root+"/refresh-lineups",{"expected_revision":b["revision"]})["batch"]
     r.check(b["document"]["encounters"][0]["pairings"][0] == old,"replay roster refresh leaves completed pairing unchanged")
+    # Let the real new cutoff pass: the replay now locks the current league
+    # ratings, while the retained pairing still uses its original snapshot.
+    while now() <= replay_deadline:
+        time.sleep(min(1,max(0.01,(replay_deadline-now()).total_seconds())))
+    r.move_meet(s,m,now(),replay_deadline)
+    replay = deepcopy(b["document"])
+    for game in games(replay):
+        if game["status"] == "pending":
+            game.update(status="completed",a=11,b=9,winner="a",played_at=iso(now()))
+    b = r.approve(s,m,r.save(s,m,b,replay))
+    rating_evidence(r,s,b,6)
+    r.check(b["document"]["encounters"][0]["pairings"][0] == old,"completed weather replay keeps prior pairing and rates six games exactly once")
     ui_meet = new_meet(r,s)
     ui_batch = prepare(r,s,ui_meet)
     s["browser_meet"] = ui_meet["id"]
