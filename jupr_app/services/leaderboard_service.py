@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from jupr_app.data.paged_reads import read_all_rows
 from jupr_app.domain.gamification.presentation import badge_category
-from jupr_app.domain.leaderboard_metrics import EXTENDED_CARD_KEYS, compute_overall_metrics, overall_highlights
+from jupr_app.domain.leaderboard_metrics import (
+    EXTENDED_CARD_KEYS,
+    compute_overall_metrics,
+    overall_highlights,
+    team_upset_highlights,
+)
 
 import re
 from datetime import date, datetime, time, timedelta, timezone
@@ -701,6 +706,15 @@ def build_public_leaderboard(
     total = len(displayed)
     page_rows = displayed[safe_offset : safe_offset + safe_limit]
     active_count = sum(1 for row in base_rows if row.get("is_active") is True)
+    if selected == OVERALL_SCOPE:
+        card_options = settings.get("card_options") or {}
+        highlights = overall_highlights(filtered, metrics=metrics, min_games=min_games, card_options=card_options)
+        highlights["biggest_upset"] = team_upset_highlights(
+            matches, players=all_ranked, status=clean_status, search=clean_search,
+            min_games=min_games, options=card_options.get("biggest_upset") or {},
+        )
+    else:
+        highlights = _highlight_rows(filtered, min_games=min_games, league_name=selected)
 
     return {
         "scopes": scopes,
@@ -723,9 +737,7 @@ def build_public_leaderboard(
         },
         "leaderboard": page_rows,
         "snapshot": snapshot,
-        "highlights": (overall_highlights(filtered, metrics=metrics, min_games=min_games,
-                                           card_options=settings.get("card_options") or {})
-                       if selected == OVERALL_SCOPE else _highlight_rows(filtered, min_games=min_games, league_name=selected)),
+        "highlights": highlights,
         "pagination": {
             "total": total,
             "offset": safe_offset,

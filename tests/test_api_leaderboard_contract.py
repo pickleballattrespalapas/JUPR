@@ -178,3 +178,39 @@ def test_all_card_metrics_are_public_but_internal_calculations_are_not(client, m
         assert rows[0]['metric_sample'] == 8
         assert 'email' not in rows[0]
         assert '_partners' not in rows[0]
+
+
+@pytest.mark.parametrize('suffix', ['', '/public'])
+def test_team_upset_projection_keeps_both_teammates_without_private_fields(client, monkeypatch, suffix):
+    from services.api import main
+    previous = main.build_public_leaderboard
+
+    def build(db, **kwargs):
+        payload = previous(db, **kwargs)
+        payload['highlights']['biggest_upset'] = [{
+            'rank': 1, 'team_key': 'p1:p2', 'player_id': None,
+            'player_name': 'Alex & Blair',
+            'team_members': [
+                {'player_id': 'p1', 'player_name': 'Alex', 'email': 'private@example.test'},
+                {'player_id': 'p2', 'player_name': 'Blair', 'internal_notes': 'hidden'},
+            ],
+            'metric_value': 0.474, 'metric_display': '+0.474 JUPR', 'metric_sample': 2,
+            'matches_played': 8, '_matches': [{'secret': 'hidden'}],
+        }]
+        return payload
+
+    monkeypatch.setattr(main, 'build_public_leaderboard', build)
+    response = client.get(f'/clubs/test-club/leaderboards{suffix}')
+    assert response.status_code == 200
+    teams = response.json()['highlights']['biggest_upset']
+    assert len(teams) == 1
+    assert teams[0]['team_key'] == 'p1:p2'
+    assert teams[0]['player_id'] is None
+    assert teams[0]['team_members'] == [
+        {'player_id': 'p1', 'player_name': 'Alex'},
+        {'player_id': 'p2', 'player_name': 'Blair'},
+    ]
+    assert teams[0]['rank'] == 1
+    assert teams[0]['metric_value'] == 0.474
+    assert teams[0]['metric_sample'] == 2
+    assert '_matches' not in teams[0]

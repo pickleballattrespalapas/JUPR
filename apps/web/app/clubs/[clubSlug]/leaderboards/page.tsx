@@ -197,16 +197,23 @@ function BarList({
       <p style={{ color: "#475569", fontSize: ".85rem", marginTop: "-.3rem" }}>{description}</p>
       {!rows.length ? <p style={{ color: "#64748b", marginBottom: 0 }}>Not enough qualifying data yet.</p> : null}
       <div style={{ display: "grid", gap: "0.65rem" }}>
-        {rows.map((row) => {
+        {rows.map((row, index) => {
           const amount = value(row);
           const width = max > 0 && amount !== 0 ? `${Math.min(100, Math.max(4, Math.round((Math.abs(amount) / max) * 100)))}%` : "0%";
+          const team = row.team_members?.length === 2 ? row.team_members : null;
+          const place = row.rank ?? index + 1;
           return (
-            <div key={`${title}-${row.player_id ?? row.player_name}`}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", fontSize: "0.86rem", marginBottom: "0.25rem", overflowWrap: "anywhere" }}>
-                <span style={{ fontWeight: 700, minWidth: 0 }}>
-                  {row.player_id != null ? <Link href={playerHref(clubSlug, row.player_id)}>{row.player_name}</Link> : row.player_name}
+            <div key={row.team_key ?? `${title}-${row.player_id ?? row.player_name}`} data-testid={team ? "leaderboard-team-row" : undefined}>
+              <div style={{ display: "flex", justifyContent: "space-between", flexWrap: team ? "wrap" : undefined, gap: "0.75rem", fontSize: "0.86rem", marginBottom: "0.25rem", overflowWrap: "anywhere" }}>
+                <span style={{ fontWeight: 700, minWidth: 0, flex: team ? "1 1 145px" : undefined }}>
+                  {team ? <>
+                    <span aria-label={`Place ${place}`} data-testid="leaderboard-team-place" style={{ color: "#475569", marginRight: ".4rem" }}>#{place}</span>
+                    {team.map((member, memberIndex) => <span key={member.player_id}>
+                      {memberIndex > 0 ? " & " : ""}<Link href={playerHref(clubSlug, member.player_id)}>{member.player_name}</Link>
+                    </span>)}
+                  </> : row.player_id != null ? <Link href={playerHref(clubSlug, row.player_id)}>{row.player_name}</Link> : row.player_name}
                 </span>
-                <span style={{ color: "#475569", textAlign: "right", minWidth: 0 }}>{detail(row)}</span>
+                <span style={{ color: "#475569", textAlign: "right", minWidth: 0, marginLeft: team ? "auto" : undefined }}>{detail(row)}</span>
               </div>
               <div style={{ height: "0.55rem", borderRadius: "999px", background: "#e2e8f0", overflow: "hidden" }}>
                 <div style={{ width, height: "100%", borderRadius: "999px", background: amount < 0 ? "#dc2626" : "#2563eb" }} />

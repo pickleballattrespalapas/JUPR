@@ -12,13 +12,17 @@ export type ClubSummary = {
   is_active?: boolean | null;
 };
 
+export type LeaderboardTeamMember = { player_id: string | number; player_name: string };
+
 export type LeaderboardEntry = {
   rank?: number | null;
   rank_position?: number | null;
   club_id?: string;
   league_name?: string | null;
-  player_id?: string | number;
+  player_id?: string | number | null;
   player_name: string;
+  team_key?: string;
+  team_members?: [LeaderboardTeamMember, LeaderboardTeamMember];
   rating?: number | null;
   rating_jupr?: number | null;
   starting_rating?: number | null;

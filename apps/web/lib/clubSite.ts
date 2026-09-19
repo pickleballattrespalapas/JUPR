@@ -63,7 +63,7 @@ export const LEADERBOARD_CARD_DETAILS: Record<LeaderboardCard, {
   average_margin: { group: "Results", description: "Average team point difference per game, including wins and losses.", sample: "games", fields: ["records"] },
   longest_win_streak: { group: "Streaks", description: "Longest run of consecutive wins within this period.", sample: "games", fields: ["records"] },
   close_game_record: { group: "Results", description: "Win percentage in games decided by two points or fewer.", sample: "close games", fields: ["win_percentage"] },
-  biggest_upset: { group: "Competition", description: "Largest rating gap overcome in a win against a team averaging at least 0.25 JUPR higher before the game.", sample: "upset wins", fields: ["ratings", "records"] },
+  biggest_upset: { group: "Competition", description: "Teams ranked by the largest rating gap they overcame in a win against opponents averaging at least 0.25 JUPR higher before the game. Each pair appears once.", sample: "upset wins together", fields: ["ratings", "records"] },
   most_upsets: { group: "Competition", description: "Wins against teams averaging at least 0.25 JUPR higher before the game.", sample: "upset wins", fields: ["ratings", "records"] },
   opponent_strength: { group: "Competition", description: "Average opposing team rating, using ratings before each game.", sample: "games", fields: ["ratings"] },
   over_performance: { group: "Competition", description: "Actual wins minus expected wins based on both teams’ pre-game ratings.", sample: "games", fields: ["ratings", "records"] },
@@ -119,7 +119,7 @@ export function leaderboardSettingsError(settings?: LeaderboardSettings): string
       return `${label}: use a minimum from 0 to 10,000.`;
     }
     if (!Number.isInteger(options.depth) || options.depth < 1 || options.depth > 10) {
-      return `${label}: show between 1 and 10 players.`;
+      return `${label}: show between 1 and 10 ${key === "biggest_upset" ? "teams" : "players"}.`;
     }
   }
   for (const [index, season] of settings.seasons.entries()) {

@@ -25,6 +25,11 @@ def metric(payload, card, player=1):
     return next(row for row in payload["highlights"][card] if row["player_id"] == player)
 
 
+def upset(payload, pair=(1, 2)):
+    return next(row for row in payload["highlights"]["biggest_upset"]
+                if {member["player_id"] for member in row["team_members"]} == set(pair))
+
+
 def test_extended_cards_share_season_history_and_use_chronological_results_and_local_days():
     sb, _ = setup()
     sb.store["matches"] = [
@@ -45,7 +50,7 @@ def test_extended_cards_share_season_history_and_use_chronological_results_and_l
     assert payload["highlights"]["hot_hand"] == []  # final tie resets both sides
     assert metric(payload, "close_game_record")["metric_value"] == pytest.approx(100 / 3)
     assert metric(payload, "close_game_record")["metric_sample"] == 3
-    assert metric(payload, "biggest_upset")["metric_value"] == .5
+    assert upset(payload)["metric_value"] == .5
     assert metric(payload, "most_upsets")["metric_value"] == 1
     assert metric(payload, "opponent_strength")["metric_value"] == 3.5
     assert metric(payload, "over_performance")["metric_value"] == pytest.approx(3 - (1 / (1 + 10 ** .5) + 2))
@@ -74,7 +79,7 @@ def test_exact_quarter_point_upset_is_inclusive_despite_float_conversion():
     sb.store["matches"] = [game(1, t1_p1_r=1506, t1_p2_r=1506, t2_p1_r=1606, t2_p2_r=1606)]
     payload = build_public_leaderboard(sb, club_id="club-1")
     assert metric(payload, "most_upsets")["metric_value"] == 1
-    assert metric(payload, "biggest_upset")["metric_value"] == pytest.approx(.25)
+    assert upset(payload)["metric_value"] == pytest.approx(.25)
 
 
 @pytest.mark.parametrize("invalid", ["NaN", "Infinity", "-Infinity"])
@@ -168,3 +173,121 @@ def test_pair_ties_are_stable_and_depth_can_show_ten_players():
     cards = overall_highlights(rows, metrics={}, min_games=10,
                                card_options={"highest_rating": {"minimum": 0, "depth": 10}})
     assert len(cards["highest_rating"]) == 10
+
+
+def team_setup():
+    sb, config = setup()
+    config["cards"] = ["biggest_upset", "average_margin"]
+    config["card_options"] = {"biggest_upset": {"minimum": 0, "depth": 3}}
+    # Include all four club profiles so either side can appear as a team.
+    sb.store["players"].append({"id": 4, "club_id": "club-1", "name": "Devin Drive",
+                                "rating": 1400, "active": True})
+    sb.store["players"][2]["active"] = True
+    return sb, config
+
+
+def test_biggest_upset_ranks_three_distinct_teams_with_both_members_and_their_best_win():
+    sb, _ = team_setup()
+    sb.store["matches"] = [
+        game(1, t1_p1_r=1200, t1_p2_r=1200),  # 1/2: +0.500
+        game(2, t1_p1=2, t1_p2=1, t1_p1_r=1300, t1_p2_r=1300),  # Same pair, reversed slots, +0.250
+        game(3, t1_p2=3, t2_p1=2, t1_p1_r=1100, t1_p2_r=1100),  # 1/3: +0.750
+        game(4, score_t1=7, score_t2=11, t2_p1_r=1250, t2_p2_r=1250),  # 3/4: +0.375
+    ]
+    original = deepcopy(sb.store)
+    payload = build_public_leaderboard(sb, club_id="club-1")
+    leaders = payload["highlights"]["biggest_upset"]
+    assert [row["team_key"] for row in leaders] == ["1:3", "1:2", "3:4"]
+    assert [row["rank"] for row in leaders] == [1, 2, 3]
+    assert [row["metric_value"] for row in leaders] == [.75, .5, .375]
+    assert leaders[0]["team_members"] == [{"player_id": 1, "player_name": "Avery Ace"},
+                                          {"player_id": 3, "player_name": "Casey Court"}]
+    assert leaders[0]["player_name"] == "Avery Ace & Casey Court"
+    assert leaders[0]["metric_display"] == "+0.750 JUPR"
+    assert all(row["player_id"] is None for row in leaders)
+    assert upset(payload)["metric_sample"] == 2
+    assert upset(payload)["matches_played"] == 3
+    assert len(sb.match_queries) == 2
+    assert sb.store == original
+
+
+def test_team_upset_minimums_count_games_and_upset_wins_together_not_individual_totals():
+    sb, config = team_setup()
+    sb.store["matches"] = [
+        game(1, t1_p1_r=1200, t1_p2_r=1200),
+        game(2, t1_p1=2, t1_p2=1, t1_p1_r=1300, t1_p2_r=1300),
+        game(3, t1_p2=3, t2_p1=2, t1_p1_r=1000, t1_p2_r=1000),
+    ]
+    config["min_games"] = 2
+    config["card_options"]["biggest_upset"] = {"minimum": 2, "depth": 3}
+    payload = build_public_leaderboard(sb, club_id="club-1")
+    assert [row["team_key"] for row in payload["highlights"]["biggest_upset"]] == ["1:2"]
+    config["min_games"] = 3
+    assert not build_public_leaderboard(sb, club_id="club-1")["highlights"]["biggest_upset"]
+    config["min_games"] = 0
+    config["card_options"]["biggest_upset"] = {"minimum": 0, "depth": 1}
+    assert [row["team_key"] for row in build_public_leaderboard(sb, club_id="club-1")["highlights"]["biggest_upset"]] == ["1:3"]
+
+
+@pytest.mark.parametrize("search", ["avery", "BASELINE", "  Blake  "])
+def test_team_search_keeps_both_teammates_when_either_name_matches(search):
+    sb, _ = team_setup()
+    sb.store["matches"] = [game(1, t1_p1_r=1200, t1_p2_r=1200)]
+    leaders = build_public_leaderboard(sb, club_id="club-1", search=search)["highlights"]["biggest_upset"]
+    assert len(leaders) == 1
+    assert leaders[0]["team_key"] == "1:2"
+    assert len(leaders[0]["team_members"]) == 2
+    assert not build_public_leaderboard(sb, club_id="club-1", search="Casey")["highlights"]["biggest_upset"]
+
+
+def test_team_status_requires_both_active_and_inactive_matches_either_inactive():
+    sb, _ = team_setup()
+    sb.store["players"][1]["active"] = False
+    sb.store["matches"] = [game(1, t1_p1_r=1200, t1_p2_r=1200),
+                           game(2, t2_p1_r=1200, t2_p2_r=1200, score_t1=7, score_t2=11)]
+    def keys(status):
+        return {row["team_key"] for row in build_public_leaderboard(sb, club_id="club-1", status=status)["highlights"]["biggest_upset"]}
+    assert keys("active") == {"3:4"}
+    assert keys("inactive") == {"1:2"}
+    assert keys("all") == {"1:2", "3:4"}
+    filtered = build_public_leaderboard(sb, club_id="club-1", status="inactive", search="Avery")
+    assert len(filtered["highlights"]["biggest_upset"]) == 1
+    assert filtered["highlights"]["biggest_upset"][0]["is_active"] is False
+
+
+def test_team_snapshot_completeness_is_pair_specific_and_unknown_members_never_appear():
+    sb, _ = team_setup()
+    sb.store["matches"] = [
+        game(1, t1_p1_r=1200, t1_p2_r=1200),
+        game(2, t1_p2=3, t2_p1=2, t1_p1_r=1000, t1_p2_r=1000),
+        game(3, t1_p2=3, t2_p1=2, t2_p2_r=None),  # Pair1/3 incomplete; pair1/2 stays eligible.
+        game(4, t1_p1=99, t1_p1_r=1000, t1_p2_r=1000),  # Profile99 belongs to another club.
+    ]
+    leaders = build_public_leaderboard(sb, club_id="club-1")["highlights"]["biggest_upset"]
+    assert [row["team_key"] for row in leaders] == ["1:2"]
+
+
+def test_team_upset_uses_season_boundaries_and_canonical_games_once():
+    sb, _ = team_setup()
+    valid = game(1, t1_p1_r=1300, t1_p2_r=1300)
+    sb.store["matches"] = [valid, dict(valid),
+        game(2, "2024-09-15T06:59:59Z", t1_p1_r=1000, t1_p2_r=1000),
+        game(3, "2024-09-17T07:00:00Z", t1_p1_r=1000, t1_p2_r=1000),
+        game(4, t1_p1_r=1000, t1_p2_r=1000, rating_scope="unrated"),
+        game(5, t1_p1_r=1000, t1_p2_r=1000, match_format="singles"),
+        game(6, t1_p1_r=1000, t1_p2_r=1000, t1_p1=2),
+        game(7, t1_p1_r=1000, t1_p2_r=1000, score_t1=11.5),
+        game(8, t1_p1_r=1000, t1_p2_r=1000, deleted_at="2024-09-16T00:00:00Z"),
+    ]
+    row = upset(build_public_leaderboard(sb, club_id="club-1"))
+    assert row["metric_value"] == .25
+    assert row["metric_sample"] == row["matches_played"] == 1
+
+
+def test_average_margin_retains_distinct_profiles_even_when_their_names_match():
+    sb, _ = team_setup()
+    sb.store["players"][1]["name"] = "Avery Ace"
+    sb.store["matches"] = [game(1)]
+    leaders = build_public_leaderboard(sb, club_id="club-1")["highlights"]["average_margin"]
+    assert [row["player_id"] for row in leaders[:2]] == [1, 2]
+    assert [row["player_name"] for row in leaders[:2]] == ["Avery Ace", "Avery Ace"]
