@@ -67,6 +67,21 @@ def email_and_responses(r, s, m):
     r.api("POST", "/public/interclub-player-response/respond", body, actor=None, expected=(409,))
     r.check(edited["member"]["notes"] == "Private revised note", "personal link edit persists; stale edits rejected")
     r.api("GET", root+"/pool", actor=1, expected=(403,))
+    # Two consenting directory players share one household address. The preview
+    # must group the email while preserving the selected player count.
+    members = r.api("GET",root+"/pool")["members"][:2]
+    address = f"household-{r.state['run']}@example.invalid"
+    r.db("POST","player_profile_update_subscriptions",[{"club_id":club,"player_id":m["player_id"],
+        "email":address,"email_normalized":address,"request_status":"active","verified_at":iso(now())} for m in members])
+    eroot = f"/admin/clubs/{club}/interclub/player-pools/{s['id']}/emails"
+    audience = r.api("GET",eroot+"/audience?kind=season")
+    payload = {"kind":"season","recipient_ids":[str(m["player_id"]) for m in members],**audience["defaults"]}
+    preview = r.api("POST",eroot+"/preview",payload)
+    r.check(preview["recipient_count"] == 1 and preview["player_count"] == 2,"season invitation groups a household email without losing players")
+    operation = str(uuid4())
+    r.api("POST",eroot,{**payload,"operation_key":operation,"preview_fingerprint":preview["preview_fingerprint"]})
+    season_send = r.api("POST",eroot+f"/{operation}/recipients/0/send")
+    r.check(season_send["status"] == "dry_run" and len(season_send["links"]) == 1,"season invitation dry-run supplies the actual signup link")
     availability = root+"/meets/"+m["id"]+"/availability"
     r.api("PUT", availability, {"expected_revision":0,"open":True,"deadline":iso(now()+timedelta(days=1))})
     eroot = f"/admin/clubs/{club}/interclub/player-pools/{s['id']}/emails"
@@ -117,11 +132,42 @@ def full_season(r):
     for division, count in [("3.5",4),("4.0",3),("4.5",2)]:
         for club in s["clubs"][:count]:
             r.roster(s, m, club, division)
-    # An ordinary participant in club three cannot view opponents before lock.
+    ownroot = r.registration(s["clubs"][0],s["id"])+"/meets/"+m["id"]
+    current = r.api("GET",ownroot)
+    team = next(t for t in current["teams"] if t["club_id"] == s["clubs"][0] and t["division"] == "3.5")
+    baseline = {"expected_meet_revision":current["meet"]["revision"],"expected_revision":team["revision"],
+                "name":"Invalid roster rehearsal","division":"3.5"}
+    own = [p for p in s["players"] if p["club_id"] == s["clubs"][0] and p["division"] == "3.5"]
+    invalid_sets = [[own[i]["id"] for i in [0,3,4,5]],
+                   [p["id"] for p in s["players"] if p["club_id"] == s["clubs"][0] and p["division"] == "4.5"][:4],
+                   [p["id"] for p in s["players"] if p["club_id"] == s["clubs"][1] and p["division"] == "3.5"][:4]]
+    for ids in invalid_sets:
+        r.api("PUT",ownroot+"/teams/"+team["id"],{**baseline,"player_ids":ids},expected=(422,))
+    r.check(True,"wrong gender balance, skill band and represented-club rosters rejected")
+    nonhostroot = r.competition(s["clubs"][2],s["id"],m["id"])
+    hidden = r.api("GET",nonhostroot,actor=3)
+    r.check(hidden["lineups_hidden"] and all(t["club_id"] == s["clubs"][2] for t in hidden["teams"]),"opponent lineups stay hidden from non-host before roster deadline")
+    r.api("POST",nonhostroot+"/generate",{"expected_revision":0,"format":"gender"},actor=3,expected=(403,))
     # The host participant identity can manage this meet but cannot approve it.
     detail = r.api("GET", r.competition(s["clubs"][1],s["id"],m["id"]), actor=1)
     r.check(detail["can_manage"] and not detail["is_organizer"], "host can manage its meet without organizer approval authority")
     r.open_dates(s)
+    # Late enrollment is exercised through signup and approval, without adding
+    # the late player to the earlier fixture meet's locked lineup.
+    late_id = 7000000000000 + int(uuid4().hex[:11],16)
+    r.db("POST","players",{"id":late_id,"club_id":s["clubs"][0],"name":"Late Rehearsal Player",
+        "normalized_name":"late "+s["id"],"rating":1500,"starting_rating":1500,"active":True,"gender":"female"})
+    late_email = f"late-{r.state['run']}@example.invalid"
+    r.api("POST","/public/interclub-signups/"+s["signup"][s["clubs"][0]]["share_id"],
+        {"name":"Late Rehearsal Player","email":late_email,"divisions":["3.5"],"notes":"Late addition rehearsal","request_id":str(uuid4()),"email_consent":True},actor=None)
+    poolroot = r.registration(s["clubs"][0],s["id"])+"/pool"
+    late = next(x for x in r.api("GET",poolroot)["members"] if x["email"] == late_email)
+    late = r.api("PATCH",poolroot+"/members/"+late["id"],{"expected_revision":late["revision"],"player_id":late_id,"status":"active"})["member"]
+    r.check(late["approval_status"] == "pending", "linked late addition still needs organizer approval")
+    request = {"member_id":late["id"],"expected_revision":late["revision"],"approve":True,"reason":"Synthetic late player approval"}
+    r.api("POST",r.registration(s["clubs"][1],s["id"])+"/pool/approvals",request,actor=1,expected=(403,))
+    approved = r.api("POST",poolroot+"/approvals",request)
+    r.check(approved["member"]["approval_status"] == "approved","only organizer approves the late addition")
     r.move_meet(s, m, now()-timedelta(days=3))
     b = r.generated(s, m)
     r.check(Counter(e["division"] for e in b["document"]["encounters"]) == {"3.5":6,"4.0":3,"4.5":1}, "four, three and two clubs generate six, three and one matchups")

@@ -87,11 +87,15 @@ class Rehearsal:
         elif token:
             headers["Authorization"] = f"Bearer {token}"
         req = Request(origin + path, data=json.dumps(payload).encode() if payload is not None else None, headers=headers, method=method)
+        started=time.monotonic()
+        self.last_request={"method":method,"path":path.split('?')[0]}
         try:
             with build_opener(NoRedirect).open(req, timeout=120) as response:
                 status, data = response.status, response.read()
         except HTTPError as exc:
             status, data = exc.code, exc.read()
+        except TimeoutError as exc:
+            raise RuntimeError(f"{method} {path.split('?')[0]} timed out") from exc
         try:
             result = json.loads(data) if data else None
         except ValueError:
@@ -99,6 +103,8 @@ class Rehearsal:
         if status not in expected:
             detail = (result or {}).get("detail", (result or {}).get("message", "Unexpected response")) if isinstance(result, dict) else "Unexpected response"
             raise RuntimeError(self.redact(f"{method} {path.split('?')[0]}: HTTP {status}; {detail}"))
+        if status == 409 and time.monotonic()-started>15:
+            raise AssertionError("An application conflict must return promptly without transaction retries")
         return result
 
     def db(self, method, table, payload=None, **filters):
@@ -133,7 +139,8 @@ class Rehearsal:
                                   "is_active": False, "status": "draft", "onboarding_status": "draft"} for i, club in enumerate(clubs)])
         for label, assigned, role, scopes in [("organizer", clubs, "administrator", []),
                                                ("participant", [clubs[1]], "administrator", []),
-                                               ("operator", [clubs[1]], "operator", [{"kind": "program_type", "program_type": "leagues", "resource_id": ""}])]:
+                                               ("operator", [clubs[1]], "operator", [{"kind": "program_type", "program_type": "leagues", "resource_id": ""}]),
+                                               ("nonhost", [clubs[2]], "administrator", [])]:
             email = f"qa-ic-{self.state['run']}-{label}@example.invalid"
             user = self.request(AUTH, "POST", "/auth/v1/admin/users", {"email": email, "email_confirm": True,
                 "app_metadata": {"pcs_rehearsal": MARKER, "run": self.state["run"]}}, service=True)
@@ -141,7 +148,7 @@ class Rehearsal:
             self.state["users"].append(row)
             self.persist()
             self.db("POST", "admin_role_assignments", [{"club_id": club, "user_id": user["id"], "email": email,
-                    "role": role, "scopes": scopes} for club in assigned])
+                    "role": role, "scopes": scopes, "expires_at":iso(now()+timedelta(hours=2))} for club in assigned])
             generated = self.request(AUTH, "POST", "/auth/v1/admin/generate_link", {"type": "magiclink", "email": email}, service=True)
             props = generated.get("properties", generated)
             token_hash = props.get("hashed_token")
@@ -238,6 +245,12 @@ class Rehearsal:
         data={"expected_meet_revision":current["meet"]["revision"],"expected_revision":existing["revision"] if existing else 0,
               "name":f"Rehearsal {division}","division":division,"player_ids":ids,"missing_pairing_forfeit":partial}
         result=self.api("PUT",root+"/teams/"+tid,data)
+        if result["team"]["status"] == "needs_exception":
+            decision={"expected_meet_revision":current["meet"]["revision"],"expected_revision":result["team"]["revision"],
+                      "approve":True,"reason":"Organizer approves the synthetic late-entered team"}
+            organizer=self.registration(season["clubs"][0],season["id"])+"/meets/"+mid
+            result=self.api("POST",organizer+"/teams/"+tid+"/eligibility",decision)
+            self.check(result["team"]["status"] == "exception_approved","organizer approves late team entry after checking eligible players")
         return result
 
     def open_dates(self, season):
@@ -285,7 +298,10 @@ class Rehearsal:
 
     def approve(self, season, meet, batch):
         root=self.competition(season["clubs"][0],season["id"],meet["id"],batch["phase"])
-        submitted=self.api("POST",root+"/submit",{"expected_revision":batch["revision"]})["batch"]
+        hostroot=self.competition(season["clubs"][1],season["id"],meet["id"],batch["phase"])
+        correction=bool(batch.get("approved_document"))
+        submitted=self.api("POST",(root if correction else hostroot)+"/submit",{"expected_revision":batch["revision"]},actor=0 if correction else 2)["batch"]
+        self.api("POST",hostroot+"/approve",{"expected_revision":submitted["revision"]},actor=2,expected=(403,))
         self.api("POST",self.competition(season["clubs"][1],season["id"],meet["id"],batch["phase"])+"/approve",
                  {"expected_revision":submitted["revision"]},actor=1,expected=(403,))
         approved=self.api("POST",root+"/approve",{"expected_revision":submitted["revision"]})

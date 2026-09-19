@@ -48,7 +48,7 @@ def rpc(db, name="pcs_interclub_club_invitation", **params):
         code = getattr(exc, "code", "")
         if code == "23505": raise HTTPException(409, "A club with this name or address already exists. Refresh the list and select that club.") from exc
         if code == "42501": raise HTTPException(403, "Use an authorized organizer account or the invited, verified email.") from exc
-        if code == "40001": raise HTTPException(409, "The setup, invitation or club access changed. Reload before continuing.") from exc
+        if code in {"40001", "PT409"}: raise HTTPException(409, "The setup, invitation or club access changed. Reload before continuing.") from exc
         if code == "P0002": raise HTTPException(404, "Club invitation or season unavailable.") from exc
         if code == "22023": raise HTTPException(422, "Check the club name, administrator email and season's club limit.") from exc
         raise HTTPException(503, "Could not confirm the invitation. Reload the setup before retrying.") from exc

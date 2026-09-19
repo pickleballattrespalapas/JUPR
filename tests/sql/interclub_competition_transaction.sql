@@ -69,14 +69,14 @@ begin
  begin
   perform public.pcs_write_interclub_competition(actor,actor_email,away,sid,mid,'regular','refresh_lineups',1,doc,sources);
   raise exception 'Post-start lineup refresh accepted';
- exception when serialization_failure then null; end;
+ exception when sqlstate 'PT409' then null; end;
  if (select revision from public.pcs_interclub_competition_batches where id=bid)<>1 then raise exception 'Rejected refresh was not atomic'; end if;
  update public.pcs_interclub_meets set starts_at=now()+interval '20 days' where id=mid;
 
  begin
   perform public.pcs_write_interclub_competition(actor,actor_email,away,sid,mid,'regular','save',0,doc,sources);
   raise exception 'Stale revision accepted';
- exception when serialization_failure then null; end;
+ exception when sqlstate 'PT409' then null; end;
  begin
   perform public.pcs_write_interclub_competition(gen_random_uuid(),actor_email,away,sid,mid,'regular','save',1,doc,sources);
   raise exception 'Forged actor accepted';
@@ -97,7 +97,7 @@ begin
  begin
   perform public.pcs_write_interclub_competition(actor,actor_email,away,sid,mid,'regular','save',1,completed,jsonb_set(sources,'{0,revision}','2'));
   raise exception 'Stale roster source accepted';
- exception when serialization_failure then null; end;
+ exception when sqlstate 'PT409' then null; end;
  perform public.pcs_write_interclub_competition(actor,actor_email,away,sid,mid,'regular','save',1,completed,sources);
  perform public.pcs_write_interclub_competition(actor,actor_email,away,sid,mid,'regular','submit',2);
  begin

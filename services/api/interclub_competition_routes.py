@@ -108,6 +108,8 @@ def _rpc(db, params, name="pcs_write_interclub_competition"):
         return db.rpc(name, params).execute().data
     except Exception as exc:
         code = str(getattr(exc, "code", ""))
+        if code == "PT409":
+            code = "40001"
         status, message = {
             "42501": (403, "Only the assigned host staff or league organizer can run this meet; approval and corrections require the organizer."),
             "40001": (409, "This meet, lineup or result revision changed. Reload before continuing."),

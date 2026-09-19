@@ -39,7 +39,7 @@ def install_interclub_setup_routes(app, *, get_supabase_client):
             result=db.rpc('pcs_save_interclub_draft',{'p_actor_id':user.user_id,'p_actor_email':user.email,'p_club_id':club_id,'p_id':str(payload.season_id),'p_revision':payload.expected_revision,'p_draft':payload.draft.model_dump(mode='json')}).execute().data
         except Exception as exc:
             code=getattr(exc,'code','')
-            if code=='40001': raise HTTPException(409,'This setup changed or invitations are already open. Reload before continuing.') from exc
+            if code in {'40001','PT409'}: raise HTTPException(409,'This setup changed or invitations are already open. Reload before continuing.') from exc
             if code=='42501': raise HTTPException(403,'Organizer administrator access required.') from exc
             if code=='22023': raise HTTPException(422,'One of the selected clubs is no longer available.') from exc
             raise HTTPException(503,'Could not confirm the save. Reload the season list before retrying.') from exc

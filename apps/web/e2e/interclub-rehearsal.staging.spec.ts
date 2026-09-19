@@ -6,7 +6,7 @@ import { bootstrapStagingContext, expectedApiOrigin } from "./support/staging";
 // This private fixture stays outside uploaded artifacts. The session was issued
 // by staging Auth to a synthetic user restricted to this run's synthetic clubs.
 test.use({ trace: "off", video: "off", screenshot: "off", timezoneId: "UTC" });
-test("interclub paper packet, score entry, approval and public results", async ({ page, context }) => {
+test("interclub paper packet, score entry, approval and public results", async ({ page, context, browser }) => {
   test.setTimeout(300_000);
   const state = JSON.parse(readFileSync(process.env.JUPR_INTERCLUB_REHEARSAL_STATE!, "utf8"));
   expect(state.marker).toBe("interclub-functional-rehearsal-v1");
@@ -68,12 +68,24 @@ test("interclub paper packet, score entry, approval and public results", async (
   await expect(page.getByRole("heading", { name: "Official meet results", exact: true })).toBeVisible();
   await expect(page.getByText("Rating updates: completed", { exact: true })).toBeVisible();
   await page.screenshot({ path: join(reportDir,"interclub-approved-meet.png"), fullPage: true });
-  await context.clearCookies({ name: "jupr_admin_workspace_v1" });
-  await page.goto(`/interclub/${official.id}`);
-  await expect(page.getByText(new RegExp(`Rehearsal ${state.run} full-season`)).first()).toBeVisible();
-  await expect(page.getByText("Club Cup", { exact: false }).first()).toBeVisible();
-  await expect(page.getByText("Private revised note", { exact: false })).toHaveCount(0);
+  const anonymous = await browser.newContext({ baseURL: origin });
+  await bootstrapStagingContext(anonymous);
+  const publicPage = await anonymous.newPage();
+  publicPage.on("pageerror", error => errors.push(error.message));
+  await publicPage.goto(`/interclub/${official.id}`);
+  await expect(publicPage.getByRole("heading",{ name: `Rehearsal ${state.run} full-season`, exact:true })).toBeVisible();
+  await expect(publicPage.getByText("Club Cup", { exact: false }).first()).toBeVisible();
+  await expect(publicPage.getByText("Private revised note", { exact: false })).toHaveCount(0);
+  await publicPage.goto(`/interclub/signup/${official.signup[club].share_id}`);
+  await publicPage.getByLabel("Your name", { exact: true }).fill("Browser Rehearsal Player");
+  await publicPage.getByLabel("Email", { exact: false }).fill(`browser-${state.run}@example.invalid`);
+  await publicPage.getByRole("checkbox",{ name:"3.5", exact:true }).check();
+  await publicPage.getByRole("checkbox",{ name:/My club can email me invitations/ }).check();
+  await publicPage.getByRole("button",{ name:"Join the season player pool", exact:true }).click();
+  await expect(publicPage.getByRole("heading",{ name:"Your interest is registered", exact:true })).toBeVisible();
+  await expect(publicPage.getByRole("link",{ name:"Manage my season signup", exact:true })).toHaveCount(1);
+  await anonymous.close();
   expect(errors).toEqual([]);
   writeFileSync(join(reportDir,"interclub-browser.json"),JSON.stringify({ status:"passed",candidate_sha:state.sha,
-    checks:["paper_packet_pdf","six_game_ui_entry","dirty_navigation_lock","draft_reload","whole_meet_submission","organizer_approval","both_rating_streams","public_cup","no_browser_exceptions"] },null,2));
+    checks:["paper_packet_pdf","six_game_ui_entry","dirty_navigation_lock","draft_reload","whole_meet_submission","organizer_approval","both_rating_streams","anonymous_public_cup","anonymous_player_signup","no_browser_exceptions"] },null,2));
 });

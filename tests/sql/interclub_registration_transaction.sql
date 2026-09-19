@@ -38,7 +38,7 @@ begin
  begin
   perform public.pcs_open_interclub_meet_registration(actor,actor_email,org,sid,2,rules);
   raise exception 'Stale draft opened';
- exception when serialization_failure then null; end;
+ exception when sqlstate 'PT409' then null; end;
  out:=public.pcs_open_interclub_meet_registration(actor,actor_email,org,sid,1,rules);
  perform public.pcs_open_interclub_meet_registration(actor,actor_email,org,sid,1,rules);
  if (select count(*) from public.pcs_interclub_participations where season_id=sid)<>3
@@ -61,12 +61,12 @@ begin
  begin
   perform public.pcs_open_interclub_registration(actor,actor_email,org,sid,1,rules,now()+interval '7 days');
   raise exception 'Old season open contract still writable';
- exception when serialization_failure then null; end;
+ exception when sqlstate 'PT409' then null; end;
  begin
  perform public.pcs_save_interclub_draft(actor,actor_email,org,sid,1,jsonb_build_object('name','Edited draft','start_date',(current_date+10)::text,
   'end_date',(current_date+90)::text,'timezone','America/Mazatlan','divisions',jsonb_build_array('Open'),'club_ids',jsonb_build_array(home,other),'meets','[]'::jsonb));
   raise exception 'Opened setup was editable';
- exception when serialization_failure then null; end;
+ exception when sqlstate 'PT409' then null; end;
  if (select details->>'name' from public.pcs_interclub_seasons where id=sid)<>'Coastal League' then raise exception 'Planning edit changed accepted terms'; end if;
  begin
   perform public.pcs_save_interclub_meet_roster(actor,actor_email,home,sid,mid,2,tid,0,'Home Blue','3.5',ids[1:4]);
@@ -80,7 +80,7 @@ begin
  begin
   perform public.pcs_interclub_participation(actor,actor_email,other,sid,other,2,'accept');
   raise exception 'Cancelled club accepted';
- exception when serialization_failure then null; end;
+ exception when sqlstate 'PT409' then null; end;
  perform public.pcs_interclub_participation(actor,actor_email,org,sid,other,2,'reinvite');
  perform public.pcs_interclub_participation(actor,actor_email,other,sid,other,3,'decline');
  perform public.pcs_interclub_participation(actor,actor_email,home,sid,home,1,'accept');
@@ -92,7 +92,7 @@ begin
  begin
   perform public.pcs_save_interclub_meet_roster(actor,actor_email,home,sid,mid,1,tid,0,'Home Blue','3.5',ids[1:4]);
   raise exception 'Stale meet deadline revision used';
- exception when serialization_failure then null; end;
+ exception when sqlstate 'PT409' then null; end;
  begin
   perform public.pcs_save_interclub_meet_roster(actor,actor_email,home,sid,gen_random_uuid(),1,tid,0,'Home Blue','3.5',ids[1:4]);
   raise exception 'Unknown meet used';
@@ -122,7 +122,7 @@ begin
  begin
   perform public.pcs_set_interclub_meet_deadline(actor,actor_email,org,sid,mid,2,now()+interval '8 days');
   raise exception 'Deadline changed after roster submission';
- exception when serialization_failure then null; end;
+ exception when sqlstate 'PT409' then null; end;
  -- Reusing a team name and players at a different meet is allowed.
  out:=public.pcs_save_interclub_meet_roster(actor,actor_email,home,sid,next_mid,1,next_team,0,'Home Blue','3.5',ids[1:4]);
  if out->'roster'->>'status'<>'eligible' or out->'team'->>'meet_id'<>next_mid::text then raise exception 'Next meet roster blocked by first meet'; end if;
@@ -141,7 +141,7 @@ begin
  begin
   perform public.pcs_save_interclub_roster(actor,actor_email,home,sid,tid,1,'Home Blue','3.5',ids[1:4]);
   raise exception 'Old season roster contract still writable';
- exception when serialization_failure then null; end;
+ exception when sqlstate 'PT409' then null; end;
 
  begin
   perform public.pcs_save_interclub_meet_roster(actor,actor_email,home,sid,mid,2,another_team,0,'Home Red','3.5',ids[1:4]);
@@ -172,7 +172,7 @@ begin
  begin
   perform public.pcs_review_interclub_meet_roster(actor,actor_email,org,sid,mid,2,tid,3,true,'Stale review');
   raise exception 'Stale roster approved';
- exception when serialization_failure then null; end;
+ exception when sqlstate 'PT409' then null; end;
  perform public.pcs_review_interclub_meet_roster(actor,actor_email,org,sid,mid,2,tid,4,false,'Use an eligible substitute');
  if (select roster from public.pcs_interclub_roster_versions where team_id=tid and revision=1) is distinct from first_roster then raise exception 'Historical lineup changed'; end if;
  update public.admin_role_assignments set revoked_at=now() where club_id=home;
@@ -197,15 +197,15 @@ begin
  begin
   perform public.pcs_save_interclub_meet_roster(actor,actor_email,home,sid,mid,2,another_team,1,'Late new team','3.5',ids[1:4]);
   raise exception 'Started meet roster changed';
- exception when serialization_failure then null; end;
+ exception when sqlstate 'PT409' then null; end;
  begin
   perform public.pcs_save_interclub_meet_roster(actor,actor_email,home,sid,mid,2,another_team,1,'','',array[]::bigint[],true);
   raise exception 'Started meet team withdrawn';
- exception when serialization_failure then null; end;
+ exception when sqlstate 'PT409' then null; end;
  begin
   perform public.pcs_review_interclub_meet_roster(actor,actor_email,org,sid,mid,2,another_team,1,true,'Too late');
   raise exception 'Started meet eligibility changed';
- exception when serialization_failure then null; end;
+ exception when sqlstate 'PT409' then null; end;
  select count(*) into count_before from public.pcs_interclub_registration_audit where season_id=sid;
  if count_before<>16 then raise exception 'Unexpected audit count: %',count_before; end if;
 end $$;
