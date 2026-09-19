@@ -41,8 +41,7 @@ jobs:
             tests/test_overall_leaderboard_metrics.py \
             tests/test_public_leaderboard_projection.py \
             tests/test_web_leaderboard_parity_contract.py \
-            tests/test_interclub_setup.py \
-            tests/test_interclub_player_email_service.py \
+            tests/test_interclub_*.py \
             tests/test_admin_tournament_broadcast_service.py \
             tests/test_tournament_broadcast_edit_links.py \
             tests/test_admin_tournament_registration_reporting_service.py \

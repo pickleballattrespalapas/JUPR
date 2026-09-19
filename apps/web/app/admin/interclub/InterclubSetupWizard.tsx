@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import type { DivisionRule, RegistrationSeason } from "@/lib/interclubRegistration";
+import type { RegistrationSeason } from "@/lib/interclubRegistration";
 import { apiError, composition } from "@/lib/interclubRegistration";
 import { ClubChoice, PlanningDraft, PlanningMeet, PlanningSeason, divisionChoices, emptyRule, firstIncompleteStep, meetLocalTime, meetUtcTime, normalizeDraft, setupSteps, stepIssues } from "@/lib/interclubSetup";
 import styles from "./setup.module.css";
@@ -92,7 +92,6 @@ export default function InterclubSetupWizard({ api, club, accessToken, initialSe
     const club_ids = draft.club_ids.includes(id) ? draft.club_ids.filter(c => c !== id) : [...draft.club_ids, id];
     edit({ club_ids, meets: draft.meets.map(meet => ({ ...meet, club_ids: meet.club_ids.filter(c => club_ids.includes(c)), host_club_id: club_ids.includes(meet.host_club_id) ? meet.host_club_id : "" })) });
   }
-  function editRule(division: string, field: keyof DivisionRule, value: string) { edit({ registration_rules: { ...draft.registration_rules, [division]: { ...(draft.registration_rules[division] || emptyRule()), [field]: value === "" ? null : Number(value) } } }); }
   function goTo(target: number) { if (target > step) { const missing = firstIncompleteStep(draft); if (missing < target) { setStep(missing); setErrors(stepIssues(draft, missing)); return; } } setStep(target); setErrors([]); setMessage(""); setReviewed(false); }
 
   async function jsonRequest(url: string, controller: AbortController, body?: object, method?: string) {
@@ -226,17 +225,16 @@ export default function InterclubSetupWizard({ api, club, accessToken, initialSe
           <p className={styles.muted}>New club invitations let administrators join PCS now. After you review the divisions and meet schedule in Step 5, every selected club receives the season invitation in its workspace.</p>
         </>}
         {step === 2 && <>
-          <p className={styles.muted}>Choose your divisions and who can play in each. All teams have four players.</p>
+          <p className={styles.muted}>Choose the skill levels offered this season. Each club decides which levels to enter at each meet, with two women and two men per team.</p>
           <fieldset disabled={disabled} className={styles.form}>
-            <div className={styles.divisionChoices}>{[...divisionChoices, ...(draft.divisions.includes("4.5/Open") ? ["4.5/Open"] : [])].map(division => <label className={styles.choice} data-selected={draft.divisions.includes(division)} key={division}><input aria-label={`Include ${division} division`} type="checkbox" checked={draft.divisions.includes(division)} onChange={() => edit({ divisions: draft.divisions.includes(division) ? draft.divisions.filter(d => d !== division) : [...draft.divisions, division] })} />{division}</label>)}</div>
-            <div className={styles.note}>Division names don’t set rating limits automatically. Leave a limit blank if you don’t want one. A player’s starting rating comes from the club they represent when they first enter the season.</div>
-            {draft.divisions.map(division => { const rule = draft.registration_rules[division] || emptyRule(); return <fieldset key={division} className={styles.rule}><legend>{division} division</legend><div className={styles.ruleGrid}>
-              <label className={styles.field}>Minimum rating<input aria-label={`${division} minimum rating`} type="number" min={1} max={7} step="0.001" placeholder="No minimum" value={rule.min_rating ?? ""} onChange={e => editRule(division, "min_rating", e.target.value)} /></label>
-              <label className={styles.field}>Maximum rating<input aria-label={`${division} maximum rating`} type="number" min={1} max={7} step="0.001" placeholder="No maximum" value={rule.max_rating ?? ""} onChange={e => editRule(division, "max_rating", e.target.value)} /></label>
-              <label className={styles.field}>Team composition<select aria-label={`${division} team composition`} value={rule.women_required ?? ""} onChange={e => editRule(division, "women_required", e.target.value)}><option value="">Any four players</option>{[0, 1, 2, 3, 4].map(n => <option key={n} value={n}>{n} women, {4 - n} men</option>)}</select></label>
-            </div></fieldset>; })}
+            <div className={styles.divisionChoices}>{[...divisionChoices, ...draft.divisions.filter(d => !divisionChoices.includes(d))].map(division => <label className={styles.choice} data-selected={draft.divisions.includes(division)} key={division}><input aria-label={`Include ${division} division`} type="checkbox" checked={draft.divisions.includes(division)} onChange={() => edit({ divisions: draft.divisions.includes(division) ? draft.divisions.filter(d => d !== division) : [...draft.divisions, division] })} />{division}</label>)}</div>
+            <div className={styles.note}>Players enter the skill level matching their interclub rating at the meet’s roster deadline. Their league rating starts from their club rating and changes with approved interclub results.</div>
+            {draft.divisions.map(division => { const rule = emptyRule(division); return <section key={division} className={styles.rule} aria-label={`${division} eligibility`}><h3>{division} skill level</h3>
+              <p>{rule.min_rating == null ? "Open rating eligibility (existing season)" : `${rule.min_rating.toFixed(1)} ${rule.max_rating == null ? "and above" : `to below ${(rule.min_rating + 0.5).toFixed(1)}`}`} · Two women and two men.</p>
+              <p className={styles.muted}>The meet’s deadline locks this rating. A new deadline applies if an unfinished matchup is rescheduled.</p>
+            </section>; })}
           </fieldset>
-          <p className={styles.muted}>Clubs choose players later, separately for each meet. An eligibility exception needs organizer approval.</p>
+          <p className={styles.muted}>Choose players later from each club’s approved season interest pool. Late season signups need organizer approval; player skill levels still follow the deadline rating.</p>
         </>}
         {step === 3 && <>
           <p className={styles.muted}>A meet is one gathering of 2–4 clubs at a host club. Add the dates and locations for this season.</p>
@@ -255,11 +253,11 @@ export default function InterclubSetupWizard({ api, club, accessToken, initialSe
           <div className={styles.toolbar} style={{ marginTop: 20 }}><button disabled={disabled || draft.meets.length >= 100} onClick={() => edit({ meets: [...draft.meets, { host_club_id: "", club_ids: [], starts_at: null, duration_minutes: 180, courts: 4 }] })}>Add a meet</button><span className={styles.muted}>{draft.meets.length} scheduled</span></div>
         </>}
         {step === 4 && <>
-          <p className={styles.muted}>Check the setup before inviting clubs. The season rules and scheduled meets are fixed when invitations open.</p>
+          <p className={styles.muted}>Check the setup before inviting clubs. Season rules are confirmed when invitations open. If weather requires a replay, the organizer can reschedule unfinished matchups in the meet workspace.</p>
           <div className={styles.review}>
             <section><div className={styles.toolbar}><h3>Season details</h3><button disabled={disabled} onClick={() => goTo(0)}>Edit season details</button></div><dl><dt>Season</dt><dd>{draft.name}</dd><dt>Dates</dt><dd>{draft.start_date} to {draft.end_date}</dd><dt>Organizer</dt><dd>{club.name}</dd><dt>Timezone</dt><dd>{draft.timezone}</dd></dl></section>
             <section><div className={styles.toolbar}><h3>Clubs to invite</h3><button disabled={disabled} onClick={() => goTo(1)}>Edit clubs</button></div><p>{draft.club_ids.map(clubName).join(" · ")}</p></section>
-            <section><div className={styles.toolbar}><h3>Divisions & eligibility</h3><button disabled={disabled} onClick={() => goTo(2)}>Edit divisions</button></div><div className={styles.tableWrap}><table className={styles.table}><thead><tr><th>Division</th><th>Minimum</th><th>Maximum</th><th>Team</th></tr></thead><tbody>{draft.divisions.map(d => { const r = draft.registration_rules[d] || emptyRule(); return <tr key={d}><td>{d}</td><td>{r.min_rating ?? "No minimum"}</td><td>{r.max_rating ?? "No maximum"}</td><td>{composition(r)}</td></tr>; })}</tbody></table></div></section>
+            <section><div className={styles.toolbar}><h3>Divisions & eligibility</h3><button disabled={disabled} onClick={() => goTo(2)}>Edit divisions</button></div><div className={styles.tableWrap}><table className={styles.table}><thead><tr><th>Division</th><th>Minimum</th><th>Maximum</th><th>Team</th></tr></thead><tbody>{draft.divisions.map(d => { const r = emptyRule(d); return <tr key={d}><td>{d}</td><td>{r.min_rating ?? "No minimum"}</td><td>{r.max_rating ?? "No maximum"}</td><td>{composition(r)}</td></tr>; })}</tbody></table></div></section>
             <section><div className={styles.toolbar}><h3>Meet schedule</h3><button disabled={disabled} onClick={() => goTo(3)}>Edit meets</button></div>{draft.meets.map((meet, index) => <p key={index}><strong>Meet {index + 1} · {when(meet.starts_at)}</strong><br />{clubName(meet.host_club_id)} hosts {meet.club_ids.map(clubName).join(", ")} · {meet.courts} courts · {meet.duration_minutes} minutes</p>)}</section>
           </div>
           <h3 style={{ marginTop: 24 }}>What happens next?</h3><SetupNextSteps />

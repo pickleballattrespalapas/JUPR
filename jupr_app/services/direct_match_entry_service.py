@@ -452,10 +452,14 @@ def submit_atomic_direct_matches(
             write_plan=write_plan,
         )
 
+    from jupr_app.services.interclub_rating_service import reconcile_interclub_for_club
+    interclub_ratings = reconcile_interclub_for_club(supabase, str(club_id))
     stored_summary = dict(receipt.get("result_summary") or result_summary)
     stored_player_updates = list(receipt.get("player_updates") or [])
     match_ids = list(receipt.get("match_ids") or [])
     warnings: list[str] = []
+    if interclub_ratings.get("status") == "failed":
+        warnings.append(str(interclub_ratings["error"]))
     if bool(receipt.get("idempotent")):
         badge_summary = {"mode": "idempotent_retry_skipped"}
         player_update_queue = {"mode": "idempotent_retry_skipped"}
@@ -479,6 +483,7 @@ def submit_atomic_direct_matches(
         **stored_summary,
         "badge_summary": badge_summary,
         "player_update_queue": player_update_queue,
+        "interclub_ratings": interclub_ratings,
     }
     operation = {
         str(key): value

@@ -1467,6 +1467,9 @@ install_club_join_invitation_routes(app, get_supabase_client=get_supabase_client
 from services.api.interclub_registration_routes import install_interclub_registration_routes
 install_interclub_registration_routes(app, get_supabase_client=get_supabase_client)
 
+from services.api.interclub_competition_routes import install_interclub_competition_routes
+install_interclub_competition_routes(app, get_supabase_client=get_supabase_client)
+
 from services.api.club_site_routes import install_club_site_routes
 install_club_site_routes(app, get_supabase_client=get_supabase_client)
 

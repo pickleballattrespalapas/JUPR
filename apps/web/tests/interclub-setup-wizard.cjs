@@ -61,14 +61,14 @@ async function completeJourney() {
   await act(async () => tree.root.findByProps({ 'aria-label': 'Visiting Club' }).props.onChange());
   await click(tree, 'Save and continue');
   assert.equal(stored.draft.setup_step, 2);
-  assert.equal(tree.root.findByProps({ 'aria-label': '3.5 maximum rating' }).props.value, '');
-  await fill(tree, '3.5 maximum rating', '3.999'); await fill(tree, '3.5 team composition', '2');
+  assert.ok(text(tree).includes('3.5 to below 4.0'));
+  assert.equal(tree.root.findAllByProps({ 'aria-label': '3.5 maximum rating' }).length, 0, 'Rating bands follow the skill level automatically');
   await act(async () => tree.root.findByProps({ 'aria-label': 'Include 4.0 division' }).props.onChange());
   await click(tree, 'Save and exit');
   assert.equal(closed, 1); assert.equal(stored.draft.registration_rules['3.5'].max_rating, 3.999);
   await act(async () => tree.unmount()); props = { ...props, initialSeason: stored };
   await act(async () => { tree = create(React.createElement(Wizard, props)); });
-  assert.equal(tree.root.findByProps({ 'aria-label': '3.5 maximum rating' }).props.value, 3.999, 'Rules survive exit and reload');
+  assert.ok(text(tree).includes('3.5 to below 4.0'), 'Rules survive exit and reload');
   await click(tree, 'Save and continue'); await click(tree, 'Add a meet'); await click(tree, 'Save and exit');
   assert.equal(stored.draft.meets[0].starts_at, null, 'Unfinished meet can be resumed');
   await act(async () => tree.unmount()); props = { ...props, initialSeason: stored };
@@ -181,7 +181,7 @@ async function inviteDuringClubSelection() {
   await click(tree, 'Update or renew invitation');
   await act(async () => tree.root.findByType('form').props.onSubmit({ preventDefault() {} }));
   assert.equal(invitations[0].status, 'pending');
-  await click(tree, 'Save and continue'); assert.ok(tree.root.findByProps({ 'aria-label': '3.5 maximum rating' }));
+  await click(tree, 'Save and continue'); assert.ok(tree.root.findByProps({ 'aria-label': '3.5 eligibility' }));
   assert.ok(!requests.some(r => r.url.endsWith('/open') || r.url.includes('/admin/platform')));
   await act(async () => tree.unmount());
   // Reload must recover an invitation committed before a lost response.
@@ -241,7 +241,7 @@ async function invitationDashboard() {
   assert.ok(nodeText(card('Invited season')).includes('Tres Palapas'), 'Invitation identifies its organizer');
   assert.deepEqual(links('Invited season').map(nodeText), ['Review invitation']);
   assert.equal(links('Invited season')[0].props.href, '/admin/interclub/registrations?season=invite');
-  assert.deepEqual(links('Joined season').map(nodeText), ['Prepare meet rosters']);
+  assert.deepEqual(links('Joined season').map(nodeText), ['Prepare meet rosters', 'Meet schedules, score sheets & results']);
   assert.ok(links('Organized season').some(a => nodeText(a) === 'Manage season'));
   assert.ok(links('Organized season').some(a => a.props.href.includes('/publication?')));
   for (const name of ['Declined season', 'Cancelled season']) assert.deepEqual(links(name).map(nodeText), ['View invitation']);

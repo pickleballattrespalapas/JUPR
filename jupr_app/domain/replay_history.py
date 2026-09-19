@@ -1307,7 +1307,13 @@ def replay_history(
         if progress_cb:
             progress_cb(rewritten / total)
 
+    from jupr_app.services.interclub_rating_service import reconcile_interclub_for_club
+    _before_mutation()
+    interclub_ratings = reconcile_interclub_for_club(supabase, str(club_id))
+    if interclub_ratings.get("status") == "failed":
+        raise RuntimeError(str(interclub_ratings["error"]))
     return {
+        "interclub_ratings": interclub_ratings,
         "target_reset": target_reset,
         "players_updated": players_updated,
         "skipped_incomplete": int(skipped_incomplete_scope),

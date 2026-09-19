@@ -8,16 +8,14 @@ import { getAdminApiBaseUrl } from "@/lib/adminAuthClient";
 import { readBrowserWorkspace } from "@/lib/adminWorkspace";
 import { apiError } from "@/lib/interclubRegistration";
 import {
-  type Encounter,
   type PublicMeet,
   type PublicLeague,
-  meetTime,
 } from "@/lib/interclubPublic";
 import PublicInterclubLeague from "@/components/PublicInterclubLeague";
 import styles from "@/components/ClubWebsite.module.css";
 type Publication = {
   revision: number;
-  draft: { results: Encounter[] };
+  draft: { results: unknown[] };
   published: unknown;
 };
 type Context = {
@@ -26,6 +24,7 @@ type Context = {
   meets: PublicMeet[];
   publication: Publication;
   preview: PublicLeague;
+  preview_fingerprint: string;
 };
 export default function PublicationEditor() {
   const { clubId } = useAdminWorkspace();
@@ -64,11 +63,11 @@ function Editor({
   accessToken: string;
 }) {
   const [data, setData] = useState<Context | null>(null),
-    [results, setResults] = useState<Encounter[]>([]),
     [error, setError] = useState(""),
     [message, setMessage] = useState(""),
     [busy, setBusy] = useState(false),
     [preview, setPreview] = useState(false),
+    [reviewed, setReviewed] = useState(false),
     [revision, setRevision] = useState(0),
     [blocked, setBlocked] = useState(false);
   const token = useRef(accessToken);
@@ -78,6 +77,9 @@ function Editor({
   const endpoint = `${getAdminApiBaseUrl()}/admin/clubs/${encodeURIComponent(clubId)}/interclub/${encodeURIComponent(season)}/publication`;
   useEffect(() => {
     const controller = new AbortController();
+    setData(null);
+    setReviewed(false);
+    setPreview(false);
     setError("");
     setBlocked(false);
     void fetch(endpoint, {
@@ -91,7 +93,6 @@ function Editor({
           throw new Error(apiError(d, "Unable to load league publication."));
         if (!controller.signal.aborted) {
           setData(d);
-          setResults(d.publication.draft.results);
         }
       })
       .catch((e) => {
@@ -100,11 +101,9 @@ function Editor({
     return () => controller.abort();
   }, [endpoint, revision]);
   useEffect(() => () => pending.current?.abort(), []);
-  const dirty =
-    data &&
-    JSON.stringify(results) !== JSON.stringify(data.publication.draft.results);
   async function mutate(action: "save" | "publish" | "unpublish") {
     if (!data || lock.current || blocked) return;
+    if (action === "publish" && !reviewed) return;
     if (readBrowserWorkspace()?.clubId !== clubId) {
       setError("The selected club changed. Reopen this workspace.");
       setBlocked(true);
@@ -127,7 +126,8 @@ function Editor({
           },
           body: JSON.stringify({
             revision: data.publication.revision,
-            ...(action === "save" ? { document: { results } } : {}),
+            ...(action === "save" ? { document: data.publication.draft } : {}),
+            ...(action === "publish" ? { preview_fingerprint: data.preview_fingerprint } : {}),
           }),
           signal: controller.signal,
         },
@@ -143,7 +143,7 @@ function Editor({
       setData({ ...data, publication: d });
       setMessage(
         action === "save"
-          ? "Results draft saved. Preview before publishing."
+          ? "League publication draft prepared. Preview before publishing."
           : action === "publish"
             ? "League website published."
             : "League website unpublished.",
@@ -161,11 +161,6 @@ function Editor({
       }
     }
   }
-  function edit(index: number, patch: Partial<Encounter>) {
-    setResults((rows) =>
-      rows.map((r, i) => (i === index ? { ...r, ...patch } : r)),
-    );
-  }
   if (!data)
     return (
       <section>
@@ -181,29 +176,28 @@ function Editor({
       </p>
       <h1>{data.season.details.name} · Public website</h1>
       <p>
-        Publish the whole league’s schedule, standings and results. Clubs choose
-        rosters per meet. Publishing results here does not apply rating updates.
+        Preview and publish the whole league’s schedule, standings and results.
+        Only organizer-approved meet results are included. Enter or correct scores
+        in the meet workspace before publishing an updated snapshot.
       </p>
       <div className={styles.actions}>
-        <button
+        {!data.publication.revision && <button
           className={styles.primary}
-          disabled={
-            busy || blocked || (!dirty && data.publication.revision > 0)
-          }
+          disabled={busy || blocked}
           onClick={() => void mutate("save")}
         >
-          Save draft
-        </button>
+          Prepare website preview
+        </button>}
         <button
           className={styles.button}
-          disabled={!!dirty}
-          onClick={() => setPreview((v) => !v)}
+          disabled={busy || blocked}
+          onClick={() => { setPreview((v) => !v); setReviewed(true); }}
         >
-          {preview ? "Edit results" : "Preview saved draft"}
+          {preview ? "Close preview" : "Preview league website"}
         </button>
         <button
           className={styles.primary}
-          disabled={busy || blocked || !!dirty || !data.publication.revision}
+          disabled={busy || blocked || !reviewed || !data.publication.revision}
           onClick={() => void mutate("publish")}
         >
           Publish league
@@ -223,6 +217,7 @@ function Editor({
           </>
         )}
       </div>
+      {!reviewed && <p>Open the league preview to review the current official results before publishing.</p>}
       {error && (
         <p role="alert" className={styles.error}>
           {error}
@@ -241,162 +236,18 @@ function Editor({
           {message}
         </p>
       )}
-      {dirty && <p>Unsaved changes. Save to update the preview.</p>}
       {preview ? (
         <div className={styles.card} style={{ marginTop: 20 }}>
           <strong>Draft preview</strong>
           <PublicInterclubLeague league={data.preview} />
         </div>
       ) : (
-        <fieldset disabled={busy || blocked} style={{ border: 0, padding: 0 }}>
-          <h2>Encounter results</h2>
-          <p>
-            Enter the three completed games for each club pairing and division.
-            You can publish the schedule before any results exist.
-          </p>
-          {results.map((row, index) => {
-            const meet = data.meets.find((m) => m.id === row.meet_id),
-              clubs = data.clubs.filter((c) => meet?.club_ids.includes(c.id));
-            return (
-              <article
-                className={`${styles.card} ${styles.form}`}
-                style={{ margin: "1rem 0" }}
-                key={row.id}
-              >
-                <h3>Encounter {index + 1}</h3>
-                <div className={styles.grid}>
-                  <label>
-                    Meet
-                    <select
-                      value={row.meet_id}
-                      onChange={(e) =>
-                        edit(index, {
-                          meet_id: e.target.value,
-                          club_a: "",
-                          club_b: "",
-                        })
-                      }
-                    >
-                      <option value="">Choose a meet</option>
-                      {data.meets.map((m) => (
-                        <option key={m.id} value={m.id}>
-                          {meetTime(m.starts_at, data.season.details.timezone)}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    Division
-                    <select
-                      value={row.division}
-                      onChange={(e) =>
-                        edit(index, { division: e.target.value })
-                      }
-                    >
-                      {data.season.details.divisions.map((d) => (
-                        <option key={d}>{d}</option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-                <div className={styles.grid}>
-                  {(["club_a", "club_b"] as const).map((side, i) => (
-                    <label key={side}>
-                      Club {i + 1}
-                      <select
-                        value={row[side]}
-                        onChange={(e) =>
-                          edit(index, { [side]: e.target.value })
-                        }
-                      >
-                        <option value="">Choose club</option>
-                        {clubs.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {c.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  ))}
-                </div>
-                <div className={styles.grid}>
-                  {row.games.map((g, i) => (
-                    <div key={i}>
-                      <strong>Game {i + 1}</strong>
-                      <label>
-                        Club 1 score
-                        <input
-                          type="number"
-                          min={0}
-                          max={100}
-                          value={g.a}
-                          onChange={(e) =>
-                            edit(index, {
-                              games: row.games.map((old, j) =>
-                                j === i
-                                  ? { ...old, a: Number(e.target.value) }
-                                  : old,
-                              ),
-                            })
-                          }
-                        />
-                      </label>
-                      <label>
-                        Club 2 score
-                        <input
-                          type="number"
-                          min={0}
-                          max={100}
-                          value={g.b}
-                          onChange={(e) =>
-                            edit(index, {
-                              games: row.games.map((old, j) =>
-                                j === i
-                                  ? { ...old, b: Number(e.target.value) }
-                                  : old,
-                              ),
-                            })
-                          }
-                        />
-                      </label>
-                    </div>
-                  ))}
-                </div>
-                <button
-                  className={styles.button}
-                  onClick={() =>
-                    setResults((rows) => rows.filter((_, i) => i !== index))
-                  }
-                >
-                  Remove encounter from draft
-                </button>
-              </article>
-            );
-          })}
-          <button
-            className={styles.button}
-            disabled={!data.meets.length}
-            onClick={() =>
-              setResults((rows) => [
-                ...rows,
-                {
-                  id: crypto.randomUUID(),
-                  meet_id: data.meets[0]?.id || "",
-                  division: data.season.details.divisions[0],
-                  club_a: "",
-                  club_b: "",
-                  games: [
-                    { a: 0, b: 0 },
-                    { a: 0, b: 0 },
-                    { a: 0, b: 0 },
-                  ],
-                },
-              ])
-            }
-          >
-            + Add encounter result
-          </button>
-        </fieldset>
+        <section className={styles.card} style={{ marginTop: 20 }}>
+          <h2>Official meet results</h2>
+          <p>Use the meet workspace to print score sheets, enter both doubles pairings, and submit all official scores together. The organizer approves the exact submission before its results can appear here.</p>
+          <Link className={styles.primary} href={`/admin/interclub/competition?season=${encodeURIComponent(season)}`}>Open meet scores & championships →</Link>
+          <p>You can publish the schedule before any meet results exist. Publishing this website does not approve scores or update ratings.</p>
+        </section>
       )}
     </section>
   );

@@ -6,12 +6,12 @@ export type RegistrationSeason = {
     meets: { host_club_id: string; club_ids: string[]; starts_at: string; duration_minutes: number; courts: number }[] };
   rules: Record<string, DivisionRule>; participation?: Participation | null;
 };
-export type RosterPlayer = { entry_id?: string; player_id?: string; name: string; starting_rating: number; gender?: string };
+export type RosterPlayer = { entry_id?: string; player_id?: string; name: string; starting_rating: number; eligibility_rating?: number; rating_locked?: boolean; rating_deadline?: string; gender?: string };
 export type RosterVersion = { revision: number; name: string; roster: RosterPlayer[]; issues: { code: string; message: string }[];
   status: string; late_change: boolean; submitted_at: string; decision_reason: string | null };
 export type InterclubTeam = RosterVersion & { id: string; season_id: string; meet_id: string | null; club_id: string; division: string; withdrawn: boolean };
 export type InterclubMeet = { id: string; season_id: string; plan_index: number; host_club_id: string; club_ids: string[];
-  starts_at: string; duration_minutes: number; courts: number; roster_deadline: string; revision: number; roster_open: boolean; deadline_editable: boolean };
+  starts_at: string; duration_minutes: number; courts: number; roster_deadline: string; revision: number; roster_open: boolean; deadline_editable: boolean; competition_phase?: "regular" | "final" | "qualifier" };
 export type MeetRegistrationDetail = { meet: InterclubMeet; teams: InterclubTeam[]; next_team_offset: number | null };
 export type RegistrationDetail = { meets: InterclubMeet[]; season: RegistrationSeason; is_organizer: boolean; own_participation: Participation | null;
   participations: Participation[]; clubs: { id: string; name: string; slug: string }[]; teams: InterclubTeam[]; next_team_offset: number | null };

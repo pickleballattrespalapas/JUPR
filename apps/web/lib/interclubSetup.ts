@@ -6,14 +6,19 @@ export type PlanningDraft = { name: string; start_date: string | null; end_date:
   divisions: string[]; club_ids: string[]; meets: PlanningMeet[]; registration_rules: Record<string, DivisionRule>; setup_step: number };
 export type PlanningSeason = { id: string; revision: number; draft: PlanningDraft; updated_at?: string };
 export const setupSteps = ["Season details", "Participating clubs", "Divisions & eligibility", "Meet schedule", "Review & invite"];
-export const divisionChoices = ["2.5", "3.0", "3.5", "4.0", "4.5", "5.0", "Open"];
-export const emptyRule = (): DivisionRule => ({ min_rating: null, max_rating: null, women_required: null });
+export const divisionChoices = ["2.5", "3.0", "3.5", "4.0", "4.5", "5.0"];
+export const emptyRule = (division = ""): DivisionRule => {
+  const level = division === "Open" ? 4.5 : Number.parseFloat(division);
+  return { min_rating: Number.isFinite(level) ? level : null,
+    max_rating: /^\d+\.\d+$/.test(division) ? Number((level + 0.499).toFixed(3)) : null,
+    women_required: 2 };
+};
 export const newSeason = (): PlanningSeason => ({ id: crypto.randomUUID(), revision: 0, draft: {
   name: "", start_date: null, end_date: null, timezone: "America/Mazatlan", divisions: ["3.5", "4.0"], club_ids: [], meets: [], registration_rules: {}, setup_step: 0
 } });
 export function normalizeDraft(draft: PlanningDraft): PlanningDraft {
   return { ...draft, start_date: draft.start_date || null, end_date: draft.end_date || null,
-    setup_step: draft.setup_step || 0, registration_rules: Object.fromEntries(draft.divisions.map(d => [d, draft.registration_rules?.[d] || emptyRule()])) };
+    setup_step: draft.setup_step || 0, registration_rules: Object.fromEntries(draft.divisions.map(d => [d, emptyRule(d)])) };
 }
 
 export function meetLocalTime(value: string | null, timeZone: string): string {
