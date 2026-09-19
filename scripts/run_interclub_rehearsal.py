@@ -245,6 +245,12 @@ class Rehearsal:
         data={"expected_meet_revision":current["meet"]["revision"],"expected_revision":existing["revision"] if existing else 0,
               "name":f"Rehearsal {division}","division":division,"player_ids":ids,"missing_pairing_forfeit":partial}
         result=self.api("PUT",root+"/teams/"+tid,data)
+        if result["team"]["status"] == "needs_exception":
+            decision={"expected_meet_revision":current["meet"]["revision"],"expected_revision":result["team"]["revision"],
+                      "approve":True,"reason":"Organizer approves the synthetic late-entered team"}
+            organizer=self.registration(season["clubs"][0],season["id"])+"/meets/"+mid
+            result=self.api("POST",organizer+"/teams/"+tid+"/eligibility",decision)
+            self.check(result["team"]["status"] == "exception_approved","organizer approves late team entry after checking eligible players")
         return result
 
     def open_dates(self, season):
