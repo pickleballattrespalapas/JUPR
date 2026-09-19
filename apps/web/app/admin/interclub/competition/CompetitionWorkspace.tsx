@@ -123,7 +123,9 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
   const qualification = context.standings?.qualification?.[division] || context.qualifying?.[division];
   const qualifyingClubs = phase === "final" ? qualification?.qualifiers : phase === "qualifier" ? qualification?.playoff_required : null;
   const candidates = Array.from(new Set(detail.teams.filter(team => team.division === division && (!qualifyingClubs || qualifyingClubs.includes(team.club_id))).map(team => team.club_id)));
-  const alreadyScheduled = phase !== "regular" && !!batch?.document.encounters.some(encounter => encounter.division === division);
+  const alreadyScheduled = phase !== "regular" && !!batch?.document.encounters.some(encounter =>
+    encounter.division === division && (phase === "final" ||
+      [encounter.club_a, encounter.club_b].includes(clubA) && [encounter.club_a, encounter.club_b].includes(clubB)));
   return <section className={styles.section}>
     {error && <p className={styles.error} role="alert">{error}</p>}{status && <p className={styles.success} role="status">{status}</p>}
     {detail.lineups_hidden && <p className={styles.notice}>Opposing lineups become available at the roster deadline. You can still manage your club’s roster.</p>}
@@ -140,7 +142,7 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
           <button type="submit" className={styles.primary} disabled={alreadyScheduled}>Generate pairings</button>
         </div></fieldset>
         {phase !== "regular" && <p>Each club fields two women and two men. The server checks current skill eligibility, prior regular-season appearances and championship qualification.</p>}
-        {alreadyScheduled && <p>Skill level {division} is already in this packet. Choose another skill level to add its matchup.</p>}
+        {alreadyScheduled && <p>{phase === "qualifier" ? "This qualifying pair is already in the packet. Choose another pair." : `Skill level ${division} is already in this packet. Choose another skill level to add its matchup.`}</p>}
         {phase !== "regular" && candidates.length < 2 && <p className={styles.notice}>Two qualifying clubs need approved lineups for this meet and skill level. Check the standings below and prepare their meet rosters first.</p>}
       </form> : <p>The host or organizer will prepare this meet. Your club can review and print the packet here when it is ready.</p>}
       {!detail.teams.length && <p className={styles.warning}>No approved meet teams are available yet. Prepare the meet rosters first.</p>}

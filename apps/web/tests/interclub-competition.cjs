@@ -36,6 +36,25 @@ const detail = { meet, batch, teams, is_organizer: true, can_manage: true, eligi
 const context = { season: { id: 'season-1', details: { name: 'Southern BCS', divisions: ['3.5'], timezone: 'America/Mazatlan' } }, standings: { divisions: {}, qualification: {} }, club_cup: { standings: [], champions: [], status: 'provisional' } };
 global.window = { addEventListener() {}, removeEventListener() {}, print() {} };
 
+async function qualifyingRoundRobin() {
+  const qualified = copy(detail);
+  qualified.batch.phase = 'qualifier'; qualified.batch.document.phase = 'qualifier';
+  qualified.teams.push({ ...copy(teams[0]), id: 'team-gamma', club_id: 'gamma' });
+  global.fetch = async () => reply(qualified);
+  let tree;
+  await act(async () => { tree = create(React.createElement(workspace.MeetOperations, {
+    root: 'https://api.test/qualifier', clubId: 'alpha', accessToken: 'token', phase: 'qualifier',
+    context: { ...context, standings: { divisions: {}, qualification: { '3.5': { playoff_required: ['alpha', 'beta', 'gamma'] } } } },
+    clubName, onLock() {}, onSeasonChange() {},
+  })); });
+  const selects = tree.root.findAllByType('select').filter(node => node.props.required);
+  await act(async () => { selects[0].props.onChange({ target: { value: 'alpha' } }); selects[1].props.onChange({ target: { value: 'gamma' } }); });
+  assert.equal(button(tree, 'Generate pairings').props.disabled, false, 'A third club can play its qualifying matchup at the same skill level');
+  await act(async () => { selects[0].props.onChange({ target: { value: 'beta' } }); selects[1].props.onChange({ target: { value: 'alpha' } }); });
+  assert.equal(button(tree, 'Generate pairings').props.disabled, true, 'An existing pair is blocked in either order');
+  await act(async () => tree.unmount());
+}
+
 async function scoreEntry() {
   let next = copy(document), tree;
   const props = { detail, players: types.competitionPlayers(detail), clubName, disabled: false, onChange: value => { next = value; } };
@@ -143,4 +162,4 @@ function writePrintReview() {
   fs.writeFileSync(output, '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Southern BCS paper packet review</title><style>' + stylesheet + screenPreview + '</style></head><body class="printBody"><div class="printPortal">' + render(document) + render(final) + '</div></body></html>');
   console.log('Print review fixture: ' + output);
 }
-(async () => { await scoreEntry(); printSafety(); await revisionsAndStaleClub(); await approval(); qualifyingDisplay(); writePrintReview(); console.log('PASS interclub competition: paper packet safety, scoped lineups, non-play scoring, exact revisions, stale club protection, approval and ratings status, qualification and joint Cup'); })().catch(error => { console.error(error); process.exit(1); });
+(async () => { await scoreEntry(); printSafety(); await revisionsAndStaleClub(); await approval(); await qualifyingRoundRobin(); qualifyingDisplay(); writePrintReview(); console.log('PASS interclub competition: paper packet safety, scoped lineups, non-play scoring, exact revisions, stale club protection, approval and ratings status, qualification and joint Cup'); })().catch(error => { console.error(error); process.exit(1); });
