@@ -49,20 +49,40 @@ global.fetch = async (url, options = {}) => {
 };
 
 (async () => {
-  const { leaderboardSettings } = load("lib/clubSite.ts");
+  const { leaderboardSettings, LEADERBOARD_CARD_LABELS, LEADERBOARD_CARD_DETAILS, LEADERBOARD_CARD_GROUPS } = load("lib/clubSite.ts");
   assert.deepEqual(leaderboardSettings().seasons, [], "No season is created automatically for existing clubs");
+  assert.deepEqual(leaderboardSettings().cards, ["highest_rating", "most_improved", "best_win_pct", "most_wins"], "New choices do not change existing clubs' selected cards");
+  assert.deepEqual(leaderboardSettings().card_options, {});
   const Website = load("app/admin/website/page.tsx").default;
   let tree;
   await act(async () => { tree = create(h(Website)); });
   const button = label => tree.root.findAllByType("button").find(item => text(item) === label);
   const field = label => tree.root.findByProps({ "aria-label": label });
   await act(async () => button("Overall leaderboard").props.onClick());
+  assert.equal(Object.keys(LEADERBOARD_CARD_LABELS).length, 17);
+  for (const group of LEADERBOARD_CARD_GROUPS) assert.ok(tree.root.findAllByType("legend").some(node => text(node) === group));
+  for (const label of Object.values(LEADERBOARD_CARD_LABELS)) assert.ok(field(`Show ${label} card`));
   await act(async () => field("Remove Highest rating card").props.onClick());
-  await act(async () => button("Add Most games played").props.onClick());
+  await act(async () => field("Show Most games played card").props.onChange({ target: { checked: true } }));
   await act(async () => field("Move Most games played up").props.onClick());
   await act(async () => field("Move Most games played up").props.onClick());
-  await act(async () => tree.root.findByProps({ type: "checkbox" }).props.onChange({ target: { checked: false } }));
-  await act(async () => tree.root.findByProps({ type: "number" }).props.onChange({ target: { value: "10" } }));
+  await act(async () => field("Show summary counts above the cards").props.onChange({ target: { checked: false } }));
+  await act(async () => field("Minimum games for performance cards").props.onChange({ target: { value: "10" } }));
+  await act(async () => field("Show Best close-game record card").props.onChange({ target: { checked: true } }));
+  await act(async () => field("Best close-game record minimum close games").props.onChange({ target: { value: "6" } }));
+  await act(async () => field("Best close-game record players to show").props.onChange({ target: { value: "3" } }));
+  await act(async () => field("Remove Best close-game record card").props.onClick());
+  await act(async () => field("Show Best close-game record card").props.onChange({ target: { checked: true } }));
+  assert.equal(field("Best close-game record minimum close games").props.value, 6, "Hiding a card preserves its criteria");
+  assert.equal(field("Best close-game record players to show").props.value, 3);
+  await act(async () => field("Show Best partnership card").props.onChange({ target: { checked: true } }));
+  await act(async () => field("Best partnership minimum games with that partner").props.onChange({ target: { value: "8" } }));
+  await act(async () => field("Best partnership players to show").props.onChange({ target: { value: "11" } }));
+  await act(async () => button("Save draft").props.onClick());
+  assert.equal(mutations.length, 0, "Invalid card depth cannot be saved");
+  assert.match(text(tree.toJSON()), /show between 1 and 10 players/);
+  await act(async () => field("Best partnership players to show").props.onChange({ target: { value: "2" } }));
+  await act(async () => field("Timezone for All time statistics").props.onChange({ target: { value: "America/Phoenix" } }));
   await act(async () => button("Add season or date range").props.onClick());
   await act(async () => button("Save draft").props.onClick());
   assert.equal(mutations.length, 0, "An unfinished season cannot be saved");
@@ -78,11 +98,19 @@ global.fetch = async (url, options = {}) => {
   const seasonId = select.findAllByType("option")[1].props.value;
   await act(async () => select.props.onChange({ target: { value: seasonId } }));
   await act(async () => button("Save draft").props.onClick());
-  assert.deepEqual(site.draft.leaderboard.cards, ["most_improved", "most_matches", "best_win_pct", "most_wins"]);
+  assert.deepEqual(site.draft.leaderboard.cards, ["most_improved", "most_matches", "best_win_pct", "most_wins", "close_game_record", "best_partnership"]);
+  assert.deepEqual(site.draft.leaderboard.card_options, { close_game_record: { minimum: 6, depth: 3 }, best_partnership: { minimum: 8, depth: 2 } });
+  assert.equal(site.draft.leaderboard.timezone, "America/Phoenix");
   assert.equal(site.draft.leaderboard.default_season_id, seasonId);
   assert.equal(site.draft.leaderboard.seasons[0].end_date, null);
   assert.equal(site.draft.leaderboard.min_games, 10);
   assert.equal(site.published.leaderboard, undefined, "Saving a draft leaves public settings untouched");
+  await act(async () => tree.unmount());
+  await act(async () => { tree = create(h(Website)); });
+  await act(async () => button("Overall leaderboard").props.onClick());
+  assert.equal(field("Best close-game record minimum close games").props.value, 6, "Card criteria survive a fresh load");
+  assert.equal(field("Best close-game record players to show").props.value, 3);
+  assert.equal(field("Best partnership minimum games with that partner").props.value, 8);
   await act(async () => button("Publish website").props.onClick());
   assert.deepEqual(site.published.leaderboard, site.draft.leaderboard);
   await act(async () => field("Remove 2026–27 from leaderboard").props.onClick());
@@ -103,11 +131,13 @@ global.fetch = async (url, options = {}) => {
   let markup = await render({ season: seasonId });
   assert.equal(requests.at(-1).options.season, seasonId);
   const titles = [...markup.matchAll(/<h2[^>]*>([^<]+)<\/h2>/g)].map(match => match[1]);
-  assert.deepEqual(titles, ["Stu", "Most improved", "Most games played", "Best win %", "Most wins"]);
+  assert.deepEqual(titles, ["Stu", "Most improved", "Most games played", "Best win %", "Most wins", "Best close-game record", "Best partnership"]);
   assert.doesNotMatch(markup, /data-testid="leaderboard-summary"/);
   assert.match(markup, /Sep 15, 2026 onward/);
   assert.match(markup, /Ratings and ranks show current standing/);
   assert.match(markup, /at least 10 recorded games/);
+  assert.match(markup, /Minimum 6 close games/);
+  assert.match(markup, /Minimum 8 games with that partner/);
   const searchForm = markup.match(/<form[^>]*data-testid="leaderboard-search-form"[\s\S]*?<\/form>/)[0];
   assert.ok(searchForm.includes(`name="season" value="${seasonId}"`), "Searching preserves the selected season");
   for (const match of markup.matchAll(/href="([^"]+)"[^>]*>(Next|Win %|See all|Share this player|view summary)<\/a>/g)) {
@@ -121,6 +151,29 @@ global.fetch = async (url, options = {}) => {
   assert.equal(requests.at(-1).options.season, "all");
   assert.match(markup, /Showing all-time statistics/);
   assert.match(markup, /name="season" value="all"/);
+  data.leaderboard_settings.cards = Object.keys(LEADERBOARD_CARD_LABELS);
+  for (const key of data.leaderboard_settings.cards) {
+    data.highlights[key] = [{ ...row, metric_value: 7, metric_display: `Metric ${key}`, metric_sample: 8 }];
+  }
+  data.highlights.best_partnership[0].metric_display = "75.0% with Alex & Sam · 8 games";
+  data.highlights.point_differential = [
+    { ...row, metric_value: -5, metric_display: "−5 points", metric_sample: 8 },
+    { ...row, player_id: 2, player_name: "Pat", metric_value: 0, metric_display: "0 points", metric_sample: 8 },
+  ];
+  markup = await render();
+  for (const key of data.leaderboard_settings.cards) assert.ok(markup.includes(LEADERBOARD_CARD_LABELS[key]), `${key} renders`);
+  assert.match(markup, /75\.0% with Alex &amp; Sam · 8 games/);
+  assert.match(markup, /Metric highest_rating/, "Generic formatting overrides the legacy field");
+  assert.match(markup, /width:100%;height:100%;border-radius:999px;background:#dc2626/);
+  assert.match(markup, /width:0%;height:100%;border-radius:999px;background:#2563eb/, "A zero metric has an empty bar");
+  assert.doesNotMatch(markup, /width:(?:NaN|Infinity|-)/, "Bars use finite, nonnegative widths");
+  for (const displayField of ["ratings", "records", "win_percentage", "match_counts", "rating_changes"]) {
+    const gated = await render({}, { [displayField]: false });
+    const renderedTitles = [...gated.matchAll(/<h2[^>]*>([^<]+)<\/h2>/g)].map(match => match[1]);
+    for (const key of data.leaderboard_settings.cards) {
+      assert.equal(renderedTitles.includes(LEADERBOARD_CARD_LABELS[key]), !LEADERBOARD_CARD_DETAILS[key].fields.includes(displayField), `${key} honors ${displayField} visibility`);
+    }
+  }
   data.leaderboard_settings.cards = [];
   assert.doesNotMatch(await render(), /leaderboard-highlight-card/, "An empty card selection is respected");
   data.selected_scope = "Ladder";
@@ -138,5 +191,5 @@ global.fetch = async (url, options = {}) => {
   assert.equal(requestedUrl.searchParams.get("offset"), "50");
   await api.getClubLeaderboard("tres-palapas");
   assert.equal(requestedUrl.searchParams.has("season"), false, "Omitted season lets the API choose the published default");
-  console.log("Overall leaderboard: card order/visibility, season validation, draft/publish isolation, default removal, period controls and link/filter persistence passed.");
+  console.log("Overall leaderboard: 17 grouped choices, persisted card depth/minimums, generic metrics, display gates, card order, season validation and draft/publish isolation passed.");
 })().catch(error => { console.error(error); process.exitCode = 1; });

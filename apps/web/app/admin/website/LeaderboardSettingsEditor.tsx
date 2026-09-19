@@ -1,8 +1,9 @@
 "use client";
 
 import {
-  LEADERBOARD_CARD_LABELS, leaderboardSettings, leaderboardSettingsError,
-  type LeaderboardCard, type LeaderboardSeason, type LeaderboardSettings, type SiteDocument,
+  LEADERBOARD_CARD_LABELS, LEADERBOARD_CARD_DETAILS, LEADERBOARD_CARD_GROUPS,
+  leaderboardSettings, leaderboardSettingsError,
+  type LeaderboardCard, type LeaderboardCardOptions, type LeaderboardSeason, type LeaderboardSettings, type SiteDocument,
 } from "@/lib/clubSite";
 import styles from "@/components/ClubWebsite.module.css";
 
@@ -19,6 +20,15 @@ export default function LeaderboardSettingsEditor({ clubId, document: doc, onCha
     [cards[index], cards[index + direction]] = [cards[index + direction], cards[index]];
     change({ cards });
   }
+  function toggleCard(key: LeaderboardCard, checked: boolean) {
+    change({ cards: checked ? [...settings.cards, key] : settings.cards.filter(card => card !== key) });
+  }
+  function updateCard(key: LeaderboardCard, patch: Partial<LeaderboardCardOptions>) {
+    change({ card_options: {
+      ...settings.card_options,
+      [key]: { minimum: 0, depth: 5, ...settings.card_options?.[key], ...patch },
+    } });
+  }
   function updateSeason(id: string, patch: Partial<LeaderboardSeason>) {
     change({ seasons: settings.seasons.map(season => season.id === id ? { ...season, ...patch } : season) });
   }
@@ -34,30 +44,44 @@ export default function LeaderboardSettingsEditor({ clubId, document: doc, onCha
     {validation ? <p role="alert" className={styles.error}>{validation}</p> : null}
     <section className={styles.card}>
       <h3 style={{ marginTop: 0 }}>Featured cards</h3>
-      <p>Cards appear in this order. Remove any you do not want to show, or add another below.</p>
+      <p>Select the statistics you want from the choices below, just like league awards. Then set their order and how many players each card shows.</p>
+      {LEADERBOARD_CARD_GROUPS.map(group => <fieldset key={group} style={{ border: "1px solid #cbd5e1", borderRadius: 12, padding: "1rem", margin: "1rem 0" }}>
+        <legend style={{ fontWeight: 750 }}>{group}</legend>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 230px), 1fr))", gap: "1rem" }}>
+          {(Object.keys(LEADERBOARD_CARD_LABELS) as LeaderboardCard[]).filter(key => LEADERBOARD_CARD_DETAILS[key].group === group).map(key => <label key={key} style={{ display: "block", padding: ".75rem", borderRadius: 10, background: settings.cards.includes(key) ? "#eff6ff" : "#f8fafc", cursor: "pointer" }}>
+            <span style={{ display: "flex", gap: ".5rem", alignItems: "baseline" }}><input type="checkbox" aria-label={`Show ${LEADERBOARD_CARD_LABELS[key]} card`} checked={settings.cards.includes(key)} onChange={event => toggleCard(key, event.target.checked)} /><strong>{LEADERBOARD_CARD_LABELS[key]}</strong></span>
+            <span style={{ display: "block", marginTop: ".4rem", color: "#475569", fontSize: ".9rem" }}>{LEADERBOARD_CARD_DETAILS[key].description}</span>
+          </label>)}
+        </div>
+      </fieldset>)}
+      <h4>Selected cards &amp; order</h4>
+      <p>Card minimums apply alongside the overall minimum games below. For close-game and partnership cards, use a minimum that gives a meaningful record. Hidden cards keep their settings.</p>
       {settings.cards.length ? <ol style={{ paddingLeft: "1.5rem" }}>
-        {settings.cards.map((key, index) => <li key={key} style={{ padding: ".5rem 0" }}>
+        {settings.cards.map((key, index) => <li key={key} style={{ padding: "1rem 0", borderBottom: "1px solid #e2e8f0" }}>
           <div className={styles.actions}>
             <strong style={{ flex: "1 1 180px" }}>{LEADERBOARD_CARD_LABELS[key]}</strong>
             <button type="button" className={styles.button} disabled={index === 0} aria-label={`Move ${LEADERBOARD_CARD_LABELS[key]} up`} onClick={() => moveCard(index, -1)}>Move up</button>
             <button type="button" className={styles.button} disabled={index === settings.cards.length - 1} aria-label={`Move ${LEADERBOARD_CARD_LABELS[key]} down`} onClick={() => moveCard(index, 1)}>Move down</button>
-            <button type="button" className={styles.button} aria-label={`Remove ${LEADERBOARD_CARD_LABELS[key]} card`} onClick={() => change({ cards: settings.cards.filter(card => card !== key) })}>Remove</button>
+            <button type="button" className={styles.button} aria-label={`Remove ${LEADERBOARD_CARD_LABELS[key]} card`} onClick={() => toggleCard(key, false)}>Remove</button>
+          </div>
+          <div className={styles.form} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 200px), 1fr))", gap: ".75rem", marginTop: ".75rem", maxWidth: 620 }}>
+            <label>Players to show<input type="number" aria-label={`${LEADERBOARD_CARD_LABELS[key]} players to show`} min={1} max={10} step={1} value={settings.card_options?.[key]?.depth ?? 5} onChange={event => updateCard(key, { depth: Number(event.target.value) })} /></label>
+            <label>Minimum {LEADERBOARD_CARD_DETAILS[key].sample}<input type="number" aria-label={`${LEADERBOARD_CARD_LABELS[key]} minimum ${LEADERBOARD_CARD_DETAILS[key].sample}`} min={0} max={10000} step={1} value={settings.card_options?.[key]?.minimum ?? 0} onChange={event => updateCard(key, { minimum: Number(event.target.value) })} /></label>
           </div>
         </li>)}
       </ol> : <p>No featured cards will be shown.</p>}
-      <div className={styles.actions}>
-        {(Object.keys(LEADERBOARD_CARD_LABELS) as LeaderboardCard[]).filter(key => !settings.cards.includes(key)).map(key =>
-          <button type="button" key={key} className={styles.button} onClick={() => change({ cards: [...settings.cards, key] })}>Add {LEADERBOARD_CARD_LABELS[key]}</button>,
-        )}
-      </div>
       <p><small>Cards also follow your choices under Stats &amp; information. For example, hiding ratings hides the Highest rating card.</small></p>
-      <label><input type="checkbox" checked={settings.show_summary} onChange={event => change({ show_summary: event.target.checked })} /> Show summary counts above the cards</label>
+      <label><input type="checkbox" aria-label="Show summary counts above the cards" checked={settings.show_summary} onChange={event => change({ show_summary: event.target.checked })} /> Show summary counts above the cards</label>
       <div className={styles.form} style={{ maxWidth: 340, marginTop: "1rem" }}>
         <label>Minimum games for performance cards
-          <input type="number" min={0} max={10000} step={1} value={settings.min_games} onChange={event => change({ min_games: Number(event.target.value) })} />
+          <input type="number" aria-label="Minimum games for performance cards" min={0} max={10000} step={1} value={settings.min_games} onChange={event => change({ min_games: Number(event.target.value) })} />
         </label>
       </div>
-      <p><small>Applies to improvement, win percentage, wins and games played in the selected period. Highest rating remains open to everyone. Players need at least one game to appear on performance cards.</small></p>
+      <p><small>Applies to every performance card in the selected period. Players need at least one game. Highest rating is exempt from this overall minimum; its own card minimum still applies.</small></p>
+      <div className={styles.form} style={{ maxWidth: 340 }}>
+        <label>Timezone for All time statistics<input aria-label="Timezone for All time statistics" list="leaderboard-timezones" value={settings.timezone} onChange={event => change({ timezone: event.target.value })} /></label>
+      </div>
+      <p><small>Used to count playing days in All time. Each season uses its own timezone below.</small></p>
     </section>
     <section className={styles.card} style={{ marginTop: "1rem" }}>
       <h3 style={{ marginTop: 0 }}>Seasons &amp; date ranges</h3>

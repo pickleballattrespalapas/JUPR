@@ -15,6 +15,7 @@ from supabase import Client, create_client
 from jupr_app.data.load import load_data
 from jupr_app.domain.admin.roles import PERMISSION_ENTER_SCORES, has_permission, resolve_admin_role
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
+from jupr_app.domain.leaderboard_metrics import LEADERBOARD_CARD_KEYS
 from jupr_app.domain.tournament_registration_repo import public_registration_error_scope
 from jupr_app.services.direct_match_entry_service import (
     DirectMatchConflictError,
@@ -111,6 +112,9 @@ PUBLIC_LEADERBOARD_ENTRY_FIELDS = {
     "badges",
     "badge_count",
     "updated_at",
+    "metric_value",
+    "metric_display",
+    "metric_sample",
 }
 PUBLIC_LEADERBOARD_BADGE_FIELDS = {"badge_id", "name", "prestige", "category", "icon_key", "rarity", "earned_at"}
 PUBLIC_LIVE_SESSION_SUMMARY_SELECT = "club_id,session_key,title,status,state,version,created_at,updated_at,last_seen_at,expires_at,completed_at"
@@ -526,7 +530,7 @@ def _normalize_public_leaderboard_projection(payload: dict[str, Any]) -> dict[st
     period = next((item for item in settings["seasons"] if item["id"] == period_id), None)
     return {
         "leaderboard_settings": settings,
-        "period": period or {"id": None, "name": "All time", "start_date": None, "end_date": None, "timezone": "UTC"},
+        "period": period or {"id": None, "name": "All time", "start_date": None, "end_date": None, "timezone": settings["timezone"]},
         "scopes": scopes,
         "selected_scope": selected_scope,
         "scope": {
@@ -556,7 +560,7 @@ def _normalize_public_leaderboard_projection(payload: dict[str, Any]) -> dict[st
         "snapshot": snapshot_rows[0] if snapshot_rows else None,
         "highlights": {
             key: _normalize_public_leaderboard_rows(highlights.get(key) or [])
-            for key in ("highest_rating", "most_improved", "best_win_pct", "most_wins", "most_matches")
+            for key in LEADERBOARD_CARD_KEYS
         },
         "pagination": {
             "total": max(0, int(pagination.get("total") or 0)),
