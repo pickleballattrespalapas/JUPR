@@ -96,7 +96,7 @@ def install_club_site_routes(app, *, get_supabase_client):
         user = site_administrator(get_supabase_client, authorization, club_id)
         return site_rpc(get_supabase_client(), "pcs_write_club_site", {"p_actor_id": user.user_id,
             "p_actor_email": user.email, "p_club_id": club_id, "p_revision": body.revision,
-            "p_action": "save", "p_document": body.document.model_dump()})
+            "p_action": "save", "p_document": body.document.model_dump(mode="json")})
 
     @app.post("/admin/clubs/{club_id}/site/{action}")
     def publish_site(club_id: str, action: str, body: SiteAction, authorization: str | None = auth_header()):

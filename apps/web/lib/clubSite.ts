@@ -26,6 +26,56 @@ export function accentTextColor(hex: string): string {
   return linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722 > 0.179 ? "#000000" : "#ffffff";
 }
 export type DisplaySettings = Partial<Record<DisplayKey, boolean>>;
+export const LEADERBOARD_CARD_LABELS = {
+  highest_rating: "Highest rating",
+  most_improved: "Most improved",
+  best_win_pct: "Best win %",
+  most_wins: "Most wins",
+  most_matches: "Most games played",
+} as const;
+export type LeaderboardCard = keyof typeof LEADERBOARD_CARD_LABELS;
+export type LeaderboardSeason = {
+  id: string;
+  name: string;
+  start_date: string;
+  end_date: string | null;
+  timezone: string;
+};
+export type LeaderboardSettings = {
+  cards: LeaderboardCard[];
+  show_summary: boolean;
+  seasons: LeaderboardSeason[];
+  default_season_id: string | null;
+  min_games: number;
+};
+export const DEFAULT_LEADERBOARD_CARDS: LeaderboardCard[] = [
+  "highest_rating", "most_improved", "best_win_pct", "most_wins",
+];
+export function leaderboardSettings(settings?: Partial<LeaderboardSettings>): LeaderboardSettings {
+  return {
+    cards: settings?.cards ?? [...DEFAULT_LEADERBOARD_CARDS],
+    show_summary: settings?.show_summary ?? true,
+    seasons: settings?.seasons ?? [],
+    default_season_id: settings?.default_season_id ?? null,
+    min_games: settings?.min_games ?? 0,
+  };
+}
+export function leaderboardSettingsError(settings?: LeaderboardSettings): string | null {
+  if (!settings) return null;
+  if (!Number.isInteger(settings.min_games) || settings.min_games < 0 || settings.min_games > 10000) {
+    return "Use a whole number from 0 to 10,000 for the minimum games.";
+  }
+  for (const [index, season] of settings.seasons.entries()) {
+    const label = season.name.trim() || `Season ${index + 1}`;
+    if (!season.name.trim()) return `${label}: add a season name.`;
+    if (!season.start_date) return `${label}: choose a start date.`;
+    if (season.end_date && season.end_date < season.start_date) return `${label}: the end date must be on or after the start date.`;
+    if (!season.timezone.trim()) return `${label}: choose a timezone.`;
+    try { new Intl.DateTimeFormat("en", { timeZone: season.timezone }).format(); }
+    catch { return `${label}: use a timezone such as America/Mazatlan or UTC.`; }
+  }
+  return null;
+}
 export type SiteBlock = {
   id: string;
   kind: "text" | "image" | "button" | "divider" | "links";
@@ -54,6 +104,7 @@ export type SiteDocument = {
   accent: string;
   visibility: "listed" | "unlisted";
   display: DisplaySettings;
+  leaderboard?: LeaderboardSettings;
   page_visibility?: Partial<Record<ClubPageKey, PageVisibility>>;
   pages: SitePage[];
 };

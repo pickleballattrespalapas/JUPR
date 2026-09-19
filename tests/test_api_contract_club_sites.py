@@ -75,6 +75,40 @@ def test_save_publication_identity_and_conflict_handling(setup):
     s['error']='42501';assert c.post('/admin/clubs/alpha/site/publish',json={'revision':5}).status_code==403
     assert c.put('/admin/clubs/alpha/site',json={**payload,'actor_id':'forged'}).status_code==422
 
+
+def test_leaderboard_settings_save_dates_as_json_without_changing_publication(setup):
+    c, state, _ = setup
+    settings = {
+        'cards': ['most_matches', 'most_improved'], 'show_summary': False,
+        'seasons': [{'id': 'winter', 'name': '2026–27', 'start_date': '2026-09-15',
+                     'end_date': '2027-09-14', 'timezone': 'America/Mazatlan'}],
+        'default_season_id': 'winter', 'min_games': 10,
+    }
+    doc = SiteDocument(name='Club', leaderboard=settings).model_dump(mode='json')
+    response = c.put('/admin/clubs/alpha/site', json={'revision': 5, 'document': doc})
+    assert response.status_code == 200
+    saved = state['calls'][-1][1]['p_document']['leaderboard']
+    assert saved == settings
+    assert c.get('/public/clubs/alpha/site').json()['document']['leaderboard']['seasons'] == []
+
+
+@pytest.mark.parametrize('settings', [
+    {'cards': ['most_wins', 'most_wins']},
+    {'cards': ['arbitrary_sql']},
+    {'default_season_id': 'missing'},
+    {'min_games': -1},
+    {'seasons': [{'id': 'all', 'name': 'Reserved', 'start_date': '2026-09-15'}]},
+    {'seasons': [{'id': 's', 'name': 'Bad dates', 'start_date': '2026-09-15', 'end_date': '2026-09-14'}]},
+    {'seasons': [{'id': 's', 'name': 'Bad zone', 'start_date': '2026-09-15', 'timezone': 'not/a/zone'}]},
+    {'seasons': [{'id': 's', 'name': 'A', 'start_date': '2026-09-15'}, {'id': 's', 'name': 'B', 'start_date': '2026-09-16'}]},
+])
+def test_invalid_leaderboard_settings_cannot_be_saved(setup, settings):
+    c, state, _ = setup
+    doc = SiteDocument(name='Club').model_dump(mode='json')
+    doc['leaderboard'] = settings
+    assert c.put('/admin/clubs/alpha/site', json={'revision': 5, 'document': doc}).status_code == 422
+    assert not state['calls']
+
 def test_page_visibility_round_trip_uses_published_snapshot_and_keeps_shared_access(setup):
     c, state, db = setup
     draft = SiteDocument(name='New draft', page_visibility={'players':'private', 'matches':'private'}).model_dump()

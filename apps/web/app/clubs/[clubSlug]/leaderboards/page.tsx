@@ -3,6 +3,10 @@ import Link from "@/components/PublicClubLink";
 import { getClubLeaderboard } from "@/lib/api";
 import type { LeaderboardBadge, LeaderboardEntry } from "@/lib/api";
 import { publicBadgeRarityLabel } from "@/lib/badgeApi";
+import {
+  DEFAULT_LEADERBOARD_CARDS, LEADERBOARD_CARD_LABELS, leaderboardSettings,
+  type DisplayKey, type LeaderboardCard,
+} from "@/lib/clubSite";
 
 type LeaderboardPageProps = {
   params: { clubSlug: string };
@@ -20,6 +24,7 @@ type ViewState = {
   sort: SortKey;
   search: string;
   player: string;
+  season: string;
   page: number;
   pageSize: number;
 };
@@ -85,6 +90,7 @@ function pageHref(
   if (next.sort !== "rank") params.set("sort", next.sort);
   if (next.search) params.set("q", next.search);
   if (next.player) params.set("player", next.player);
+  if (next.season) params.set("season", next.season);
   if (next.page > 1) params.set("page", String(next.page));
   if (next.pageSize !== DEFAULT_PAGE_SIZE) params.set("per_page", String(next.pageSize));
   const query = params.toString();
@@ -116,6 +122,22 @@ function percentLabel(value?: number | null): string {
   if (value == null || !Number.isFinite(Number(value))) return "—";
   return `${Number(value).toFixed(1)}%`;
 }
+
+function dateLabel(value: string): string {
+  return new Intl.DateTimeFormat("en", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }).format(new Date(`${value}T00:00:00Z`));
+}
+
+const highlightPresentation: Record<LeaderboardCard, {
+  field: DisplayKey;
+  value: (row: LeaderboardEntry) => number;
+  detail: (row: LeaderboardEntry) => string;
+}> = {
+  highest_rating: { field: "ratings", value: row => Number(row.rating_jupr ?? 0), detail: row => ratingLabel(row.rating_jupr) },
+  most_improved: { field: "rating_changes", value: row => Number(row.rating_gain_jupr ?? 0), detail: row => signedRatingLabel(row.rating_gain_jupr) },
+  best_win_pct: { field: "win_percentage", value: row => Number(row.win_pct ?? 0), detail: row => percentLabel(row.win_pct) },
+  most_wins: { field: "records", value: row => Number(row.wins ?? 0), detail: row => `${Number(row.wins ?? 0)} wins` },
+  most_matches: { field: "match_counts", value: row => Number(row.matches_played ?? 0), detail: row => `${Number(row.matches_played ?? 0)} games` },
+};
 
 function matchesPlayed(entry: LeaderboardEntry): number {
   return Number(entry.matches_played ?? (entry.wins ?? 0) + (entry.losses ?? 0));
@@ -201,6 +223,7 @@ export default async function ClubLeaderboardPage({ params, searchParams }: Lead
   const selectedSort = normalizeSort(firstParam(searchParams, "sort"));
   const search = (firstParam(searchParams, "q") || "").trim().slice(0, 120);
   const selectedPlayer = (firstParam(searchParams, "player") || "").trim().slice(0, 120);
+  const requestedSeason = (firstParam(searchParams, "season") || "").trim().slice(0, 80);
   const page = positiveInt(firstParam(searchParams, "page"), 1);
   const pageSize = positiveInt(firstParam(searchParams, "per_page"), DEFAULT_PAGE_SIZE, 100);
   const offset = (page - 1) * pageSize;
@@ -211,6 +234,7 @@ export default async function ClubLeaderboardPage({ params, searchParams }: Lead
     search,
     sort: selectedSort,
     playerId: selectedPlayer || null,
+    season: requestedSeason || null,
     limit: pageSize,
     offset
   });
@@ -231,6 +255,9 @@ export default async function ClubLeaderboardPage({ params, searchParams }: Lead
   }
 
   const selectedLeague = data.selected_scope || (data.filters.league_view === "active" ? "OVERALL" : "");
+  const overall = selectedLeague === "OVERALL";
+  const settings = leaderboardSettings(data.leaderboard_settings);
+  const selectedPeriod = data.period;
   const state: ViewState = {
     league: selectedLeague,
     leagueView: data.filters.league_view,
@@ -238,11 +265,11 @@ export default async function ClubLeaderboardPage({ params, searchParams }: Lead
     sort: normalizeSort(data.filters.sort),
     search: data.filters.search,
     player: selectedPlayer,
+    season: overall ? selectedPeriod?.id || "all" : requestedSeason,
     page,
     pageSize
   };
   const entries = data.leaderboard ?? [];
-  const overall = selectedLeague === "OVERALL";
   const minGames = Number(data.scope?.min_games ?? 0);
   const totalPages = Math.max(1, Math.ceil(Number(data.pagination.total || 0) / Number(data.pagination.limit || pageSize)));
   const currentPage = Math.min(page, totalPages);
@@ -296,6 +323,25 @@ export default async function ClubLeaderboardPage({ params, searchParams }: Lead
         })}
       </nav>
 
+      {overall && settings.seasons.length > 0 ? <div style={{ ...cardStyle, marginBottom: "1rem" }} data-testid="leaderboard-period-controls">
+        <form method="get" action={`/clubs/${encodeURIComponent(clubSlug)}/leaderboards`} style={{ display: "flex", gap: ".75rem", flexWrap: "wrap", alignItems: "end" }}>
+          {state.status !== "active" ? <input type="hidden" name="status" value={state.status} /> : null}
+          {state.sort !== "rank" ? <input type="hidden" name="sort" value={state.sort} /> : null}
+          {state.search ? <input type="hidden" name="q" value={state.search} /> : null}
+          {state.pageSize !== DEFAULT_PAGE_SIZE ? <input type="hidden" name="per_page" value={state.pageSize} /> : null}
+          <label style={{ display: "grid", gap: ".35rem", fontWeight: 700 }}>Statistics period
+            <select name="season" defaultValue={state.season} style={{ border: "1px solid #94a3b8", borderRadius: 8, padding: ".6rem .7rem", font: "inherit", maxWidth: "100%" }}>
+              <option value="all">All time</option>
+              {settings.seasons.map(season => <option key={season.id} value={season.id}>{season.name}</option>)}
+            </select>
+          </label>
+          <button type="submit" style={{ border: 0, borderRadius: "999px", padding: ".65rem 1rem", background: "#0f172a", color: "white", fontWeight: 800 }}>Show period</button>
+        </form>
+        {selectedPeriod?.id && selectedPeriod.start_date ? <p style={{ marginBottom: 0, color: "#475569" }} data-testid="leaderboard-period-description">
+          <strong>{selectedPeriod.name}</strong> · {dateLabel(selectedPeriod.start_date)}{selectedPeriod.end_date ? ` – ${dateLabel(selectedPeriod.end_date)}` : " onward"}. Wins, games, win percentage and rating improvement cover this period. Ratings and ranks show current standing.
+        </p> : <p style={{ marginBottom: 0, color: "#475569" }}>Showing all-time statistics.</p>}
+      </div> : null}
+
       <div style={{ ...cardStyle, display: "grid", gap: "0.85rem", marginBottom: "1rem" }}>
         <form method="get" action={`/clubs/${encodeURIComponent(clubSlug)}/leaderboards`} data-testid="leaderboard-search-form" style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "end" }}>
           {selectedLeague && selectedLeague !== "OVERALL" ? <input type="hidden" name="league" value={selectedLeague} /> : null}
@@ -303,6 +349,7 @@ export default async function ClubLeaderboardPage({ params, searchParams }: Lead
           {state.status !== "active" ? <input type="hidden" name="status" value={state.status} /> : null}
           {state.sort !== "rank" ? <input type="hidden" name="sort" value={state.sort} /> : null}
           {state.pageSize !== DEFAULT_PAGE_SIZE ? <input type="hidden" name="per_page" value={state.pageSize} /> : null}
+          {state.season ? <input type="hidden" name="season" value={state.season} /> : null}
           <label style={{ display: "grid", gap: "0.3rem", minWidth: "min(100%, 280px)", flex: "1 1 320px", fontWeight: 700 }}>
             Find player
             <input name="q" defaultValue={search} maxLength={120} placeholder="Search by player name" style={{ border: "1px solid #94a3b8", borderRadius: "8px", padding: "0.6rem 0.7rem", font: "inherit" }} />
@@ -339,12 +386,14 @@ export default async function ClubLeaderboardPage({ params, searchParams }: Lead
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }} data-testid="leaderboard-summary">
+      {!overall || settings.show_summary ? <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }} data-testid="leaderboard-summary">
         <article style={cardStyle}><strong>Ranked players</strong><br />{data.summary.ranked_players}</article>
         <article style={cardStyle}><strong>Active players</strong><br />{data.summary.active_players}</article>
         <article style={cardStyle}><strong>Inactive players</strong><br />{data.summary.inactive_players}</article>
         <article style={cardStyle}><strong>Leaderboard groups</strong><br />{data.summary.leaderboard_scopes}</article>
-      </div>
+      </div> : null}
+
+      {overall && settings.min_games > 0 ? <p style={{ color: "#475569" }} data-testid="leaderboard-performance-qualification">Performance cards require at least {settings.min_games} recorded game{settings.min_games === 1 ? "" : "s"} in this period. Highest rating includes everyone.</p> : null}
 
       {selectedLeague && !overall ? (
         <p style={{ ...cardStyle, background: "#f8fafc", color: "#475569" }} data-testid="leaderboard-qualification-note">
@@ -377,11 +426,11 @@ export default async function ClubLeaderboardPage({ params, searchParams }: Lead
         </article>
       ) : null}
 
-      {selectedLeague ? <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "1rem", marginBottom: "1rem" }}>
-        <BarList title="Highest rating" rows={data.highlights.highest_rating} value={(row) => Number(row.rating_jupr ?? 0)} detail={(row) => ratingLabel(row.rating_jupr)} clubSlug={clubSlug} />
-        <BarList title="Most improved" rows={data.highlights.most_improved} value={(row) => Number(row.rating_gain_jupr ?? 0)} detail={(row) => signedRatingLabel(row.rating_gain_jupr)} clubSlug={clubSlug} />
-        <BarList title="Best win %" rows={data.highlights.best_win_pct} value={(row) => Number(row.win_pct ?? 0)} detail={(row) => percentLabel(row.win_pct)} clubSlug={clubSlug} />
-        <BarList title="Most wins" rows={data.highlights.most_wins} value={(row) => Number(row.wins ?? 0)} detail={(row) => `${Number(row.wins ?? 0)} wins`} clubSlug={clubSlug} />
+      {selectedLeague && (!overall || settings.cards.length > 0) ? <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "1rem", marginBottom: "1rem" }}>
+        {(overall ? settings.cards : DEFAULT_LEADERBOARD_CARDS).map(key => {
+          const card = highlightPresentation[key];
+          return <Display key={key} field={card.field}><BarList title={LEADERBOARD_CARD_LABELS[key]} rows={data.highlights[key] ?? []} value={card.value} detail={card.detail} clubSlug={clubSlug} /></Display>;
+        })}
       </div> : null}
 
       {data.summary.ranked_players === 0 ? (

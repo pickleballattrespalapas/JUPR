@@ -8,6 +8,7 @@ import { readBrowserWorkspace } from "@/lib/adminWorkspace";
 import {
   DISPLAY_LABELS,
   clubPageHref,
+  leaderboardSettingsError,
   type AdminSite,
   type DisplayKey,
   type SiteBlock,
@@ -20,6 +21,7 @@ import { ClubDisplayProvider, Display } from "@/components/ClubDisplay";
 import styles from "@/components/ClubWebsite.module.css";
 import editor from "./website.module.css";
 import PageVisibilityEditor from "./PageVisibilityEditor";
+import LeaderboardSettingsEditor from "./LeaderboardSettingsEditor";
 
 export default function WebsitePage() {
   const { clubId } = useAdminWorkspace();
@@ -113,6 +115,12 @@ function WebsiteEditor({
   }, [dirty]);
   async function mutate(action: "save" | "publish" | "unpublish" | "discard") {
     if (!site || !doc || lock.current || blocked) return;
+    const leaderboardError = action === "save" ? leaderboardSettingsError(doc.leaderboard) : null;
+    if (leaderboardError) {
+      setError(leaderboardError);
+      setTab("leaderboard");
+      return;
+    }
     if (readBrowserWorkspace()?.clubId !== clubId) {
       setError(
         "Your selected club changed in another tab. Reopen the workspace before saving.",
@@ -323,6 +331,7 @@ function WebsiteEditor({
           ["pages", "Pages & layout"],
           ["visibility", "Page visibility"],
           ["display", "Stats & information"],
+          ["leaderboard", "Overall leaderboard"],
           ["preview", "Preview & publish"],
         ].map(([value, label]) => (
           <button
@@ -750,6 +759,9 @@ function WebsiteEditor({
         )}
         {tab === "visibility" && (
           <PageVisibilityEditor site={site} document={doc} onChange={change} />
+        )}
+        {tab === "leaderboard" && (
+          <LeaderboardSettingsEditor clubId={clubId} document={doc} onChange={change} />
         )}
         {tab === "display" && (
           <div className={`${styles.card} ${styles.form}`}>
