@@ -251,7 +251,10 @@ def incidents(r):
                                 ("weather-partial",[],"partial"),("weather-cancelled",[],"cancelled")]:
         m = new_meet(r,s)
         b = prepare(r,s,m,partial=partial)
-        doc = r.complete(b["document"],datetime.fromisoformat(m["starts_at"]))
+        # Balance incident results so the fixture squad stays in this skill band
+        # while real league ratings carry forward to successive roster cutoffs.
+        winner = s["clubs"][1 if label in {"missing-pairing", "weather-partial"} else 0]
+        doc = r.complete(b["document"],datetime.fromisoformat(m["starts_at"]),winner=winner)
         if mode != "normal":
             doc["weather"] = "finalized_partial"
             for pairing in doc["encounters"][0]["pairings"][(1 if mode=="partial" else 0):]:
