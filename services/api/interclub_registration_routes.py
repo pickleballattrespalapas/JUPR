@@ -10,11 +10,11 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, PositiveInt, V
 from jupr_app.domain.admin.staff_policy import ADMIN_ROLES
 from services.api.admin_auth_routes import require_admin_assignments
 from services.api.auth import auth_header
-from services.api.interclub_models import DivisionRule, SeasonDraft
+from services.api.interclub_models import DivisionRule, SeasonDraft, canonical_southern_bcs_rules
 
 SEASON_FIELDS = "id,organizer_club_id,source_revision,details,rules,opened_at"
 PARTICIPATION_FIELDS = "season_id,club_id,status,revision,updated_at"
-MEET_FIELDS = "id,season_id,plan_index,host_club_id,club_ids,starts_at,duration_minutes,courts,roster_deadline,revision,roster_open,deadline_editable"
+MEET_FIELDS = "id,season_id,plan_index,host_club_id,club_ids,starts_at,duration_minutes,courts,roster_deadline,revision,roster_open,deadline_editable,competition_phase"
 TEAM_FIELDS = "id,season_id,meet_id,club_id,division,name,revision,withdrawn,created_at,updated_at,roster,issues,status,late_change,submitted_at,decision_reason,decided_at"
 HISTORY_FIELDS = "team_id,revision,name,roster,issues,status,late_change,submitted_at,decision_reason,decided_at"
 
@@ -38,12 +38,14 @@ class RosterUpdate(StrictModel):
     expected_revision: int = Field(ge=0)
     name: str = Field(min_length=1, max_length=80)
     division: str = Field(min_length=1, max_length=20)
-    player_ids: list[PositiveInt] = Field(min_length=4, max_length=4)
+    player_ids: list[PositiveInt] = Field(min_length=2, max_length=4)
+    missing_pairing_forfeit: bool = False
 
     @model_validator(mode="after")
     def distinct(self):
-        if len(set(self.player_ids)) != 4:
-            raise ValueError("Choose four different players.")
+        expected = 2 if self.missing_pairing_forfeit else 4
+        if len(self.player_ids) != expected or len(set(self.player_ids)) != expected:
+            raise ValueError("Choose two different players and confirm the missing pairing forfeit, or choose a full four-player team.")
         return self
 
 
@@ -66,7 +68,7 @@ def safe_roster(row, *, own_club: bool):
     # Even a future private column in the DB must not leak through snapshots.
     fields = set((TEAM_FIELDS + "," + HISTORY_FIELDS).split(","))
     result = {k: v for k, v in row.items() if k in fields}
-    allowed = ["entry_id", "name", "starting_rating", "gender"] + (["player_id"] if own_club else [])
+    allowed = ["entry_id", "name", "starting_rating", "eligibility_rating", "rating_deadline", "rating_locked", "gender"] + (["player_id"] if own_club else [])
     result["roster"] = [{k: entry.get(k) for k in allowed} for entry in row.get("roster", [])]
     result["issues"] = [{k: issue.get(k) for k in ("code", "message")} for issue in row.get("issues", [])]
     return result
@@ -84,7 +86,7 @@ def call_rpc(db, name, params):
         if code == "23505":
             raise HTTPException(409, "A player or team name is already used by another team in this club, meet and division.") from exc
         if code == "22023":
-            raise HTTPException(422, "Check the rules, meet deadline and four active club players. Each new season player needs a starting club rating.") from exc
+            raise HTTPException(422, "Choose approved season-pool players in the correct skill level: a full team of two women and two men, or two players with the missing pairing declared as a forfeit.") from exc
         if code == "P0002":
             raise HTTPException(404, "Season, meet, invitation or team unavailable.") from exc
         raise HTTPException(503, "Could not confirm the update. Reload before retrying.") from exc
@@ -142,10 +144,11 @@ def install_interclub_registration_routes(app, *, get_supabase_client):
         rules = {d: r.model_dump() for d, r in payload.rules.items()}
         if set(rules) != set(draft.divisions):
             raise HTTPException(422, "Review eligibility rules for each selected division.")
-        if draft.registration_rules and rules != {d: r.model_dump() for d, r in draft.registration_rules.items()}:
-            raise HTTPException(409, "Eligibility rules changed. Save and review the setup before opening invitations.")
+        # Earlier saved drafts allowed arbitrary bands and team composition.
+        # Normalize these historical form values to the confirmed league rules.
+        rules = {d: rule.model_dump() for d, rule in canonical_southern_bcs_rules(draft.divisions).items()}
         season = call_rpc(db, "pcs_open_interclub_meet_registration", {**actor_params(user, club_id, season_id),
-            "p_revision": payload.expected_revision, "p_rules": {d: r.model_dump() for d, r in payload.rules.items()}})
+            "p_revision": payload.expected_revision, "p_rules": rules})
         return {"season": {key: season.get(key) for key in SEASON_FIELDS.split(",")}}
 
     @app.get("/admin/clubs/{club_id}/interclub/registrations/{season_id}")
@@ -208,7 +211,7 @@ def install_interclub_registration_routes(app, *, get_supabase_client):
         meet = meet_access(db, club_id, season, meet_id)
         if not meet["roster_open"]:
             raise HTTPException(409, "This meet has started. Its rosters are now history.")
-        return player_choices(db, club_id, season_id, own, q, offset)
+        return player_choices(db, club_id, season_id, own, q, offset, meet=meet)
 
     @app.get("/admin/clubs/{club_id}/interclub/registrations/{season_id}/players")
     def players(club_id: str, season_id: UUID, q: str = Query(default="", max_length=80), offset: int = Query(default=0, ge=0, le=100000), authorization: str | None = auth_header()):
@@ -216,17 +219,29 @@ def install_interclub_registration_routes(app, *, get_supabase_client):
         _, own = access(db, club_id, season_id)
         return player_choices(db, club_id, season_id, own, q, offset)
 
-    def player_choices(db, club_id, season_id, own, q, offset):
+    def player_choices(db, club_id, season_id, own, q, offset, meet=None):
         if not own or own["status"] != "accepted":
             raise HTTPException(403, "Accept your club's season invitation before choosing players.")
         query = db.table("players").select("id,name,rating,gender").eq("club_id", club_id).eq("active", True)
+        meet_ratings = {}
+        if meet is not None:
+            members = db.table("pcs_interclub_pool_members").select("player_id").eq("season_id", str(season_id)).eq("club_id", club_id).eq("status", "active").eq("approval_status", "approved").execute().data or []
+            member_ids = [row["player_id"] for row in members if row.get("player_id") is not None]
+            if not member_ids:
+                return {"players": [], "next_offset": None}
+            query = query.in_("id", member_ids)
+            values = call_rpc(db, "pcs_interclub_meet_player_ratings", {"p_season_id": str(season_id), "p_meet_id": meet["id"], "p_club_id": club_id})
+            meet_ratings = {str(row["player_id"]): row for row in (values or [])}
+            if not meet_ratings:
+                return {"players": [], "next_offset": None}
+            query = query.in_("id", [int(value) for value in meet_ratings])
         if q.strip():
             term = q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             query = query.ilike("name", f"%{term}%")
         rows = query.order("name").order("id").range(offset, offset+100).execute().data or []
         entries = db.table("pcs_interclub_entries").select("player_id,starting_rating").eq("season_id", str(season_id)).eq("club_id", club_id).in_("player_id", [r["id"] for r in rows[:100]]).execute().data if rows else []
         seeds = {str(e["player_id"]): e["starting_rating"] for e in entries or []}
-        return {"players": [{"id": str(row["id"]), "name": row["name"], "starting_rating": seeds.get(str(row["id"]), float(row["rating"])/400 if row.get("rating") is not None else None)} for row in rows[:100]],
+        return {"players": [{"id": str(row["id"]), "name": row["name"], "starting_rating": seeds.get(str(row["id"]), float(row["rating"])/400 if row.get("rating") is not None else None), **({key: meet_ratings[str(row["id"])].get(key) for key in ("entry_id", "eligibility_rating", "rating_deadline", "rating_locked", "gender")} if meet is not None else {})} for row in rows[:100]],
                 "next_offset": offset+100 if len(rows)>100 else None}
 
     @app.put("/admin/clubs/{club_id}/interclub/registrations/{season_id}/teams/{team_id}")

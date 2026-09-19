@@ -1,6 +1,7 @@
 export type PoolMember = {
   id: string; season_id: string; club_id: string; name: string; email: string; divisions: string[];
   notes: string; manage_url?: string; status: "active" | "withdrawn"; player_id: string | null; revision: number;
+  approval_status?: "pending" | "approved" | "rejected"; late_join?: boolean; approval_reason?: string | null;
 };
 export type SeasonPool = {
   signup: { share_id: string | null; revision: number; open: boolean; url: string | null };

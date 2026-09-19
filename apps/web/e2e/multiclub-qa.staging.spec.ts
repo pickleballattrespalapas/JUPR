@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Response } from "@playwright/test";
 import { bootstrapStagingContext, expectedApiOrigin, expectedAuthOrigin } from "./support/staging";
 
 const clubs = [
@@ -41,7 +41,7 @@ test("club creation starts with club details and preserves them before account s
 });
 
 test("dedicated QA admin switches three clubs and previews website controls", async ({ page, context }) => {
-  test.setTimeout(180_000);
+  test.setTimeout(300_000);
   const token = process.env.STAGING_ADMIN_BEARER_TOKEN || "";
   const email = process.env.STAGING_ADMIN_EMAIL || "";
   const origin = process.env.JUPR_ATTESTED_VERCEL_DEPLOYMENT_ORIGIN || "";
@@ -85,6 +85,10 @@ test("dedicated QA admin switches three clubs and previews website controls", as
   await expect(page.getByRole("list", { name: "Your club workspaces" }).getByRole("button")).toHaveCount(3);
 
   const playerSets: Set<number>[] = [];
+  const competitionWrites: string[] = [];
+  page.on("request", request => {
+    if (new URL(request.url()).pathname.includes("/interclub/competition") && !["GET", "HEAD", "OPTIONS"].includes(request.method())) competitionWrites.push(request.method() + " " + new URL(request.url()).pathname);
+  });
   for (const club of clubs) {
     await test.step(`${club.name}: switch, roster and page controls`, async () => {
       await page.getByRole("button", { name: `Open ${club.name}`, exact: true }).click();
@@ -203,6 +207,90 @@ test("dedicated QA admin switches three clubs and previews website controls", as
             await expect(page.getByRole("button", { name: "Hide player availability", exact: true })).toBeVisible();
           }
         }
+        if (organizer || joined) {
+          await test.step(`${season.details.name}: read-only meet operations and print layout`, async () => {
+            const competitionPath = `/admin/clubs/${club.id}/interclub/competition/${season.id}`;
+            const responses = new Map<string, Response>();
+            const capture = (response: Response) => {
+              const pathname = new URL(response.url()).pathname;
+              if (response.request().method() === "GET" && pathname.startsWith(competitionPath + "/meets/")) responses.set(pathname, response);
+            };
+            page.on("response", capture);
+            try {
+              const listResult = page.waitForResponse(response => new URL(response.url()).pathname === `/admin/clubs/${club.id}/interclub/competition` && response.request().method() === "GET");
+              const workspaceResult = page.waitForResponse(response => new URL(response.url()).pathname === competitionPath && response.request().method() === "GET");
+              await page.goto(`/admin/interclub/competition?season=${encodeURIComponent(season.id)}`);
+              expect((await listResult).status()).toBe(200);
+              const competitionResponse = await workspaceResult;
+              expect(competitionResponse.status(), `${club.name}: competition workspace must load`).toBe(200);
+              const competition = await competitionResponse.json();
+              expect(competition.season.id).toBe(season.id);
+              expect(competition.is_organizer).toBe(organizer);
+              expect(competition.meets.every((meet: { season_id: string; club_ids: string[] }) => meet.season_id === season.id && (organizer || meet.club_ids.includes(club.id)))).toBe(true);
+              const meetIds = new Set(competition.meets.map((meet: { id: string }) => meet.id));
+              expect(competition.batches.every((batch: { season_id: string; meet_id: string }) => batch.season_id === season.id && meetIds.has(batch.meet_id))).toBe(true);
+              await expect(page.getByRole("heading", { name: "Meet operations", exact: true })).toBeVisible();
+              await expect(page.getByRole("combobox", { name: "Season", exact: true })).toHaveValue(season.id);
+              await expect(page.getByRole("heading", { name: "Standings & Club Cup", exact: true })).toBeVisible();
+              await expect(page.getByText(/^(Load failed|Unable to load|Loading meet operations)/)).toHaveCount(0);
+
+              for (const scheduled of competition.meets) {
+                const phase = scheduled.competition_phase || "regular";
+                const meetPath = `${competitionPath}/meets/${scheduled.id}/${phase}`;
+                const selector = page.getByRole("combobox", { name: "Meet", exact: true });
+                if (await selector.inputValue() !== scheduled.id) await selector.selectOption(scheduled.id);
+                await expect.poll(() => responses.has(meetPath), { message: "The selected meet must fetch its own scoped competition document" }).toBe(true);
+                const meetResponse = responses.get(meetPath)!;
+                expect(meetResponse.status(), `${club.name}: ${scheduled.id} competition detail`).toBe(200);
+                const operations = await meetResponse.json();
+                expect(operations.meet.id).toBe(scheduled.id);
+                expect(operations.meet.season_id).toBe(season.id);
+                expect(operations.is_organizer).toBe(organizer);
+                expect(operations.can_manage).toBe(organizer || scheduled.host_club_id === club.id);
+                expect(operations.teams.every((team: { meet_id: string; club_id: string; roster: Record<string, unknown>[] }) => team.meet_id === scheduled.id && scheduled.club_ids.includes(team.club_id) && team.roster.every(player => !Object.hasOwn(player, "player_id") && !Object.hasOwn(player, "email")))).toBe(true);
+                expect(Object.keys(operations.eligible_players || {}).every(id => scheduled.club_ids.includes(id))).toBe(true);
+                for (const candidates of Object.values(operations.eligible_players || {}) as Record<string, unknown>[][]) {
+                  expect(candidates.every(player => !Object.hasOwn(player, "email") && !Object.hasOwn(player, "player_id"))).toBe(true);
+                }
+                await expect(page.getByRole("combobox", { name: "Scheduled competition format", exact: true })).toHaveValue(phase);
+                await expect(page.getByText("Loading this meet…", { exact: true })).toHaveCount(0);
+                await expect(page.getByText(/^(Load failed|This meet could not be loaded)/)).toHaveCount(0);
+                if (operations.batch) {
+                  expect(operations.batch.meet_id).toBe(scheduled.id);
+                  expect(operations.batch.phase).toBe(phase);
+                  expect(operations.batch.document.meet_id).toBe(scheduled.id);
+                  const print = page.getByRole("button", { name: "Print meet packet", exact: true });
+                  await expect(print).toBeEnabled();
+                  expect(await print.evaluate(element => getComputedStyle(element).cursor)).toBe("pointer");
+                  expect((await print.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+                  const packet = page.locator('[class*="printPortal"]');
+                  await expect(packet).toHaveCount(1);
+                  await expect(packet).toBeHidden();
+                  await page.emulateMedia({ media: "print" });
+                  try {
+                    await expect(packet).toBeVisible();
+                    await expect(page.getByRole("heading", { name: "Meet operations", exact: true })).toBeHidden();
+                    expect(await packet.textContent()).toContain("Court assignments");
+                    expect(await packet.textContent()).toContain("Verified by club A");
+                    expect(await packet.evaluate(element => element.getBoundingClientRect().width <= document.documentElement.clientWidth)).toBe(true);
+                  } finally {
+                    await page.emulateMedia({ media: "screen" });
+                  }
+                } else {
+                  await expect(page.getByRole("button", { name: "Print meet packet", exact: true })).toHaveCount(0);
+                  await expect(page.getByRole("heading", { name: new RegExp("^Prepare .+ pairings$") })).toBeVisible();
+                }
+                if (!operations.can_manage) await expect(page.getByRole("button", { name: "Generate pairings", exact: true })).toHaveCount(0);
+                if (!operations.is_organizer) {
+                  await expect(page.getByRole("button", { name: "Review official approval", exact: true })).toHaveCount(0);
+                  await expect(page.getByText("Schedule a championship, qualifying playoff or additional meet", { exact: true })).toHaveCount(0);
+                }
+              }
+            } finally {
+              page.off("response", capture);
+            }
+          });
+        }
       }
       // Inspect invitations and rosters only; do not accept, decline or edit them.
       await page.getByRole("link", { name: "Switch club", exact: true }).click();
@@ -215,6 +303,11 @@ test("dedicated QA admin switches three clubs and previews website controls", as
     headers: { Authorization: `Bearer ${token}` }, maxRedirects: 0,
   });
   expect(denied.status()).toBe(403);
+  const deniedCompetition = await context.request.get(`${expectedApiOrigin}/admin/clubs/tres_palapas/interclub/competition`, {
+    headers: { Authorization: `Bearer ${token}` }, maxRedirects: 0,
+  });
+  expect(deniedCompetition.status()).toBe(403);
+  expect(competitionWrites, "The competition acceptance check must never generate, save, submit, approve or alter fixture data").toEqual([]);
   await page.goto("/admin/login");
   const signedOut = page.waitForResponse(r => r.url().startsWith(`${expectedAuthOrigin}/auth/v1/logout`) && r.request().method() === "POST");
   await page.getByRole("button", { name: "Sign out", exact: true }).click();

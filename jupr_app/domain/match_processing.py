@@ -675,6 +675,10 @@ def process_matches(
         except Exception as exc:  # noqa: BLE001
             logger.warning("Player update queueing failed after match processing: %s", exc)
             player_update_queue = {**player_update_queue, "mode": "error", "error": str(exc)}
+    interclub_ratings = {"status": "not_requested"}
+    if db_matches:
+        from jupr_app.services.interclub_rating_service import reconcile_interclub_for_club
+        interclub_ratings = reconcile_interclub_for_club(supabase, str(club_id))
     return {
         "inserted": len(db_matches),
         "skipped_incomplete": int(skipped_incomplete),
@@ -686,4 +690,5 @@ def process_matches(
         },
         "badge_summary": badge_summary,
         "player_update_queue": player_update_queue,
+        "interclub_ratings": interclub_ratings,
     }

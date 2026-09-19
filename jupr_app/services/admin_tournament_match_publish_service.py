@@ -1070,6 +1070,9 @@ def publish_admin_tournament_draw_matches(
             publish_plan_fingerprint=publish_plan_fingerprint,
             write_plan={**combined_write_plan, "publish_plan": current_plan},
         )
+        from jupr_app.services.interclub_rating_service import reconcile_interclub_for_club
+        interclub_ratings = reconcile_interclub_for_club(supabase, str(club_id))
+        process_result["interclub_ratings"] = interclub_ratings
         inserted_count = int(atomic_result.get("inserted") or 0)
         affected_players = {
             int(value)
@@ -1186,6 +1189,8 @@ def publish_admin_tournament_draw_matches(
     warnings: list[str] = []
     if audit_write.warning:
         warnings.append(audit_write.warning)
+    if (process_result.get("interclub_ratings") or {}).get("status") == "failed":
+        warnings.append(str(process_result["interclub_ratings"]["error"]))
     if atomic_identity_ready and not audit_write.ok:
         raise RuntimeError(
             "Official match/rating core completed, but its exact operation-bound post-processor receipt did not persist. Keep recovery locked."

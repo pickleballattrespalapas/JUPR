@@ -26,7 +26,8 @@ POOL = "pcs_interclub_pool_settings"
 MEMBERS = "pcs_interclub_pool_members"
 SETTINGS = "pcs_interclub_availability_settings"
 RESPONSES = "pcs_interclub_availability_responses"
-MEMBER_FIELDS = "id,season_id,club_id,name,email,divisions,notes,status,player_id,revision,created_at,updated_at"
+MEMBER_FIELDS = "id,season_id,club_id,name,email,divisions,notes,status,player_id,revision,created_at,updated_at,approval_status,late_join,approval_reason"
+APPROVAL_FIELDS = "id,club_id,name,player_id,revision,approval_status,late_join,approval_reason"
 MEET_FIELDS = "id,season_id,host_club_id,club_ids,starts_at,roster_deadline"
 PURPOSE = "pcs-interclub-player:v1"
 
@@ -41,6 +42,13 @@ class PoolMemberUpdate(StrictModel):
     expected_revision: int = Field(ge=1)
     player_id: int | None = Field(default=None, gt=0)
     status: Literal["active", "withdrawn"]
+
+
+class PoolApproval(StrictModel):
+    member_id: UUID
+    expected_revision: int = Field(ge=1)
+    approve: bool
+    reason: str = Field(min_length=1, max_length=500)
 
 
 class AvailabilitySettingsUpdate(StrictModel):
@@ -322,6 +330,31 @@ def install_interclub_player_pool_routes(app, *, get_supabase_client):
             _private_headers(result)
         return result
 
+    def organizer_context(club_id, season_id, authorization):
+        db = get_supabase_client()
+        user, assignments = require_admin_assignments(get_supabase_client=lambda: db, authorization=authorization, requested_club_id=club_id)
+        if not any(row["role"] in ADMIN_ROLES for row in assignments):
+            raise HTTPException(403, "Club administrator access required.")
+        season = _one(db, "pcs_interclub_seasons", "id,organizer_club_id", id=str(season_id))
+        if not season or season["organizer_club_id"] != club_id:
+            raise HTTPException(403, "Only the league organizer approves late season additions.")
+        return db, user
+
+    @app.get(base + "/pool/approvals")
+    def get_approvals(club_id: str, season_id: UUID, response: Response, authorization: str | None = auth_header()):
+        _private_headers(response)
+        db, _ = organizer_context(club_id, season_id, authorization)
+        rows = _rows(_query(db, MEMBERS, APPROVAL_FIELDS, season_id=str(season_id), status="active").order("name").limit(1000))
+        return {"members": [{key: row.get(key) for key in APPROVAL_FIELDS.split(",")} for row in rows]}
+
+    @app.post("/admin/clubs/{club_id}/interclub/registrations/{season_id}/pool/approvals")
+    def review_approval(club_id: str, season_id: UUID, body: PoolApproval, response: Response, authorization: str | None = auth_header()):
+        _private_headers(response)
+        db, user = organizer_context(club_id, season_id, authorization)
+        result = pool_rpc(db, "pcs_review_interclub_pool_member", {**pool_actor(user, club_id, season_id),
+            "p_member_id": str(body.member_id), "p_revision": body.expected_revision, "p_approve": body.approve, "p_reason": body.reason})
+        return {"member": {key: result.get(key) for key in APPROVAL_FIELDS.split(",")}}
+
     @app.get(base + "/pool")
     def get_pool(club_id: str, season_id: UUID, response: Response, authorization: str | None = auth_header()):
         _private_headers(response)
@@ -390,7 +423,7 @@ def install_interclub_player_pool_routes(app, *, get_supabase_client):
             return {"status": "already_registered", "message": "If you have already joined, use your saved personal link or contact your club administrator. Your existing signup has not changed."}
         member = result["member"]
         _, season = _season_club(db, member["club_id"], member["season_id"])
-        return {"status": "registered", "message": "You're in your club's season player pool. Your club will invite you to individual meets.", "manage_url": pool_member_url(member, season)}
+        return {"status": "registered", "message": "Your season signup is saved. Late additions need league organizer approval before playing." if member.get("late_join") else "Your season signup is saved. Your club will confirm your player record and invite you to individual meets.", "manage_url": pool_member_url(member, season)}
 
     @app.post("/public/interclub-player-response/review")
     def review_response(body: ResponseReview, response: Response):

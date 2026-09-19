@@ -1984,6 +1984,10 @@ def _run_atomic_match_side_effects(
     write_plan: dict[str, Any],
     side_effect_context: dict[str, Any],
 ) -> dict[str, Any]:
+    from jupr_app.services.interclub_rating_service import reconcile_interclub_for_club
+    interclub_ratings = reconcile_interclub_for_club(supabase, str(club_id))
+    if interclub_ratings.get("status") == "failed":
+        raise RuntimeError(str(interclub_ratings["error"]))
     clean_operation_key = str(operation_key or "").strip()
     if not clean_operation_key:
         raise RuntimeError(

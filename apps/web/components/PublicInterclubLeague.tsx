@@ -1,6 +1,7 @@
 import type { PublicLeague } from "@/lib/interclubPublic";
 import { meetTime } from "@/lib/interclubPublic";
 import styles from "./ClubWebsite.module.css";
+import { CompetitionStandings, CompetitionResults } from "./PublicInterclubCompetition";
 export default function PublicInterclubLeague({
   league,
 }: {
@@ -29,6 +30,7 @@ export default function PublicInterclubLeague({
       </nav>
       <section id="standings">
         <h2>Standings</h2>
+        {doc.scoring_version === 1 ? <CompetitionStandings league={league} /> : <>
         <p>
           Ranked by encounter wins, then game difference and point difference.
           Clubs with equal totals are tied.
@@ -38,6 +40,7 @@ export default function PublicInterclubLeague({
             No results have been published yet. All clubs start at zero.
           </p>
         )}
+        <p className={styles.notice}>Historical results recorded with the earlier scoring format.</p>
         {league.standings.map((group) => (
           <section key={group.division}>
             <h3>{group.division} division</h3>
@@ -80,6 +83,7 @@ export default function PublicInterclubLeague({
             </div>
           </section>
         ))}
+        </>}
       </section>
       <section id="schedule">
         <h2>Meet schedule</h2>
@@ -112,7 +116,7 @@ export default function PublicInterclubLeague({
       </section>
       <section id="results">
         <h2>Results</h2>
-        {!doc.results.length ? (
+        {doc.scoring_version === 1 ? <CompetitionResults results={doc.competition_results || []} names={names} /> : !doc.results.length ? (
           <p>Results will appear after the organizer publishes them.</p>
         ) : (
           <div className={styles.grid}>

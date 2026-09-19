@@ -63,3 +63,14 @@ def test_partial_setup_retains_progress_rules_and_unfinished_meets(monkeypatch):
 def test_invalid_wizard_metadata_is_rejected(patch):
  from services.api.interclub_models import PlanningDraft
  with pytest.raises(ValidationError):PlanningDraft(**patch)
+
+
+def test_southern_bcs_rules_use_fixed_skill_bands_and_mixed_team_composition():
+    from services.api.interclub_models import canonical_southern_bcs_rules
+    rules = canonical_southern_bcs_rules(["3.5", "4.0", "4.5", "5.0", "4.5/Open"])
+    assert rules["3.5"].model_dump() == {"min_rating": 3.5, "max_rating": 3.999, "women_required": 2}
+    assert rules["4.0"].min_rating == 4.0
+    assert rules["4.5"].max_rating == 4.999
+    assert rules["5.0"].max_rating == 5.499
+    assert rules["4.5/Open"].min_rating == 4.5 and rules["4.5/Open"].max_rating is None
+    assert all(rule.women_required == 2 for rule in rules.values())

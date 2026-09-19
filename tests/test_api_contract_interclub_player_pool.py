@@ -495,3 +495,46 @@ def test_private_response_errors_and_validation_failures_are_not_cacheable(setup
     response = client.get(state["base"] + "/pool")
     assert response.status_code == 404
     private_headers(response)
+
+
+def test_pool_approvals_only_organizer_and_no_contact_details(setup):
+    client, state = setup
+    member = state["member"]
+    member.update(approval_status="pending", late_join=True, approval_reason=None)
+    assert client.get(state["base"] + "/pool/approvals").status_code == 403
+    state["season"]["organizer_club_id"] = "alpha"
+    # Organizers may operate the league without entering their own club.
+    state["participation"]["status"] = "declined"
+    response = client.get(state["base"] + "/pool/approvals")
+    assert response.status_code == 200
+    saved = response.json()["members"][0]
+    assert saved["name"] == member["name"]
+    assert saved["approval_status"] == "pending"
+    assert not {"email", "notes", "token_nonce", "manage_url", "identity_key"}.intersection(saved)
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_pool_approval_uses_verified_actor_and_revision(setup):
+    client, state = setup
+    state["season"]["organizer_club_id"] = "alpha"
+    state["result"] = {**state["member"], "approval_status": "approved"}
+    body = dict(member_id=state["member"]["id"], expected_revision=3, approve=True, reason="Late traveler approved")
+    response = client.post(state["base"] + "/pool/approvals", json=body)
+    assert response.status_code == 200
+    name, params = state["calls"][-1]
+    assert name == "pcs_review_interclub_pool_member"
+    assert params["p_actor_id"] == state["user"].user_id
+    assert params["p_revision"] == 3
+    assert params["p_reason"] == body["reason"]
+    assert "email" not in response.json()["member"]
+    assert client.post(state["base"] + "/pool/approvals", json={**body, "actor_id": str(uuid4())}).status_code == 422
+
+
+def test_pool_approval_stale_conflict_and_nonadmin_rejected(setup):
+    client, state = setup
+    state["season"]["organizer_club_id"] = "alpha"
+    body = dict(member_id=state["member"]["id"], expected_revision=1, approve=True, reason="Late traveler")
+    state["error"] = "40001"
+    assert client.post(state["base"] + "/pool/approvals", json=body).status_code == 409
+    state["assignment"]["role"] = "operator"
+    assert client.post(state["base"] + "/pool/approvals", json=body).status_code == 403

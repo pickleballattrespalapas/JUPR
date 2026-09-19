@@ -8,6 +8,7 @@ import { useAdminWorkspace } from "@/lib/useAdminWorkspace";
 import { InterclubTeam, MeetRegistrationDetail, RegistrationDetail, RegistrationSeason, RosterVersion, apiError, composition, rosterStatus } from "@/lib/interclubRegistration";
 import styles from "./registrations.module.css";
 import { SeasonPlayerPool, MeetAvailability } from "./PlayerPoolPanels";
+import SeasonEligibilityApprovals from "./SeasonEligibilityApprovals";
 
 function loadErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && !(error instanceof TypeError) && !(error instanceof SyntaxError) ? error.message : fallback;
@@ -153,6 +154,7 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId }: { api: strin
       <header className={styles.seasonHeader}>
         <h2>{data.season.details.name}</h2>
         <p>{date(data.season.details.start_date)} – {date(data.season.details.end_date)} · Organized by {clubName(data.season.organizer_club_id)}</p>
+        {showRosters && <p><Link className={styles.button} href={`/admin/interclub/competition?season=${encodeURIComponent(seasonId)}`}>Meet schedules, score sheets & results →</Link></p>}
       </header>
       {status === "invited" && <section className={`${styles.card} ${styles.invitation}`} aria-labelledby="invitation-title">
         <p className={styles.eyebrow}>Invitation to your club</p>
@@ -192,8 +194,9 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId }: { api: strin
         <div className={styles.scroll}><table className={styles.table}><caption>Season eligibility rules</caption><thead><tr><th>Division</th><th>Minimum rating</th><th>Maximum rating</th><th>Team</th></tr></thead><tbody>
           {Object.entries(data.season.rules).map(([division, rule]) => <tr key={division}><td>{division}</td><td>{rule.min_rating ?? "No minimum"}</td><td>{rule.max_rating ?? "No maximum"}</td><td>{composition(rule)}</td></tr>)}
         </tbody></table></div>
-        <p>Starting ratings come from the represented club when each player first enters this season. Those starting ratings stay fixed for this season’s eligibility checks.</p>
+        <p>Interclub ratings start from the represented club’s rating, then change with approved league results. Each meet locks the player’s league rating at its roster deadline. Players move to the skill level matching that rating, and every team has two women and two men.</p>
       </details>
+      {data.is_organizer && <SeasonEligibilityApprovals root={root} accessToken={accessToken} clubs={data.clubs} />}
       {data.is_organizer && <section id="club-responses" className={styles.card}><h3>Club responses</h3>
         <p>{data.participations.filter(p => p.status === "accepted").length} of {data.participations.length} clubs have accepted. Each club chooses its players separately for each meet.</p>
         <div className={styles.scroll}><table className={styles.table}><thead><tr><th>Club</th><th>Response</th><th>Invitation</th></tr></thead><tbody>
@@ -304,7 +307,7 @@ function MeetRegistration({ root, accessToken, clubId, seasonData }: { root: str
       </>}
       {ownMeet && data.meet.roster_open && <button disabled={disabled} onClick={() => setEditor({ team: null })}>Add a team for this meet</button>}
       {editor && <RosterEditor key={editor.team ? `${editor.team.id}:${editor.team.revision}` : "new"} root={root} accessToken={accessToken} clubName={clubName(clubId)} divisions={seasonData.season.details.divisions} team={editor.team} disabled={disabled}
-        responses={responses}
+        responses={responses} allowMissingPairing={(data.meet.competition_phase || "regular") === "regular"}
         cancel={() => setEditor(null)} save={(id, body) => change(`/teams/${id}`, "PUT", { ...body, ...revision }, "Roster submitted for this meet.")} />}
       <h4>{seasonData.is_organizer ? "Teams for this meet" : "Your club’s teams for this meet"}</h4>
       {!data.teams.length && <p>No teams submitted for this meet yet.</p>}
@@ -317,16 +320,19 @@ function MeetRegistration({ root, accessToken, clubId, seasonData }: { root: str
   </section>;
 }
 
-type PlayerChoice = { id: string; name: string; starting_rating: number | null };
-function RosterEditor({ root, accessToken, clubName, divisions, team, disabled, cancel, save, responses }: {
+type PlayerChoice = { id: string; name: string; starting_rating: number | null; eligibility_rating?: number; rating_locked?: boolean; rating_deadline?: string };
+function RosterEditor({ root, accessToken, clubName, divisions, team, disabled, cancel, save, responses, allowMissingPairing }: {
   root: string; accessToken: string; clubName: string; divisions: string[]; team: InterclubTeam | null; disabled: boolean; cancel: () => void;
   save: (id: string, body: object) => Promise<boolean>;
   responses: { player_id: string | null; status: string; member_status?: string }[] | null;
+  allowMissingPairing: boolean;
 }) {
   const [id] = useState(() => team?.id || crypto.randomUUID());
   const [name, setName] = useState(team?.name || "");
   const [division, setDivision] = useState(team?.division || divisions[0] || "");
-  const [selected, setSelected] = useState<PlayerChoice[]>(() => (team?.roster || []).map(p => ({ id: p.player_id!, name: p.name, starting_rating: p.starting_rating })));
+  const [selected, setSelected] = useState<PlayerChoice[]>(() => (team?.roster || []).map(p => ({ ...p, id: p.player_id! })));
+  const [missingPairing, setMissingPairing] = useState(allowMissingPairing && team?.roster.length === 2);
+  const requiredPlayers = missingPairing ? 2 : 4;
   const [query, setQuery] = useState("");
   const [offset, setOffset] = useState(0);
   const [choices, setChoices] = useState<PlayerChoice[]>([]);
@@ -348,33 +354,36 @@ function RosterEditor({ root, accessToken, clubName, divisions, team, disabled, 
     return () => controller.abort();
   }, [root, query, offset]);
   function toggle(player: PlayerChoice) {
-    setSelected(old => old.some(p => p.id === player.id) ? old.filter(p => p.id !== player.id) : old.length < 4 ? [...old, player] : old);
+    setSelected(old => old.some(p => p.id === player.id) ? old.filter(p => p.id !== player.id) : old.length < requiredPlayers ? [...old, player] : old);
   }
-  return <form className={styles.card} onSubmit={e => { e.preventDefault(); if (selected.length === 4) void save(id, { expected_revision: team?.revision || 0, name, division, player_ids: selected.map(p => p.id) }); }}>
-    <h3>{team ? "Update team roster" : "New four-player team"}</h3>
+  return <form className={styles.card} onSubmit={e => { e.preventDefault(); if (selected.length === requiredPlayers) void save(id, { expected_revision: team?.revision || 0, name, division, player_ids: selected.map(p => p.id), ...(missingPairing ? { missing_pairing_forfeit: true } : {}) }); }}>
+    <h3>{team ? "Update team roster" : "New meet roster"}</h3>
     <fieldset disabled={disabled} className={styles.form}><legend>{clubName}</legend>
       <label>Team name<input required maxLength={80} value={name} onChange={e => setName(e.target.value)} /></label>
       <label>Division<select disabled={Boolean(team) || disabled} value={division} onChange={e => setDivision(e.target.value)}>{divisions.map(d => <option key={d} value={d}>{d}</option>)}</select></label>
-      <p>{selected.length} of 4 players selected. A player may be on only one of your club’s teams in each division for this meet.</p>
-      {selected.length > 0 && <ul>{selected.map(player => <li key={player.id}>{player.name} · {player.starting_rating?.toFixed(3) ?? "No rating"} <button type="button" onClick={() => toggle(player)}>Remove {player.name}</button></li>)}</ul>}
+      <p>{selected.length} of {requiredPlayers} players selected. {missingPairing ? "Choose the two players who will compete in the remaining doubles pairing." : "Choose two women and two men from your approved season pool."} A player may represent one skill level at this meet.</p>
+      <p>Eligibility uses the player’s league rating, locked at this meet’s roster deadline.</p>
+      {selected.length > 0 && <ul>{selected.map(player => <li key={player.id}>{player.name} · {(player.eligibility_rating ?? player.starting_rating)?.toFixed(3) ?? "No rating"} <button type="button" onClick={() => toggle(player)}>Remove {player.name}</button></li>)}</ul>}
       <label>Find a player in {clubName}<input type="search" maxLength={80} value={query} onChange={e => { setQuery(e.target.value); setOffset(0); }} /></label>
       {responses !== null && <label><input type="checkbox" checked={availableOnly} onChange={e => setAvailableOnly(e.target.checked)} />Show only players who said they are available</label>}
       {responses === null && <p>Open “Invite players &amp; view availability” to see meet responses alongside player names.</p>}
       {error && <p role="alert">{error}</p>}
       <div className={styles.choices}>{visibleChoices.map(player => <label key={player.id}>
-        <input type="checkbox" checked={selected.some(p => p.id === player.id)} disabled={disabled || (selected.length === 4 && !selected.some(p => p.id === player.id))} onChange={() => toggle(player)} />
-        {player.name} · {player.starting_rating?.toFixed(3) ?? "No rating"}
+        <input type="checkbox" checked={selected.some(p => p.id === player.id)} disabled={disabled || (selected.length >= requiredPlayers && !selected.some(p => p.id === player.id))} onChange={() => toggle(player)} />
+        {player.name} · {(player.eligibility_rating ?? player.starting_rating)?.toFixed(3) ?? "No rating"}{player.rating_locked ? " · Locked for this meet" : ""}
         {responseByPlayer.has(player.id) && <span> · {({available: "Available", maybe: "Unsure", unavailable: "Unavailable", invited: "Not replied", pending: "Not replied"} as Record<string, string>)[responseByPlayer.get(player.id)!] || "Not replied"}</span>}
       </label>)}{loading && <p>Loading players…</p>}{!loading && !error && !visibleChoices.length && <p>{availableOnly ? "No available players in these results. Load more players or clear the filter." : "No active players found."}</p>}</div>
+      {allowMissingPairing && <label><input type="checkbox" aria-label="Missing pairing forfeit" checked={missingPairing} onChange={e => setMissingPairing(e.target.checked)} />We can field only one pairing; the missing pairing will forfeit all three games.</label>}
+      {missingPairing && <p role="status">Enter only the two players who will compete. They must form a women’s or men’s pairing at a gender-doubles meet, or one woman and one man at a mixed-doubles meet. The selected meet format is checked when its schedule is prepared. Championship teams still need four players.</p>}
       {next !== null && <button type="button" disabled={loading || disabled} onClick={() => setOffset(next)}>More players</button>}
-      <div className={styles.toolbar}><button type="submit" disabled={disabled || selected.length !== 4}>Submit four-player roster</button><button type="button" onClick={cancel}>Cancel roster edit</button></div>
+      <div className={styles.toolbar}><button type="submit" disabled={disabled || selected.length !== requiredPlayers}>{missingPairing ? "Submit two-player roster with forfeit" : "Submit four-player roster"}</button><button type="button" onClick={cancel}>Cancel roster edit</button></div>
     </fieldset>
   </form>;
 }
 
 function RosterTable({ version }: { version: RosterVersion }) {
-  return <><div className={styles.scroll}><table className={styles.table}><thead><tr><th>Player</th><th>Starting rating</th><th>Gender</th></tr></thead><tbody>
-    {version.roster.map((player, index) => <tr key={player.entry_id || index}><td>{player.name}</td><td>{player.starting_rating.toFixed(3)}</td><td>{player.gender === "female" ? "Female" : player.gender === "male" ? "Male" : "Not set"}</td></tr>)}
+  return <>{version.roster.length === 2 && <p className={styles.notice}>Two-player roster: the missing pairing forfeits its three games.</p>}<div className={styles.scroll}><table className={styles.table}><thead><tr><th>Player</th><th>Eligibility rating</th><th>Gender</th></tr></thead><tbody>
+    {version.roster.map((player, index) => <tr key={player.entry_id || index}><td>{player.name}</td><td>{(player.eligibility_rating ?? player.starting_rating).toFixed(3)}</td><td>{player.gender === "female" ? "Female" : player.gender === "male" ? "Male" : "Not set"}</td></tr>)}
   </tbody></table></div>
     {version.issues.length > 0 && <ul className={styles.issues}>{version.issues.map((issue, index) => <li key={index}>{issue.message}</li>)}</ul>}
     {version.decision_reason && <p>Organizer decision: {version.decision_reason}</p>}

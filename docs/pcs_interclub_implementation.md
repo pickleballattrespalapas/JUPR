@@ -1,6 +1,57 @@
 # PCS interclub implementation plan
 
-Status: design foundation; no interclub rating writes enabled.
+## Current specification (September 19, 2026)
+
+The authoritative competition and workflow requirements are now consolidated in
+[Southern BCS interclub rules](southern_bcs_interclub_rules.md). That document
+records the guided-questionnaire decisions, distinguishes operational defaults,
+and includes the staging acceptance checklist.
+
+**Implementation status: the revised competition workflows are implemented in
+the current working branch. Exact-commit release and end-to-end staging evidence
+must still be recorded separately.** This document is not deployment evidence.
+
+The current increment includes:
+
+- Approved season interest pools, organizer review of late additions, immutable
+  represented-club identity, and deadline-specific league-rating eligibility.
+- Meet-specific skill entries, two/three/four-club schedules, paper score packets,
+  actual-player score entry, whole-meet submission and organizer approval.
+- Injury, forfeits, delays, canceled partial results and replayed unfinished
+  pairings with new eligible lineups and preserved historical results.
+- Division standings, actual-play qualification, MLP championship finals,
+  multi-club qualifying round robins, final bonuses and joint Club Cup winners.
+- Independent league and club rating projections, chronological correction
+  replay across connected clubs, and durable repair status after local writes.
+- Public result snapshots with a reviewed-source guard that rejects publishing
+  if official revisions, season details, club names or schedule change.
+
+The multi-club qualifying round robin is an explicitly documented operational
+default: complete all tied-club matchups, rank wins then doubles game wins and
+doubles point differential, and play a further round for any residual cutoff
+tie. It does not award extra Club Cup points. See the
+[competition contract](interclub_competition_contract.md) and current rulebook
+for data contracts, tests and remaining acceptance gates.
+
+The final partial-roster increment permits an explicitly unavailable regular
+pairing while the other eligible pair plays; full MLP lineups still require
+four players. Same-pairing double forfeits use the documented operational
+default of three game losses each, zero differential/rating effects and no draw
+bonus. Backend, component and staging rollback checks cover this edge case.
+The release workflow runs the authenticated three-club browser checks.
+
+The sections below preserve the history of earlier implementations. In
+particular, references to season-frozen eligibility ratings, automatic late
+player entry, mandatory season-level participation, and live scoring as the
+required operating workflow are superseded by the current specification.
+Current requirements include approved season interest pools, meet-specific skill
+entries and lineups, changing interclub ratings frozen at each roster deadline,
+paper-first meet operation, whole-meet official score submission, explicit
+weather outcomes, MLP finals, and the all-category Club Cup.
+
+## Historical planning and delivery notes
+
+Original status: design foundation; no interclub rating writes enabled.
 
 ## First season
 Southern BCS (La Paz and south), January–March. Eight participating clubs,

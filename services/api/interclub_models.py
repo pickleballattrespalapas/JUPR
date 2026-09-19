@@ -18,6 +18,17 @@ class DivisionRule(BaseModel):
             raise ValueError("Minimum rating cannot exceed maximum rating.")
         return self
 
+def canonical_southern_bcs_rules(divisions: list[str]) -> dict[str, DivisionRule]:
+    """Display rules for the fixed half-point bands; SQL enforces exclusive upper bounds."""
+    result = {}
+    for division in divisions:
+        if division in {"Open", "4.5/Open"}:
+            result[division] = DivisionRule(min_rating=4.5, max_rating=None, women_required=2)
+        else:
+            level = float(division)
+            result[division] = DivisionRule(min_rating=level, max_rating=round(level + 0.499, 3), women_required=2)
+    return result
+
 class PlanningMeet(BaseModel):
     model_config = ConfigDict(extra="forbid")
     host_club_id: str = Field(default="", max_length=100)

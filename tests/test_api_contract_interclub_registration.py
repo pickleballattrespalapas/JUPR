@@ -48,6 +48,7 @@ def setup(monkeypatch):
               "clubs":[dict(id=c,name=c.title(),slug=c) for c in ("alpha","beta","gamma")],
               "players":[dict(id=i,club_id="beta",name=f"Player {i}",rating=1600,gender="female",active=True,email="private@example.test") for i in range(1,5)] + [dict(id=99,club_id="gamma",name="Private other club player",active=True,rating=1800)],
               "pcs_interclub_entries":[dict(season_id=sid,club_id="beta",player_id=1,starting_rating=3.2)]}
+    tables["pcs_interclub_pool_members"] = [dict(season_id=sid, club_id="beta", player_id=i, status="active", approval_status="approved") for i in range(1, 5)]
     tables["pcs_interclub_drafts"]=[dict(id=sid,organizer_club_id="alpha",revision=2,draft={**season["details"],"start_date":"2099-01-01","end_date":"2099-03-31","registration_rules":season["rules"],"meets":[dict(host_club_id="beta",club_ids=["beta","gamma"],starts_at=meet["starts_at"],duration_minutes=180,courts=4)]})]
     state = dict(meet=meet,user=user,assignment=assignment,season=season,participation=participation,team=team,tables=tables,calls=[],reads=[],error="")
     def table(name): state["reads"].append(name); return Query(tables[name])
@@ -56,6 +57,11 @@ def setup(monkeypatch):
         def execute():
             if state["error"]:
                 e = RuntimeError("private database failure"); e.code=state["error"]; raise e
+            if name == "pcs_interclub_meet_player_ratings":
+                rows = state.get("meet_player_ratings")
+                if rows is None:
+                    rows = [dict(player_id=p["id"], entry_id=str(uuid4()), eligibility_rating=p.get("rating", 1400)/400, gender=p.get("gender"), rating_deadline=meet["roster_deadline"], rating_locked=False) for p in tables["players"] if p["club_id"] == params["p_club_id"]]
+                return SimpleNamespace(data=rows)
             data = season if name == "pcs_open_interclub_meet_registration" else participation if name == "pcs_interclub_participation" else meet if name == "pcs_set_interclub_meet_deadline" else {"team":team,"roster":version}
             return SimpleNamespace(data=data)
         return SimpleNamespace(execute=execute)
@@ -126,7 +132,8 @@ def test_open_uses_exact_saved_revision_and_verified_organizer(setup):
     assert response.status_code==200
     name,args=s["calls"][0]
     assert name=="pcs_open_interclub_meet_registration" and args["p_club_id"]=="alpha" and args["p_actor_id"]==s["user"].user_id
-    assert args["p_revision"]==2 and args["p_rules"]==s["season"]["rules"]
+    assert args["p_revision"] == 2
+    assert args["p_rules"] == {"3.5": {"min_rating": 3.5, "max_rating": 3.999, "women_required": 2}}
 
 
 @pytest.mark.parametrize("patch",[dict(min_rating=4,max_rating=3),dict(max_rating=9),dict(women_required=5),dict(private="injected")])
@@ -178,6 +185,7 @@ def test_database_failures_are_actionable_without_internal_details(setup,code,st
 def test_player_and_team_lists_have_explicit_pagination(setup):
     c,s=setup; s["assignment"]["club_id"]="beta"
     s["tables"]["players"]=[dict(id=i,club_id="beta",name=f"Player {i}",rating=1400,active=True) for i in range(1,103)]
+    s["tables"]["pcs_interclub_pool_members"] = [dict(season_id=s["season"]["id"], club_id="beta", player_id=i, status="active", approval_status="approved") for i in range(1, 103)]
     s["tables"]["pcs_interclub_current_rosters"]=[{**s["team"],"id":str(uuid4())} for _ in range(102)]
     assert len(c.get(meet_base(s,"beta")+"/players").json()["players"])==100
     assert c.get(meet_base(s,"beta")+"/players").json()["next_offset"]==100
@@ -302,7 +310,7 @@ def test_started_meet_keeps_history_but_player_picker_is_closed(setup):
     assert "players" not in s["reads"]
 
 
-@pytest.mark.parametrize("patch",[dict(name=""),dict(start_date=None),dict(club_ids=["beta"]),dict(meets=[]),dict(meets=[dict(host_club_id="beta",club_ids=["beta","gamma"],starts_at=None)]),dict(registration_rules={"3.5":dict(max_rating=4)})])
+@pytest.mark.parametrize("patch",[dict(name=""),dict(start_date=None),dict(club_ids=["beta"]),dict(meets=[]),dict(meets=[dict(host_club_id="beta",club_ids=["beta","gamma"],starts_at=None)])])
 def test_incomplete_or_unreviewed_setup_cannot_open_invitations(setup,patch):
     c,s=setup; s["tables"]["pcs_interclub_drafts"][0]["draft"].update(patch)
     r=c.post(base(s)+"/open",json={"expected_revision":2,"rules":s["season"]["rules"]})
@@ -316,3 +324,42 @@ def test_open_requires_current_saved_setup_owned_by_this_organizer(setup):
     s["tables"]["pcs_interclub_drafts"][0]["organizer_club_id"]="gamma"
     assert c.post(base(s)+"/open",json={"expected_revision":3,"rules":s["season"]["rules"]}).status_code==404
     assert not s["calls"]
+
+
+def test_open_normalizes_legacy_custom_rating_rules(setup):
+    c, s = setup
+    s["tables"]["pcs_interclub_drafts"][0]["draft"]["registration_rules"] = {"3.5": {"max_rating": 4, "women_required": None}}
+    response = c.post(base(s) + "/open", json={"expected_revision": 2, "rules": s["season"]["rules"]})
+    assert response.status_code == 200
+    assert s["calls"][0][1]["p_rules"] == {"3.5": {"min_rating": 3.5, "max_rating": 3.999, "women_required": 2}}
+
+
+def test_meet_player_lookup_only_approved_pool_and_uses_deadline_rating(setup):
+    client, state = setup
+    state["assignment"]["club_id"] = "beta"
+    state["tables"]["pcs_interclub_pool_members"][1]["approval_status"] = "pending"
+    state["tables"]["pcs_interclub_pool_members"][2]["status"] = "withdrawn"
+    state["meet_player_ratings"] = [dict(player_id=i, entry_id=str(uuid4()), eligibility_rating=4.125, gender="female", rating_deadline=state["meet"]["roster_deadline"], rating_locked=True) for i in range(1, 5)]
+    response = client.get(meet_base(state, "beta") + "/players")
+    assert response.status_code == 200
+    rows = response.json()["players"]
+    assert [row["id"] for row in rows] == ["1", "4"]
+    assert rows[0]["starting_rating"] == 3.2
+    assert rows[0]["eligibility_rating"] == 4.125 and rows[0]["rating_locked"]
+    assert "email" not in response.text
+    # The separate directory lookup still supports linking a new signup.
+    response = client.get(base(state, "beta") + "/players")
+    assert len(response.json()["players"]) == 4
+
+
+def test_two_player_roster_requires_explicit_missing_pairing_declaration(setup):
+    client, state = setup
+    state["assignment"]["club_id"] = "beta"
+    payload = dict(expected_meet_revision=1, expected_revision=0, name="Women only", division="3.5", player_ids=[1, 2])
+    url = meet_base(state, "beta") + "/teams/" + str(uuid4())
+    assert client.put(url, json=payload).status_code == 422
+    response = client.put(url, json={**payload, "missing_pairing_forfeit": True})
+    assert response.status_code == 200
+    assert state["calls"][-1][1]["p_player_ids"] == [1, 2]
+    assert client.put(url, json={**payload, "player_ids": [1, 2, 3], "missing_pairing_forfeit": True}).status_code == 422
+    assert client.put(url, json={**payload, "player_ids": [1, 2, 3, 4], "missing_pairing_forfeit": True}).status_code == 422

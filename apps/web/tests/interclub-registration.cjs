@@ -3,7 +3,7 @@ const React = require('react'), ts = require('typescript'), { create, act } = re
 function load(file, mocks = {}) {
   const code = ts.transpileModule(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true } }).outputText;
   const module = { exports: {} };
-  new Function('require', 'module', 'exports', code)(n => n === './PlayerPoolPanels' ? { SeasonPlayerPool: p => React.createElement('section', { 'data-pool-root': p.root }), MeetAvailability: p => React.createElement('section', { 'data-availability-root': p.meetRoot, onResponses: p.onResponses }) } : Object.hasOwn(mocks, n) ? mocks[n] : require(n), module, module.exports);
+  new Function('require', 'module', 'exports', code)(n => n === './SeasonEligibilityApprovals' ? { default: () => null, __esModule: true } : n === './PlayerPoolPanels' ? { SeasonPlayerPool: p => React.createElement('section', { 'data-pool-root': p.root }), MeetAvailability: p => React.createElement('section', { 'data-availability-root': p.meetRoot, onResponses: p.onResponses }) } : Object.hasOwn(mocks, n) ? mocks[n] : require(n), module, module.exports);
   return module.exports;
 }
 const helpers = load('lib/interclubRegistration.ts');
@@ -94,11 +94,11 @@ async function clubsAndRosters() {
   ]));
   const availableFilter = () => tree.root.findAllByType('label').find(label => label.children.includes('Show only players who said they are available')).findByType('input');
   await act(async () => availableFilter().props.onChange({ target: { checked: true } }));
-  assert.equal(tree.root.findAllByProps({ type: 'checkbox' }).length, 5, 'Availability filter preserves four selected players');
+  assert.equal(tree.root.findAllByProps({ type: 'checkbox' }).length, 6, 'Availability filter preserves four selected players');
   await act(async () => tree.root.findAllByProps({ type: 'checkbox' })[1].props.onChange());
-  assert.equal(tree.root.findAllByProps({ type: 'checkbox' }).length, 4, 'Withdrawn pool member is not suggested by their historical available reply');
+  assert.equal(tree.root.findAllByProps({ type: 'checkbox' }).length, 5, 'Withdrawn pool member is not suggested by their historical available reply');
   await act(async () => availableFilter().props.onChange({ target: { checked: false } }));
-  assert.equal(tree.root.findAllByProps({ type: 'checkbox' }).length, 6, 'Clearing availability filter allows manual substitutes');
+  assert.equal(tree.root.findAllByProps({ type: 'checkbox' }).length, 7, 'Clearing availability filter allows manual substitutes');
   await act(async () => tree.root.findAllByProps({ type: 'checkbox' })[1].props.onChange());
   const beforeRefresh = requests.length; token = 'token-2';
   await act(async () => tree.update(React.createElement(Page, { initialSeasonId: sid })));
@@ -159,6 +159,14 @@ async function clubsAndRosters() {
   assert.equal(tree.root.findAllByProps({ type: 'checkbox' }).filter(i => i.props.checked).length, 0, 'Next meet starts with no assumed players');
   assert.equal(name().props.value, '');
   assert.ok(requests.at(-1).url.includes(`/meets/${mid2}/players`));
+  await act(async () => tree.root.findByProps({ 'aria-label': 'Missing pairing forfeit' }).props.onChange({ target: { checked: true } }));
+  assert.ok(textContent(tree).includes('missing pairing will forfeit all three games'));
+  await act(async () => tree.root.findAllByProps({ type: 'checkbox' }).slice(0, 2).forEach(i => i.props.onChange()));
+  await act(async () => name().props.onChange({ target: { value: 'Beta Pair Only' } }));
+  assert.equal(button(tree, 'Submit two-player roster with forfeit').props.disabled, false);
+  await act(async () => tree.root.findByType('form').props.onSubmit({ preventDefault() {} }));
+  assert.deepEqual(JSON.parse(requests.at(-1).options.body), { expected_meet_revision: 1, expected_revision: 0, name: 'Beta Pair Only', division: '3.5', player_ids: ['1', '2'], missing_pairing_forfeit: true });
+  await act(async () => finish(reply({ team: { ...team, meet_id: mid2, name: 'Beta Pair Only', roster: lineup.slice(0, 2), status: 'eligible' } })));
   secondMeet.roster_open = false; secondMeet.deadline_editable = false;
   await act(async () => button(tree, 'Reload meet').props.onClick());
   assert.equal(button(tree, 'Add a team for this meet'), undefined, 'Past-meet rosters are history');

@@ -86,7 +86,7 @@ class RpcSupabase:
         self.calls: list[tuple[str, dict]] = []
 
     def table(self, name):
-        if name != "admin_direct_match_entry_operations":
+        if name not in {"admin_direct_match_entry_operations", "pcs_interclub_rating_repairs"}:
             raise AssertionError(f"Unexpected table read: {name}")
         row = (
             {
@@ -96,7 +96,7 @@ class RpcSupabase:
                 "match_format": self.preflight_receipt["match_format"],
                 "result_json": self.preflight_receipt,
             }
-            if self.preflight_receipt
+            if self.preflight_receipt and name == "admin_direct_match_entry_operations"
             else None
         )
 
