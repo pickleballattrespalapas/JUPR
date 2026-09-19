@@ -1,0 +1,29 @@
+.panel { background: #fff; border: 1px solid #d9e3ee; border-radius: 16px; margin: 1.25rem 0; padding: clamp(1rem, 3vw, 1.75rem); color: #172335; }
+.panel h3, .panel h4 { margin: 0 0 .7rem; }
+.panel p { line-height: 1.5; }
+.panel button { border: 1px solid #bdcbdc; border-radius: 9px; min-height: 44px; padding: .65rem 1rem; font: inherit; font-weight: 650; background: white; color: #172335; cursor: pointer; transition: background .15s, border-color .15s; }
+.panel button:hover:not(:disabled) { background: #edf4ff; border-color: #4d78dc; }
+.panel button:focus-visible, .panel input:focus-visible, .panel select:focus-visible, .panel textarea:focus-visible, .panel summary:focus-visible { outline: 3px solid #7199f5; outline-offset: 3px; }
+.panel button:disabled { opacity: .55; cursor: not-allowed; }
+.panel button.primary { background: #224ddd; border-color: #224ddd; color: white; }
+.panel button.primary:hover:not(:disabled) { background: #163baa; }
+.panel label { display: flex; flex-direction: column; gap: .4rem; font-weight: 600; }
+.panel input:not([type=checkbox]), .panel textarea, .panel select { border: 1px solid #bdcbdc; border-radius: 8px; min-height: 44px; padding: .6rem .75rem; font: inherit; background: #fff; color: #172335; max-width: 100%; }
+.panel input[type=checkbox] { width: 20px; height: 20px; accent-color: #224ddd; }
+.panel textarea { width: 100%; min-height: 110px; }
+.panel fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: .7rem; margin: .8rem 0; }
+.notice { padding: .85rem 1rem; border-radius: 9px; background: #edf4ff; color: #254572; }
+.error { padding: .85rem 1rem; border-radius: 9px; background: #fff1e6; color: #8e3919; }
+.muted { color: #576b80; font-size: .92rem; }
+.share { display: flex; gap: .65rem; align-items: flex-end; flex-wrap: wrap; margin: 1rem 0; }
+.share label { flex: 1; min-width: 180px; }
+.card { border: 1px solid #d9e3ee; border-radius: 10px; padding: 1rem; margin: .8rem 0; overflow-wrap: anywhere; }
+.row { display: flex; justify-content: space-between; align-items: flex-start; gap: .8rem; flex-wrap: wrap; }
+.badge { border-radius: 999px; padding: .25rem .7rem; background: #edf4ff; font-size: .9rem; font-weight: 600; }
+.notes { white-space: pre-wrap; }
+.panel summary { cursor: pointer; padding: .5rem 0; font-weight: 650; }
+.panel label.choice { flex-direction: row; align-items: center; gap: .75rem; padding: .7rem 0; font-weight: 400; }
+.candidates { max-height: 330px; overflow: auto; border-block: 1px solid #e1e8f1; margin: .9rem 0; }
+.preview { white-space: pre-wrap; background: #f5f8fc; border: 1px solid #d9e3ee; border-radius: 10px; padding: 1rem; overflow-wrap: anywhere; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(240px, 100%),1fr)); gap: 1rem; }
