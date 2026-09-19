@@ -188,6 +188,7 @@ class Rehearsal:
         sid = str(uuid4())
         record = {"id": sid, "label": label, "clubs": clubs, "divisions": divisions, "meets": []}
         record["players"] = [{**p, "id": 7000000000000 + int(uuid4().hex[:11],16),
+                              "name": p["name"]+" "+label,
                               "normalized_name": p["normalized_name"]+" "+sid}
                              for p in self.state["players"] if p["club_id"] in clubs and p["division"] in divisions]
         self.state["seasons"].append(record)

@@ -320,8 +320,18 @@ def qualifier(r):
 
 
 def run(r):
-    full_season(r)
-    incidents(r)
-    qualifier(r)
+    failures = []
+    # Every scenario uses fresh season players, so an assertion in one should
+    # not prevent the remaining independent rehearsals from producing evidence.
+    for scenario in (full_season, incidents, qualifier):
+        try:
+            scenario(r)
+        except Exception as exc:
+            failure = r.redact(f"{scenario.__name__}: {type(exc).__name__}: {exc}")
+            failures.append(failure)
+            print("REHEARSAL FAILURE "+failure, flush=True)
+    if failures:
+        r.phase("scenario failures")
+        raise RuntimeError("; ".join(failures))
     r.phase("browser handoff")
     r.check(True,"API rehearsal complete; all synthetic sessions reserved for browser verification and cleanup")
