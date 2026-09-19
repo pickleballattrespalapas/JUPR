@@ -21,7 +21,8 @@ from jupr_app.services.direct_match_entry_service import (
     DirectMatchRecoveryRequiredError,
     submit_atomic_direct_matches,
 )
-from jupr_app.services.leaderboard_service import LeaderboardDataUnavailable, build_public_leaderboard
+from jupr_app.services.leaderboard_service import LeaderboardDataUnavailable, LeaderboardPeriodInvalid, build_public_leaderboard
+from services.api.club_site_models import LeaderboardSettings
 from jupr_app.services.public_live_service import is_public_live_session_row, public_live_session_detail, public_live_sessions_from_rows
 from jupr_app.services.public_live_operation_service import (
     PublicLiveConflictError,
@@ -520,7 +521,12 @@ def _normalize_public_leaderboard_projection(payload: dict[str, Any]) -> dict[st
     pagination = payload.get("pagination") if isinstance(payload.get("pagination"), dict) else {}
     snapshot_rows = _normalize_public_leaderboard_rows([payload["snapshot"]]) if isinstance(payload.get("snapshot"), dict) else []
     highlights = payload.get("highlights") if isinstance(payload.get("highlights"), dict) else {}
+    settings = LeaderboardSettings.model_validate(payload.get("leaderboard_settings") or {}).model_dump(mode="json")
+    period_id = (payload.get("period") or {}).get("id")
+    period = next((item for item in settings["seasons"] if item["id"] == period_id), None)
     return {
+        "leaderboard_settings": settings,
+        "period": period or {"id": None, "name": "All time", "start_date": None, "end_date": None, "timezone": "UTC"},
         "scopes": scopes,
         "selected_scope": selected_scope,
         "scope": {
@@ -550,7 +556,7 @@ def _normalize_public_leaderboard_projection(payload: dict[str, Any]) -> dict[st
         "snapshot": snapshot_rows[0] if snapshot_rows else None,
         "highlights": {
             key: _normalize_public_leaderboard_rows(highlights.get(key) or [])
-            for key in ("highest_rating", "most_improved", "best_win_pct", "most_wins")
+            for key in ("highest_rating", "most_improved", "best_win_pct", "most_wins", "most_matches")
         },
         "pagination": {
             "total": max(0, int(pagination.get("total") or 0)),
@@ -572,6 +578,7 @@ def _build_leaderboard_response(
     player_id: str | None = None,
     limit: int = 50,
     offset: int = 0,
+    season: str | None = None,
 ) -> dict[str, Any]:
     club = get_club(club_slug)
     club_id = str(club.get("id") or club.get("club_id") or club_slug)
@@ -588,7 +595,10 @@ def _build_leaderboard_response(
             player_id=player_id,
             limit=limit,
             offset=offset,
+            **({"season": season} if season is not None else {}),
         )
+    except LeaderboardPeriodInvalid as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except LeaderboardDataUnavailable as exc:
         raise HTTPException(status_code=503, detail="Leaderboard data is temporarily unavailable.") from exc
     return {"club": _public_club_payload(club, club_slug), **_normalize_public_leaderboard_projection(projection)}
@@ -1063,6 +1073,7 @@ def get_club_leaderboard(
     player_id: str | None = Query(default=None, max_length=120),
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
+    season: str | None = Query(default=None, max_length=80),
 ) -> dict[str, Any]:
     return _build_leaderboard_response(
         club_slug,
@@ -1074,6 +1085,7 @@ def get_club_leaderboard(
         player_id=player_id,
         limit=limit,
         offset=offset,
+        season=season,
     )
 
 
@@ -1088,6 +1100,7 @@ def get_club_leaderboard_compat(
     player_id: str | None = Query(default=None, max_length=120),
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
+    season: str | None = Query(default=None, max_length=80),
 ) -> dict[str, Any]:
     return _build_leaderboard_response(
         club_slug,
@@ -1099,6 +1112,7 @@ def get_club_leaderboard_compat(
         player_id=player_id,
         limit=limit,
         offset=offset,
+        season=season,
     )
 
 

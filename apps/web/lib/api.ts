@@ -1,3 +1,5 @@
+import type { LeaderboardSettings } from "@/lib/clubSite";
+
 export type ClubSummary = {
   id: string;
   slug: string;
@@ -71,11 +73,20 @@ export type LeaderboardResponse = {
   };
   leaderboard: LeaderboardEntry[];
   snapshot?: LeaderboardEntry | null;
+  leaderboard_settings?: LeaderboardSettings;
+  period?: {
+    id: string | null;
+    name: string;
+    start_date: string | null;
+    end_date: string | null;
+    timezone: string | null;
+  };
   highlights: {
     highest_rating: LeaderboardEntry[];
     most_improved: LeaderboardEntry[];
     best_win_pct: LeaderboardEntry[];
     most_wins: LeaderboardEntry[];
+    most_matches?: LeaderboardEntry[];
   };
   pagination: { total: number; offset: number; limit: number; has_more: boolean };
 };
@@ -568,6 +579,7 @@ export type LeaderboardRequest = {
   search?: string | null;
   sort?: "rank" | "rating" | "matches" | "win_pct" | "gain" | "name";
   playerId?: string | number | null;
+  season?: string | null;
   limit?: number;
   offset?: number;
 };
@@ -583,6 +595,7 @@ export async function getClubLeaderboard(
   if (options.search) params.set("q", String(options.search));
   if (options.sort) params.set("sort", options.sort);
   if (options.playerId != null && String(options.playerId).trim()) params.set("player_id", String(options.playerId));
+  if (options.season) params.set("season", options.season);
   if (options.limit != null) params.set("limit", String(options.limit));
   if (options.offset != null) params.set("offset", String(options.offset));
   const query = params.toString();

@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import re
+from datetime import date
 from typing import Literal
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -84,6 +86,52 @@ class DisplaySettings(StrictModel):
     registration_schedule: bool = True
 
 
+LeaderboardCard = Literal["highest_rating", "most_improved", "best_win_pct", "most_wins", "most_matches"]
+
+
+class LeaderboardSeason(StrictModel):
+    id: str = Field(min_length=1, max_length=80, pattern=r"^[a-zA-Z0-9_-]+$")
+    name: str = Field(min_length=1, max_length=120)
+    start_date: date
+    end_date: date | None = None
+    timezone: str = Field(default="America/Mazatlan", max_length=100)
+
+    @model_validator(mode="after")
+    def valid_period(self):
+        if self.id == "all":
+            raise ValueError("The season ID 'all' is reserved for all-time statistics.")
+        if self.end_date is not None and self.end_date < self.start_date:
+            raise ValueError("Season end date must be on or after its start date.")
+        if self.end_date == date.max:
+            raise ValueError("Choose a season end date before 9999-12-31.")
+        try:
+            ZoneInfo(self.timezone)
+        except (ZoneInfoNotFoundError, ValueError):
+            raise ValueError("Choose a valid season timezone.")
+        return self
+
+
+class LeaderboardSettings(StrictModel):
+    cards: list[LeaderboardCard] = Field(default_factory=lambda: [
+        "highest_rating", "most_improved", "best_win_pct", "most_wins"
+    ], max_length=5)
+    show_summary: bool = True
+    seasons: list[LeaderboardSeason] = Field(default_factory=list, max_length=40)
+    default_season_id: str | None = Field(default=None, max_length=80)
+    min_games: int = Field(default=0, ge=0, le=10000)
+
+    @model_validator(mode="after")
+    def unique_settings(self):
+        if len(set(self.cards)) != len(self.cards):
+            raise ValueError("Choose each leaderboard card only once.")
+        ids = [season.id for season in self.seasons]
+        if len(set(ids)) != len(ids):
+            raise ValueError("Each season must have a unique ID.")
+        if self.default_season_id is not None and self.default_season_id not in ids:
+            raise ValueError("Choose an existing season or All time as the default.")
+        return self
+
+
 class SiteDocument(StrictModel):
     schema_version: Literal[1] = 1
     name: str = Field(min_length=1, max_length=120)
@@ -94,6 +142,7 @@ class SiteDocument(StrictModel):
     accent: str = Field(default="#1d4ed8", pattern=r"^#[0-9a-fA-F]{6}$")
     visibility: Literal["listed", "unlisted"] = "unlisted"
     display: DisplaySettings = Field(default_factory=DisplaySettings)
+    leaderboard: LeaderboardSettings = Field(default_factory=LeaderboardSettings)
     page_visibility: dict[
         Literal["players", "leaderboards", "leagues", "tournaments", "matches", "play",
                 "match-explorer", "weekly-recap", "badge-codex", "interclub"],
