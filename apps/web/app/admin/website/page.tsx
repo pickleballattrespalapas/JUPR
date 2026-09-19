@@ -771,6 +771,11 @@ function WebsiteEditor({
               and results pages. They are display settings; club records stay
               available to staff.
             </p>
+            <p>
+              Featured cards on the Overall leaderboard are selected separately
+              under Overall leaderboard. Hiding a statistic here does not hide
+              a card you selected there.
+            </p>
             <div className={styles.grid}>
               {(Object.entries(DISPLAY_LABELS) as [DisplayKey, string][]).map(
                 ([key, label]) => (

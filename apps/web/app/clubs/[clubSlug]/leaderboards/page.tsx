@@ -440,8 +440,12 @@ export default async function ClubLeaderboardPage({ params, searchParams }: Lead
           const card = LEADERBOARD_CARD_DETAILS[key];
           const minimum = overall ? settings.card_options?.[key]?.minimum ?? 0 : 0;
           const description = `${card.description}${minimum > 0 ? ` Minimum ${minimum} ${card.sample}.` : ""}`;
+          const highlight = <BarList key={key} title={LEADERBOARD_CARD_LABELS[key]} description={description} rows={data.highlights[key] ?? []} value={row => highlightValue(key, row)} detail={row => highlightDetail(key, row)} clubSlug={clubSlug} />;
+          // The Overall selector is the authority for its featured cards.
+          // Table columns and default league cards retain display preferences.
+          if (overall) return highlight;
           return card.fields.reduceRight((child, field) => <Display key={`${key}-${field}`} field={field}>{child}</Display>,
-            <BarList title={LEADERBOARD_CARD_LABELS[key]} description={description} rows={data.highlights[key] ?? []} value={row => highlightValue(key, row)} detail={row => highlightDetail(key, row)} clubSlug={clubSlug} />);
+            highlight);
         })}
       </div> : null}
 

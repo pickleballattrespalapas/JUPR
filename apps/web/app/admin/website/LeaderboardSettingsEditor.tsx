@@ -70,7 +70,7 @@ export default function LeaderboardSettingsEditor({ clubId, document: doc, onCha
           </div>
         </li>)}
       </ol> : <p>No featured cards will be shown.</p>}
-      <p><small>Cards also follow your choices under Stats &amp; information. For example, hiding ratings hides the Highest rating card.</small></p>
+      <p><small>Selected cards appear on the Overall leaderboard. Stats &amp; information controls table columns and other statistics separately, so you can show Most improved while hiding the Gain and Gap columns.</small></p>
       <label><input type="checkbox" aria-label="Show summary counts above the cards" checked={settings.show_summary} onChange={event => change({ show_summary: event.target.checked })} /> Show summary counts above the cards</label>
       <div className={styles.form} style={{ maxWidth: 340, marginTop: "1rem" }}>
         <label>Minimum games for performance cards
