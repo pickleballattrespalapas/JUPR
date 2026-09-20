@@ -21,8 +21,8 @@ def build_tournament_registration_edit_email_html(*, tournament_name: str, regis
 <h1>Edit your tournament registration</h1>
 <p>We received a request to edit your tournament registration.</p>
 <p><strong>Tournament:</strong> {escape(_safe_text(tournament_name))}<br><strong>Registered email:</strong> {escape(_safe_text(registered_email))}</p>
-<p><a href=\"{escape(_safe_text(edit_url))}\" style=\"background:#2563eb;color:white;padding:10px 14px;text-decoration:none;border-radius:6px\">Edit my registration</a></p>
-<p>Or copy and paste this link into your browser:<br>{escape(_safe_text(edit_url))}</p>
+<p><a href=\"{escape(_safe_text(edit_url))}\" style=\"display:inline-block;background:#2563eb;color:white;padding:12px 18px;font-size:18px;font-weight:bold;line-height:1.4;text-decoration:none;border-radius:6px\">Edit my registration</a></p>
+<p>Or copy and paste this link into your browser:<br><a href=\"{escape(_safe_text(edit_url))}\" style=\"display:block;color:#2563eb;word-break:break-all;word-wrap:break-word;overflow-wrap:anywhere\">{escape(_safe_text(edit_url))}</a></p>
 <p>This link expires in 48 hours. If you did not request this, you can ignore this email.</p>
 </body></html>""", email_sponsors)
 
