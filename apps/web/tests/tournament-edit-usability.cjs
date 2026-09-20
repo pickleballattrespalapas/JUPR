@@ -152,6 +152,65 @@ async function verifyPrices() {
   assert.equal(quotes.length, 1);
 }
 
+async function verifyIndependentEventSaves() {
+  const mixed = { ...events[0], id: "mixed", event_family_label: "Mixed Doubles", division_name: "Split Age Open" };
+  const mixedSelection = { id: "selection-mixed", event_option_id: "mixed", partner_mode: "NEEDS_PARTNER", updated_at: "selection-3" };
+  const editButtons = () => renderer.root.findAllByType("button").filter(node => text(node) === "Edit event");
+  const closeEditor = async () => act(async () => renderer.root.findByType(Dialog).props.onRequestClose());
+
+  for (const remove of [false, true]) {
+    await mount({ events: [...events, mixed], selections: [...selections, mixedSelection] });
+    // Leave an incomplete Men's Doubles draft in a closed dialog.
+    await act(async () => renderer.root.findByProps({ value: "HAS_PARTNER", type: "radio" }).props.onChange());
+    await closeEditor();
+    await act(async () => editButtons()[2].props.onClick());
+    await act(async () => renderer.root.findByProps({ value: "HAS_PARTNER", type: "radio" }).props.onChange());
+    await act(async () => renderer.root.findByProps({ "aria-label": "Partner name" }).props.onChange({ target: { value: "Mixed Partner" } }));
+    if (remove) await act(async () => button("Remove event").props.onClick());
+    else await act(async () => renderer.root.findByType("form").props.onSubmit({ preventDefault() {}, currentTarget: {} }));
+
+    assert.equal(submissions.length, 1);
+    const saved = submissions[0].selections;
+    assert.equal(saved.find(row => row.event_option_id === "doubles").partner_mode, "NEEDS_PARTNER", "Another event's unsaved partner choice must not be submitted");
+    assert.equal(saved.find(row => row.event_option_id === "doubles").show_on_partner_board, true);
+    assert.equal(saved.find(row => row.event_option_id === "singles").id, "selection-singles");
+    assert.deepEqual(saved.map(row => row.event_option_id), remove ? ["doubles", "singles"] : ["doubles", "singles", "mixed"]);
+    if (!remove) assert.equal(saved.find(row => row.event_option_id === "mixed").partner_name, "Mixed Partner");
+  }
+
+  // An unsaved replacement must not remove the original division when
+  // a different event is saved. A new, unsaved event must not be added.
+  for (const extra of [mixed, { ...events[0], id: "doubles-alternate", division_name: "Alternate" }]) {
+    await mount({ events: [...events, extra] });
+    await closeEditor();
+    await act(async () => button("Add event").props.onClick());
+    const choice = dialog().findAllByType("button").find(node => text(node).includes(extra.division_name));
+    await act(async () => choice.props.onClick());
+    await closeEditor();
+    // Singles remains second for an added event and first for a replacement.
+    const cards = renderer.root.findAllByType("article");
+    const singlesCard = cards.find(node => node.findAllByType("button").some(button => text(button) === "Edit event") && text(node).includes("Singles"));
+    await act(async () => singlesCard.findByType("button").props.onClick());
+    await act(async () => button("Save changes").props.onClick());
+    assert.deepEqual(submissions[0].selections.map(row => row.event_option_id), ["doubles", "singles"]);
+
+    await mount({ events: [...events, extra] });
+    await closeEditor();
+    await act(async () => button("Add event").props.onClick());
+    await act(async () => dialog().findAllByType("button").find(node => text(node).includes(extra.division_name)).props.onClick());
+    await act(async () => button("Save changes").props.onClick());
+    assert.deepEqual(submissions[0].selections.map(row => row.event_option_id), extra.id === "mixed" ? ["doubles", "singles", "mixed"] : ["doubles-alternate", "singles"]);
+    if (extra.id !== "mixed") assert.equal(submissions[0].selections[0].id, "selection-doubles", "Saving a replacement retains its selection identity");
+  }
+
+  // Explicitly saving all registration changes still includes all drafts.
+  await mount();
+  await act(async () => renderer.root.findByProps({ value: "HAS_PARTNER", type: "radio" }).props.onChange());
+  await closeEditor();
+  await act(async () => renderer.root.findByType("form").props.onSubmit({ preventDefault() {}, currentTarget: {} }));
+  assert.equal(submissions[0].selections[0].partner_mode, "HAS_PARTNER");
+}
+
 async function verifyRecovery() {
   if (renderer) await act(async () => renderer.unmount());
   const requests = [];
@@ -201,6 +260,7 @@ async function main() {
   global.FormData = class { get(name) { return formValues[name] ?? null; } };
   try {
     await verifySaving();
+    await verifyIndependentEventSaves();
     await verifyPrices();
     await verifyRecovery();
     await verifyNavigation();
