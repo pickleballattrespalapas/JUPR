@@ -86,7 +86,11 @@ async function startNew() {
 }
 async function testNew() {
   await startNew();
-  assert.equal(field("Doubles skill").props.value, "4.1");
+  assert.equal(field("Doubles skill").props.readOnly, true);
+  assert.equal(field("Singles skill").props.readOnly, true);
+  await change("Doubles skill", "2.5");
+  await change("Singles skill", "2.5");
+  assert.equal(field("Doubles skill").props.value, "4.1", "Selected profile ratings cannot be edited");
   assert.equal(field("Singles skill").props.value, "3.8");
   assert.equal(renderer.root.findAllByProps({ "aria-label": "DUPR ID" }).length, 0);
   assert.equal(named("profile_candidate").props.checked, true, "Unique name match is selected before the player touches the choices");
@@ -101,6 +105,7 @@ async function testNew() {
 
   await startNew();
   await chooseNone();
+  assert.equal(field("Doubles skill").props.readOnly, false);
   await change("Doubles skill", "3.25");
   await act(async () => button("Back").props.onClick());
   await act(async () => button("Continue").props.onClick());
@@ -130,6 +135,9 @@ async function testEdit() {
   await submitEdit();
   assert.equal(submissions.length, 0, "Saving waits for the automatic match");
   await settle();
+  assert.equal(named("doubles_skill").props.readOnly, true);
+  assert.equal(named("singles_skill").props.readOnly, true);
+  await act(async () => named("doubles_skill").props.onChange({ target: { value: "2.5" } }));
   assert.equal(named("doubles_skill").props.value, "4.1");
   assert.equal(named("registration_profile").props.checked, true);
   await act(async () => button("Edit event").props.onClick());
@@ -145,8 +153,12 @@ async function testEdit() {
   await settle();
   assert.equal(requests.length, 0, "An established link is never replaced by a name lookup");
   assert.equal(named("doubles_skill").props.value, 4.1);
+  assert.equal(named("doubles_skill").props.readOnly, true);
+  assert.notEqual(named("doubles_skill").props.disabled, true, "Read-only ratings remain available to FormData");
   await submitEdit();
   assert.equal(submissions[0].player_id, player.id);
+  assert.equal(submissions[0].doubles_skill, player.doubles_skill);
+  assert.equal(submissions[0].singles_skill, player.singles_skill);
 
   resolveResponse = async () => result([player, duplicate]);
   await mount(EditForm, editProps());
@@ -164,6 +176,34 @@ async function testEdit() {
   await submitEdit();
   assert.equal(submissions.length, 1, "A failed lookup still allows manual registration edits");
 }
+async function testMissingProfileRatings() {
+  for (const [doubles, singles] of [[4.1, null], [null, 3.8], [null, null]]) {
+    const candidate = { ...player, doubles_skill: doubles, singles_skill: singles };
+    resolveResponse = async () => result([candidate]);
+    await startNew();
+    assert.equal(field("Doubles skill").props.readOnly, doubles != null);
+    assert.equal(field("Singles skill").props.readOnly, singles != null);
+    for (const [label, rating] of [["Doubles skill", doubles], ["Singles skill", singles]]) {
+      if (rating == null) {
+        await change(label, "3.25");
+        assert.equal(field(label).props.value, "3.25", "Missing profile ratings can be entered");
+      }
+    }
+    for (const linked of [false, true]) {
+      await mount(EditForm, editProps(linked ? { registration: { ...registration, player_id: candidate.id }, players: [candidate] } : {}));
+      await settle();
+      assert.equal(named("doubles_skill").props.readOnly, doubles != null);
+      assert.equal(named("singles_skill").props.readOnly, singles != null);
+      for (const [name, rating] of [["doubles_skill", doubles], ["singles_skill", singles]]) {
+        if (rating == null) await act(async () => named(name).props.onChange({ target: { value: "3.25" } }));
+      }
+      await submitEdit();
+      assert.equal(submissions[0].doubles_skill, doubles ?? 3.25);
+      assert.equal(submissions[0].singles_skill, singles ?? 3.25);
+    }
+  }
+}
+
 async function testStaleEditLookup() {
   let finish;
   resolveResponse = () => new Promise(resolve => { finish = resolve; });
@@ -192,7 +232,7 @@ async function main() {
     const input = renderer.root.findAll(node => ["input", "select", "textarea"].includes(node.type) && node.props.name === name)[0];
     return input?.props.value ?? input?.props.defaultValue ?? null;
   } };
-  try { await testNew(); await testEdit(); await testStaleEditLookup(); console.log("Automatic profiles: new/edit selection, save payloads, duplicates, opt out, existing links, stale responses and manual fallback passed."); }
+  try { await testNew(); await testEdit(); await testMissingProfileRatings(); await testStaleEditLookup(); console.log("Automatic profiles: new/edit selection, save payloads, duplicates, opt out, existing links, stale responses and manual fallback passed."); }
   finally { if (renderer) await act(async () => renderer.unmount()); global.window = originalWindow; global.FormData = originalFormData; }
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });
