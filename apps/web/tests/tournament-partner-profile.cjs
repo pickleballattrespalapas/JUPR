@@ -69,14 +69,16 @@ const field = name => renderer.root.findByProps({ "aria-label": name });
 const change = (name, value) => act(async () => field(name).props.onChange({ target: { value } }));
 const settle = () => act(async () => new Promise(resolve => setTimeout(resolve, 275)));
 
-async function testNewRegistration() {
+async function testNewRegistration(rating = 3.4) {
+  candidate.doubles_skill = rating;
   await act(async () => { renderer = create(React.createElement(NewForm, props)); });
   await act(async () => button("Start a registration").props.onClick());
   for (const [name, value] of [["First name", "Fixture"], ["Last name", "Player"], ["Email", "player@example.invalid"], ["Age", "40"], ["Gender", "Men"]]) await change(name, value);
   await change("Notes for tournament staff", "Private staff message");
   assert.match(content(renderer.root.findByProps({ id: "staff-notes-help" })), /do not appear on the public Partner Board/);
   await act(async () => button("Continue").props.onClick());
-  await change("Doubles skill", "4.5");
+  await change("Doubles skill", "3.651203499999999");
+  assert.equal(field("Doubles skill").props.step, "any", "Player ratings must accept full profile precision");
   await act(async () => button("Continue to events").props.onClick());
   await act(async () => field("Mixed Below 9").props.onChange({ target: { checked: true } }));
   await change("Below 9 public partner note", "Public partner message");
@@ -87,32 +89,34 @@ async function testNewRegistration() {
   assert.equal(lookups.at(-1).name, "Fixture Partner");
   assert.equal(lookups.at(-1).email, null, "A profile can be found before entering email, age or gender");
   assert.ok(renderer.root.findAllByType("input").some(node => node.props.type === "radio" && node.props.checked && content(node.parent).includes("Fixture Partner")), "The exact matching partner is selected without a click");
-  assert.equal(field("Below 9 partner skill").props.value, "3.4");
+  assert.equal(field("Below 9 partner skill").props.value, String(candidate.doubles_skill));
+  assert.equal(field("Below 9 partner skill").props.step, "any", "Partner ratings must accept full profile precision");
   assert.equal(renderer.root.findAllByProps({ "aria-label": "Below 9 partner DUPR ID" }).length, 0);
   // Adding contact details must preserve the explicitly selected profile.
   await change("Below 9 partner email", "Baumann");
-  assert.equal(field("Below 9 partner skill").props.value, "3.4");
+  assert.equal(field("Below 9 partner skill").props.value, String(candidate.doubles_skill));
   await change("Below 9 partner age", "70");
   await change("Below 9 partner gender", "Women");
-  await change("Below 9 partner skill", "3.4");
+  await change("Below 9 partner skill", String(candidate.doubles_skill));
   await act(async () => button("Review registration").props.onClick());
   assert.match(content(renderer.root.findByProps({ role: "alert" })), /valid partner email/);
   await change("Below 9 partner email", "partner@example.invalid");
-  assert.equal(field("Below 9 partner skill").props.value, "3.4");
+  assert.equal(field("Below 9 partner skill").props.value, String(candidate.doubles_skill));
   await act(async () => button("Review registration").props.onClick());
   await act(async () => button("Back").props.onClick());
-  assert.equal(field("Below 9 partner skill").props.value, "3.4", "Selected profile survives review and back");
+  assert.equal(field("Below 9 partner skill").props.value, String(candidate.doubles_skill), "Selected profile survives review and back");
   assert.equal(renderer.root.findAllByProps({ "aria-label": "Below 9 partner DUPR ID" }).length, 0);
-  await change("Below 9 partner skill", "4.6");
+  await change("Below 9 partner skill", "5.6");
   await act(async () => button("Review registration").props.onClick());
   assert.match(content(renderer.root.findByProps({ role: "alert" })), /combined rating must be below 9/);
-  await change("Below 9 partner skill", "3.4");
+  await change("Below 9 partner skill", String(candidate.doubles_skill));
   await act(async () => button("Review registration").props.onClick());
   await act(async () => renderer.root.findAllByType("input").find(node => node.props.type === "checkbox").props.onChange({ target: { checked: true } }));
   await act(async () => button("Submit registration").props.onClick());
   const selection = submissions.at(-1).selections[0];
   assert.equal(selection.partner_name, candidate.display_name);
-  assert.equal(selection.partner_skill, 3.4);
+  assert.equal(selection.partner_skill, candidate.doubles_skill, "Saving must preserve the full rating, without rounding eligibility inputs");
+  assert.equal(submissions.at(-1).doubles_skill, 3.651203499999999);
   assert.equal(selection.partner_dupr_id, candidate.dupr_id);
   assert.equal(selection.partner_email, "partner@example.invalid");
   assert.equal(selection.partner_note, "Public partner message");
@@ -123,7 +127,7 @@ async function testNewRegistration() {
 }
 
 async function testEditing() {
-  const registration = { id: "reg", email: "player@example.invalid", first_name: "Fixture", last_name: "Player", age: 40, gender: "Men", doubles_skill: 4.5, notes: "Existing private staff message" };
+  const registration = { id: "reg", email: "player@example.invalid", first_name: "Fixture", last_name: "Player", age: 40, gender: "Men", doubles_skill: 3.651203499999999, notes: "Existing private staff message" };
   await act(async () => { renderer = create(React.createElement(EditForm, { ...props, registration, editToken: "fixture", players: [], selections: [{ id: "selection", event_option_id: "mixed", partner_mode: "HAS_PARTNER", partner_name: "Fixture Partner", partner_email: "partner@example.invalid", partner_age: 70, partner_gender: "Female", partner_skill: 2.5 }] })); });
   await act(async () => button("Edit event").props.onClick());
   const staffNotes = renderer.root.findByProps({ name: "notes" }).props.defaultValue;
@@ -132,7 +136,7 @@ async function testEditing() {
   await act(async () => renderer.root.findByProps({ "aria-describedby": "edit-partner-note-help" }).props.onChange({ target: { value: "Updated public partner message" } }));
   await settle();
   assert.ok(renderer.root.findAllByType("input").some(node => node.props.type === "radio" && node.props.checked && content(node.parent).includes("Fixture Partner")), "The exact matching partner is selected without a click");
-  assert.equal(field("Below 9 partner skill").props.value, "3.4", "Profile selection updates controlled edit fields");
+  assert.equal(field("Below 9 partner skill").props.value, String(candidate.doubles_skill), "Profile selection updates controlled edit fields");
   assert.equal(field("Below 9 partner gender").props.value, "Women");
   await act(async () => renderer.root.findByProps({ title: "Edit event" }).props.onRequestClose());
   await act(async () => button("Edit event").props.onClick());
@@ -140,11 +144,12 @@ async function testEditing() {
   await act(async () => renderer.root.findByProps({ title: "Edit event" }).props.onRequestClose());
   await act(async () => new Promise(resolve => setTimeout(resolve, 275)));
   const original = global.FormData;
-  global.FormData = class { get(name) { return { first_name: "Fixture", last_name: "Player", age: "40", gender: "Men", doubles_skill: "4.5", terms_accepted: "on", notes: staffNotes }[name] ?? null; } };
+  global.FormData = class { get(name) { return { first_name: "Fixture", last_name: "Player", age: "40", gender: "Men", doubles_skill: "3.651203499999999", terms_accepted: "on", notes: staffNotes }[name] ?? null; } };
   try { await act(async () => renderer.root.findByType("form").props.onSubmit({ preventDefault() {}, currentTarget: {} })); }
   finally { global.FormData = original; }
   const selection = submissions.at(-1).selections[0];
-  assert.equal(selection.partner_skill, 3.4);
+  assert.equal(selection.partner_skill, candidate.doubles_skill, "Saving must preserve the full rating, without rounding eligibility inputs");
+  assert.equal(submissions.at(-1).doubles_skill, 3.651203499999999);
   assert.equal(selection.partner_gender, "Women");
   assert.equal(selection.partner_profile_id, undefined);
   assert.equal(selection.id, "selection");
@@ -247,6 +252,9 @@ async function main() {
   try {
     await testNewRegistration();
     await testEditing();
+    await testNewRegistration(4.651203499999999);
+    await testEditing();
+    candidate.doubles_skill = 3.4;
     await testLookupRaceAndFallback();
     await testDuplicatePartnerChoice();
     await testAcceptedInvitationPrefill();

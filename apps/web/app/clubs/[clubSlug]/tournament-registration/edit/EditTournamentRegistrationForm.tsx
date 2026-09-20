@@ -591,10 +591,10 @@ export default function EditTournamentRegistrationForm({
           <label>Email<br /><input name="email" type="email" value={registration.email} disabled style={{ width: "100%" }} /></label>
           <label>Phone<br /><input name="phone" defaultValue={registration.phone || ""} style={{ width: "100%" }} /></label>
           {linkedPlayer || profileCandidateId ? <input type="hidden" name="dupr_id" value={duprId} /> : <label>DUPR ID<br /><input name="dupr_id" value={duprId} onChange={(event) => { profileDetailsVersion.current += 1; setDuprId(event.target.value); }} style={{ width: "100%" }} /></label>}
-          <label>Doubles skill<br /><input name="doubles_skill" value={linkedPlayer?.doubles_skill ?? doublesSkill} onChange={(event) => { profileDetailsVersion.current += 1; setDoublesSkill(event.target.value); }} disabled={linkedPlayer?.doubles_skill != null} type="number" min="1" max="7" step="0.01" style={{ width: "100%" }} /></label>
+          <label>Doubles skill<br /><input name="doubles_skill" value={linkedPlayer?.doubles_skill ?? doublesSkill} onChange={(event) => { profileDetailsVersion.current += 1; setDoublesSkill(event.target.value); }} disabled={linkedPlayer?.doubles_skill != null} type="number" min="1" max="7" step="any" inputMode="decimal" style={{ width: "100%" }} /></label>
           <label>
             Singles skill<br />
-            <input name="singles_skill" aria-label="Singles skill" aria-describedby={linkedPlayer?.singles_skill == null ? "edit-singles-skill-help" : undefined} value={linkedPlayer?.singles_skill ?? singlesSkill} onChange={(event) => { profileDetailsVersion.current += 1; setSinglesSkill(event.target.value); }} disabled={linkedPlayer?.singles_skill != null} type="number" min="1" max="7" step="0.01" style={{ width: "100%" }} />
+            <input name="singles_skill" aria-label="Singles skill" aria-describedby={linkedPlayer?.singles_skill == null ? "edit-singles-skill-help" : undefined} value={linkedPlayer?.singles_skill ?? singlesSkill} onChange={(event) => { profileDetailsVersion.current += 1; setSinglesSkill(event.target.value); }} disabled={linkedPlayer?.singles_skill != null} type="number" min="1" max="7" step="any" inputMode="decimal" style={{ width: "100%" }} />
             {linkedPlayer?.singles_skill == null ? (
               <span id="edit-singles-skill-help" style={{ display: "block", color: "#64748b", fontSize: "0.9rem", marginTop: "0.35rem" }}>
                 No singles rating? Enter your current level or leave it blank.
