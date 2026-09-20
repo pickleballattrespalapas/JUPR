@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import GeneratorSubmission, { type GeneratorSubmissionStatus } from "@/components/GeneratorSubmission";
 import { actionSuccess, actionUncertain, type ActionCompletion } from "@/components/interaction";
 import { swapRosterPositions } from "@/lib/playGeneratorRoster.mjs";
 import { useAdminSession } from "@/lib/useAdminSession";
@@ -66,6 +67,9 @@ type GeneratorEvent = {
 };
 
 type GeneratorSession = {
+  submission?: GeneratorSubmissionStatus | null;
+  created_at?: string;
+  rating_mode?: "rated" | "unrated";
   session_key: string;
   title: string;
   status: string;
@@ -102,12 +106,6 @@ type SkipRoundRequest = {
   advanceIdempotencyKey: string;
 };
 
-type PublishMatchesRequest = {
-  match_date: string | null;
-  confirmation_text: string;
-  expected_version: string;
-  idempotency_key: string;
-};
 
 class ApiRequestError extends Error {
   readonly status: number;
@@ -352,7 +350,6 @@ export default function GeneratorRoundRunner({
   const [newPlayerId, setNewPlayerId] = useState("");
   const [substituteScope, setSubstituteScope] = useState<"round" | "rest">("rest");
   const [rosterOrder, setRosterOrder] = useState<string[]>([]);
-  const [publishDate, setPublishDate] = useState("");
   const skipDestinationRef = useRef<number | "completed" | null>(null);
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
@@ -390,6 +387,16 @@ export default function GeneratorRoundRunner({
       )
       .map((row) => row.id);
     setRosterOrder(ordered);
+  }
+
+  async function submitResults(organizerName: string, matchDate: string): Promise<void> {
+    if (!session) return;
+    const payload = await requestJson<MutationResponse>(
+      `/admin/clubs/${encodeURIComponent(clubId)}/play-generators/sessions/${encodeURIComponent(sessionKey)}/submit`,
+      { method: "POST", body: JSON.stringify({ expected_version: session.version, organizer_name: organizerName, match_date: matchDate }) }
+    );
+    if (!payload.session) throw new Error("Could not confirm submission. Please try again.");
+    applySession(payload.session);
   }
 
   async function loadSession(): Promise<void> {
@@ -449,22 +456,6 @@ export default function GeneratorRoundRunner({
     ? Object.values(scores).filter((value) => value !== "").length
     : 0;
   const anyDraftScore = draftScoreCount > 0;
-  const publishedMatchIds = new Set(
-    (session?.official_publish?.published_match_ids || []).map(String)
-  );
-  const unpublishedSavedMatchCount = (event?.rounds || []).reduce(
-    (count, row) =>
-      count +
-      (row.status === "saved"
-        ? flattenMatches(row).filter(
-            (match) =>
-              match.scoreA != null &&
-              match.scoreB != null &&
-              !publishedMatchIds.has(String(match.id))
-          ).length
-        : 0),
-    0
-  );
   const results = round ? roundStandings(round, participants) : [];
   const byeNames = (round?.byeParticipantIds || [])
     .map((id) => participants.get(id)?.name || id)
@@ -665,7 +656,7 @@ export default function GeneratorRoundRunner({
         {}
       );
       if (next.status === "completed") {
-        setMessage("Session completed. You can review or publish the saved matches.");
+        setMessage("Session completed. You can submit the saved matches for approval.");
         router.refresh();
         return;
       }
@@ -751,56 +742,6 @@ export default function GeneratorRoundRunner({
     }
   }
 
-  async function executePublishMatches(request: PublishMatchesRequest): Promise<ActionCompletion> {
-    setBusy(true);
-    setMessage(null);
-    try {
-      const payload = await requestJson<MutationResponse>(
-        `/admin/clubs/${encodeURIComponent(clubId)}/play-generators/sessions/${encodeURIComponent(
-          sessionKey
-        )}/publish`,
-        {
-          method: "POST",
-          body: JSON.stringify(request)
-        }
-      );
-      if (!payload.ok || !payload.session) {
-        throw new Error("Official matches published without a refreshed session.");
-      }
-      applySession(payload.session);
-      const publishedCount = payload.published_count ?? 0;
-      const successMessage = `Published ${publishedCount} official rated ${publishedCount === 1 ? "match" : "matches"}.`;
-      setMessage(successMessage);
-      return actionSuccess("Official matches published", successMessage);
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Unable to publish matches.";
-      if (isUncertainRequestError(error)) {
-        const recoveryMessage = `${errorMessage} The exact publish request is retained as ${request.idempotency_key}; retry it here before publishing again.`;
-        setMessage(recoveryMessage);
-        return actionUncertain(
-          "Official publish needs verification",
-          recoveryMessage,
-          request.idempotency_key,
-          "Retry exact publish request",
-          () => executePublishMatches(request)
-        );
-      }
-      setMessage(errorMessage);
-      throw error;
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function publishMatches(confirmationText: string): Promise<ActionCompletion> {
-    if (!session) throw new Error("Reload the session before publishing official matches.");
-    return executePublishMatches({
-      match_date: publishDate || null,
-      confirmation_text: confirmationText,
-      expected_version: session.version,
-      idempotency_key: operationKey("publish")
-    });
-  }
 
   if (!session || !event || !round) {
     return (
@@ -832,6 +773,7 @@ export default function GeneratorRoundRunner({
           </Link>
         </p>
         <h1 style={{ margin: "0 0 0.4rem" }}>{session.title}</h1>
+        <p>{session.rating_mode === "rated" ? "Rated" : "Unrated"} session · Chosen before play</p>
         <p style={{ margin: 0, color: "#475569" }}>
           {playFormatLabel(session.play_format)} · Round {roundNumber} of{" "}
           {event.totalRounds} · {scoredSession ? "Scored" : "Unscored"} · {round.status}
@@ -1279,52 +1221,10 @@ export default function GeneratorRoundRunner({
         </article>
       ) : null}
 
-      {scoredSession ? (
-        <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>Official results</h2>
-          <p style={{ color: "#475569" }}>
-            Publication requires an official player ID for every player in each saved match. Singles games publish
-            to singles ratings, and doubles games publish to doubles ratings.
-          </p>
-          <div style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap", alignItems: "end" }}>
-            <label>
-              Match date optional
-              <br />
-              <input
-                value={publishDate}
-                onChange={(event_) => setPublishDate(event_.target.value)}
-                placeholder="Defaults to publish time"
-                style={inputStyle}
-              />
-            </label>
-            <ConfirmAction
-              triggerLabel="Publish official matches"
-              title={`Publish ${unpublishedSavedMatchCount} official rated ${unpublishedSavedMatchCount === 1 ? "match" : "matches"}?`}
-              description="This publishes every unpublished saved result to official rating history. Review the exact count and match date before continuing."
-              preview={
-                <div style={{ display: "grid", gap: "0.35rem" }}>
-                  <p style={{ margin: 0 }}>
-                    <strong>Unpublished saved results:</strong> {unpublishedSavedMatchCount} {unpublishedSavedMatchCount === 1 ? "match" : "matches"}
-                  </p>
-                  <p style={{ margin: 0 }}>
-                    <strong>Match date:</strong> {publishDate || "Publish time (default)"}
-                  </p>
-                </div>
-              }
-              confirmLabel="Yes, publish official matches"
-              confirmationText="PUBLISH MATCHES"
-              tone="danger"
-              disabled={busy || unpublishedSavedMatchCount === 0}
-              disabledReason={unpublishedSavedMatchCount === 0 ? "No unpublished saved matches are ready." : undefined}
-              busy={busy}
-              onConfirm={publishMatches}
-            />
-          </div>
-          <p style={{ color: "#64748b" }}>
-            Published: {session.official_publish?.published_match_ids?.length || 0} match(es)
-          </p>
-        </article>
-      ) : null}
+      {scoredSession && !session.official_publish?.published_match_ids?.length ? <>
+        <GeneratorSubmission ratingMode={session.rating_mode || "unrated"} submission={session.submission} canSubmit={session.status === "completed"} defaultDate={session.created_at} onSubmit={submitResults} />
+        <p><Link href="/admin/play-generators/submissions">Review generator submissions</Link> (club administrators)</p>
+      </> : null}
 
       {message ? (
         <p

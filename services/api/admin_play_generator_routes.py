@@ -4,7 +4,7 @@ import os
 from typing import Any
 
 from fastapi import HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from jupr_app.domain.admin.roles import (
     PERMISSION_ENTER_SCORES,
@@ -40,6 +40,10 @@ from jupr_app.services.admin_play_generator_service import (
     skip_play_generator_round,
 )
 from services.api.auth import authenticate_bearer, auth_header
+from jupr_app.services.generator_submission_service import (
+    list_generator_submissions, require_reviewer, review_generator_submission, submit_generator_session,
+)
+from jupr_app.services.public_live_operation_service import PublicLiveConflictError
 
 
 class GeneratorPreviewRequest(BaseModel):
@@ -54,6 +58,7 @@ class GeneratorPreviewRequest(BaseModel):
     singles_court_count: int = Field(default=0, ge=0, le=20)
     standings_sort: str = Field(default="wins", pattern=r"^(wins|points|differential)$")
     scoring_mode: str = Field(default="scored", pattern=r"^(scored|unscored)$")
+    rating_mode: str = Field(default="unrated", pattern=r"^(rated|unrated)$")
 
 
 class GeneratorDurableRequest(BaseModel):
@@ -111,6 +116,22 @@ class GeneratorPublishRequest(GeneratorDurableRequest):
     source: str = "next_play_generator_publish"
 
 
+class GeneratorSubmitRequest(BaseModel):
+    expected_version: str = Field(min_length=1)
+    organizer_name: str = Field(min_length=1, max_length=160)
+    match_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+
+
+class GeneratorReviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_version: int = Field(ge=1)
+    action: str = Field(pattern=r"^(approve|reject)$")
+    player_ids: dict[str, int] = Field(default_factory=dict, max_length=2500)
+    match_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    reason: str = Field(default="", max_length=500)
+
+
 def _model_payload(model: BaseModel) -> dict[str, Any]:
     if hasattr(model, "model_dump"):
         return model.model_dump()  # type: ignore[attr-defined]
@@ -133,6 +154,8 @@ def _require_service_role() -> None:
 
 
 def _handle(exc: Exception) -> None:
+    if isinstance(exc, PublicLiveConflictError):
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if isinstance(exc, LiveLadderConflictError):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if isinstance(exc, LiveLadderUncertainError):
@@ -197,6 +220,44 @@ def _require_write_gate() -> None:
 def install_admin_play_generator_routes(app, *, get_supabase_client) -> None:
     """Install durable Round-Robin and Ladder Generator administration routes."""
 
+    @app.get("/admin/clubs/{club_id}/play-generators/submissions")
+    def get_generator_submissions(club_id: str,
+        status: str = Query(default="pending", pattern=r"^(pending|approved|rejected)$"),
+        authorization: str | None = auth_header()) -> dict[str, Any]:
+        supabase = get_supabase_client()
+        _, role = _resolve_role_or_403(supabase=supabase, club_id=club_id,
+            authorization=authorization, source="generator_submissions")
+        try:
+            return list_generator_submissions(supabase, club_id=club_id, actor_role=role, status=status)
+        except Exception as exc:
+            _handle(exc)
+
+    @app.post("/admin/clubs/{club_id}/play-generators/sessions/{session_key}/submit")
+    def post_generator_submission(club_id: str, session_key: str, payload: GeneratorSubmitRequest,
+        authorization: str | None = auth_header()) -> dict[str, Any]:
+        _require_write_gate()
+        supabase = get_supabase_client()
+        email, _ = _resolve_role_or_403(supabase=supabase, club_id=club_id,
+            authorization=authorization, source="generator_submission")
+        try:
+            return submit_generator_session(supabase, club_id=club_id, session_key=session_key,
+                actor_email=email, **_model_payload(payload))
+        except Exception as exc:
+            _handle(exc)
+
+    @app.post("/admin/clubs/{club_id}/play-generators/sessions/{session_key}/review")
+    def post_generator_review(club_id: str, session_key: str, payload: GeneratorReviewRequest,
+        authorization: str | None = auth_header()) -> dict[str, Any]:
+        _require_write_gate()
+        supabase = get_supabase_client()
+        email, role = _resolve_role_or_403(supabase=supabase, club_id=club_id,
+            authorization=authorization, source="generator_review")
+        try:
+            return review_generator_submission(supabase, club_id=club_id, session_key=session_key,
+                actor_email=email, actor_role=role, **_model_payload(payload))
+        except Exception as exc:
+            _handle(exc)
+
     @app.get("/admin/clubs/{club_id}/play-generators/status")
     def get_generator_status(club_id: str) -> dict[str, Any]:
         try:
@@ -233,6 +294,7 @@ def install_admin_play_generator_routes(app, *, get_supabase_client) -> None:
                 singles_court_count=payload.singles_court_count,
                 standings_sort=payload.standings_sort,
                 scoring_mode=payload.scoring_mode,
+                rating_mode=payload.rating_mode,
             )
         except Exception as exc:
             _handle(exc)
@@ -309,7 +371,8 @@ def install_admin_play_generator_routes(app, *, get_supabase_client) -> None:
                     singles_court_count=payload.singles_court_count,
                     preview_fingerprint=payload.preview_fingerprint,
                     standings_sort=payload.standings_sort,
-                scoring_mode=payload.scoring_mode,
+                    scoring_mode=payload.scoring_mode,
+                    rating_mode=payload.rating_mode,
                     actor_email=actor_email,
                     actor_role=actor_role,
                     source=payload.source,
@@ -752,6 +815,10 @@ def install_admin_play_generator_routes(app, *, get_supabase_client) -> None:
             authorization=authorization,
             source=payload.source,
         )
+        try:
+            require_reviewer(actor_role)
+        except PermissionError as exc:
+            _handle(exc)
         operation_key = deterministic_operation_key(
             club_id=str(club_id),
             surface="play_generator",

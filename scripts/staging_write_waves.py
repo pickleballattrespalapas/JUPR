@@ -357,6 +357,8 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/advance"),
         ("POST", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/roster"),
         ("POST", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/complete"),
+        ("POST", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/submit"),
+        ("POST", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/review"),
         ("POST", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/publish"),
     ),
     "public-live": (
@@ -373,6 +375,7 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/clubs/{club_slug}/play-generators/sessions/{session_key}/advance"),
         ("POST", "/clubs/{club_slug}/play-generators/sessions/{session_key}/roster"),
         ("POST", "/clubs/{club_slug}/play-generators/sessions/{session_key}/complete"),
+        ("POST", "/clubs/{club_slug}/play-generators/sessions/{session_key}/submit"),
     ),
     "tournament-mutations": (
         ("PATCH", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}"),

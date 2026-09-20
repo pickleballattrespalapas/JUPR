@@ -20,7 +20,7 @@ export default function PublicPlayHub({ params }: Props) {
       </p>
       <h1 style={{ marginTop: 0 }}>Create and run play</h1>
       <p style={{ color: "#334155", maxWidth: "860px" }}>
-        Build a schedule, share it with players, and record each round. These games won&apos;t affect player ratings.
+        Choose rated or unrated play, build a schedule, and record each round. Submit the results afterward for club administrator approval.
       </p>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "1rem" }}>
         <Link href={`${base}/round-robin-generator`} style={cardStyle}>

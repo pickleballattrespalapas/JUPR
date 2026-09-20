@@ -28,7 +28,7 @@ export default async function PublicGeneratorPage({ params }: Props) {
       <h1 style={{ marginTop: 0 }}>Ladder Generator</h1>
       <p style={{ color: "#334155", maxWidth: "900px" }}>Preview Round 1, record the scores, and build each new round from the previous result.</p>
       <p style={{ color: "#475569", maxWidth: "900px" }}>
-        These games won&apos;t affect ratings. Keep the organizer link private and share the regular page link with players.
+        Choose rated or unrated before play. Results enter club records after administrator approval. Keep the organizer link private and share the regular page link with players.
       </p>
       <PublicGeneratorWorkspace generatorKind="ladder" apiBase={serverApiBase()} clubId={params.clubSlug} status={status} />
     </section>

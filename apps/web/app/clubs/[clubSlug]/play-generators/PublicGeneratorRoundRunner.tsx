@@ -4,6 +4,7 @@ import Link from "@/components/PublicClubLink";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ConfirmAction } from "@/components/ConfirmAction";
+import GeneratorSubmission, { generatorResultLabel, type GeneratorSubmissionStatus } from "@/components/GeneratorSubmission";
 import { actionSuccess, actionUncertain, type ActionCompletion } from "@/components/interaction";
 import { publicLiveErrorText } from "@/lib/publicLiveErrorText";
 import { swapRosterPositions } from "@/lib/playGeneratorRoster.mjs";
@@ -66,6 +67,9 @@ type GeneratorEvent = {
 };
 
 type GeneratorSession = {
+  submission?: GeneratorSubmissionStatus | null;
+  created_at?: string;
+  rating_mode?: "rated" | "unrated";
   session_key: string;
   title: string;
   status: string;
@@ -398,6 +402,16 @@ export default function GeneratorRoundRunner({
       )
       .map((row) => row.id);
     setRosterOrder(ordered);
+  }
+
+  async function submitResults(organizerName: string, matchDate: string): Promise<void> {
+    if (!session) return;
+    const payload = await requestJson<MutationResponse>(
+      `/clubs/${encodeURIComponent(clubId)}/play-generators/sessions/${encodeURIComponent(sessionKey)}/submit`,
+      { method: "POST", body: JSON.stringify({ edit_token: editToken, idempotency_key: `generator-submit:${sessionKey}`, expected_version: session.version, organizer_name: organizerName, match_date: matchDate }) }
+    );
+    if (!payload.session) throw new Error("Could not confirm submission. Please try again.");
+    applySession(payload.session);
   }
 
   async function loadSession(): Promise<void> {
@@ -792,7 +806,7 @@ export default function GeneratorRoundRunner({
         <h1 style={{ margin: "0 0 0.4rem" }}>{session.title}</h1>
         <p style={{ margin: 0, color: "#475569" }}>
           {playFormatLabel(session.play_format)} · Round {roundNumber} of{" "}
-          {event.totalRounds} · {scoredSession ? "Scores on" : "Scores off"} · {roundStatusLabel(round.status)} · Won’t affect ratings
+          {event.totalRounds} · {scoredSession ? "Scores on" : "Scores off"} · {roundStatusLabel(round.status)} · {session.submission?.status !== "approved" ? `${session.rating_mode === "rated" ? "Rated" : "Unrated"} · ` : ""}{generatorResultLabel(session.submission)}
         </p>
         {!editToken ? <p style={{ color: "#64748b" }}>Only the organizer can enter scores or change players.</p> : null}
       </article>
@@ -800,9 +814,11 @@ export default function GeneratorRoundRunner({
       {session.status === "completed" ? (
         <article style={{ ...cardStyle, background: "#ecfdf5", borderColor: "#86efac" }}>
           <h2 style={{ marginTop: 0 }}>Session complete</h2>
-          <p style={{ marginBottom: 0, color: "#166534" }}>All scheduled rounds are complete. These games won’t affect ratings.</p>
+          <p style={{ marginBottom: 0, color: "#166534" }}>Review the saved session history below.</p>
         </article>
       ) : null}
+
+      {scoredSession ? <GeneratorSubmission ratingMode={session.rating_mode || "unrated"} submission={session.submission} canSubmit={session.status === "completed" && Boolean(editToken)} defaultDate={session.created_at} onSubmit={submitResults} /> : null}
 
       <article style={cardStyle}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
@@ -1241,7 +1257,7 @@ export default function GeneratorRoundRunner({
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Ratings</h2>
         <p style={{ color: "#475569" }}>
-          These games won’t affect ratings. Share this page with players or download the results below.
+          {session.rating_mode === "rated" ? "Ratings update only after admin approval." : "These games won’t affect ratings."} Share this page with players or download the results below.
         </p>
         <a href={`/api/clubs/${clubId}/play-generators/sessions/${sessionKey}/export?format=csv`}>
           Download session CSV
