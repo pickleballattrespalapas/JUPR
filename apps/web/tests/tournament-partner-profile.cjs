@@ -91,6 +91,9 @@ async function testNewRegistration(rating = 3.4) {
   assert.ok(renderer.root.findAllByType("input").some(node => node.props.type === "radio" && node.props.checked && content(node.parent).includes("Fixture Partner")), "The exact matching partner is selected without a click");
   assert.equal(field("Below 9 partner skill").props.value, String(candidate.doubles_skill));
   assert.equal(field("Below 9 partner skill").props.step, "any", "Partner ratings must accept full profile precision");
+  assert.equal(field("Below 9 partner skill").props.readOnly, true);
+  await change("Below 9 partner skill", "2.5");
+  assert.equal(field("Below 9 partner skill").props.value, String(candidate.doubles_skill), "Selected partner ratings cannot be edited");
   assert.equal(renderer.root.findAllByProps({ "aria-label": "Below 9 partner DUPR ID" }).length, 0);
   // Adding contact details must preserve the explicitly selected profile.
   await change("Below 9 partner email", "Baumann");
@@ -106,10 +109,15 @@ async function testNewRegistration(rating = 3.4) {
   await act(async () => button("Back").props.onClick());
   assert.equal(field("Below 9 partner skill").props.value, String(candidate.doubles_skill), "Selected profile survives review and back");
   assert.equal(renderer.root.findAllByProps({ "aria-label": "Below 9 partner DUPR ID" }).length, 0);
+  assert.equal(field("Below 9 partner skill").props.readOnly, true, "The profile rating stays locked after review and back");
+  await act(async () => button("Change profile").props.onClick());
+  assert.equal(field("Below 9 partner skill").props.readOnly, false);
   await change("Below 9 partner skill", "5.6");
   await act(async () => button("Review registration").props.onClick());
   assert.match(content(renderer.root.findByProps({ role: "alert" })), /combined rating must be below 9/);
-  await change("Below 9 partner skill", String(candidate.doubles_skill));
+  await act(async () => button("Find partner profile").props.onClick());
+  await act(async () => renderer.root.findAllByType("input").find(node => node.props.type === "radio" && content(node.parent).includes("Fixture Partner")).props.onChange());
+  assert.equal(field("Below 9 partner skill").props.readOnly, true, "An explicitly chosen rated profile is locked too");
   await act(async () => button("Review registration").props.onClick());
   await act(async () => renderer.root.findAllByType("input").find(node => node.props.type === "checkbox").props.onChange({ target: { checked: true } }));
   await act(async () => button("Submit registration").props.onClick());
@@ -138,8 +146,12 @@ async function testEditing() {
   assert.ok(renderer.root.findAllByType("input").some(node => node.props.type === "radio" && node.props.checked && content(node.parent).includes("Fixture Partner")), "The exact matching partner is selected without a click");
   assert.equal(field("Below 9 partner skill").props.value, String(candidate.doubles_skill), "Profile selection updates controlled edit fields");
   assert.equal(field("Below 9 partner gender").props.value, "Women");
+  assert.equal(field("Below 9 partner skill").props.readOnly, true);
+  await change("Below 9 partner skill", "2.5");
+  assert.equal(field("Below 9 partner skill").props.value, String(candidate.doubles_skill));
   await act(async () => renderer.root.findByProps({ title: "Edit event" }).props.onRequestClose());
   await act(async () => button("Edit event").props.onClick());
+  assert.equal(field("Below 9 partner skill").props.readOnly, true, "Reopening the editor preserves the selected profile rating lock");
   assert.equal(renderer.root.findAllByProps({ "aria-label": "Below 9 partner DUPR ID" }).length, 0);
   await act(async () => renderer.root.findByProps({ title: "Edit event" }).props.onRequestClose());
   await act(async () => new Promise(resolve => setTimeout(resolve, 275)));
@@ -179,6 +191,28 @@ async function testLookupRaceAndFallback() {
   await act(async () => button("Find partner profile").props.onClick());
   assert.match(content(renderer.root.findByProps({ role: "alert" })), /enter their details below/);
   assert.equal(field("Partner partner skill").props.value, "3.25", "Lookup failure preserves manual details");
+  await act(async () => renderer.unmount());
+}
+
+async function testUnratedPartner() {
+  function Host({ revision }) {
+    const [value, setValue] = React.useState({ name: "Fixture Partner", email: "", age: "", gender: "", skill: "", phone: "", duprId: "" });
+    return React.createElement(PartnerDetails, { ...props, key: revision, labelPrefix: "Partner", value, onChange: patch => setValue(current => ({ ...current, ...patch })) });
+  }
+  lookupResponse = async () => ({ data: { profile_candidates: [candidate] } });
+  await act(async () => { renderer = create(React.createElement(Host, { revision: 1 })); });
+  await settle();
+  assert.equal(field("Partner partner skill").props.readOnly, true);
+  lookupResponse = async () => ({ data: { profile_candidates: [{ ...candidate, id: "unrated", display_name: "Unrated Partner", doubles_skill: null }] } });
+  await change("Partner partner name", "Unrated Partner");
+  assert.equal(field("Partner partner skill").props.readOnly, false, "Changing the partner clears the previous rating lock");
+  await settle();
+  assert.equal(field("Partner partner skill").props.readOnly, false, "A selected profile without a rating stays editable");
+  await change("Partner partner skill", "3.25");
+  await act(async () => renderer.update(React.createElement(Host, { revision: 2 })));
+  assert.equal(field("Partner partner skill").props.readOnly, false);
+  await change("Partner partner skill", "3.5");
+  assert.equal(field("Partner partner skill").props.value, "3.5");
   await act(async () => renderer.unmount());
 }
 
@@ -256,6 +290,7 @@ async function main() {
     await testEditing();
     candidate.doubles_skill = 3.4;
     await testLookupRaceAndFallback();
+    await testUnratedPartner();
     await testDuplicatePartnerChoice();
     await testAcceptedInvitationPrefill();
     console.log("Partner profiles: new/edit flows, prefill, eligibility, identity boundary, stale responses and manual fallback passed.");
