@@ -150,6 +150,125 @@ def _confirmed_reciprocal_registration(monkeypatch):
     return supabase, storage, registration_id, token
 
 
+def _unpaired_mens_and_mixed_registration(monkeypatch):
+    supabase, storage, registration_id, token = _registered_supabase(monkeypatch)
+    storage["tournament_registrations"][0].update(age=38, gender="Men")
+    mens = storage["tournament_event_options"][0]
+    mens.update(
+        label="Men's Doubles Open", division_name="Men's Doubles Open",
+        event_family_label="Men's Doubles", event_type="GENDER_DOUBLES",
+        gender_restriction="MEN", partner_required=True,
+    )
+    selection = storage["tournament_registration_selections"][0]
+    # A legacy entry can retain this flag after its partner details are gone.
+    selection.update(partner_mode="HAS_PARTNER", partner_name=None, partner_email=None)
+    storage["tournament_event_options"].append({
+        **mens, "id": "mixed", "label": "Mixed Doubles Split Age Open",
+        "division_name": "Mixed Doubles Split Age Open", "event_family_label": "Mixed Doubles",
+        "event_type": "MIXED_DOUBLES", "gender_restriction": "MIXED",
+        "age_mode": "SPLIT_AGE", "age_rules": {"mode": "SPLIT_AGE", "split_age_threshold": 50},
+    })
+    storage["tournament_registration_selections"].append({
+        **selection, "id": "mixed-selection", "event_option_id": "mixed",
+        "partner_mode": "NEEDS_PARTNER", "sort_order": 2,
+    })
+    return supabase, storage, registration_id, token
+
+
+def test_edit_page_treats_empty_unlinked_partner_flag_as_needing_partner(monkeypatch):
+    supabase, storage, _registration_id, token = _unpaired_mens_and_mixed_registration(monkeypatch)
+    before = deepcopy(storage)
+
+    page = build_public_tournament_registration_edit_page(supabase, club_id="club-1", edit_token=token)
+
+    assert page["selections"][0]["partner_mode"] == "NEEDS_PARTNER"
+    assert not page["selections"][0]["show_on_partner_board"], "Do not publish a listing without consent"
+    assert storage == before, "Loading the edit page must not write a repair"
+    assert not supabase.rpc_calls
+
+
+@pytest.mark.parametrize("already_open_page", [False, True])
+def test_mixed_partner_save_succeeds_with_unpaired_mens_entry(monkeypatch, already_open_page):
+    supabase, storage, registration_id, token = _unpaired_mens_and_mixed_registration(monkeypatch)
+    page = build_public_tournament_registration_edit_page(supabase, club_id="club-1", edit_token=token)
+    if already_open_page:
+        page["selections"][0]["partner_mode"] = "HAS_PARTNER"
+    page["selections"][1].update(
+        partner_mode="HAS_PARTNER", partner_name="Sam Partner", partner_email="sam@example.com",
+        partner_skill=4.651203499999999, partner_age=50, partner_gender="Women",
+    )
+
+    result = submit_public_tournament_registration_edit(
+        supabase, club_id="club-1", edit_token=token,
+        payload={**page["registration"], **_edit_versions(storage), "tournament_id": "t1",
+                 "terms_accepted": True, "selections": page["selections"]},
+    )
+
+    assert result["ok"] is True
+    saved = {row["event_option_id"]: row for row in storage["tournament_registration_selections"]
+             if row["registration_id"] == registration_id}
+    assert saved["event1"]["partner_mode"] == "NEEDS_PARTNER"
+    assert not saved["event1"]["partner_name"]
+    assert not saved["event1"]["show_on_partner_board"]
+    assert saved["mixed"]["partner_mode"] == "HAS_PARTNER"
+    assert saved["mixed"]["partner_name"] == "Sam Partner"
+    assert saved["mixed"]["partner_skill"] == 4.651203499999999
+
+
+@pytest.mark.parametrize("field,value", [
+    ("partner_name", "Sam Partner"), ("partner_email", "sam@example.com"),
+    ("partner_phone", "555-0100"), ("partner_dupr_id", "PARTNER-ID"),
+    ("partner_skill", 0), ("partner_age", 0), ("partner_gender", "Men"),
+])
+def test_edit_page_preserves_partial_partner_details(monkeypatch, field, value):
+    supabase, storage, _registration_id, token = _unpaired_mens_and_mixed_registration(monkeypatch)
+    storage["tournament_registration_selections"][0][field] = value
+    before = deepcopy(storage["tournament_registration_selections"])
+
+    page = build_public_tournament_registration_edit_page(supabase, club_id="club-1", edit_token=token)
+
+    assert page["selections"][0]["partner_mode"] == "HAS_PARTNER"
+    assert page["selections"][0][field] == value
+    assert storage["tournament_registration_selections"] == before
+
+
+@pytest.mark.parametrize("change", ["new_partner_choice", "partial_partner", "wrong_selection_id"])
+def test_empty_partner_recovery_does_not_bypass_edit_validation(monkeypatch, change):
+    supabase, storage, _registration_id, token = _unpaired_mens_and_mixed_registration(monkeypatch)
+    if change == "new_partner_choice":
+        storage["tournament_registration_selections"][0]["partner_mode"] = "NEEDS_PARTNER"
+    page = build_public_tournament_registration_edit_page(supabase, club_id="club-1", edit_token=token)
+    page["selections"][0]["partner_mode"] = "HAS_PARTNER"
+    if change == "partial_partner":
+        page["selections"][0]["partner_email"] = "sam@example.com"
+    if change == "wrong_selection_id":
+        page["selections"][0]["id"] = "another-registration-selection"
+    before = deepcopy(storage)
+
+    expected_error = TournamentRegistrationEditConflictError if change == "wrong_selection_id" else ValueError
+    with pytest.raises(expected_error):
+        submit_public_tournament_registration_edit(
+            supabase, club_id="club-1", edit_token=token,
+            payload={**page["registration"], **_edit_versions(storage), "tournament_id": "t1",
+                     "terms_accepted": True, "selections": page["selections"]},
+        )
+
+    assert storage == before
+    assert not supabase.rpc_calls
+
+
+def test_unresolved_confirmed_partner_is_not_reclassified_as_unpaired(monkeypatch):
+    supabase, storage, _registration_id, token = _confirmed_reciprocal_registration(monkeypatch)
+    storage["tournament_registrations"][1]["status"] = "cancelled"
+    before = deepcopy(storage)
+
+    page = build_public_tournament_registration_edit_page(supabase, club_id="club-1", edit_token=token)
+
+    assert page["selections"][0]["partner_mode"] == "HAS_PARTNER"
+    assert not page["selections"][0]["partner_name"]
+    assert storage == before
+
+
 @pytest.mark.parametrize("reverse_link", [False, True])
 def test_edit_page_resolves_confirmed_partner_without_rewriting_reciprocal_entry(monkeypatch, reverse_link):
     supabase, storage, registration_id, token = _confirmed_reciprocal_registration(monkeypatch)
