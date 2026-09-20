@@ -80,7 +80,7 @@ def _html_groups(sponsors: list[dict] | None) -> tuple[str, str]:
         groups[tier].append(f'<tr><td style="padding:16px 0;font-size:14px;line-height:1.5">{content}</td></tr>')
 
     def table(content: str) -> str:
-        return '<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="width:100%;border-collapse:collapse">' + content + '</table>'
+        return '<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="width:100%;table-layout:fixed;border-collapse:collapse">' + content + '</table>'
 
     header = '<div style="margin-bottom:24px;border-bottom:1px solid #e2e8f0">' + table("".join(credits)) + '</div>' if credits else ""
     footer = table("".join(groups["presenting"])) if groups["presenting"] else ""
@@ -94,14 +94,20 @@ def _html_groups(sponsors: list[dict] | None) -> tuple[str, str]:
 
 def with_sponsors_html(body: str, sponsors: list[dict] | None) -> str:
     header, footer = _html_groups(sponsors)
-    if not header and not footer:
-        return body
     if header:
         body = body.replace("</h1>", "</h1>" + header, 1)
     body = body.replace('<h1>', '<h1 style="font-size:24px;line-height:1.3;margin:0 0 12px">', 1)
+    # Apply the mobile layout even when the tournament has no sponsors.
+    # A long signed URL otherwise sets an automatic table's minimum width,
+    # causing phone mail clients to shrink the entire message to fit.
+    metadata = '<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="x-apple-disable-message-reformatting">'
+    if "</head>" in body:
+        body = body.replace("</head>", metadata + "</head>", 1)
+    else:
+        body = re.sub(r"(<body\b[^>]*>)", lambda match: "<head>" + metadata + "</head>" + match.group(1), body, count=1)
     # Inline styles and a presentation table also work in email clients that
     # strip stylesheets. Leave the background unset for native dark-mode colors.
-    container = '<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="width:100%;max-width:680px;border-collapse:collapse"><tr><td style="font-family:Arial,sans-serif;font-size:16px;line-height:1.6;padding:8px 0">'
+    container = '<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="width:100%;max-width:680px;table-layout:fixed;border-collapse:collapse"><tr><td style="font-family:Arial,sans-serif;font-size:16px;line-height:1.6;padding:8px 0;word-wrap:break-word;overflow-wrap:anywhere;word-break:break-word">'
     body = re.sub(r"(<body\b[^>]*>)", lambda match: match.group(1) + container, body, count=1)
     return body.replace("</body>", footer + "</td></tr></table></body>", 1)
 
