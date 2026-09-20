@@ -1,36 +1,12 @@
 import { notFound } from "next/navigation";
-import { headers } from "next/headers";
-import type { Metadata } from "next";
+import { requestShareMetadata } from "@/lib/shareMetadata";
 import { getPublicSite } from "@/lib/clubSiteServer";
 import { ClubDisplayProvider } from "@/components/ClubDisplay";
 import RememberPublicClub from "@/components/RememberPublicClub";
 import ClubSiteHeader from "@/components/ClubSiteHeader";
-import { publicClubPage } from "@/lib/clubSite";
 import { ClubPageNavigationProvider } from "@/components/PublicClubLink";
-export async function generateMetadata({
-  params,
-}: {
-  params: { clubSlug: string };
-}): Promise<Metadata> {
-  const site = await getPublicSite(params.clubSlug);
-  if (!site)
-    return {
-      title: "Club unavailable",
-      robots: { index: false, follow: false },
-    };
-  return {
-    title: site.document.name,
-    description: site.document.description.slice(0, 160),
-    robots:
-      site.document.visibility === "unlisted" ||
-      !publicClubPage(
-        site.document,
-        site.slug,
-        headers().get("x-pcs-club-path") || `/clubs/${site.slug}`,
-      )
-        ? { index: false, follow: false }
-        : { index: true, follow: true },
-  };
+export async function generateMetadata({ params }: { params: { clubSlug: string } }) {
+  return requestShareMetadata(`/clubs/${params.clubSlug}`);
 }
 export default async function ClubLayout({
   params,

@@ -4,7 +4,6 @@ import { publicSiteFetch } from "@/lib/clubSiteServer";
 import type { PublicLeague } from "@/lib/interclubPublic";
 import PublicInterclubLeague from "@/components/PublicInterclubLeague";
 export const metadata = {
-  title: "Interclub league · PCS",
   robots: { index: false, follow: false },
 };
 export default async function LeaguePage({

@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import { requestShareMetadata } from "@/lib/shareMetadata";
 import type { CSSProperties, ReactNode } from "react";
 import PublicFooterNav from "@/components/PublicFooterNav";
 import PublicSiteHeader from "@/components/PublicSiteHeader";
@@ -13,11 +13,9 @@ function deploymentGitSha(): string | null {
   return /^[0-9a-f]{40}$/.test(value) ? value : null;
 }
 
-export const metadata: Metadata = {
-  title: productName,
-  description:
-    "Club websites, live scoring, ratings, leaderboards, player profiles, and event scoring for pickleball clubs."
-};
+export async function generateMetadata() {
+  return requestShareMetadata("/", true);
+}
 
 const shellStyle: CSSProperties = {
   margin: "0 auto",
