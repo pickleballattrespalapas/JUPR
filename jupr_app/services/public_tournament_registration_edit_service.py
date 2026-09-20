@@ -21,6 +21,7 @@ from jupr_app.domain.tournament_registration_repo import (
     save_registration,
 )
 from jupr_app.services.public_tournament_registration_service import (
+    _PARTNER_IDENTITY_RATING_AGE_FIELDS,
     _clean_email,
     _clean_text,
     _get_club_player,
@@ -95,6 +96,14 @@ def _selection_public_payload(selection: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _empty_partner_details(selection: dict[str, Any]) -> bool:
+    return all(
+        selection.get(key) is None
+        or (isinstance(selection.get(key), str) and not selection[key].strip())
+        for key in _PARTNER_IDENTITY_RATING_AGE_FIELDS
+    )
+
+
 def _selections_with_confirmed_partners(
     supabase: Any,
     *,
@@ -106,7 +115,8 @@ def _selections_with_confirmed_partners(
 
     Automatic pairing deliberately leaves the reciprocal selection's free-text
     partner fields empty. The confirmed team, not those fields, identifies the
-    partner. Keep the selection IDs and versions intact for the atomic save.
+    partner. An empty HAS_PARTNER entry without a confirmed team is still
+    unpaired. Keep the selection IDs and versions intact for the atomic save.
     """
     selected = {
         str(row.get("id") or ""): row
@@ -142,6 +152,14 @@ def _selections_with_confirmed_partners(
                         "This event has conflicting partner records. Please contact tournament staff."
                     )
                 partners[selection_id] = (partner_id, partner_selection_id)
+    selections = [
+        {**row, "partner_mode": "NEEDS_PARTNER"}
+        if str(row.get("id") or "") in selected
+        and str(row.get("id") or "") not in partners
+        and _empty_partner_details(row)
+        else row
+        for row in selections
+    ]
     if not partners:
         return selections
     partner_entries = {
@@ -642,6 +660,32 @@ def submit_public_tournament_registration_edit(
         str(event.get("id") or ""): _public_event(event, registration_open=bool(page.get("registration_open")))
         for event in (bundle.get("event_options") or [])
         if str(event.get("id") or "") in existing_selected_ids
+    }
+    # Older, already-open edit pages can still submit an empty HAS_PARTNER
+    # flag. Only repair that exact pre-existing orphan, never a new partner
+    # choice, partial partner details, or an established team relationship.
+    stored_selections = list(bundle.get("selections") or [])
+    resolved_selections = _selections_with_confirmed_partners(
+        supabase, tournament_id=tournament_id, registration_id=registration_id,
+        selections=stored_selections,
+    )
+    unpaired_event_ids = {
+        str(stored.get("event_option_id") or "")
+        for stored, resolved in zip(stored_selections, resolved_selections)
+        if str(stored.get("partner_mode") or "").upper() == "HAS_PARTNER"
+        and resolved.get("partner_mode") == "NEEDS_PARTNER"
+    }
+    payload = {
+        **payload,
+        "selections": [
+            {**row, "partner_mode": "NEEDS_PARTNER"}
+            if isinstance(row, dict)
+            and str(row.get("event_option_id") or "") in unpaired_event_ids
+            and str(row.get("partner_mode") or "").upper() == "HAS_PARTNER"
+            and _empty_partner_details(row)
+            else row
+            for row in (payload.get("selections") or [])
+        ],
     }
     save_payload = build_validated_public_registration_save_payload(
         supabase,
