@@ -74,7 +74,9 @@ async function verifyPublicLegacyGenders() {
       assert.ok(genderMarkup?.includes(`<option value="${canonical}" selected="">${canonical}</option>`), "The browser must receive a selected gender option for a legacy value");
       let renderer;
       try {
-        await act(async () => { renderer = create(React.createElement(PublicEditForm, props)); });
+        await act(async () => { renderer = create(React.createElement(PublicEditForm, props), {
+          createNodeMock: element => element.type === "form" ? {} : element.type === "fieldset" ? { querySelectorAll: () => [] } : null
+        }); });
         const gender = renderer.root.findAllByType("select").find(node => node.props.name === "gender");
         assert.equal(gender.props.value, canonical);
         await act(async () => renderer.root.findAllByType("button").find(node => content(node) === "Edit event").props.onClick());

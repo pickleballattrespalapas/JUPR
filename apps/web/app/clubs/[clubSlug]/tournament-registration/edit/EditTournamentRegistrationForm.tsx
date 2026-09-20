@@ -392,19 +392,33 @@ export default function EditTournamentRegistrationForm({
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (editingEventId) {
+      await saveEvent();
+      return;
+    }
     await saveRegistration(new FormData(event.currentTarget));
   }
 
   async function saveEvent(remove = false) {
-    if (!formRef.current || savingRef.current) return;
+    if (!formRef.current || savingRef.current || !editingEventId) return;
     if (!remove) {
       const controls = eventEditorRef.current?.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("input, select, textarea");
       if (controls && Array.from(controls).some((control) => !control.reportValidity())) return;
     }
-    await saveRegistration(new FormData(formRef.current), remove ? selectedIds.filter((id) => id !== editingEventId) : selectedIds);
+    const editedEvent = eventById.get(editingEventId);
+    if (!editedEvent) return;
+    // An event's save includes only that event's draft. A closed dialog may
+    // still hold unfinished edits, which must not leak into another save.
+    const eventIds = initialSelectionIds.flatMap((id) => {
+      const priorEvent = eventById.get(id);
+      const replacesPrior = id === editingEventId || (priorEvent && publicEventFamilyKey(priorEvent) === publicEventFamilyKey(editedEvent));
+      return replacesPrior ? (remove ? [] : [editingEventId]) : [id];
+    });
+    if (!remove && !eventIds.includes(editingEventId)) eventIds.push(editingEventId);
+    await saveRegistration(new FormData(formRef.current), eventIds, editingEventId);
   }
 
-  async function saveRegistration(formData: FormData, eventIds = selectedIds) {
+  async function saveRegistration(formData: FormData, eventIds = selectedIds, editedEventId?: string) {
     if (partnerInvitation.token && (!partnerInvitation.invitation || partnerInvitation.error)) {
       setError(partnerInvitation.error || "Please wait while we verify your partner request."); return;
     }
@@ -414,11 +428,12 @@ export default function EditTournamentRegistrationForm({
       setError("Enter your first and last name in Player information before saving.");
       return;
     }
-    if (profileLookupPending || eventIds.some((id) => partnerModes[id] === "HAS_PARTNER" && selectionDrafts[id]?.partner_profile_lookup_pending)) {
+    const draftEventIds = editedEventId ? eventIds.filter((id) => id === editedEventId) : eventIds;
+    if (profileLookupPending || draftEventIds.some((id) => partnerModes[id] === "HAS_PARTNER" && selectionDrafts[id]?.partner_profile_lookup_pending)) {
       setError("Please wait while we find the matching profiles.");
       return;
     }
-    if ((profileCandidates.length && !profileChoiceMade) || eventIds.some((id) => partnerModes[id] === "HAS_PARTNER" && selectionDrafts[id]?.partner_profile_choice_required)) {
+    if ((profileCandidates.length && !profileChoiceMade) || draftEventIds.some((id) => partnerModes[id] === "HAS_PARTNER" && selectionDrafts[id]?.partner_profile_choice_required)) {
       setError("Choose a matching profile, or select None of these before saving.");
       return;
     }
@@ -449,8 +464,9 @@ export default function EditTournamentRegistrationForm({
     const payloadSelections: Array<PublicRegistrationSelectionPayload & { id?: string }> = eventIds.map((eventId) => {
       const eventOption = eventById.get(eventId);
       const prior = selectionByEventId.get(eventId) ?? (eventOption ? selectionByFamily.get(publicEventFamilyKey(eventOption)) : undefined);
-      const mode = partnerModes[eventId] ?? (eventOption?.partner_required ? "NEEDS_PARTNER" : "NONE");
-      const draft = selectionDrafts[eventId] || {};
+      const useSavedSelection = Boolean(editedEventId && eventId !== editedEventId);
+      const mode = (useSavedSelection ? prior?.partner_mode : partnerModes[eventId]) ?? (eventOption?.partner_required ? "NEEDS_PARTNER" : "NONE");
+      const draft = (useSavedSelection ? prior : selectionDrafts[eventId]) || {};
       return {
         id: prior?.id,
         event_option_id: eventId,
@@ -487,7 +503,7 @@ export default function EditTournamentRegistrationForm({
         setCommerceQuote(reviewedQuote);
         const previousTotal = commerceQuote?.total_minor ?? commerceOrder?.total_minor ?? commerceOrder?.quote?.total_minor;
         if (reviewedQuote.total_minor !== previousTotal) {
-          setError(`Your updated total is ${formatCommerceMoney(reviewedQuote.total_minor)}. Review it, then ${eventIds.length < selectedIds.length ? "choose Remove event" : "save changes"} to confirm.`);
+          setError(`Your updated total is ${formatCommerceMoney(reviewedQuote.total_minor)}. Review it, then ${editedEventId && !eventIds.includes(editedEventId) ? "choose Remove event" : "save changes"} to confirm.`);
           return;
         }
       }
