@@ -881,10 +881,10 @@ export default function TournamentRegistrationForm({
             {!profile.candidateId ? (
               <label>DUPR ID<br /><input aria-label="DUPR ID" value={profile.duprId} onChange={(event) => updateProfile("duprId", event.target.value)} style={inputStyle} /></label>
             ) : null}
-            <label>Doubles skill<br /><input aria-label="Doubles skill" type="number" min="1" max="7" step="0.01" value={profile.doublesSkill} onChange={(event) => updateProfile("doublesSkill", event.target.value)} style={inputStyle} /></label>
+            <label>Doubles skill<br /><input aria-label="Doubles skill" type="number" min="1" max="7" step="any" inputMode="decimal" value={profile.doublesSkill} onChange={(event) => updateProfile("doublesSkill", event.target.value)} style={inputStyle} /></label>
             <label>
               Singles skill<br />
-              <input aria-label="Singles skill" type="number" min="1" max="7" step="0.01" aria-describedby="singles-skill-help" value={profile.singlesSkill} onChange={(event) => updateProfile("singlesSkill", event.target.value)} style={inputStyle} />
+              <input aria-label="Singles skill" type="number" min="1" max="7" step="any" inputMode="decimal" aria-describedby="singles-skill-help" value={profile.singlesSkill} onChange={(event) => updateProfile("singlesSkill", event.target.value)} style={inputStyle} />
               <span id="singles-skill-help" style={{ display: "block", color: "#64748b", fontSize: "0.9rem", marginTop: "0.35rem" }}>
                 No singles rating? Enter your current level or leave it blank.
               </span>
