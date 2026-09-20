@@ -46,7 +46,7 @@ def test_public_modules_mirror_generator_functionality_without_official_publish(
     assert "Download CSV" in workspace
     assert "Download one-sheet PDF" in workspace
     assert "Preview matchups" in workspace
-    assert "Start session" in workspace
+    assert "Start ${ratingMode} session" in workspace
     assert "public-play-generator-create:${clubId}:${generatorKind}" in workspace
     assert "readPendingStartPayload(startOperationStorageKey)" in workspace
     assert "sessionStorage.setItem(startOperationStorageKey, JSON.stringify(requestPayload))" in workspace

@@ -355,6 +355,7 @@ def test_mixed_official_publish_splits_singles_and_doubles(monkeypatch) -> None:
         generator_kind="round_robin",
         play_format="doubles_singles",
         title="Mixed official",
+        rating_mode="rated",
         participant_names=_names(8),
         player_ids=list(range(101, 109)),
         total_rounds=1,
@@ -363,7 +364,7 @@ def test_mixed_official_publish_splits_singles_and_doubles(monkeypatch) -> None:
         singles_court_count=2,
         preview_fingerprint=None,
         actor_email="admin@example.com",
-        actor_role="admin",
+        actor_role="administrator",
         source="test",
     )
     session = created["session"]
@@ -379,7 +380,7 @@ def test_mixed_official_publish_splits_singles_and_doubles(monkeypatch) -> None:
         ],
         expected_version=session["version"],
         actor_email="admin@example.com",
-        actor_role="admin",
+        actor_role="administrator",
         source="test",
     )["session"]
 
@@ -418,7 +419,7 @@ def test_mixed_official_publish_splits_singles_and_doubles(monkeypatch) -> None:
         idempotency_key="mixed-publish-123",
         operation_key="a" * 64,
         actor_email="admin@example.com",
-        actor_role="admin",
+        actor_role="administrator",
         source="test",
     )
 

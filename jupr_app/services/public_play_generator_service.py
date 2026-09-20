@@ -224,7 +224,12 @@ def public_play_generator_session_payload(row: dict[str, Any]) -> dict[str, Any]
         "scoring_mode": str(event.get("scoringMode") or "scored") if event else "scored",
         "standings_sort": str(event.get("standingsSort") or "wins") if event else "wins",
         "standings": generator_event_standings(event) if event else [],
-        "unrated": True,
+        "unrated": str(event.get("ratingMode") or "unrated") == "unrated",
+        "rating_mode": str(event.get("ratingMode") or "unrated"),
+        "submission": {
+            key: value for key, value in (state.get("generator_submission") or {}).items()
+            if key in {"status", "approved_mode", "rating_mode", "submitted_at", "reviewed_at", "match_date", "match_count", "rejection_reason"}
+        } or None,
     }
 
 
@@ -278,6 +283,7 @@ def preview_public_play_generator(
     singles_court_count: int = 0,
     standings_sort: str = "wins",
     scoring_mode: str = "scored",
+    rating_mode: str = "unrated",
 ) -> dict[str, Any]:
     kind = _normalize_kind(generator_kind)
     fmt = _normalize_format(play_format)
@@ -301,6 +307,7 @@ def preview_public_play_generator(
             singles_court_count=max(0, min(int(singles_court_count or 0), 20)),
             standings_sort=standings_sort,
             scoring_mode=scoring_mode,
+            rating_mode=rating_mode,
         )
     except ValueError as exc:
         raise PublicPlayGeneratorError(str(exc)) from exc
@@ -341,6 +348,7 @@ def create_public_play_generator_session(
     token_secret: str | None = None,
     standings_sort: str = "wins",
     scoring_mode: str = "scored",
+    rating_mode: str = "unrated",
 ) -> dict[str, Any]:
     preview_result = preview_public_play_generator(
         supabase,
@@ -356,6 +364,7 @@ def create_public_play_generator_session(
         singles_court_count=singles_court_count,
         standings_sort=standings_sort,
         scoring_mode=scoring_mode,
+        rating_mode=rating_mode,
     )
     preview = preview_result["preview"]
     supplied = str(preview_fingerprint or "").strip()
@@ -372,6 +381,7 @@ def create_public_play_generator_session(
         "singles_court_count": int(preview.get("singlesCourtCount") or 0),
         "standings_sort": str(preview.get("standingsSort") or "wins"),
         "scoring_mode": str(preview.get("scoringMode") or "scored"),
+        "rating_mode": str(preview.get("ratingMode") or "unrated"),
         "live_mode": "quick",
     }
     operation, existed = begin_public_live_operation(

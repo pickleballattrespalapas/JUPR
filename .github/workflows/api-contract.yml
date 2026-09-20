@@ -58,6 +58,16 @@ jobs:
         run: |
           python -m pytest -q tests/test_program_badges.py tests/test_program_badge_service.py tests/test_api_badge_management.py tests/test_badge_schema.py tests/test_badge_recompute.py tests/test_public_player_service.py
 
+      - name: Verify organizer submissions and rating approval
+        run: |
+          python -m pytest -q \
+            tests/test_generator_submissions.py \
+            tests/test_public_play_generator_service.py \
+            tests/test_admin_play_generator_service.py \
+            tests/test_weekly_recap_delta.py \
+            tests/test_weekly_recap_categories.py \
+            tests/test_weekly_recap_range_driven.py
+
       - name: Run deployment and admin UX safety contracts
         run: |
           python -m pytest -q \

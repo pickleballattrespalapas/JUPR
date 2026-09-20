@@ -60,6 +60,7 @@ type PreviewEvent = {
   playFormat: PlayFormat;
   standingsSort?: StandingsSort;
   scoringMode?: ScoringMode;
+  ratingMode?: "rated" | "unrated";
   totalRounds: number;
   courtCount: number;
   doublesCourtCount: number;
@@ -242,6 +243,7 @@ export default function GeneratorWorkspace({
   const [playFormat, setPlayFormat] = useState<PlayFormat>("doubles");
   const [standingsSort, setStandingsSort] = useState<StandingsSort>("wins");
   const [scoringMode, setScoringMode] = useState<ScoringMode>("scored");
+  const [ratingMode, setRatingMode] = useState<"rated" | "unrated">("unrated");
   const [targetCount, setTargetCount] = useState(8);
   const initialMixedSetup = recommendedMixedCourtSetup(8);
   const [doublesCourtCount, setDoublesCourtCount] = useState(initialMixedSetup.doublesCourtCount);
@@ -312,6 +314,7 @@ export default function GeneratorWorkspace({
       setPlayFormat(stored.playFormat);
       setStandingsSort(stored.standingsSort || "wins");
       setScoringMode(generatorKind === "round_robin" ? stored.scoringMode || "scored" : "scored");
+      setRatingMode(stored.ratingMode === "rated" ? "rated" : "unrated");
       setTargetCount(stored.targetCount);
       const mixedSetup = recommendedMixedCourtSetup(stored.targetCount);
       setDoublesCourtCount(stored.doublesCourtCount || mixedSetup.doublesCourtCount);
@@ -324,7 +327,7 @@ export default function GeneratorWorkspace({
       }
     }
     setDraftHydrated(true);
-  }, [draftKey]);
+  }, [draftKey, generatorKind]);
 
   useEffect(() => {
     if (!draftHydrated) return;
@@ -333,6 +336,7 @@ export default function GeneratorWorkspace({
       playFormat,
       standingsSort,
       scoringMode,
+      ratingMode,
       targetCount,
       doublesCourtCount,
       singlesCourtCount,
@@ -347,6 +351,7 @@ export default function GeneratorWorkspace({
     playFormat,
     standingsSort,
     scoringMode,
+    ratingMode,
     targetCount,
     doublesCourtCount,
     singlesCourtCount,
@@ -381,6 +386,7 @@ export default function GeneratorWorkspace({
       play_format: playFormat,
       standings_sort: standingsSort,
       scoring_mode: generatorKind === "round_robin" ? scoringMode : "scored",
+      rating_mode: ratingMode,
       title: title.trim(),
       participant_names: participantNames,
       player_ids: allLinked ? orderedIds : [],
@@ -617,6 +623,20 @@ export default function GeneratorWorkspace({
               ) : null}
             </select>
           </label>
+          <label>
+            Match rating
+            <br />
+            <select aria-label="Match rating" value={ratingMode} onChange={event => {
+              const mode = event.target.value as "rated" | "unrated";
+              setRatingMode(mode);
+              if (mode === "rated") setScoringMode("scored");
+              invalidatePreview();
+            }} style={inputStyle}>
+              <option value="unrated">Unrated — stats only, no rating changes</option>
+              <option value="rated">Rated — update player ratings after approval</option>
+            </select>
+            <small style={{ display: "block", marginTop: "0.35rem", color: "#64748b" }}>Choose before starting. This stays fixed for the session. Submit scored results afterward for admin approval.</small>
+          </label>
           {generatorKind === "round_robin" ? (
             <>
               <label>
@@ -624,6 +644,7 @@ export default function GeneratorWorkspace({
                 <br />
                 <select
                   value={scoringMode}
+                  disabled={ratingMode === "rated"}
                   onChange={(event) => {
                     setScoringMode(event.target.value as ScoringMode);
                     invalidatePreview();
@@ -723,7 +744,7 @@ export default function GeneratorWorkspace({
               disabled={busy || !writesEnabled}
               style={primaryButton}
             >
-              {busy ? "Starting…" : "Start session"}
+              {busy ? "Starting…" : `Start ${ratingMode} session`}
             </button>
           </div>
 

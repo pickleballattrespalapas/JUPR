@@ -1113,6 +1113,7 @@ def create_generator_preview(
     singles_court_count: int = 0,
     standings_sort: str = "wins",
     scoring_mode: str = "scored",
+    rating_mode: str = "unrated",
 ) -> dict[str, Any]:
     kind = str(generator_kind or "").strip().lower().replace("-", "_")
     if kind not in {"round_robin", "ladder"}:
@@ -1187,6 +1188,10 @@ def create_generator_preview(
         mixed_doubles = 0
         mixed_singles = 0
         resolved_court_count = max(0, min(int(court_count or 0), 20))
+    if rating_mode not in {"rated", "unrated"}:
+        raise ValueError("Choose rated or unrated before starting the session.")
+    if rating_mode == "rated" and scoring == "unscored":
+        raise ValueError("Rated sessions require scores.")
     event = {
         "schemaVersion": 3,
         "sourceEventUid": f"generator-{uuid4().hex}",
@@ -1195,6 +1200,7 @@ def create_generator_preview(
         "generatorKind": kind,
         "playFormat": fmt,
         "scoringMode": scoring,
+        "ratingMode": rating_mode,
         "standingsSort": normalize_standings_sort(standings_sort),
         "status": "preview",
         "participants": participants,
@@ -1226,6 +1232,7 @@ def create_generator_preview(
                 "singles_courts": event["singlesCourtCount"],
                 "standings_sort": event["standingsSort"],
                 "scoring_mode": event["scoringMode"],
+                "rating_mode": event["ratingMode"],
                 "schedule": event["rounds"],
             },
             sort_keys=True,

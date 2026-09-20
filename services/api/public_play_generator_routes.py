@@ -5,6 +5,8 @@ from typing import Any, Callable
 from fastapi import Query, Request, Response
 from pydantic import BaseModel, Field
 
+from jupr_app.services.generator_submission_service import submit_generator_session
+
 from jupr_app.services.public_play_generator_service import (
     advance_public_play_generator_session,
     build_public_play_generator_export,
@@ -33,6 +35,7 @@ class PublicGeneratorPreviewRequest(BaseModel):
     singles_court_count: int = Field(default=0, ge=0, le=20)
     standings_sort: str = Field(default="wins", pattern=r"^(wins|points|differential)$")
     scoring_mode: str = Field(default="scored", pattern=r"^(scored|unscored)$")
+    rating_mode: str = Field(default="unrated", pattern=r"^(rated|unrated)$")
 
 
 class PublicGeneratorStartRequest(PublicGeneratorPreviewRequest):
@@ -44,6 +47,11 @@ class PublicGeneratorMutationRequest(BaseModel):
     edit_token: str = Field(min_length=1, max_length=128)
     expected_version: int = Field(ge=1)
     idempotency_key: str = Field(min_length=8, max_length=160)
+
+
+class PublicGeneratorSubmitRequest(PublicGeneratorMutationRequest):
+    organizer_name: str = Field(min_length=1, max_length=160)
+    match_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
 
 
 class PublicGeneratorScorePayload(BaseModel):
@@ -92,6 +100,20 @@ def install_public_play_generator_routes(
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
         return club, club_id, get_supabase_client()
+
+    @app.post("/clubs/{club_slug}/play-generators/sessions/{session_key}/submit")
+    def post_public_generator_submission(club_slug: str, session_key: str,
+        payload: PublicGeneratorSubmitRequest, request: Request) -> dict[str, Any]:
+        require_public_writes()
+        require_service_role()
+        club, club_id, supabase = context(club_slug)
+        try:
+            result = submit_generator_session(supabase, club_id=club_id,
+                session_key=session_key, **_model_payload(payload), requester_hash=requester_hash(request))
+        except Exception as exc:
+            raise_public_error(exc)
+            raise
+        return {"club": public_club_payload(club, club_slug), **result}
 
     @app.get("/clubs/{club_slug}/play-generators/status")
     def get_public_generator_status(club_slug: str) -> dict[str, Any]:

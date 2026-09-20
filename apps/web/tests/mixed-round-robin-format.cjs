@@ -13,6 +13,7 @@ const adminRunner = read("app/admin/play-generators/GeneratorRoundRunner.tsx");
 const publicRunner = read("app/clubs/[clubSlug]/play-generators/PublicGeneratorRoundRunner.tsx");
 const adminStandings = read("app/admin/play-generators/GeneratorStandings.tsx");
 const publicStandings = read("app/clubs/[clubSlug]/play-generators/PublicGeneratorStandings.tsx");
+const adminSubmissions = read("app/admin/play-generators/submissions/GeneratorSubmissions.tsx");
 
 assert.match(roster, /type PlayFormat = "singles" \| "doubles" \| "doubles_singles"/);
 assert.match(roster, /Doubles courts/);
@@ -40,12 +41,14 @@ for (const runner of [adminRunner, publicRunner]) {
   assert.match(runner, /Doubles \+ Singles Mix/);
   assert.match(runner, /matchFormatLabel\(match, event\.playFormat\)/);
   assert.match(runner, /View standings and continue/);
+  assert.match(runner, /<GeneratorSubmission/);
 }
 
 assert.match(adminRunner, /Round Played/);
 assert.match(publicRunner, /Mark round played/);
 
-assert.match(adminRunner, /Singles games publish\s+to singles ratings, and doubles games publish to doubles ratings/);
+assert.match(adminSubmissions, /Approval updates the appropriate singles or doubles ratings/);
+assert.match(adminSubmissions, /Approval leaves ratings unchanged/);
 assert.match(adminStandings, /Doubles \+ Singles Mix/);
 assert.match(publicStandings, /Doubles \+ Singles Mix/);
 

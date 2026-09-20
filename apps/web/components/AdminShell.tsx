@@ -85,6 +85,11 @@ const adminGroups: AdminGroup[] = [
         active: (pathname) => pathname.startsWith("/admin/ladder-generator")
       },
       {
+        label: "Generator submissions",
+        href: "/admin/play-generators/submissions",
+        active: pathname => pathname.startsWith("/admin/play-generators/submissions")
+      },
+      {
         label: "Challenge Ladder",
         href: "/admin/challenge-ladder",
         active: (pathname) => pathname.startsWith("/admin/challenge-ladder")
