@@ -1,5 +1,6 @@
 import base64
 from email import message_from_string
+from html.parser import HTMLParser
 from io import BytesIO
 from types import SimpleNamespace
 
@@ -76,10 +77,42 @@ def test_sponsor_content_is_escaped_and_unsafe_urls_are_not_links():
     assert html.count("Presented by") == 2  # The full feature also appears without lower tiers.
 
 
-def test_no_sponsors_keeps_original_message():
+def test_no_sponsors_keeps_message_content_with_mobile_layout():
     body = "<body><h1>Event</h1><p>Hello</p></body>"
-    assert with_sponsors_html(body, []) == body
+    html = with_sponsors_html(body, [])
+    assert ">Event</h1><p>Hello</p>" in html
+    assert "Presented by" not in html
+    assert 'name="viewport"' in html
     assert with_sponsors_text("Hello", None) == "Hello"
+
+
+@pytest.mark.parametrize("email_sponsors", [None, [], sponsors()])
+def test_edit_email_preserves_complete_long_url_in_button_fallback_and_plain_text(email_sponsors):
+    # Wrapping must never insert whitespace or zero-width characters into a
+    # signed link: both tapping and copying it must preserve the token exactly.
+    url = "https://example.com/edit?token=" + "AbCd0123456789_-" * 60 + "&event=baja"
+    args = dict(tournament_name="Baja Classic", registered_email="alex@example.com",
+                edit_url=url, email_sponsors=email_sponsors)
+    html = edit.build_tournament_registration_edit_email_html(**args)
+
+    class Links(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.hrefs = []
+            self.text = []
+        def handle_starttag(self, tag, attrs):
+            if tag == "a":
+                self.hrefs.append(dict(attrs).get("href"))
+        def handle_data(self, data):
+            self.text.append(data)
+
+    parsed = Links()
+    parsed.feed(html)
+    assert parsed.hrefs.count(url) == 2
+    assert url in parsed.text
+    assert "Edit my registration" in parsed.text
+    assert url in edit.build_tournament_registration_edit_email_text(**args)
+    assert "This link expires in 48 hours." in html
 
 
 def database():
