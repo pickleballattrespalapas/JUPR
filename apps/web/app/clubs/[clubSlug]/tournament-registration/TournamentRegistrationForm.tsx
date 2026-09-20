@@ -271,6 +271,10 @@ export default function TournamentRegistrationForm({
     setSelectedIds(current => Array.from(new Set([...current, prefill.event_option_id])));
   }, [partnerInvitation.invitation]);
 
+  const selectedProfile = resolution?.profile_candidates.find((candidate) => candidate.id === profile.candidateId);
+  const doublesSkillReadOnly = selectedProfile?.doubles_skill != null;
+  const singlesSkillReadOnly = selectedProfile?.singles_skill != null;
+
   const selectableEvents = useMemo(() => events.filter((event) => event.selectable), [events]);
   const eventById = useMemo(() => new Map(events.map((event) => [event.id, event])), [events]);
   const daysById = useMemo(() => new Map(days.map((day) => [day.id, day])), [days]);
@@ -359,6 +363,7 @@ export default function TournamentRegistrationForm({
   }
 
   function updateProfile(key: keyof ProfileState, value: string) {
+    if ((key === "doublesSkill" && doublesSkillReadOnly) || (key === "singlesSkill" && singlesSkillReadOnly)) return;
     setProfile((current) => ({ ...current, [key]: value }));
   }
 
@@ -876,17 +881,18 @@ export default function TournamentRegistrationForm({
             Choosing a profile only fills in this form. An organizer will
             confirm that it belongs to you.
           </aside>
+          {doublesSkillReadOnly ? <p style={{ color: "#475569" }}>Your doubles rating comes from your club profile and can’t be changed here.</p> : null}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
             <label>Display name *<br /><input aria-label="Display name" value={profile.displayName} onChange={(event) => updateProfile("displayName", event.target.value)} style={inputStyle} /></label>
             {!profile.candidateId ? (
               <label>DUPR ID<br /><input aria-label="DUPR ID" value={profile.duprId} onChange={(event) => updateProfile("duprId", event.target.value)} style={inputStyle} /></label>
             ) : null}
-            <label>Doubles skill<br /><input aria-label="Doubles skill" type="number" min="1" max="7" step="any" inputMode="decimal" value={profile.doublesSkill} onChange={(event) => updateProfile("doublesSkill", event.target.value)} style={inputStyle} /></label>
+            <label>Doubles skill<br /><input aria-label="Doubles skill" type="number" min="1" max="7" step="any" inputMode="decimal" value={profile.doublesSkill} readOnly={doublesSkillReadOnly} onChange={(event) => updateProfile("doublesSkill", event.target.value)} style={{ ...inputStyle, ...(doublesSkillReadOnly ? { background: "#f1f5f9" } : {}) }} /></label>
             <label>
               Singles skill<br />
-              <input aria-label="Singles skill" type="number" min="1" max="7" step="any" inputMode="decimal" aria-describedby="singles-skill-help" value={profile.singlesSkill} onChange={(event) => updateProfile("singlesSkill", event.target.value)} style={inputStyle} />
+              <input aria-label="Singles skill" type="number" min="1" max="7" step="any" inputMode="decimal" aria-describedby="singles-skill-help" value={profile.singlesSkill} readOnly={singlesSkillReadOnly} onChange={(event) => updateProfile("singlesSkill", event.target.value)} style={{ ...inputStyle, ...(singlesSkillReadOnly ? { background: "#f1f5f9" } : {}) }} />
               <span id="singles-skill-help" style={{ display: "block", color: "#64748b", fontSize: "0.9rem", marginTop: "0.35rem" }}>
-                No singles rating? Enter your current level or leave it blank.
+                {singlesSkillReadOnly ? "Your club profile rating can’t be changed here." : "No singles rating? Enter your current level or leave it blank."}
               </span>
             </label>
           </div>

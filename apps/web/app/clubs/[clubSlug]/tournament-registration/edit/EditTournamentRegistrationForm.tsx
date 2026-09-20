@@ -58,6 +58,7 @@ type EventSelectionDraft = Omit<
   "event_option_id" | "registration_day_id" | "partner_mode"
 > & {
   partner_profile_id?: string;
+  partner_profile_has_rating?: boolean;
   partner_profile_choice_made?: boolean;
   partner_profile_lookup_pending?: boolean;
   partner_profile_choice_required?: boolean;
@@ -221,6 +222,9 @@ export default function EditTournamentRegistrationForm({
 
   const eventById = useMemo(() => new Map(events.map((event) => [event.id, event])), [events]);
   const linkedPlayer = useMemo(() => players.find((player) => player.id === String(registration.player_id ?? "")) ?? null, [players, registration.player_id]);
+  const ratingProfile = linkedPlayer ?? profileCandidates.find((candidate) => candidate.id === profileCandidateId);
+  const doublesSkillReadOnly = ratingProfile?.doubles_skill != null;
+  const singlesSkillReadOnly = ratingProfile?.singles_skill != null;
   const selectedProfileRef = useRef("");
   const selectProfile = useCallback((candidate: PublicRegistrationPlayer | null) => {
     setProfileCandidateId(candidate?.id || "");
@@ -579,9 +583,9 @@ export default function EditTournamentRegistrationForm({
         <p style={{ color: "#475569" }}>
           To change your email, contact the tournament organizer.
         </p>
-        {linkedPlayer ? (
+        {doublesSkillReadOnly || singlesSkillReadOnly ? (
           <p style={{ color: "#475569" }}>
-            Verified JUPR ratings can’t be changed here.
+            Ratings from your club profile can’t be changed here.
           </p>
         ) : null}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
@@ -591,11 +595,11 @@ export default function EditTournamentRegistrationForm({
           <label>Email<br /><input name="email" type="email" value={registration.email} disabled style={{ width: "100%" }} /></label>
           <label>Phone<br /><input name="phone" defaultValue={registration.phone || ""} style={{ width: "100%" }} /></label>
           {linkedPlayer || profileCandidateId ? <input type="hidden" name="dupr_id" value={duprId} /> : <label>DUPR ID<br /><input name="dupr_id" value={duprId} onChange={(event) => { profileDetailsVersion.current += 1; setDuprId(event.target.value); }} style={{ width: "100%" }} /></label>}
-          <label>Doubles skill<br /><input name="doubles_skill" value={linkedPlayer?.doubles_skill ?? doublesSkill} onChange={(event) => { profileDetailsVersion.current += 1; setDoublesSkill(event.target.value); }} disabled={linkedPlayer?.doubles_skill != null} type="number" min="1" max="7" step="any" inputMode="decimal" style={{ width: "100%" }} /></label>
+          <label>Doubles skill<br /><input name="doubles_skill" value={linkedPlayer?.doubles_skill ?? doublesSkill} onChange={(event) => { if (doublesSkillReadOnly) return; profileDetailsVersion.current += 1; setDoublesSkill(event.target.value); }} readOnly={doublesSkillReadOnly} type="number" min="1" max="7" step="any" inputMode="decimal" style={{ width: "100%", ...(doublesSkillReadOnly ? { background: "#f1f5f9" } : {}) }} /></label>
           <label>
             Singles skill<br />
-            <input name="singles_skill" aria-label="Singles skill" aria-describedby={linkedPlayer?.singles_skill == null ? "edit-singles-skill-help" : undefined} value={linkedPlayer?.singles_skill ?? singlesSkill} onChange={(event) => { profileDetailsVersion.current += 1; setSinglesSkill(event.target.value); }} disabled={linkedPlayer?.singles_skill != null} type="number" min="1" max="7" step="any" inputMode="decimal" style={{ width: "100%" }} />
-            {linkedPlayer?.singles_skill == null ? (
+            <input name="singles_skill" aria-label="Singles skill" aria-describedby={!singlesSkillReadOnly ? "edit-singles-skill-help" : undefined} value={linkedPlayer?.singles_skill ?? singlesSkill} onChange={(event) => { if (singlesSkillReadOnly) return; profileDetailsVersion.current += 1; setSinglesSkill(event.target.value); }} readOnly={singlesSkillReadOnly} type="number" min="1" max="7" step="any" inputMode="decimal" style={{ width: "100%", ...(singlesSkillReadOnly ? { background: "#f1f5f9" } : {}) }} />
+            {!singlesSkillReadOnly ? (
               <span id="edit-singles-skill-help" style={{ display: "block", color: "#64748b", fontSize: "0.9rem", marginTop: "0.35rem" }}>
                 No singles rating? Enter your current level or leave it blank.
               </span>
@@ -780,6 +784,7 @@ export default function EditTournamentRegistrationForm({
           age: String(prior?.partner_age ?? ""),
           gender: prior?.partner_gender || "",
           profileId: prior?.partner_profile_id || "",
+          profileHasRating: prior?.partner_profile_has_rating,
           profileChoiceMade: prior?.partner_profile_choice_made,
           profileLookupPending: prior?.partner_profile_lookup_pending,
           profileChoiceRequired: prior?.partner_profile_choice_required
@@ -844,6 +849,7 @@ export default function EditTournamentRegistrationForm({
                       ...(patch.age !== undefined ? { partner_age: numericState(patch.age) } : {}),
                       ...(patch.gender !== undefined ? { partner_gender: patch.gender } : {}),
                       ...(patch.profileId !== undefined ? { partner_profile_id: patch.profileId } : {}),
+                      ...(patch.profileHasRating !== undefined ? { partner_profile_has_rating: patch.profileHasRating } : {}),
                       ...(patch.profileChoiceMade !== undefined ? { partner_profile_choice_made: patch.profileChoiceMade } : {}),
                       ...(patch.profileLookupPending !== undefined ? { partner_profile_lookup_pending: patch.profileLookupPending } : {}),
                       ...(patch.profileChoiceRequired !== undefined ? { partner_profile_choice_required: patch.profileChoiceRequired } : {}),

@@ -22,6 +22,7 @@ export type TournamentPartnerDetailsValue = {
   duprId: string;
   // A browser prefill choice, never submitted as a verified player link.
   profileId?: string;
+  profileHasRating?: boolean;
   profileChoiceMade?: boolean;
   profileLookupPending?: boolean;
   profileChoiceRequired?: boolean;
@@ -52,6 +53,7 @@ export default function TournamentPartnerDetails({
   clubSlug, tournamentId, registrationSlug, labelPrefix, value, onChange
 }: Props) {
   const choiceId = useId();
+  const skillReadOnly = Boolean(value.profileId && value.profileHasRating);
   const requestId = useRef(0);
   const detailsVersion = useRef(0);
   const lookupTimer = useRef<ReturnType<typeof setTimeout>>();
@@ -70,7 +72,7 @@ export default function TournamentPartnerDetails({
     onChange({
       ...(value.profileId && patch.name !== undefined ? { skill: "", duprId: "" } : {}),
       ...patch, profileId: patch.name !== undefined ? "" : value.profileId,
-      ...(patch.name !== undefined ? { profileChoiceMade: false, profileLookupPending: Boolean(patch.name.trim()), profileChoiceRequired: false } : {})
+      ...(patch.name !== undefined ? { profileHasRating: false, profileChoiceMade: false, profileLookupPending: Boolean(patch.name.trim()), profileChoiceRequired: false } : {})
     });
   }
 
@@ -103,7 +105,7 @@ export default function TournamentPartnerDetails({
       setCandidates(rows);
       const candidate = automaticRegistrationProfile(rows, value.name, result.data.profile_match_kind);
       onChangeRef.current(candidate && version === detailsVersion.current ? {
-        profileId: candidate.id, profileChoiceMade: true, profileChoiceRequired: false,
+        profileId: candidate.id, profileHasRating: candidate.doubles_skill != null, profileChoiceMade: true, profileChoiceRequired: false,
         skill: candidate.doubles_skill == null ? "" : String(candidate.doubles_skill),
         duprId: String(candidate.dupr_id || "")
       } : { profileChoiceMade: rows.length === 0, profileChoiceRequired: rows.length > 0 });
@@ -135,11 +137,11 @@ export default function TournamentPartnerDetails({
     setPending(false);
     setError(null);
     onChange(candidate ? {
-      profileId: candidate.id, profileChoiceMade: true, profileLookupPending: false, profileChoiceRequired: false,
+      profileId: candidate.id, profileHasRating: candidate.doubles_skill != null, profileChoiceMade: true, profileLookupPending: false, profileChoiceRequired: false,
       name: candidate.display_name,
       skill: candidate.doubles_skill == null ? "" : String(candidate.doubles_skill),
       duprId: String(candidate.dupr_id || "")
-    } : { profileId: "", ...(value.profileId ? { skill: "", duprId: "" } : {}), profileChoiceMade: true, profileLookupPending: false, profileChoiceRequired: false });
+    } : { profileId: "", profileHasRating: false, ...(value.profileId ? { skill: "", duprId: "" } : {}), profileChoiceMade: true, profileLookupPending: false, profileChoiceRequired: false });
   }
 
   return (
@@ -193,8 +195,9 @@ export default function TournamentPartnerDetails({
         <label>Partner age *<br /><input required aria-label={`${labelPrefix} partner age`} type="number" min="1" max="120" value={value.age} onChange={(event) => onChange({ age: event.target.value })} style={inputStyle} /></label>
         <label>Partner gender *<br /><select required aria-label={`${labelPrefix} partner gender`} value={value.gender} onChange={(event) => onChange({ gender: event.target.value })} style={inputStyle}><option value="">Select</option>{registrationGenderOptions(value.gender).map((gender) => <option key={gender} value={gender}>{gender}</option>)}</select></label>
         {/* Club ratings retain their full precision; a hundredth-step rejects valid profile autofill. */}
-        <label>Partner starting skill *<br /><input required aria-label={`${labelPrefix} partner skill`} type="number" min="1" max="7" step="any" inputMode="decimal" value={value.skill} onChange={(event) => { detailsVersion.current += 1; onChange({ skill: event.target.value }); }} style={inputStyle} /></label>
+        <label>Partner starting skill *<br /><input required aria-label={`${labelPrefix} partner skill`} type="number" min="1" max="7" step="any" inputMode="decimal" value={value.skill} readOnly={skillReadOnly} onChange={(event) => { if (skillReadOnly) return; detailsVersion.current += 1; onChange({ skill: event.target.value }); }} style={{ ...inputStyle, ...(skillReadOnly ? { background: "#f1f5f9" } : {}) }} /></label>
       </div>
+      {skillReadOnly ? <p style={{ margin: 0, color: "#475569" }}>Your partner’s club profile rating can’t be changed here.</p> : null}
       <div style={gridStyle}>
         <label>Partner phone<br /><input aria-label={`${labelPrefix} partner phone`} type="tel" value={value.phone} onChange={(event) => onChange({ phone: event.target.value })} style={inputStyle} /></label>
         {!value.profileId ? <label>Partner DUPR ID<br /><input aria-label={`${labelPrefix} partner DUPR ID`} value={value.duprId} onChange={(event) => { detailsVersion.current += 1; onChange({ duprId: event.target.value }); }} style={inputStyle} /></label> : null}
