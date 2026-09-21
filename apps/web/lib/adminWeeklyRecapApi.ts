@@ -38,6 +38,14 @@ export type AdminWeeklyRecapListResponse = {
   mode?: string;
   recaps: AdminWeeklyRecapRow[];
   count: number;
+  can_delete_drafts?: boolean;
+};
+
+export type AdminWeeklyRecapDeleteResponse = {
+  ok: boolean;
+  deleted_recap_id: string;
+  week_start: string;
+  warnings?: string[];
 };
 
 export type AdminWeeklyRecapDetailResponse = {

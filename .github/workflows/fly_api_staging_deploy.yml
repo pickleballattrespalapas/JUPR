@@ -54,6 +54,7 @@ on:
           - open
           - public-intake-auth
           - communications
+          - admin-notifications
           - match-player
           - match-exclusion-recovery
           - support-requests

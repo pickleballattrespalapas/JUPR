@@ -192,7 +192,7 @@ def test_existing_shared_action_guards_remain_token_scoped() -> None:
         (
             "apps/web/app/admin/weekly-recap/WeeklyRecapAdminPanel.tsx",
             "writeRequest",
-            ("generateDraft", "saveDraft", "publishAction"),
+            ("generateDraft", "saveDraft", "publishAction", "deleteDraft"),
         ),
         (
             "apps/web/app/admin/league-manager/awards/LeagueAwardsPanel.tsx",
@@ -213,7 +213,11 @@ def test_existing_shared_action_guards_remain_token_scoped() -> None:
         ),
     ):
         source = _source(relative)
-        assert f"useLatestRequestGuard(accessToken" in source
+        if relative.endswith("WeeklyRecapAdminPanel.tsx"):
+            assert 'const requestScope = `${clubId}\\u0000${accessToken}`;' in source
+            assert "const writeRequest = useLatestRequestGuard(requestScope);" in source
+        else:
+            assert "useLatestRequestGuard(accessToken" in source
         for action in actions:
             body = _async_function_body(source, action)
             assert f"{request_name}.begin()" in body, f"{relative}:{action}"
@@ -245,16 +249,18 @@ def test_admin_session_ignores_unrelated_storage_events() -> None:
 def test_admin_home_is_client_gated_and_bearer_authorized() -> None:
     page = _source("apps/web/app/admin/page.tsx")
     home = _source("apps/web/app/admin/AdminHome.tsx")
-    api = _source("apps/web/lib/adminDashboardApi.ts")
+    api = _source("apps/web/lib/adminNotificationsApi.ts")
+    notifications = _source("apps/web/components/AdminNotificationCenter.tsx")
 
     assert "getAdminDashboard" not in page
     assert "AdminHome" in page
     assert '"use client";' in home
     assert "useAdminSession()" in home
-    assert "useAuthenticatedAutoLoad(accessToken, loadDashboard, clubId)" in home
-    assert "useLatestRequestGuard" in home
+    assert "<AdminNotificationCenter accessToken={accessToken} clubId={clubId} compact" in home
+    assert "useAuthenticatedAutoLoad(accessToken, refresh, clubId)" in notifications
+    assert "useLatestRequestGuard" in notifications
     assert "if (sessionLoading || !accessToken || !session)" in home
-    assert "setData(null)" in home
+    assert "setData(null)" in notifications
     assert "Authorization: `Bearer ${accessToken}`" in api
     assert 'cache: "no-store"' in api
     assert "encodeURIComponent(clubId)" in api

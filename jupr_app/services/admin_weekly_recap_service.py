@@ -8,6 +8,7 @@ from typing import Any
 from uuid import uuid4
 
 from jupr_app.data.load import load_data
+from jupr_app.domain.admin.roles import PERMISSION_DELETE_MATCHES, has_permission
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.domain.recaps.weekly_recap import (
     DEFAULT_SPOTLIGHT_DESCRIPTIONS,
@@ -25,6 +26,7 @@ CONFIRM_GENERATE = "GENERATE RECAP"
 CONFIRM_SAVE = "SAVE RECAP"
 CONFIRM_PUBLISH = "PUBLISH RECAP"
 CONFIRM_UNPUBLISH = "UNPUBLISH RECAP"
+CONFIRM_DELETE = "DELETE RECAP"
 ADMIN_WEEKLY_RECAP_SELECT = "*"
 MAX_RECAP_DAYS = 60
 
@@ -208,26 +210,30 @@ def _upsert_recap_row(
     week_start: str,
     payload: dict[str, Any],
     expected_row_version: int | None = None,
+    expected_recap_id: str | None = None,
 ) -> dict[str, Any]:
     before = _fetch_recap_row(supabase, club_id=str(club_id), week_start=str(week_start))
     clean_payload = {k: v for k, v in payload.items() if v is not None or k in {"published_at", "published_by"}}
     if before:
         current_version = int(before.get("row_version") or 1)
-        if expected_row_version is None:
+        if expected_row_version is None or not expected_recap_id:
             raise StaleWeeklyRecapStateError("This recap already exists. Load it before overwriting the draft.")
-        if int(expected_row_version) != current_version:
+        if str(before.get("id")) != str(expected_recap_id) or int(expected_row_version) != current_version:
             raise StaleWeeklyRecapStateError("Weekly recap changed. Reload before saving.")
         row = _first_row(
             supabase.table("weekly_recaps")
             .update({**clean_payload, "updated_at": _now_iso()})
             .eq("club_id", str(club_id))
             .eq("week_start", str(week_start))
+            .eq("id", str(expected_recap_id))
             .eq("row_version", current_version)
             .execute()
         )
         if row is None:
             raise StaleWeeklyRecapStateError("Weekly recap changed. Reload before saving.")
         return row
+    if expected_row_version is not None or expected_recap_id is not None:
+        raise StaleWeeklyRecapStateError("Weekly recap was deleted. Reload before creating another draft.")
     insert_payload = {"id": str(uuid4()), "created_at": _now_iso(), "updated_at": _now_iso(), "row_version": 1, **clean_payload}
     try:
         row = _first_row(supabase.table("weekly_recaps").insert(insert_payload).execute())
@@ -239,6 +245,26 @@ def _upsert_recap_row(
             ) from exc
         raise
     return row or insert_payload
+
+
+def _require_reviewed_recap(
+    before: dict[str, Any] | None,
+    *,
+    expected_recap_id: str | None,
+    expected_row_version: int | None,
+    allow_new: bool = False,
+) -> None:
+    if before is None:
+        if allow_new and expected_recap_id is None and expected_row_version is None:
+            return
+        raise StaleWeeklyRecapStateError("Weekly recap was deleted. Reload before creating another draft.")
+    if (
+        not expected_recap_id
+        or expected_row_version is None
+        or str(before.get("id")) != str(expected_recap_id)
+        or int(before.get("row_version") or 1) != int(expected_row_version)
+    ):
+        raise StaleWeeklyRecapStateError("Weekly recap changed. Reload before making changes.")
 
 
 def _audit(
@@ -387,7 +413,7 @@ def build_admin_weekly_recap_status(supabase: Any | None, *, club_id: str) -> di
     mutations_enabled = staging_communications_mutations_enabled()
     warnings = [] if mutations_enabled else [
         "Read-only mode is active. Open the isolated communications write wave "
-        "before generating, saving, publishing, or unpublishing recaps."
+        "before generating, saving, publishing, unpublishing, or deleting recaps."
     ]
     return {
         "enabled": True,
@@ -432,6 +458,101 @@ def get_admin_weekly_recap(supabase: Any, *, club_id: str, week_start: str, incl
     return {"ok": True, "mode": "weekly_recap_detail", "recap": _row_payload(row), "candidates": candidates}
 
 
+def delete_admin_weekly_recap_draft(
+    supabase: Any,
+    *,
+    club_id: str,
+    week_start: str,
+    expected_recap_id: str,
+    expected_row_version: int,
+    actor_email: str,
+    actor_role: str,
+    confirmation_text: str,
+    source: str = "next_weekly_recap_delete",
+) -> dict[str, Any]:
+    if not is_admin_weekly_recap_enabled():
+        raise PermissionError("Next Weekly Recap Admin is disabled.")
+    require_staging_communications_mutations()
+    if not has_permission(actor_role, PERMISSION_DELETE_MATCHES):
+        raise PermissionError("Only administrators can delete recap drafts.")
+    if _clean_text(confirmation_text, limit=80).upper() != CONFIRM_DELETE:
+        raise ValueError("Confirm deletion of this weekly recap draft.")
+    before = _fetch_recap_row(supabase, club_id=str(club_id), week_start=str(week_start))
+    if before is None:
+        raise StaleWeeklyRecapStateError("This recap was already deleted. Refresh the recap list.")
+    if str(before.get("status") or "") != "draft":
+        raise StaleWeeklyRecapStateError("Only drafts can be deleted. Reload this recap to see its current status.")
+    if (
+        not expected_recap_id
+        or str(before.get("id")) != str(expected_recap_id)
+        or expected_row_version is None
+        or int(before.get("row_version") or 1) != int(expected_row_version)
+    ):
+        raise StaleWeeklyRecapStateError("Weekly recap changed. Reload before deleting.")
+    reviewed_scope = {
+        "recap_id": str(expected_recap_id),
+        "week_start": str(before.get("week_start")),
+        "week_end": str(before.get("week_end")),
+        "expected_row_version": int(expected_row_version),
+        "recap": _row_payload(before),
+    }
+    action_type = "delete_weekly_recap_draft_admin"
+    _required_audit_intent(
+        supabase,
+        club_id=str(club_id),
+        actor_email=actor_email,
+        actor_role=actor_role,
+        action_type=action_type,
+        week_start=str(week_start),
+        reviewed_scope=reviewed_scope,
+        source=source,
+    )
+    try:
+        deleted = _first_row(
+            supabase.table("weekly_recaps")
+            .delete()
+            .eq("club_id", str(club_id))
+            .eq("week_start", str(week_start))
+            .eq("id", str(expected_recap_id))
+            .eq("status", "draft")
+            .eq("row_version", int(expected_row_version))
+            .execute()
+        )
+        if deleted is None:
+            raise StaleWeeklyRecapStateError("Weekly recap changed. Reload before deleting.")
+        warnings = _audit(
+            supabase,
+            club_id=str(club_id),
+            actor_email=actor_email,
+            actor_role=actor_role,
+            action_type=action_type,
+            week_start=str(week_start),
+            before_json={"recap": _row_payload(deleted)},
+            after_json={"recap": None, "deleted_recap_id": str(expected_recap_id)},
+            source=source,
+        )
+    except Exception as exc:
+        _audit_failure(
+            supabase,
+            club_id=str(club_id),
+            actor_email=actor_email,
+            actor_role=actor_role,
+            action_type=action_type,
+            week_start=str(week_start),
+            reviewed_scope=reviewed_scope,
+            source=source,
+            error=exc,
+        )
+        raise
+    return {
+        "ok": True,
+        "mode": "weekly_recap_delete",
+        "deleted_recap_id": str(expected_recap_id),
+        "week_start": str(week_start),
+        "warnings": warnings,
+    }
+
+
 def generate_admin_weekly_recap(
     supabase: Any,
     *,
@@ -444,6 +565,7 @@ def generate_admin_weekly_recap(
     tz_name: str = "America/Mazatlan",
     source: str = "next_weekly_recap_generate",
     expected_row_version: int | None = None,
+    expected_recap_id: str | None = None,
 ) -> dict[str, Any]:
     if not is_admin_weekly_recap_enabled():
         raise PermissionError("Next Weekly Recap Admin is disabled.")
@@ -452,6 +574,7 @@ def generate_admin_weekly_recap(
         raise ValueError(f"Type {CONFIRM_GENERATE} to generate a weekly recap draft.")
     start_date, end_date = _date_range(week_start, week_end)
     before = _fetch_recap_row(supabase, club_id=str(club_id), week_start=start_date.isoformat())
+    _require_reviewed_recap(before, expected_recap_id=expected_recap_id, expected_row_version=expected_row_version, allow_new=True)
     if before and str(before.get("status") or "") == "published":
         raise ValueError("Published recaps must be explicitly unpublished before regeneration.")
     ctx = _recap_context(supabase, club_id=str(club_id))
@@ -471,6 +594,7 @@ def generate_admin_weekly_recap(
     reviewed_scope = {
         "week_start": start_date.isoformat(),
         "week_end": end_date.isoformat(),
+        "expected_recap_id": expected_recap_id,
         "expected_row_version": expected_row_version,
     }
     _required_audit_intent(
@@ -490,6 +614,7 @@ def generate_admin_weekly_recap(
             week_start=start_date.isoformat(),
             payload=payload,
             expected_row_version=expected_row_version,
+            expected_recap_id=expected_recap_id,
         )
         warnings = _audit(
             supabase,
@@ -530,6 +655,7 @@ def save_admin_weekly_recap(
     tz_name: str = "America/Mazatlan",
     source: str = "next_weekly_recap_save",
     expected_row_version: int | None = None,
+    expected_recap_id: str | None = None,
 ) -> dict[str, Any]:
     if not is_admin_weekly_recap_enabled():
         raise PermissionError("Next Weekly Recap Admin is disabled.")
@@ -537,8 +663,7 @@ def save_admin_weekly_recap(
     if _clean_text(confirmation_text, limit=80).upper() != CONFIRM_SAVE:
         raise ValueError(f"Type {CONFIRM_SAVE} to save the weekly recap draft.")
     before = _fetch_recap_row(supabase, club_id=str(club_id), week_start=str(week_start))
-    if before is None:
-        raise ValueError("weekly recap not found")
+    _require_reviewed_recap(before, expected_recap_id=expected_recap_id, expected_row_version=expected_row_version)
     if str(before.get("status") or "") == "published":
         raise ValueError("Published recaps must be explicitly unpublished before saving draft edits.")
     if expected_row_version is None:
@@ -559,6 +684,7 @@ def save_admin_weekly_recap(
     }
     reviewed_scope = {
         "week_start": str(before.get("week_start")),
+        "expected_recap_id": expected_recap_id,
         "expected_row_version": int(expected_row_version),
         "edit_keys": sorted(edits),
     }
@@ -579,6 +705,7 @@ def save_admin_weekly_recap(
             week_start=str(before.get("week_start")),
             payload=payload,
             expected_row_version=expected_row_version,
+            expected_recap_id=expected_recap_id,
         )
         warnings = _audit(
             supabase,
@@ -620,6 +747,7 @@ def publish_admin_weekly_recap(
     tz_name: str = "America/Mazatlan",
     source: str = "next_weekly_recap_publish",
     expected_row_version: int | None = None,
+    expected_recap_id: str | None = None,
 ) -> dict[str, Any]:
     if not is_admin_weekly_recap_enabled():
         raise PermissionError("Next Weekly Recap Admin is disabled.")
@@ -631,8 +759,7 @@ def publish_admin_weekly_recap(
     if _clean_text(confirmation_text, limit=80).upper() != required:
         raise ValueError(f"Type {required} to {clean_action} the weekly recap.")
     before = _fetch_recap_row(supabase, club_id=str(club_id), week_start=str(week_start))
-    if before is None:
-        raise ValueError("weekly recap not found")
+    _require_reviewed_recap(before, expected_recap_id=expected_recap_id, expected_row_version=expected_row_version)
     if expected_row_version is None:
         raise StaleWeeklyRecapStateError("Weekly recap version is required. Reload before publishing.")
     is_publish = clean_action == "publish"
@@ -677,6 +804,7 @@ def publish_admin_weekly_recap(
     action_type = "publish_weekly_recap_admin" if is_publish else "unpublish_weekly_recap_admin"
     reviewed_scope = {
         "week_start": str(before.get("week_start")),
+        "expected_recap_id": expected_recap_id,
         "action": clean_action,
         "expected_row_version": int(expected_row_version),
     }
@@ -697,6 +825,7 @@ def publish_admin_weekly_recap(
             week_start=str(before.get("week_start")),
             payload=payload,
             expected_row_version=expected_row_version,
+            expected_recap_id=expected_recap_id,
         )
         warnings = _audit(
             supabase,

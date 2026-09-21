@@ -257,6 +257,7 @@ def test_unpublish_is_status_only_and_preserves_published_content(monkeypatch) -
         actor_role="club_owner",
         confirmation_text="UNPUBLISH RECAP",
         expected_row_version=4,
+        expected_recap_id="recap-1",
     )
     assert result["recap"]["status"] == "draft"
     assert captured["generated_json"] == before["generated_json"]
