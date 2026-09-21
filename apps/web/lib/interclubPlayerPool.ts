@@ -2,6 +2,7 @@ export type PoolMember = {
   id: string; season_id: string; club_id: string; name: string; email: string; divisions: string[];
   notes: string; manage_url?: string; status: "active" | "withdrawn"; player_id: string | null; revision: number;
   approval_status?: "pending" | "approved" | "rejected"; late_join?: boolean; approval_reason?: string | null;
+  rating?: number | null; league_rating?: number | null; gender?: string | null; eligible_divisions?: string[];
 };
 export type SeasonPool = {
   signup: { share_id: string | null; revision: number; open: boolean; url: string | null };
@@ -32,3 +33,42 @@ export type InvitationBatch = { operation_key: string; recipients: InvitationDel
 export const availabilityLabel: Record<AvailabilityResponse["status"], string> = {
   invited: "Not replied", available: "Available", maybe: "Maybe", unavailable: "Unavailable",
 };
+
+export type PoolPlayerChoice = { id: string; name: string; rating: number | null; league_rating?: number | null; gender: string | null; eligible_divisions: string[] };
+export type PoolPlayerChoices = { players: PoolPlayerChoice[]; next_offset: number | null };
+export type BulkPoolMember = { name?: string; email?: string | null; player_id?: string | null; divisions?: string[]; notes?: string };
+export type BulkPoolPreviewRow = BulkPoolMember & {
+  index: number; name: string; email: string; player_id: string | null;
+  status: "matched" | "new" | "ambiguous" | "duplicate"; candidates: PoolPlayerChoice[];
+  rating: number | null; league_rating?: number | null; gender: string | null; eligible_divisions: string[];
+};
+export type BulkPoolPreview = { rows: BulkPoolPreviewRow[]; ready_count: number; duplicate_count: number; ambiguous_count: number };
+export type BulkPoolResult = { added_count: number; skipped_count: number; pool: SeasonPool };
+
+export function poolRating(value: number | null | undefined): string {
+  return typeof value === "number" && Number.isFinite(value) ? value.toFixed(2) : "Not rated";
+}
+export function poolGender(value: string | null | undefined): string {
+  const gender = value?.trim().toLowerCase();
+  return gender === "f" || gender === "female" || gender === "woman" ? "Women" : gender === "m" || gender === "male" || gender === "man" ? "Men" : "Not specified";
+}
+export function sortedPoolDivisions(divisions: string[]): string[] {
+  return [...divisions].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+}
+
+/** Accept one name per line, optionally followed by an email in CSV, tab or angle-bracket form. */
+export function parsePoolPlayerList(value: string): { members: BulkPoolMember[]; errors: string[] } {
+  const members: BulkPoolMember[] = [], errors: string[] = [];
+  value.split(/\r?\n/).forEach((raw, index) => {
+    const line = raw.trim();
+    if (!line || /^(?:full\s+)?name\s*[,\t]\s*email(?:\s+address)?$/i.test(line)) return;
+    const emails = line.match(/[^\s,;<>"\t]+@[^\s,;<>"\t]+/g) || [];
+    if (emails.length > 1) { errors.push(`Line ${index + 1}: use one player and one email per line.`); return; }
+    const email = emails[0];
+    if (line.includes("@") && (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) { errors.push(`Line ${index + 1}: check the email address.`); return; }
+    const name = (email ? line.replace(email, "") : line).replace(/^[\s,;<>"\t]+|[\s,;<>"\t]+$/g, "").replace(/""/g, '"').trim();
+    if (!name) { errors.push(`Line ${index + 1}: include the player’s name.`); return; }
+    members.push({ name, ...(email ? { email } : {}) });
+  });
+  return { members, errors };
+}

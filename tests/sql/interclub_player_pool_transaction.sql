@@ -37,7 +37,7 @@ begin
  settings:=public.pcs_interclub_pool_action(actor,actor_email,home,sid,'settings','{"expected_revision":0,"open":true}');
  share:=(settings->>'share_id')::uuid;
  signup:=jsonb_build_object('share_id',share,'name','Pool QA','email','pool-qa@example.invalid','divisions',jsonb_build_array('3.5'),
-  'notes','Visiting for part of the season','request_id',gen_random_uuid(),'request_fingerprint','fixture-payload','email_consent',true);
+  'notes','Visiting for part of the season','player_id',null,'request_id',gen_random_uuid(),'request_fingerprint','fixture-payload','email_consent',true);
  result:=public.pcs_interclub_pool_public_action('signup',signup,requester);
  member_id:=(result->'member'->>'id')::uuid; member_nonce:=(result->'member'->>'token_nonce')::uuid;
  retry:=public.pcs_interclub_pool_public_action('signup',signup,requester);

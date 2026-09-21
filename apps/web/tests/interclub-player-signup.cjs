@@ -11,11 +11,17 @@ let uuid = 0;
 Object.defineProperty(global, 'crypto', { value: { randomUUID: () => `request-${++uuid}` }, configurable: true });
 const helpers = load('lib/interclubPlayerSignup.ts');
 const styles = new Proxy({}, { get: (_, property) => property });
-const Signup = load('app/interclub/signup/[shareId]/SeasonSignup.tsx', { '@/lib/interclubPlayerSignup': helpers, '../../player-signup.module.css': styles }).default;
+let currentSession = null;
+const Signup = load('app/interclub/signup/[shareId]/SeasonSignup.tsx', {
+  '@/lib/interclubPlayerSignup': helpers, '../../player-signup.module.css': styles,
+  '@/lib/tournamentRegistrationProfile': load('lib/tournamentRegistrationProfile.ts'),
+  '@/lib/adminAuthClient': { loadAdminSession: () => currentSession, adminSessionIsFresh: () => true },
+}).default;
 const Response = load('app/interclub/respond/PlayerResponse.tsx', { '@/lib/interclubPlayerSignup': helpers, '../player-signup.module.css': styles }).default;
 const reply = (value, status = 200) => ({ ok: status < 400, status, json: async () => value });
 const content = tree => JSON.stringify(tree.toJSON());
 const button = (tree, text) => tree.root.findAllByType('button').find(node => node.children.includes(text));
+const settleLookup = () => act(async () => new Promise(resolve => setTimeout(resolve, 275)));
 const club = { id: 'cabo', name: 'Cabo Test Club' };
 const season = { id: 'season', name: 'Coastal Season', start_date: '2099-11-01', end_date: '2100-03-31', timezone: 'America/Mazatlan', divisions: ['3.5', '4.0'] };
 const member = { id: 'member-a', name: 'Jo Player', email: 'jo@example.test', divisions: ['3.5'], notes: 'Away in January', status: 'active', revision: 4 };
@@ -33,6 +39,7 @@ async function signupConsentRetryAndPrivacy() {
   global.fetch = async (url, options) => {
     calls.push({ url, options });
     if (options.method) return new Promise(resolve => { finish = resolve; });
+    if (url.includes('/players')) return reply({ players: [], linked_player: null });
     return reply({ club, season, signup: { open: true }, meets: [] });
   };
   let tree;
@@ -45,6 +52,7 @@ async function signupConsentRetryAndPrivacy() {
     tree.root.findAllByProps({ type: 'checkbox' })[0].props.onChange({ target: { checked: true } });
     tree.root.findAllByProps({ type: 'checkbox' }).at(-1).props.onChange({ target: { checked: true } });
   });
+  await settleLookup();
   await act(async () => {
     void tree.root.findByType('form').props.onSubmit({ preventDefault() {} });
     void tree.root.findByType('form').props.onSubmit({ preventDefault() {} });
@@ -68,6 +76,7 @@ async function signupConsentRetryAndPrivacy() {
     tree.root.findByProps({ type: 'email' }).props.onChange({ target: { value: 'jo@example.test' } });
     tree.root.findAllByProps({ type: 'checkbox' }).at(-1).props.onChange({ target: { checked: true } });
   });
+  await settleLookup();
   await act(async () => { void tree.root.findByType('form').props.onSubmit({ preventDefault() {} }); });
   await act(async () => finish(reply({ status: 'already_registered' })));
   assert.ok(content(tree).includes('Your earlier signup is still saved'));
@@ -114,7 +123,7 @@ async function seasonEditingAndWithdrawal() {
 
 async function signupClosingWhileFormIsOpen() {
   let open = true;
-  global.fetch = async (url, options) => options.method ? reply({ detail: 'Closed' }, 409) : reply({ club, season, signup: { open }, meets: [] });
+  global.fetch = async (url, options) => options.method ? reply({ detail: 'Closed' }, 409) : url.includes('/players') ? reply({ players: [], linked_player: null }) : reply({ club, season, signup: { open }, meets: [] });
   let tree;
   await act(async () => { tree = create(React.createElement(Signup, { shareId: 'shared' })); });
   await act(async () => {
@@ -122,6 +131,7 @@ async function signupClosingWhileFormIsOpen() {
     tree.root.findByProps({ type: 'email' }).props.onChange({ target: { value: 'jo@example.test' } });
     tree.root.findAllByProps({ type: 'checkbox' }).at(-1).props.onChange({ target: { checked: true } });
   });
+  await settleLookup();
   await act(async () => tree.root.findByType('form').props.onSubmit({ preventDefault() {} }));
   assert.equal(button(tree, 'Join the season player pool').props.disabled, true);
   assert.equal(tree.root.findByProps({ autoComplete: 'name' }).props.value, 'Jo Player');
@@ -221,6 +231,102 @@ async function missingLinkAndWrongResponseKind() {
   }
 }
 
+async function signupProfileMatchingAndSafeFallback() {
+  const player = { id: 'player-1', name: 'Jo Player', rating: 3.456789, gender: 'Female', eligible_divisions: ['3.5'] };
+  const duplicate = { ...player, id: 'player-2', rating: 4.01 };
+  let players = [player], posts = [], lookup;
+  global.fetch = async (url, options) => {
+    if (options.method) { posts.push(JSON.parse(options.body)); return reply({ detail: 'Test stop' }, 503); }
+    if (url.includes('/players')) return lookup ? lookup(url) : reply({ players, linked_player: null });
+    return reply({ club, season: { ...season, divisions: ['4.5', '3.5', '4.0', '3.0'] }, signup: { open: true }, meets: [] });
+  };
+  let tree;
+  const mount = async () => {
+    if (tree) await act(async () => tree.unmount());
+    await act(async () => { tree = create(React.createElement(Signup, { shareId: 'shared' })); });
+    await act(async () => {
+      tree.root.findByProps({ autoComplete: 'name' }).props.onChange({ target: { value: '  JO   Player  ' } });
+      tree.root.findByProps({ type: 'email' }).props.onChange({ target: { value: 'jo@example.test' } });
+      tree.root.findAllByProps({ type: 'checkbox' }).at(-1).props.onChange({ target: { checked: true } });
+    });
+  };
+  const submit = () => act(async () => tree.root.findByType('form').props.onSubmit({ preventDefault() {} }));
+  await mount();
+  await submit();
+  assert.equal(posts.length, 0, 'Submit waits for profile matching');
+  await settleLookup();
+  assert.equal(tree.root.findByProps({ 'aria-label': 'Club rating' }).props.readOnly, true);
+  assert.equal(tree.root.findByProps({ 'aria-label': 'Club rating' }).props.value, '3.46');
+  const divisionLabels = tree.root.findAllByProps({ type: 'checkbox' }).slice(0, 4).map(input => input.parent.findByType('span').children[0]);
+  assert.deepEqual(divisionLabels, ['3.0', '3.5', '4.0', '4.5']);
+  await submit();
+  assert.equal(posts.at(-1).player_id, player.id, 'Unique normalized exact match is submitted automatically');
+  assert.equal(Object.hasOwn(posts.at(-1), 'rating'), false, 'Browser does not submit a rating override');
+  await act(async () => button(tree, 'This isn’t my profile').props.onClick());
+  await submit();
+  assert.equal(posts.at(-1).player_id, null, 'Explicit opt out prevents server automatic linking');
+
+  players = [player, duplicate];
+  await mount(); await settleLookup();
+  const beforeAmbiguous = posts.length;
+  await submit();
+  assert.equal(posts.length, beforeAmbiguous, 'Ambiguous matches require an explicit choice');
+  assert.equal(tree.root.findAllByProps({ 'aria-label': 'Club rating' }).length, 0);
+  await act(async () => tree.root.findByProps({ type: 'radio', value: duplicate.id }).props.onChange());
+  assert.equal(tree.root.findByProps({ autoComplete: 'name' }).props.value, 'Jo Player');
+  await submit();
+  assert.equal(posts.at(-1).player_id, duplicate.id);
+
+  let finishOld;
+  lookup = url => url.includes('Jo') || url.includes('JO') ? new Promise(resolve => { finishOld = resolve; }) : reply({ players: [], linked_player: null });
+  await mount(); await settleLookup();
+  await act(async () => tree.root.findByProps({ autoComplete: 'name' }).props.onChange({ target: { value: 'Different Person' } }));
+  await act(async () => finishOld(reply({ players: [player], linked_player: null })));
+  assert.equal(tree.root.findAllByProps({ 'aria-label': 'Club rating' }).length, 0, 'Late response cannot select the prior person');
+  await settleLookup(); await submit();
+  assert.equal(posts.at(-1).name, 'Different Person');
+  assert.equal(Object.hasOwn(posts.at(-1), 'player_id'), false, 'Changing name removes the old profile from signup');
+
+  lookup = () => { throw Error('offline'); };
+  await mount(); await settleLookup();
+  assert.ok(button(tree, 'Continue without a profile'));
+  const beforeFailure = posts.length;
+  await submit(); assert.equal(posts.length, beforeFailure);
+  await act(async () => button(tree, 'Continue without a profile').props.onClick());
+  await submit();
+  assert.equal(posts.at(-1).player_id, null, 'Lookup outages allow an explicit unmatched signup');
+  await act(async () => tree.unmount());
+}
+
+async function signupExistingAccountPrefill() {
+  const player = { id: 'account-player', name: 'Verified Player', rating: 4.2, gender: 'Male', eligible_divisions: ['4.0'] };
+  currentSession = { access_token: 'existing-session-token', user: { email: 'verified@example.test' } };
+  let calls = [], finishAccount;
+  global.fetch = async (url, options) => {
+    calls.push({ url, options });
+    if (url.endsWith('/players')) return reply({ players: [player], linked_player: player });
+    if (url.includes('/players?')) return reply({ players: [], linked_player: player });
+    return reply({ club, season, signup: { open: true }, meets: [] });
+  };
+  let tree;
+  await act(async () => { tree = create(React.createElement(Signup, { shareId: 'shared' })); });
+  assert.equal(tree.root.findByProps({ autoComplete: 'name' }).props.value, player.name);
+  assert.equal(tree.root.findByProps({ type: 'email' }).props.value, 'verified@example.test');
+  assert.equal(tree.root.findByProps({ 'aria-label': 'Club rating' }).props.value, '4.2');
+  assert.equal(calls.find(call => call.url.endsWith('/players')).options.headers.Authorization, 'Bearer existing-session-token');
+  await act(async () => tree.unmount());
+
+  global.fetch = async url => url.endsWith('/players') ? new Promise(resolve => { finishAccount = resolve; }) : url.includes('/players?') ? reply({ players: [], linked_player: player }) : reply({ club, season, signup: { open: true }, meets: [] });
+  await act(async () => { tree = create(React.createElement(Signup, { shareId: 'shared' })); });
+  await act(async () => tree.root.findByProps({ autoComplete: 'name' }).props.onChange({ target: { value: 'Someone Else' } }));
+  await act(async () => finishAccount(reply({ players: [player], linked_player: player })));
+  assert.equal(tree.root.findByProps({ autoComplete: 'name' }).props.value, 'Someone Else', 'Account prefill cannot overwrite typed identity');
+  await settleLookup();
+  assert.equal(tree.root.findAllByProps({ 'aria-label': 'Club rating' }).length, 0, 'Search does not select the account profile over a different typed name');
+  await act(async () => tree.unmount());
+  currentSession = null;
+}
+
 (async () => {
   await signupConsentRetryAndPrivacy();
   await signupClosingWhileFormIsOpen();
@@ -228,5 +334,7 @@ async function missingLinkAndWrongResponseKind() {
   await withdrawalWhenSeasonSignupIsClosed();
   await meetRepliesConflictAndExpiry();
   await missingLinkAndWrongResponseKind();
+  await signupProfileMatchingAndSafeFallback();
+  await signupExistingAccountPrefill();
   console.log('Interclub public player signup and response checks passed');
 })().catch(error => { console.error(error); process.exit(1); });

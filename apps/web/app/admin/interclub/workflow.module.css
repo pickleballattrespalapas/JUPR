@@ -1,0 +1,14 @@
+.workflow { margin: 24px 0; }
+.workflow ol { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); list-style: none; padding: 0; margin: 0; gap: 8px; }
+.step { display: flex; align-items: flex-start; gap: 8px; height: 100%; border: 1px solid #cbd5e1; border-radius: 8px; padding: 12px 10px; color: #334155; background: #fff; text-decoration: none; }
+.step strong { display: block; font-size: .9rem; }
+.step small { display: block; line-height: 1.4; color: #526174; margin-top: 4px; }
+.step[aria-current="step"] { border-color: #1d4ed8; background: #eff6ff; color: #1d4ed8; box-shadow: inset 0 0 0 1px #1d4ed8; }
+.step[aria-disabled="true"] { opacity: .65; }
+.step:focus-visible { outline: 3px solid #60a5fa; outline-offset: 3px; }
+a.step:hover { border-color: #64748b; background: #eff6ff; }
+.number { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 24px; height: 24px; border-radius: 50%; background: #e2e8f0; font-size: .8rem; font-weight: 700; }
+[aria-current="step"] .number { background: #1d4ed8; color: white; }
+.workflow > p { margin: 10px 0 0; font-size: .9rem; color: #526174; }
+@media (max-width: 800px) { .workflow ol { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media print { .workflow { display: none; } }

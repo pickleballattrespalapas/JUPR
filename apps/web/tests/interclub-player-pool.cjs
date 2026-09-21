@@ -12,7 +12,8 @@ const resource = load(base + 'usePoolResource.ts', { '@/lib/interclubRegistratio
 const common = load(base + 'PoolPanelCommon.tsx', { './playerPool.module.css': {} });
 const mocks = { '@/lib/interclubPlayerPool': types, './usePoolResource': resource, './PoolPanelCommon': common, './playerPool.module.css': {} };
 const email = load(base + 'PoolInvitationEmail.tsx', mocks);
-const panels = load(base + 'PlayerPoolPanels.tsx', { ...mocks, './PoolInvitationEmail': email });
+const bulk = load(base + 'PoolBulkAdd.tsx', mocks);
+const panels = load(base + 'PlayerPoolPanels.tsx', { ...mocks, './PoolInvitationEmail': email, './PoolBulkAdd': bulk });
 const nodeText = node => typeof node === 'string' ? node : node.children.map(nodeText).join('');
 const button = (tree, label) => tree.root.findAllByType('button').find(node => nodeText(node) === label);
 const text = tree => JSON.stringify(tree.toJSON());
@@ -42,6 +43,8 @@ async function seasonPool() {
   pool = { ...pool, signup: { revision: 1, open: true, url: 'https://site.test/interclub/signup/share' } };
   await act(async () => finish(reply(pool)));
   assert.ok(text(tree).includes('https://site.test/interclub/signup/share'));
+  assert.equal(tree.root.findByProps({ children: 'Open signup page' }).props.href, pool.signup.url);
+  assert.ok(button(tree, 'Add players'), 'Admin can add verbal commitments without opening public signup');
   assert.equal(button(tree, 'Invite club players by email').props.disabled, false);
   await act(async () => button(tree, 'Link club player').props.onClick());
   assert.ok(requests.at(-1).url.startsWith(root + '/players?q=Alex%20Example'), 'Player links search only the represented club');
@@ -156,4 +159,59 @@ async function recoverSavedInvitations() {
   await act(async () => tree.unmount());
   delete global.window;
 }
-(async () => { await seasonPool(); await availability(); await invitationEmail(); await recoverSavedInvitations(); console.log('PASS interclub player pool: scoped signup/linking, revision conflicts, stale responses, availability, email preview and dry-run delivery'); })().catch(error => { console.error(error); process.exit(1); });
+
+async function bulkAdd() {
+  assert.deepEqual(types.parsePoolPlayerList('Name, Email\nAlex Garcia\nPat Jones, pat@example.com\nSam Lee <sam@example.com>\n"Doe, Jane",jane@example.com').members,
+    [{ name: 'Alex Garcia' }, { name: 'Pat Jones', email: 'pat@example.com' }, { name: 'Sam Lee', email: 'sam@example.com' }, { name: 'Doe, Jane', email: 'jane@example.com' }]);
+  assert.equal(types.parsePoolPlayerList('missing@example.com').errors.length, 1);
+  assert.equal(types.parsePoolPlayerList('Name, bad@address').errors.length, 1);
+  assert.equal(types.parsePoolPlayerList('Name, first@example.com, second@example.com').errors.length, 1);
+  assert.deepEqual(types.sortedPoolDivisions(['4.0', '3.0', '4.5', '3.5']), ['3.0', '3.5', '4.0', '4.5']);
+  assert.equal(types.poolRating(3.55555), '3.56');
+  assert.equal(types.poolRating(null), 'Not rated');
+  let requests = [], added, finish;
+  const player = { id: 'p1', name: 'Club Player', rating: 3.5523, gender: 'female', eligible_divisions: ['3.5'] };
+  global.fetch = async (url, options) => {
+    requests.push({ url, options });
+    if (!options.method) return reply({ players: [player, { ...player, id: 'existing', name: 'Already Added' }], next_offset: null });
+    const entries = JSON.parse(options.body).members;
+    if (url.endsWith('/bulk-preview')) {
+      const rows = entries.map((entry, index) => ({ ...entry, index, email: entry.email || '', candidates: entry.name === 'Ambiguous Name' ? [{ ...player, id: 'p2', name: 'Ambiguous Name' }] : [], rating: entry.player_id ? player.rating : null, gender: null, eligible_divisions: entry.player_id ? ['3.5'] : [], status: entry.name === 'Already Added' ? 'duplicate' : entry.name === 'Ambiguous Name' && !Object.hasOwn(entry, 'player_id') ? 'ambiguous' : entry.player_id ? 'matched' : 'new' }));
+      return reply({ rows, ready_count: rows.filter(row => ['new', 'matched'].includes(row.status)).length, duplicate_count: rows.filter(row => row.status === 'duplicate').length, ambiguous_count: rows.filter(row => row.status === 'ambiguous').length });
+    }
+    if (url.endsWith('/bulk-add')) return new Promise(resolve => { finish = resolve; });
+    throw new Error('Unexpected bulk request ' + url);
+  };
+  let tree;
+  await act(async () => { tree = create(React.createElement(bulk.PoolBulkAdd, { root, accessToken: 'token', divisions: ['3.5'], members: [{ ...member, player_id: 'existing' }], onClose() {}, onAdded: result => { added = result; } })); });
+  const choices = tree.root.findAllByProps({ type: 'checkbox' });
+  assert.equal(choices[1].props.disabled, true, 'Already pooled profiles cannot be selected twice');
+  await act(async () => choices[0].props.onChange());
+  await act(async () => tree.root.findByType('textarea').props.onChange({ target: { value: 'New Player\nAmbiguous Name\nAlready Added' } }));
+  await act(async () => button(tree, 'Preview 4 players').props.onClick());
+  assert.deepEqual(JSON.parse(requests.at(-1).options.body).members[0], { player_id: 'p1', name: 'Club Player', divisions: ['3.5'] });
+  assert.equal(button(tree, 'Add 2 players to pool').props.disabled, true, 'Ambiguous names must be resolved before saving');
+  assert.ok(text(tree).includes('Already in pool · skipped'));
+  assert.ok(text(tree).includes('New signup · needs player link'));
+  await act(async () => tree.root.findByType('select').props.onChange({ target: { value: 'p2' } }));
+  assert.equal(JSON.parse(requests.at(-1).options.body).members[2].player_id, 'p2', 'Ambiguous row resolves to the selected club profile');
+  assert.equal(button(tree, 'Add 3 players to pool').props.disabled, false);
+  await act(async () => button(tree, 'Preview 4 players').props.onClick());
+  assert.equal(Object.hasOwn(JSON.parse(requests.at(-1).options.body).members[2], 'player_id'), false, 'Pasted names omit player_id to request automatic profile matching');
+  assert.ok(text(tree).includes('None of these — add as a new signup'));
+  await act(async () => tree.root.findByType('select').props.onChange({ target: { value: '__new__' } }));
+  assert.equal(JSON.parse(requests.at(-1).options.body).members[2].player_id, null, 'Explicit none-of-these choice opts out of automatic profile linking');
+  assert.equal(button(tree, 'Add 3 players to pool').props.disabled, false, 'An unmatched new signup can be saved after declining profile suggestions');
+  assert.ok(text(tree).includes('Email invitations are optional.'), 'Verbal availability can be used directly in lineups');
+  const addButton = button(tree, 'Add 3 players to pool');
+  await act(async () => { void addButton.props.onClick(); void addButton.props.onClick(); });
+  assert.equal(requests.filter(row => row.url.endsWith('/bulk-add')).length, 1, 'Repeated clicks create one batch');
+  assert.ok(!Object.hasOwn(JSON.parse(requests.at(-1).options.body).members[1], 'email'), 'Email remains optional for new verbal commitments');
+  await act(async () => finish(reply({ added_count: 3, skipped_count: 1, pool: { members: [], signup: {}, email_mode: 'dry_run' } })));
+  assert.equal(added.added_count, 3);
+  assert.equal(requests.some(row => row.url.includes('/emails')), false, 'Adding commitments does not invoke email delivery');
+  await act(async () => tree.root.findByType('textarea').props.onChange({ target: { value: 'Different Player' } }));
+  assert.equal(button(tree, 'Add 3 players to pool'), undefined, 'Changing a batch clears the reviewed preview');
+  await act(async () => tree.unmount());
+}
+(async () => { await seasonPool(); await availability(); await invitationEmail(); await recoverSavedInvitations(); await bulkAdd(); console.log('PASS interclub player pool: scoped signup/linking, revision conflicts, stale responses, availability, bulk player matching and optional emails, email preview and dry-run delivery'); })().catch(error => { console.error(error); process.exit(1); });

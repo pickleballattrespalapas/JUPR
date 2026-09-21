@@ -241,8 +241,8 @@ async function invitationDashboard() {
   assert.ok(nodeText(card('Invited season')).includes('Tres Palapas'), 'Invitation identifies its organizer');
   assert.deepEqual(links('Invited season').map(nodeText), ['Review invitation']);
   assert.equal(links('Invited season')[0].props.href, '/admin/interclub/registrations?season=invite');
-  assert.deepEqual(links('Joined season').map(nodeText), ['Prepare meet rosters', 'Meet schedules, score sheets & results']);
-  assert.ok(links('Organized season').some(a => nodeText(a) === 'Manage season'));
+  assert.deepEqual(links('Joined season').map(nodeText), ['Open league workspace', 'Meet schedules, score sheets & results']);
+  assert.ok(links('Organized season').some(a => nodeText(a) === 'Open league workspace'));
   assert.ok(links('Organized season').some(a => a.props.href.includes('/publication?')));
   for (const name of ['Declined season', 'Cancelled season']) assert.deepEqual(links(name).map(nodeText), ['View invitation']);
   assert.ok(!links('Invited season').some(a => a.props.href.includes('/publication?')), 'Participating club is not offered organizer publishing');

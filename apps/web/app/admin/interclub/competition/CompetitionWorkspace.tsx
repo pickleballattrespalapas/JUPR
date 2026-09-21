@@ -13,6 +13,7 @@ import PrintPacket from "./PrintPacket";
 import Standings from "./Standings";
 import ScheduleMeet from "./ScheduleMeet";
 import styles from "./competition.module.css";
+import InterclubWorkflow, { workflowHref } from "../InterclubWorkflow";
 
 export default function CompetitionWorkspace({ initialSeasonId, initialMeetId }: { initialSeasonId: string; initialMeetId: string }) {
   const { session, accessToken, loading } = useAdminSession();
@@ -51,22 +52,20 @@ export function CompetitionHome({ clubId, accessToken, initialSeasonId, initialM
   const clubName = (id: string) => data?.clubs.find(club => club.id === id)?.name || "Club";
   const when = (iso: string) => new Date(iso).toLocaleString(undefined, { timeZone: data?.season.details.timezone, dateStyle: "medium", timeStyle: "short" });
   return <main className={styles.page}>
-    <p><Link href="/admin/interclub">← Interclub leagues</Link></p>
+    <p>{locked ? <span aria-disabled="true">← Interclub leagues</span> : <Link href="/admin/interclub">← Interclub leagues</Link>}</p>
     <header><p className={styles.eyebrow}>Paper courts · One official score submission</p><h1>Meet operations</h1><p>Prepare and print the pairings, run the meet on paper, then bring all official scores back here.</p></header>
     <div className={styles.toolbar}><label>Season<select value={seasonId} disabled={locked || !seasons.length} onChange={event => { setSeasonId(event.target.value); setMeetId(""); }}>
-      {!seasons.length && <option value="">No accepted seasons</option>}{seasons.map(season => <option key={season.id} value={season.id}>{season.details.name}</option>)}
+      {!seasons.length && <option value="">No accepted seasons</option>}{seasons.map(season => <option key={season.id} value={season.id}>{season.details.name} · {season.details.start_date}</option>)}
     </select></label><button disabled={loading || locked} onClick={() => setRefresh(value => value + 1)}>Refresh season</button>
-      {seasonId && <Link className={styles.button} href={`/admin/interclub/registrations?season=${encodeURIComponent(seasonId)}`}>Player pool &amp; meet rosters</Link>}
     </div>
     {error && <p role="alert" className={styles.error}>{error}</p>}
     {loading && <p role="status">Loading meet operations…</p>}
     {!loading && !seasons.length && !error && <p>Accept a season invitation first, then prepare the players for your meet.</p>}
     {data && <>
-      <div className={styles.steps} aria-label="Meet workflow"><span>1. Prepare &amp; print</span><span>2. Record all scores</span><span>3. Submit for approval</span><span>4. Organizer approves</span></div>
       <div className={styles.toolbar}><label>Meet<select value={meetId} disabled={locked} onChange={event => setMeetId(event.target.value)}>{data.meets.map(meet => <option key={meet.id} value={meet.id}>{when(meet.starts_at)} · {clubName(meet.host_club_id)}{meet.competition_phase && meet.competition_phase !== "regular" ? ` · ${phaseLabels[meet.competition_phase]}` : ""}</option>)}</select></label>
         <label>Competition<select value={phase} disabled aria-label="Scheduled competition format">{Object.entries(phaseLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
       </div>
-      {!data.meets.length && <p>The organizer needs to schedule a meet before score sheets can be prepared.</p>}
+      {!data.meets.length && <><InterclubWorkflow seasonId={seasonId} current="run" /><p>The organizer needs to schedule a meet before score sheets can be prepared.</p></>}
       {data.is_organizer && <ScheduleMeet root={competitionPath(api!, clubId, seasonId)} clubId={clubId} accessToken={accessToken} context={data} disabled={locked} onScheduled={meet => { setMeetId(meet.id); setRefresh(value => value + 1); }} />}
       {meetId && <MeetOperations key={`${clubId}:${seasonId}:${meetId}:${phase}:${refresh}`} root={`${competitionPath(api!, clubId, seasonId)}/meets/${encodeURIComponent(meetId)}/${phase}`} clubId={clubId} accessToken={accessToken} phase={phase} context={data} clubName={clubName} onLock={setLocked} onSeasonChange={() => { setLocked(false); setRefresh(value => value + 1); }} />}
       <Standings data={data} clubName={clubName} />
@@ -77,7 +76,8 @@ export function CompetitionHome({ clubId, accessToken, initialSeasonId, initialM
 export function MeetOperations({ root, clubId, accessToken, phase, context, clubName, onLock, onSeasonChange }: { root: string; clubId: string; accessToken: string; phase: CompetitionPhase; context: CompetitionContext; clubName: (id: string) => string; onLock: (locked: boolean) => void; onSeasonChange: () => void }) {
   const [detail, setDetail] = useState<MeetCompetition | null>(null), [draft, setDraft] = useState<CompetitionDocument | null>(null);
   const [error, setError] = useState(""), [status, setStatus] = useState(""), [loading, setLoading] = useState(true), [busy, setBusy] = useState(false), [blocked, setBlocked] = useState(false), [refresh, setRefresh] = useState(0);
-  const [format, setFormat] = useState<CompetitionFormat>(phase === "regular" ? "gender" : "mlp"), [division, setDivision] = useState(context.season.details.divisions[0] || ""), [clubA, setClubA] = useState(""), [clubB, setClubB] = useState("");
+  const divisions = [...context.season.details.divisions].sort((a, b) => Number.parseFloat(a) - Number.parseFloat(b) || a.localeCompare(b, undefined, { numeric: true }));
+  const [format, setFormat] = useState<CompetitionFormat>(phase === "regular" ? "gender" : "mlp"), [division, setDivision] = useState(divisions[0] || ""), [clubA, setClubA] = useState(""), [clubB, setClubB] = useState("");
   const [review, setReview] = useState<"submit" | "approve" | null>(null), [reason, setReason] = useState(""), [startsAt, setStartsAt] = useState(""), [deadline, setDeadline] = useState("");
   const token = useRef(accessToken); token.current = accessToken;
   const pending = useRef(false), controller = useRef<AbortController | null>(null);
@@ -126,7 +126,15 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
   const alreadyScheduled = phase !== "regular" && !!batch?.document.encounters.some(encounter =>
     encounter.division === division && (phase === "final" ||
       [encounter.club_a, encounter.club_b].includes(clubA) && [encounter.club_a, encounter.club_b].includes(clubB)));
+  const hasPlayableLineups = phase === "regular"
+    ? divisions.some(level => new Set(detail.teams.filter(team => team.division === level).map(team => team.club_id)).size >= 2)
+    : candidates.length >= 2;
+  const lineupHref = workflowHref("lineups", context.season.id, detail.meet.id);
   return <section className={styles.section}>
+    <InterclubWorkflow seasonId={context.season.id} meetId={detail.meet.id}
+      current={batch?.state === "submitted" || batch?.state === "approved" ? "approve" : "run"}
+      disabled={dirty || busy} unavailable={batch?.state === "submitted" || batch?.state === "approved" ? [] : ["approve"]}
+      hints={{ run: !batch ? hasPlayableLineups ? "Prepare approved lineups" : "Lineups needed first" : batch.state === "draft" ? "Enter and submit scores" : "Scores submitted", approve: batch?.state === "approved" ? "Official results" : batch?.state === "submitted" ? "Ready for organizer review" : "Submit scores first" }} />
     {error && <p className={styles.error} role="alert">{error}</p>}{status && <p className={styles.success} role="status">{status}</p>}
     {detail.lineups_hidden && <p className={styles.notice}>Opposing lineups become available at the roster deadline. You can still manage your club’s roster.</p>}
     {blocked && <div className={styles.notice}><p>Reload the latest saved meet before continuing. Your last change may already have been saved.</p><button disabled={busy} onClick={() => { setReview(null); setRefresh(value => value + 1); }}>Reload saved meet</button></div>}
@@ -135,17 +143,19 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
       {detail.can_manage && (phase === "regular" || detail.is_organizer) ? <form onSubmit={event => { event.preventDefault(); void change("generate", { format, ...(phase !== "regular" ? { division, club_a: clubA, club_b: clubB } : {}) }); }}>
         <fieldset className={styles.gameFields} disabled={disabled || dirty}><div className={styles.toolbar}>
           {phase === "regular" ? <label>Meet format<select value={format} onChange={event => setFormat(event.target.value as CompetitionFormat)}><option value="gender">Women’s and men’s doubles</option><option value="mixed">Two mixed doubles pairings</option></select></label> : <>
-            <label>Skill level<select value={division} onChange={event => { setDivision(event.target.value); setClubA(""); setClubB(""); }}>{context.season.details.divisions.map(value => <option key={value}>{value}</option>)}</select></label>
+            <label>Skill level<select value={division} onChange={event => { setDivision(event.target.value); setClubA(""); setClubB(""); }}>{divisions.map(value => <option key={value}>{value}</option>)}</select></label>
             <label>Club A<select required value={clubA} onChange={event => setClubA(event.target.value)}><option value="">Choose club</option>{candidates.filter(id => id !== clubB).map(id => <option key={id} value={id}>{clubName(id)}</option>)}</select></label>
             <label>Club B<select required value={clubB} onChange={event => setClubB(event.target.value)}><option value="">Choose club</option>{candidates.filter(id => id !== clubA).map(id => <option key={id} value={id}>{clubName(id)}</option>)}</select></label>
           </>}
-          <button type="submit" className={styles.primary} disabled={alreadyScheduled}>Generate pairings</button>
+          <button type="submit" className={styles.primary} disabled={alreadyScheduled || !hasPlayableLineups}>Generate pairings</button>
         </div></fieldset>
         {phase !== "regular" && <p>Each club fields two women and two men. The server checks current skill eligibility, prior regular-season appearances and championship qualification.</p>}
         {alreadyScheduled && <p>{phase === "qualifier" ? "This qualifying pair is already in the packet. Choose another pair." : `Skill level ${division} is already in this packet. Choose another skill level to add its matchup.`}</p>}
         {phase !== "regular" && candidates.length < 2 && <p className={styles.notice}>Two qualifying clubs need approved lineups for this meet and skill level. Check the standings below and prepare their meet rosters first.</p>}
       </form> : <p>The host or organizer will prepare this meet. Your club can review and print the packet here when it is ready.</p>}
-      {!detail.teams.length && <p className={styles.warning}>No approved meet teams are available yet. Prepare the meet rosters first.</p>}
+      {!hasPlayableLineups && <div className={styles.warning}><p>{!detail.teams.length ? "No approved meet teams are available yet." : "At least two clubs need approved lineups at the same skill level before pairings can be prepared."} Each club chooses its lineup from its season player pool.</p>
+        {dirty || busy ? <span aria-disabled="true">Prepare lineups for this meet →</span> : <Link className={styles.button} href={lineupHref}>Prepare lineups for this meet →</Link>}
+      </div>}
     </div>}
     {batch && draft && <>
       <div className={styles.card}>
