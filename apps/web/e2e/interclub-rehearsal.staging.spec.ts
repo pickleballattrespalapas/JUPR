@@ -16,6 +16,10 @@ test("interclub paper packet, score entry, approval and public results", async (
   const club = state.clubs[0];
   const season = state.seasons.find((s: { label: string }) => s.label === "incidents");
   const official = state.seasons.find((s: { label: string }) => s.label === "full-season");
+  const signup = state.seasons.find((s: { label: string }) => s.label === "browser-signup");
+  expect(season.registration.status).toBe("closed");
+  expect(official.registration.status).toBe("closed");
+  expect(signup.registration.status).toBe("open");
   const reportDir = process.env.JUPR_INTERCLUB_REHEARSAL_REPORT!;
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
@@ -68,6 +72,33 @@ test("interclub paper packet, score entry, approval and public results", async (
   await expect(page.getByRole("heading", { name: "Official meet results", exact: true })).toBeVisible();
   await expect(page.getByText("Rating updates: completed", { exact: true })).toBeVisible();
   await page.screenshot({ path: join(reportDir,"interclub-approved-meet.png"), fullPage: true });
+
+  const lockedReads: string[] = [];
+  page.on("request", request => {
+    const path = new URL(request.url()).pathname;
+    if (request.method() === "GET" && ["registrations", "competition"].some(area => path.startsWith(`/admin/clubs/${club}/interclub/${area}/${signup.id}/meets/`))) lockedReads.push(path);
+  });
+  const signupContext = page.waitForResponse(r => new URL(r.url()).pathname === `/admin/clubs/${club}/interclub/competition/${signup.id}` && r.request().method() === "GET");
+  await page.goto(`/admin/interclub/competition?season=${signup.id}&meet=${signup.meets[0].id}`);
+  const signupResponse = await signupContext;
+  expect(signupResponse.status()).toBe(200);
+  expect((await signupResponse.json()).season.id).toBe(signup.id);
+  await expect(page.getByRole("heading", { name: "Meet planning opens after registration closes", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Standings & Club Cup", exact: true, includeHidden: true })).toHaveCount(0);
+  await expect(page.getByRole("combobox", { name: "Meet", exact: true, includeHidden: true })).toHaveCount(0);
+  await page.getByRole("link", { name: "Go to season player pool", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Season registration", exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Season player pool", exact: true })).toBeVisible();
+  const workflow = page.getByRole("navigation", { name: "League workflow", exact: true });
+  await expect(workflow.getByRole("link", { name: "Player pool", exact: true })).toHaveAttribute("aria-current", "step");
+  for (const label of ["Meet availability", "Lineups", "Run meet", "Approve results"]) {
+    await expect(workflow.getByRole("link", { name: label, exact: true })).toHaveCount(0);
+    await expect(workflow.locator('[aria-disabled="true"]').filter({ has: page.getByText(label, { exact: true }) })).toHaveCount(1);
+  }
+  await expect(page.getByRole("combobox", { name: "Meet", exact: true, includeHidden: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Reload meet", exact: true, includeHidden: true })).toHaveCount(0);
+  expect(lockedReads, "An open signup season must not fetch operational meet details even from a direct URL").toEqual([]);
+
   const anonymous = await browser.newContext({ baseURL: origin });
   await bootstrapStagingContext(anonymous);
   const publicPage = await anonymous.newPage();
@@ -77,6 +108,9 @@ test("interclub paper packet, score entry, approval and public results", async (
   await expect(publicPage.getByText("Club Cup", { exact: false }).first()).toBeVisible();
   await expect(publicPage.getByText("Private revised note", { exact: false })).toHaveCount(0);
   await publicPage.goto(`/interclub/signup/${official.signup[club].share_id}`);
+  await expect(publicPage.getByRole("heading", { name: "Season registration has closed.", exact: true })).toBeVisible();
+  await expect(publicPage.getByRole("button", { name: "Join the season player pool", exact: true, includeHidden: true })).toHaveCount(0);
+  await publicPage.goto(`/interclub/signup/${signup.signup[club].share_id}`);
   await publicPage.getByLabel("Your name", { exact: true }).fill("Browser Rehearsal Player");
   await publicPage.getByRole("textbox", { name: /^Email/ }).fill(`browser-${state.run}@example.invalid`);
   await publicPage.getByRole("checkbox",{ name:"3.5", exact:true }).check();
@@ -87,5 +121,5 @@ test("interclub paper packet, score entry, approval and public results", async (
   await anonymous.close();
   expect(errors).toEqual([]);
   writeFileSync(join(reportDir,"interclub-browser.json"),JSON.stringify({ status:"passed",candidate_sha:state.sha,
-    checks:["paper_packet_pdf","six_game_ui_entry","dirty_navigation_lock","draft_reload","whole_meet_submission","organizer_approval","both_rating_streams","anonymous_public_cup","anonymous_player_signup","no_browser_exceptions"] },null,2));
+    checks:["paper_packet_pdf","six_game_ui_entry","dirty_navigation_lock","draft_reload","whole_meet_submission","organizer_approval","both_rating_streams","registration_phase_route_lock","anonymous_public_cup","closed_signup_readonly","anonymous_player_signup","no_browser_exceptions"] },null,2));
 });

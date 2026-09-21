@@ -1,3 +1,4 @@
+import type { SeasonRegistrationWindow } from "./interclubRegistrationWindow";
 export type PoolMember = {
   id: string; season_id: string; club_id: string; name: string; email: string; divisions: string[];
   notes: string; manage_url?: string; status: "active" | "withdrawn"; player_id: string | null; revision: number;
@@ -5,6 +6,7 @@ export type PoolMember = {
   rating?: number | null; league_rating?: number | null; gender?: string | null; eligible_divisions?: string[];
 };
 export type SeasonPool = {
+  registration?: SeasonRegistrationWindow;
   signup: { share_id: string | null; revision: number; open: boolean; url: string | null };
   members: PoolMember[]; email_mode: string;
 };
@@ -15,6 +17,7 @@ export type AvailabilityResponse = {
   invited_at: string; responded_at: string | null; response_url: string;
 };
 export type MeetAvailabilityData = {
+  registration?: SeasonRegistrationWindow;
   settings: { revision: number; open: boolean; deadline: string | null };
   responses: AvailabilityResponse[]; email_mode: string;
 };

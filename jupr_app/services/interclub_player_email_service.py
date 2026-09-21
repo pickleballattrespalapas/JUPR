@@ -23,6 +23,7 @@ from jupr_app.domain.notifications.player_profile_update_repo import (
 )
 from jupr_app.domain.notifications.smtp_mailer import get_smtp_config_status, send_email_with_inline_chart
 from jupr_app.services.staging_write_guard import require_staging_communications_mutations, staging_communications_mutations_enabled
+from jupr_app.services.interclub_registration_phase import RegistrationPhaseError, registration_state, require_registration_phase
 
 TABLE = "communications_admin_operations"
 MAX_RECIPIENTS = 200
@@ -101,9 +102,11 @@ def build_audience(db, *, club_id: str, season_id: str, kind: str, meet_id: str 
     club, season = _authorized_context(db, club_id, season_id)
     if kind not in {"season", "meet"} or (kind == "season" and meet_id) or (kind == "meet" and not meet_id):
         raise ValueError("Choose a season signup email or a specific meet invitation.")
+    require_registration_phase(season, intake=kind == "season")
     settings = _one(db, "pcs_interclub_pool_settings", club_id=club_id, season_id=season_id) or {}
     candidates = []
-    state = {"club": {"id": club_id, "name": club["name"]}, "season": season["details"], "settings": settings}
+    state = {"club": {"id": club_id, "name": club["name"]}, "season": season["details"], "settings": settings,
+             "registration": registration_state(season)}
     if kind == "season":
         contacts = _all(lambda: db.table("player_profile_update_subscriptions")
             .select("id,player_id,email,email_normalized,request_status,preferences_json,verified_at")
@@ -131,8 +134,8 @@ def build_audience(db, *, club_id: str, season_id: str, kind: str, meet_id: str 
         ends_at = datetime.fromisoformat(season["details"]["end_date"]).replace(
             tzinfo=ZoneInfo(season["details"].get("timezone") or "America/Mazatlan")) + timedelta(days=1)
         season_open = ends_at > datetime.now(timezone.utc)
-        available = bool(season_open and settings.get("open") and settings.get("share_id"))
-        reason = ("Open season player signup before preparing invitation emails." if season_open
+        available = bool(season_open and settings.get("share_id"))
+        reason = ("The season signup link is unavailable. Reload the player pool before preparing invitations." if season_open
             else "This season has ended. Player signup invitations are closed.")
     else:
         meet = _one(db, "pcs_interclub_meets", id=meet_id, season_id=season_id)
@@ -217,10 +220,11 @@ def _recipient_type(operation_key):
 
 
 def _operation(db, club_id, season_id, operation_key):
-    _authorized_context(db, club_id, season_id)
+    _, season = _authorized_context(db, club_id, season_id)
     row = get_communications_admin_operation(db, operation_key=_uuid(operation_key))
     if not row or row.get("club_id") != club_id or row.get("operation_type") != _root_type(season_id):
         raise EmailNotFoundError("Email not found in this club and season.")
+    require_registration_phase(season, intake=row["request_json"]["kind"] == "season")
     return row
 
 
@@ -233,7 +237,8 @@ def _audit(db, *, club_id, user, operation_key, action, details):
 
 
 def create_email(db, *, club_id, season_id, user, operation_key, preview_fingerprint, **payload):
-    _authorized_context(db, club_id, season_id)
+    _, season = _authorized_context(db, club_id, season_id)
+    require_registration_phase(season, intake=payload["kind"] == "season")
     require_staging_communications_mutations()
     operation_key = _uuid(operation_key)
     request = {**payload, "recipient_ids": sorted(set(payload["recipient_ids"])), "subject": payload["subject"].strip(),
@@ -340,7 +345,13 @@ def send_recipient(db, *, club_id, season_id, user, operation_key, recipient_ind
         raise RuntimeError("The email claim was not confirmed. Check its results before continuing.")
     try:
         links = _links(db, user, club_id, season_id, request, recipient)
+        # Recheck immediately before each delivery, including resumed batches.
+        # A window may change while a link or durable recipient claim is prepared.
+        _, season = _authorized_context(db, club_id, season_id)
+        require_registration_phase(season, intake=request["kind"] == "season")
         result = {**_deliver(recipient=recipient, request=request, links=links, message_id=child_key), "links": links}
+    except RegistrationPhaseError:
+        result = {"status": "blocked", "detail": "No email was sent because the season registration window changed."}
     except Exception:
         result = {"status": "uncertain", "detail": "Delivery could not be confirmed. Check the invitation and email results before preparing another email."}
     try:

@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from jupr_app.services import interclub_player_email_service as service
 from tests.test_admin_match_log_service import FakeSupabase, FakeQuery
+from tests.interclub_registration_fixtures import set_registration_phase
 
 SEASON = "11111111-1111-4111-8111-111111111111"
 MEET = "22222222-2222-4222-8222-222222222222"
@@ -65,7 +66,7 @@ def fixture(monkeypatch):
     return DB({
         "clubs": [{"id": "club", "name": "Cabo"}, {"id": "other", "name": "Other Club"}],
         "pcs_interclub_participations": [{"club_id": "club", "season_id": SEASON, "status": "accepted"}, {"club_id": "other", "season_id": SEASON, "status": "accepted"}],
-        "pcs_interclub_seasons": [{"id": SEASON, "details": {"name": "Winter", "timezone": "America/Mazatlan", "end_date": "2099-12-31"}}],
+        "pcs_interclub_seasons": [set_registration_phase({"id": SEASON, "details": {"name": "Winter", "timezone": "America/Mazatlan", "end_date": "2099-12-31"}}, "open")],
         "pcs_interclub_pool_settings": [{"club_id": "club", "season_id": SEASON, "open": True, "share_id": "share", "revision": 1}],
         "players": [{"id": 1, "club_id": "club", "name": "Alex", "active": True}, {"id": 2, "club_id": "club", "name": "Beth", "active": True}, {"id": 3, "club_id": "other", "name": "Foreign", "active": True}],
         "player_profile_update_subscriptions": [{"id": "contact1", "club_id": "club", "player_id": 1, "email": "alex@example.invalid", "request_status": "active"}, {"id": "contact2", "club_id": "club", "player_id": 2, "email": "beth@example.invalid", "request_status": "active"}, {"id": "contact3", "club_id": "other", "player_id": 3, "email": "foreign@example.invalid", "request_status": "active"}],
@@ -119,6 +120,7 @@ def test_foreign_selection_cannot_expand_audience(fixture):
 
 
 def test_no_invitation_or_email_created_by_preview(fixture):
+    set_registration_phase(fixture.tables["pcs_interclub_seasons"][0], "closed")
     result = service.preview_email(fixture, club_id="club", season_id=SEASON, **payload("meet"))
     assert "#personal-meet-response-link" in result["preview"]["html"]
     assert not fixture.tables.get(service.TABLE)
@@ -126,6 +128,7 @@ def test_no_invitation_or_email_created_by_preview(fixture):
 
 
 def test_dry_run_prepares_test_link_once_and_never_touches_smtp(fixture, monkeypatch):
+    set_registration_phase(fixture.tables["pcs_interclub_seasons"][0], "closed")
     monkeypatch.setattr(service, "send_email_with_inline_chart", lambda **_: pytest.fail("SMTP must not run"))
     batch, params = create(fixture, kind="meet")
     first = send(fixture, batch["operation_key"])
@@ -140,6 +143,7 @@ def test_dry_run_prepares_test_link_once_and_never_touches_smtp(fixture, monkeyp
 
 
 def test_shared_inbox_gets_one_email_for_selected_members(fixture):
+    set_registration_phase(fixture.tables["pcs_interclub_seasons"][0], "closed")
     second = {**fixture.tables["pcs_interclub_pool_members"][0], "id": str(uuid4()), "name": "Beth"}
     fixture.tables["pcs_interclub_pool_members"].append(second)
     batch, _ = create(fixture, kind="meet", recipient_ids=[MEMBER, second["id"]])
@@ -164,6 +168,7 @@ def test_changed_contact_invalidates_review_and_remaining_send(fixture, field, v
 
 
 def test_changed_member_and_deadline_stop_remaining_send(fixture):
+    set_registration_phase(fixture.tables["pcs_interclub_seasons"][0], "closed")
     batch, _ = create(fixture, kind="meet")
     fixture.tables["pcs_interclub_availability_settings"][0]["deadline"] = "2099-11-29T12:00:00Z"
     with pytest.raises(ValueError, match="changed"):
@@ -172,6 +177,7 @@ def test_changed_member_and_deadline_stop_remaining_send(fixture):
 
 
 def test_withdrawn_member_is_no_longer_invitable(fixture):
+    set_registration_phase(fixture.tables["pcs_interclub_seasons"][0], "closed")
     batch, _ = create(fixture, kind="meet")
     fixture.tables["pcs_interclub_pool_members"][0]["status"] = "withdrawn"
     with pytest.raises(ValueError):
@@ -248,6 +254,7 @@ def test_email_routes_require_club_admin_and_do_not_cache(fixture):
 
 
 def test_real_pool_helper_creates_scoped_signed_meet_link(fixture, monkeypatch):
+    set_registration_phase(fixture.tables["pcs_interclub_seasons"][0], "closed")
     import importlib
     monkeypatch.delitem(sys.modules, "services.api.interclub_player_pool_routes")
     pool = importlib.import_module("services.api.interclub_player_pool_routes")
@@ -298,3 +305,51 @@ def test_missing_email_batch_returns_404_for_safe_client_recovery(fixture):
     url = f"/admin/clubs/club/interclub/player-pools/{SEASON}/emails/{uuid4()}"
     result = client.get(url, headers={"Authorization": "Bearer valid-admin"})
     assert result.status_code == 404
+
+
+@pytest.mark.parametrize("kind,phase", [("season", "unconfigured"), ("season", "scheduled"), ("season", "closed"),
+                                         ("meet", "unconfigured"), ("meet", "scheduled"), ("meet", "open")])
+def test_email_routes_cannot_bypass_shared_registration_phase(fixture, kind, phase):
+    from services.api.interclub_player_email_routes import install_interclub_player_email_routes
+    set_registration_phase(fixture.tables["pcs_interclub_seasons"][0], phase)
+    app = FastAPI()
+    install_interclub_player_email_routes(app, get_supabase_client=lambda: fixture)
+    client = TestClient(app)
+    base = f"/admin/clubs/club/interclub/player-pools/{SEASON}/emails"
+    headers = {"Authorization": "Bearer valid-admin"}
+    query = f"?kind={kind}" + (f"&meet_id={MEET}" if kind == "meet" else "")
+    assert client.get(base + "/audience" + query, headers=headers).status_code == 423
+    assert client.post(base + "/preview", headers=headers, json=payload(kind)).status_code == 423
+    assert not fixture.tables.get(service.TABLE) and not fixture.tables.get("__prepared__")
+
+
+@pytest.mark.parametrize("kind,initial,changed", [("season", "open", "closed"), ("meet", "closed", "open")])
+def test_phase_change_invalidates_reviewed_email_and_saved_send(fixture, kind, initial, changed):
+    from jupr_app.services.interclub_registration_phase import RegistrationPhaseError
+    season = fixture.tables["pcs_interclub_seasons"][0]
+    set_registration_phase(season, initial)
+    reviewed = prepare(fixture, kind=kind)
+    set_registration_phase(season, changed)
+    with pytest.raises(RegistrationPhaseError):
+        service.create_email(fixture, club_id="club", season_id=SEASON, user=USER, **reviewed)
+    assert not fixture.tables.get(service.TABLE)
+    set_registration_phase(season, initial)
+    batch, _ = create(fixture, kind=kind)
+    set_registration_phase(season, changed)
+    with pytest.raises(RegistrationPhaseError):
+        send(fixture, batch["operation_key"])
+    assert not fixture.tables.get("__prepared__")
+
+
+def test_phase_change_while_preparing_email_prevents_delivery(fixture, monkeypatch):
+    batch, _ = create(fixture)
+    original_links = service._links
+    def links_then_close(*args, **kwargs):
+        links = original_links(*args, **kwargs)
+        set_registration_phase(fixture.tables["pcs_interclub_seasons"][0], "closed")
+        return links
+    monkeypatch.setattr(service, "_links", links_then_close)
+    monkeypatch.setattr(service, "_deliver", lambda **_: pytest.fail("Delivery must not run after registration closes"))
+    result = send(fixture, batch["operation_key"])
+    assert result["status"] == "blocked"
+    assert "No email was sent" in result["detail"]

@@ -44,6 +44,7 @@ begin
   raise exception 'Changed club published without review';
  exception when sqlstate 'PT409' then null; end;
  update public.clubs set name='Publication Away' where id=away;
+ perform public.pcs_set_interclub_registration_window(actor,email,home,sid,0,now()-interval '3 days',now()-interval '2 days');
  insert into public.pcs_interclub_competition_batches(season_id,meet_id,phase,state,document,roster_sources,approved_document,approved_revision)
  values(sid,mid,'regular','approved','{}','[]','{}',1);
  begin

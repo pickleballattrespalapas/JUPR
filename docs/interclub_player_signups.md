@@ -4,6 +4,18 @@ After accepting a season invitation, a club recruits a pool of interested player
 Joining this pool does not commit anyone to the whole season or place them on a
 team. Each meet has its own availability responses and final roster.
 
+## Commissioner
+
+Set the season registration opening and closing dates in the season workspace.
+This single window applies to every participating club and is displayed in the
+league's timezone. Registration must close no later than the first meet starts.
+Existing seasons require the commissioner to set these dates; no dates are assumed.
+
+Before registration opens, players can view the signup page. While it is open,
+players can join and club administrators can add verbal or email commitments.
+Meet availability, roster deadlines, lineups and competition settings unlock
+only after registration closes. Direct links obey the same restriction.
+
 ## Club administrator
 
 1. Open **Interclub seasons** and select the season. Accepted clubs start with
@@ -15,12 +27,12 @@ team. Each meet has its own availability responses and final roster.
    signup when none of the profiles is correct; players already in
    the pool are skipped. Missing email addresses do not prevent an administrator
    from recording a commitment. This action does not send invitations.
-3. Open season sign-ups and copy the sign-up link, or use **Open signup page** to
+3. During the commissioner-set window, copy the sign-up link or use **Open signup page** to
    review the form. The form searches the represented club's player profiles,
    selects a unique exact name match and shows its existing rating. Unmatched
    sign-ups can still join and be linked by their club later. Interest forms never
    create or change ratings, claim accounts, or import another club's player record.
-4. A week or two before a meet, choose **Meet availability** and the relevant meet.
+4. After season registration closes, choose **Meet availability** and the relevant meet.
    Choose a reply deadline and the pool members to invite.
 5. Preview the email and its recipients, then send. Replies appear as **Available**,
    **Unsure**, **Unavailable**, or **Not replied**. Invitations are optional:
@@ -31,6 +43,9 @@ team. Each meet has its own availability responses and final roster.
 Opening meet invitations is a deliberate admin action. No automatic schedule sends
 messages without the admin's review. The club can invite players again as plans
 change, and an existing reply is retained when a new invitation is prepared.
+Clubs cannot open or close season registration individually. After the window
+closes, existing players can still be linked to their profiles, reviewed or
+withdrawn; new additions and restorations require an open registration window.
 
 ## Player
 
@@ -49,6 +64,8 @@ until the deadline. The administrator selects the final lineup separately.
 
 Season withdrawal stops future invitations. It does not remove a player from a
 roster already submitted; they should contact their club about that lineup.
+Players can withdraw after registration closes, but cannot change their active
+registration or rejoin outside the window.
 
 ## Staging test
 

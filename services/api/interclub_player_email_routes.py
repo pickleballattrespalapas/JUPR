@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from services.api.auth import auth_header
 from jupr_app.services.staging_write_guard import require_staging_communications_mutations
 from jupr_app.services import interclub_player_email_service as emails
+from jupr_app.services.interclub_registration_phase import RegistrationPhaseError
 
 
 def _require_communications_mutations():
@@ -48,6 +49,8 @@ def install_interclub_player_email_routes(app, *, get_supabase_client):
             raise HTTPException(403, str(exc)) from exc
         except emails.EmailNotFoundError as exc:
             raise HTTPException(404, str(exc)) from exc
+        except RegistrationPhaseError as exc:
+            raise HTTPException(423, str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
         except RuntimeError as exc:

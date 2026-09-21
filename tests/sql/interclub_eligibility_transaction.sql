@@ -22,8 +22,7 @@ begin
  perform public.pcs_open_interclub_meet_registration(actor,actor_email,home,sid,1,'{"3.5":{"min_rating":3.5,"max_rating":3.999,"women_required":2},"4.0":{"min_rating":4.0,"max_rating":4.499,"women_required":2}}');
  perform public.pcs_interclub_participation(actor,actor_email,home,sid,home,1,'accept');
  perform public.pcs_interclub_participation(actor,actor_email,away,sid,away,1,'accept');
- perform public.pcs_interclub_pool_action(actor,actor_email,home,sid,'settings','{"expected_revision":0,"open":true}');
- perform public.pcs_interclub_pool_action(actor,actor_email,away,sid,'settings','{"expected_revision":0,"open":true}');
+ perform public.pcs_set_interclub_registration_window(actor,actor_email,home,sid,0,now()-interval '6 days',now()+interval '1 day');
  select id into mid from public.pcs_interclub_meets where season_id=sid;
  for i in 1..5 loop
   linked_player:=next_player+i;
@@ -41,6 +40,7 @@ begin
    if result->>'approval_status'<>'pending' then raise exception 'Late signup bypassed organizer approval'; end if;
   end if;
  end loop;
+ perform public.pcs_set_interclub_registration_window(actor,actor_email,home,sid,1,now()-interval '6 days',now()-interval '5 days');
  begin
   perform public.pcs_review_interclub_pool_member(actor,actor_email,away,sid,late_member,2,true,'Late traveler');
   raise exception 'Nonorganizer approved late player';
@@ -75,6 +75,9 @@ begin
  if (select rating from public.pcs_interclub_meet_eligibility_snapshots where meet_id=mid and entry_id=entries[1] and deadline=cutoff)<>3.7 then raise exception 'Frozen rating changed'; end if;
  insert into public.pcs_interclub_appearances(season_id,meet_id,entry_id,club_id,player_id,division,batch_id,revision,phase,game_id)
  values(sid,mid,entries[1],home,players[1],'3.5',gen_random_uuid(),1,'regular','qa-game');
+ -- Reopen while the synthetic meet is still in the future to exercise identity
+ -- guards without the registration phase intentionally rejecting intake first.
+ perform public.pcs_set_interclub_registration_window(actor,actor_email,home,sid,2,now()-interval '6 days',now()+interval '1 day');
  begin
   insert into public.pcs_interclub_pool_members(season_id,club_id,name,email,request_id,request_fingerprint)
    values(sid,away,'Player 1','elig-1@example.invalid',gen_random_uuid(),'different-club');
@@ -93,6 +96,7 @@ begin
   raise exception 'Played pool identity reassigned';
  exception when invalid_parameter_value then null; end;
 
+ perform public.pcs_set_interclub_registration_window(actor,actor_email,home,sid,3,now()-interval '6 days',now()-interval '5 days');
  -- Lazy freeze happens before a post-deadline withdrawal, retaining eligibility.
  delete from public.pcs_interclub_meet_eligibility_snapshots where meet_id=mid and entry_id=entries[2];
  select pool_member_id into member from public.pcs_interclub_entries where id=entries[2];

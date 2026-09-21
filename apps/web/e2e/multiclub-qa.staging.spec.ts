@@ -1,4 +1,4 @@
-import { expect, test, type Response } from "@playwright/test";
+import { expect, test, type Page, type Response } from "@playwright/test";
 import { bootstrapStagingContext, expectedApiOrigin, expectedAuthOrigin } from "./support/staging";
 
 const clubs = [
@@ -6,6 +6,23 @@ const clubs = [
   { id: "la-paz-test-club", name: "La Paz Test Club" },
   { id: "la-ribera-pickelball-club", name: "La Ribera Pickelball Club" },
 ];
+
+async function expectMeetStepsLocked(page: Page) {
+  const workflow = page.getByRole("navigation", { name: "League workflow", exact: true });
+  await expect(workflow).toBeVisible();
+  for (const label of ["Meet availability", "Lineups", "Run meet", "Approve results"]) {
+    await expect(workflow.getByRole("link", { name: label, exact: true })).toHaveCount(0);
+    await expect(workflow.locator('[aria-disabled="true"]').filter({ has: page.getByText(label, { exact: true }) })).toHaveCount(1);
+  }
+}
+
+async function expectNoMeetControls(page: Page) {
+  // Include hidden elements: registration must not merely conceal mounted meet panels.
+  await expect(page.getByRole("combobox", { name: "Meet", exact: true, includeHidden: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Reload meet", exact: true, includeHidden: true })).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Meet rosters", exact: true, includeHidden: true })).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Meet player availability", exact: true, includeHidden: true })).toHaveCount(0);
+}
 
 // Use the existing protected-deployment CI bootstrap. No sign-in bypass is
 // shipped in the app: FastAPI verifies the real, short-lived Supabase JWT.
@@ -86,8 +103,11 @@ test("dedicated QA admin switches three clubs and previews website controls", as
 
   const playerSets: Set<number>[] = [];
   const competitionWrites: string[] = [];
+  const operationalReads: string[] = [];
   page.on("request", request => {
-    if (new URL(request.url()).pathname.includes("/interclub/competition") && !["GET", "HEAD", "OPTIONS"].includes(request.method())) competitionWrites.push(request.method() + " " + new URL(request.url()).pathname);
+    const pathname = new URL(request.url()).pathname;
+    if (pathname.includes("/interclub/competition") && !["GET", "HEAD", "OPTIONS"].includes(request.method())) competitionWrites.push(request.method() + " " + pathname);
+    if (request.method() === "GET" && /\/interclub\/(registrations|competition)\/[^/]+\/meets\//.test(pathname)) operationalReads.push(pathname);
   });
   for (const club of clubs) {
     await test.step(`${club.name}: switch, roster and page controls`, async () => {
@@ -147,12 +167,17 @@ test("dedicated QA admin switches three clubs and previews website controls", as
           await expect(invitationLink).toHaveText("Review invitation");
         }
         const seasonPath = `/admin/clubs/${club.id}/interclub/registrations/${season.id}`;
+        const registrationReadsStart = operationalReads.length;
         const seasonResponse = page.waitForResponse(r => new URL(r.url()).pathname === seasonPath && r.request().method() === "GET");
         await invitationLink.click();
         const response = await seasonResponse;
         expect(response.status(), `${club.name}: ${season.details.name} season request`).toBe(200);
         const details = await response.json();
+        // Only a closed registration window with explicit permission opens meet planning.
+        // Older responses without registration metadata must remain locked.
+        const meetPlanningOpen = details.season.registration?.status === "closed" && details.season.registration?.meet_planning_open === true;
         await expect(page.getByRole("heading", { name: season.details.name, exact: true })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "Season registration", exact: true })).toBeVisible();
         await expect(page.getByText("Loading season…", { exact: true })).toHaveCount(0);
         const organizer = season.organizer_club_id === club.id;
         expect(details.is_organizer).toBe(organizer);
@@ -184,7 +209,12 @@ test("dedicated QA admin switches three clubs and previews website controls", as
           await expect(page.getByRole("region", { name: "Season player pool", exact: true })).toBeVisible();
         }
         if (!organizer && !joined) await expect(page.getByRole("combobox", { name: "Meet", exact: true })).toHaveCount(0);
-        if (details.meets.length && (organizer || joined)) {
+        if (!meetPlanningOpen) {
+          if (organizer || joined) await expectMeetStepsLocked(page);
+          await expectNoMeetControls(page);
+          expect(operationalReads.slice(registrationReadsStart), "Registration must not fetch meet details or availability before meet planning opens").toEqual([]);
+        }
+        if (meetPlanningOpen && details.meets.length && (organizer || joined)) {
           const workflow = page.getByRole("navigation", { name: "League workflow", exact: true });
           const lineups = workflow.getByRole("link", { name: "Lineups", exact: true });
           await lineups.click();
@@ -218,6 +248,7 @@ test("dedicated QA admin switches three clubs and previews website controls", as
         if (organizer || joined) {
           await test.step(`${season.details.name}: read-only meet operations and print layout`, async () => {
             const competitionPath = `/admin/clubs/${club.id}/interclub/competition/${season.id}`;
+            const competitionReadsStart = operationalReads.length;
             const responses = new Map<string, Response>();
             const capture = (response: Response) => {
               const pathname = new URL(response.url()).pathname;
@@ -239,8 +270,23 @@ test("dedicated QA admin switches three clubs and previews website controls", as
               expect(competition.batches.every((batch: { season_id: string; meet_id: string }) => batch.season_id === season.id && meetIds.has(batch.meet_id))).toBe(true);
               await expect(page.getByRole("heading", { name: "Meet operations", exact: true })).toBeVisible();
               await expect(page.getByRole("combobox", { name: "Season", exact: true })).toHaveValue(season.id);
-              await expect(page.getByRole("heading", { name: "Standings & Club Cup", exact: true })).toBeVisible();
               await expect(page.getByText(/^(Load failed|Unable to load|Loading meet operations)/)).toHaveCount(0);
+
+              const competitionPlanningOpen = competition.season.registration?.status === "closed" && competition.season.registration?.meet_planning_open === true;
+              if (!competitionPlanningOpen) {
+                await expect(page.getByRole("heading", { name: "Meet planning opens after registration closes", exact: true })).toBeVisible();
+                await expect(page.getByRole("link", { name: "Go to season player pool", exact: true })).toHaveAttribute("href", `/admin/interclub/registrations?season=${encodeURIComponent(season.id)}&step=pool`);
+                await expectMeetStepsLocked(page);
+                await expectNoMeetControls(page);
+                await expect(page.getByRole("heading", { name: "Standings & Club Cup", exact: true, includeHidden: true })).toHaveCount(0);
+                await expect(page.getByRole("combobox", { name: "Scheduled competition format", exact: true, includeHidden: true })).toHaveCount(0);
+                await expect(page.getByRole("button", { name: "Print meet packet", exact: true, includeHidden: true })).toHaveCount(0);
+                await expect(page.getByRole("button", { name: "Generate pairings", exact: true, includeHidden: true })).toHaveCount(0);
+                await expect(page.getByText("Schedule a championship, qualifying playoff or additional meet", { exact: true })).toHaveCount(0);
+                expect(operationalReads.slice(competitionReadsStart), "Direct competition navigation must read only season context while meet planning is locked").toEqual([]);
+                return;
+              }
+              await expect(page.getByRole("heading", { name: "Standings & Club Cup", exact: true })).toBeVisible();
 
               for (const scheduled of competition.meets) {
                 const phase = scheduled.competition_phase || "regular";

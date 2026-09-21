@@ -8,9 +8,11 @@ function load(file, mocks = {}) {
   return module.exports;
 }
 const registration = load('lib/interclubRegistration.ts'), types = load('lib/interclubPlayerPool.ts');
+const windowHelpers = load('lib/interclubRegistrationWindow.ts');
+const windowHook = load('lib/useRegistrationWindow.ts', { './interclubRegistrationWindow': windowHelpers });
 const resource = load(base + 'usePoolResource.ts', { '@/lib/interclubRegistration': registration });
 const common = load(base + 'PoolPanelCommon.tsx', { './playerPool.module.css': {} });
-const mocks = { '@/lib/interclubPlayerPool': types, './usePoolResource': resource, './PoolPanelCommon': common, './playerPool.module.css': {} };
+const mocks = { '@/lib/interclubRegistrationWindow': windowHelpers, '@/lib/useRegistrationWindow': windowHook, '@/lib/interclubPlayerPool': types, './usePoolResource': resource, './PoolPanelCommon': common, './playerPool.module.css': {} };
 const email = load(base + 'PoolInvitationEmail.tsx', mocks);
 const bulk = load(base + 'PoolBulkAdd.tsx', mocks);
 const panels = load(base + 'PlayerPoolPanels.tsx', { ...mocks, './PoolInvitationEmail': email, './PoolBulkAdd': bulk });
@@ -20,12 +22,14 @@ const text = tree => JSON.stringify(tree.toJSON());
 const reply = (body, status = 200) => ({ ok: status < 400, status, json: async () => body });
 const root = 'https://api.test/admin/clubs/beta/interclub/registrations/season-1';
 const emailRoot = 'https://api.test/admin/clubs/beta/interclub/player-pools/season-1/emails';
-const season = { id: 'season-1', details: { name: 'Coastal League', divisions: ['3.5'], timezone: 'America/Mazatlan' } };
+const openWindow = { opens_at: '2020-01-01T00:00:00Z', closes_at: '2099-01-01T00:00:00Z', revision: 1, status: 'open', can_register: true, meet_planning_open: false };
+const closedWindow = { ...openWindow, closes_at: '2020-02-01T00:00:00Z', status: 'closed', can_register: false, meet_planning_open: true };
+const season = { registration: openWindow, id: 'season-1', details: { name: 'Coastal League', divisions: ['3.5'], timezone: 'America/Mazatlan' } };
 const member = { id: 'member-1', club_id: 'beta', season_id: 'season-1', name: 'Alex Example', email: 'alex@example.invalid', divisions: ['3.5'], notes: 'Away in January', player_id: null, status: 'active', revision: 2 };
 Object.defineProperty(global, 'crypto', { value: { randomUUID: () => 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }, configurable: true });
 
 async function seasonPool() {
-  let requests = [], finish, pool = { signup: { revision: 0, open: false, url: null }, members: [member], email_mode: 'dry_run' };
+  let requests = [], finish, pool = { registration: openWindow, signup: { revision: 0, open: true, url: 'https://site.test/interclub/signup/share' }, members: [member], email_mode: 'dry_run' };
   global.fetch = async (url, options) => {
     requests.push({ url, options });
     if (options.method) return new Promise(resolve => { finish = resolve; });
@@ -35,13 +39,11 @@ async function seasonPool() {
   let tree;
   const props = { root, accessToken: 'token-1', clubName: 'Beta Club', season };
   await act(async () => { tree = create(React.createElement(panels.SeasonPlayerPool, props)); });
-  assert.equal(button(tree, 'Invite club players by email').props.disabled, true);
+  assert.equal(button(tree, 'Invite club players by email').props.disabled, false);
   assert.ok(text(tree).includes('Away in January'));
-  await act(async () => { void button(tree, 'Open season signup').props.onClick(); void button(tree, 'Open season signup').props.onClick(); });
-  assert.equal(requests.filter(row => row.options.method).length, 1, 'Opening signup deduplicates repeated clicks');
-  assert.deepEqual(JSON.parse(requests.at(-1).options.body), { expected_revision: 0, open: true });
-  pool = { ...pool, signup: { revision: 1, open: true, url: 'https://site.test/interclub/signup/share' } };
-  await act(async () => finish(reply(pool)));
+  assert.equal(button(tree, 'Open season signup'), undefined, 'Clubs cannot open season registration');
+  assert.equal(button(tree, 'Close season signup'), undefined, 'Clubs cannot close season registration');
+  assert.equal(requests.filter(row => row.options.method).length, 0, 'Opening the pool does not alter commissioner registration dates');
   assert.ok(text(tree).includes('https://site.test/interclub/signup/share'));
   assert.equal(tree.root.findByProps({ children: 'Open signup page' }).props.href, pool.signup.url);
   assert.ok(button(tree, 'Add players'), 'Admin can add verbal commitments without opening public signup');
@@ -80,7 +82,7 @@ async function availability() {
     if (options.method === 'PUT') { state = { ...state, settings: { revision: 1, open: true, deadline: '2099-02-19T12:00:00Z' } }; return reply(state); }
     return reply(state);
   };
-  let tree; const props = { meetRoot: root + '/meets/meet-1', accessToken: 'token', clubName: 'Beta Club', season, meet, onResponses: rows => { observed = rows; } };
+  let tree; const props = { meetRoot: root + '/meets/meet-1', accessToken: 'token', clubName: 'Beta Club', season: { ...season, registration: closedWindow }, meet, onResponses: rows => { observed = rows; } };
   await act(async () => { tree = create(React.createElement(panels.MeetAvailability, props)); });
   assert.equal(observed, responses);
   assert.ok(text(tree).includes('1 available · 0 maybe · 0 unavailable · 1 not replied'), 'Withdrawn members do not count toward available players');
@@ -94,6 +96,63 @@ async function availability() {
   assert.ok(text(tree).includes('Available Player') && !text(tree).includes('Withdrawn Player') && !text(tree).includes('Waiting Player'));
   assert.equal(requests.filter(row => row.options.method).length, 1, 'Opening replies does not send invitations');
   await act(async () => tree.unmount());
+}
+
+async function commissionerRegistrationGates() {
+  const scheduled = { ...openWindow, opens_at: '2098-01-01T00:00:00Z', status: 'scheduled', can_register: false };
+  for (const registrationWindow of [undefined, scheduled, closedWindow, openWindow]) {
+    let reads = 0;
+    global.fetch = async () => { reads++; return reply({ registration: registrationWindow, signup: { open: true, revision: 1, url: 'https://site.test/interclub/signup/share' }, members: [member, { ...member, id: 'withdrawn', name: 'Withdrawn Player', status: 'withdrawn' }], email_mode: 'dry_run' }); };
+    let tree;
+    await act(async () => { tree = create(React.createElement(panels.SeasonPlayerPool, { root, accessToken: 'token', clubName: 'Beta Club', season: { ...season, registration: registrationWindow } })); });
+    const open = registrationWindow === openWindow;
+    assert.equal(button(tree, 'Add players').props.disabled, !open, 'Only commissioner-open registration permits admin additions');
+    assert.equal(button(tree, 'Invite club players by email').props.disabled, !open);
+    assert.ok(tree.root.findByProps({ children: 'Open signup page' }), 'The signup page stays shareable in every phase');
+    assert.equal(button(tree, 'Open season signup'), undefined);
+    assert.equal(button(tree, 'Close season signup'), undefined);
+    assert.equal(button(tree, 'Withdraw from season pool').props.disabled, false, 'Existing players can still withdraw outside registration');
+    assert.equal(button(tree, 'Link club player').props.disabled, false, 'Administrators can still correct profile links');
+    await act(async () => tree.root.findByType('select').props.onChange({ target: { value: 'all' } }));
+    assert.equal(button(tree, 'Restore season signup').props.disabled, !open, 'Restoring a withdrawn player requires open registration');
+    if (!registrationWindow) assert.ok(text(tree).includes('commissioner has not set registration dates yet'));
+    await act(async () => tree.unmount());
+    if (!open) continue;
+    reads = 0;
+    await act(async () => { tree = create(React.createElement(panels.MeetAvailability, { meetRoot: root + '/meets/meet-1', accessToken: 'token', clubName: 'Beta Club', season, meet: { id: 'meet-1', starts_at: '2099-02-20T18:00:00Z' } })); });
+    assert.equal(reads, 0, 'Meet settings and availability data are not opened during registration');
+    assert.equal(tree.root.findAllByType('form').length, 0);
+    await act(async () => tree.unmount());
+  }
+}
+
+async function resumedRegistrationBoundary() {
+  const originalNow = Date.now, previousWindow = global.window;
+  let clock = Date.parse('2050-01-01T00:00:00Z'), reads = 0, tree;
+  Date.now = () => clock;
+  const scheduled = { ...openWindow, opens_at: new Date(clock + 3_600_000).toISOString(), status: 'scheduled', can_register: false };
+  const opened = { ...scheduled, status: 'open', can_register: true };
+  const focus = new Set();
+  global.window = { addEventListener: (event, callback) => { if (event === 'focus') focus.add(callback); }, removeEventListener: (event, callback) => focus.delete(callback) };
+  global.fetch = async () => { reads++; return reply({ registration: scheduled, signup: { revision: 1, open: false, url: 'https://site.test/interclub/signup/share' }, members: [], email_mode: 'dry_run' }); };
+  try {
+    const props = { root, accessToken: 'token', clubName: 'Beta Club', season: { ...season, registration: scheduled } };
+    await act(async () => { tree = create(React.createElement(panels.SeasonPlayerPool, props)); });
+    assert.equal(button(tree, 'Add players').props.disabled, true);
+    clock = Date.parse(scheduled.opens_at) + 1;
+    await act(async () => { for (const listener of [...focus]) listener(); });
+    assert.equal(reads, 2, 'Returning after a suspended opening timer rechecks the pool at the missed boundary');
+    await act(async () => tree.update(React.createElement(panels.SeasonPlayerPool, { ...props, season: { ...season, registration: opened } })));
+    assert.equal(button(tree, 'Add players').props.disabled, false, 'A parent open snapshot supersedes scheduled pool data at the same revision');
+    const closed = { ...opened, status: 'closed', can_register: false, meet_planning_open: true };
+    assert.equal(windowHelpers.latestRegistrationWindow(opened, closed), closed, 'Equal-revision phases cannot regress from closed to open');
+    const revised = { ...scheduled, revision: 2 };
+    assert.equal(windowHelpers.latestRegistrationWindow(closed, revised), revised, 'A new commissioner revision overrides prior phase progression');
+  } finally {
+    if (tree) await act(async () => tree.unmount());
+    Date.now = originalNow;
+    if (previousWindow === undefined) delete global.window; else global.window = previousWindow;
+  }
 }
 
 async function invitationEmail() {
@@ -183,7 +242,7 @@ async function bulkAdd() {
     throw new Error('Unexpected bulk request ' + url);
   };
   let tree;
-  await act(async () => { tree = create(React.createElement(bulk.PoolBulkAdd, { root, accessToken: 'token', divisions: ['3.5'], members: [{ ...member, player_id: 'existing' }], onClose() {}, onAdded: result => { added = result; } })); });
+  await act(async () => { tree = create(React.createElement(bulk.PoolBulkAdd, { registration: openWindow, root, accessToken: 'token', divisions: ['3.5'], members: [{ ...member, player_id: 'existing' }], onClose() {}, onAdded: result => { added = result; } })); });
   const choices = tree.root.findAllByProps({ type: 'checkbox' });
   assert.equal(choices[1].props.disabled, true, 'Already pooled profiles cannot be selected twice');
   await act(async () => choices[0].props.onChange());
@@ -212,6 +271,13 @@ async function bulkAdd() {
   assert.equal(requests.some(row => row.url.includes('/emails')), false, 'Adding commitments does not invoke email delivery');
   await act(async () => tree.root.findByType('textarea').props.onChange({ target: { value: 'Different Player' } }));
   assert.equal(button(tree, 'Add 3 players to pool'), undefined, 'Changing a batch clears the reviewed preview');
+  const beforeClose = requests.length, originalNow = Date.now;
+  try {
+    Date.now = () => Date.parse('2100-01-01T00:00:00Z');
+    await act(async () => button(tree, 'Preview 2 players').props.onClick());
+    assert.equal(requests.length, beforeClose, 'A stale bulk preview click is blocked after the closing boundary');
+    assert.ok(text(tree).includes('Season registration has closed.'));
+  } finally { Date.now = originalNow; }
   await act(async () => tree.unmount());
 }
-(async () => { await seasonPool(); await availability(); await invitationEmail(); await recoverSavedInvitations(); await bulkAdd(); console.log('PASS interclub player pool: scoped signup/linking, revision conflicts, stale responses, availability, bulk player matching and optional emails, email preview and dry-run delivery'); })().catch(error => { console.error(error); process.exit(1); });
+(async () => { await seasonPool(); await availability(); await commissionerRegistrationGates(); await resumedRegistrationBoundary(); await invitationEmail(); await recoverSavedInvitations(); await bulkAdd(); console.log('PASS interclub player pool: scoped signup/linking, commissioner registration phases, suspended boundary recovery, revision conflicts, stale responses, availability, bulk player matching and optional emails, email preview and dry-run delivery'); })().catch(error => { console.error(error); process.exit(1); });

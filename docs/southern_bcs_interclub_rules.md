@@ -63,15 +63,21 @@ remain visible rather than silently admitting an apparent transfer.
 
 ## 3. Season interest pool and meet registration
 
-1. After accepting, the club opens a season interest registration page and shares
-   it with its players.
+1. The commissioner sets one season registration opening and closing time for
+   all clubs. After accepting, each club shares its own registration link;
+   individual clubs cannot open or close season registration. The closing time
+   must be no later than the first meet starts.
 2. Players join that club's season interest pool at the beginning of the season.
    Joining expresses interest; it does not commit the player to every meet or
    guarantee selection.
-3. Joining after the season starts requires **league organizer approval as a late
+3. Joining is possible only during the commissioner-set registration window,
+   including administrator additions for verbal or email commitments. Joining
+   after the season starts also requires **league organizer approval as a late
    addition**. A club administrator cannot bypass this approval by directly
    placing a new player on a meet roster.
-4. Before each meet, the club invites pool members to report availability. Joe's
+4. Meet availability, deadlines, lineups and competition settings are locked
+   until season registration closes. After it closes, the club invites pool
+   members to report availability before each meet. Joe's
    intended timing is roughly one or two weeks ahead; exact dates and response
    deadlines are configurable.
 5. The club administrator selects a meet-specific lineup from the approved pool.

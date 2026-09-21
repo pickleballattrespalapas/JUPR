@@ -46,6 +46,8 @@ begin
    'starts_at',now()+interval '20 days','duration_minutes',180,'courts',4)));
  saved:=public.pcs_save_interclub_draft(actor,actor_email,org,sid,2,draft);
  perform public.pcs_open_interclub_meet_registration(actor,actor_email,org,sid,3,rules);
+ if (select registration_opens_at is not null or registration_closes_at is not null from public.pcs_interclub_seasons where id=sid) then
+  raise exception 'Opening club invitations invented a player registration window'; end if;
  begin
   perform public.pcs_save_interclub_draft(actor,actor_email,org,sid,3,draft||'{"name":"Misleading edit"}'::jsonb);
   raise exception 'Opened season still accepts planning edits';

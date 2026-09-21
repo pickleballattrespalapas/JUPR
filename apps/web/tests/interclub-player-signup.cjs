@@ -10,23 +10,28 @@ process.env.NEXT_PUBLIC_JUPR_API_BASE_URL = 'https://api.test';
 let uuid = 0;
 Object.defineProperty(global, 'crypto', { value: { randomUUID: () => `request-${++uuid}` }, configurable: true });
 const helpers = load('lib/interclubPlayerSignup.ts');
+const windowHelpers = load('lib/interclubRegistrationWindow.ts');
+const windowHook = load('lib/useRegistrationWindow.ts', { './interclubRegistrationWindow': windowHelpers });
+const windowMocks = { '@/lib/interclubRegistrationWindow': windowHelpers, '@/lib/useRegistrationWindow': windowHook };
 const styles = new Proxy({}, { get: (_, property) => property });
 let currentSession = null;
 const Signup = load('app/interclub/signup/[shareId]/SeasonSignup.tsx', {
-  '@/lib/interclubPlayerSignup': helpers, '../../player-signup.module.css': styles,
+  ...windowMocks, '@/lib/interclubPlayerSignup': helpers, '../../player-signup.module.css': styles,
   '@/lib/tournamentRegistrationProfile': load('lib/tournamentRegistrationProfile.ts'),
   '@/lib/adminAuthClient': { loadAdminSession: () => currentSession, adminSessionIsFresh: () => true },
 }).default;
-const Response = load('app/interclub/respond/PlayerResponse.tsx', { '@/lib/interclubPlayerSignup': helpers, '../player-signup.module.css': styles }).default;
+const Response = load('app/interclub/respond/PlayerResponse.tsx', { ...windowMocks, '@/lib/interclubPlayerSignup': helpers, '../player-signup.module.css': styles }).default;
 const reply = (value, status = 200) => ({ ok: status < 400, status, json: async () => value });
 const content = tree => JSON.stringify(tree.toJSON());
 const button = (tree, text) => tree.root.findAllByType('button').find(node => node.children.includes(text));
 const settleLookup = () => act(async () => new Promise(resolve => setTimeout(resolve, 275)));
 const club = { id: 'cabo', name: 'Cabo Test Club' };
-const season = { id: 'season', name: 'Coastal Season', start_date: '2099-11-01', end_date: '2100-03-31', timezone: 'America/Mazatlan', divisions: ['3.5', '4.0'] };
+const openWindow = { opens_at: '2020-01-01T00:00:00Z', closes_at: '2099-01-01T00:00:00Z', revision: 1, status: 'open', can_register: true, meet_planning_open: false };
+const closedWindow = { ...openWindow, closes_at: '2020-02-01T00:00:00Z', status: 'closed', can_register: false, meet_planning_open: true };
+const season = { registration: openWindow, id: 'season', name: 'Coastal Season', start_date: '2099-11-01', end_date: '2100-03-31', timezone: 'America/Mazatlan', divisions: ['3.5', '4.0'] };
 const member = { id: 'member-a', name: 'Jo Player', email: 'jo@example.test', divisions: ['3.5'], notes: 'Away in January', status: 'active', revision: 4 };
 const review = { kind: 'season', club, season, member, can_respond: true, can_withdraw: true };
-const meetReview = { ...review, kind: 'meet', meet: { id: 'meet-a', host_club_id: 'la-paz', host_club_name: 'La Paz Test Club', starts_at: '2099-11-15T17:00:00Z' }, availability: { status: 'invited', revision: 2, deadline: '2099-11-13T17:00:00Z', open: true } };
+const meetReview = { ...review, season: { ...season, registration: closedWindow }, kind: 'meet', meet: { id: 'meet-a', host_club_id: 'la-paz', host_club_name: 'La Paz Test Club', starts_at: '2099-11-15T17:00:00Z' }, availability: { status: 'invited', revision: 2, deadline: '2099-11-13T17:00:00Z', open: true } };
 
 function personalLink(token = 'private-token') {
   const replaced = [];
@@ -123,7 +128,7 @@ async function seasonEditingAndWithdrawal() {
 
 async function signupClosingWhileFormIsOpen() {
   let open = true;
-  global.fetch = async (url, options) => options.method ? reply({ detail: 'Closed' }, 409) : url.includes('/players') ? reply({ players: [], linked_player: null }) : reply({ club, season, signup: { open }, meets: [] });
+  global.fetch = async (url, options) => options.method ? reply({ detail: 'Closed' }, 409) : url.includes('/players') ? reply({ players: [], linked_player: null }) : reply({ club, season: { ...season, registration: open ? openWindow : closedWindow }, signup: { open }, meets: [] });
   let tree;
   await act(async () => { tree = create(React.createElement(Signup, { shareId: 'shared' })); });
   await act(async () => {
@@ -137,7 +142,7 @@ async function signupClosingWhileFormIsOpen() {
   assert.equal(tree.root.findByProps({ autoComplete: 'name' }).props.value, 'Jo Player');
   open = false;
   await act(async () => button(tree, 'Reload signup').props.onClick());
-  assert.ok(content(tree).includes('Signup is currently closed'));
+  assert.ok(content(tree).includes('Season registration has closed.'));
   assert.equal(tree.root.findAllByType('form').length, 0);
   await act(async () => tree.unmount());
 }
@@ -327,6 +332,42 @@ async function signupExistingAccountPrefill() {
   currentSession = null;
 }
 
+async function commissionerRegistrationWindow() {
+  let windowValue, calls = [];
+  global.fetch = async (url, options) => { calls.push({ url, options }); return reply({ club, season: { ...season, registration: windowValue }, signup: { open: true }, meets: [] }); };
+  for (const value of [undefined, { ...openWindow, opens_at: '2098-01-01T00:00:00Z', status: 'scheduled', can_register: false }, closedWindow]) {
+    windowValue = value;
+    let tree;
+    await act(async () => { tree = create(React.createElement(Signup, { shareId: 'shared' })); });
+    assert.equal(tree.root.findAllByType('form').length, 0, 'Legacy club signup.open does not override commissioner registration');
+    if (!value) assert.ok(content(tree).includes('commissioner has not set registration dates yet'));
+    else assert.ok(content(tree).includes('Season registration:'));
+    await act(async () => tree.unmount());
+  }
+  const opens = Date.now() + 60, closes = opens + 3_600_000;
+  calls = [];
+  global.fetch = async (url, options) => {
+    calls.push({ url, options });
+    const canRegister = Date.now() >= opens;
+    return reply({ club, season: { ...season, registration: { ...openWindow, opens_at: new Date(opens).toISOString(), closes_at: new Date(closes).toISOString(), status: canRegister ? 'open' : 'scheduled', can_register: canRegister } }, signup: { open: true }, meets: [] });
+  };
+  let tree;
+  await act(async () => { tree = create(React.createElement(Signup, { shareId: 'shared' })); });
+  assert.equal(tree.root.findAllByType('form').length, 0);
+  await act(async () => new Promise(resolve => setTimeout(resolve, 125)));
+  assert.ok(calls.length >= 2, 'The opening boundary rechecks commissioner settings automatically');
+  assert.equal(tree.root.findAllByType('form').length, 1, 'The form opens only after the server confirms the registration phase');
+  await act(async () => tree.root.findAllByProps({ type: 'checkbox' }).at(-1).props.onChange({ target: { checked: true } }));
+  const beforeClose = calls.length, originalNow = Date.now;
+  try {
+    Date.now = () => closes + 1;
+    await act(async () => tree.root.findByType('form').props.onSubmit({ preventDefault() {} }));
+    assert.equal(calls.slice(beforeClose).some(call => call.options.method === 'POST'), false, 'An already-open form cannot submit after registration closes');
+    assert.equal(tree.root.findAllByType('form').length, 0);
+  } finally { Date.now = originalNow; }
+  await act(async () => tree.unmount());
+}
+
 (async () => {
   await signupConsentRetryAndPrivacy();
   await signupClosingWhileFormIsOpen();
@@ -336,5 +377,6 @@ async function signupExistingAccountPrefill() {
   await missingLinkAndWrongResponseKind();
   await signupProfileMatchingAndSafeFallback();
   await signupExistingAccountPrefill();
+  await commissionerRegistrationWindow();
   console.log('Interclub public player signup and response checks passed');
 })().catch(error => { console.error(error); process.exit(1); });

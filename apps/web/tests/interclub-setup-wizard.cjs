@@ -7,6 +7,7 @@ function load(file, mocks = {}) {
   return module.exports;
 }
 const registration = load('lib/interclubRegistration.ts'), helpers = load('lib/interclubSetup.ts');
+const registrationWindow = load('lib/interclubRegistrationWindow.ts');
 const Link = ({ children, ...props }) => React.createElement('a', props, children);
 const Panel = load('app/admin/interclub/ClubInvitationPanel.tsx', { './setup.module.css': {} }).default;
 const Wizard = load('app/admin/interclub/InterclubSetupWizard.tsx', { 'next/link': Link, '@/lib/interclubRegistration': registration, '@/lib/interclubSetup': helpers, './setup.module.css': {}, './ClubInvitationPanel': Panel }).default;
@@ -213,7 +214,7 @@ async function inviteDuringClubSelection() {
 async function invitationDashboard() {
   let clubId = 'beta', registrations = [
     { id: 'invite', organizer_club_id: 'alpha', details: { name: 'Invited season', start_date: '2099-01-01', end_date: '2099-03-31' }, participation: { status: 'invited' } },
-    { id: 'joined', organizer_club_id: 'alpha', details: { name: 'Joined season', start_date: '2099-01-01', end_date: '2099-03-31' }, participation: { status: 'accepted' } },
+    { id: 'joined', registration: { opens_at: '2000-01-01T00:00:00Z', closes_at: '2000-02-01T00:00:00Z', revision: 1, status: 'closed', can_register: false, meet_planning_open: true }, organizer_club_id: 'alpha', details: { name: 'Joined season', start_date: '2099-01-01', end_date: '2099-03-31' }, participation: { status: 'accepted' } },
     { id: 'organized', organizer_club_id: 'beta', details: { name: 'Organized season', start_date: '2099-01-01', end_date: '2099-03-31' }, participation: { status: 'invited' } },
     { id: 'declined', organizer_club_id: 'alpha', details: { name: 'Declined season', start_date: '2099-01-01', end_date: '2099-03-31' }, participation: { status: 'declined' } },
     { id: 'cancelled', organizer_club_id: 'alpha', details: { name: 'Cancelled season', start_date: '2099-01-01', end_date: '2099-03-31' }, participation: { status: 'cancelled' } }
@@ -230,7 +231,7 @@ async function invitationDashboard() {
     'next/link': Link, '@/lib/useAdminWorkspace': { useAdminWorkspace: () => ({ clubId }) },
     '@/lib/useAdminSession': { useAdminSession: () => ({ accessToken: 'home-token', loading: false, session: { user: { id: 'staff' }, capabilities: { assignments: [{ club_id: clubId, role: 'administrator' }] } } }) },
     '@/lib/adminPlayerEditorApi': { getAdminPlayerEditorApiBaseUrl: () => 'https://api.test' },
-    '@/lib/interclubRegistration': registration, '@/lib/interclubSetup': helpers, './InterclubSetupWizard': () => null, './setup.module.css': {}
+    '@/lib/interclubRegistration': registration, '@/lib/interclubRegistrationWindow': registrationWindow, '@/lib/interclubSetup': helpers, './InterclubSetupWizard': () => null, './setup.module.css': {}
   }).default;
   let tree;
   await act(async () => { tree = create(React.createElement(Home)); });
@@ -244,6 +245,7 @@ async function invitationDashboard() {
   assert.deepEqual(links('Joined season').map(nodeText), ['Open league workspace', 'Meet schedules, score sheets & results']);
   assert.ok(links('Organized season').some(a => nodeText(a) === 'Open league workspace'));
   assert.ok(links('Organized season').some(a => a.props.href.includes('/publication?')));
+  assert.ok(!links('Organized season').some(a => a.props.href.includes('/competition?')), 'Meet operations are not offered before the commissioner registration period has closed');
   for (const name of ['Declined season', 'Cancelled season']) assert.deepEqual(links(name).map(nodeText), ['View invitation']);
   assert.ok(!links('Invited season').some(a => a.props.href.includes('/publication?')), 'Participating club is not offered organizer publishing');
   assert.ok(requests.every(r => r.url.includes('/clubs/beta/') && !r.options.method), 'Dashboard only loads the current club');
