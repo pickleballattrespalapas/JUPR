@@ -419,7 +419,7 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
     assert all("XX" not in version for version in versions)
     assert len(contract["required_ledger_names"]) == 107
     assert "partner_email_invitations" in contract["required_ledger_names"]
-    assert len(contract["deployment_order"]) == 105
+    assert len(contract["deployment_order"]) == 107
     assert set(contract["deployment_order"]) == set(
         contract["required_ledger_names"]
     )
