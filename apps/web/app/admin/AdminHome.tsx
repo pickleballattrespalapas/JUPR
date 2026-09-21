@@ -1,12 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
-import { clearAdminSession, type AdminSession } from "@/lib/adminAuthClient";
-import { getAdminDashboard, type AdminDashboard } from "@/lib/adminDashboardApi";
+import type { AdminSession } from "@/lib/adminAuthClient";
+import AdminNotificationCenter from "@/components/AdminNotificationCenter";
 import { useAdminSession } from "@/lib/useAdminSession";
 import { useAdminWorkspace } from "@/lib/useAdminWorkspace";
-import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import styles from "./AdminHome.module.css";
 
 const quickActions = [
@@ -19,63 +17,6 @@ const quickActions = [
 function ClubDashboard({ accessToken, session, clubId, clubSlug }: {
   accessToken: string; session: AdminSession; clubId: string; clubSlug: string;
 }) {
-  const [data, setData] = useState<AdminDashboard | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const inFlight = useRef(false);
-  const mounted = useRef(true);
-  const request = useLatestRequestGuard(`${accessToken}\u0000${clubId}`);
-
-  async function loadDashboard() {
-    if (inFlight.current) return;
-    inFlight.current = true;
-    const generation = request.begin();
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await getAdminDashboard(accessToken, clubId);
-      if (!mounted.current || !request.isCurrent(generation)) return;
-      if (result.status === 401 || result.status === 403) {
-        setData(null);
-        clearAdminSession();
-        return;
-      }
-      if (!result.data) {
-        setData(null);
-        setError(result.error || "We couldn’t check pending work. Please try again.");
-        return;
-      }
-      setData(result.data);
-    } catch {
-      if (mounted.current && request.isCurrent(generation)) {
-        setData(null);
-        setError("We couldn’t check pending work. Please try again.");
-      }
-    } finally {
-      inFlight.current = false;
-      if (mounted.current && request.isCurrent(generation)) setLoading(false);
-    }
-  }
-
-  useAuthenticatedAutoLoad(accessToken, loadDashboard, clubId);
-  const refreshRef = useRef(loadDashboard);
-  refreshRef.current = loadDashboard;
-  useEffect(() => {
-    mounted.current = true;
-    const refresh = () => {
-      if (document.visibilityState === "visible") void refreshRef.current();
-    };
-    window.addEventListener("focus", refresh);
-    document.addEventListener("visibilitychange", refresh);
-    const timer = window.setInterval(refresh, 60_000);
-    return () => {
-      mounted.current = false;
-      window.removeEventListener("focus", refresh);
-      document.removeEventListener("visibilitychange", refresh);
-      window.clearInterval(timer);
-    };
-  }, [request]);
-
   const assignments = session.capabilities?.assignments.filter(item => item.club_id === clubId) ?? [];
   const permissions = new Set(assignments.flatMap(item => item.permissions));
   const isAdmin = assignments.some(item => ["administrator", "club_owner", "super_admin"].includes(item.role));
@@ -91,10 +32,6 @@ function ClubDashboard({ accessToken, session, clubId, clubSlug }: {
     return { ...action, label: canCreate ? action.label : action.openLabel,
       description: canCreate ? action.description : "Open your assigned programs and continue play." };
   });
-  const pending = data?.queues.filter(queue => queue.status === "ready" && Number(queue.count) > 0) ?? [];
-  const unavailable = data?.queues.filter(queue => queue.status === "unavailable") ?? [];
-  const ready = data?.queues.filter(queue => queue.status === "ready") ?? [];
-  const total = pending.reduce((sum, queue) => sum + Number(queue.count), 0);
 
   return (
     <section className={styles.home}>
@@ -106,40 +43,7 @@ function ClubDashboard({ accessToken, session, clubId, clubSlug }: {
         <Link className={styles.publicLink} href={`/clubs/${encodeURIComponent(clubSlug)}`} target="_blank" rel="noreferrer">View club website ↗</Link>
       </header>
 
-      <section className={`${styles.attention} ${total > 0 ? styles.hasPending : ""}`} aria-labelledby="attention-heading" aria-busy={loading}>
-        <div className={styles.sectionHeader}>
-          <div>
-            <p className={styles.eyebrow}>Notifications</p>
-            <h2 id="attention-heading">Needs attention</h2>
-          </div>
-          <button type="button" className={styles.refresh} disabled={loading} onClick={() => void loadDashboard()}>{loading ? "Checking…" : "Refresh"}</button>
-        </div>
-        <p role="status" aria-live="polite" className={styles.summary}>
-          {loading && !data ? "Checking for pending work…" : error ? "Notifications unavailable" : total > 0
-            ? `${total}${unavailable.length ? "+" : ""} ${total === 1 && !unavailable.length ? "item needs" : "items need"} attention`
-            : unavailable.length ? "Some notifications couldn’t be checked" : data?.queues.length
-              ? "No pending work in the checked queues" : "No review queues are available for your role"}
-        </p>
-        {error ? <div role="alert" className={styles.warning}><p>{error}</p><p>Your club tools are still available below and in the menu.</p></div> : null}
-        {pending.length > 0 ? <ul className={styles.queueList}>
-          {pending.map(queue => <li key={queue.key}>
-            <Link href={queue.href} className={styles.queueLink}>
-              <span className={styles.count}>{queue.count}</span>
-              <span className={styles.queueText}><strong>{queue.label}</strong><span>{queue.description}</span></span>
-              <span aria-hidden="true" className={styles.arrow}>→</span>
-            </Link>
-          </li>)}
-        </ul> : null}
-        {unavailable.length > 0 ? <div role="alert" className={styles.warning}>
-          <p>We couldn’t check {unavailable.length === 1 ? "this queue" : "these queues"}. Open {unavailable.length === 1 ? "it" : "them"} to review pending work, or try Refresh.</p>
-          <ul>{unavailable.map(queue => <li key={queue.key}><Link href={queue.href}>{queue.label}</Link></li>)}</ul>
-        </div> : null}
-        {data && ready.length > 0 ? <details className={styles.checked}>
-          <summary>{ready.length} {ready.length === 1 ? "queue" : "queues"} checked · See all review queues</summary>
-          <ul>{ready.map(queue => <li key={queue.key}><Link href={queue.href}>{queue.label}</Link><span>{queue.count} pending</span></li>)}</ul>
-        </details> : null}
-        {data ? <p className={styles.updated}>{loading ? "Updating notifications…" : `Checked at ${new Date(data.checked_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`} · Refreshes automatically while this page is open.</p> : null}
-      </section>
+      <AdminNotificationCenter accessToken={accessToken} clubId={clubId} compact />
 
       {availableActions.length > 0 ? <section aria-labelledby="play-heading">
         <h2 id="play-heading">Run play</h2>

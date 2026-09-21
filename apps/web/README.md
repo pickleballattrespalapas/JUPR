@@ -49,7 +49,8 @@ belongs in Vercel.
 - `/support` and `/contact` durable general-support intake plus a populated email fallback.
 - `/data-corrections` public correction intake with no direct data mutation.
 - `/profile-privacy` identity-reviewed privacy fulfillment intake with no direct public-profile mutation.
-- `/admin` club dashboard with linked notifications for pending work and everyday play shortcuts.
+- `/admin` club dashboard with personal notifications and everyday play shortcuts.
+- `/admin/notifications` full inbox, flagged/cleared views, and per-club notification preferences.
 - `/admin/match-log`, `/admin/replay-history`, `/admin/match-uploader`, `/admin/players`, `/admin/league-manager`, and `/admin/league-manager/awards` guarded staff migration surfaces.
 - `/admin/league-manager/print` authenticated browser-print schedule, weekly leaders, configured Top Performers, standings, and attendance roster.
 - `/admin/top-players-printable` authenticated previous-calendar-month Top 50 browser export.
@@ -78,18 +79,27 @@ emails use it to generate tokenized Next `/email-preferences` links. The API
 fails the individual outbox send closed when no unsubscribe token is available;
 it never falls back to a public subscription ID.
 
-The `/admin` route renders no private counts until the browser restores a
-capability-checked staff session. It reads `GET /admin/clubs/{club_id}/dashboard`
-with the Supabase bearer token and `cache: no-store`. Notifications cover generator
-and Club Social approvals, new/in-progress player support requests, verified player
-update requests, draft weekly recaps, inbound interclub invitations, organizer meet-result
-approvals, and late-player eligibility reviews. Interclub review links open the oldest
-pending item’s season/meet. Each source
-is permission/feature scoped and counted independently; a failed query is shown as
-unavailable, never as zero pending. Closed work disappears on refresh, when the tab
-regains focus/visibility, or at the next visible one-minute refresh. Token changes,
-club changes, and authorization denials clear old counts. Interclub lineup
+Admin Home and `/admin/notifications` restore a verified staff session before
+reading `GET /admin/clubs/{club_id}/notifications` with its bearer token and
+`cache: no-store`. The nine existing pending-work queues are joined by tournament
+registrations/cancellations, team league registrations/solo signups, interclub
+player signups, and accepted staff invitations. Each category respects current
+role and feature access; Operators do not receive club-wide collections.
+
+Preferences, flags, and cleared states belong to one user in one club and survive
+reloads. Clear changes only that person's inbox, never the underlying work; the
+review queues remain accessible. Flags keep activity beyond the normal 30-day
+window. Completed/deleted work disappears on refresh even if flagged. A new
+record or source version has its own notice and cannot inherit an older clear.
+Each source is limited to 200 current/recent items with explicit truncation;
+saved flags are retained independently. Failures are shown as unavailable, never
+as empty work. The view refreshes on focus and every visible minute, with token
+and club changes immediately discarding the previous view. Interclub lineup
 exceptions remain in their season workspaces.
+
+Weekly recap drafts can be deleted with date-range confirmation. Published
+recaps cannot be deleted. All recap mutations bind both recap ID and row version
+so a stale tab cannot change a draft recreated for the same week.
 
 The technical `GET /admin/operations/status?club_id=...` endpoint remains available
 for system checks and pilot tooling; migration diagnostics are no longer on Home.

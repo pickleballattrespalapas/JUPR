@@ -298,7 +298,8 @@ def test_secondary_reports_actions_and_recap_writes_ignore_old_token_responses()
     assert "if (!tierReviewRequest.isCurrent(generation)) return;" in ladder
     assert "const actionRequest = useLatestRequestGuard(accessToken);" in awards
     assert awards.count("if (!actionRequest.isCurrent(generation)) return") >= 2
-    assert "const writeRequest = useLatestRequestGuard(accessToken);" in recap
+    assert 'const requestScope = `${clubId}\\u0000${accessToken}`;' in recap
+    assert "const writeRequest = useLatestRequestGuard(requestScope);" in recap
     assert recap.count("const generation = writeRequest.begin();") >= 3
     assert recap.count("if (!writeRequest.isCurrent(generation)) return") >= 5
 

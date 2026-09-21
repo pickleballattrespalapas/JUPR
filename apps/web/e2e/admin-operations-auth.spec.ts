@@ -20,19 +20,20 @@ const capabilities = {
   ]
 };
 
-const dashboard = {
+const notifications = {
   club_id: "tres_palapas",
   checked_at: "2026-09-21T16:00:00Z",
-  queues: [
-    {
-      key: "generator_submissions",
-      label: "Generator submissions",
-      description: "Completed sessions waiting for approval.",
-      href: "/admin/play-generators/submissions",
-      count: 3,
-      status: "ready"
-    }
-  ]
+  history_days: 30,
+  truncated: false,
+  categories: [{
+    key: "generator_submissions", label: "Generator submissions", description: "Review completed sessions.",
+    href: "/admin/play-generators/submissions", kind: "action", enabled: true, status: "ready", total_count: 1
+  }],
+  items: [{
+    key: "generator:session-1", category: "generator_submissions", kind: "action", state: "new",
+    title: "Monday round robin awaiting approval", description: "Completed sessions waiting for approval.",
+    href: "/admin/play-generators/submissions", occurred_at: "2026-09-21T15:00:00Z"
+  }]
 };
 
 test.beforeEach(async ({ context, page, baseURL }) => {
@@ -48,13 +49,13 @@ test.beforeEach(async ({ context, page, baseURL }) => {
   } }));
 });
 
-test("anonymous admin page never requests or renders dashboard counts", async ({
+test("anonymous admin page never requests or renders notifications", async ({
   page
 }) => {
-  let dashboardCalls = 0;
-  await page.route("**/admin/clubs/*/dashboard", async (route) => {
-    dashboardCalls += 1;
-    await route.fulfill({ json: dashboard });
+  let notificationCalls = 0;
+  await page.route("**/admin/clubs/*/notifications", async (route) => {
+    notificationCalls += 1;
+    await route.fulfill({ json: notifications });
   });
 
   await page.goto("/admin", { waitUntil: "domcontentloaded" });
@@ -62,23 +63,23 @@ test("anonymous admin page never requests or renders dashboard counts", async ({
   await expect(
     page.getByRole("heading", { name: /admin sign-in required/i })
   ).toBeVisible();
-  expect(dashboardCalls).toBe(0);
+  expect(notificationCalls).toBe(0);
   await expect(page.getByText("Completed sessions waiting for approval.", { exact: true })).toHaveCount(0);
 });
 
-test("authorized admin loads dashboard once with bearer and club scope", async ({
+test("authorized admin loads notifications once with bearer and club scope", async ({
   page
 }) => {
-  const dashboardRequests: Array<{ authorization: string; url: string }> = [];
+  const notificationRequests: Array<{ authorization: string; url: string }> = [];
   await page.route(/\/admin\/auth\/capabilities(?:\?.*)?$/, async (route) => {
     await route.fulfill({ json: capabilities });
   });
-  await page.route("**/admin/clubs/*/dashboard", async (route) => {
-    dashboardRequests.push({
+  await page.route("**/admin/clubs/*/notifications", async (route) => {
+    notificationRequests.push({
       authorization: route.request().headers().authorization || "",
       url: route.request().url()
     });
-    await route.fulfill({ json: dashboard });
+    await route.fulfill({ json: notifications });
   });
   await page.addInitScript((session) => {
     window.localStorage.setItem(
@@ -93,51 +94,15 @@ test("authorized admin loads dashboard once with bearer and club scope", async (
     page.getByRole("heading", { name: /admin home/i })
   ).toBeVisible();
   await expect(page.getByText("Completed sessions waiting for approval.", { exact: true })).toBeVisible();
-  await expect.poll(() => dashboardRequests.length).toBe(1);
-  expect(dashboardRequests[0].authorization).toBe("Bearer ui-test-token");
-  expect(dashboardRequests[0].url).toContain("/admin/clubs/tres_palapas/dashboard");
+  await expect.poll(() => notificationRequests.length).toBe(1);
+  expect(notificationRequests[0].authorization).toBe("Bearer ui-test-token");
+  expect(notificationRequests[0].url).toContain("/admin/clubs/tres_palapas/notifications");
 });
 
-test("home notifications link to approvals and refresh honestly on desktop and mobile", async ({
-  page
-}, testInfo) => {
-  let count: number | null = 3;
-  let queueStatus = "ready";
-  const pageErrors: string[] = [];
-  page.on("pageerror", error => pageErrors.push(error.message));
-  await page.route(/\/admin\/auth\/capabilities(?:\?.*)?$/, route => route.fulfill({ json: capabilities }));
-  await page.route("**/admin/clubs/*/dashboard", route => route.fulfill({ json: {
-    ...dashboard, queues: [{ ...dashboard.queues[0], count, status: queueStatus }]
-  } }));
-  await page.addInitScript(session => {
-    localStorage.setItem("jupr_admin_session_v1", JSON.stringify(session));
-  }, storedSession);
-  await page.goto("/admin", { waitUntil: "domcontentloaded" });
-  const notifications = page.getByRole("region", { name: "Needs attention" });
-  await expect(notifications.getByRole("link", { name: /3 Generator submissions/ })).toHaveAttribute("href", "/admin/play-generators/submissions");
-  await expect(notifications).toContainText("3 items need attention");
-  await page.screenshot({ path: testInfo.outputPath("admin-home-desktop.png"), fullPage: true });
-  await page.setViewportSize({ width: 390, height: 844 });
-  await expect(notifications.getByRole("link", { name: /3 Generator submissions/ })).toBeVisible();
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await page.screenshot({ path: testInfo.outputPath("admin-home-mobile.png"), fullPage: true });
-  count = 0;
-  await notifications.getByRole("button", { name: "Refresh", exact: true }).click();
-  await expect(notifications).toContainText("No pending work in the checked queues");
-  await expect(notifications.getByRole("link", { name: /3 Generator submissions/ })).toHaveCount(0);
-  count = null;
-  queueStatus = "unavailable";
-  await notifications.getByRole("button", { name: "Refresh", exact: true }).click();
-  await expect(notifications).toContainText("Some notifications couldn’t be checked");
-  await expect(notifications).not.toContainText("No pending work");
-  await expect(notifications.getByRole("link", { name: "Generator submissions", exact: true })).toHaveAttribute("href", "/admin/play-generators/submissions");
-  expect(pageErrors).toEqual([]);
-});
-
-test("token change clears old counts before authorization denial", async ({
+test("token change clears old notices before authorization denial", async ({
   page
 }) => {
-  let dashboardCalls = 0;
+  let notificationCalls = 0;
   const denialGate: { release?: () => void } = {};
   const denialReady = new Promise<void>((resolve) => {
     denialGate.release = resolve;
@@ -145,10 +110,10 @@ test("token change clears old counts before authorization denial", async ({
   await page.route(/\/admin\/auth\/capabilities(?:\?.*)?$/, async (route) => {
     await route.fulfill({ json: capabilities });
   });
-  await page.route("**/admin/clubs/*/dashboard", async (route) => {
-    dashboardCalls += 1;
-    if (dashboardCalls === 1) {
-      await route.fulfill({ json: dashboard });
+  await page.route("**/admin/clubs/*/notifications", async (route) => {
+    notificationCalls += 1;
+    if (notificationCalls === 1) {
+      await route.fulfill({ json: notifications });
       return;
     }
     await denialReady;
@@ -175,7 +140,7 @@ test("token change clears old counts before authorization denial", async ({
     );
     window.dispatchEvent(new CustomEvent("jupr-admin-session-change"));
   }, storedSession);
-  await expect.poll(() => dashboardCalls).toBe(2);
+  await expect.poll(() => notificationCalls).toBe(2);
   await expect(page.getByText("Completed sessions waiting for approval.", { exact: true })).toHaveCount(0);
 
   denialGate.release?.();
@@ -194,7 +159,7 @@ test("logout during a delayed capability check cannot restore the old session", 
   page
 }) => {
   let capabilityCalls = 0;
-  let dashboardCalls = 0;
+  let notificationCalls = 0;
   let releaseCapability: (() => void) | undefined;
   const capabilityGate = new Promise<void>((resolve) => {
     releaseCapability = resolve;
@@ -204,9 +169,9 @@ test("logout during a delayed capability check cannot restore the old session", 
     await capabilityGate;
     await route.fulfill({ json: capabilities });
   });
-  await page.route("**/admin/clubs/*/dashboard", async (route) => {
-    dashboardCalls += 1;
-    await route.fulfill({ json: dashboard });
+  await page.route("**/admin/clubs/*/notifications", async (route) => {
+    notificationCalls += 1;
+    await route.fulfill({ json: notifications });
   });
   await page.addInitScript((session) => {
     window.localStorage.setItem(
@@ -232,14 +197,14 @@ test("logout during a delayed capability check cannot restore the old session", 
       page.evaluate(() => localStorage.getItem("jupr_admin_session_v1"))
     )
     .toBeNull();
-  expect(dashboardCalls).toBe(0);
+  expect(notificationCalls).toBe(0);
 });
 
-test("token rotation supersedes a delayed capability check without stale dashboard counts", async ({
+test("token rotation supersedes a delayed capability check without stale notifications", async ({
   page
 }) => {
   const capabilityTokens: string[] = [];
-  const dashboardTokens: string[] = [];
+  const notificationTokens: string[] = [];
   let releaseFirstCapability: (() => void) | undefined;
   const firstCapabilityGate = new Promise<void>((resolve) => {
     releaseFirstCapability = resolve;
@@ -249,9 +214,9 @@ test("token rotation supersedes a delayed capability check without stale dashboa
     if (capabilityTokens.length === 1) await firstCapabilityGate;
     await route.fulfill({ json: capabilities });
   });
-  await page.route("**/admin/clubs/*/dashboard", async (route) => {
-    dashboardTokens.push(route.request().headers().authorization || "");
-    await route.fulfill({ json: dashboard });
+  await page.route("**/admin/clubs/*/notifications", async (route) => {
+    notificationTokens.push(route.request().headers().authorization || "");
+    await route.fulfill({ json: notifications });
   });
   await page.addInitScript((session) => {
     window.localStorage.setItem(
@@ -276,7 +241,7 @@ test("token rotation supersedes a delayed capability check without stale dashboa
   await expect(
     page.getByRole("heading", { name: /admin home/i })
   ).toBeVisible();
-  await expect.poll(() => dashboardTokens).toEqual([
+  await expect.poll(() => notificationTokens).toEqual([
     "Bearer rotated-ui-test-token"
   ]);
   expect(capabilityTokens).toEqual([
@@ -293,7 +258,7 @@ test("token rotation supersedes a delayed capability check without stale dashboa
     .toBe("rotated-ui-test-token");
 });
 
-test("focus revalidates authorization and hides a revoked dashboard", async ({
+test("focus revalidates authorization and hides revoked notifications", async ({
   page
 }) => {
   let denyCapabilities = false;
@@ -310,8 +275,8 @@ test("focus revalidates authorization and hides a revoked dashboard", async ({
     }
     await route.fulfill({ json: capabilities });
   });
-  await page.route("**/admin/clubs/*/dashboard", async (route) => {
-    await route.fulfill({ json: dashboard });
+  await page.route("**/admin/clubs/*/notifications", async (route) => {
+    await route.fulfill({ json: notifications });
   });
   await page.addInitScript((session) => {
     window.localStorage.setItem(
