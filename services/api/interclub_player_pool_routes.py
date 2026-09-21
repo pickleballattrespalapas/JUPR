@@ -535,13 +535,13 @@ def install_interclub_player_pool_routes(app, *, get_supabase_client):
         rows = _rows(_player_query(db, club["id"], q).range(offset, offset + 100))
         return {"players": _choices(db, club["id"], season, rows[:100]), "next_offset": offset + 100 if len(rows) > 100 else None}
 
-    @app.post(base + "/pool/bulk-preview")
+    @app.post("/admin/clubs/{club_id}/interclub/registrations/{season_id}/pool/bulk-preview")
     def preview_members(club_id: str, season_id: UUID, body: BulkPoolMembers, response: Response, authorization: str | None = auth_header()):
         _private_headers(response)
         db, _, club, season = pool_admin_context(get_supabase_client, authorization, club_id, season_id)
         return _bulk_preview(db, club, season, body)
 
-    @app.post(base + "/pool/bulk-add")
+    @app.post("/admin/clubs/{club_id}/interclub/registrations/{season_id}/pool/bulk-add")
     def add_members(club_id: str, season_id: UUID, body: BulkPoolMembers, response: Response, authorization: str | None = auth_header()):
         _private_headers(response)
         db, user, club, season = pool_admin_context(get_supabase_client, authorization, club_id, season_id)
