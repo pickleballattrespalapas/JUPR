@@ -3,8 +3,6 @@ from __future__ import annotations
 from typing import Any
 
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
-from jupr_app.domain.admin.staff_policy import ADMIN_ROLES
-from jupr_app.domain.admin.roles import normalize_role
 from jupr_app.domain.tournament_registration_repo import (
     ADMIN_PAYMENT_STATUS_OPTIONS,
     ADMIN_REGISTRATION_STATUS_OPTIONS,
@@ -15,6 +13,7 @@ from jupr_app.domain.tournament_registration_repo import (
 )
 from jupr_app.services.admin_tournament_service import (
     TOURNAMENT_SELECT,
+    CANCELLATION_ADMIN_ROLES,
     _clean_text,
     _fetch_registration_by_id,
     _first_row,
@@ -83,7 +82,7 @@ def bulk_update_admin_tournament_registrations(
 
     common_payload = _bulk_update_payload(patch)
     cancelling = common_payload.get("status") == "cancelled"
-    if cancelling and normalize_role(actor_role) not in ADMIN_ROLES:
+    if cancelling and str(actor_role).strip().lower() not in CANCELLATION_ADMIN_ROLES:
         raise PermissionError("Only an administrator can cancel and remove registrations.")
     note_text = _clean_text(patch.get("append_note"), limit=1000)
     if not common_payload and not note_text:

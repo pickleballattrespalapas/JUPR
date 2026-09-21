@@ -8,8 +8,6 @@ from typing import Any
 from urllib.parse import urlencode
 
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
-from jupr_app.domain.admin.staff_policy import ADMIN_ROLES
-from jupr_app.domain.admin.roles import normalize_role
 from jupr_app.domain.tournament_registration_repo import (
     ADMIN_PAYMENT_STATUS_OPTIONS,
     ADMIN_REGISTRATION_STATUS_OPTIONS,
@@ -31,6 +29,8 @@ from jupr_app.services.public_tournament_registration_service import (
     build_tournament_registration_player_profile,
     validate_and_clean_tournament_selection,
 )
+
+CANCELLATION_ADMIN_ROLES = frozenset({"administrator", "club_owner", "super_admin"})
 
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
 TOURNAMENT_SELECT = "id,club_id,name,status,start_date,end_date,event_tags,created_at,updated_at"
@@ -1178,7 +1178,7 @@ def update_admin_tournament_registration(
         "status" in update_payload
         and str(update_payload.get("status") or "") != _registration_status(before)
     )
-    if update_payload.get("status") == "cancelled" and normalize_role(actor_role) not in ADMIN_ROLES:
+    if update_payload.get("status") == "cancelled" and str(actor_role).strip().lower() not in CANCELLATION_ADMIN_ROLES:
         raise PermissionError("Only an administrator can cancel and remove a registration.")
     player_link_changed = (
         "player_id" in update_payload
