@@ -18,8 +18,8 @@ begin
  values(pa,a,'Rating A','rating a',1400,1400,true,'female',0,0,0),(pb,b,'Rating B','rating b',1400,1400,true,'female',0,0,0),
  (po,unrelated,'Unrelated','unrelated',1500,1500,true,'male',0,0,0);
  insert into public.pcs_interclub_drafts(id,organizer_club_id,draft) values(sid,a,'{}');
- insert into public.pcs_interclub_seasons(id,organizer_club_id,source_revision,details,rules) values(sid,a,1,
-  jsonb_build_object('name','Rating regression','start_date',(current_date-10)::text,'end_date',(current_date+30)::text,'timezone','America/Mazatlan'),'{}');
+ insert into public.pcs_interclub_seasons(id,organizer_club_id,source_revision,details,rules,registration_opens_at,registration_closes_at) values(sid,a,1,
+  jsonb_build_object('name','Rating regression','start_date',(current_date-10)::text,'end_date',(current_date+30)::text,'timezone','America/Mazatlan'),'{}',now()-interval '10 days',now()-interval '5 days');
  insert into public.pcs_interclub_participations(season_id,club_id,status) values(sid,a,'accepted'),(sid,b,'accepted');
  insert into public.pcs_interclub_entries(id,season_id,club_id,player_id,starting_rating,entered_at)
  values(ea,sid,a,pa,3.5,now()-interval '2 days'),(eb,sid,b,pb,3.5,now()-interval '2 days');

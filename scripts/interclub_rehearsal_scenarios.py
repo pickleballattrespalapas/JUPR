@@ -58,6 +58,24 @@ def rating_evidence(r, s, b, expected_games):
     return effects
 
 
+def register_late_player(r, s):
+    # Season start controls late-player eligibility independently of the signup
+    # window. Enroll while the commissioner window is open; review after close.
+    r.open_dates(s)
+    club = s["clubs"][0]
+    late_id = 7000000000000 + int(uuid4().hex[:11],16)
+    r.db("POST","players",{"id":late_id,"club_id":club,"name":"Late Rehearsal Player",
+        "normalized_name":"late "+s["id"],"rating":1500,"starting_rating":1500,"active":True,"gender":"female"})
+    late_email = f"late-{r.state['run']}@example.invalid"
+    r.api("POST","/public/interclub-signups/"+s["signup"][club]["share_id"],
+        {"name":"Late Rehearsal Player","email":late_email,"divisions":["3.5"],"notes":"Late addition rehearsal","request_id":str(uuid4()),"email_consent":True},actor=None)
+    poolroot = r.registration(club,s["id"])+"/pool"
+    late = next(x for x in r.api("GET",poolroot)["members"] if x["email"] == late_email)
+    late = r.api("PATCH",poolroot+"/members/"+late["id"],{"expected_revision":late["revision"],"player_id":late_id,"status":"active"})["member"]
+    r.check(late["approval_status"] == "pending", "linked late addition still needs organizer approval")
+    return late
+
+
 def email_and_responses(r, s, m):
     r.phase("signup, private edits, dry-run invitations and availability")
     club = s["clubs"][0]
@@ -87,6 +105,13 @@ def email_and_responses(r, s, m):
     r.api("POST",eroot,{**payload,"operation_key":operation,"preview_fingerprint":preview["preview_fingerprint"]})
     season_send = r.api("POST",eroot+f"/{operation}/recipients/0/send")
     r.check(season_send["status"] == "dry_run" and len(season_send["links"]) == 1,"season invitation dry-run supplies the actual signup link")
+    late = register_late_player(r, s)
+    r.close_registration(s)
+    review = r.api("POST", "/public/interclub-player-response/review", {"token":secret}, actor=None)
+    r.check(not review["can_respond"] and review["can_withdraw"], "closed season personal link preserves review and withdrawal only")
+    r.api("POST", "/public/interclub-player-response/respond", {**body, "expected_revision": review["member"]["revision"]}, actor=None, expected=(423,))
+    r.check(True, "closed season rejects active signup edits before meet availability opens")
+    r.phase("closed registration, dry-run meet invitations and availability")
     availability = root+"/meets/"+m["id"]+"/availability"
     r.api("PUT", availability, {"expected_revision":0,"open":True,"deadline":iso(now()+timedelta(days=1))})
     eroot = f"/admin/clubs/{club}/interclub/player-pools/{s['id']}/emails"
@@ -117,6 +142,7 @@ def email_and_responses(r, s, m):
     r.api("PUT", availability, {"expected_revision":state["revision"],"open":False,"deadline":state["deadline"]})
     review = r.api("POST", "/public/interclub-player-response/review", {"token":secret}, actor=None)
     r.check(not review["can_respond"], "closed RSVP link is read-only")
+    return late
 
 
 def publication(r, s):
@@ -133,7 +159,7 @@ def full_season(r):
     r.phase("four-club season and mixed participation by skill level")
     s = r.season("full-season", divisions=["3.5","4.0","4.5"], public_signups=True)
     m = s["meets"][0]
-    email_and_responses(r, s, m)
+    late = email_and_responses(r, s, m)
     for division, count in [("3.5",4),("4.0",3),("4.5",2)]:
         for club in s["clubs"][:count]:
             r.roster(s, m, club, division)
@@ -156,19 +182,9 @@ def full_season(r):
     # The host participant identity can manage this meet but cannot approve it.
     detail = r.api("GET", r.competition(s["clubs"][1],s["id"],m["id"]), actor=1)
     r.check(detail["can_manage"] and not detail["is_organizer"], "host can manage its meet without organizer approval authority")
-    r.open_dates(s)
-    # Late enrollment is exercised through signup and approval, without adding
-    # the late player to the earlier fixture meet's locked lineup.
-    late_id = 7000000000000 + int(uuid4().hex[:11],16)
-    r.db("POST","players",{"id":late_id,"club_id":s["clubs"][0],"name":"Late Rehearsal Player",
-        "normalized_name":"late "+s["id"],"rating":1500,"starting_rating":1500,"active":True,"gender":"female"})
-    late_email = f"late-{r.state['run']}@example.invalid"
-    r.api("POST","/public/interclub-signups/"+s["signup"][s["clubs"][0]]["share_id"],
-        {"name":"Late Rehearsal Player","email":late_email,"divisions":["3.5"],"notes":"Late addition rehearsal","request_id":str(uuid4()),"email_consent":True},actor=None)
+    # Enrollment happened before close. Approval remains available after close,
+    # without adding this player to the earlier fixture meet's locked lineup.
     poolroot = r.registration(s["clubs"][0],s["id"])+"/pool"
-    late = next(x for x in r.api("GET",poolroot)["members"] if x["email"] == late_email)
-    late = r.api("PATCH",poolroot+"/members/"+late["id"],{"expected_revision":late["revision"],"player_id":late_id,"status":"active"})["member"]
-    r.check(late["approval_status"] == "pending", "linked late addition still needs organizer approval")
     request = {"member_id":late["id"],"expected_revision":late["revision"],"approve":True,"reason":"Synthetic late player approval"}
     r.api("POST",r.registration(s["clubs"][1],s["id"])+"/pool/approvals",request,actor=1,expected=(403,))
     approved = r.api("POST",poolroot+"/approvals",request)
@@ -235,6 +251,7 @@ def full_season(r):
 def incidents(r):
     r.phase("injury, substitution, partial teams and weather")
     s = r.season("incidents",club_count=2)
+    r.close_registration(s)
     m = s["meets"][0]
     b = prepare(r,s,m)
     doc = r.complete(b["document"],datetime.fromisoformat(m["starts_at"]))
@@ -306,6 +323,7 @@ def incidents(r):
 def qualifier(r):
     r.phase("three-way cutoff tie and MLP qualifying round robin")
     s = r.season("qualifying-playoff",club_count=3)
+    r.close_registration(s)
     m = s["meets"][0]
     b = prepare(r,s,m)
     b = r.approve(s,m,r.save(s,m,b,r.complete(b["document"],datetime.fromisoformat(m["starts_at"]),cycle=True)))
@@ -340,5 +358,9 @@ def run(r):
     if failures:
         r.phase("scenario failures")
         raise RuntimeError("; ".join(failures))
+    # The browser completes score/approval flows on closed seasons, then joins
+    # this separate open season without reopening any completed competition.
+    r.phase("open registration fixture for anonymous browser signup")
+    r.season("browser-signup", club_count=2)
     r.phase("browser handoff")
     r.check(True,"API rehearsal complete; all synthetic sessions reserved for browser verification and cleanup")

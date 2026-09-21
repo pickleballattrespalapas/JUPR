@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from services.api import admin_auth_routes, interclub_player_pool_routes as routes
 from tests.test_api_contract_interclub_registration import Query
+from tests.interclub_registration_fixtures import set_registration_phase
 
 
 @pytest.fixture
@@ -22,6 +23,7 @@ def setup(monkeypatch):
     season = dict(id=sid, organizer_club_id="organizer", details=dict(name="Coastal League",
         start_date="2099-01-01", end_date="2099-03-31", timezone="America/Mazatlan",
         divisions=["3.5", "4.0"], club_ids=["alpha", "beta"]), rules={})
+    set_registration_phase(season, "open")
     participation = dict(season_id=sid, club_id="alpha", status="accepted", revision=2)
     meet = dict(id=mid, season_id=sid, host_club_id="beta", club_ids=["alpha", "beta"],
         starts_at="2099-02-10T18:00:00Z", roster_deadline="2099-02-09T18:00:00Z", revision=1)
@@ -97,7 +99,7 @@ def test_pool_requires_current_administrator_assignment_for_this_club(setup, cha
     client, state = setup
     state["assignment"].update(change)
     for response in [client.get(state["base"] + "/pool"),
-        client.put(state["base"] + "/pool", json=dict(expected_revision=0, open=True)),
+        client.put(state["base"] + "/pool", json=dict(expected_revision=1, rotate_link=True)),
         client.get(state["availability"])]:
         assert response.status_code == 403
     assert not state["calls"]
@@ -109,7 +111,7 @@ def test_unauthenticated_admin_cannot_read_or_modify_pool(setup, monkeypatch):
         raise HTTPException(401, "Sign in required")
     monkeypatch.setattr(admin_auth_routes, "authenticate_bearer", deny)
     assert client.get(state["base"] + "/pool").status_code == 401
-    assert client.put(state["base"] + "/pool", json=dict(expected_revision=0, open=True)).status_code == 401
+    assert client.put(state["base"] + "/pool", json=dict(expected_revision=1, rotate_link=True)).status_code == 401
     assert not state["calls"]
 
 
@@ -118,7 +120,7 @@ def test_unaccepted_club_cannot_collect_or_read_season_interest(setup, status):
     client, state = setup
     state["participation"]["status"] = status
     assert client.get(state["base"] + "/pool").status_code == 404
-    assert client.put(state["base"] + "/pool", json=dict(expected_revision=0, open=True)).status_code == 404
+    assert client.put(state["base"] + "/pool", json=dict(expected_revision=1, rotate_link=True)).status_code == 404
     assert not state["calls"]
 
 
@@ -135,7 +137,7 @@ def test_organizer_role_does_not_grant_another_clubs_pool(setup):
     dict(actor_id="forged"), dict(share_id=str(uuid4())), dict(season_id=str(uuid4()))])
 def test_bad_pool_settings_do_not_reach_rpc(setup, patch):
     client, state = setup
-    response = client.put(state["base"] + "/pool", json={"expected_revision": 0, "open": True, **patch})
+    response = client.put(state["base"] + "/pool", json={"expected_revision": 1, "rotate_link": True, **patch})
     assert response.status_code == 422
     assert not state["calls"]
 
@@ -191,7 +193,7 @@ def test_public_meet_response_cannot_forge_identity_or_profile(setup, patch):
 
 
 @pytest.mark.parametrize("code,status", [("42501", 403), ("P0002", 404), ("40001", 409), ("PT409", 409),
-    ("23505", 409), ("22023", 422), ("54000", 429), ("unknown", 503)])
+    ("23505", 409), ("22023", 422), ("PT423", 423), ("54000", 429), ("unknown", 503)])
 def test_database_errors_are_safe_and_actionable(setup, code, status):
     _, state = setup
     state["error"] = code
@@ -240,12 +242,13 @@ def test_admin_pool_does_not_include_other_clubs_seasons_or_capability_nonces(se
 
 def test_pool_and_availability_changes_forward_verified_scope_and_revision(setup):
     client, state = setup
-    response = client.put(state["base"] + "/pool", json=dict(expected_revision=1, open=False, rotate_link=True))
+    response = client.put(state["base"] + "/pool", json=dict(expected_revision=1, rotate_link=True))
     assert response.status_code == 200
     name, args = state["calls"][-1]
     assert name == "pcs_interclub_pool_action"
     assert args == {**routes.pool_actor(state["user"], "alpha", state["season"]["id"]),
-        "p_action": "settings", "p_payload": {"expected_revision": 1, "open": False, "rotate_link": True}}
+        "p_action": "settings", "p_payload": {"expected_revision": 1, "rotate_link": True}}
+    set_registration_phase(state["season"], "closed")
     response = client.put(state["availability"], json=dict(expected_revision=1, open=True, deadline="2099-02-01T12:00:00Z"))
     assert response.status_code == 200
     _, args = state["calls"][-1]
@@ -268,6 +271,7 @@ def test_member_link_forwards_current_club_and_member_and_redacts_nonce(setup):
 
 def test_meet_history_contains_only_own_members_and_scoped_private_links(setup):
     client, state = setup
+    set_registration_phase(state["season"], "closed")
     state["tables"][routes.RESPONSES].extend([
         {**state["response"], "id": str(uuid4()), "club_id": "beta"},
         {**state["response"], "id": str(uuid4()), "meet_id": str(uuid4())},
@@ -288,6 +292,7 @@ def test_meet_history_contains_only_own_members_and_scoped_private_links(setup):
 @pytest.mark.parametrize("patch", [dict(season_id=str(uuid4())), dict(club_ids=["beta"])])
 def test_meet_outside_club_or_season_is_unavailable_before_rpc(setup, patch):
     client, state = setup
+    set_registration_phase(state["season"], "closed")
     state["meet"].update(patch)
     assert client.get(state["availability"]).status_code == 404
     assert client.put(state["availability"], json=dict(expected_revision=1, open=True,
@@ -349,6 +354,7 @@ def test_new_signup_returns_only_own_season_link_in_fragment_and_stable_retry_fi
 @pytest.mark.parametrize("kind", ["season", "meet"])
 def test_personal_review_returns_only_named_member_without_nonce(setup, kind):
     client, state = setup
+    set_registration_phase(state["season"], "closed" if kind == "meet" else "open")
     response = client.post("/public/interclub-player-response/review", json={"token": token_for(state, kind)})
     assert response.status_code == 200
     assert response.json()["kind"] == kind and response.json()["member"]["id"] == state["member"]["id"]
@@ -396,7 +402,7 @@ def test_club_cancellation_revokes_public_share_and_personal_access(setup, statu
 
 def test_closed_pool_still_allows_withdrawal_but_not_reactivation_in_review(setup):
     client, state = setup
-    state["settings"]["open"] = False
+    set_registration_phase(state["season"], "closed")
     response = client.post("/public/interclub-player-response/review", json={"token": token_for(state)})
     assert response.status_code == 200 and not response.json()["can_respond"]
     assert response.json()["can_withdraw"] is True
@@ -408,6 +414,7 @@ def test_closed_pool_still_allows_withdrawal_but_not_reactivation_in_review(setu
 @pytest.mark.parametrize("change", ["deadline", "closed", "withdrawn", "started"])
 def test_meet_review_reports_response_closure_without_hiding_history(setup, change):
     client, state = setup
+    set_registration_phase(state["season"], "closed")
     if change == "deadline": state["availability_settings"]["deadline"] = "2020-01-01T12:00:00Z"
     if change == "closed": state["availability_settings"]["open"] = False
     if change == "withdrawn": state["member"]["status"] = "withdrawn"
@@ -430,6 +437,7 @@ def test_meet_capability_cannot_update_season_and_season_capability_cannot_rsvp(
 @pytest.mark.parametrize("kind", ["season", "meet"])
 def test_personal_updates_send_capability_scope_nonce_and_expected_revision_to_atomic_rpc(setup, kind):
     client, state = setup
+    set_registration_phase(state["season"], "closed" if kind == "meet" else "open")
     payload = dict(token=token_for(state, kind), expected_revision=1,
         action="update_season" if kind == "season" else "respond_meet", status="active" if kind == "season" else "available")
     if kind == "season": payload.update(name="Alex", email="ALEX@EXAMPLE.TEST", divisions=["3.5"], notes="February")
@@ -459,8 +467,9 @@ def test_missing_signing_configuration_stops_signup_and_invitations_before_mutat
     def unavailable():
         raise ValueError("Missing signing secret")
     monkeypatch.setattr(routes, "get_explicit_registration_edit_token_secret", unavailable)
-    assert client.put(state["base"] + "/pool", json=dict(expected_revision=1, open=True)).status_code == 503
+    assert client.put(state["base"] + "/pool", json=dict(expected_revision=1, rotate_link=True)).status_code == 503
     assert client.post(state["signup"], json=state["signup_body"]).status_code == 503
+    set_registration_phase(state["season"], "closed")
     with pytest.raises(HTTPException) as exc:
         routes.prepare_meet_invitations(state["db"], state["user"], "alpha", state["season"]["id"],
             state["meet"]["id"], [state["member"]["id"]])
@@ -469,6 +478,7 @@ def test_missing_signing_configuration_stops_signup_and_invitations_before_mutat
 
 def test_preparing_invites_uses_same_club_season_and_selected_member_ids(setup):
     _, state = setup
+    set_registration_phase(state["season"], "closed")
     routes.prepare_meet_invitations(state["db"], state["user"], "alpha", state["season"]["id"],
         state["meet"]["id"], [state["member"]["id"]])
     name, args = state["calls"][-1]
@@ -634,3 +644,84 @@ def test_admin_added_no_email_member_can_use_personal_link_to_withdraw(setup):
         "email": "", "divisions": ["3.5"], "notes": ""})
     assert response.status_code == 200
     assert state["calls"][-1][1]["p_payload"]["email"] == ""
+
+
+@pytest.mark.parametrize("phase", ["unconfigured", "scheduled", "closed"])
+def test_intake_is_locked_for_all_clubs_outside_shared_registration_window(setup, phase):
+    client, state = setup
+    set_registration_phase(state["season"], phase)
+    state["settings"]["open"] = True  # Legacy per-club flags cannot reopen intake.
+    pool = client.get(state["base"] + "/pool")
+    assert pool.status_code == 200 and pool.json()["season"]["registration"]["status"] == phase
+    assert pool.json()["signup"]["open"] is False
+    share = client.get(state["signup"])
+    assert share.status_code == 200 and share.json()["signup"]["open"] is False
+    assert client.post(state["signup"], json=state["signup_body"]).status_code == 423
+    for action in ("bulk-preview", "bulk-add"):
+        assert client.post(state["base"] + "/pool/" + action, json={"members": [{"name": "Verbal Commitment"}]}).status_code == 423
+    assert client.post("/public/interclub-player-response/respond", json={
+        "token": token_for(state), "action": "update_season", "expected_revision": 1, "status": "active",
+        "name": state["member"]["name"], "email": state["member"]["email"], "divisions": ["3.5"], "notes": "Edit"
+    }).status_code == 423
+    assert not state["calls"]
+    state["member"]["status"] = "withdrawn"
+    assert client.patch(state["base"] + "/pool/members/" + state["member"]["id"], json={
+        "expected_revision": 1, "player_id": "1", "status": "active"
+    }).status_code == 423
+    assert not state["calls"]
+
+
+@pytest.mark.parametrize("phase", ["unconfigured", "scheduled", "open"])
+def test_direct_availability_and_personal_meet_reply_wait_for_registration_close(setup, phase):
+    client, state = setup
+    set_registration_phase(state["season"], phase)
+    assert client.get(state["availability"]).status_code == 423
+    assert client.put(state["availability"], json={"expected_revision": 1, "open": True,
+        "deadline": "2099-02-01T12:00:00Z"}).status_code == 423
+    with pytest.raises(HTTPException) as exc:
+        routes.prepare_meet_invitations(state["db"], state["user"], "alpha", state["season"]["id"],
+                                       state["meet"]["id"], [state["member"]["id"]])
+    assert exc.value.status_code == 423
+    review = client.post("/public/interclub-player-response/review", json={"token": token_for(state, "meet")})
+    assert review.status_code == 423
+    assert client.post("/public/interclub-player-response/respond", json={"token": token_for(state, "meet"),
+        "action": "respond_meet", "expected_revision": 1, "status": "available"}).status_code == 423
+    assert not state["calls"]
+
+
+@pytest.mark.parametrize("phase", ["unconfigured", "scheduled", "closed"])
+def test_registration_lock_keeps_existing_member_linking_and_withdrawal_available(setup, phase):
+    client, state = setup
+    set_registration_phase(state["season"], phase)
+    state["result"] = {**state["member"], "player_id": 1}
+    linked = client.patch(state["base"] + "/pool/members/" + state["member"]["id"],
+                          json={"expected_revision": 1, "player_id": "1", "status": "active"})
+    assert linked.status_code == 200 and linked.json()["member"]["player_id"] == "1"
+    response = client.post("/public/interclub-player-response/respond", json={"token": token_for(state),
+        "action": "update_season", "expected_revision": 1, "status": "withdrawn", "name": "Sneaked identity edit",
+        "email": "changed@example.test", "divisions": ["4.0"], "notes": "Changed while withdrawing"})
+    assert response.status_code == 200
+    assert state["calls"][-1][1]["p_payload"]["status"] == "withdrawn"
+    assert {key: state["calls"][-1][1]["p_payload"][key] for key in ("name", "email", "divisions", "notes")} == {
+        key: state["member"][key] for key in ("name", "email", "divisions", "notes")
+    }, "Permitted withdrawal must not smuggle closed-season edits."
+
+
+@pytest.mark.parametrize("open_value", [True, False])
+def test_club_cannot_change_season_registration_using_legacy_pool_toggle(setup, open_value):
+    client, state = setup
+    response = client.put(state["base"] + "/pool", json={"expected_revision": 1, "open": open_value})
+    assert response.status_code == 422 and not state["calls"]
+
+
+def test_closing_shared_registration_switches_from_intake_to_meet_planning(setup):
+    client, state = setup
+    assert client.get(state["signup"]).json()["signup"]["open"] is True
+    assert client.get(state["availability"]).status_code == 423
+    set_registration_phase(state["season"], "closed")
+    assert client.get(state["signup"]).json()["signup"]["open"] is False
+    assert client.post(state["signup"], json=state["signup_body"]).status_code == 423
+    assert client.get(state["availability"]).status_code == 200
+    assert client.put(state["availability"], json={"expected_revision": 1, "open": True,
+        "deadline": "2099-02-01T12:00:00Z"}).status_code == 200
+    assert state["calls"][-1][1]["p_action"] == "availability"

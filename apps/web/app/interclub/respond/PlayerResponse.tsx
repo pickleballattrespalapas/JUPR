@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { PlayerResponseDetails, PlayerSignupError, playerSignupRequest, seasonDates, signupErrorMessage, signupMeetTime } from "@/lib/interclubPlayerSignup";
 import styles from "../player-signup.module.css";
+import { registrationCanAccept, registrationMeetPlanning, registrationWindowDates, registrationWindowMessage } from "@/lib/interclubRegistrationWindow";
+import { useRegistrationWindow } from "@/lib/useRegistrationWindow";
 
 type MeetStatus = "available" | "maybe" | "unavailable";
 
@@ -20,6 +22,9 @@ export default function PlayerResponse() {
   const [name, setName] = useState(""), [email, setEmail] = useState("");
   const [divisions, setDivisions] = useState<string[]>([]), [notes, setNotes] = useState("");
   const [answer, setAnswer] = useState<MeetStatus | "">(""), [confirmWithdrawal, setConfirmWithdrawal] = useState(false);
+
+  const windowState = useRegistrationWindow(data?.season.registration, reason => { if (reason === "boundary") setReload(value => value + 1); });
+  const canRespond = !!data?.can_respond && (data.kind === "season" ? windowState.canRegister : windowState.meetPlanningOpen);
 
   function show(value: PlayerResponseDetails) {
     setData(value); setName(value.member.name); setEmail(value.member.email);
@@ -54,7 +59,7 @@ export default function PlayerResponse() {
 
   async function save(body: Record<string, unknown>, success: string) {
     const withdrawalAllowed = data?.kind === "season" && data.can_withdraw && body.action === "update_season" && body.status === "withdrawn";
-    if (!data || !token.current || pending.current || blocked || (!data.can_respond && !withdrawalAllowed)) return;
+    if (!data || !token.current || pending.current || blocked || (!(data.can_respond && (data.kind === "season" ? registrationCanAccept(data.season.registration) : registrationMeetPlanning(data.season.registration))) && !withdrawalAllowed)) return;
     const previous = data;
     const controller = new AbortController(); mutation.current = controller; pending.current = true;
     setBusy(true); setError(""); setMessage("");
@@ -77,7 +82,7 @@ export default function PlayerResponse() {
       : data.member.status === "withdrawn" ? "You’re back in the season player pool. Your club can invite you to upcoming meets." : "Your season signup is updated.");
   }
 
-  const disabled = busy || blocked || loading || !data?.can_respond;
+  const disabled = busy || blocked || loading || !canRespond;
   const withdrawalDisabled = busy || blocked || loading || !data?.can_withdraw;
   return <div className={styles.page}><section className={styles.card}>
     <p className={styles.eyebrow}>{data?.club.name || "Your interclub invitation"}</p>
@@ -85,6 +90,7 @@ export default function PlayerResponse() {
     {loading ? <p role="status">Loading your invitation…</p> : data && <>
       <h2>{data.season.name}</h2>
       <p className={styles.muted}>{data.kind === "season" ? seasonDates(data.season) : `Hi ${data.member.name}. Let your club know whether you’re available.`}</p>
+      {data.kind === "season" && registrationWindowDates(data.season.registration, data.season.timezone) && <p className={styles.hint}>Season registration: {registrationWindowDates(data.season.registration, data.season.timezone)}</p>}
       {message && <div className={styles.success} role="status" tabIndex={-1} ref={confirmation}><strong>{message}</strong></div>}
       {data.kind === "meet" && data.meet && data.availability ? <>
         <dl className={styles.details}>
@@ -95,7 +101,7 @@ export default function PlayerResponse() {
           <dt>Your response</dt><dd>{data.availability.status === "invited" ? "Not answered yet" : data.availability.status === "available" ? "Available" : data.availability.status === "maybe" ? "Maybe" : "Not available"}</dd>
         </dl>
         <p className={styles.intro}>This is for this meet only. Your administrator will choose the final teams and confirm who is playing.</p>
-        {!data.can_respond ? <div className={styles.notice}><h2>Responses are closed</h2><p>{data.member.status === "withdrawn" ? "You’ve left the season player pool. Contact your club administrator if your plans have changed." : "Your saved response is shown above. Contact your club administrator if your availability changes."}</p></div> : <form className={styles.form} onSubmit={event => {
+        {!canRespond ? <div className={styles.notice}><h2>Responses are closed</h2><p>{data.member.status === "withdrawn" ? "You’ve left the season player pool. Contact your club administrator if your plans have changed." : "Your saved response is shown above. Contact your club administrator if your availability changes."}</p></div> : <form className={styles.form} onSubmit={event => {
           event.preventDefault();
           if (answer) void save({ action: "respond_meet", expected_revision: data.availability!.revision, status: answer }, answer === "available" ? "Your club knows you’re available. Your administrator will confirm the final teams." : answer === "maybe" ? "Your club knows you’re a maybe. You can update your response before the deadline." : "Your club knows you’re not available for this meet. You’re still in the season player pool.");
         }}>
@@ -109,13 +115,13 @@ export default function PlayerResponse() {
         </form>}
       </> : data.kind === "season" && <>
         <div className={styles.notice}><strong>{data.member.status === "active" ? "You’re in your club’s player pool" : "You’ve left this season’s player pool"}</strong><p>{data.member.status === "active" ? "You’ll decide separately for each meet. Joining the pool does not commit you to every date or reserve a team place." : "You won’t receive new meet invitations for this season. Your previous meet results and rosters stay on record."}</p></div>
-        {!data.can_respond && <p className={styles.notice}>Season signup changes are currently closed. {data.can_withdraw ? "You can still leave the player pool below. Contact your club administrator for other changes." : "Contact your club administrator if you need a change."}</p>}
+        {!canRespond && <p className={styles.notice}>{registrationWindowMessage(data.season.registration, windowState.now)} {data.can_withdraw ? "You can still leave the player pool below. Contact your club administrator for other changes." : "Contact your club administrator if you need a change."}</p>}
         <form className={styles.form} onSubmit={event => { event.preventDefault(); saveSeason("active"); }}>
           <label>Your name<input required maxLength={120} autoComplete="name" value={name} disabled={disabled} onChange={event => setName(event.target.value)} /></label>
           <label>Email<input required type="email" maxLength={254} autoComplete="email" value={email} disabled={disabled} onChange={event => setEmail(event.target.value)} /></label>
           <fieldset disabled={disabled}><legend>Divisions you’re interested in</legend><div className={styles.choices}>{data.season.divisions.map(division => <label className={styles.choice} key={division}><input type="checkbox" checked={divisions.includes(division)} onChange={event => setDivisions(current => event.target.checked ? [...current, division] : current.filter(item => item !== division))} /><span>{division}</span></label>)}</div></fieldset>
           <label>Availability notes <span className={styles.hint}>(optional)</span><textarea maxLength={1000} value={notes} disabled={disabled} onChange={event => setNotes(event.target.value)} /></label>
-          {data.can_respond && <button className={styles.primary} disabled={disabled}>{busy ? "Saving your signup…" : data.member.status === "withdrawn" ? "Rejoin the season player pool" : "Save my changes"}</button>}
+          {canRespond && <button className={styles.primary} disabled={disabled}>{busy ? "Saving your signup…" : data.member.status === "withdrawn" ? "Rejoin the season player pool" : "Save my changes"}</button>}
         </form>
         {data.can_withdraw && data.member.status === "active" && <><hr className={styles.divider} />{confirmWithdrawal ? <div className={styles.notice}><h2>Leave the player pool?</h2><p>This stops new meet invitations for this season. It won’t remove you from teams already confirmed; contact your club administrator about those.</p><div className={styles.actions}><button type="button" disabled={withdrawalDisabled} onClick={() => saveSeason("withdrawn")}>{busy ? "Leaving…" : "Yes, leave the player pool"}</button><button type="button" disabled={withdrawalDisabled} onClick={() => setConfirmWithdrawal(false)}>Stay in the pool</button></div></div>
           : <button type="button" disabled={withdrawalDisabled} onClick={() => setConfirmWithdrawal(true)}>Leave the season player pool</button>}</>}

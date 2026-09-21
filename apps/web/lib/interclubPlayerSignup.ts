@@ -1,5 +1,6 @@
+import type { SeasonRegistrationWindow } from "./interclubRegistrationWindow";
 export type SignupClub = { id: string; name: string };
-export type SignupSeason = { id: string; name: string; start_date: string; end_date: string; timezone: string; divisions: string[] };
+export type SignupSeason = { id: string; name: string; start_date: string; end_date: string; timezone: string; divisions: string[]; registration?: SeasonRegistrationWindow };
 export type SignupMeet = { id: string; starts_at: string; host_club_id: string | null; host_club_name?: string | null };
 export type SeasonSignupDetails = { club: SignupClub; season: SignupSeason; signup: { open: boolean }; meets: SignupMeet[] };
 export type SignupPlayer = { id: string; name: string; rating: number | null; league_rating?: number | null; gender: string | null; eligible_divisions: string[] };

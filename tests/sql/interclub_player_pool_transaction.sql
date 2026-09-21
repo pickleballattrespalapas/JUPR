@@ -34,7 +34,8 @@ begin
  exception when insufficient_privilege then null; end;
  perform public.pcs_interclub_participation(actor,actor_email,home,sid,home,1,'accept');
  perform public.pcs_interclub_participation(actor,actor_email,away,sid,away,1,'accept');
- settings:=public.pcs_interclub_pool_action(actor,actor_email,home,sid,'settings','{"expected_revision":0,"open":true}');
+ perform public.pcs_set_interclub_registration_window(actor,actor_email,home,sid,0,now()-interval '1 day',now()+interval '1 day');
+ select to_jsonb(s) into settings from public.pcs_interclub_pool_settings s where season_id=sid and club_id=home;
  share:=(settings->>'share_id')::uuid;
  signup:=jsonb_build_object('share_id',share,'name','Pool QA','email','pool-qa@example.invalid','divisions',jsonb_build_array('3.5'),
   'notes','Visiting for part of the season','player_id',null,'request_id',gen_random_uuid(),'request_fingerprint','fixture-payload','email_consent',true);
@@ -59,6 +60,7 @@ begin
  if entry_before is null then raise exception 'Approved linked player did not receive a season identity'; end if;
  select id into mid from public.pcs_interclub_meets where season_id=sid and plan_index=0;
  select id into mid2 from public.pcs_interclub_meets where season_id=sid and plan_index=1;
+ perform public.pcs_set_interclub_registration_window(actor,actor_email,home,sid,1,now()-interval '2 days',now()-interval '1 day');
  perform public.pcs_interclub_pool_action(actor,actor_email,home,sid,'availability',jsonb_build_object('meet_id',mid,'expected_revision',0,'open',true,'deadline',now()+interval '18 days'));
  perform public.pcs_interclub_pool_action(actor,actor_email,home,sid,'availability',jsonb_build_object('meet_id',mid2,'expected_revision',0,'open',true,'deadline',now()+interval '38 days'));
  result:=public.pcs_interclub_pool_action(actor,actor_email,home,sid,'invite',jsonb_build_object('meet_id',mid,'member_ids',jsonb_build_array(member_id)));
@@ -85,7 +87,7 @@ begin
  if (select rating from public.players where id=home_player)<>1400
   or (select to_jsonb(e) from public.pcs_interclub_entries e where season_id=sid and player_id=home_player) is distinct from entry_before
   or exists(select 1 from public.pcs_interclub_teams where season_id=sid) then raise exception 'Availability altered ratings or lineups'; end if;
- settings:=public.pcs_interclub_pool_action(actor,actor_email,home,sid,'settings','{"expected_revision":1,"open":true,"rotate_link":true}');
+ settings:=public.pcs_interclub_pool_action(actor,actor_email,home,sid,'settings','{"expected_revision":1,"rotate_link":true}');
  if (settings->>'share_id')::uuid=share then raise exception 'Share link did not rotate'; end if;
  begin
   perform public.pcs_interclub_pool_public_action('signup',signup||jsonb_build_object('request_id',gen_random_uuid()),requester);

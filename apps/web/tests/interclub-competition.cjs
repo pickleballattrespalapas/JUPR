@@ -17,7 +17,9 @@ const PrintPacket = load(base + 'PrintPacket.tsx', common).PrintPacketContent;
 const Standings = load(base + 'Standings.tsx', common).default;
 let currentClub = 'alpha';
 const workflow = load('app/admin/interclub/InterclubWorkflow.tsx', { 'next/link': ({ children, ...props }) => React.createElement('a', props, children), './workflow.module.css': css });
-const workspace = load(base + 'CompetitionWorkspace.tsx', { ...common, '../InterclubWorkflow': workflow, 'next/link': ({ children, href }) => React.createElement('a', { href }, children), '@/lib/adminAuthClient': { getAdminApiBaseUrl: () => 'https://api.test' }, '@/lib/adminWorkspace': { readBrowserWorkspace: () => ({ clubId: currentClub }) }, '@/lib/useAdminSession': { useAdminSession: () => ({}) }, '@/lib/useAdminWorkspace': { useAdminWorkspace: () => ({ clubId: currentClub }) }, './ScoreEditor': ScoreEditor, './PrintPacket': PrintPacket, './Standings': Standings, './ScheduleMeet': () => null });
+const registrationWindow = load('lib/interclubRegistrationWindow.ts');
+const windowHook = load('lib/useRegistrationWindow.ts', { './interclubRegistrationWindow': registrationWindow });
+const workspace = load(base + 'CompetitionWorkspace.tsx', { ...common, '@/lib/useRegistrationWindow': windowHook, '../InterclubWorkflow': workflow, 'next/link': ({ children, href }) => React.createElement('a', { href }, children), '@/lib/adminAuthClient': { getAdminApiBaseUrl: () => 'https://api.test' }, '@/lib/adminWorkspace': { readBrowserWorkspace: () => ({ clubId: currentClub }) }, '@/lib/useAdminSession': { useAdminSession: () => ({}) }, '@/lib/useAdminWorkspace': { useAdminWorkspace: () => ({ clubId: currentClub }) }, './ScoreEditor': ScoreEditor, './PrintPacket': PrintPacket, './Standings': Standings, './ScheduleMeet': () => null });
 const nodeText = node => typeof node === 'string' ? node : node.children.map(nodeText).join('');
 const button = (tree, label) => tree.root.findAllByType('button').find(node => nodeText(node) === label);
 const text = tree => JSON.stringify(tree.toJSON());
@@ -34,7 +36,8 @@ const document = { schema_version: 1, meet_id: 'meet-1', phase: 'regular', forma
 const meet = { id: 'meet-1', host_club_id: 'alpha', club_ids: ['alpha', 'beta'], starts_at: '2099-01-16T17:00:00Z', roster_deadline: '2099-01-14T17:00:00Z', courts: 2 };
 const batch = { meet_id: meet.id, phase: 'regular', revision: 4, state: 'draft', document, roster_sources: [{ team_id: 'team-0', revision: 1 }, { team_id: 'team-1', revision: 1 }], ratings_status: 'not_requested' };
 const detail = { meet, batch, teams, is_organizer: true, can_manage: true, eligible_players: { alpha: players.slice(0, 4), beta: players.slice(4) } };
-const context = { season: { id: 'season-1', details: { name: 'Southern BCS', divisions: ['3.5'], timezone: 'America/Mazatlan' } }, standings: { divisions: {}, qualification: {} }, club_cup: { standings: [], champions: [], status: 'provisional' } };
+const closedRegistration = { opens_at: '2000-01-01T00:00:00Z', closes_at: '2000-02-01T00:00:00Z', revision: 1, status: 'closed', can_register: false, meet_planning_open: true };
+const context = { season: { registration: closedRegistration, id: 'season-1', details: { name: 'Southern BCS', divisions: ['3.5'], timezone: 'America/Mazatlan' } }, standings: { divisions: {}, qualification: {} }, club_cup: { standings: [], champions: [], status: 'provisional' } };
 global.window = { addEventListener() {}, removeEventListener() {}, print() {} };
 
 async function qualifyingRoundRobin() {
@@ -71,6 +74,46 @@ async function missingLineups() {
   assert.equal(url.searchParams.get('step'), 'lineups', 'Missing-roster message takes the organizer directly to that meet’s lineup workspace');
   assert.equal(tree.root.findAllByType('a').some(node => node.props['aria-label'] === 'Approve results'), false, 'Approval is unavailable until scores are submitted');
   await act(async () => tree.unmount());
+}
+
+async function seasonRegistrationGate() {
+  const originalWindow = global.window;
+  global.window = new EventTarget(); window.print = () => {};
+  const lockedWindows = [undefined,
+    { opens_at: null, closes_at: null, revision: 0, status: 'unconfigured', can_register: false, meet_planning_open: false },
+    { opens_at: '2099-01-01T00:00:00Z', closes_at: '2099-02-01T00:00:00Z', revision: 1, status: 'scheduled', can_register: false, meet_planning_open: false },
+    { opens_at: '2000-01-01T00:00:00Z', closes_at: '2099-02-01T00:00:00Z', revision: 1, status: 'open', can_register: true, meet_planning_open: false },
+  ];
+  const props = { clubId: 'alpha', accessToken: 'token', initialSeasonId: 'season-1', initialMeetId: 'meet-1' };
+  try {
+    for (const registration of lockedWindows) {
+      const requests = [], scopedContext = { ...context, season: { ...context.season, registration }, clubs: [], meets: [], batches: [], is_organizer: true };
+      global.fetch = async url => { requests.push(url); return reply(url.endsWith('/competition') ? { seasons: [scopedContext.season] } : scopedContext); };
+      let tree;
+      await act(async () => { tree = create(React.createElement(workspace.CompetitionHome, props)); });
+      assert.ok(text(tree).includes('Meet planning opens after registration closes'));
+      assert.equal(tree.root.findAllByType(ScoreEditor).length, 0);
+      assert.equal(tree.root.findAllByType(Standings).length, 0, 'The closed phase is required before operational standings controls mount');
+      assert.equal(tree.root.findAllByType('select').length, 1, 'Only season choice remains; no meet settings are mounted');
+      assert.ok(!requests.some(url => url.includes('/meets/')), 'Direct competition deep links do not fetch a meet during registration');
+      const pool = tree.root.findAllByType('a').find(link => nodeText(link) === 'Go to season player pool');
+      const url = new URL(pool.props.href, 'https://example.test');
+      assert.equal(url.searchParams.get('season'), 'season-1'); assert.equal(url.searchParams.get('meet'), 'meet-1');
+      await act(async () => tree.unmount());
+    }
+    const scopedContext = { ...context, clubs: [], meets: [meet], batches: [batch], is_organizer: true };
+    const reads = [];
+    global.fetch = async url => { reads.push(url); return reply(url.endsWith('/competition') ? { seasons: [context.season] } : url.includes('/meets/') ? detail : scopedContext); };
+    let tree;
+    await act(async () => { tree = create(React.createElement(workspace.CompetitionHome, props)); });
+    assert.equal(tree.root.findAllByType(ScoreEditor).length, 1, 'Confirmed closed registration retains the complete score workflow');
+    await act(async () => tree.root.findByType(ScoreEditor).props.onChange({ ...copy(document), weather: 'delay' }));
+    const meetReads = reads.filter(url => url.includes('/meets/')).length;
+    await act(async () => window.dispatchEvent(new Event('focus')));
+    assert.equal(tree.root.findByType(ScoreEditor).props.document.weather, 'delay', 'A phase recheck preserves an unsaved score draft when registration is still closed');
+    assert.equal(reads.filter(url => url.includes('/meets/')).length, meetReads, 'Background phase checks do not remount the current meet');
+    await act(async () => tree.unmount());
+  } finally { global.window = originalWindow; }
 }
 
 async function scoreEntry() {
@@ -183,4 +226,4 @@ function writePrintReview() {
   fs.writeFileSync(output, '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Southern BCS paper packet review</title><style>' + stylesheet + screenPreview + '</style></head><body class="printBody"><div class="printPortal">' + render(document) + render(final) + '</div></body></html>');
   console.log('Print review fixture: ' + output);
 }
-(async () => { await scoreEntry(); printSafety(); await revisionsAndStaleClub(); await approval(); await qualifyingRoundRobin(); await missingLineups(); qualifyingDisplay(); writePrintReview(); console.log('PASS interclub competition: paper packet safety, scoped lineups, non-play scoring, exact revisions, stale club protection, approval and ratings status, missing-lineup guidance, qualification and joint Cup'); })().catch(error => { console.error(error); process.exit(1); });
+(async () => { await scoreEntry(); printSafety(); await revisionsAndStaleClub(); await approval(); await qualifyingRoundRobin(); await missingLineups(); await seasonRegistrationGate(); qualifyingDisplay(); writePrintReview(); console.log('PASS interclub competition: registration phase locks and background draft preservation, paper packet safety, scoped lineups, non-play scoring, exact revisions, approval and ratings status, missing-lineup guidance, qualification and joint Cup'); })().catch(error => { console.error(error); process.exit(1); });

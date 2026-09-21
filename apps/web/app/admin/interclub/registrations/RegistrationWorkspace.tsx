@@ -11,6 +11,8 @@ import styles from "./registrations.module.css";
 import { SeasonPlayerPool, MeetAvailability } from "./PlayerPoolPanels";
 import SeasonEligibilityApprovals from "./SeasonEligibilityApprovals";
 import InterclubWorkflow, { RegistrationStep, workflowHref } from "../InterclubWorkflow";
+import SeasonRegistrationWindow from "./SeasonRegistrationWindow";
+import { useRegistrationWindow } from "@/lib/useRegistrationWindow";
 
 function loadErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && !(error instanceof TypeError) && !(error instanceof SyntaxError) ? error.message : fallback;
@@ -48,7 +50,7 @@ function ClubRegistrations({ clubId, accessToken, initialSeasonId, initialMeetId
   return <section className={styles.page}>
     <p className={styles.back}><Link href="/admin/interclub">← Interclub leagues</Link></p>
     <h1>League workspace</h1>
-    <p>Build your club’s player pool, check availability, and choose a lineup for each meet.</p>
+    <p>Register players for the season first. Meet planning opens after the commissioner’s registration period closes.</p>
     <div className={styles.toolbar}>
       <label>Season <select value={selected} onChange={e => setSelected(e.target.value)} disabled={!loaded}>
         {!seasons.length && <option value="">{loading ? "Loading invitations…" : loaded ? "No open invitations" : "Choose a season"}</option>}
@@ -75,11 +77,14 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId, initialMeetId,
   const [reload, setReload] = useState(0);
   const [selectedMeet, setSelectedMeet] = useState(initialMeetId);
   const [step, setStep] = useState<RegistrationStep>(initialStep);
+  const registrationCheck = useRef<AbortController | null>(null);
+  const { meetPlanningOpen } = useRegistrationWindow(data?.season.registration, () => void recheckRegistration());
   const stepFocus = useRef(false);
   const poolSection = useRef<HTMLElement | null>(null);
   const [responding, setResponding] = useState<"accept" | "decline" | null>(null);
   const responseFocus = useRef(false), confirmation = useRef<HTMLHeadingElement | null>(null), rosters = useRef<HTMLElement | null>(null);
   const pending = useRef(false), mutation = useRef<AbortController | null>(null);
+  useEffect(() => { if (data && !meetPlanningOpen) setStep("pool"); }, [data, meetPlanningOpen]);
   useEffect(() => {
     if (responseFocus.current && data?.own_participation?.status !== "invited") {
       confirmation.current?.focus({ preventScroll: true });
@@ -87,6 +92,7 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId, initialMeetId,
     }
   }, [data?.own_participation?.status]);
   useEffect(() => () => { mutation.current?.abort(); }, [root]);
+  useEffect(() => () => registrationCheck.current?.abort(), [root]);
   useEffect(() => {
     if (!stepFocus.current) return;
     const section = step === "pool" ? poolSection.current : rosters.current;
@@ -94,18 +100,36 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId, initialMeetId,
     stepFocus.current = false;
   }, [step]);
   useEffect(() => {
+    registrationCheck.current?.abort();
     const controller = new AbortController(); setData(null); setLoading(true); setLoadError(""); setBlocked(false);
     fetch(root, { headers: { Authorization: `Bearer ${token.current}` }, cache: "no-store", signal: controller.signal })
       .then(async response => {
         const next = await response.json(); if (!response.ok) throw new Error(apiError(next, "Unable to load this season."));
-        if (!controller.signal.aborted) { setData(next); setSelectedMeet(old => next.meets.some((m: { id: string }) => m.id === old) ? old : next.meets.find((m: { roster_open: boolean; club_ids: string[] }) => m.roster_open && m.club_ids.includes(clubId))?.id || next.meets.find((m: { roster_open: boolean }) => m.roster_open)?.id || next.meets[0]?.id || ""); }
+        if (!controller.signal.aborted) { setData(next); setSelectedMeet(old => !next.meets.length || next.meets.some((m: { id: string }) => m.id === old) ? old : next.meets.find((m: { roster_open: boolean; club_ids: string[] }) => m.roster_open && m.club_ids.includes(clubId))?.id || next.meets.find((m: { roster_open: boolean }) => m.roster_open)?.id || next.meets[0]?.id || ""); }
       }).catch(e => { if (!controller.signal.aborted) setLoadError(loadErrorMessage(e, "Unable to load this season. Try again.")); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [root, reload, clubId]);
 
+  async function recheckRegistration() {
+    if (!data || pending.current) return;
+    registrationCheck.current?.abort();
+    const controller = new AbortController(); registrationCheck.current = controller;
+    try {
+      const response = await fetch(root, { headers: { Authorization: `Bearer ${token.current}` }, cache: "no-store", signal: controller.signal });
+      const next: RegistrationDetail = await response.json();
+      if (!response.ok || next.season?.id !== seasonId) throw new Error("Unable to refresh season registration. Select Retry loading season to check again.");
+      if (!controller.signal.aborted) {
+        setData(current => current && (current.season.registration?.revision || 0) <= (next.season.registration?.revision || 0) ? next : current);
+        setSelectedMeet(old => !next.meets.length || next.meets.some(meet => meet.id === old) ? old : next.meets.find(meet => meet.roster_open && meet.club_ids.includes(clubId))?.id || next.meets[0]?.id || "");
+        setLoadError("");
+      }
+    } catch { if (!controller.signal.aborted) setLoadError("Unable to refresh season registration. Select Retry loading season to check again."); }
+  }
+
   async function change(path: string, method: string, body: object, success: string, participationAction?: "accept" | "decline"): Promise<boolean> {
     if (pending.current || blocked) return false;
+    registrationCheck.current?.abort();
     pending.current = true; setBusy(true); setMessage(""); setResponding(participationAction || null);
     const controller = new AbortController(); mutation.current = controller;
     try {
@@ -145,23 +169,22 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId, initialMeetId,
   const when = (value: string) => new Date(value).toLocaleString(undefined, { timeZone: data?.season.details.timezone, dateStyle: "medium", timeStyle: "short" });
   const date = (value: string) => new Date(`${value}T12:00:00Z`).toLocaleDateString(undefined, { timeZone: "UTC", dateStyle: "medium" });
   const status = data?.own_participation?.status;
-  const showRosters = data?.is_organizer || status === "accepted";
-  const activeStep = status !== "accepted" && step !== "lineups" ? "lineups" : step;
+  const hasWorkspace = data?.is_organizer || status === "accepted";
+  const showRosters = hasWorkspace && meetPlanningOpen;
+  const activeStep = !meetPlanningOpen ? "pool" : status !== "accepted" && step !== "lineups" ? "lineups" : step;
   const nextMeet = data?.meets.find(meet => meet.roster_open && meet.club_ids.includes(clubId));
-  function selectStep(value: RegistrationStep) { stepFocus.current = true; setStep(value); }
+  const schedule = data?.meet_schedule || data?.meets || [];
+  function selectStep(value: RegistrationStep) { if (value !== "pool" && !meetPlanningOpen) return; stepFocus.current = true; setStep(value); }
   return <>
     {loadError && <p role="alert" className={styles.notice}>{loadError}</p>}
     {message && <p role="status" className={styles.notice}>{message}</p>}
-    {(!data || blocked) && <div className={styles.toolbar}><button disabled={busy || loading} onClick={() => { setMessage(""); setReload(n => n + 1); }}>{loadError ? "Retry loading season" : "Reload season"}</button>{blocked && <span>Reload to check the latest response before trying again.</span>}</div>}
+    {(!data || blocked || loadError) && <div className={styles.toolbar}><button disabled={busy || loading} onClick={() => { setMessage(""); setReload(n => n + 1); }}>{loadError ? "Retry loading season" : "Reload season"}</button>{blocked && <span>Reload to check the latest response before trying again.</span>}</div>}
     {loading && <p role="status">Loading season…</p>}
     {data && <>
       <header className={styles.seasonHeader}>
         <h2>{data.season.details.name}</h2>
         <p>{date(data.season.details.start_date)} – {date(data.season.details.end_date)} · Organized by {clubName(data.season.organizer_club_id)}</p>
       </header>
-      {showRosters && <InterclubWorkflow seasonId={seasonId} meetId={selectedMeet} current={activeStep}
-        unavailable={status === "accepted" ? [] : ["pool", "availability"]}
-        onSelect={value => selectStep(value as RegistrationStep)} />}
       {status === "invited" && <section className={`${styles.card} ${styles.invitation}`} aria-labelledby="invitation-title">
         <p className={styles.eyebrow}>Invitation to your club</p>
         <h3 id="invitation-title">{clubName(clubId)} is invited</h3>
@@ -172,15 +195,21 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId, initialMeetId,
         </div>
         <p className={styles.muted}>No player roster is required to accept.</p>
       </section>}
+      <SeasonRegistrationWindow root={root} accessToken={accessToken} season={data.season} commissioner={data.is_organizer} firstMeetAt={data.first_meet_at}
+        onSaved={season => { registrationCheck.current?.abort(); setData(current => current ? { ...current, season } : current); void recheckRegistration(); }} onReload={() => setReload(value => value + 1)} />
+      {hasWorkspace && <InterclubWorkflow seasonId={seasonId} meetId={selectedMeet} current={activeStep} meetPlanningOpen={meetPlanningOpen}
+        unavailable={status === "accepted" ? [] : ["pool", "availability"]}
+        onSelect={value => selectStep(value as RegistrationStep)} />}
+      {hasWorkspace && !meetPlanningOpen && <p className={styles.notice} role="status">Meet planning opens after registration closes. Stay with the season player pool for now; availability, lineups, and meet settings are locked for every club.</p>}
       {status === "accepted" && <section hidden={activeStep !== "pool"} className={`${styles.card} ${styles.success}`} aria-labelledby="participation-confirmed">
         <p className={styles.eyebrow}>Invitation accepted</p>
         <h3 id="participation-confirmed" ref={confirmation} tabIndex={-1}>{clubName(clubId)} has joined</h3>
-        <p>Your place in {data.season.details.name} is confirmed. Invite players to your season pool, ask who is available for each meet, then choose that meet’s lineup.</p>
-        <div className={styles.toolbar}>
+        <p>Your place in {data.season.details.name} is confirmed. {meetPlanningOpen ? "Season registration is closed. Check who is available for each meet, then choose that meet’s lineup." : "Use the season player pool to register your club’s players during the commissioner’s registration period."}</p>
+        {meetPlanningOpen && <div className={styles.toolbar}>
           {data.meets.length > 0 && <button onClick={() => { if (nextMeet) setSelectedMeet(nextMeet.id); selectStep("availability"); }}>Next: check meet availability</button>}
-        </div>
-        {nextMeet && <p><strong>Next meet:</strong> {when(nextMeet.starts_at)} · {clubName(nextMeet.host_club_id)}</p>}
-        {!data.meets.length && <p>The organizer will share your meet schedule here.</p>}
+        </div>}
+        {meetPlanningOpen && nextMeet && <p><strong>Next meet:</strong> {when(nextMeet.starts_at)} · {clubName(nextMeet.host_club_id)}</p>}
+        {meetPlanningOpen && !data.meets.length && <p>The organizer will share your meet schedule here.</p>}
       </section>}
       {status === "accepted" && <section id="season-player-pool" hidden={activeStep !== "pool"} ref={poolSection} tabIndex={-1} className={styles.rosters} aria-label="Season player pool workspace">
         <SeasonPlayerPool root={root} accessToken={accessToken} clubName={clubName(clubId)} season={data.season} />
@@ -189,10 +218,10 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId, initialMeetId,
         <h3 ref={confirmation} tabIndex={-1}>{status === "declined" ? "Invitation declined" : "Invitation cancelled"}</h3>
         <p>{clubName(clubId)} has not joined {data.season.details.name}. Ask {clubName(data.season.organizer_club_id)} for a new invitation if you want to take part.</p>
       </section>}
-      {!showRosters && <details className={styles.card}>
-        <summary>Meet schedule for {clubName(clubId)} ({data.meets.length})</summary>
+      {(!hasWorkspace || !meetPlanningOpen) && <details className={styles.card}>
+        <summary>Planned meet dates ({schedule.length})</summary>
         <p>Meet times are shown in {data.season.details.timezone}.</p>
-        {data.meets.length ? <ul className={styles.schedule}>{data.meets.map(meet => <li key={meet.id}><strong>{when(meet.starts_at)}</strong><span>Hosted by {clubName(meet.host_club_id)}</span></li>)}</ul> : <p>No meets are scheduled for your club yet.</p>}
+        {schedule.length ? <ul className={styles.schedule}>{schedule.map(meet => <li key={meet.id}><strong>{when(meet.starts_at)}</strong><span>Hosted by {clubName(meet.host_club_id)}</span></li>)}</ul> : <p>No meets are scheduled for your club yet.</p>}
       </details>}
       {showRosters && <section id="meet-rosters" hidden={activeStep === "pool"} ref={rosters} tabIndex={-1} className={styles.rosters} aria-label="Meet rosters">
         <h3>{activeStep === "availability" ? "Meet availability" : "Lineups"}</h3>

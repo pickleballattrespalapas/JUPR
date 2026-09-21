@@ -5,6 +5,8 @@ import { adminSessionIsFresh, loadAdminSession } from "@/lib/adminAuthClient";
 import { registrationNameKey } from "@/lib/tournamentRegistrationProfile";
 import { formatSignupRating, PlayerSignupError, playerSignupRequest, seasonDates, SeasonSignupDetails, signupErrorMessage, signupMeetTime, SignupPlayer, SignupPlayerMatches, sortSignupDivisions } from "@/lib/interclubPlayerSignup";
 import styles from "../../player-signup.module.css";
+import { registrationCanAccept, registrationWindowDates, registrationWindowMessage } from "@/lib/interclubRegistrationWindow";
+import { useRegistrationWindow } from "@/lib/useRegistrationWindow";
 
 type Registration = { status: "registered" | "already_registered"; message: string; manage_url?: string };
 
@@ -29,6 +31,8 @@ export default function SeasonSignup({ shareId }: { shareId: string }) {
   const nameRef = useRef(""), identityVersion = useRef(0);
   const previousShare = useRef(shareId);
   const path = `/public/interclub-signups/${encodeURIComponent(shareId)}`;
+  const { canRegister, now } = useRegistrationWindow(data?.season.registration, () => setReload(value => value + 1));
+  const registrationDates = data ? registrationWindowDates(data.season.registration, data.season.timezone) : null;
   const needsProfileChoice = !profile && !withoutProfile && Boolean(candidates?.length || lookupError);
 
   useEffect(() => {
@@ -62,7 +66,7 @@ export default function SeasonSignup({ shareId }: { shareId: string }) {
   useEffect(() => { if (registration) success.current?.focus(); }, [registration]);
 
   useEffect(() => {
-    if (!session.accessToken || !data?.signup.open) return;
+    if (!session.accessToken || !canRegister) return;
     const controller = new AbortController();
     const version = identityVersion.current;
     playerSignupRequest<SignupPlayerMatches>(`${path}/players`, controller.signal, undefined, session.accessToken).then(result => {
@@ -74,10 +78,10 @@ export default function SeasonSignup({ shareId }: { shareId: string }) {
       }
     }).catch(() => { /* Name search is available if account prefill is unavailable. */ });
     return () => controller.abort();
-  }, [path, session, data?.signup.open]);
+  }, [path, session, canRegister]);
 
   useEffect(() => {
-    if (!data?.signup.open || registration || profile || withoutProfile || name.trim().length < 2) {
+    if (!canRegister || registration || profile || withoutProfile || name.trim().length < 2) {
       setLookupPending(false);
       return;
     }
@@ -96,7 +100,7 @@ export default function SeasonSignup({ shareId }: { shareId: string }) {
       }).finally(() => { if (!controller.signal.aborted && version === identityVersion.current) setLookupPending(false); });
     }, 250);
     return () => { clearTimeout(timer); controller.abort(); };
-  }, [path, name, session.accessToken, data?.signup.open, registration, profile, withoutProfile, lookupRetry]);
+  }, [path, name, session.accessToken, canRegister, registration, profile, withoutProfile, lookupRetry]);
 
   function changeName(value: string) {
     identityVersion.current += 1;
@@ -112,7 +116,8 @@ export default function SeasonSignup({ shareId }: { shareId: string }) {
   }
 
   async function register() {
-    if (pending.current || refreshRequired || !data?.signup.open || !consent) return;
+    if (pending.current || refreshRequired || !consent) return;
+    if (!registrationCanAccept(data?.season.registration)) { setError(registrationWindowMessage(data?.season.registration)); setRefreshRequired(true); return; }
     if (lookupPending) { setError("Wait a moment while we check for your club profile."); return; }
     if (needsProfileChoice) { setError("Choose your profile, or continue without one."); return; }
     const body = {
@@ -136,6 +141,7 @@ export default function SeasonSignup({ shareId }: { shareId: string }) {
     <h1>{registration ? registration.status === "registered" ? "You’re in the player pool" : "You’re already signed up" : "Join your club’s player pool"}</h1>
     {loading ? <p role="status">Loading season signup…</p> : data && <>
       <h2>{data.season.name}</h2><p className={styles.muted}>{seasonDates(data.season)}</p>
+      {registrationDates && <p className={styles.hint}><strong>Season registration:</strong> {registrationDates}</p>}
       {registration ? <div className={styles.success}>
         <h2 ref={success} tabIndex={-1}>{registration.status === "registered" ? "Your interest is registered" : "Your earlier signup is still saved"}</h2>
         <p>Your club will invite players to upcoming meets. You can say yes, maybe, or no for each one. Your administrator confirms the final teams.</p>
@@ -145,7 +151,7 @@ export default function SeasonSignup({ shareId }: { shareId: string }) {
             <button type="button" onClick={async () => { try { await navigator.clipboard.writeText(registration.manage_url!); setCopied(true); } catch { setCopied(false); setError("Copy the personal link from the box below."); } }}>{copied ? "Link copied" : "Copy my personal link"}</button></div>
           <label className={styles.form}>Your personal link<input readOnly value={registration.manage_url} aria-label="Your personal link" onFocus={event => event.target.select()} /></label>
         </> : <p>Use the personal link from your original signup to make changes. If you no longer have it, ask your club administrator for help.</p>}
-      </div> : !data.signup.open ? <div className={styles.notice}><h2>Signup is currently closed</h2><p>Contact your club administrator if you’d like to take part.</p></div> : <>
+      </div> : !canRegister ? <div className={styles.notice}><h2>{registrationWindowMessage(data.season.registration, now)}</h2><p>The commissioner sets registration dates for every club in this league. {data.season.registration?.status === "closed" ? "Contact your club administrator about your existing signup." : "Return when registration opens to join your club’s player pool."}</p></div> : <>
         <p className={styles.intro}>Interested in playing for {data.club.name}? Sign up once for the season. Your club will invite you to individual meets when it’s time to plan the teams.</p>
         <div className={styles.notice}><strong>Travel plans can change.</strong><p>Joining this pool does not commit you to every meet or reserve a team place. You’ll choose your availability separately for each meet. No player account is needed.</p></div>
         {data.meets.length > 0 && <details><summary>Planned meets for your club ({data.meets.length})</summary><ul>{data.meets.map(meet => <li key={meet.id}>{signupMeetTime(meet.starts_at, data.season.timezone)}{meet.host_club_name ? ` · ${meet.host_club_name}` : ""}</li>)}</ul><p className={styles.hint}>You’ll respond separately when your club invites you to a meet.</p></details>}

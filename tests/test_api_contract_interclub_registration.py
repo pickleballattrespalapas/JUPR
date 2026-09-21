@@ -9,6 +9,7 @@ from httpx import Client, MockTransport, Response
 from postgrest import SyncPostgrestClient
 
 from services.api import admin_auth_routes, interclub_registration_routes as routes
+from tests.interclub_registration_fixtures import set_registration_phase
 
 
 class Query:
@@ -38,6 +39,7 @@ def setup(monkeypatch):
     assignment = dict(club_id="alpha", email=user.email, user_id=uid, role="administrator")
     season = dict(id=sid, organizer_club_id="alpha", source_revision=2, opened_at="2026-09-08T00:00:00Z", roster_deadline="2099-01-01T00:00:00Z",
                   details=dict(name="Coastal League",club_ids=["beta","gamma"],divisions=["3.5"],timezone="America/Mazatlan",meets=[]), rules={"3.5":dict(min_rating=None,max_rating=3.75,women_required=2)})
+    set_registration_phase(season, "closed")
     meet = dict(id=mid,season_id=sid,plan_index=0,host_club_id="beta",club_ids=["beta","gamma"],starts_at="2099-01-10T18:00:00Z",roster_deadline="2099-01-10T18:00:00Z",revision=1,roster_open=True,deadline_editable=False)
     participation = dict(season_id=sid,club_id="beta",status="accepted",revision=2)
     version = dict(team_id=tid,revision=1,name="Beta Blue",status="needs_exception",issues=[dict(code="rating_above_maximum",message="Player exceeds limit",private="secret")],late_change=False,
@@ -62,6 +64,10 @@ def setup(monkeypatch):
                 if rows is None:
                     rows = [dict(player_id=p["id"], entry_id=str(uuid4()), eligibility_rating=p.get("rating", 1400)/400, gender=p.get("gender"), rating_deadline=meet["roster_deadline"], rating_locked=False) for p in tables["players"] if p["club_id"] == params["p_club_id"]]
                 return SimpleNamespace(data=rows)
+            if name == "pcs_set_interclub_registration_window":
+                season.update(registration_opens_at=params["p_opens_at"], registration_closes_at=params["p_closes_at"],
+                              registration_revision=params["p_revision"] + 1)
+                return SimpleNamespace(data=season)
             data = season if name == "pcs_open_interclub_meet_registration" else participation if name == "pcs_interclub_participation" else meet if name == "pcs_set_interclub_meet_deadline" else {"team":team,"roster":version}
             return SimpleNamespace(data=data)
         return SimpleNamespace(execute=execute)
@@ -175,7 +181,7 @@ def test_history_is_private_to_owner_and_organizer_with_contact_redaction(setup)
     assert c.get(meet_base(s,"gamma")+f"/teams/{s['team']['id']}/history").status_code==404
 
 
-@pytest.mark.parametrize("code,status",[("42501",403),("40001",409),("PT409",409),("23505",409),("22023",422),("P0002",404),("unknown",503)])
+@pytest.mark.parametrize("code,status",[("42501",403),("40001",409),("PT409",409),("23505",409),("22023",422),("PT423",423),("P0002",404),("unknown",503)])
 def test_database_failures_are_actionable_without_internal_details(setup,code,status):
     c,s=setup; s["error"]=code
     r=c.post(base(s)+"/participations/beta",json={"expected_revision":2,"action":"cancel"})
@@ -363,3 +369,69 @@ def test_two_player_roster_requires_explicit_missing_pairing_declaration(setup):
     assert state["calls"][-1][1]["p_player_ids"] == [1, 2]
     assert client.put(url, json={**payload, "player_ids": [1, 2, 3], "missing_pairing_forfeit": True}).status_code == 422
     assert client.put(url, json={**payload, "player_ids": [1, 2, 3, 4], "missing_pairing_forfeit": True}).status_code == 422
+
+
+@pytest.mark.parametrize("phase", ["unconfigured", "scheduled", "open"])
+def test_direct_meet_planning_urls_stay_locked_until_season_registration_closes(setup, phase):
+    client, state = setup
+    set_registration_phase(state["season"], phase)
+    result = client.get(base(state))
+    assert result.status_code == 200
+    body = result.json()
+    assert body["season"]["registration"]["status"] == phase
+    assert body["meets"] == [] and body["teams"] == []
+    assert body["meet_schedule"] == [{key: state["meet"][key] for key in ("id", "starts_at", "host_club_id", "club_ids")}]
+    assert body["first_meet_at"] == state["meet"]["starts_at"]
+    assert not {"roster_deadline", "roster_open", "deadline_editable", "revision", "teams", "roster"}.intersection(body["meet_schedule"][0])
+    assert client.put(meet_base(state) + "/deadline", json={
+        "expected_revision": 1, "roster_deadline": "2099-01-10T12:00:00Z"
+    }).status_code == 423
+    assert client.post(meet_base(state) + f"/teams/{state['team']['id']}/eligibility", json={
+        "expected_meet_revision": 1, "expected_revision": 1, "approve": True, "reason": "Reviewed"
+    }).status_code == 423
+    state["assignment"]["club_id"] = "beta"
+    root = meet_base(state, "beta")
+    assert client.get(root + "/players").status_code == 423
+    assert client.put(root + f"/teams/{state['team']['id']}", json={
+        "expected_meet_revision": 1, "expected_revision": 1, "name": "Beta Blue", "division": "3.5",
+        "player_ids": [1, 2, 3, 4]
+    }).status_code == 423
+    assert client.post(root + f"/teams/{state['team']['id']}/withdraw", json={
+        "expected_meet_revision": 1, "expected_revision": 1
+    }).status_code == 423
+    assert not state["calls"], "Locked operations must never reach a mutation RPC."
+
+
+def test_only_commissioner_updates_shared_registration_window_with_exact_revision(setup):
+    client, state = setup
+    set_registration_phase(state["season"], "unconfigured")
+    payload = {"expected_revision": 0, "opens_at": "2026-01-01T00:00:00Z", "closes_at": "2098-12-31T23:59:59Z"}
+    state["assignment"]["club_id"] = "beta"
+    assert client.put(base(state, "beta") + "/registration-window", json=payload).status_code == 403
+    state["assignment"]["club_id"] = "gamma"
+    assert client.put(base(state, "gamma") + "/registration-window", json=payload).status_code == 403
+    assert not state["calls"]
+    state["assignment"]["club_id"] = "alpha"
+    assert client.put(base(state) + "/registration-window", json={**payload, "expected_revision": 1}).status_code == 409
+    assert not state["calls"]
+    result = client.put(base(state) + "/registration-window", json=payload)
+    assert result.status_code == 200
+    assert result.json()["season"]["registration"]["status"] == "open"
+    assert result.json()["season"]["registration"]["revision"] == 1
+    name, args = state["calls"][-1]
+    assert name == "pcs_set_interclub_registration_window"
+    assert args["p_actor_id"] == state["user"].user_id and args["p_club_id"] == "alpha"
+    assert args["p_revision"] == 0 and args["p_season_id"] == state["season"]["id"]
+    state["assignment"]["club_id"] = "beta"
+    participant = client.get(base(state, "beta"))
+    assert participant.status_code == 200
+    assert participant.json()["season"]["registration"] == result.json()["season"]["registration"]
+
+
+@pytest.mark.parametrize("patch", [{"opens_at": "2099-01-01T00:00:00Z"}, {"closes_at": "2020-01-01T00:00:00Z"},
+                                  {"opens_at": "2026-01-01T00:00:00"}, {"closes_at": None}, {"club_id": "beta"}])
+def test_registration_window_requires_ordered_aware_dates_and_route_scope(setup, patch):
+    client, state = setup
+    result = client.put(base(state) + "/registration-window", json={"expected_revision": 1,
+        "opens_at": "2026-01-01T00:00:00Z", "closes_at": "2099-01-01T00:00:00Z", **patch})
+    assert result.status_code == 422 and not state["calls"]

@@ -21,6 +21,8 @@ from jupr_app.domain.admin.staff_policy import ADMIN_ROLES
 from services.api.admin_auth_routes import require_admin_assignments
 from services.api.auth import authenticate_bearer, auth_header
 from services.api.interclub_registration_routes import StrictModel
+from jupr_app.services.interclub_registration_phase import REGISTRATION_FIELDS
+from services.api.interclub_registration_phase import registration_state, require_season_phase
 from services.api.staging_write_guard import require_public_intake_or_403
 
 POOL = "pcs_interclub_pool_settings"
@@ -36,8 +38,7 @@ PLAYER_FIELDS = "id,name,rating,gender"
 
 class PoolSettingsUpdate(StrictModel):
     expected_revision: int = Field(ge=0)
-    open: bool
-    rotate_link: bool = False
+    rotate_link: Literal[True]
 
 
 class PoolMemberUpdate(StrictModel):
@@ -175,6 +176,7 @@ def pool_rpc(db, name, params):
             "23505": (409, "This player already has a season signup. Reload the player pool."),
             "22023": (422, "Check the player, divisions and response deadline for this club."),
             "PT422": (422, "More than one club profile matches this name. Choose your profile or select that none of the matches is you."),
+            "PT423": (423, "This action is locked by the season registration window. Reload the league workspace for its current dates."),
             "54000": (429, "Too many requests. Please wait and try again."),
         }.get(code, (503, "Could not confirm the update. Reload before retrying."))
         raise HTTPException(status, message) from exc
@@ -185,7 +187,7 @@ def pool_actor(user, club_id, season_id):
 
 
 def _season_club(db, club_id, season_id):
-    season = _one(db, "pcs_interclub_seasons", "id,organizer_club_id,details,rules", id=str(season_id))
+    season = _one(db, "pcs_interclub_seasons", "id,organizer_club_id,details,rules," + REGISTRATION_FIELDS, id=str(season_id))
     participation = _one(db, "pcs_interclub_participations", "status", season_id=str(season_id), club_id=club_id)
     club = _one(db, "clubs", "id,name", id=club_id)
     if not season or not club or not participation or participation["status"] != "accepted":
@@ -262,7 +264,8 @@ def _date(value):
 
 
 def _public_season(season):
-    return {"id": season["id"], **{key: season["details"][key] for key in ("name", "start_date", "end_date", "timezone", "divisions")}}
+    return {"id": season["id"], **{key: season["details"][key] for key in ("name", "start_date", "end_date", "timezone", "divisions")},
+            "registration": registration_state(season)}
 
 
 def _member(row):
@@ -391,8 +394,8 @@ def _bulk_preview(db, club, season, body):
             "ambiguous_count": sum(r["status"] == "ambiguous" for r in rows)}
 
 
-def _settings(row):
-    return {"share_id": row["share_id"], "revision": row["revision"], "open": row["open"], "url": pool_signup_url(row["share_id"])} if row else {"share_id": None, "revision": 0, "open": False, "url": None}
+def _settings(row, season):
+    return {"share_id": row["share_id"], "revision": row["revision"], "open": registration_state(season)["can_register"], "url": pool_signup_url(row["share_id"])} if row else {"share_id": None, "revision": 0, "open": False, "url": None}
 
 
 def _meet(db, club_id, season_id, meet_id):
@@ -407,7 +410,7 @@ def _pool_payload(db, club, season):
     filters = {"club_id": club["id"], "season_id": season["id"]}
     members = _rows(_query(db, MEMBERS, MEMBER_FIELDS + ",token_nonce", **filters).order("name").order("id").limit(1000))
     summaries = _profile_summaries(db, club["id"], season, members)
-    return {"club": club, "season": _public_season(season), "signup": _settings(_one(db, POOL, **filters)),
+    return {"club": club, "season": _public_season(season), "registration": registration_state(season), "signup": _settings(_one(db, POOL, **filters), season),
             "members": [{**summary, "manage_url": pool_member_url(row, season)} for row, summary in zip(members, summaries)], "email_mode": get_email_mode()}
 
 
@@ -430,6 +433,8 @@ def _availability_payload(db, club, season, meet):
 
 
 def prepare_meet_invitations(db, user, club_id, season_id, meet_id, member_ids):
+    _, season = _season_club(db, club_id, season_id)
+    require_season_phase(season)
     _secret()  # Fail before creating invitations if the signing configuration is unavailable.
     return pool_rpc(db, "pcs_interclub_pool_action", {**pool_actor(user, club_id, season_id), "p_action": "invite",
         "p_payload": {"meet_id": str(meet_id), "member_ids": [str(value) for value in member_ids]}})
@@ -460,10 +465,10 @@ def _review(db, claims):
     result = {"kind": claims["kind"], "club": club, "season": _public_season(season), "member": _member(member), "can_respond": False}
     now = datetime.now(timezone.utc)
     if claims["kind"] == "season":
-        settings = _one(db, POOL, season_id=season["id"], club_id=club["id"])
-        result["can_respond"] = bool(settings and settings["open"] and _season_end(season) > now)
+        result["can_respond"] = bool(registration_state(season)["can_register"] and _season_end(season) > now)
         result["can_withdraw"] = bool(member["status"] == "active" and _season_end(season) > now)
     else:
+        require_season_phase(season)
         meet = _meet(db, club["id"], season["id"], row["meet_id"])
         settings = _one(db, SETTINGS, season_id=season["id"], club_id=club["id"], meet_id=meet["id"])
         if not settings:
@@ -522,8 +527,7 @@ def install_interclub_player_pool_routes(app, *, get_supabase_client):
     def update_pool(club_id: str, season_id: UUID, body: PoolSettingsUpdate, response: Response, authorization: str | None = auth_header()):
         _private_headers(response)
         db, user, club, season = pool_admin_context(get_supabase_client, authorization, club_id, season_id)
-        if body.open:
-            _secret()
+        _secret()
         pool_rpc(db, "pcs_interclub_pool_action", {**pool_actor(user, club_id, season_id), "p_action": "settings", "p_payload": body.model_dump()})
         return _pool_payload(db, club, season)
 
@@ -539,12 +543,14 @@ def install_interclub_player_pool_routes(app, *, get_supabase_client):
     def preview_members(club_id: str, season_id: UUID, body: BulkPoolMembers, response: Response, authorization: str | None = auth_header()):
         _private_headers(response)
         db, _, club, season = pool_admin_context(get_supabase_client, authorization, club_id, season_id)
+        require_season_phase(season, intake=True)
         return _bulk_preview(db, club, season, body)
 
     @app.post("/admin/clubs/{club_id}/interclub/registrations/{season_id}/pool/bulk-add")
     def add_members(club_id: str, season_id: UUID, body: BulkPoolMembers, response: Response, authorization: str | None = auth_header()):
         _private_headers(response)
         db, user, club, season = pool_admin_context(get_supabase_client, authorization, club_id, season_id)
+        require_season_phase(season, intake=True)
         _secret()  # Personal links must work before retaining any new entries.
         preview = _bulk_preview(db, club, season, body)
         if preview["ambiguous_count"]:
@@ -557,6 +563,10 @@ def install_interclub_player_pool_routes(app, *, get_supabase_client):
     def update_member(club_id: str, season_id: UUID, member_id: UUID, body: PoolMemberUpdate, response: Response, authorization: str | None = auth_header()):
         _private_headers(response)
         db, user, _, season = pool_admin_context(get_supabase_client, authorization, club_id, season_id)
+        if body.status == "active":
+            current = _one(db, MEMBERS, "status", id=str(member_id), season_id=str(season_id), club_id=club_id)
+            if current and current["status"] == "withdrawn":
+                require_season_phase(season, intake=True)
         row = pool_rpc(db, "pcs_interclub_pool_action", {**pool_actor(user, club_id, season_id), "p_action": "member", "p_payload": {**body.model_dump(), "member_id": str(member_id)}})
         return {"member": {**_profile_summaries(db, club_id, season, [row])[0], "manage_url": pool_member_url(row, season)}}
 
@@ -564,12 +574,14 @@ def install_interclub_player_pool_routes(app, *, get_supabase_client):
     def get_availability(club_id: str, season_id: UUID, meet_id: UUID, response: Response, authorization: str | None = auth_header()):
         _private_headers(response)
         db, _, club, season = pool_admin_context(get_supabase_client, authorization, club_id, season_id)
+        require_season_phase(season)
         return _availability_payload(db, club, season, _meet(db, club_id, season_id, meet_id))
 
     @app.put("/admin/clubs/{club_id}/interclub/registrations/{season_id}/meets/{meet_id}/availability")
     def update_availability(club_id: str, season_id: UUID, meet_id: UUID, body: AvailabilitySettingsUpdate, response: Response, authorization: str | None = auth_header()):
         _private_headers(response)
         db, user, club, season = pool_admin_context(get_supabase_client, authorization, club_id, season_id)
+        require_season_phase(season)
         meet = _meet(db, club_id, season_id, meet_id)
         pool_rpc(db, "pcs_interclub_pool_action", {**pool_actor(user, club_id, season_id), "p_action": "availability", "p_payload": {**body.model_dump(mode="json"), "meet_id": str(meet_id)}})
         return _availability_payload(db, club, season, meet)
@@ -586,7 +598,7 @@ def install_interclub_player_pool_routes(app, *, get_supabase_client):
         host_ids = list({m["host_club_id"] for m in meets})
         hosts = _rows(_query(db, "clubs", "id,name").in_("id", host_ids)) if host_ids else []
         host_names = {host["id"]: host["name"] for host in hosts}
-        return {"club": club, "season": _public_season(season), "signup": {"open": settings["open"] and _season_end(season) > datetime.now(timezone.utc)},
+        return {"club": club, "season": _public_season(season), "signup": {"open": registration_state(season)["can_register"] and _season_end(season) > datetime.now(timezone.utc)},
                 "meets": [{**{key: row[key] for key in ("id", "host_club_id", "starts_at")}, "host_club_name": host_names.get(row["host_club_id"], row["host_club_id"])} for row in meets]}
 
     @app.post("/public/interclub-signups/{share_id}")
@@ -597,15 +609,16 @@ def install_interclub_player_pool_routes(app, *, get_supabase_client):
             raise HTTPException(422, "Please leave the website field blank.")
         requester = _requester(request)
         db = get_supabase_client()
+        settings = _one(db, POOL, share_id=str(share_id))
+        if not settings:
+            raise HTTPException(404, "This season signup link is unavailable.")
+        club, season = _season_club(db, settings["club_id"], settings["season_id"])
+        require_season_phase(season, intake=True)
         # Fingerprint the submitted details, not mutable member data. An exact
         # network retry recovers its private link; another signup never can.
         payload = body.model_dump(mode="json", exclude={"website"} | ({"player_id"} if "player_id" not in body.model_fields_set else set()))
         fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         if authorization and "player_id" not in body.model_fields_set:
-            settings = _one(db, POOL, share_id=str(share_id))
-            if not settings:
-                raise HTTPException(404, "This season signup link is unavailable.")
-            club, season = _season_club(db, settings["club_id"], settings["season_id"])
             linked = _account_player(db, club["id"], season, authorization)
             if linked and _name(linked["name"]) == _name(body.name):
                 payload["player_id"] = int(linked["id"])
@@ -624,7 +637,8 @@ def install_interclub_player_pool_routes(app, *, get_supabase_client):
         if not settings:
             raise HTTPException(404, "This season signup link is unavailable.")
         club, season = _season_club(db, settings["club_id"], settings["season_id"])
-        if not settings["open"] or _season_end(season) <= datetime.now(timezone.utc):
+        require_season_phase(season, intake=True)
+        if _season_end(season) <= datetime.now(timezone.utc):
             raise HTTPException(409, "This season signup is closed.")
         linked = _account_player(db, club["id"], season, authorization)
         rows = pool_rpc(db, "pcs_interclub_pool_search_players", {"p_season_id": season["id"], "p_club_id": club["id"],
@@ -644,7 +658,18 @@ def install_interclub_player_pool_routes(app, *, get_supabase_client):
         if (claims["kind"] == "season") != (body.action == "update_season"):
             raise HTTPException(404, "This private link cannot make that response.")
         db = get_supabase_client()
-        _review(db, claims)
+        review = _review(db, claims)
+        _, season = _season_club(db, claims["club_id"], claims["season_id"])
+        if body.action == "respond_meet":
+            require_season_phase(season)
+            if not review["can_respond"]:
+                raise HTTPException(409, "This meet is no longer accepting responses.")
+        elif body.status != "withdrawn":
+            require_season_phase(season, intake=True)
+        elif not review.get("can_withdraw"):
+            raise HTTPException(409, "This player is no longer in the active season pool.")
         payload = {**body.model_dump(exclude={"token", "action"}, exclude_none=True), **{k: claims[k] for k in ("id", "season_id", "club_id", "nonce")}}
+        if body.action == "update_season" and body.status == "withdrawn" and not registration_state(season)["can_register"]:
+            payload.update({key: review["member"][key] for key in ("name", "email", "divisions", "notes")})
         pool_rpc(db, "pcs_interclub_pool_public_action", {"p_action": body.action, "p_payload": payload, "p_requester_hash": _requester(request)})
         return _review(db, claims)

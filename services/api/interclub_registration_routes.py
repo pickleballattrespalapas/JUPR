@@ -11,8 +11,10 @@ from jupr_app.domain.admin.staff_policy import ADMIN_ROLES
 from services.api.admin_auth_routes import require_admin_assignments
 from services.api.auth import auth_header
 from services.api.interclub_models import DivisionRule, SeasonDraft, canonical_southern_bcs_rules
+from jupr_app.services.interclub_registration_phase import REGISTRATION_FIELDS
+from services.api.interclub_registration_phase import registration_season, registration_state, require_season_phase
 
-SEASON_FIELDS = "id,organizer_club_id,source_revision,details,rules,opened_at"
+SEASON_FIELDS = "id,organizer_club_id,source_revision,details,rules,opened_at," + REGISTRATION_FIELDS
 PARTICIPATION_FIELDS = "season_id,club_id,status,revision,updated_at"
 MEET_FIELDS = "id,season_id,plan_index,host_club_id,club_ids,starts_at,duration_minutes,courts,roster_deadline,revision,roster_open,deadline_editable,competition_phase"
 TEAM_FIELDS = "id,season_id,meet_id,club_id,division,name,revision,withdrawn,created_at,updated_at,roster,issues,status,late_change,submitted_at,decision_reason,decided_at"
@@ -31,6 +33,18 @@ class OpenRegistration(StrictModel):
 class ParticipationUpdate(StrictModel):
     expected_revision: int = Field(ge=1)
     action: Literal["accept", "decline", "cancel", "reinvite"]
+
+
+class RegistrationWindowUpdate(StrictModel):
+    expected_revision: int = Field(ge=0)
+    opens_at: AwareDatetime
+    closes_at: AwareDatetime
+
+    @model_validator(mode="after")
+    def ordered(self):
+        if self.closes_at <= self.opens_at:
+            raise ValueError("Registration must close after it opens.")
+        return self
 
 
 class RosterUpdate(StrictModel):
@@ -81,6 +95,8 @@ def call_rpc(db, name, params):
         code = getattr(exc, "code", "")
         if code == "42501":
             raise HTTPException(403, "Your club account cannot perform this action. Check its administrator access and season invitation.") from exc
+        if code == "PT423":
+            raise HTTPException(423, "This action is locked by the season registration window. Reload the league workspace for its current dates.") from exc
         if code in {"40001", "PT409"}:
             raise HTTPException(409, "This invitation, meet or roster changed, or the meet has started. Reload before continuing.") from exc
         if code == "23505":
@@ -121,7 +137,7 @@ def install_interclub_registration_routes(app, *, get_supabase_client):
         invited = db.table("pcs_interclub_seasons").select(SEASON_FIELDS).in_("id", [p["season_id"] for p in own]).execute().data if own else []
         by_id = {s["id"]: s for s in [*organized, *(invited or [])]}
         by_season = {p["season_id"]: p for p in own}
-        return {"seasons": [{**s, "participation": by_season.get(s["id"])} for s in sorted(by_id.values(), key=lambda s: s["opened_at"], reverse=True)]}
+        return {"seasons": [{**registration_season(s), "participation": by_season.get(s["id"])} for s in sorted(by_id.values(), key=lambda s: s["opened_at"], reverse=True)]}
 
     @app.post("/admin/clubs/{club_id}/interclub/registrations/{season_id}/open")
     def open_registration(club_id: str, season_id: UUID, payload: OpenRegistration, authorization: str | None = auth_header()):
@@ -149,7 +165,36 @@ def install_interclub_registration_routes(app, *, get_supabase_client):
         rules = {d: rule.model_dump() for d, rule in canonical_southern_bcs_rules(draft.divisions).items()}
         season = call_rpc(db, "pcs_open_interclub_meet_registration", {**actor_params(user, club_id, season_id),
             "p_revision": payload.expected_revision, "p_rules": rules})
-        return {"season": {key: season.get(key) for key in SEASON_FIELDS.split(",")}}
+        return {"season": registration_season({key: season.get(key) for key in SEASON_FIELDS.split(",")})}
+
+    @app.put("/admin/clubs/{club_id}/interclub/registrations/{season_id}/registration-window")
+    def update_registration_window(club_id: str, season_id: UUID, payload: RegistrationWindowUpdate, authorization: str | None = auth_header()):
+        db, user = administrator(club_id, authorization)
+        rows = db.table("pcs_interclub_seasons").select(SEASON_FIELDS).eq("id", str(season_id)).limit(1).execute().data or []
+        if not rows:
+            raise HTTPException(404, "Season unavailable.")
+        season = rows[0]
+        if season["organizer_club_id"] != club_id:
+            raise HTTPException(403, "Only the league commissioner can set registration dates for all clubs.")
+        if int(season.get("registration_revision") or 0) != payload.expected_revision:
+            raise HTTPException(409, "Registration dates changed. Reload before saving.")
+        try:
+            updated = db.rpc("pcs_set_interclub_registration_window", {**actor_params(user, club_id, season_id),
+                "p_revision": payload.expected_revision, "p_opens_at": payload.opens_at.isoformat(), "p_closes_at": payload.closes_at.isoformat()}).execute().data
+        except Exception as exc:
+            code = getattr(exc, "code", "")
+            if code == "42501":
+                raise HTTPException(403, "Only the league commissioner can set registration dates for all clubs.") from exc
+            if code in {"40001", "PT409"}:
+                raise HTTPException(409, "Registration dates changed. Reload before saving.") from exc
+            if code == "PT423":
+                raise HTTPException(423, "The registration window is currently locked. Reload the season before changing its dates.") from exc
+            if code == "22023":
+                raise HTTPException(422, "Registration must close after it opens and no later than the first meet.") from exc
+            if code == "P0002":
+                raise HTTPException(404, "Season unavailable.") from exc
+            raise HTTPException(503, "Could not confirm the registration dates. Reload before retrying.") from exc
+        return {"season": registration_season({**season, **{key: updated.get(key) for key in REGISTRATION_FIELDS.split(",")}})}
 
     @app.get("/admin/clubs/{club_id}/interclub/registrations/{season_id}")
     def detail(club_id: str, season_id: UUID, team_offset: int = Query(default=0, ge=0, le=100000), authorization: str | None = auth_header()):
@@ -157,18 +202,28 @@ def install_interclub_registration_routes(app, *, get_supabase_client):
         season, own = access(db, club_id, season_id)
         organizer = season["organizer_club_id"] == club_id
         participations = db.table("pcs_interclub_participations").select(PARTICIPATION_FIELDS).eq("season_id", str(season_id)).execute().data or [] if organizer else ([own] if own else [])
+        clubs = db.table("clubs").select("id,name,slug").in_("id", list(set(season["details"]["club_ids"] + [season["organizer_club_id"]]))).execute().data or []
+        if not registration_state(season)["meet_planning_open"]:
+            calendar = db.table("pcs_interclub_meet_workspaces").select("id,starts_at,host_club_id,club_ids").eq("season_id", str(season_id))
+            if not organizer:
+                calendar = calendar.contains("club_ids", json.dumps([club_id]))
+            schedule = calendar.order("starts_at").order("id").limit(100).execute().data or []
+            return {"season": registration_season(season), "meets": [], "is_organizer": organizer, "own_participation": own,
+                    "participations": participations, "clubs": clubs, "teams": [], "next_team_offset": None,
+                    "meet_schedule": schedule, "first_meet_at": schedule[0]["starts_at"] if schedule else None}
         query = db.table("pcs_interclub_current_rosters").select(TEAM_FIELDS).eq("season_id", str(season_id)).is_("meet_id", "null")
         if not organizer:
             query = query.eq("club_id", club_id)
         teams = query.order("id").range(team_offset, team_offset+100).execute().data or []
-        clubs = db.table("clubs").select("id,name,slug").in_("id", list(set(season["details"]["club_ids"] + [season["organizer_club_id"]]))).execute().data or []
         meet_query = db.table("pcs_interclub_meet_workspaces").select(MEET_FIELDS).eq("season_id", str(season_id))
         if not organizer:
             # club_ids is JSONB. A Python list is encoded by PostgREST's client
             # as a PostgreSQL array literal, which is invalid for this column.
             meet_query = meet_query.contains("club_ids", json.dumps([club_id]))
         meets = meet_query.order("starts_at").order("id").limit(100).execute().data or []
-        return {"season": season, "meets": meets, "is_organizer": organizer, "own_participation": own, "participations": participations, "clubs": clubs,
+        return {"season": registration_season(season), "meets": meets, "is_organizer": organizer, "own_participation": own, "participations": participations, "clubs": clubs,
+                "meet_schedule": [{key: meet[key] for key in ("id", "starts_at", "host_club_id", "club_ids")} for meet in meets],
+                "first_meet_at": meets[0]["starts_at"] if meets else None,
                 "teams": [safe_roster(row, own_club=row["club_id"] == club_id) for row in teams[:100]],
                 "next_team_offset": team_offset+100 if len(teams)>100 else None}
 
@@ -180,6 +235,7 @@ def install_interclub_registration_routes(app, *, get_supabase_client):
         return {"participation": {key: row.get(key) for key in PARTICIPATION_FIELDS.split(",")}}
 
     def meet_access(db, club_id, season, meet_id):
+        require_season_phase(season)
         rows = db.table("pcs_interclub_meet_workspaces").select(MEET_FIELDS).eq("id", str(meet_id)).eq("season_id", season["id"]).limit(1).execute().data or []
         if not rows or (season["organizer_club_id"] != club_id and club_id not in rows[0]["club_ids"]):
             raise HTTPException(404, "Meet unavailable for this club.")
@@ -200,6 +256,8 @@ def install_interclub_registration_routes(app, *, get_supabase_client):
     @app.put("/admin/clubs/{club_id}/interclub/registrations/{season_id}/meets/{meet_id}/deadline")
     def meet_deadline(club_id: str, season_id: UUID, meet_id: UUID, payload: MeetDeadlineUpdate, authorization: str | None = auth_header()):
         db, user = administrator(club_id, authorization)
+        season, _ = access(db, club_id, season_id)
+        require_season_phase(season)
         row = call_rpc(db, "pcs_set_interclub_meet_deadline", {**actor_params(user, club_id, season_id),
             "p_meet_id": str(meet_id), "p_revision": payload.expected_revision, "p_deadline": payload.roster_deadline.isoformat()})
         return {"meet": {key: row.get(key) for key in MEET_FIELDS.split(",") if key not in ("roster_open", "deadline_editable")}}
@@ -254,6 +312,8 @@ def install_interclub_registration_routes(app, *, get_supabase_client):
     @app.put("/admin/clubs/{club_id}/interclub/registrations/{season_id}/meets/{meet_id}/teams/{team_id}")
     def save_roster(club_id: str, season_id: UUID, meet_id: UUID, team_id: UUID, payload: RosterUpdate, authorization: str | None = auth_header()):
         db, user = administrator(club_id, authorization)
+        season, _ = access(db, club_id, season_id)
+        require_season_phase(season)
         saved = call_rpc(db, "pcs_save_interclub_meet_roster", {**actor_params(user, club_id, season_id), "p_meet_id": str(meet_id), "p_meet_revision": payload.expected_meet_revision, "p_team_id": str(team_id),
             "p_revision": payload.expected_revision, "p_name": payload.name, "p_division": payload.division, "p_player_ids": payload.player_ids})
         return {"team": safe_roster({**saved["team"], **saved["roster"]}, own_club=True)}
@@ -261,6 +321,8 @@ def install_interclub_registration_routes(app, *, get_supabase_client):
     @app.post("/admin/clubs/{club_id}/interclub/registrations/{season_id}/meets/{meet_id}/teams/{team_id}/withdraw")
     def withdraw(club_id: str, season_id: UUID, meet_id: UUID, team_id: UUID, payload: RosterRevision, authorization: str | None = auth_header()):
         db, user = administrator(club_id, authorization)
+        season, _ = access(db, club_id, season_id)
+        require_season_phase(season)
         saved = call_rpc(db, "pcs_save_interclub_meet_roster", {**actor_params(user, club_id, season_id), "p_meet_id": str(meet_id), "p_meet_revision": payload.expected_meet_revision, "p_team_id": str(team_id),
             "p_revision": payload.expected_revision, "p_name": "", "p_division": "", "p_player_ids": [], "p_withdraw": True})
         return {"team": safe_roster({**saved["team"], **saved["roster"]}, own_club=True)}
@@ -268,6 +330,8 @@ def install_interclub_registration_routes(app, *, get_supabase_client):
     @app.post("/admin/clubs/{club_id}/interclub/registrations/{season_id}/meets/{meet_id}/teams/{team_id}/eligibility")
     def decide(club_id: str, season_id: UUID, meet_id: UUID, team_id: UUID, payload: EligibilityDecision, authorization: str | None = auth_header()):
         db, user = administrator(club_id, authorization)
+        season, _ = access(db, club_id, season_id)
+        require_season_phase(season)
         saved = call_rpc(db, "pcs_review_interclub_meet_roster", {**actor_params(user, club_id, season_id), "p_meet_id": str(meet_id), "p_meet_revision": payload.expected_meet_revision, "p_team_id": str(team_id),
             "p_revision": payload.expected_revision, "p_approve": payload.approve, "p_reason": payload.reason})
         return {"team": safe_roster({**saved["team"], **saved["roster"]}, own_club=saved["team"]["club_id"] == club_id)}
@@ -277,6 +341,7 @@ def install_interclub_registration_routes(app, *, get_supabase_client):
     def history(club_id: str, season_id: UUID, team_id: UUID, meet_id: UUID | None = None, authorization: str | None = auth_header()):
         db, _ = administrator(club_id, authorization)
         season, _ = access(db, club_id, season_id)
+        require_season_phase(season)
         teams = db.table("pcs_interclub_teams").select("id,club_id,meet_id").eq("id", str(team_id)).eq("season_id", str(season_id)).limit(1).execute().data or []
         if meet_id is not None:
             meet_access(db, club_id, season, meet_id)

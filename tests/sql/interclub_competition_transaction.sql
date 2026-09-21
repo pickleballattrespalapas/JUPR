@@ -23,14 +23,8 @@ begin
  perform public.pcs_open_interclub_meet_registration(actor,actor_email,home,sid,1,'{"3.5":{"min_rating":3.5,"max_rating":3.999,"women_required":2}}');
  perform public.pcs_interclub_participation(actor,actor_email,home,sid,home,1,'accept');
  perform public.pcs_interclub_participation(actor,actor_email,away,sid,away,1,'accept');
+ perform public.pcs_set_interclub_registration_window(actor,actor_email,home,sid,0,now()-interval '3 days',now()+interval '1 day');
  select id into mid from public.pcs_interclub_meets where season_id=sid;
- begin
-  perform public.pcs_create_interclub_competition_meet(actor,actor_email,home,sid,jsonb_build_object(
-   'competition_phase','final','host_club_id',away,'club_ids',jsonb_build_array(home,away),
-   'starts_at',now()+interval '20 days','roster_deadline',now()+interval '19 days','duration_minutes',180,'courts',2));
-  raise exception 'Overlapping meet accepted';
- exception when invalid_parameter_value then null; end;
- insert into public.pcs_interclub_pool_settings(season_id,club_id) values(sid,home),(sid,away);
  for i in 1..8 loop
   c:=case when i<=4 then home else away end;
   pid:=8000000000000+(random()*1000000000000)::bigint; ids:=array_append(ids,pid);
@@ -40,6 +34,13 @@ begin
    values(sid,c,'Competition QA '||i,'competition-'||i||'@example.invalid',pid,gen_random_uuid(),'fixture');
   entries:=array_append(entries,(select id from public.pcs_interclub_entries where season_id=sid and club_id=c and player_id=pid));
  end loop;
+ perform public.pcs_set_interclub_registration_window(actor,actor_email,home,sid,1,now()-interval '3 days',now()-interval '2 days');
+ begin
+  perform public.pcs_create_interclub_competition_meet(actor,actor_email,home,sid,jsonb_build_object(
+   'competition_phase','final','host_club_id',away,'club_ids',jsonb_build_array(home,away),
+   'starts_at',now()+interval '20 days','roster_deadline',now()+interval '19 days','duration_minutes',180,'courts',2));
+  raise exception 'Overlapping meet accepted';
+ exception when invalid_parameter_value then null; end;
  perform public.pcs_save_interclub_meet_roster(actor,actor_email,home,sid,mid,1,team_home,0,'Home 3.5','3.5',ids[1:4]);
  perform public.pcs_save_interclub_meet_roster(actor,actor_email,away,sid,mid,1,team_away,0,'Away 3.5','3.5',ids[5:8]);
  -- The fixtures reach the deadline in this rollback-only transaction.

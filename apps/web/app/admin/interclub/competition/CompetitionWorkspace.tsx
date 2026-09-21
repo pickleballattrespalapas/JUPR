@@ -14,6 +14,7 @@ import Standings from "./Standings";
 import ScheduleMeet from "./ScheduleMeet";
 import styles from "./competition.module.css";
 import InterclubWorkflow, { workflowHref } from "../InterclubWorkflow";
+import { useRegistrationWindow } from "@/lib/useRegistrationWindow";
 
 export default function CompetitionWorkspace({ initialSeasonId, initialMeetId }: { initialSeasonId: string; initialMeetId: string }) {
   const { session, accessToken, loading } = useAdminSession();
@@ -30,6 +31,22 @@ export function CompetitionHome({ clubId, accessToken, initialSeasonId, initialM
   const [data, setData] = useState<CompetitionContext | null>(null), [error, setError] = useState(""), [refresh, setRefresh] = useState(0), [loading, setLoading] = useState(true);
   const [meetId, setMeetId] = useState(initialMeetId), [locked, setLocked] = useState(false);
   const token = useRef(accessToken); token.current = accessToken;
+  const registrationCheck = useRef<AbortController | null>(null);
+  const { meetPlanningOpen } = useRegistrationWindow(data?.season.registration, () => void recheckRegistration());
+  useEffect(() => () => registrationCheck.current?.abort(), [api, clubId, seasonId]);
+  async function recheckRegistration() {
+    if (!data || !api) return;
+    registrationCheck.current?.abort();
+    const request = new AbortController(); registrationCheck.current = request;
+    try {
+      const result = await competitionRequest<CompetitionContext>(competitionPath(api, clubId, seasonId), token.current, request.signal);
+      if (!request.signal.aborted) {
+        setData(current => current && (current.season.registration?.revision || 0) <= (result.season.registration?.revision || 0) ? result : current);
+        setMeetId(old => !result.meets.length || result.meets.some(meet => meet.id === old) ? old : result.meets[0]?.id || "");
+        setError("");
+      }
+    } catch (cause) { if (!request.signal.aborted) setError(message(cause)); }
+  }
   useEffect(() => {
     const controller = new AbortController();
     if (!api) { setError("Meet operations are unavailable. Please try again later."); setLoading(false); return; }
@@ -41,9 +58,10 @@ export function CompetitionHome({ clubId, accessToken, initialSeasonId, initialM
   useEffect(() => {
     const controller = new AbortController();
     if (!seasonId || !api) return;
+    registrationCheck.current?.abort();
     setLoading(true); setError(""); setData(null);
     void competitionRequest<CompetitionContext>(competitionPath(api, clubId, seasonId), token.current, controller.signal)
-      .then(result => { if (!controller.signal.aborted) { setData(result); setMeetId(old => result.meets.some(meet => meet.id === old) ? old : result.meets[0]?.id || ""); } })
+      .then(result => { if (!controller.signal.aborted) { setData(result); setMeetId(old => !result.meets.length || result.meets.some(meet => meet.id === old) ? old : result.meets[0]?.id || ""); } })
       .catch(cause => { if (!controller.signal.aborted) setError(message(cause)); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
@@ -61,11 +79,19 @@ export function CompetitionHome({ clubId, accessToken, initialSeasonId, initialM
     {error && <p role="alert" className={styles.error}>{error}</p>}
     {loading && <p role="status">Loading meet operations…</p>}
     {!loading && !seasons.length && !error && <p>Accept a season invitation first, then prepare the players for your meet.</p>}
-    {data && <>
+    {data && !meetPlanningOpen && <>
+      <InterclubWorkflow seasonId={seasonId} meetId={meetId} current="pool" meetPlanningOpen={false} />
+      <section className={styles.notice} aria-labelledby="registration-locked-heading">
+        <h2 id="registration-locked-heading">Meet planning opens after registration closes</h2>
+        <p>{data.season.details.name} is still in its season registration phase. The commissioner sets the same opening and closing dates for every club. Availability, lineups, schedules, and scores are locked until registration has closed.</p>
+        <Link className={styles.button} href={workflowHref("pool", seasonId, meetId)}>Go to season player pool</Link>
+      </section>
+    </>}
+    {data && meetPlanningOpen && <>
       <div className={styles.toolbar}><label>Meet<select value={meetId} disabled={locked} onChange={event => setMeetId(event.target.value)}>{data.meets.map(meet => <option key={meet.id} value={meet.id}>{when(meet.starts_at)} · {clubName(meet.host_club_id)}{meet.competition_phase && meet.competition_phase !== "regular" ? ` · ${phaseLabels[meet.competition_phase]}` : ""}</option>)}</select></label>
         <label>Competition<select value={phase} disabled aria-label="Scheduled competition format">{Object.entries(phaseLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
       </div>
-      {!data.meets.length && <><InterclubWorkflow seasonId={seasonId} current="run" /><p>The organizer needs to schedule a meet before score sheets can be prepared.</p></>}
+      {!data.meets.length && <><InterclubWorkflow seasonId={seasonId} current="run" meetPlanningOpen={meetPlanningOpen} /><p>The organizer needs to schedule a meet before score sheets can be prepared.</p></>}
       {data.is_organizer && <ScheduleMeet root={competitionPath(api!, clubId, seasonId)} clubId={clubId} accessToken={accessToken} context={data} disabled={locked} onScheduled={meet => { setMeetId(meet.id); setRefresh(value => value + 1); }} />}
       {meetId && <MeetOperations key={`${clubId}:${seasonId}:${meetId}:${phase}:${refresh}`} root={`${competitionPath(api!, clubId, seasonId)}/meets/${encodeURIComponent(meetId)}/${phase}`} clubId={clubId} accessToken={accessToken} phase={phase} context={data} clubName={clubName} onLock={setLocked} onSeasonChange={() => { setLocked(false); setRefresh(value => value + 1); }} />}
       <Standings data={data} clubName={clubName} />
@@ -131,7 +157,7 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
     : candidates.length >= 2;
   const lineupHref = workflowHref("lineups", context.season.id, detail.meet.id);
   return <section className={styles.section}>
-    <InterclubWorkflow seasonId={context.season.id} meetId={detail.meet.id}
+    <InterclubWorkflow seasonId={context.season.id} meetId={detail.meet.id} meetPlanningOpen={true}
       current={batch?.state === "submitted" || batch?.state === "approved" ? "approve" : "run"}
       disabled={dirty || busy} unavailable={batch?.state === "submitted" || batch?.state === "approved" ? [] : ["approve"]}
       hints={{ run: !batch ? hasPlayableLineups ? "Prepare approved lineups" : "Lineups needed first" : batch.state === "draft" ? "Enter and submit scores" : "Scores submitted", approve: batch?.state === "approved" ? "Official results" : batch?.state === "submitted" ? "Ready for organizer review" : "Submit scores first" }} />

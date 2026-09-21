@@ -182,6 +182,88 @@ class Rehearsal:
         root = f"/admin/clubs/{club}/interclub/competition/{sid}"
         return root + (f"/meets/{meet}/{phase}" if meet else "")
 
+    def registration_window(self, season, opens_at, closes_at, status):
+        root = self.registration(season["clubs"][0], season["id"])
+        current = self.api("GET", root)["season"]["registration"]
+        payload = {"expected_revision": current["revision"], "opens_at": iso(opens_at), "closes_at": iso(closes_at)}
+        updated = self.api("PUT", root+"/registration-window", payload)["season"]["registration"]
+        self.check(updated["status"] == status and updated["revision"] == current["revision"]+1
+                   and updated["can_register"] == (status == "open")
+                   and updated["meet_planning_open"] == (status == "closed"),
+                   season["label"]+" commissioner registration window is "+status)
+        season["registration"] = updated
+        self.persist()
+        return payload
+
+    def locked_registration_checks(self, season, status):
+        """Exercise real direct URLs; inaccessible buttons alone are insufficient."""
+        sid, meet = season["id"], season["meets"][0]
+        for club in season["clubs"][:2]:
+            root = self.registration(club, sid)
+            detail = self.api("GET", root)
+            context = self.api("GET", self.competition(club, sid))
+            self.check(detail["season"]["id"] == sid and context["season"]["id"] == sid
+                       and detail["season"]["registration"]["status"] == status
+                       and context["season"]["registration"]["status"] == status
+                       and not detail["meets"] and not detail["teams"]
+                       and not context["meets"] and not context["batches"],
+                       status+" registration retains season context without meet workspaces for "+club)
+            for path in (root+"/meets/"+meet["id"], root+"/meets/"+meet["id"]+"/availability",
+                         self.competition(club, sid, meet["id"])):
+                self.api("GET", path, expected=(423,))
+        club = season["clubs"][0]
+        root = self.registration(club, sid)
+        meetroot = root+"/meets/"+meet["id"]
+        self.api("PUT", meetroot+"/deadline", {"expected_revision": meet["revision"],
+            "roster_deadline": iso(now()+timedelta(days=1))}, expected=(423,))
+        self.api("PUT", meetroot+"/availability", {"expected_revision": 0, "open": True,
+            "deadline": iso(now()+timedelta(days=1))}, expected=(423,))
+        candidates = [p for p in season["players"] if p["club_id"] == club and p["division"] == season["divisions"][0]]
+        self.api("PUT", meetroot+"/teams/"+str(uuid4()), {"expected_meet_revision": meet["revision"],
+            "expected_revision": 0, "name": "Locked rehearsal lineup", "division": season["divisions"][0],
+            "player_ids": [candidates[i]["id"] for i in [0, 1, 3, 4]]}, expected=(423,))
+        self.api("POST", self.competition(club, sid, meet["id"])+"/generate",
+                 {"expected_revision": 0, "format": "gender"}, expected=(423,))
+        self.api("POST", self.competition(club, sid)+"/meets", {"host_club_id": season["clubs"][1],
+            "club_ids": season["clubs"], "starts_at": iso(now()+timedelta(days=7)),
+            "roster_deadline": iso(now()+timedelta(days=6)), "courts": 12, "duration_minutes": 180,
+            "competition_phase": "regular"}, expected=(423,))
+        eroot = f"/admin/clubs/{club}/interclub/player-pools/{sid}/emails"
+        self.api("GET", eroot+"/audience?kind=meet&meet_id="+meet["id"], expected=(423,))
+        if status != "open":
+            self.blocked_intake_checks(season)
+        self.check(True, status+" phase blocks direct meet reads, deadlines, availability, lineups, scheduling, generation and invitations")
+
+    def blocked_intake_checks(self, season):
+        club, sid = season["clubs"][0], season["id"]
+        root = self.registration(club, sid)
+        share = "/public/interclub-signups/"+season["signup"][club]["share_id"]
+        self.check(not self.api("GET", share, actor=None)["signup"]["open"],
+                   season["label"]+" public signup reports enrollment unavailable")
+        self.api("POST", share, {"name": "Outside Window Rehearsal", "email": f"outside-{sid}@example.invalid",
+            "divisions": [season["divisions"][0]], "request_id": str(uuid4()), "email_consent": True}, actor=None, expected=(423,))
+        self.api("GET", share+"/players?q=Rehearsal", actor=None, expected=(423,))
+        payload = {"members": [{"name": "Outside Window Rehearsal"}]}
+        self.api("POST", root+"/pool/bulk-preview", payload, expected=(423,))
+        self.api("POST", root+"/pool/bulk-add", payload, expected=(423,))
+        self.api("GET", f"/admin/clubs/{club}/interclub/player-pools/{sid}/emails/audience?kind=season", expected=(423,))
+        self.check(True, season["label"]+" signup, profile search, bulk enrollment and season invitations reject intake outside the window")
+
+    def close_registration(self, season):
+        # The rehearsal later moves fixtures up to fourteen days into the past.
+        # Close this synthetic window before those dates as well as before now.
+        earliest = min(datetime.fromisoformat(m["starts_at"].replace("Z", "+00:00")) for m in season["meets"])
+        closes = min(now()-timedelta(days=20), earliest-timedelta(days=1))
+        self.registration_window(season, closes-timedelta(days=20), closes, "closed")
+        detail = self.api("GET", self.registration(season["clubs"][0], season["id"]))
+        by_id = {meet["id"]: meet for meet in detail["meets"]}
+        self.check(set(by_id) == {meet["id"] for meet in season["meets"]},
+                   season["label"]+" closed registration unlocks the scheduled meets")
+        for meet in season["meets"]:
+            meet.update(by_id[meet["id"]])
+        self.blocked_intake_checks(season)
+        self.persist()
+
     def season(self, label, club_count=4, divisions=None, *, public_signups=False):
         clubs = self.state["clubs"][:club_count]
         divisions = divisions or ["3.5"]
@@ -202,13 +284,36 @@ class Rehearsal:
         saved = self.api("PUT", f"/admin/clubs/{clubs[0]}/interclub/setup", {"season_id": sid, "expected_revision": 0, "draft": draft})
         self.api("POST", self.registration(clubs[0], sid)+"/open", {"expected_revision": saved["season"]["revision"],
             "rules": {division: {"min_rating": float(division), "max_rating": float(division)+.499, "women_required":2} for division in divisions}})
+        # Locked season responses intentionally hide operational meets. Keep the
+        # freshly created synthetic fixture IDs for direct-URL phase assertions.
+        record["meets"] = self.db("GET", "pcs_interclub_meets", season_id="eq."+sid, order="starts_at,id")
         for club in clubs:
             root = self.registration(club, sid)
             self.api("GET", root+"/pool", expected=(404,))
             self.api("POST", root+f"/participations/{club}", {"expected_revision":1, "action":"accept"})
-            pool = self.api("PUT", root+"/pool", {"expected_revision":0,"open":True})
-            self.check(pool["email_mode"] == "dry_run", label+" dry-run email confirmed")
+            pool = self.api("GET", root+"/pool")
+            self.check(pool["email_mode"] == "dry_run" and pool["signup"]["share_id"] and not pool["signup"]["open"],
+                       label+" acceptance creates a signup link with dry-run email and enrollment initially locked")
             record.setdefault("signup", {})[club] = pool["signup"]
+        if public_signups:
+            self.locked_registration_checks(record, "unconfigured")
+            scheduled = self.registration_window(record, now()+timedelta(hours=1), now()+timedelta(days=1), "scheduled")
+            self.api("PUT", self.registration(clubs[0], sid)+"/registration-window", scheduled, expected=(409,))
+            self.api("PUT", self.registration(clubs[1], sid)+"/registration-window", {
+                **scheduled, "expected_revision": record["registration"]["revision"]}, actor=1, expected=(403,))
+            first_meet = datetime.fromisoformat(record["meets"][0]["starts_at"].replace("Z", "+00:00"))
+            self.api("PUT", self.registration(clubs[0], sid)+"/registration-window", {
+                **scheduled, "expected_revision": record["registration"]["revision"],
+                "closes_at": iso(first_meet+timedelta(days=1))}, expected=(422,))
+            self.check(True, "only the commissioner changes registration dates; stale revisions and closing after the first meet are rejected")
+            self.locked_registration_checks(record, "scheduled")
+        self.registration_window(record, now()-timedelta(days=40), now()+timedelta(days=1), "open")
+        if public_signups:
+            self.locked_registration_checks(record, "open")
+        for club in clubs:
+            root = self.registration(club, sid)
+            pool = self.api("GET", root+"/pool")
+            self.check(pool["signup"]["open"], label+" commissioner dates open enrollment for "+club)
             selected = [p for p in record["players"] if p["club_id"]==club]
             for index, player in enumerate(selected):
                 email = f"p-{player['id']}@example.invalid"
@@ -231,8 +336,6 @@ class Rehearsal:
                 if linked["approval_status"] != "approved":
                     raise AssertionError("Preseason player failed automatic approval")
             record.setdefault("pools", {})[club] = self.api("GET", root+"/pool")
-        detail = self.api("GET",self.registration(clubs[0],sid))
-        record["meets"] = detail["meets"]
         self.persist()
         return record
 
@@ -354,7 +457,9 @@ def cleanup(directory):
     errors=[]
     for season in state["seasons"]:
         try:
-            r.db("PATCH","pcs_interclub_pool_settings",{"open":False},season_id="eq."+season["id"])
+            # The retired per-club open flag no longer closes public signup.
+            r.db("PATCH","pcs_interclub_seasons",{"registration_opens_at":iso(now()-timedelta(days=40)),
+                "registration_closes_at":iso(now()-timedelta(days=31))},id="eq."+season["id"])
             r.db("PATCH","pcs_interclub_availability_settings",{"open":False},season_id="eq."+season["id"])
             r.db("PATCH","pcs_interclub_publications",{"published":None,"published_at":None},season_id="eq."+season["id"])
         except Exception as exc:errors.append(r.redact(exc))

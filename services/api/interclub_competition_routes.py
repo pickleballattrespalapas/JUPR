@@ -15,6 +15,7 @@ from services.api.admin_auth_routes import require_admin_assignments
 from services.api.auth import auth_header
 from services.api.interclub_competition_models import CompetitionDocument
 from services.api.interclub_registration_routes import SEASON_FIELDS, MEET_FIELDS as REGISTRATION_MEET_FIELDS, TEAM_FIELDS, safe_roster
+from services.api.interclub_registration_phase import registration_season, registration_state, require_season_phase
 
 MEET_FIELDS = REGISTRATION_MEET_FIELDS
 
@@ -117,6 +118,7 @@ def _rpc(db, params, name="pcs_write_interclub_competition"):
             "22P02": (422, "Choose valid season players and score identities."),
             "23505": (409, "This result or player assignment already exists. Reload before continuing."),
             "P0002": (404, "Meet or competition workspace unavailable."),
+            "PT423": (423, "Meet planning is locked until season registration closes for all clubs."),
         }.get(code, (503, "Could not confirm the update. Reload before retrying."))
         raise HTTPException(status, message) from exc
 
@@ -285,6 +287,7 @@ def install_interclub_competition_routes(app, *, get_supabase_client):
     def context(club_id, season_id, meet_id, phase, authorization, *, mutation=False, organizer_only=False):
         db, user, assignments = actor(club_id, authorization)
         season, accepted = access(db, club_id, season_id)
+        require_season_phase(season)
         meet, organizer, can_manage = meet_access(db, club_id, season, meet_id, assignments)
         if (meet.get("competition_phase") or "regular") != phase:
             raise HTTPException(422, "Choose the competition phase scheduled for this meet.")
@@ -343,13 +346,16 @@ def install_interclub_competition_routes(app, *, get_supabase_client):
                         continue
             candidates = {sid: row for sid, row in candidates.items() if sid in allowed}
         participation = {row["season_id"]: row for row in own}
-        return {"seasons": [{**row, "participation": participation.get(sid)} for sid, row in candidates.items()]}
+        return {"seasons": [{**registration_season(row), "participation": participation.get(sid)} for sid, row in candidates.items()]}
 
     @app.get("/admin/clubs/{club_id}/interclub/competition/{season_id}")
     def workspace(club_id: str, season_id: UUID, authorization: str | None = auth_header()):
         db, _, assignments = actor(club_id, authorization)
         season, accepted = access(db, club_id, season_id)
         organizer = club_id == season["organizer_club_id"] and any(row["role"] in ADMIN_ROLES for row in assignments)
+        if not registration_state(season)["meet_planning_open"]:
+            return {"season": registration_season(season), "clubs": [], "meets": [], "batches": [],
+                    "is_organizer": organizer, "standings": {}, "club_cup": {}, "qualifying": {}}
         meets = _rows(db, "pcs_interclub_meet_workspaces", MEET_FIELDS, season_id=str(season_id))
         if club_id != season["organizer_club_id"]:
             meets = [meet for meet in meets if club_id in meet["club_ids"] or club_id == meet["host_club_id"]]
@@ -367,7 +373,7 @@ def install_interclub_competition_routes(app, *, get_supabase_client):
         published = [row["approved_document"] for row in batches if row.get("approved_document")]
         standings = engine.league_standings(published, clubs=clubs)
         hidden = {meet["id"] for meet in permitted if club_id not in {meet["host_club_id"], season["organizer_club_id"]} and datetime.fromisoformat(meet["roster_deadline"].replace("Z", "+00:00")) > datetime.now(timezone.utc)}
-        return {"season": season, "clubs": clubs, "meets": permitted, "batches": [row for row in batches if row["meet_id"] in ids - hidden],
+        return {"season": registration_season(season), "clubs": clubs, "meets": permitted, "batches": [row for row in batches if row["meet_id"] in ids - hidden],
                 "is_organizer": organizer, "standings": standings, "club_cup": engine.club_cup(published, clubs=clubs),
                 "qualifying": standings.get("qualification", {})}
 
@@ -377,6 +383,7 @@ def install_interclub_competition_routes(app, *, get_supabase_client):
         season, accepted = access(db, club_id, season_id)
         if season["organizer_club_id"] != club_id or not any(row["role"] in ADMIN_ROLES for row in assignments):
             raise HTTPException(403, "Only the organizer can schedule meets.")
+        require_season_phase(season)
         if not set(body.club_ids).issubset(accepted) or body.host_club_id not in accepted:
             raise HTTPException(422, "Choose accepted clubs and an accepted host club.")
         meet = _rpc(db, {"p_actor_id": user.user_id, "p_actor_email": user.email, "p_club_id": club_id,
@@ -391,7 +398,7 @@ def install_interclub_competition_routes(app, *, get_supabase_client):
         visible_meet = {**meet, "club_ids": [club_id]} if hidden else meet
         eligible = _eligible_players(db, season_id, visible_meet)
         saved = None if hidden else saved
-        return {"season": season, "meet": meet, "batch": saved, "teams": teams, "eligible_players": eligible,
+        return {"season": registration_season(season), "meet": meet, "batch": saved, "teams": teams, "eligible_players": eligible,
                 "can_manage": can_manage, "is_organizer": organizer, "lineups_hidden": hidden, "display_players": _display_players(db, season_id, meet, saved)}
 
     @app.post("/admin/clubs/{club_id}/interclub/competition/{season_id}/meets/{meet_id}/{phase}/generate")

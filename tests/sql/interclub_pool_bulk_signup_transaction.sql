@@ -30,6 +30,7 @@ begin
   jsonb_build_object('host_club_id',home,'club_ids',jsonb_build_array(home,away),'starts_at',now()+interval '20 days','duration_minutes',180,'courts',4))));
  perform public.pcs_open_interclub_meet_registration(actor,actor_email,home,sid,1,
   '{"3.5":{"min_rating":3.5,"max_rating":3.999,"women_required":2},"4.0":{"min_rating":4.0,"max_rating":4.499,"women_required":2}}');
+ perform public.pcs_set_interclub_registration_window(actor,actor_email,home,sid,0,now()-interval '1 day',now()+interval '1 day');
  begin
   perform public.pcs_interclub_pool_bulk_add(actor,actor_email,home,sid,jsonb_build_array(jsonb_build_object('player_id',p1)));
   raise exception 'Unaccepted club added players';
@@ -37,12 +38,12 @@ begin
  perform public.pcs_interclub_participation(actor,actor_email,home,sid,home,1,'accept');
  perform public.pcs_interclub_participation(actor,actor_email,away,sid,away,1,'accept');
 
- -- Bulk addition works before public signup opens and accepts missing emails.
+ -- Both intake paths obey the central window; legacy club flags have no authority.
  result:=public.pcs_interclub_pool_bulk_add(actor,actor_email,home,sid,jsonb_build_array(
   jsonb_build_object('player_id',p5,'divisions',jsonb_build_array('3.5')),
   jsonb_build_object('name','Unknown Verbal','divisions',jsonb_build_array('3.5'))));
  if result->>'added_count'<>'2' or result->>'skipped_count'<>'0' then raise exception 'Bulk add count incorrect'; end if;
- if (select open from public.pcs_interclub_pool_settings where season_id=sid and club_id=home) then raise exception 'Bulk addition opened public signup'; end if;
+ if (select open from public.pcs_interclub_pool_settings where season_id=sid and club_id=home) then raise exception 'Bulk addition changed legacy club flag'; end if;
  select * into saved from public.pcs_interclub_pool_members where season_id=sid and player_id=p5;
  if saved.email<>'' or saved.consent_at is not null or saved.approval_status<>'approved' then raise exception 'Verbal addition invents email/consent or misses profile'; end if;
  if exists(select 1 from public.pcs_interclub_pool_members where season_id=sid and name='Unknown Verbal' and (player_id is not null or approval_status<>'pending')) then raise exception 'Unmatched member gained identity'; end if;
@@ -68,7 +69,7 @@ begin
   raise exception 'Wrong account added players';
  exception when insufficient_privilege then null; end;
 
- settings:=public.pcs_interclub_pool_action(actor,actor_email,home,sid,'settings','{"expected_revision":1,"open":true}');
+ select to_jsonb(s) into settings from public.pcs_interclub_pool_settings s where season_id=sid and club_id=home;
  share:=(settings->>'share_id')::uuid;
  signup:=jsonb_build_object('share_id',share,'name','  Pool   Unique ','email','unique@example.invalid','divisions',jsonb_build_array('3.5'),
   'notes','','request_id',gen_random_uuid(),'request_fingerprint','unique-signup','email_consent',true);

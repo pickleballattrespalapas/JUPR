@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from services.api import admin_auth_routes, interclub_competition_routes as routes
 from jupr_app.domain import interclub_competition as engine
+from tests.interclub_registration_fixtures import set_registration_phase
 
 
 class Query:
@@ -26,6 +27,7 @@ def setup(monkeypatch):
     user=SimpleNamespace(user_id=uid,email='qa@example.invalid')
     assignment=dict(club_id='home',email=user.email,user_id=uid,role='administrator')
     season=dict(id=sid,organizer_club_id='home',details=dict(name='BCS QA',club_ids=['home','away'],divisions=['3.5']),rules={})
+    set_registration_phase(season, "closed")
     meet=dict(id=mid,season_id=sid,plan_index=0,host_club_id='away',club_ids=['home','away'],starts_at='2099-01-10T18:00:00Z',roster_deadline='2099-01-09T18:00:00Z',revision=1,courts=2,duration_minutes=180)
     teams=[]
     for club in ['home','away']:
@@ -163,7 +165,7 @@ def test_public_reads_preserve_prior_approved_version_during_correction(setup):
     assert routes.approved_documents(s['db'],s['season']['id'])==[official]
 
 
-@pytest.mark.parametrize('code,status',[('42501',403),('40001',409),('PT409',409),('22023',422),('P0002',404),('23505',409),('other',503)])
+@pytest.mark.parametrize('code,status',[('42501',403),('40001',409),('PT409',409),('22023',422),('PT423',423),('P0002',404),('23505',409),('other',503)])
 def test_rpc_errors_are_safe_and_actionable(setup,code,status):
     client,s=setup;s['error']=code
     r=client.put(path(s),json=dict(expected_revision=1,document=s['saved']['document']))
@@ -371,3 +373,32 @@ def test_lineup_refresh_cannot_change_starting_team_after_meet_start(setup):
     client,s=setup;s['meet']['starts_at']='2020-01-01T18:00:00Z'
     assert client.post(path(s)+'/refresh-lineups',json={'expected_revision':1}).status_code==422
     assert not s['calls']
+
+
+@pytest.mark.parametrize('phase', ['unconfigured', 'scheduled', 'open'])
+def test_direct_competition_routes_cannot_bypass_shared_registration_window(setup, phase):
+    client, state = setup
+    set_registration_phase(state['season'], phase)
+    workspace = client.get(base(state))
+    assert workspace.status_code == 200
+    assert workspace.json()['season']['registration']['status'] == phase
+    assert workspace.json()['meets'] == [] and workspace.json()['batches'] == []
+    assert client.get(path(state)).status_code == 423
+    payload = dict(host_club_id='away', club_ids=['home', 'away'], starts_at='2099-03-01T18:00:00Z',
+                   roster_deadline='2099-02-27T18:00:00Z', courts=2, duration_minutes=180, competition_phase='final')
+    assert client.post(base(state) + '/meets', json=payload).status_code == 423
+    assert client.put(path(state), json=dict(expected_revision=1, document=state['saved']['document'])).status_code == 423
+    actions = {
+        'generate': dict(expected_revision=1, format='gender'),
+        'refresh-lineups': dict(expected_revision=1),
+        'submit': dict(expected_revision=1),
+        'approve': dict(expected_revision=1),
+        'retry-ratings': dict(expected_revision=1),
+        'reopen': dict(expected_revision=1, reason='Correct score'),
+        'reschedule': dict(expected_revision=1, reason='Weather reschedule', starts_at='2099-03-01T18:00:00Z',
+                           roster_deadline='2099-02-27T18:00:00Z'),
+    }
+    for action, body in actions.items():
+        response = client.post(path(state) + '/' + action, json=body)
+        assert response.status_code == 423, (action, response.text)
+    assert not state['calls']

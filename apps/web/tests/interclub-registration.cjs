@@ -1,9 +1,9 @@
 const assert = require('node:assert/strict'), fs = require('node:fs'), path = require('node:path');
 const React = require('react'), ts = require('typescript'), { create, act } = require('react-test-renderer');
 function load(file, mocks = {}) {
-  const code = ts.transpileModule(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true } }).outputText;
+  const code = ts.transpileModule(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true } }).outputText;
   const module = { exports: {} };
-  new Function('require', 'module', 'exports', code)(n => n === '@/lib/interclubSetup' ? load('lib/interclubSetup.ts') : n === '../InterclubWorkflow' ? load('app/admin/interclub/InterclubWorkflow.tsx', { 'next/link': Link, './workflow.module.css': {} }) : n === './SeasonEligibilityApprovals' ? { default: () => null, __esModule: true } : n === './PlayerPoolPanels' ? { SeasonPlayerPool: p => React.createElement('section', { 'data-pool-root': p.root }), MeetAvailability: p => React.createElement('section', { 'data-availability-root': p.meetRoot, onResponses: p.onResponses }) } : Object.hasOwn(mocks, n) ? mocks[n] : require(n), module, module.exports);
+  new Function('require', 'module', 'exports', code)(n => n === '@/lib/interclubRegistrationWindow' ? load('lib/interclubRegistrationWindow.ts') : n === '@/lib/useRegistrationWindow' ? load('lib/useRegistrationWindow.ts', { './interclubRegistrationWindow': load('lib/interclubRegistrationWindow.ts') }) : n === './SeasonRegistrationWindow' ? load('app/admin/interclub/registrations/SeasonRegistrationWindow.tsx', { '@/lib/interclubRegistration': helpers, './registrations.module.css': {} }) : n === '@/lib/interclubSetup' ? load('lib/interclubSetup.ts') : n === '../InterclubWorkflow' ? load('app/admin/interclub/InterclubWorkflow.tsx', { 'next/link': Link, './workflow.module.css': {} }) : n === './SeasonEligibilityApprovals' ? { default: () => null, __esModule: true } : n === './PlayerPoolPanels' ? { SeasonPlayerPool: p => React.createElement('section', { 'data-pool-root': p.root }), MeetAvailability: p => React.createElement('section', { 'data-availability-root': p.meetRoot, onResponses: p.onResponses }) } : Object.hasOwn(mocks, n) ? mocks[n] : require(n), module, module.exports);
   return module.exports;
 }
 const helpers = load('lib/interclubRegistration.ts');
@@ -18,7 +18,8 @@ const reply = (data, status = 200) => ({ ok: status < 400, status, json: async (
 const mid = '00000000-0000-4000-8000-000000000003', mid2 = '00000000-0000-4000-8000-000000000004';
 const sid = '00000000-0000-4000-8000-000000000001', tid = '00000000-0000-4000-8000-000000000002';
 Object.defineProperty(global, 'crypto', { value: { randomUUID: () => tid }, configurable: true });
-const season = { id: sid, organizer_club_id: 'alpha', source_revision: 2, roster_deadline: '2099-01-01T00:00:00Z', details: {
+const closedRegistration = { opens_at: '2000-01-01T00:00:00Z', closes_at: '2000-02-01T00:00:00Z', revision: 1, status: 'closed', can_register: false, meet_planning_open: true };
+const season = { registration: closedRegistration, id: sid, organizer_club_id: 'alpha', source_revision: 2, roster_deadline: '2099-01-01T00:00:00Z', details: {
   name: 'Coastal League', start_date: '2099-01-10', end_date: '2099-03-31', timezone: 'America/Mazatlan', divisions: ['3.5'], club_ids: ['beta', 'gamma'], meets: []
 }, rules: { '3.5': { min_rating: null, max_rating: 3.75, women_required: 2 } } };
 const lineup = [1, 2, 3, 4].map(n => ({ entry_id: `entry-${n}`, player_id: String(n), name: `Player ${n}`, starting_rating: 3.5 }));
@@ -318,6 +319,166 @@ async function deepLinkContext() {
   await act(async () => tree.unmount());
 }
 
+function phaseWorkspace(commissioner = false) {
+  return load('app/admin/interclub/registrations/RegistrationWorkspace.tsx', {
+    'next/link': Link, '@/lib/adminAuthClient': { getAdminApiBaseUrl: () => 'https://api.test' }, '@/lib/interclubRegistration': helpers,
+    '@/lib/useAdminWorkspace': { useAdminWorkspace: () => ({ clubId: commissioner ? 'alpha' : 'beta' }) },
+    '@/lib/useAdminSession': { useAdminSession: () => ({ accessToken: 'token', loading: false, session: { user: { id: 'staff' }, capabilities: { assignments: [{ club_id: commissioner ? 'alpha' : 'beta', role: 'administrator' }] } } }) },
+    '@/components/ConfirmAction': { ConfirmAction: () => null }, './registrations.module.css': {}
+  }).default;
+}
+
+async function registrationPhaseLocks() {
+  const windows = [undefined,
+    { opens_at: null, closes_at: null, revision: 0, status: 'unconfigured', can_register: false, meet_planning_open: false },
+    { opens_at: '2099-01-01T00:00:00Z', closes_at: '2099-02-01T00:00:00Z', revision: 1, status: 'scheduled', can_register: false, meet_planning_open: false },
+    { opens_at: '2000-01-01T00:00:00Z', closes_at: '2099-02-01T00:00:00Z', revision: 1, status: 'open', can_register: true, meet_planning_open: false },
+    { ...closedRegistration, meet_planning_open: false },
+  ];
+  for (const registration of windows) {
+    const reads = [], selectedSeason = { ...season, registration };
+    global.fetch = async (url, options) => {
+      reads.push(url); assert.equal(options.method, undefined);
+      if (url.endsWith('/registrations')) return reply({ seasons: [selectedSeason] });
+      return reply({ season: selectedSeason, meets: [meet], is_organizer: false, own_participation: { status: 'accepted' }, participations: [], clubs: [], teams: [], next_team_offset: null });
+    };
+    let tree; const Page = phaseWorkspace();
+    await act(async () => { tree = create(React.createElement(Page, { initialSeasonId: sid, initialMeetId: mid, initialStep: 'availability' })); });
+    assert.equal(tree.root.findByProps({ id: 'season-player-pool' }).props.hidden, false, 'A locked meet deep link returns to the player pool');
+    assert.equal(tree.root.findByProps({ 'aria-label': 'Player pool' }).props['aria-current'], 'step');
+    assert.equal(tree.root.findAllByProps({ 'aria-label': 'Meet' }).length, 0, 'Meet selector is not mounted before registration closes');
+    assert.equal(tree.root.findAllByProps({ id: 'meet-rosters' }).length, 0, 'Locked meet forms are absent, not merely hidden');
+    assert.equal(tree.root.findAllByProps({ 'aria-disabled': 'true' }).length, 4);
+    assert.equal(button(tree, 'Next: check meet availability'), undefined);
+    assert.equal(button(tree, 'Set registration dates'), undefined, 'A participating club cannot set commissioner dates');
+    assert.equal(button(tree, 'Edit registration dates'), undefined);
+    assert.ok(!reads.some(url => url.includes('/meets/')), 'A locked deep link never fetches meet settings or availability');
+    assert.ok(textContent(tree).includes('Meet planning opens after registration closes.'));
+    await act(async () => tree.unmount());
+  }
+}
+
+async function commissionerWindowEditor() {
+  const Window = load('app/admin/interclub/registrations/SeasonRegistrationWindow.tsx', { '@/lib/interclubRegistration': helpers, './registrations.module.css': {} }).default;
+  const unconfigured = { opens_at: null, closes_at: null, revision: 0, status: 'unconfigured', can_register: false, meet_planning_open: false };
+  const requests = []; let finish, saved;
+  global.fetch = (url, options) => new Promise(resolve => { requests.push({ url, options }); finish = resolve; });
+  const props = { root: `https://api.test/registrations/${sid}`, accessToken: 'token', season: { ...season, registration: unconfigured }, commissioner: false, firstMeetAt: '2027-01-11T17:00:00Z', onSaved: value => { saved = value; }, onReload() {} };
+  let tree;
+  await act(async () => { tree = create(React.createElement(Window, props)); });
+  assert.equal(tree.root.findAllByType('button').length, 0, 'Other clubs see the dates without date controls');
+  await act(async () => tree.update(React.createElement(Window, { ...props, commissioner: true })));
+  await act(async () => button(tree, 'Set registration dates').props.onClick());
+  const input = label => tree.root.findByProps({ 'aria-label': label });
+  assert.equal(input('Registration opens').props.value, '', 'No opening date is invented');
+  assert.equal(input('Registration closes').props.value, '', 'No closing date is invented');
+  assert.equal(input('Registration closes').props.max, '2027-01-11T10:00', 'Closing limit uses the league timezone and real first meet');
+  await act(async () => {
+    input('Registration opens').props.onChange({ target: { value: '2027-01-10T09:00' } });
+    input('Registration closes').props.onChange({ target: { value: '2027-01-10T08:00' } });
+  });
+  await act(async () => tree.root.findByType('form').props.onSubmit({ preventDefault() {} }));
+  assert.equal(requests.length, 0); assert.ok(textContent(tree).includes('Registration must close after it opens.'));
+  await act(async () => input('Registration closes').props.onChange({ target: { value: '2027-01-12T10:00' } }));
+  await act(async () => tree.root.findByType('form').props.onSubmit({ preventDefault() {} }));
+  assert.equal(requests.length, 0); assert.ok(textContent(tree).includes('Registration must close by the first scheduled meet.'));
+  await act(async () => input('Registration closes').props.onChange({ target: { value: '2027-01-11T10:00' } }));
+  await act(async () => { tree.root.findByType('form').props.onSubmit({ preventDefault() {} }); tree.root.findByType('form').props.onSubmit({ preventDefault() {} }); });
+  assert.equal(requests.length, 1, 'Repeated save creates one commissioner mutation');
+  assert.ok(requests[0].url.endsWith('/registration-window'));
+  assert.deepEqual(JSON.parse(requests[0].options.body), { expected_revision: 0, opens_at: '2027-01-10T16:00:00.000Z', closes_at: '2027-01-11T17:00:00.000Z' });
+  await act(async () => finish(reply({ season: { ...season, registration: { ...unconfigured, ...JSON.parse(requests[0].options.body), status: 'scheduled', revision: 1 } } })));
+  assert.equal(saved.registration.revision, 1);
+  assert.ok(textContent(tree).includes('Registration dates saved for every club in this league.'));
+  const configuredProps = { ...props, commissioner: true, season: { ...season, registration: saved.registration } };
+  await act(async () => tree.update(React.createElement(Window, configuredProps)));
+  await act(async () => button(tree, 'Edit registration dates').props.onClick());
+  await act(async () => input('Registration opens').props.onChange({ target: { value: '2027-01-09T09:00' } }));
+  await act(async () => tree.update(React.createElement(Window, { ...configuredProps, season: { ...configuredProps.season, registration: { ...saved.registration, revision: 2, opens_at: '2027-01-08T16:00:00Z' } } })));
+  assert.equal(input('Registration opens').props.value, '2027-01-09T09:00', 'A concurrent commissioner edit preserves the local draft');
+  assert.equal(tree.root.findByType('fieldset').props.disabled, true, 'Changed dates require a deliberate reload before overwriting');
+  await act(async () => tree.unmount());
+}
+
+async function savedClosedWindowLoadsMeets() {
+  let registration = { opens_at: null, closes_at: null, revision: 0, status: 'unconfigured', can_register: false, meet_planning_open: false };
+  const reads = [], Page = phaseWorkspace(true);
+  global.fetch = async (url, options) => {
+    reads.push(url);
+    if (options.method === 'PUT') {
+      const body = JSON.parse(options.body);
+      registration = { opens_at: body.opens_at, closes_at: body.closes_at, revision: 1, status: 'closed', can_register: false, meet_planning_open: true };
+      return reply({ season: { ...season, registration } });
+    }
+    if (url.endsWith('/registrations')) return reply({ seasons: [{ ...season, registration }] });
+    if (url.includes('/meets/')) return reply({ meet, teams: [], next_team_offset: null });
+    return reply({ season: { ...season, registration }, meets: registration.meet_planning_open ? [meet] : [], first_meet_at: meet.starts_at,
+      is_organizer: true, own_participation: { status: 'accepted' }, participations: [], clubs: [], teams: [], next_team_offset: null });
+  };
+  let tree;
+  await act(async () => { tree = create(React.createElement(Page, { initialSeasonId: sid, initialMeetId: mid })); });
+  await act(async () => button(tree, 'Set registration dates').props.onClick());
+  await act(async () => {
+    tree.root.findByProps({ 'aria-label': 'Registration opens' }).props.onChange({ target: { value: '2000-01-01T09:00' } });
+    tree.root.findByProps({ 'aria-label': 'Registration closes' }).props.onChange({ target: { value: '2000-02-01T09:00' } });
+  });
+  await act(async () => tree.root.findByType('form').props.onSubmit({ preventDefault() {} }));
+  assert.ok(reads.some(url => url.endsWith(`/meets/${mid}`)), 'Saving a closed window refreshes the full season and loads its existing meets');
+  assert.equal(tree.root.findAllByType('a').filter(node => node.props['aria-label'] === 'Lineups').length, 1);
+  await act(async () => tree.unmount());
+}
+
+async function serverConfirmedWindowBoundary() {
+  const originalNow = Date.now, originalWindow = global.window;
+  let now = Date.parse('2026-09-21T18:00:00Z'), serverClosed = false;
+  Date.now = () => now; global.window = new EventTarget();
+  const reads = [], Page = phaseWorkspace(); let tree;
+  global.fetch = async url => {
+    reads.push(url);
+    const registration = { opens_at: '2026-09-21T17:00:00Z', closes_at: '2026-09-21T19:00:00Z', revision: 1, status: serverClosed ? 'closed' : 'open', can_register: !serverClosed, meet_planning_open: serverClosed };
+    const currentSeason = { ...season, registration };
+    if (url.endsWith('/registrations')) return reply({ seasons: [currentSeason] });
+    if (url.includes('/meets/')) return reply({ meet, teams: [], next_team_offset: null });
+    return reply({ season: currentSeason, meets: serverClosed ? [meet] : [], is_organizer: false, own_participation: { status: 'accepted' }, participations: [], clubs: [], teams: [], next_team_offset: null });
+  };
+  try {
+    await act(async () => { tree = create(React.createElement(Page, { initialSeasonId: sid, initialMeetId: mid, initialStep: 'lineups' })); });
+    now = Date.parse('2026-09-21T19:01:00Z');
+    await act(async () => window.dispatchEvent(new Event('focus')));
+    assert.ok(!reads.some(url => url.includes('/meets/')), 'Passing the local closing time cannot unlock meet forms without server confirmation');
+    serverClosed = true;
+    await act(async () => window.dispatchEvent(new Event('focus')));
+    assert.ok(reads.some(url => url.endsWith(`/meets/${mid}`)), 'Fresh server-confirmed closure unlocks the selected meet');
+    assert.equal(tree.root.findByProps({ 'aria-label': 'Player pool' }).props['aria-current'], 'step', 'Earlier locked deep link stays on the pool until the admin selects a meet step');
+    await act(async () => tree.unmount());
+  } finally { Date.now = originalNow; global.window = originalWindow; }
+}
+
+async function phaseRefreshCannotUndoAcceptance() {
+  const originalWindow = global.window; global.window = new EventTarget();
+  let status = 'invited', defer = false, finish, oldSignal, tree;
+  const Page = phaseWorkspace();
+  const details = () => ({ season, meets: [meet], is_organizer: false, own_participation: { season_id: sid, club_id: 'beta', status, revision: status === 'invited' ? 1 : 2 }, participations: [], clubs: [], teams: [], next_team_offset: null });
+  global.fetch = async (url, options) => {
+    if (options.method) { status = 'accepted'; return reply({ participation: details().own_participation }); }
+    if (url.endsWith('/registrations')) return reply({ seasons: [season] });
+    if (url.includes('/meets/')) return reply({ meet, teams: [], next_team_offset: null });
+    if (defer) { const old = details(); oldSignal = options.signal; return new Promise(resolve => { finish = () => resolve(reply(old)); }); }
+    return reply(details());
+  };
+  try {
+    await act(async () => { tree = create(React.createElement(Page, { initialSeasonId: sid })); });
+    defer = true;
+    await act(async () => window.dispatchEvent(new Event('focus')));
+    await act(async () => button(tree, 'Accept invitation').props.onClick());
+    assert.equal(oldSignal.aborted, true, 'Accepting participation cancels older background phase reads');
+    await act(async () => finish());
+    assert.equal(button(tree, 'Accept invitation'), undefined, 'An older phase response cannot undo accepted participation');
+    assert.equal(tree.root.findByProps({ id: 'season-player-pool' }).props.hidden, false);
+    await act(async () => tree.unmount());
+  } finally { global.window = originalWindow; }
+}
+
 async function loadFailuresCanBeRetried() {
   const requests = [];
   global.fetch = (url, options) => new Promise((resolve, reject) => requests.push({ url, options, resolve, reject }));
@@ -370,5 +531,5 @@ async function loadFailuresCanBeRetried() {
   await act(async () => tree.unmount());
 }
 
-(async () => { await clubsAndRosters(); await invitationResponses(); await deepLinkContext(); await loadFailuresCanBeRetried(); console.log('Interclub registration: invitation outcomes, gated rosters, meet-specific lineups, deadlines, scoped players, stale saves, account/meet changes, deep-link context, stage draft preservation, load failures and retries passed.'); })()
+(async () => { await clubsAndRosters(); await invitationResponses(); await deepLinkContext(); await registrationPhaseLocks(); await commissionerWindowEditor(); await savedClosedWindowLoadsMeets(); await serverConfirmedWindowBoundary(); await phaseRefreshCannotUndoAcceptance(); await loadFailuresCanBeRetried(); console.log('Interclub registration: invitation outcomes, commissioner window dates, phase gates and server-confirmed boundaries, meet-specific lineups, scoped players, stale saves, deep-link context, stage draft preservation, load failures and retries passed.'); })()
   .catch(e => { console.error(e); process.exitCode = 1; });
