@@ -242,22 +242,22 @@ def test_admin_session_ignores_unrelated_storage_events() -> None:
     assert 'window.addEventListener("storage", load);' not in hook
 
 
-def test_admin_operations_cockpit_is_client_gated_and_bearer_authorized() -> None:
+def test_admin_home_is_client_gated_and_bearer_authorized() -> None:
     page = _source("apps/web/app/admin/page.tsx")
-    cockpit = _source("apps/web/app/admin/AdminOperationsCockpit.tsx")
-    api = _source("apps/web/lib/adminOperationsApi.ts")
+    home = _source("apps/web/app/admin/AdminHome.tsx")
+    api = _source("apps/web/lib/adminDashboardApi.ts")
 
-    assert "getAdminOperationsStatus" not in page
-    assert "AdminOperationsCockpit" in page
-    assert '"use client";' in cockpit
-    assert "useAdminSession()" in cockpit
-    assert "useAuthenticatedAutoLoad(accessToken, loadStatus, clubId)" in cockpit
-    assert "useLatestRequestGuard" in cockpit
-    assert "if (sessionLoading || !accessToken || !session)" in cockpit
-    assert "setData(null)" in cockpit
+    assert "getAdminDashboard" not in page
+    assert "AdminHome" in page
+    assert '"use client";' in home
+    assert "useAdminSession()" in home
+    assert "useAuthenticatedAutoLoad(accessToken, loadDashboard, clubId)" in home
+    assert "useLatestRequestGuard" in home
+    assert "if (sessionLoading || !accessToken || !session)" in home
+    assert "setData(null)" in home
     assert "Authorization: `Bearer ${accessToken}`" in api
     assert 'cache: "no-store"' in api
-    assert "club_id" in api
+    assert "encodeURIComponent(clubId)" in api
 
 
 def test_admin_pilot_match_log_readiness_forwards_the_bearer_token() -> None:

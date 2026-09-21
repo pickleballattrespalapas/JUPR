@@ -20,34 +20,41 @@ const capabilities = {
   ]
 };
 
-const operationsStatus = {
-  service: "jupr-api",
-  environment: "staging",
-  mode: "guarded",
-  write_pilot_enabled: false,
-  streamlit_fallback_url: "https://fallback.example.test",
-  strict_audit_required: true,
-  service_role_configured: true,
-  jwt_verification_configured: true,
-  jwt_verification_mode: "jwks",
-  enabled_workflows: [],
-  recommended_sequence: [],
-  pilot_gates: ["Keep writes off."],
-  permanent_guardrails: ["Require authorization."],
-  workflows: []
+const dashboard = {
+  club_id: "tres_palapas",
+  checked_at: "2026-09-21T16:00:00Z",
+  queues: [
+    {
+      key: "generator_submissions",
+      label: "Generator submissions",
+      description: "Completed sessions waiting for approval.",
+      href: "/admin/play-generators/submissions",
+      count: 3,
+      status: "ready"
+    }
+  ]
 };
 
-test.beforeEach(async ({ context }) => {
+test.beforeEach(async ({ context, page, baseURL }) => {
   await bootstrapStagingContext(context);
+  await context.addCookies([{
+    name: "jupr_admin_workspace_v1",
+    value: encodeURIComponent(JSON.stringify({ clubId: "tres_palapas", clubSlug: "tres-palapas" })),
+    url: baseURL!,
+    sameSite: "Lax"
+  }]);
+  await page.route("**/admin/auth/workspaces", route => route.fulfill({ json: {
+    workspaces: [{ club_id: "tres_palapas", club_slug: "tres-palapas", club_name: "Tres Palapas", roles: ["club_owner"] }]
+  } }));
 });
 
-test("anonymous admin page never requests or renders operations status", async ({
+test("anonymous admin page never requests or renders dashboard counts", async ({
   page
 }) => {
-  let statusCalls = 0;
-  await page.route("**/admin/operations/status?**", async (route) => {
-    statusCalls += 1;
-    await route.fulfill({ json: operationsStatus });
+  let dashboardCalls = 0;
+  await page.route("**/admin/clubs/*/dashboard", async (route) => {
+    dashboardCalls += 1;
+    await route.fulfill({ json: dashboard });
   });
 
   await page.goto("/admin", { waitUntil: "domcontentloaded" });
@@ -55,23 +62,23 @@ test("anonymous admin page never requests or renders operations status", async (
   await expect(
     page.getByRole("heading", { name: /admin sign-in required/i })
   ).toBeVisible();
-  expect(statusCalls).toBe(0);
-  await expect(page.getByText("Environment", { exact: true })).toHaveCount(0);
+  expect(dashboardCalls).toBe(0);
+  await expect(page.getByText("Completed sessions waiting for approval.", { exact: true })).toHaveCount(0);
 });
 
-test("authorized admin loads protected status exactly once with bearer and scope", async ({
+test("authorized admin loads dashboard once with bearer and club scope", async ({
   page
 }) => {
-  const statusRequests: Array<{ authorization: string; url: string }> = [];
-  await page.route("**/admin/auth/capabilities?**", async (route) => {
+  const dashboardRequests: Array<{ authorization: string; url: string }> = [];
+  await page.route(/\/admin\/auth\/capabilities(?:\?.*)?$/, async (route) => {
     await route.fulfill({ json: capabilities });
   });
-  await page.route("**/admin/operations/status?**", async (route) => {
-    statusRequests.push({
+  await page.route("**/admin/clubs/*/dashboard", async (route) => {
+    dashboardRequests.push({
       authorization: route.request().headers().authorization || "",
       url: route.request().url()
     });
-    await route.fulfill({ json: operationsStatus });
+    await route.fulfill({ json: dashboard });
   });
   await page.addInitScript((session) => {
     window.localStorage.setItem(
@@ -83,29 +90,65 @@ test("authorized admin loads protected status exactly once with bearer and scope
   await page.goto("/admin", { waitUntil: "domcontentloaded" });
 
   await expect(
-    page.getByRole("heading", { name: /operations cockpit/i })
+    page.getByRole("heading", { name: /admin home/i })
   ).toBeVisible();
-  await expect(page.getByText("Environment", { exact: true })).toBeVisible();
-  await expect.poll(() => statusRequests.length).toBe(1);
-  expect(statusRequests[0].authorization).toBe("Bearer ui-test-token");
-  expect(statusRequests[0].url).toContain("club_id=tres_palapas");
+  await expect(page.getByText("Completed sessions waiting for approval.", { exact: true })).toBeVisible();
+  await expect.poll(() => dashboardRequests.length).toBe(1);
+  expect(dashboardRequests[0].authorization).toBe("Bearer ui-test-token");
+  expect(dashboardRequests[0].url).toContain("/admin/clubs/tres_palapas/dashboard");
 });
 
-test("token change clears old posture before authorization denial", async ({
+test("home notifications link to approvals and refresh honestly on desktop and mobile", async ({
+  page
+}, testInfo) => {
+  let count: number | null = 3;
+  let queueStatus = "ready";
+  const pageErrors: string[] = [];
+  page.on("pageerror", error => pageErrors.push(error.message));
+  await page.route(/\/admin\/auth\/capabilities(?:\?.*)?$/, route => route.fulfill({ json: capabilities }));
+  await page.route("**/admin/clubs/*/dashboard", route => route.fulfill({ json: {
+    ...dashboard, queues: [{ ...dashboard.queues[0], count, status: queueStatus }]
+  } }));
+  await page.addInitScript(session => {
+    localStorage.setItem("jupr_admin_session_v1", JSON.stringify(session));
+  }, storedSession);
+  await page.goto("/admin", { waitUntil: "domcontentloaded" });
+  const notifications = page.getByRole("region", { name: "Needs attention" });
+  await expect(notifications.getByRole("link", { name: /3 Generator submissions/ })).toHaveAttribute("href", "/admin/play-generators/submissions");
+  await expect(notifications).toContainText("3 items need attention");
+  await page.screenshot({ path: testInfo.outputPath("admin-home-desktop.png"), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(notifications.getByRole("link", { name: /3 Generator submissions/ })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("admin-home-mobile.png"), fullPage: true });
+  count = 0;
+  await notifications.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(notifications).toContainText("No pending work in the checked queues");
+  await expect(notifications.getByRole("link", { name: /3 Generator submissions/ })).toHaveCount(0);
+  count = null;
+  queueStatus = "unavailable";
+  await notifications.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(notifications).toContainText("Some notifications couldn’t be checked");
+  await expect(notifications).not.toContainText("No pending work");
+  await expect(notifications.getByRole("link", { name: "Generator submissions", exact: true })).toHaveAttribute("href", "/admin/play-generators/submissions");
+  expect(pageErrors).toEqual([]);
+});
+
+test("token change clears old counts before authorization denial", async ({
   page
 }) => {
-  let statusCalls = 0;
+  let dashboardCalls = 0;
   const denialGate: { release?: () => void } = {};
   const denialReady = new Promise<void>((resolve) => {
     denialGate.release = resolve;
   });
-  await page.route("**/admin/auth/capabilities?**", async (route) => {
+  await page.route(/\/admin\/auth\/capabilities(?:\?.*)?$/, async (route) => {
     await route.fulfill({ json: capabilities });
   });
-  await page.route("**/admin/operations/status?**", async (route) => {
-    statusCalls += 1;
-    if (statusCalls === 1) {
-      await route.fulfill({ json: operationsStatus });
+  await page.route("**/admin/clubs/*/dashboard", async (route) => {
+    dashboardCalls += 1;
+    if (dashboardCalls === 1) {
+      await route.fulfill({ json: dashboard });
       return;
     }
     await denialReady;
@@ -124,7 +167,7 @@ test("token change clears old posture before authorization denial", async ({
 
   await page.goto("/admin", { waitUntil: "domcontentloaded" });
 
-  await expect(page.getByText("Environment", { exact: true })).toBeVisible();
+  await expect(page.getByText("Completed sessions waiting for approval.", { exact: true })).toBeVisible();
   await page.evaluate((session) => {
     window.localStorage.setItem(
       "jupr_admin_session_v1",
@@ -132,14 +175,14 @@ test("token change clears old posture before authorization denial", async ({
     );
     window.dispatchEvent(new CustomEvent("jupr-admin-session-change"));
   }, storedSession);
-  await expect.poll(() => statusCalls).toBe(2);
-  await expect(page.getByText("Environment", { exact: true })).toHaveCount(0);
+  await expect.poll(() => dashboardCalls).toBe(2);
+  await expect(page.getByText("Completed sessions waiting for approval.", { exact: true })).toHaveCount(0);
 
   denialGate.release?.();
   await expect(
     page.getByRole("heading", { name: /admin sign-in required/i })
   ).toBeVisible();
-  await expect(page.getByText("Environment", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Completed sessions waiting for approval.", { exact: true })).toHaveCount(0);
   await expect
     .poll(() =>
       page.evaluate(() => localStorage.getItem("jupr_admin_session_v1"))
@@ -151,19 +194,19 @@ test("logout during a delayed capability check cannot restore the old session", 
   page
 }) => {
   let capabilityCalls = 0;
-  let statusCalls = 0;
+  let dashboardCalls = 0;
   let releaseCapability: (() => void) | undefined;
   const capabilityGate = new Promise<void>((resolve) => {
     releaseCapability = resolve;
   });
-  await page.route("**/admin/auth/capabilities?**", async (route) => {
+  await page.route(/\/admin\/auth\/capabilities(?:\?.*)?$/, async (route) => {
     capabilityCalls += 1;
     await capabilityGate;
     await route.fulfill({ json: capabilities });
   });
-  await page.route("**/admin/operations/status?**", async (route) => {
-    statusCalls += 1;
-    await route.fulfill({ json: operationsStatus });
+  await page.route("**/admin/clubs/*/dashboard", async (route) => {
+    dashboardCalls += 1;
+    await route.fulfill({ json: dashboard });
   });
   await page.addInitScript((session) => {
     window.localStorage.setItem(
@@ -178,7 +221,7 @@ test("logout during a delayed capability check cannot restore the old session", 
     window.localStorage.removeItem("jupr_admin_session_v1");
     window.dispatchEvent(new CustomEvent("jupr-admin-session-change"));
   });
-  await expect(page.getByText("Environment", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Completed sessions waiting for approval.", { exact: true })).toHaveCount(0);
 
   releaseCapability?.();
   await expect(
@@ -189,26 +232,26 @@ test("logout during a delayed capability check cannot restore the old session", 
       page.evaluate(() => localStorage.getItem("jupr_admin_session_v1"))
     )
     .toBeNull();
-  expect(statusCalls).toBe(0);
+  expect(dashboardCalls).toBe(0);
 });
 
-test("token rotation supersedes a delayed capability check without stale status", async ({
+test("token rotation supersedes a delayed capability check without stale dashboard counts", async ({
   page
 }) => {
   const capabilityTokens: string[] = [];
-  const statusTokens: string[] = [];
+  const dashboardTokens: string[] = [];
   let releaseFirstCapability: (() => void) | undefined;
   const firstCapabilityGate = new Promise<void>((resolve) => {
     releaseFirstCapability = resolve;
   });
-  await page.route("**/admin/auth/capabilities?**", async (route) => {
+  await page.route(/\/admin\/auth\/capabilities(?:\?.*)?$/, async (route) => {
     capabilityTokens.push(route.request().headers().authorization || "");
     if (capabilityTokens.length === 1) await firstCapabilityGate;
     await route.fulfill({ json: capabilities });
   });
-  await page.route("**/admin/operations/status?**", async (route) => {
-    statusTokens.push(route.request().headers().authorization || "");
-    await route.fulfill({ json: operationsStatus });
+  await page.route("**/admin/clubs/*/dashboard", async (route) => {
+    dashboardTokens.push(route.request().headers().authorization || "");
+    await route.fulfill({ json: dashboard });
   });
   await page.addInitScript((session) => {
     window.localStorage.setItem(
@@ -226,14 +269,14 @@ test("token rotation supersedes a delayed capability check without stale status"
     );
     window.dispatchEvent(new CustomEvent("jupr-admin-session-change"));
   }, storedSession);
-  await expect(page.getByText("Environment", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Completed sessions waiting for approval.", { exact: true })).toHaveCount(0);
 
   releaseFirstCapability?.();
   await expect.poll(() => capabilityTokens.length).toBe(2);
   await expect(
-    page.getByRole("heading", { name: /operations cockpit/i })
+    page.getByRole("heading", { name: /admin home/i })
   ).toBeVisible();
-  await expect.poll(() => statusTokens).toEqual([
+  await expect.poll(() => dashboardTokens).toEqual([
     "Bearer rotated-ui-test-token"
   ]);
   expect(capabilityTokens).toEqual([
@@ -250,12 +293,12 @@ test("token rotation supersedes a delayed capability check without stale status"
     .toBe("rotated-ui-test-token");
 });
 
-test("focus revalidates authorization and hides a revoked cockpit", async ({
+test("focus revalidates authorization and hides a revoked dashboard", async ({
   page
 }) => {
   let denyCapabilities = false;
   let capabilityCalls = 0;
-  await page.route("**/admin/auth/capabilities?**", async (route) => {
+  await page.route(/\/admin\/auth\/capabilities(?:\?.*)?$/, async (route) => {
     capabilityCalls += 1;
     if (denyCapabilities) {
       await route.fulfill({
@@ -267,8 +310,8 @@ test("focus revalidates authorization and hides a revoked cockpit", async ({
     }
     await route.fulfill({ json: capabilities });
   });
-  await page.route("**/admin/operations/status?**", async (route) => {
-    await route.fulfill({ json: operationsStatus });
+  await page.route("**/admin/clubs/*/dashboard", async (route) => {
+    await route.fulfill({ json: dashboard });
   });
   await page.addInitScript((session) => {
     window.localStorage.setItem(
@@ -278,7 +321,7 @@ test("focus revalidates authorization and hides a revoked cockpit", async ({
   }, storedSession);
 
   await page.goto("/admin", { waitUntil: "domcontentloaded" });
-  await expect(page.getByText("Environment", { exact: true })).toBeVisible();
+  await expect(page.getByText("Completed sessions waiting for approval.", { exact: true })).toBeVisible();
 
   denyCapabilities = true;
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
@@ -287,7 +330,7 @@ test("focus revalidates authorization and hides a revoked cockpit", async ({
   await expect(
     page.getByRole("heading", { name: /admin sign-in required/i })
   ).toBeVisible();
-  await expect(page.getByText("Environment", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Completed sessions waiting for approval.", { exact: true })).toHaveCount(0);
   await expect
     .poll(() =>
       page.evaluate(() => localStorage.getItem("jupr_admin_session_v1"))
@@ -302,7 +345,7 @@ test("commerce evidence OK restores an explicit visible ring to the exact Inspec
   const commerceRoot =
     "/admin/clubs/tres_palapas/tournaments/commerce";
 
-  await page.route("**/admin/auth/capabilities?**", async (route) => {
+  await page.route(/\/admin\/auth\/capabilities(?:\?.*)?$/, async (route) => {
     await route.fulfill({ json: capabilities });
   });
   await page.route(

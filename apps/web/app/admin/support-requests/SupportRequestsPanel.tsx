@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import { actionSuccess } from "@/components/interaction";
 import type { AdminSupportRequest, AdminSupportRequestsListResponse, AdminSupportRequestsStatus, AdminSupportRequestUpdateResponse } from "@/lib/adminSupportRequestsApi";
@@ -75,7 +76,10 @@ function SupportRequestCard({ request, selected, disabled, onSelect }: { request
 
 export default function SupportRequestsPanel({ apiBase, clubId, status }: Props) {
   const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
-  const [statusFilter, setStatusFilter] = useState("new");
+  const queryStatus = useSearchParams().get("status");
+  const linkedStatus = STATUS_OPTIONS.includes(queryStatus || "") ? queryStatus! : "new";
+  const [statusFilter, setStatusFilter] = useState(linkedStatus);
+  useEffect(() => { setStatusFilter(linkedStatus); }, [linkedStatus]);
   const [typeFilter, setTypeFilter] = useState("");
   const [requests, setRequests] = useState<AdminSupportRequest[]>([]);
   const [summary, setSummary] = useState<AdminSupportRequestsListResponse["summary"] | null>(null);

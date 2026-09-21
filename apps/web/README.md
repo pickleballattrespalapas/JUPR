@@ -8,7 +8,7 @@ The web app is **public-first with guarded admin migration surfaces**.
 
 - Production Streamlit remains the trusted admin fallback runtime during migration.
 - FastAPI supplies public read APIs, guarded public intake APIs, status-only admin migration APIs, and guarded admin endpoints.
-- Next.js renders public pages and the admin operations cockpit against FastAPI.
+- Next.js renders public pages and the staff dashboard against FastAPI.
 - Next admin write workflows remain disabled unless explicitly enabled for controlled staging or closed-club production-write pilot experiments.
 - Never put Supabase service-role keys, JWT secrets, or database credentials in Vercel/frontend environment variables.
 
@@ -49,7 +49,7 @@ belongs in Vercel.
 - `/support` and `/contact` durable general-support intake plus a populated email fallback.
 - `/data-corrections` public correction intake with no direct data mutation.
 - `/profile-privacy` identity-reviewed privacy fulfillment intake with no direct public-profile mutation.
-- `/admin` staff operations cockpit for the Streamlit-to-Next migration.
+- `/admin` club dashboard with linked notifications for pending work and everyday play shortcuts.
 - `/admin/match-log`, `/admin/replay-history`, `/admin/match-uploader`, `/admin/players`, `/admin/league-manager`, and `/admin/league-manager/awards` guarded staff migration surfaces.
 - `/admin/league-manager/print` authenticated browser-print schedule, weekly leaders, configured Top Performers, standings, and attendance roster.
 - `/admin/top-players-printable` authenticated previous-calendar-month Top 50 browser export.
@@ -78,14 +78,22 @@ emails use it to generate tokenized Next `/email-preferences` links. The API
 fails the individual outbox send closed when no unsubscribe token is available;
 it never falls back to a public subscription ID.
 
-The `/admin` route renders no cockpit data until the browser restores a
-capability-checked staff session. It then reads
-`GET /admin/operations/status?club_id=...` with the Supabase bearer token and
-`cache: no-store`; logout, token rotation, scope changes, and authorization
-denials clear the rendered posture. The session is rechecked every minute and
-when the tab regains focus or visibility so an expiry or revoked assignment
-cannot leave the cockpit visible indefinitely. Workflow flags live on the API deployment,
-not in Vercel. `/admin/match-log` reads
+The `/admin` route renders no private counts until the browser restores a
+capability-checked staff session. It reads `GET /admin/clubs/{club_id}/dashboard`
+with the Supabase bearer token and `cache: no-store`. Notifications cover generator
+and Club Social approvals, new/in-progress player support requests, verified player
+update requests, draft weekly recaps, inbound interclub invitations, organizer meet-result
+approvals, and late-player eligibility reviews. Interclub review links open the oldest
+pending item’s season/meet. Each source
+is permission/feature scoped and counted independently; a failed query is shown as
+unavailable, never as zero pending. Closed work disappears on refresh, when the tab
+regains focus/visibility, or at the next visible one-minute refresh. Token changes,
+club changes, and authorization denials clear old counts. Interclub lineup
+exceptions remain in their season workspaces.
+
+The technical `GET /admin/operations/status?club_id=...` endpoint remains available
+for system checks and pilot tooling; migration diagnostics are no longer on Home.
+Workflow flags live on the API deployment, not in Vercel. `/admin/match-log` reads
 `GET /admin/clubs/{club_id}/match-log` and shows fallback instructions until
 `JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG=1` is enabled on FastAPI. When apply mode is
 enabled, guided and bulk edits carry stable idempotency keys; rating-affecting

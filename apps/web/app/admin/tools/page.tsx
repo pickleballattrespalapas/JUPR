@@ -36,7 +36,7 @@ export default async function AdminToolsPage() {
         <p><Link href="/admin/top-players-printable">Previous-month Top 50</Link></p>
       </article>
       <AdminToolsPanel apiBase={apiBase()} clubId={clubId} status={status} />
-      <p style={{ marginTop: "1rem" }}><Link href="/admin/top-players-printable">Previous-month Top 50</Link> · <Link href="/admin/replay-history">Replay History</Link> · <Link href="/admin/badges">Badge Diagnostics</Link> · <Link href="/admin/match-canonical-audit">Match Canonical Audit</Link> · <Link href="/admin">Operations cockpit</Link></p>
+      <p style={{ marginTop: "1rem" }}><Link href="/admin/top-players-printable">Previous-month Top 50</Link> · <Link href="/admin/replay-history">Replay History</Link> · <Link href="/admin/badges">Badge Diagnostics</Link> · <Link href="/admin/match-canonical-audit">Match Canonical Audit</Link> · <Link href="/admin">Admin Home</Link></p>
     </section>
   );
 }

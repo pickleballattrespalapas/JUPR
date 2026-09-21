@@ -339,13 +339,13 @@ for (const surface of adminSurfaces) {
   });
 }
 
-test("admin operations cockpit is hidden until staff authentication", async ({ page }) => {
+test("admin home is hidden until staff authentication", async ({ page }) => {
   const response = await page.goto("/admin", { waitUntil: "domcontentloaded" });
   expect(response?.status()).toBeLessThan(400);
   await expect(
     page.getByRole("heading", { name: /admin sign-in required/i })
   ).toBeVisible();
-  await expect(page.getByRole("link", { name: /open admin login/i })).toBeVisible();
+  await expect(page.getByRole("link", { name: /^sign in$/i })).toBeVisible();
   await expect(page.getByText("Environment", { exact: true })).toHaveCount(0);
   await expect(page.getByText("Workflow flags", { exact: true })).toHaveCount(0);
   await expect(page.getByText("API service role", { exact: true })).toHaveCount(0);

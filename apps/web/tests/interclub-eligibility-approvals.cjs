@@ -44,4 +44,19 @@ async function unlinkedAndStale(){
  assert.equal(lastSignal.aborted,true);await act(async()=>finish(reply({detail:'OLD SEASON ERROR'},422)));
  assert.ok(!text(tree).includes('OLD SEASON ERROR'));assert.ok(!text(tree).includes('not approved'));await act(async()=>tree.unmount());
 }
-(async()=>{await reviews();await unlinkedAndStale();console.log('PASS interclub eligibility approvals: revisions, review, privacy, late-only queue and stale context');})().catch(error=>{console.error(error);process.exit(1)});
+async function approvalAnchor(){
+ let resolve,scrolls=0,focuses=0;
+ global.window={location:{hash:'#season-eligibility-approvals'}};
+ global.fetch=()=>new Promise(finish=>{resolve=finish;});
+ let tree;await act(async()=>{tree=create(React.createElement(Panel,props),{createNodeMock:element=>element.props.id==='season-eligibility-approvals'?{scrollIntoView:()=>scrolls++,focus:options=>{assert.equal(options.preventScroll,true);focuses++;}}:null});});
+ assert.equal(scrolls,0,'The deep link waits until its asynchronous queue loads');
+ await act(async()=>resolve(reply({members:[]})));
+ assert.equal(scrolls,1);assert.equal(focuses,1,'The destination receives keyboard focus');
+ await act(async()=>button(tree,'Refresh eligibility requests').props.onClick());
+ await act(async()=>resolve(reply({members:[member]})));
+ assert.equal(scrolls,1,'Refreshing the queue does not pull the reader back to the anchor');
+ await act(async()=>tree.update(React.createElement(Panel,{...props,clubs:[...props.clubs]})));
+ assert.equal(scrolls,1,'Ordinary rerenders do not repeat the scroll');
+ await act(async()=>tree.unmount());delete global.window;
+}
+(async()=>{await reviews();await unlinkedAndStale();await approvalAnchor();console.log('PASS interclub eligibility approvals: revisions, review, privacy, late-only queue, stale context and async deep link');})().catch(error=>{console.error(error);process.exit(1)});

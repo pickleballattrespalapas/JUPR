@@ -200,6 +200,7 @@ export default function AdminShell({ children, workspace }: Props) {
   const [contextChanged, setContextChanged] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(
     {}
   );
@@ -208,6 +209,10 @@ export default function AdminShell({ children, workspace }: Props) {
   const globalPage = pathname === "/admin/select-club" || pathname === "/admin/platform" || pathname === "/admin/accept-invitation";
   const activeClub = workspaces.find(club => club.club_id === workspace?.clubId && club.club_slug === workspace?.clubSlug);
   const canChoose = canChooseAdminWorkspace(workspaces);
+
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [pathname]);
 
   useEffect(() => {
     // A previous account's navigation cookie must not make a single-club user
@@ -264,6 +269,7 @@ export default function AdminShell({ children, workspace }: Props) {
   if (!loaded) return <p role="status">Loading club workspace…</p>;
   if (!activeClub || !session?.capabilities?.assignments.some(assignment => assignment.club_id === workspace.clubId)) return <section><h1>Choose an available club</h1><p>Your account does not currently have access to this workspace.</p><Link href="/admin/select-club">Choose club</Link></section>;
   const groups = adminGroups.map(group => ({ ...group, links: group.links.map(item => ({ ...item, href: item.href.replace("/clubs/{club}", `/clubs/${encodeURIComponent(activeClub.club_slug)}`) })) }));
+  const currentPage = groups.flatMap(group => group.links).find(item => item.active(pathname))?.label || "Admin workspace";
 
   async function signOut() {
     if (signingOut) return;
@@ -292,13 +298,27 @@ export default function AdminShell({ children, workspace }: Props) {
       <aside
         className={`${styles.sidebar} ${
           sidebarCollapsed ? styles.sidebarCollapsed : ""
-        }`}
+        } ${mobileMenuOpen ? styles.mobileMenuOpen : ""}`}
         aria-label="Admin workspace navigation"
       >
+        <div className={styles.mobileHeader}>
+          <button
+            type="button"
+            className={styles.mobileMenuToggle}
+            aria-expanded={mobileMenuOpen}
+            aria-controls="admin-navigation-menu"
+            onClick={() => setMobileMenuOpen(current => !current)}
+          >
+            <span aria-hidden="true">{mobileMenuOpen ? "×" : "☰"}</span>
+            {mobileMenuOpen ? "Hide menu" : "Show menu"}
+          </button>
+          <span className={styles.mobileLocation}>{currentPage}</span>
+        </div>
         <button
           type="button"
           className={styles.sidebarToggle}
           aria-expanded={!sidebarCollapsed}
+          aria-controls="admin-navigation-menu"
           aria-label={sidebarCollapsed ? "Expand admin sidebar" : "Collapse admin sidebar"}
           title={sidebarCollapsed ? "Expand admin sidebar" : "Collapse admin sidebar"}
           onClick={() => setSidebarCollapsed((current) => !current)}
@@ -307,8 +327,7 @@ export default function AdminShell({ children, workspace }: Props) {
           {!sidebarCollapsed ? <span>Collapse</span> : null}
         </button>
 
-        {!sidebarCollapsed ? (
-          <>
+        <div id="admin-navigation-menu" className={styles.navigationBody}>
             <div className={styles.identity}>
               <p className={styles.eyebrow}>Admin workspace</p>
               <strong>{activeClub.club_name}</strong>
@@ -370,12 +389,12 @@ export default function AdminShell({ children, workspace }: Props) {
                 {signingOut ? "Signing out…" : "Sign out"}
               </button>
             </div>
-          </>
-        ) : (
+        </div>
+        {sidebarCollapsed ? (
           <p className={styles.collapsedLabel} aria-hidden="true">
             Admin
           </p>
-        )}
+        ) : null}
       </aside>
       <div className={styles.content}>
         <p className={styles.eyebrow} aria-label="Current club">{activeClub.club_name}</p>
