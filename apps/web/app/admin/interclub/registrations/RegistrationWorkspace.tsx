@@ -6,7 +6,7 @@ import { getAdminApiBaseUrl } from "@/lib/adminAuthClient";
 import { useAdminSession } from "@/lib/useAdminSession";
 import { useAdminWorkspace } from "@/lib/useAdminWorkspace";
 import { InterclubTeam, MeetRegistrationDetail, RegistrationDetail, RegistrationSeason, RosterVersion, apiError, composition, rosterStatus } from "@/lib/interclubRegistration";
-import { emptyRule } from "@/lib/interclubSetup";
+import { divisionEligibilityLabel, emptyRule } from "@/lib/interclubSetup";
 import styles from "./registrations.module.css";
 import { SeasonPlayerPool, MeetAvailability } from "./PlayerPoolPanels";
 import SeasonEligibilityApprovals from "./SeasonEligibilityApprovals";
@@ -243,10 +243,10 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId, initialMeetId,
         <div className={styles.scroll}><table className={styles.table}><caption>Season eligibility rules</caption><thead><tr><th>Division</th><th>League rating</th><th>Team</th></tr></thead><tbody>
           {[...data.season.details.divisions].sort((a, b) => Number.parseFloat(a) - Number.parseFloat(b) || a.localeCompare(b, undefined, { numeric: true })).map(division => {
             const rule = emptyRule(division);
-            return <tr key={division}><td>{division}</td><td>{rule.min_rating == null ? "Rating eligibility unavailable" : `${rule.min_rating.toFixed(1)} ${rule.max_rating == null ? "and above" : `to below ${(rule.min_rating + 0.5).toFixed(1)}`}`}</td><td>{composition(rule)}</td></tr>;
+            return <tr key={division}><td>{division}</td><td>{divisionEligibilityLabel(division)}</td><td>{composition(rule)}</td></tr>;
           })}
         </tbody></table></div>
-        <p>Interclub ratings start from the represented club’s rating, then change with approved league results. Each meet locks the player’s league rating at its roster deadline. Players move to the skill level matching that rating, and every team has two women and two men.</p>
+        <p>Interclub ratings start from the represented club’s rating, then change with approved league results. Each meet locks the player’s league rating at its roster deadline. Players may play up: a 2.9 player can enter 3.0 or a higher division. Each numeric division requires a rating below its listed limit; Open divisions accept any positive rating. Every team has two women and two men.</p>
       </details>
       {data.is_organizer && <SeasonEligibilityApprovals root={root} accessToken={accessToken} clubs={data.clubs} />}
       {data.is_organizer && <section id="club-responses" className={styles.card}><h3>Club responses</h3>

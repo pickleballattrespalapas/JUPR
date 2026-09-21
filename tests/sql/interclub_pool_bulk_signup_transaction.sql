@@ -113,7 +113,7 @@ begin
  -- Change only club rating: the established league seed must remain in authority.
  update public.players set rating=1700 where id=p1;
  details:=public.pcs_interclub_pool_player_details(sid,home,array[p1]);
- if (details->0->>'league_rating')::numeric<>3.7 or details->0->'eligible_divisions'<>'["3.5"]'::jsonb then raise exception 'Club rating replaced established league eligibility'; end if;
+ if (details->0->>'league_rating')::numeric<>3.7 or details->0->'eligible_divisions'<>'["3.5","4.0"]'::jsonb then raise exception 'Club rating replaced established league eligibility'; end if;
 
  -- Late additions remain pending even when an administrator selects their profile.
  update public.pcs_interclub_seasons set details=jsonb_set(pcs_interclub_seasons.details,'{start_date}',to_jsonb((current_date-1)::text)) where id=sid;

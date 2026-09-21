@@ -8,11 +8,16 @@ export type PlanningSeason = { id: string; revision: number; draft: PlanningDraf
 export const setupSteps = ["Season details", "Participating clubs", "Divisions & eligibility", "Meet schedule", "Review & invite"];
 export const divisionChoices = ["2.5", "3.0", "3.5", "4.0", "4.5", "5.0"];
 export const emptyRule = (division = ""): DivisionRule => {
-  const level = division === "Open" ? 4.5 : Number.parseFloat(division);
-  return { min_rating: Number.isFinite(level) ? level : null,
-    max_rating: /^\d+\.\d+$/.test(division) ? Number((level + 0.499).toFixed(3)) : null,
+  const level = Number.parseFloat(division);
+  return { min_rating: null,
+    max_rating: /^[2-6]\.[05]$/.test(division) ? Number((level + 0.499).toFixed(3)) : null,
     women_required: 2 };
 };
+export function divisionEligibilityLabel(division: string): string {
+  const normalized = division.toLowerCase();
+  if (normalized === "open" || normalized === "4.5/open") return "Any positive rating";
+  return /^[2-6]\.[05]$/.test(normalized) ? `Below ${(Number.parseFloat(normalized) + 0.5).toFixed(1)}` : "Rating eligibility unavailable";
+}
 export const newSeason = (): PlanningSeason => ({ id: crypto.randomUUID(), revision: 0, draft: {
   name: "", start_date: null, end_date: null, timezone: "America/Mazatlan", divisions: ["3.5", "4.0"], club_ids: [], meets: [], registration_rules: {}, setup_step: 0
 } });

@@ -3,7 +3,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import type { RegistrationSeason } from "@/lib/interclubRegistration";
 import { apiError, composition } from "@/lib/interclubRegistration";
-import { ClubChoice, PlanningDraft, PlanningMeet, PlanningSeason, divisionChoices, emptyRule, firstIncompleteStep, meetLocalTime, meetUtcTime, normalizeDraft, setupSteps, stepIssues } from "@/lib/interclubSetup";
+import { ClubChoice, PlanningDraft, PlanningMeet, PlanningSeason, divisionChoices, divisionEligibilityLabel, emptyRule, firstIncompleteStep, meetLocalTime, meetUtcTime, normalizeDraft, setupSteps, stepIssues } from "@/lib/interclubSetup";
 import styles from "./setup.module.css";
 import ClubInvitationPanel, { ClubJoinInvitation, InviteClubInput } from "./ClubInvitationPanel";
 
@@ -228,13 +228,13 @@ export default function InterclubSetupWizard({ api, club, accessToken, initialSe
           <p className={styles.muted}>Choose the skill levels offered this season. Each club decides which levels to enter at each meet, with two women and two men per team.</p>
           <fieldset disabled={disabled} className={styles.form}>
             <div className={styles.divisionChoices}>{[...divisionChoices, ...draft.divisions.filter(d => !divisionChoices.includes(d))].map(division => <label className={styles.choice} data-selected={draft.divisions.includes(division)} key={division}><input aria-label={`Include ${division} division`} type="checkbox" checked={draft.divisions.includes(division)} onChange={() => edit({ divisions: draft.divisions.includes(division) ? draft.divisions.filter(d => d !== division) : [...draft.divisions, division] })} />{division}</label>)}</div>
-            <div className={styles.note}>Players enter the skill level matching their interclub rating at the meet’s roster deadline. Their league rating starts from their club rating and changes with approved interclub results.</div>
-            {draft.divisions.map(division => { const rule = emptyRule(division); return <section key={division} className={styles.rule} aria-label={`${division} eligibility`}><h3>{division} skill level</h3>
-              <p>{rule.min_rating == null ? "Open rating eligibility (existing season)" : `${rule.min_rating.toFixed(1)} ${rule.max_rating == null ? "and above" : `to below ${(rule.min_rating + 0.5).toFixed(1)}`}`} · Two women and two men.</p>
+            <div className={styles.note}>Players may play up. Their interclub rating must stay below the division’s upper limit at the meet’s roster deadline. For example, a 2.9 player may enter 3.0 or a higher division. Open divisions accept any positive rating.</div>
+            {draft.divisions.map(division => <section key={division} className={styles.rule} aria-label={`${division} eligibility`}><h3>{division} skill level</h3>
+              <p>{divisionEligibilityLabel(division)} · Two women and two men.</p>
               <p className={styles.muted}>The meet’s deadline locks this rating. A new deadline applies if an unfinished matchup is rescheduled.</p>
-            </section>; })}
+            </section>)}
           </fieldset>
-          <p className={styles.muted}>Choose players later from each club’s approved season interest pool. Late season signups need organizer approval; player skill levels still follow the deadline rating.</p>
+          <p className={styles.muted}>Choose players later from each club’s approved season interest pool. Late season signups need organizer approval. League ratings start from club ratings and change with approved interclub results.</p>
         </>}
         {step === 3 && <>
           <p className={styles.muted}>A meet is one gathering of 2–4 clubs at a host club. Add the dates and locations for this season.</p>
@@ -257,7 +257,7 @@ export default function InterclubSetupWizard({ api, club, accessToken, initialSe
           <div className={styles.review}>
             <section><div className={styles.toolbar}><h3>Season details</h3><button disabled={disabled} onClick={() => goTo(0)}>Edit season details</button></div><dl><dt>Season</dt><dd>{draft.name}</dd><dt>Dates</dt><dd>{draft.start_date} to {draft.end_date}</dd><dt>Organizer</dt><dd>{club.name}</dd><dt>Timezone</dt><dd>{draft.timezone}</dd></dl></section>
             <section><div className={styles.toolbar}><h3>Clubs to invite</h3><button disabled={disabled} onClick={() => goTo(1)}>Edit clubs</button></div><p>{draft.club_ids.map(clubName).join(" · ")}</p></section>
-            <section><div className={styles.toolbar}><h3>Divisions & eligibility</h3><button disabled={disabled} onClick={() => goTo(2)}>Edit divisions</button></div><div className={styles.tableWrap}><table className={styles.table}><thead><tr><th>Division</th><th>Minimum</th><th>Maximum</th><th>Team</th></tr></thead><tbody>{draft.divisions.map(d => { const r = emptyRule(d); return <tr key={d}><td>{d}</td><td>{r.min_rating ?? "No minimum"}</td><td>{r.max_rating ?? "No maximum"}</td><td>{composition(r)}</td></tr>; })}</tbody></table></div></section>
+            <section><div className={styles.toolbar}><h3>Divisions & eligibility</h3><button disabled={disabled} onClick={() => goTo(2)}>Edit divisions</button></div><div className={styles.tableWrap}><table className={styles.table}><thead><tr><th>Division</th><th>Rating eligibility</th><th>Team</th></tr></thead><tbody>{draft.divisions.map(d => <tr key={d}><td>{d}</td><td>{divisionEligibilityLabel(d)}</td><td>{composition(emptyRule(d))}</td></tr>)}</tbody></table></div><p>Players may play up. Their rating must be below the listed limit.</p></section>
             <section><div className={styles.toolbar}><h3>Meet schedule</h3><button disabled={disabled} onClick={() => goTo(3)}>Edit meets</button></div>{draft.meets.map((meet, index) => <p key={index}><strong>Meet {index + 1} · {when(meet.starts_at)}</strong><br />{clubName(meet.host_club_id)} hosts {meet.club_ids.map(clubName).join(", ")} · {meet.courts} courts · {meet.duration_minutes} minutes</p>)}</section>
           </div>
           <h3 style={{ marginTop: 24 }}>What happens next?</h3><SetupNextSteps />

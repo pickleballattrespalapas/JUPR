@@ -40,6 +40,12 @@ only after registration closes. Direct links obey the same restriction.
 6. Choose the final four-player teams. The roster picker can show only players who
    replied that they are available. Clear that filter when adding a substitute.
 
+Players may play up: a 2.9 player can enter 3.0 or any higher offered division.
+Numeric divisions require a positive rating below the division label plus 0.5;
+Open divisions have no upper ceiling. Eligibility uses the interclub rating
+locked at the meet deadline. A player can appear in multiple eligible-division
+counts, while preferred divisions remain their own saved choices.
+
 Opening meet invitations is a deliberate admin action. No automatic schedule sends
 messages without the admin's review. The club can invite players again as plans
 change, and an existing reply is retained when a new invitation is prepared.

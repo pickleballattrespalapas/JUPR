@@ -1,7 +1,8 @@
 # Southern BCS interclub league: rules and operating specification
 
 Decision record consolidated September 19, 2026 from Joe's guided questionnaire
-and the Southern BCS Interclub League Development Roadmap (revision 0.1).
+and the Southern BCS Interclub League Development Roadmap (revision 0.1), with
+Joe's September 21 clarification that players may play up.
 
 **Status: approved product direction; the current working branch implements the
 competition, eligibility, rating, printing and publication workflows described
@@ -89,8 +90,8 @@ full team at each entered level has **two men and two women**. A regular-season
 club may instead declare an unavailable pairing and submit the two eligible
 players for the pairing it can field, using the missing-pairing rules below.
 Finals and qualifying MLP matchups require the full four-player lineup. A player
-plays at the level matching their eligible rating, not at a lower level to fill
-a gap.
+may play up in a higher division, but cannot enter a numeric division at or
+above that division's upper rating limit.
 
 Participation fees are handled **outside PCS** by the clubs. This signup flow
 does not require online payment or introduce a payment-processing gate.
@@ -104,11 +105,17 @@ SMTP. Production email activation is not authorized by a staging build request.
 ### Confirmed rating rules
 
 - Seed the player's initial interclub league rating from the club they represent.
-- Thereafter **the current interclub league rating** determines skill placement;
+- Thereafter **the current interclub league rating** determines eligible divisions;
   the current home-club rating and the season's initial seed do not override it.
-- Players move up or down as that league rating changes. For example, crossing
-  from the 3.5 band into 4.0 requires placement at 4.0; dropping below the 4.0
-  boundary allows placement in the matching lower band.
+- Players may play up. A 2.9 player may enter 3.0, 3.5, 4.0 or any higher offered
+  division. Numeric divisions have no lower rating bound; they exclude ratings
+  at or above the division label plus 0.5.
+- As a league rating changes, the player may become eligible or ineligible for
+  lower divisions. Reaching 4.0 makes a player ineligible for 3.5; dropping below
+  4.0 permits 3.5 again. The player may still choose a higher eligible division.
+- Open divisions, including legacy `Open` and `4.5/Open` labels, accept any valid
+  positive rating and have no upper ceiling. A missing, zero, negative or
+  non-finite rating is not eligible.
 - For a specific meet, freeze each player's eligibility rating at **that meet's
   roster deadline**, using the approved rating history available at the cutoff.
   Later rating changes do not silently invalidate that meet's lineup.
@@ -117,9 +124,12 @@ SMTP. Production email activation is not authorized by a staging build request.
 - The starting league rating remains an auditable seed, not a season-long
   eligibility lock.
 
-Skill-band boundaries are recorded in the season rules. Use unambiguous bounds,
-for example 3.5 means `3.5 <= rating < 4.0`, rather than relying on a rounded
-display string to determine eligibility. Any organizer-approved exception must
+Upper limits are recorded in the season rules. Use unambiguous bounds, for
+example 3.5 means `0 < rating < 4.0`, rather than relying on a rounded display
+string to determine eligibility. The exact exclusive upper bound governs even
+when legacy metadata stores `max_rating: 3.999`. Existing preferred divisions
+remain the player's choices; broader eligibility does not rewrite them.
+Any organizer-approved exception must
 reference the exact roster revision, player, rule, and approving administrator.
 
 ### Roster changes
@@ -349,8 +359,9 @@ to these operational defaults must be an explicit rules revision.
   attendance threshold.
 - Every championship player must have played **at least one regular-season meet
   for that club**. It may have been at any skill level.
-- The player must still play the championship level matching their current
-  eligible interclub rating, frozen at the championship roster deadline.
+- The player must remain eligible for the selected championship division using
+  their interclub rating frozen at the championship roster deadline. Players may
+  play up here too; numeric divisions retain their exclusive upper rating limit.
 - Pool registration or availability alone is not a playing appearance.
 
 Operational default: an appearance requires actual play in an official retained
@@ -475,7 +486,7 @@ rules or delay development of their controls:
 | Fixed season roster/team | Approved season interest pool plus a different eligible lineup for each meet |
 | Players can join any later meet automatically | Beginning-of-season pool; late additions require organizer approval |
 | Initial rating fixes division eligibility all season | Current interclub rating, frozen at each meet's roster deadline |
-| Play up freely / never move down | Match the eligible rating band; move up or down as the league rating changes |
+| A player must match a division's lower and upper rating bounds | Players may play up; numeric divisions enforce only an exclusive upper limit, and current ratings govern access to lower divisions |
 | Clubs commit to levels for the entire season | Clubs choose entered levels separately for each meet |
 | Every level always has four clubs and nine games | Two/three/four entrants give three/six/nine games per player |
 | Season standings use wins, game difference, then point difference | Club-matchup points, pairings won, games won, point differential, head-to-head |
@@ -495,7 +506,8 @@ The following are required tests, not claims that the implementation passes them
   cannot continue writing.
 - [ ] Clubs independently enter skill levels per meet; two/three/four-club
   fixtures create the right opponents, rotations, courts, and 3/6/9 player games.
-- [ ] Below/at/above-band ratings, later up/down movement, original cutoff, and
+- [ ] Play-up choices, ratings below/at/above each upper limit, Open divisions,
+  invalid ratings, later movement, original cutoff, and
   new rescheduled cutoff produce correct eligibility without rewriting history.
 - [ ] The printed package alone supports a complete meet, including actual game
   participants, score verification, substitutions, non-play, and weather notes.

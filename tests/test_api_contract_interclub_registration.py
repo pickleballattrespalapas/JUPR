@@ -139,7 +139,7 @@ def test_open_uses_exact_saved_revision_and_verified_organizer(setup):
     name,args=s["calls"][0]
     assert name=="pcs_open_interclub_meet_registration" and args["p_club_id"]=="alpha" and args["p_actor_id"]==s["user"].user_id
     assert args["p_revision"] == 2
-    assert args["p_rules"] == {"3.5": {"min_rating": 3.5, "max_rating": 3.999, "women_required": 2}}
+    assert args["p_rules"] == {"3.5": {"min_rating": None, "max_rating": 3.999, "women_required": 2}}
 
 
 @pytest.mark.parametrize("patch",[dict(min_rating=4,max_rating=3),dict(max_rating=9),dict(women_required=5),dict(private="injected")])
@@ -332,12 +332,25 @@ def test_open_requires_current_saved_setup_owned_by_this_organizer(setup):
     assert not s["calls"]
 
 
-def test_open_normalizes_legacy_custom_rating_rules(setup):
+def test_open_normalizes_legacy_custom_rating_rules_to_allow_playing_up(setup):
     c, s = setup
-    s["tables"]["pcs_interclub_drafts"][0]["draft"]["registration_rules"] = {"3.5": {"max_rating": 4, "women_required": None}}
-    response = c.post(base(s) + "/open", json={"expected_revision": 2, "rules": s["season"]["rules"]})
+    draft = s["tables"]["pcs_interclub_drafts"][0]["draft"]
+    draft["divisions"] = ["3.0", "3.5", "Open", "4.5/Open"]
+    legacy_rules = {
+        "3.0": {"min_rating": 3.0, "max_rating": 3.499, "women_required": None},
+        "3.5": {"min_rating": 3.5, "max_rating": 4, "women_required": None},
+        "Open": {"min_rating": 4.5, "women_required": None},
+        "4.5/Open": {"min_rating": 4.5, "women_required": None},
+    }
+    draft["registration_rules"] = legacy_rules
+    response = c.post(base(s) + "/open", json={"expected_revision": 2, "rules": legacy_rules})
     assert response.status_code == 200
-    assert s["calls"][0][1]["p_rules"] == {"3.5": {"min_rating": 3.5, "max_rating": 3.999, "women_required": 2}}
+    assert s["calls"][0][1]["p_rules"] == {
+        "3.0": {"min_rating": None, "max_rating": 3.499, "women_required": 2},
+        "3.5": {"min_rating": None, "max_rating": 3.999, "women_required": 2},
+        "Open": {"min_rating": None, "max_rating": None, "women_required": 2},
+        "4.5/Open": {"min_rating": None, "max_rating": None, "women_required": 2},
+    }
 
 
 def test_meet_player_lookup_only_approved_pool_and_uses_deadline_rating(setup):

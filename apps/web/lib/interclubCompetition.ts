@@ -61,8 +61,9 @@ export function activeSinglesPlayers(encounter: CompetitionEncounter, side: "a" 
   })));
 }
 export function matchesSkillLevel(player: CompetitionPlayer, division: string): boolean {
-  if (player.division) return player.division === division;
-  const rating = player.eligibility_rating ?? player.rating;
-  const level = Number.parseFloat(division);
-  return rating == null || !Number.isFinite(level) || rating >= level && rating < level + .5;
+  const rating = player.eligibility_rating ?? player.rating ?? player.starting_rating;
+  if (rating == null || !Number.isFinite(rating) || rating <= 0) return false;
+  const normalized = division.toLowerCase();
+  if (normalized === "open" || normalized === "4.5/open") return true;
+  return /^[2-6]\.[05]$/.test(normalized) && rating < Number.parseFloat(normalized) + .5;
 }

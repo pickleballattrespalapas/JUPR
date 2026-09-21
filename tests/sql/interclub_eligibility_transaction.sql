@@ -61,9 +61,9 @@ begin
  update public.pcs_interclub_meets set competition_phase='regular' where id=mid;
  perform public.pcs_save_interclub_meet_roster(actor,actor_email,home,sid,mid,1,team,0,'Home 3.5','3.5',players,false);
  begin
-  perform public.pcs_save_interclub_meet_roster(actor,actor_email,home,sid,mid,1,gen_random_uuid(),0,'Wrong level','4.0',players,false);
-  raise exception 'Wrong skill level accepted';
- exception when invalid_parameter_value then null; end;
+  perform public.pcs_save_interclub_meet_roster(actor,actor_email,home,sid,mid,1,gen_random_uuid(),0,'Play up duplicate','4.0',players,false);
+  raise exception 'Player entered a second team at the same meet';
+ exception when unique_violation then null; end;
  update public.pcs_interclub_entries set entered_at=now()-interval '2 days' where season_id=sid;
  update public.pcs_interclub_pool_members set approved_at=now()-interval '2 days' where season_id=sid;
  update public.pcs_interclub_meets set roster_deadline=cutoff where id=mid;
