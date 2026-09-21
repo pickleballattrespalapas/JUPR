@@ -30,6 +30,8 @@ from jupr_app.services.public_tournament_registration_service import (
     validate_and_clean_tournament_selection,
 )
 
+CANCELLATION_ADMIN_ROLES = frozenset({"administrator", "club_owner", "super_admin"})
+
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
 TOURNAMENT_SELECT = "id,club_id,name,status,start_date,end_date,event_tags,created_at,updated_at"
 TOURNAMENT_MINIMAL_SELECT = "id,club_id,name,status"
@@ -1176,6 +1178,8 @@ def update_admin_tournament_registration(
         "status" in update_payload
         and str(update_payload.get("status") or "") != _registration_status(before)
     )
+    if update_payload.get("status") == "cancelled" and str(actor_role).strip().lower() not in CANCELLATION_ADMIN_ROLES:
+        raise PermissionError("Only an administrator can cancel and remove a registration.")
     player_link_changed = (
         "player_id" in update_payload
         and update_payload.get("player_id") != _safe_int(before.get("player_id"))
@@ -1197,6 +1201,7 @@ def update_admin_tournament_registration(
         registration_id=clean_registration_id,
         payload=update_payload,
         expected_updated_at=clean_expected_updated_at,
+        actor_email=actor_email,
     )
     selection_count = _selection_count_for_registration(supabase, tournament_id=clean_tournament_id, registration_id=clean_registration_id)
     registration = _registration_payload(updated, selection_count=selection_count)
@@ -1218,7 +1223,8 @@ def update_admin_tournament_registration(
         warnings.append(audit_write.warning)
     if not audit_write.ok and is_api_audit_log_required():
         raise RuntimeError("audit log write required but unavailable")
-    return {"ok": True, "mode": "tournament_registration_update", "registration": registration, "warnings": warnings}
+    return {"ok": True, "mode": "tournament_registration_update", "registration": registration,
+            "registration_removed": bool(updated.get("removed")), "warnings": warnings}
 
 
 def create_admin_tournament_selection(

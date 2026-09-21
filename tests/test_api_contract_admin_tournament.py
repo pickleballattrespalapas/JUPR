@@ -6,6 +6,7 @@ import pytest
 
 from jupr_app.domain.tournament_registration_repo import (
     ADMIN_SELECTION_UPDATE_RPC,
+    REGISTRATION_CANCEL_RPC,
     StaleTournamentRegistrationSelectionError,
     update_admin_registration_selection,
 )
@@ -35,6 +36,14 @@ class _FakeRpcQuery:
             raise self.client.rpc_error
         if self.client.rpc_result is not _DEFAULT_RPC_RESULT:
             return SimpleNamespace(data=self.client.rpc_result)
+        if self.name == REGISTRATION_CANCEL_RPC:
+            # The database transaction is exercised by the SQL rehearsal. This
+            # fake only returns its receipt so API tests verify the RPC boundary.
+            rows = {row["id"]: row for row in self.client.tables["tournament_registrations"]}
+            return SimpleNamespace(data={"ok": True, "registrations": [
+                {**rows[item["id"]], **item["patch"], "status": "cancelled", "removed": True}
+                for item in self.params["p_changes"]
+            ]})
         if self.name != ADMIN_SELECTION_UPDATE_RPC:
             raise RuntimeError(f"unsupported fake RPC: {self.name}")
 
@@ -908,9 +917,14 @@ def test_admin_tournament_bulk_registration_update_contract(monkeypatch):
     assert payload["registration_ids"] == ["registration_1"]
     assert payload["registrations"][0]["registration_status"] == "cancelled"
     assert payload["registrations"][0]["payment_status"] == "refunded"
-    assert tables["tournament_registrations"][0]["status"] == "cancelled"
-    assert tables["tournament_registrations"][0]["payment_status"] == "refunded"
-    assert tables["tournament_registrations"][0]["notes"] == "Original note\nBulk cancellation."
+    assert payload["registrations_removed"] is True
+    assert payload["registrations"][0]["notes"] == "Original note\nBulk cancellation."
+    assert supabase.rpc_calls == [(REGISTRATION_CANCEL_RPC, {
+        "p_tournament_id": "tour_1", "p_actor_email": "admin@example.com", "p_changes": [{
+            "id": "registration_1", "expected_updated_at": tables["tournament_registrations"][0]["updated_at"],
+            "patch": {"payment_status": "refunded", "notes": "Original note\nBulk cancellation."},
+        }],
+    })]
     assert tables["admin_activity_log"][0]["action_type"] == "bulk_update_tournament_registrations_admin"
     assert tables["admin_activity_log"][0]["flagged_for_review"] is True
 
@@ -1058,3 +1072,51 @@ def test_admin_tournament_registration_export_requires_manage_permission(monkeyp
     assert response.status_code == 403
     assert response.json()["detail"] == "insufficient permission"
     assert tables["admin_activity_log"][-1]["action_type"] == "admin_tournament_denied"
+
+
+@pytest.mark.parametrize("role", ["club_owner", "administrator", "super_admin"])
+def test_cancellation_returns_removal_receipt_from_atomic_rpc(monkeypatch, role):
+    from jupr_app.services.admin_tournament_service import update_admin_tournament_registration
+    tables = tournament_tables()
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    result = update_admin_tournament_registration(
+        supabase, club_id="club", tournament_id="tour_1", registration_id="registration_1",
+        patch={"registration_status": "cancelled"}, expected_updated_at=tables["tournament_registrations"][0]["updated_at"],
+        actor_email="admin@example.com", actor_role=role, confirmation_text="SAVE REGISTRATION",
+    )
+    assert result["registration_removed"] is True
+    assert len(supabase.rpc_calls) == 1
+    assert supabase.rpc_calls[0][0] == REGISTRATION_CANCEL_RPC
+    assert supabase.rpc_calls[0][1]["p_changes"][0]["id"] == "registration_1"
+
+
+@pytest.mark.parametrize("role", ["operator", "manager", "read_only"])
+def test_cancellation_requires_administrator_before_rpc(monkeypatch, role):
+    from jupr_app.services.admin_tournament_service import update_admin_tournament_registration
+    from jupr_app.services.admin_tournament_bulk_service import bulk_update_admin_tournament_registrations
+    tables = tournament_tables()
+    supabase = FakeSupabase(tables)
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    common = dict(club_id="club", tournament_id="tour_1", patch={"registration_status": "cancelled"},
+                  actor_email="operator@example.com", actor_role=role)
+    with pytest.raises(PermissionError, match="administrator"):
+        update_admin_tournament_registration(supabase, **common, registration_id="registration_1",
+            expected_updated_at=tables["tournament_registrations"][0]["updated_at"], confirmation_text="SAVE REGISTRATION")
+    with pytest.raises(PermissionError, match="administrator"):
+        bulk_update_admin_tournament_registrations(supabase, **common, registration_ids=["registration_1"],
+            confirmation_text="BULK UPDATE REGISTRATIONS")
+    assert supabase.rpc_calls == []
+
+
+def test_cancellation_database_conflict_returns_no_success(monkeypatch):
+    from jupr_app.services.admin_tournament_service import update_admin_tournament_registration
+    from jupr_app.domain.tournament_registration_repo import StaleTournamentRegistrationAdminError
+    tables = tournament_tables()
+    supabase = FakeSupabase(tables, rpc_error=RuntimeError("JUPR_CANCEL_CONFLICT: Changed while locking."))
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    with pytest.raises(StaleTournamentRegistrationAdminError):
+        update_admin_tournament_registration(supabase, club_id="club", tournament_id="tour_1", registration_id="registration_1",
+            patch={"registration_status": "cancelled"}, expected_updated_at=tables["tournament_registrations"][0]["updated_at"],
+            actor_email="admin@example.com", actor_role="club_owner", confirmation_text="SAVE REGISTRATION")
+    assert tables.get("admin_activity_log", []) == []

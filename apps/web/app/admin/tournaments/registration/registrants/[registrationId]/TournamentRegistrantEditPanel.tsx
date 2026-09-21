@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import { FormDialog, actionSuccess, InteractionActionError } from "@/components/interaction";
@@ -277,6 +278,7 @@ export default function TournamentRegistrantEditPanel({
   drawId,
   registrationId
 }: Props) {
+  const router = useRouter();
   const { accessToken, loading: sessionLoading } = useAdminSession();
   const [detail, setDetail] =
     useState<AdminTournamentDetailResponse | null>(null);
@@ -455,7 +457,7 @@ export default function TournamentRegistrantEditPanel({
     setBusy(true);
     setMessage(null);
     try {
-      await requestJson<AdminTournamentWriteResponse>(
+      const result = await requestJson<AdminTournamentWriteResponse>(
         `/admin/clubs/${encodeURIComponent(
           clubId
         )}/tournaments/admin/tournaments/${encodeURIComponent(
@@ -486,6 +488,13 @@ export default function TournamentRegistrantEditPanel({
           })
         }
       );
+      if (result.registration_removed) {
+        const completion = actionSuccess("Registration cancelled", "Registration removed. Remaining partners are now listed as needing a partner.");
+        if (actionRequest.isCurrent(generation)) {
+          router.replace(selectedHref("/admin/tournaments/registration/registrants", tournamentId, tournamentName, drawId));
+        }
+        return completion;
+      }
       const completion = actionSuccess("Registration saved", `${registration.display_name}'s registration and eligibility information were saved.`);
       if (!actionRequest.isCurrent(generation)) return completion;
       await loadDetail(selectedSelectionId);
@@ -1078,10 +1087,11 @@ export default function TournamentRegistrantEditPanel({
             </label>
             <p>
               <ConfirmAction
-                triggerLabel={busy ? "Saving…" : "Save registration"}
-                title="Save this registration update?"
-                description={`Update every editable registration detail for ${registration.display_name}. Eligibility-affecting changes are rechecked when event entries are saved and during Tournament Review.`}
-                confirmLabel="Yes, save registration"
+                triggerLabel={busy ? "Saving…" : registrationDraft.registrationStatus === "cancelled" ? "Cancel registration" : "Save registration"}
+                title={registrationDraft.registrationStatus === "cancelled" ? "Cancel and remove this registration?" : "Save this registration update?"}
+                description={registrationDraft.registrationStatus === "cancelled" ? "Remove this registration and all its event entries and partner connections. Remaining partners will need a partner. This player must register again to return." : `Update every editable registration detail for ${registration.display_name}. Eligibility-affecting changes are rechecked when event entries are saved and during Tournament Review.`}
+                confirmLabel={registrationDraft.registrationStatus === "cancelled" ? "Yes, cancel and remove" : "Yes, save registration"}
+                tone={registrationDraft.registrationStatus === "cancelled" ? "danger" : "default"}
                 confirmationText="SAVE REGISTRATION"
                 busy={busy}
                 onConfirm={saveRegistration}

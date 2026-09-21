@@ -7,11 +7,13 @@ from jupr_app.domain.tournament_registration_repo import (
     ADMIN_PAYMENT_STATUS_OPTIONS,
     ADMIN_REGISTRATION_STATUS_OPTIONS,
     update_admin_registration,
+    cancel_registrations_atomic,
     registration_is_imported_to_draw,
     StaleTournamentRegistrationAdminError,
 )
 from jupr_app.services.admin_tournament_service import (
     TOURNAMENT_SELECT,
+    CANCELLATION_ADMIN_ROLES,
     _clean_text,
     _fetch_registration_by_id,
     _first_row,
@@ -79,6 +81,9 @@ def bulk_update_admin_tournament_registrations(
         raise ValueError("No more than 100 registrations can be updated at once.")
 
     common_payload = _bulk_update_payload(patch)
+    cancelling = common_payload.get("status") == "cancelled"
+    if cancelling and str(actor_role).strip().lower() not in CANCELLATION_ADMIN_ROLES:
+        raise PermissionError("Only an administrator can cancel and remove registrations.")
     note_text = _clean_text(patch.get("append_note"), limit=1000)
     if not common_payload and not note_text:
         raise ValueError("Choose a registration status, payment status, or note to apply.")
@@ -129,6 +134,17 @@ def bulk_update_admin_tournament_registrations(
     after_payloads: list[dict[str, Any]] = []
     updated_ids: list[str] = []
     skipped: list[str] = []
+    removed_by_id: dict[str, dict[str, Any]] = {}
+    if cancelling:
+        changes = []
+        for registration_id, before in before_by_id.items():
+            cancellation_patch = {key: value for key, value in common_payload.items() if key == "payment_status"}
+            if note_text:
+                cancellation_patch["notes"] = "\n".join(filter(None, [_clean_text(before.get("notes"), limit=2000), note_text]))[:2000]
+            changes.append({"id": registration_id, "expected_updated_at": before.get("updated_at"), "patch": cancellation_patch})
+        if changes:
+            removed_by_id = {row["id"]: row for row in cancel_registrations_atomic(
+                supabase, tournament_id=clean_tournament_id, changes=changes, actor_email=actor_email)}
     for registration_id in ids:
         before = before_by_id.get(registration_id)
         if before is None:
@@ -138,7 +154,7 @@ def bulk_update_admin_tournament_registrations(
         if note_text:
             existing_note = _clean_text(before.get("notes"), limit=2000)
             update_payload["notes"] = f"{existing_note}\n{note_text}".strip() if existing_note else note_text
-        updated = update_admin_registration(
+        updated = removed_by_id[registration_id] if cancelling else update_admin_registration(
             supabase,
             tournament_id=clean_tournament_id,
             registration_id=registration_id,
@@ -186,4 +202,5 @@ def bulk_update_admin_tournament_registrations(
         "registrations": after_payloads,
         "skipped": skipped,
         "warnings": warnings,
+        "registrations_removed": cancelling,
     }
