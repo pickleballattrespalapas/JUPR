@@ -491,6 +491,8 @@ def test_every_communications_route_has_an_independent_service_guard() -> None:
     ("public-intake-auth", "POST", "/public/interclub-player-response/review"),
     ("public-intake-auth", "POST", "/public/interclub-player-response/respond"),
     ("admin-tools", "PUT", "/admin/clubs/alpha/interclub/registrations/season/pool"),
+    ("admin-tools", "POST", "/admin/clubs/alpha/interclub/registrations/season/pool/bulk-preview"),
+    ("admin-tools", "POST", "/admin/clubs/alpha/interclub/registrations/season/pool/bulk-add"),
     ("admin-tools", "PATCH", "/admin/clubs/alpha/interclub/registrations/season/pool/members/member"),
     ("admin-tools", "PUT", "/admin/clubs/alpha/interclub/registrations/season/meets/meet/availability"),
     ("communications", "POST", "/admin/clubs/alpha/interclub/player-pools/season/emails/preview"),
