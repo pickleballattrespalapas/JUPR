@@ -58,6 +58,30 @@ def test_delete_removes_only_reviewed_draft_and_audits_before_after(workspace):
     assert delete(client).status_code == 409
 
 
+def test_browser_preflight_allows_draft_delete_only_from_configured_origin(workspace):
+    from starlette.middleware.cors import CORSMiddleware
+
+    db, client = workspace
+    cors = next(middleware for middleware in app.user_middleware if middleware.cls is CORSMiddleware)
+    origin = cors.kwargs["allow_origins"][0]
+    before = deepcopy(db.tables["weekly_recaps"])
+    headers = {
+        "Origin": origin,
+        "Access-Control-Request-Method": "DELETE",
+        "Access-Control-Request-Headers": "authorization,content-type",
+    }
+    response = client.options(DELETE_URL, headers=headers)
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == origin
+    assert "DELETE" in response.headers["access-control-allow-methods"].split(", ")
+    assert "authorization" in response.headers["access-control-allow-headers"].lower()
+    assert db.tables["weekly_recaps"] == before
+    denied = client.options(DELETE_URL, headers={**headers, "Origin": "https://untrusted.invalid"})
+    assert denied.status_code == 400
+    assert "access-control-allow-origin" not in denied.headers
+    assert db.tables["weekly_recaps"] == before
+
+
 @pytest.mark.parametrize("role", ["administrator", "club_owner", "super_admin"])
 def test_administrator_roles_can_delete_and_list_exposes_capability(monkeypatch, workspace, role):
     _, client = workspace
