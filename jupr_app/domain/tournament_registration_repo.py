@@ -99,6 +99,7 @@ class TournamentRegistrationRelationshipLockedError(ValueError):
 
 
 ADMIN_SELECTION_UPDATE_RPC = "admin_update_tournament_registration_selection"
+REGISTRATION_CANCEL_RPC = "server_cancel_tournament_registrations"
 ADMIN_SELECTION_DELETE_RPC = "admin_delete_tournament_registration_selection"
 PUBLIC_REGISTRATION_EDIT_RPC = "server_update_public_tournament_registration_edit"
 PUBLIC_REGISTRATION_CANONICAL_CREATE_RPC = (
@@ -2623,19 +2624,9 @@ def update_registration_admin_fields(
     payload = {
         "status": clean_status,
         "payment_status": clean_payment_status,
-        "updated_at": _now_iso(),
     }
-    resp = (
-        supabase.table("tournament_registrations")
-        .update(payload)
-        .eq("tournament_id", str(tournament_id))
-        .eq("id", str(registration_id))
-        .execute()
-    )
-    updated = _safe_first(resp)
-    if not updated:
-        raise ValueError("Registration not found for this tournament.")
-    return updated
+    return update_admin_registration(supabase, tournament_id=tournament_id,
+                                     registration_id=registration_id, payload=payload)
 
 
 def create_admin_registration(supabase, *, tournament_id: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -2654,6 +2645,7 @@ def update_admin_registration(
     registration_id: str,
     payload: dict[str, Any],
     expected_updated_at: str | None = None,
+    actor_email: str = "legacy-admin",
 ) -> dict[str, Any]:
     clean_payload: dict[str, Any] = {}
     text_limits = {
@@ -2734,6 +2726,18 @@ def update_admin_registration(
             raise ValueError("Another registration already uses that email.")
     if not clean_payload:
         raise ValueError("No supported registration fields were provided.")
+
+    if clean_payload.get("status") == "cancelled":
+        if expected_updated_at is None:
+            existing = _safe_first(supabase.table("tournament_registrations").select("updated_at")
+                .eq("tournament_id", str(tournament_id)).eq("id", str(registration_id)).execute())
+            if not existing:
+                raise ValueError("Registration not found for this tournament.")
+            expected_updated_at = existing.get("updated_at")
+        return cancel_registrations_atomic(supabase, tournament_id=tournament_id, changes=[{
+            "id": str(registration_id), "expected_updated_at": expected_updated_at,
+            "patch": {key: value for key, value in clean_payload.items() if key in {"notes", "payment_status"}},
+        }], actor_email=actor_email)[0]
 
     clean_payload["updated_at"] = _now_iso()
     query = (
@@ -3117,23 +3121,34 @@ def cancel_registration(supabase, *, tournament_id: str, registration_id: str) -
     )
 
 
+def cancel_registrations_atomic(supabase, *, tournament_id: str, changes: list[dict[str, Any]],
+                                actor_email: str) -> list[dict[str, Any]]:
+    """Remove registrations and their partnerships in one guarded transaction."""
+    try:
+        response = supabase.rpc(REGISTRATION_CANCEL_RPC, {
+            "p_tournament_id": str(tournament_id), "p_changes": changes, "p_actor_email": actor_email,
+        }).execute()
+    except Exception as exc:
+        if _database_error_contains(exc, "JUPR_CANCEL_CONFLICT"):
+            raise StaleTournamentRegistrationAdminError("Registration changed. Refresh and try again.") from exc
+        if _database_error_contains(exc, "JUPR_CANCEL_IMPORTED"):
+            raise ValueError("Registration is already imported into a draw. Remove the affected draw team in Tournament Ops first.") from exc
+        if _database_error_contains(exc, "JUPR_CANCEL_CAPTAIN"):
+            raise ValueError("Assign a new four-player team captain before cancelling this registration.") from exc
+        if _database_error_contains(exc, REGISTRATION_COMMERCE_FULFILLED_CANCEL_MARKER):
+            raise ValueError("This registration has fulfilled extras. Resolve fulfillment before cancelling the registration.") from exc
+        raise
+    result = getattr(response, "data", None)
+    if not isinstance(result, dict) or result.get("ok") is not True:
+        raise RuntimeError("Registration cancellation did not complete. Refresh and try again.")
+    rows = result.get("registrations")
+    if not isinstance(rows, list) or {str(row.get("id")) for row in rows} != {str(row.get("id")) for row in changes}:
+        raise RuntimeError("Registration cancellation returned an incomplete receipt.")
+    return rows
+
+
 def delete_registration(supabase, *, tournament_id: str, registration_id: str) -> None:
-    if registration_is_imported_to_draw(supabase, tournament_id=str(tournament_id), registration_id=str(registration_id)):
-        raise ValueError("Registration is already imported into a draw. Remove the draw team first.")
-    (
-        supabase.table("tournament_registration_selections")
-        .delete()
-        .eq("tournament_id", str(tournament_id))
-        .eq("registration_id", str(registration_id))
-        .execute()
-    )
-    (
-        supabase.table("tournament_registrations")
-        .delete()
-        .eq("tournament_id", str(tournament_id))
-        .eq("id", str(registration_id))
-        .execute()
-    )
+    cancel_registration(supabase, tournament_id=tournament_id, registration_id=registration_id)
 
 
 def list_registration_selections(supabase, tournament_id: str) -> list[dict[str, Any]]:

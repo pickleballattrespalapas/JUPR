@@ -163,7 +163,7 @@ export default function TournamentRegistrationEditorPanel({ apiBase, clubId, sta
     setBusy(true);
     setMessage(null);
     try {
-      await requestJson<AdminTournamentWriteResponse>(
+      const result = await requestJson<AdminTournamentWriteResponse>(
         `/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/registrations/${encodeURIComponent(selectedRegistration.id)}`,
         {
           method: "PATCH",
@@ -177,10 +177,10 @@ export default function TournamentRegistrationEditorPanel({ apiBase, clubId, sta
           })
         }
       );
-      const completion = actionSuccess("Registration saved", `${selectedRegistration.display_name}'s registration and payment status were updated.`);
+      const completion = result.registration_removed ? actionSuccess("Registration cancelled", "Registration and partner connections removed.") : actionSuccess("Registration saved", `${selectedRegistration.display_name}'s registration and payment status were updated.`);
       if (!actionRequest.isCurrent(generation)) return completion;
-      await loadDetail(selectedRegistration.id, selectedSelectionId);
-      if (actionRequest.isCurrent(generation)) setMessage("Registration saved.");
+      await loadDetail(result.registration_removed ? "" : selectedRegistration.id, result.registration_removed ? "" : selectedSelectionId);
+      if (actionRequest.isCurrent(generation)) setMessage(result.registration_removed ? "Registration cancelled and removed." : "Registration saved.");
       return completion;
     } catch (error) {
       if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to save registration.");
@@ -256,7 +256,7 @@ export default function TournamentRegistrationEditorPanel({ apiBase, clubId, sta
                 <label><strong>Payment status</strong><br /><select value={registrationDraft.paymentStatus} onChange={(event) => setRegistrationDraft((current) => ({ ...current, paymentStatus: event.target.value }))} style={inputStyle}>{PAYMENT_STATUS_OPTIONS.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
               </div>
               <label style={{ display: "block", marginTop: "0.75rem" }}><strong>Admin notes</strong><br /><textarea value={registrationDraft.notes} onChange={(event) => setRegistrationDraft((current) => ({ ...current, notes: event.target.value }))} rows={3} style={inputStyle} /></label>
-              <p><ConfirmAction triggerLabel={busy ? "Saving…" : "Save registration"} title="Save this registration update?" description={`Update ${selectedRegistration.display_name}'s registration and offline payment status.`} confirmLabel="Yes, save registration" confirmationText="SAVE REGISTRATION" busy={busy} onConfirm={saveRegistration} /></p>
+              <p><ConfirmAction triggerLabel={busy ? "Saving…" : "Save registration"} title={registrationDraft.registrationStatus === "cancelled" ? "Cancel and remove this registration?" : "Save this registration update?"} description={registrationDraft.registrationStatus === "cancelled" ? "Remove this registration, all event entries and partner connections. Remaining partners will need a partner. Returning players must register again." : `Update ${selectedRegistration.display_name}'s registration and offline payment status.`} confirmLabel={registrationDraft.registrationStatus === "cancelled" ? "Yes, cancel and remove" : "Yes, save registration"} tone={registrationDraft.registrationStatus === "cancelled" ? "danger" : "default"} confirmationText="SAVE REGISTRATION" busy={busy} onConfirm={saveRegistration} /></p>
             </article>
           ) : null}
 
