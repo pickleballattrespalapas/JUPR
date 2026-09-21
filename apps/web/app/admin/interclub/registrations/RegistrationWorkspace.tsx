@@ -6,24 +6,26 @@ import { getAdminApiBaseUrl } from "@/lib/adminAuthClient";
 import { useAdminSession } from "@/lib/useAdminSession";
 import { useAdminWorkspace } from "@/lib/useAdminWorkspace";
 import { InterclubTeam, MeetRegistrationDetail, RegistrationDetail, RegistrationSeason, RosterVersion, apiError, composition, rosterStatus } from "@/lib/interclubRegistration";
+import { emptyRule } from "@/lib/interclubSetup";
 import styles from "./registrations.module.css";
 import { SeasonPlayerPool, MeetAvailability } from "./PlayerPoolPanels";
 import SeasonEligibilityApprovals from "./SeasonEligibilityApprovals";
+import InterclubWorkflow, { RegistrationStep, workflowHref } from "../InterclubWorkflow";
 
 function loadErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && !(error instanceof TypeError) && !(error instanceof SyntaxError) ? error.message : fallback;
 }
 
-export default function RegistrationWorkspace({ initialSeasonId }: { initialSeasonId: string }) {
+export default function RegistrationWorkspace({ initialSeasonId, initialMeetId = "", initialStep = "pool" }: { initialSeasonId: string; initialMeetId?: string; initialStep?: RegistrationStep }) {
   const { session, accessToken, loading } = useAdminSession();
   const { clubId } = useAdminWorkspace();
   const canManage = session?.capabilities?.assignments.some(a => a.club_id === clubId && ["administrator", "club_owner", "super_admin"].includes(a.role));
   if (loading) return <p>Checking club access…</p>;
   if (!canManage) return <p>Sign in as a club administrator to manage participation and rosters. <Link href="/admin/login">Sign in</Link></p>;
-  return <ClubRegistrations key={`${clubId}:${session?.user?.id || session?.user?.email}`} clubId={clubId} accessToken={accessToken} initialSeasonId={initialSeasonId} />;
+  return <ClubRegistrations key={`${clubId}:${session?.user?.id || session?.user?.email}`} clubId={clubId} accessToken={accessToken} initialSeasonId={initialSeasonId} initialMeetId={initialMeetId} initialStep={initialStep} />;
 }
 
-function ClubRegistrations({ clubId, accessToken, initialSeasonId }: { clubId: string; accessToken: string; initialSeasonId: string }) {
+function ClubRegistrations({ clubId, accessToken, initialSeasonId, initialMeetId, initialStep }: { clubId: string; accessToken: string; initialSeasonId: string; initialMeetId: string; initialStep: RegistrationStep }) {
   const api = getAdminApiBaseUrl();
   const [seasons, setSeasons] = useState<RegistrationSeason[]>([]);
   const [selected, setSelected] = useState(initialSeasonId);
@@ -45,7 +47,8 @@ function ClubRegistrations({ clubId, accessToken, initialSeasonId }: { clubId: s
   }, [api, clubId, reload]);
   return <section className={styles.page}>
     <p className={styles.back}><Link href="/admin/interclub">← Interclub leagues</Link></p>
-    <h1>Club invitations &amp; rosters</h1>
+    <h1>League workspace</h1>
+    <p>Build your club’s player pool, check availability, and choose a lineup for each meet.</p>
     <div className={styles.toolbar}>
       <label>Season <select value={selected} onChange={e => setSelected(e.target.value)} disabled={!loaded}>
         {!seasons.length && <option value="">{loading ? "Loading invitations…" : loaded ? "No open invitations" : "Choose a season"}</option>}
@@ -56,11 +59,11 @@ function ClubRegistrations({ clubId, accessToken, initialSeasonId }: { clubId: s
     {error && <p role="alert">{error}</p>}
     {loading && <p role="status">Loading club invitations…</p>}
     {loaded && !seasons.length && <p>Your club has no season invitations yet. Organizers open invitations from a saved season plan.</p>}
-    {loaded && selected && api && <SeasonRegistration key={`${selected}:${reload}`} api={api} clubId={clubId} accessToken={accessToken} seasonId={selected} />}
+    {loaded && selected && api && <SeasonRegistration key={`${selected}:${reload}`} api={api} clubId={clubId} accessToken={accessToken} seasonId={selected} initialMeetId={selected === initialSeasonId ? initialMeetId : ""} initialStep={initialStep} />}
   </section>;
 }
 
-function SeasonRegistration({ api, clubId, accessToken, seasonId }: { api: string; clubId: string; accessToken: string; seasonId: string }) {
+function SeasonRegistration({ api, clubId, accessToken, seasonId, initialMeetId, initialStep }: { api: string; clubId: string; accessToken: string; seasonId: string; initialMeetId: string; initialStep: RegistrationStep }) {
   const root = `${api}/admin/clubs/${encodeURIComponent(clubId)}/interclub/registrations/${seasonId}`;
   const token = useRef(accessToken); token.current = accessToken;
   const [data, setData] = useState<RegistrationDetail | null>(null);
@@ -70,8 +73,9 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId }: { api: strin
   const [busy, setBusy] = useState(false);
   const [blocked, setBlocked] = useState(false);
   const [reload, setReload] = useState(0);
-  const [selectedMeet, setSelectedMeet] = useState("");
-  const [showPool, setShowPool] = useState(false);
+  const [selectedMeet, setSelectedMeet] = useState(initialMeetId);
+  const [step, setStep] = useState<RegistrationStep>(initialStep);
+  const stepFocus = useRef(false);
   const poolSection = useRef<HTMLElement | null>(null);
   const [responding, setResponding] = useState<"accept" | "decline" | null>(null);
   const responseFocus = useRef(false), confirmation = useRef<HTMLHeadingElement | null>(null), rosters = useRef<HTMLElement | null>(null);
@@ -84,18 +88,21 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId }: { api: strin
   }, [data?.own_participation?.status]);
   useEffect(() => () => { mutation.current?.abort(); }, [root]);
   useEffect(() => {
-    if (showPool) { poolSection.current?.focus({ preventScroll: true }); poolSection.current?.scrollIntoView({ block: "start" }); }
-  }, [showPool]);
+    if (!stepFocus.current) return;
+    const section = step === "pool" ? poolSection.current : rosters.current;
+    section?.focus({ preventScroll: true }); section?.scrollIntoView({ block: "start" });
+    stepFocus.current = false;
+  }, [step]);
   useEffect(() => {
     const controller = new AbortController(); setData(null); setLoading(true); setLoadError(""); setBlocked(false);
     fetch(root, { headers: { Authorization: `Bearer ${token.current}` }, cache: "no-store", signal: controller.signal })
       .then(async response => {
         const next = await response.json(); if (!response.ok) throw new Error(apiError(next, "Unable to load this season."));
-        if (!controller.signal.aborted) { setData(next); setSelectedMeet(old => next.meets.some((m: { id: string }) => m.id === old) ? old : next.meets.find((m: { roster_open: boolean }) => m.roster_open)?.id || next.meets[0]?.id || ""); }
+        if (!controller.signal.aborted) { setData(next); setSelectedMeet(old => next.meets.some((m: { id: string }) => m.id === old) ? old : next.meets.find((m: { roster_open: boolean; club_ids: string[] }) => m.roster_open && m.club_ids.includes(clubId))?.id || next.meets.find((m: { roster_open: boolean }) => m.roster_open)?.id || next.meets[0]?.id || ""); }
       }).catch(e => { if (!controller.signal.aborted) setLoadError(loadErrorMessage(e, "Unable to load this season. Try again.")); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [root, reload]);
+  }, [root, reload, clubId]);
 
   async function change(path: string, method: string, body: object, success: string, participationAction?: "accept" | "decline"): Promise<boolean> {
     if (pending.current || blocked) return false;
@@ -139,12 +146,9 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId }: { api: strin
   const date = (value: string) => new Date(`${value}T12:00:00Z`).toLocaleDateString(undefined, { timeZone: "UTC", dateStyle: "medium" });
   const status = data?.own_participation?.status;
   const showRosters = data?.is_organizer || status === "accepted";
+  const activeStep = status !== "accepted" && step !== "lineups" ? "lineups" : step;
   const nextMeet = data?.meets.find(meet => meet.roster_open && meet.club_ids.includes(clubId));
-  function prepareRoster() {
-    if (nextMeet) setSelectedMeet(nextMeet.id);
-    rosters.current?.focus({ preventScroll: true });
-    rosters.current?.scrollIntoView({ block: "start" });
-  }
+  function selectStep(value: RegistrationStep) { stepFocus.current = true; setStep(value); }
   return <>
     {loadError && <p role="alert" className={styles.notice}>{loadError}</p>}
     {message && <p role="status" className={styles.notice}>{message}</p>}
@@ -154,8 +158,10 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId }: { api: strin
       <header className={styles.seasonHeader}>
         <h2>{data.season.details.name}</h2>
         <p>{date(data.season.details.start_date)} – {date(data.season.details.end_date)} · Organized by {clubName(data.season.organizer_club_id)}</p>
-        {showRosters && <p><Link className={styles.button} href={`/admin/interclub/competition?season=${encodeURIComponent(seasonId)}`}>Meet schedules, score sheets & results →</Link></p>}
       </header>
+      {showRosters && <InterclubWorkflow seasonId={seasonId} meetId={selectedMeet} current={activeStep}
+        unavailable={status === "accepted" ? [] : ["pool", "availability"]}
+        onSelect={value => selectStep(value as RegistrationStep)} />}
       {status === "invited" && <section className={`${styles.card} ${styles.invitation}`} aria-labelledby="invitation-title">
         <p className={styles.eyebrow}>Invitation to your club</p>
         <h3 id="invitation-title">{clubName(clubId)} is invited</h3>
@@ -166,20 +172,18 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId }: { api: strin
         </div>
         <p className={styles.muted}>No player roster is required to accept.</p>
       </section>}
-      {status === "accepted" && <section className={`${styles.card} ${styles.success}`} aria-labelledby="participation-confirmed">
+      {status === "accepted" && <section hidden={activeStep !== "pool"} className={`${styles.card} ${styles.success}`} aria-labelledby="participation-confirmed">
         <p className={styles.eyebrow}>Invitation accepted</p>
         <h3 id="participation-confirmed" ref={confirmation} tabIndex={-1}>{clubName(clubId)} has joined</h3>
         <p>Your place in {data.season.details.name} is confirmed. Invite players to your season pool, ask who is available for each meet, then choose that meet’s lineup.</p>
         <div className={styles.toolbar}>
-          <button className={styles.primary} onClick={() => setShowPool(true)}>Build season player pool</button>
-          {data.meets.length > 0 && <button onClick={prepareRoster}>{nextMeet ? "Prepare meet roster" : "View meet rosters"}</button>}
+          {data.meets.length > 0 && <button onClick={() => { if (nextMeet) setSelectedMeet(nextMeet.id); selectStep("availability"); }}>Next: check meet availability</button>}
         </div>
         {nextMeet && <p><strong>Next meet:</strong> {when(nextMeet.starts_at)} · {clubName(nextMeet.host_club_id)}</p>}
         {!data.meets.length && <p>The organizer will share your meet schedule here.</p>}
       </section>}
-      {status === "accepted" && showPool && <section ref={poolSection} tabIndex={-1} className={styles.rosters} aria-label="Season player pool workspace">
+      {status === "accepted" && <section id="season-player-pool" hidden={activeStep !== "pool"} ref={poolSection} tabIndex={-1} className={styles.rosters} aria-label="Season player pool workspace">
         <SeasonPlayerPool root={root} accessToken={accessToken} clubName={clubName(clubId)} season={data.season} />
-        <button onClick={() => setShowPool(false)}>Close player pool</button>
       </section>}
       {status && !["invited", "accepted"].includes(status) && <section className={styles.card}>
         <h3 ref={confirmation} tabIndex={-1}>{status === "declined" ? "Invitation declined" : "Invitation cancelled"}</h3>
@@ -190,9 +194,28 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId }: { api: strin
         <p>Meet times are shown in {data.season.details.timezone}.</p>
         {data.meets.length ? <ul className={styles.schedule}>{data.meets.map(meet => <li key={meet.id}><strong>{when(meet.starts_at)}</strong><span>Hosted by {clubName(meet.host_club_id)}</span></li>)}</ul> : <p>No meets are scheduled for your club yet.</p>}
       </details>}
+      {showRosters && <section id="meet-rosters" hidden={activeStep === "pool"} ref={rosters} tabIndex={-1} className={styles.rosters} aria-label="Meet rosters">
+        <h3>{activeStep === "availability" ? "Meet availability" : "Lineups"}</h3>
+        <p>{activeStep === "availability" ? "Ask players from your season pool who can attend this meet. Joining the pool does not confirm availability." : "Choose a meet, then add a team with four available players. Your lineup can change from one meet to the next."}</p>
+        {!data.meets.length ? <p>No meets are scheduled for your club in this season.</p> : <>
+          <label>Meet <select aria-label="Meet" value={selectedMeet} onChange={e => setSelectedMeet(e.target.value)}>
+            {data.meets.map(meet => <option key={meet.id} value={meet.id}>{when(meet.starts_at)} · {clubName(meet.host_club_id)}{meet.roster_open ? "" : " · History"}</option>)}
+          </select></label>
+          {selectedMeet && <MeetRegistration key={selectedMeet} root={`${root}/meets/${selectedMeet}`} accessToken={accessToken} clubId={clubId} seasonData={data} step={activeStep} onStep={selectStep} />}
+        </>}
+        {data.teams.length > 0 && <details className={styles.card}><summary>Earlier season submissions (reference only)</summary>
+          <p>These were submitted before rosters moved to individual meets. Choose players again for each upcoming meet.</p>
+          {data.teams.map(team => <TeamCard key={`${team.id}:${team.revision}`} team={team} clubName={clubName(team.club_id)} root={root} accessToken={accessToken} own={false} organizer={false} disabled={true}
+            edit={() => {}} withdraw={async () => false} decide={async () => false} />)}
+          {data.next_team_offset !== null && <button disabled={disabled} onClick={() => void moreTeams()}>Load earlier submissions</button>}
+        </details>}
+      </section>}
       <details className={styles.card}><summary>Divisions and eligibility rules</summary>
-        <div className={styles.scroll}><table className={styles.table}><caption>Season eligibility rules</caption><thead><tr><th>Division</th><th>Minimum rating</th><th>Maximum rating</th><th>Team</th></tr></thead><tbody>
-          {Object.entries(data.season.rules).map(([division, rule]) => <tr key={division}><td>{division}</td><td>{rule.min_rating ?? "No minimum"}</td><td>{rule.max_rating ?? "No maximum"}</td><td>{composition(rule)}</td></tr>)}
+        <div className={styles.scroll}><table className={styles.table}><caption>Season eligibility rules</caption><thead><tr><th>Division</th><th>League rating</th><th>Team</th></tr></thead><tbody>
+          {[...data.season.details.divisions].sort((a, b) => Number.parseFloat(a) - Number.parseFloat(b) || a.localeCompare(b, undefined, { numeric: true })).map(division => {
+            const rule = emptyRule(division);
+            return <tr key={division}><td>{division}</td><td>{rule.min_rating == null ? "Rating eligibility unavailable" : `${rule.min_rating.toFixed(1)} ${rule.max_rating == null ? "and above" : `to below ${(rule.min_rating + 0.5).toFixed(1)}`}`}</td><td>{composition(rule)}</td></tr>;
+          })}
         </tbody></table></div>
         <p>Interclub ratings start from the represented club’s rating, then change with approved league results. Each meet locks the player’s league rating at its roster deadline. Players move to the skill level matching that rating, and every team has two women and two men.</p>
       </details>
@@ -205,28 +228,15 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId }: { api: strin
           {["declined", "cancelled"].includes(p.status) && <button disabled={disabled} onClick={() => void change(`/participations/${encodeURIComponent(p.club_id)}`, "POST", { action: "reinvite", expected_revision: p.revision }, "Club invited again.")}>Invite again</button>}
         </td></tr>)}
       </tbody></table></div></section>}
-      {showRosters && <section id="meet-rosters" ref={rosters} tabIndex={-1} className={styles.rosters} aria-label="Meet rosters">
-        <h3>Meet rosters</h3>
-        <p>Choose a meet, then add a team with four available players. Your lineup can change from one meet to the next.</p>
-        {!data.meets.length ? <p>No meets are scheduled for your club in this season.</p> : <>
-          <label>Meet <select aria-label="Meet" value={selectedMeet} onChange={e => setSelectedMeet(e.target.value)}>
-            {data.meets.map(meet => <option key={meet.id} value={meet.id}>{when(meet.starts_at)} · {clubName(meet.host_club_id)}{meet.roster_open ? "" : " · History"}</option>)}
-          </select></label>
-          {selectedMeet && <MeetRegistration key={selectedMeet} root={`${root}/meets/${selectedMeet}`} accessToken={accessToken} clubId={clubId} seasonData={data} />}
-        </>}
-        {data.teams.length > 0 && <details className={styles.card}><summary>Earlier season submissions (reference only)</summary>
-          <p>These were submitted before rosters moved to individual meets. Choose players again for each upcoming meet.</p>
-          {data.teams.map(team => <TeamCard key={`${team.id}:${team.revision}`} team={team} clubName={clubName(team.club_id)} root={root} accessToken={accessToken} own={false} organizer={false} disabled={true}
-            edit={() => {}} withdraw={async () => false} decide={async () => false} />)}
-          {data.next_team_offset !== null && <button disabled={disabled} onClick={() => void moreTeams()}>Load earlier submissions</button>}
-        </details>}
-      </section>}
       {!blocked && <div className={styles.toolbar}><button disabled={busy || loading} onClick={() => { setMessage(""); setReload(n => n + 1); }}>Reload season</button></div>}
     </>}
   </>;
 }
 
-function MeetRegistration({ root, accessToken, clubId, seasonData }: { root: string; accessToken: string; clubId: string; seasonData: RegistrationDetail }) {
+function MeetRegistration({ root, accessToken, clubId, seasonData, step, onStep }: {
+  root: string; accessToken: string; clubId: string; seasonData: RegistrationDetail;
+  step: RegistrationStep; onStep: (step: RegistrationStep) => void;
+}) {
   const token = useRef(accessToken); token.current = accessToken;
   const [data, setData] = useState<MeetRegistrationDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -236,9 +246,10 @@ function MeetRegistration({ root, accessToken, clubId, seasonData }: { root: str
   const [blocked, setBlocked] = useState(false);
   const [reload, setReload] = useState(0);
   const [editor, setEditor] = useState<{ team: InterclubTeam | null } | null>(null);
-  const [showAvailability, setShowAvailability] = useState(false);
+  const [availabilityVisited, setAvailabilityVisited] = useState(step === "availability");
   const [responses, setResponses] = useState<{ member_id: string; player_id: string | null; name: string; status: string; member_status?: string }[] | null>(null);
   const pending = useRef(false), mutation = useRef<AbortController | null>(null);
+  useEffect(() => { if (step === "availability") setAvailabilityVisited(true); }, [step]);
   useEffect(() => () => { mutation.current?.abort(); }, [root]);
   useEffect(() => {
     const controller = new AbortController(); setData(null); setLoading(true); setLoadError(""); setEditor(null); setBlocked(false);
@@ -296,26 +307,36 @@ function MeetRegistration({ root, accessToken, clubId, seasonData }: { root: str
       <p>Roster deadline for this meet: {when(data.meet.roster_deadline)} ({seasonData.season.details.timezone}).</p>
       {data.meet.roster_open ? <p>Valid substitutions are allowed after the deadline, until this meet starts. A new team submitted after the deadline needs an organizer exception.</p>
         : <p>This meet has started. Its rosters and decisions are available as history.</p>}
-      {seasonData.is_organizer && data.meet.deadline_editable && <form className={styles.card} onSubmit={e => { e.preventDefault(); void change("/deadline", "PUT", { expected_revision: data.meet.revision, roster_deadline: new Date(deadline).toISOString() }, "Meet roster deadline saved."); }}>
+      {seasonData.is_organizer && data.meet.deadline_editable && <details className={styles.card}><summary>Change this meet’s roster deadline</summary><form onSubmit={e => { e.preventDefault(); void change("/deadline", "PUT", { expected_revision: data.meet.revision, roster_deadline: new Date(deadline).toISOString() }, "Meet roster deadline saved."); }}>
         <label>Roster deadline (your device’s local time) <input required disabled={disabled} type="datetime-local" value={deadline} onChange={e => setDeadline(e.target.value)} /></label>
         <p>The default is the meet’s start time. Set an earlier deadline before the first team submits.</p>
         <button disabled={disabled || !deadline} type="submit">Save meet deadline</button>
-      </form>}
-      {ownMeet && <>
-        <button aria-expanded={showAvailability} onClick={() => setShowAvailability(value => !value)}>{showAvailability ? "Hide player availability" : "Invite players & view availability"}</button>
-        {showAvailability && <MeetAvailability meetRoot={root} accessToken={accessToken} clubName={clubName(clubId)} season={seasonData.season} meet={data.meet} onResponses={setResponses} />}
-      </>}
+      </form></details>}
+      <div hidden={step !== "availability"}>
+        {ownMeet ? <>
+          <p className={styles.notice}>Players who confirmed verbally or by email can go straight into your lineup, even without an email address. Sending availability invitations is optional. <button onClick={() => onStep("lineups")}>Choose lineups now</button></p>
+          {availabilityVisited && <MeetAvailability meetRoot={root} accessToken={accessToken} clubName={clubName(clubId)} season={seasonData.season} meet={data.meet} onResponses={setResponses} />}
+          <div className={styles.toolbar}><button className={styles.primary} onClick={() => onStep("lineups")}>Next: choose lineups</button></div>
+        </> : <p>Your club is not participating in this meet. Each participating club manages its own player availability. <button onClick={() => onStep("lineups")}>View meet lineups</button></p>}
+      </div>
+      <div hidden={step !== "lineups"}>
       {ownMeet && data.meet.roster_open && <button disabled={disabled} onClick={() => setEditor({ team: null })}>Add a team for this meet</button>}
-      {editor && <RosterEditor key={editor.team ? `${editor.team.id}:${editor.team.revision}` : "new"} root={root} accessToken={accessToken} clubName={clubName(clubId)} divisions={seasonData.season.details.divisions} team={editor.team} disabled={disabled}
+      {editor && <RosterEditor key={editor.team ? `${editor.team.id}:${editor.team.revision}` : "new"} root={root} accessToken={accessToken} clubName={clubName(clubId)} divisions={[...seasonData.season.details.divisions].sort((a, b) => Number.parseFloat(a) - Number.parseFloat(b) || a.localeCompare(b, undefined, { numeric: true }))} team={editor.team} disabled={disabled}
         responses={responses} allowMissingPairing={(data.meet.competition_phase || "regular") === "regular"}
         cancel={() => setEditor(null)} save={(id, body) => change(`/teams/${id}`, "PUT", { ...body, ...revision }, "Roster submitted for this meet.")} />}
       <h4>{seasonData.is_organizer ? "Teams for this meet" : "Your club’s teams for this meet"}</h4>
-      {!data.teams.length && <p>No teams submitted for this meet yet.</p>}
+      {!data.teams.length && <p>No teams submitted for this meet yet. {ownMeet ? "Add a team above using the players who can attend." : "Each participating club needs to submit its lineup before the host can prepare pairings."}</p>}
       {data.teams.map(team => <TeamCard key={`${team.id}:${team.revision}:${team.status}`} team={team} clubName={clubName(team.club_id)} root={root} accessToken={accessToken} own={ownMeet && team.club_id === clubId && data.meet.roster_open} organizer={seasonData.is_organizer && data.meet.roster_open} disabled={disabled}
         edit={() => setEditor({ team })}
         withdraw={() => change(`/teams/${team.id}/withdraw`, "POST", { expected_revision: team.revision, ...revision }, "Team withdrawn from this meet. Earlier rosters remain in its history.")}
         decide={(approve, reason) => change(`/teams/${team.id}/eligibility`, "POST", { expected_revision: team.revision, ...revision, approve, reason }, approve ? "Exception approved for this meet roster." : "Exception declined for this meet roster.")} />)}
       {data.next_team_offset !== null && <button disabled={busy} onClick={() => void moreTeams()}>Load more teams</button>}
+      <div className={styles.toolbar}>
+        {ownMeet && <button onClick={() => onStep("availability")}>Review player availability</button>}
+        <Link className={styles.button} href={workflowHref("run", seasonData.season.id, data.meet.id)}>Next: prepare meet pairings →</Link>
+      </div>
+      <p className={styles.muted}>The host or organizer can prepare pairings once the participating clubs have approved lineups.</p>
+      </div>
     </>}
   </section>;
 }
@@ -366,7 +387,7 @@ function RosterEditor({ root, accessToken, clubName, divisions, team, disabled, 
       {selected.length > 0 && <ul>{selected.map(player => <li key={player.id}>{player.name} · {(player.eligibility_rating ?? player.starting_rating)?.toFixed(3) ?? "No rating"} <button type="button" onClick={() => toggle(player)}>Remove {player.name}</button></li>)}</ul>}
       <label>Find a player in {clubName}<input type="search" maxLength={80} value={query} onChange={e => { setQuery(e.target.value); setOffset(0); }} /></label>
       {responses !== null && <label><input type="checkbox" checked={availableOnly} onChange={e => setAvailableOnly(e.target.checked)} />Show only players who said they are available</label>}
-      {responses === null && <p>Open “Invite players &amp; view availability” to see meet responses alongside player names.</p>}
+      {responses === null && <p>Choose “Meet availability” above to see responses alongside player names. Your lineup draft will stay here.</p>}
       {error && <p role="alert">{error}</p>}
       <div className={styles.choices}>{visibleChoices.map(player => <label key={player.id}>
         <input type="checkbox" checked={selected.some(p => p.id === player.id)} disabled={disabled || (selected.length >= requiredPlayers && !selected.some(p => p.id === player.id))} onChange={() => toggle(player)} />

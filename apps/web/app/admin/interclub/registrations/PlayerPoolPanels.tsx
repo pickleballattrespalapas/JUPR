@@ -1,10 +1,11 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import type { InterclubMeet, RegistrationSeason } from "@/lib/interclubRegistration";
-import { availabilityLabel, type AvailabilityResponse, type MeetAvailabilityData, type PoolMember, type SeasonPool } from "@/lib/interclubPlayerPool";
+import { availabilityLabel, poolGender, poolRating, sortedPoolDivisions, type AvailabilityResponse, type MeetAvailabilityData, type PoolMember, type SeasonPool } from "@/lib/interclubPlayerPool";
 import { usePoolResource } from "./usePoolResource";
 import { InvitationEmail } from "./PoolInvitationEmail";
 import { RequestStatus, ShareLink } from "./PoolPanelCommon";
+import { PoolBulkAdd } from "./PoolBulkAdd";
 import styles from "./playerPool.module.css";
 
 type PoolProps = { root: string; accessToken: string; clubName: string; season: RegistrationSeason };
@@ -17,7 +18,10 @@ export function SeasonPlayerPool(props: PoolProps) { return <SeasonPoolPanel key
 function SeasonPoolPanel({ root, accessToken, clubName, season }: PoolProps) {
   const resource = usePoolResource<SeasonPool>(`${root}/pool`, accessToken);
   const [memberFilter, setMemberFilter] = useState("active"), [message, setMessage] = useState("");
-  const [invite, setInvite] = useState(false), data = resource.data;
+  const [invite, setInvite] = useState(false), [adding, setAdding] = useState(false), [query, setQuery] = useState(""), data = resource.data;
+  const active = data?.members.filter(member => member.status === "active") || [];
+  const visible = data?.members.filter(member => (memberFilter === "all" || member.status === memberFilter) && `${member.name} ${member.email}`.toLocaleLowerCase().includes(query.toLocaleLowerCase())).sort((a, b) => a.name.localeCompare(b.name)) || [];
+  const showLeagueRating = data?.members.some(member => member.league_rating != null);
   async function changeOpen() {
     if (!data) return;
     const next = await resource.perform<SeasonPool>(json => json(`${root}/pool`, "PUT", { expected_revision: data.signup.revision, open: !data.signup.open }));
@@ -30,18 +34,22 @@ function SeasonPoolPanel({ root, accessToken, clubName, season }: PoolProps) {
   }
   return <section className={styles.panel} aria-label="Season player pool">
     <h3>1. Build your season player pool</h3>
-    <p>Invite players to register their interest in representing {clubName} in {season.details.name}. One signup adds them to your season pool. They can choose their availability separately for each meet.</p>
+    <p>Add players who have committed to representing {clubName}, or share the signup page. Players join the season pool once and choose their availability separately for each meet.</p>
     <p className={styles.muted}>Signing up does not reserve a team place. Your club chooses its final lineup for each meet.</p>
     <RequestStatus {...resource} />{message && <p role="status" className={styles.notice}>{message}</p>}
     {data && <>
+      <div className={styles.toolbar}><button className={styles.primary} disabled={resource.disabled} onClick={() => setAdding(true)}>Add players</button><span className={styles.muted}>Select club players or paste a list. Email is optional.</span></div>
+      {adding && <PoolBulkAdd root={root} accessToken={accessToken} divisions={season.details.divisions} members={data.members} onClose={() => setAdding(false)} onAdded={result => { resource.setData(result.pool); setAdding(false); setMessage(`${result.added_count} player${result.added_count === 1 ? "" : "s"} added to the season pool.${result.skipped_count ? ` ${result.skipped_count} already in the pool skipped.` : ""}`); }} />}
       <div className={styles.toolbar}><span className={styles.badge}>{data.signup.open ? "Season signup open" : "Season signup closed"}</span><button className={!data.signup.open ? styles.primary : undefined} disabled={resource.disabled} onClick={() => void changeOpen()}>{data.signup.open ? "Close season signup" : "Open season signup"}</button></div>
-      {data.signup.url && <ShareLink url={data.signup.url} label="Season signup link" />}
+      {data.signup.url && <ShareLink url={data.signup.url} label="Season signup link" openLabel="Open signup page" />}
       {data.email_mode === "dry_run" && <p className={styles.notice}>Test environment: no emails are sent. Copy the signup link to try the player form.</p>}
       <button disabled={!data.signup.open || resource.disabled} onClick={() => setInvite(value => !value)}>{invite ? "Close season invitation email" : "Invite club players by email"}</button>
       {invite && data.signup.open && <InvitationEmail root={emailsRoot(root)} accessToken={accessToken} kind="season" />}
-      <div className={styles.toolbar}><h4>Season signups ({data.members.filter(member => member.status === "active").length} active)</h4><label>Show players<select value={memberFilter} onChange={event => setMemberFilter(event.target.value)}><option value="active">Active signups</option><option value="withdrawn">Withdrawn signups</option><option value="all">All signups</option></select></label></div>
-      {!data.members.some(member => memberFilter === "all" || member.status === memberFilter) && <p>No {memberFilter === "withdrawn" ? "withdrawn " : ""}players have signed up yet.</p>}
-      {data.members.filter(member => memberFilter === "all" || member.status === memberFilter).map(member => <MemberCard key={`${member.id}:${member.revision}`} member={member} root={root} accessToken={accessToken} disabled={resource.disabled} onUpdate={updateMember} />)}
+      <div className={styles.poolSummary} aria-label="Player pool totals"><strong>{active.length} active players</strong><span>{active.filter(member => poolGender(member.gender) === "Women").length} women</span><span>{active.filter(member => poolGender(member.gender) === "Men").length} men</span><span>{active.filter(member => poolGender(member.gender) === "Not specified").length} gender not specified</span><span>{active.filter(member => !member.player_id).length} need a player link</span></div>
+      {active.length > 0 && <details className={styles.divisionSummary}><summary>Players by eligible division</summary><div className={styles.tableScroll}><table className={styles.poolTable}><caption>Active players by rating eligibility</caption><thead><tr><th scope="col">Division</th><th scope="col">Women</th><th scope="col">Men</th><th scope="col">Not specified</th><th scope="col">Total</th></tr></thead><tbody>{sortedPoolDivisions(season.details.divisions).map(division => { const eligible = active.filter(member => member.eligible_divisions?.includes(division)); return <tr key={division}><th scope="row">{division}</th><td>{eligible.filter(member => poolGender(member.gender) === "Women").length}</td><td>{eligible.filter(member => poolGender(member.gender) === "Men").length}</td><td>{eligible.filter(member => poolGender(member.gender) === "Not specified").length}</td><td>{eligible.length}</td></tr>; })}</tbody></table></div><p className={styles.muted}>Counts use current rating eligibility. Check season approval and meet availability before choosing a lineup.</p></details>}
+      <div className={styles.toolbar}><h4>Season signups</h4><label>Find in player pool<input type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder="Name or email" /></label><label>Show players<select value={memberFilter} onChange={event => setMemberFilter(event.target.value)}><option value="active">Active signups</option><option value="withdrawn">Withdrawn signups</option><option value="all">All signups</option></select></label></div>
+      {!visible.length && <p>{data.members.length ? "No players match these filters." : "Your player pool is empty. Add committed players above or share your signup page."}</p>}
+      {visible.length > 0 && <div className={styles.tableScroll}><table className={styles.poolTable}><caption>Season player pool for {clubName}</caption><thead><tr><th scope="col">Player</th><th scope="col">Club rating</th>{showLeagueRating && <th scope="col">League rating</th>}<th scope="col">Gender</th><th scope="col">Eligible divisions</th><th scope="col">Season status</th><th scope="col">Details</th></tr></thead><tbody>{visible.map(member => <tr key={`${member.id}:${member.revision}`}><th scope="row">{member.name}<span className={styles.playerMeta}>{member.email || "No email"}</span></th><td>{poolRating(member.rating)}</td>{showLeagueRating && <td>{poolRating(member.league_rating)}</td>}<td>{poolGender(member.gender)}</td><td>{!member.player_id ? "Link player" : member.eligible_divisions == null ? "Check rating" : sortedPoolDivisions(member.eligible_divisions).join(", ") || "No eligible division"}{member.divisions.length > 0 && <span className={styles.playerMeta}>Prefers {sortedPoolDivisions(member.divisions).join(", ")}</span>}</td><td>{member.status === "withdrawn" ? "Withdrawn" : member.approval_status === "approved" ? "Approved" : member.approval_status === "rejected" ? "Not approved" : member.late_join ? "Late · approval needed" : member.player_id ? "Awaiting approval" : "Needs player link"}</td><td><details><summary aria-label={`Manage ${member.name}`}>Manage</summary><MemberCard member={member} root={root} accessToken={accessToken} disabled={resource.disabled} onUpdate={updateMember} /></details></td></tr>)}</tbody></table></div>}
     </>}
     <div className={styles.toolbar}><button disabled={resource.busy || resource.loading} onClick={() => { setMessage(""); resource.reload(); }}>Reload player pool</button></div>
   </section>;
@@ -62,7 +70,7 @@ function PlayerLink({ member, root, accessToken, disabled, onLink }: { member: P
   const [query, setQuery] = useState(member.name.slice(0, 80)), [offset, setOffset] = useState(0);
   const resource = usePoolResource<{ players: { id: string; name: string; starting_rating: number }[]; next_offset: number | null }>(`${root}/players?q=${encodeURIComponent(query)}&offset=${offset}`, accessToken);
   return <div className={styles.card}><label>Find a player in this club<input type="search" value={query} maxLength={80} onChange={event => { setQuery(event.target.value); setOffset(0); }} /></label><RequestStatus {...resource} />
-    {resource.data?.players.map(player => <div key={player.id} className={styles.toolbar}><span>{player.name} · Rating {player.starting_rating}</span><button disabled={disabled} onClick={() => void onLink(String(player.id))}>Link {player.name}</button></div>)}
+    {resource.data?.players.map(player => <div key={player.id} className={styles.toolbar}><span>{player.name} · Rating {poolRating(player.starting_rating)}</span><button disabled={disabled} onClick={() => void onLink(String(player.id))}>Link {player.name}</button></div>)}
     {resource.data?.players.length === 0 && <p>No matching club player. Add their player record in Players, then return here to link it.</p>}
     <div className={styles.toolbar}>{offset > 0 && <button disabled={resource.loading} onClick={() => setOffset(0)}>First players</button>}{resource.data?.next_offset != null && <button disabled={resource.loading} onClick={() => setOffset(resource.data!.next_offset!)}>More players</button>}{member.player_id && <button disabled={disabled} onClick={() => void onLink(null)}>Unlink player record</button>}</div>
   </div>;

@@ -27,3 +27,25 @@
 .candidates { max-height: 330px; overflow: auto; border-block: 1px solid #e1e8f1; margin: .9rem 0; }
 .preview { white-space: pre-wrap; background: #f5f8fc; border: 1px solid #d9e3ee; border-radius: 10px; padding: 1rem; overflow-wrap: anywhere; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(240px, 100%),1fr)); gap: 1rem; }
+.buttonLink { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: .65rem 1rem; border: 1px solid #bdcbdc; border-radius: 9px; font-weight: 650; color: #172335; text-decoration: none; }
+.buttonLink:hover { background: #edf4ff; border-color: #4d78dc; }
+.buttonLink:focus-visible { outline: 3px solid #7199f5; outline-offset: 3px; }
+.poolSummary { display: flex; flex-wrap: wrap; gap: .6rem 1.3rem; padding: 1rem; margin-top: 1.4rem; background: #f5f8fc; border-radius: 10px; font-size: .95rem; }
+.tableScroll { overflow-x: auto; margin: .7rem 0; }
+.poolTable { width: 100%; border-collapse: collapse; text-align: left; font-size: .93rem; }
+.poolTable caption { text-align: left; font-weight: 600; color: #576b80; padding: .3rem 0 .8rem; }
+.poolTable th, .poolTable td { padding: .75rem .7rem; border-bottom: 1px solid #e1e8f1; vertical-align: top; }
+.poolTable thead th { background: #f5f8fc; font-size: .85rem; white-space: nowrap; }
+.poolTable tbody th { min-width: 150px; font-weight: 650; }
+.poolTable td { min-width: 105px; }
+.poolTable td:last-child { min-width: 100px; }
+.poolTable details[open] { min-width: 300px; max-width: 440px; }
+.playerMeta { display: block; color: #576b80; font-size: .82rem; font-weight: 400; margin-top: .25rem; overflow-wrap: anywhere; }
+.divisionSummary { margin: .5rem 0 1.2rem; }
+.bulkPanel { padding: 1.1rem; margin: 1rem 0; border: 2px solid #bdcef5; border-radius: 12px; background: #f9fbff; }
+.bulkPanel h4:focus { outline: none; }
+.bulkPreview { border-top: 1px solid #bdcef5; margin-top: 1.5rem; padding-top: 1.3rem; }
+.matchChoice { margin-top: .8rem; font-size: .85rem; }
+.selectedNames { font-size: .85rem; max-height: 5rem; overflow-y: auto; }
+.panel button.textButton { min-height: 0; border: 0; padding: .25rem; background: transparent; text-decoration: underline; font-size: .9rem; }
+@media (max-width: 600px) { .bulkPanel { padding: .75rem; } .poolTable { font-size: .87rem; } .poolSummary { gap: .5rem 1rem; } }

@@ -6,19 +6,20 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
 import json
+import math
 import re
 import time
 from typing import Literal
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from fastapi import HTTPException, Request, Response
+from fastapi import HTTPException, Query, Request, Response
 from pydantic import AwareDatetime, Field, field_validator, model_validator
 
 from jupr_app.config import get_email_mode, get_explicit_registration_edit_token_secret, get_next_web_base_url
 from jupr_app.domain.admin.staff_policy import ADMIN_ROLES
 from services.api.admin_auth_routes import require_admin_assignments
-from services.api.auth import auth_header
+from services.api.auth import authenticate_bearer, auth_header
 from services.api.interclub_registration_routes import StrictModel
 from services.api.staging_write_guard import require_public_intake_or_403
 
@@ -30,6 +31,7 @@ MEMBER_FIELDS = "id,season_id,club_id,name,email,divisions,notes,status,player_i
 APPROVAL_FIELDS = "id,club_id,name,player_id,revision,approval_status,late_join,approval_reason"
 MEET_FIELDS = "id,season_id,host_club_id,club_ids,starts_at,roster_deadline"
 PURPOSE = "pcs-interclub-player:v1"
+PLAYER_FIELDS = "id,name,rating,gender"
 
 
 class PoolSettingsUpdate(StrictModel):
@@ -82,6 +84,35 @@ class PoolSignup(MemberDetails):
     request_id: UUID
     email_consent: Literal[True]
     website: str = Field(default="", max_length=200)
+    player_id: int | None = Field(default=None, gt=0)
+
+
+class BulkPoolMember(StrictModel):
+    name: str = Field(default="", max_length=120)
+    email: str | None = Field(default=None, max_length=254)
+    player_id: int | None = Field(default=None, gt=0)
+    divisions: list[str] = Field(default_factory=list, max_length=8)
+    notes: str = Field(default="", max_length=1000)
+
+    @field_validator("email")
+    @classmethod
+    def optional_email(cls, value):
+        return MemberDetails.email_address(value) if value else ""
+
+    @field_validator("divisions")
+    @classmethod
+    def distinct_divisions(cls, value):
+        return MemberDetails.distinct_divisions(value)
+
+    @model_validator(mode="after")
+    def details(self):
+        if self.player_id is None and not self.name.strip():
+            raise ValueError("Enter a player name or choose a club player.")
+        return self
+
+
+class BulkPoolMembers(StrictModel):
+    members: list[BulkPoolMember] = Field(min_length=1, max_length=200)
 
 
 class ResponseReview(StrictModel):
@@ -93,7 +124,7 @@ class PlayerResponse(ResponseReview):
     action: Literal["update_season", "respond_meet"]
     status: Literal["active", "withdrawn", "available", "maybe", "unavailable"]
     name: str | None = Field(default=None, min_length=1, max_length=120)
-    email: str | None = Field(default=None, min_length=3, max_length=254)
+    email: str | None = Field(default=None, max_length=254)
     divisions: list[str] | None = Field(default=None, max_length=8)
     notes: str | None = Field(default=None, max_length=1000)
 
@@ -102,8 +133,10 @@ class PlayerResponse(ResponseReview):
         if self.action == "update_season":
             if self.status not in {"active", "withdrawn"} or None in (self.name, self.email, self.divisions, self.notes):
                 raise ValueError("Include your season signup details and status.")
-            details = MemberDetails(name=self.name, email=self.email, divisions=self.divisions, notes=self.notes)
-            self.email = details.email
+            without_email = self.status == "withdrawn" and not self.email
+            details = MemberDetails(name=self.name, email="withdrawal@example.invalid" if without_email else self.email,
+                                    divisions=self.divisions, notes=self.notes)
+            self.email = "" if without_email else details.email
         elif self.status not in {"available", "maybe", "unavailable"} or any(v is not None for v in (self.name, self.email, self.divisions, self.notes)):
             raise ValueError("Choose available, maybe, or unavailable for this meet.")
         return self
@@ -141,6 +174,7 @@ def pool_rpc(db, name, params):
             "40001": (409, "This signup changed or has closed. Reload before continuing."),
             "23505": (409, "This player already has a season signup. Reload the player pool."),
             "22023": (422, "Check the player, divisions and response deadline for this club."),
+            "PT422": (422, "More than one club profile matches this name. Choose your profile or select that none of the matches is you."),
             "54000": (429, "Too many requests. Please wait and try again."),
         }.get(code, (503, "Could not confirm the update. Reload before retrying."))
         raise HTTPException(status, message) from exc
@@ -237,6 +271,126 @@ def _member(row):
     return result
 
 
+def _name(value):
+    return " ".join(str(value or "").split()).lower()
+
+
+def _player(row, season):
+    rating = float(row["rating"]) / 400 if row.get("rating") is not None else None
+    if rating is not None and (not math.isfinite(rating) or rating <= 0):
+        rating = None
+    gender = str(row.get("gender") or "").strip().lower()
+    gender = "female" if gender in {"f", "female", "woman", "women"} else "male" if gender in {"m", "male", "man", "men"} else None
+    return {"id": str(row["id"]), "name": row["name"], "rating": rating, "gender": gender,
+            "league_rating": row.get("league_rating"), "eligible_divisions": row.get("eligible_divisions", [])}
+
+
+def _choices(db, club_id, season, players):
+    if not players:
+        return []
+    details = pool_rpc(db, "pcs_interclub_pool_player_details", {"p_season_id": season["id"], "p_club_id": club_id,
+        "p_player_ids": [int(row["id"]) for row in players]})
+    by_id = {str(row["player_id"]): row for row in details}
+    return [_player({**row, **by_id.get(str(row["id"]), {})}, season) for row in players]
+
+
+def _player_query(db, club_id, q=""):
+    query = _query(db, "players", PLAYER_FIELDS, club_id=club_id, active=True)
+    if q.strip():
+        term = " ".join(q.split()).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        query = query.ilike("name", f"%{term}%")
+    return query.order("name").order("id")
+
+
+def _account_player(db, club_id, season, authorization):
+    if not authorization:
+        return None
+    try:
+        user = authenticate_bearer(authorization)
+    except HTTPException as exc:
+        if exc.status_code == 401:
+            return None
+        raise
+    # A previously verified club contact can prefill signup. This never creates
+    # an account claim, changes a directory profile, or exposes contact data.
+    contacts = _rows(_query(db, "player_profile_update_subscriptions", "player_id,verified_at,unsubscribed_at",
+        club_id=club_id, email_normalized=user.email.lower(), request_status="active").limit(100))
+    ids = {row["player_id"] for row in contacts if row.get("verified_at") and not row.get("unsubscribed_at")}
+    if len(ids) != 1:
+        return None
+    player = _one(db, "players", PLAYER_FIELDS, club_id=club_id, active=True, id=next(iter(ids)))
+    return _choices(db, club_id, season, [player])[0] if player else None
+
+
+def _profile_summaries(db, club_id, season, members):
+    ids = sorted({int(m["player_id"]) for m in members if m.get("player_id") is not None})
+    players = _rows(_query(db, "players", PLAYER_FIELDS, club_id=club_id).in_("id", ids)) if ids else []
+    by_id = {str(row["id"]): row for row in _choices(db, club_id, season, players)}
+    return [{**_member(row), **{key: by_id.get(str(row.get("player_id")), {}).get(key, [] if key == "eligible_divisions" else None)
+             for key in ("rating", "league_rating", "gender", "eligible_divisions")}} for row in members]
+
+
+def _bulk_preview(db, club, season, body):
+    players = []
+    for offset in range(0, 100000, 500):
+        page = _rows(_player_query(db, club["id"]).range(offset, offset + 499))
+        players.extend(page)
+        if len(page) < 500:
+            break
+    else:
+        raise HTTPException(422, "This directory is too large to review in one batch. Contact support.")
+    by_id = {str(p["id"]): p for p in players}
+    by_name = {}
+    for player in players:
+        by_name.setdefault(_name(player["name"]), []).append(player)
+    relevant = {str(p["id"]): p for item in body.members for p in
+                ([by_id[str(item.player_id)]] if item.player_id is not None and str(item.player_id) in by_id else by_name.get(_name(item.name), []))}
+    choices = {p["id"]: p for p in _choices(db, club["id"], season, list(relevant.values()))}
+    contacts = _rows(_query(db, "player_profile_update_subscriptions",
+        "player_id,email,email_normalized,verified_at,unsubscribed_at,preferences_json", club_id=club["id"], request_status="active")
+        .in_("player_id", [int(pid) for pid in relevant])) if relevant else []
+    contact_emails = {}
+    for contact in contacts:
+        preferences = contact.get("preferences_json") or {}
+        if not contact.get("verified_at") or contact.get("unsubscribed_at") or preferences.get("optional_emails_enabled") is False or preferences.get("unsubscribe_scope") == "global":
+            continue
+        try:
+            email = MemberDetails.email_address(str(contact.get("email_normalized") or contact.get("email") or ""))
+        except ValueError:
+            continue
+        contact_emails.setdefault(str(contact["player_id"]), set()).add(email)
+    existing = _rows(_query(db, MEMBERS, "name,email,player_id", season_id=season["id"], club_id=club["id"]).limit(1000))
+    seen = list(existing)
+    rows = []
+    for index, item in enumerate(body.members):
+        if not set(item.divisions).issubset(season["details"]["divisions"]):
+            raise HTTPException(422, "Choose divisions from this season.")
+        explicit_unlinked = "player_id" in item.model_fields_set and item.player_id is None
+        matches = [] if explicit_unlinked else by_name.get(_name(item.name), [])
+        player = by_id.get(str(item.player_id)) if item.player_id is not None else matches[0] if len(matches) == 1 else None
+        if item.player_id is not None and not player:
+            raise HTTPException(422, "Choose an active player from this club.")
+        choice = choices[str(player["id"])] if player else {"rating": None, "league_rating": None, "gender": None, "eligible_divisions": []}
+        name = player["name"] if player else " ".join(item.name.split())
+        pid = str(player["id"]) if player else None
+        saved_emails = contact_emails.get(pid, set())
+        email = item.email or (next(iter(saved_emails)) if len(saved_emails) == 1 and "email" not in item.model_fields_set else "")
+        duplicate = any((pid is not None and str(old.get("player_id")) == pid) or
+            ((pid is None or old.get("player_id") is None) and _name(old["name"]) == _name(name) and
+             (not email or not old.get("email") or old["email"].lower() == email)) for old in seen)
+        status = "duplicate" if duplicate else "ambiguous" if player is None and len(matches) > 1 else "matched" if player else "new"
+        row = {"index": index, "name": name, "email": email, "player_id": pid,
+               "divisions": item.divisions or choice["eligible_divisions"], "notes": item.notes, "status": status,
+               "candidates": [choices[str(p["id"])] for p in matches if str(p["id"]) in choices],
+               **{key: choice[key] for key in ("rating", "league_rating", "gender", "eligible_divisions")}}
+        rows.append(row)
+        if status in {"matched", "new"}:
+            seen.append(row)
+    return {"rows": rows, "ready_count": sum(r["status"] in {"matched", "new"} for r in rows),
+            "duplicate_count": sum(r["status"] == "duplicate" for r in rows),
+            "ambiguous_count": sum(r["status"] == "ambiguous" for r in rows)}
+
+
 def _settings(row):
     return {"share_id": row["share_id"], "revision": row["revision"], "open": row["open"], "url": pool_signup_url(row["share_id"])} if row else {"share_id": None, "revision": 0, "open": False, "url": None}
 
@@ -252,8 +406,9 @@ def _meet(db, club_id, season_id, meet_id):
 def _pool_payload(db, club, season):
     filters = {"club_id": club["id"], "season_id": season["id"]}
     members = _rows(_query(db, MEMBERS, MEMBER_FIELDS + ",token_nonce", **filters).order("name").order("id").limit(1000))
+    summaries = _profile_summaries(db, club["id"], season, members)
     return {"club": club, "season": _public_season(season), "signup": _settings(_one(db, POOL, **filters)),
-            "members": [{**_member(row), "manage_url": pool_member_url(row, season)} for row in members], "email_mode": get_email_mode()}
+            "members": [{**summary, "manage_url": pool_member_url(row, season)} for row, summary in zip(members, summaries)], "email_mode": get_email_mode()}
 
 
 def _availability_payload(db, club, season, meet):
@@ -372,12 +527,38 @@ def install_interclub_player_pool_routes(app, *, get_supabase_client):
         pool_rpc(db, "pcs_interclub_pool_action", {**pool_actor(user, club_id, season_id), "p_action": "settings", "p_payload": body.model_dump()})
         return _pool_payload(db, club, season)
 
+    @app.get(base + "/pool/players")
+    def pool_players(club_id: str, season_id: UUID, response: Response, q: str = Query(default="", max_length=120),
+                     offset: int = Query(default=0, ge=0, le=100000), authorization: str | None = auth_header()):
+        _private_headers(response)
+        db, _, club, season = pool_admin_context(get_supabase_client, authorization, club_id, season_id)
+        rows = _rows(_player_query(db, club["id"], q).range(offset, offset + 100))
+        return {"players": _choices(db, club["id"], season, rows[:100]), "next_offset": offset + 100 if len(rows) > 100 else None}
+
+    @app.post(base + "/pool/bulk-preview")
+    def preview_members(club_id: str, season_id: UUID, body: BulkPoolMembers, response: Response, authorization: str | None = auth_header()):
+        _private_headers(response)
+        db, _, club, season = pool_admin_context(get_supabase_client, authorization, club_id, season_id)
+        return _bulk_preview(db, club, season, body)
+
+    @app.post(base + "/pool/bulk-add")
+    def add_members(club_id: str, season_id: UUID, body: BulkPoolMembers, response: Response, authorization: str | None = auth_header()):
+        _private_headers(response)
+        db, user, club, season = pool_admin_context(get_supabase_client, authorization, club_id, season_id)
+        _secret()  # Personal links must work before retaining any new entries.
+        preview = _bulk_preview(db, club, season, body)
+        if preview["ambiguous_count"]:
+            raise HTTPException(422, "Choose the correct club profile for each name with more than one match.")
+        members = [{key: row[key] for key in ("name", "email", "player_id", "divisions", "notes")} for row in preview["rows"]]
+        result = pool_rpc(db, "pcs_interclub_pool_bulk_add", {**pool_actor(user, club_id, season_id), "p_members": members})
+        return {"added_count": result["added_count"], "skipped_count": result["skipped_count"], "pool": _pool_payload(db, club, season)}
+
     @app.patch("/admin/clubs/{club_id}/interclub/registrations/{season_id}/pool/members/{member_id}")
     def update_member(club_id: str, season_id: UUID, member_id: UUID, body: PoolMemberUpdate, response: Response, authorization: str | None = auth_header()):
         _private_headers(response)
         db, user, _, season = pool_admin_context(get_supabase_client, authorization, club_id, season_id)
         row = pool_rpc(db, "pcs_interclub_pool_action", {**pool_actor(user, club_id, season_id), "p_action": "member", "p_payload": {**body.model_dump(), "member_id": str(member_id)}})
-        return {"member": {**_member(row), "manage_url": pool_member_url(row, season)}}
+        return {"member": {**_profile_summaries(db, club_id, season, [row])[0], "manage_url": pool_member_url(row, season)}}
 
     @app.get(base + "/meets/{meet_id}/availability")
     def get_availability(club_id: str, season_id: UUID, meet_id: UUID, response: Response, authorization: str | None = auth_header()):
@@ -409,7 +590,7 @@ def install_interclub_player_pool_routes(app, *, get_supabase_client):
                 "meets": [{**{key: row[key] for key in ("id", "host_club_id", "starts_at")}, "host_club_name": host_names.get(row["host_club_id"], row["host_club_id"])} for row in meets]}
 
     @app.post("/public/interclub-signups/{share_id}")
-    def submit_signup(share_id: UUID, body: PoolSignup, request: Request, response: Response):
+    def submit_signup(share_id: UUID, body: PoolSignup, request: Request, response: Response, authorization: str | None = auth_header()):
         _private_headers(response)
         require_public_intake_or_403()
         if body.website:
@@ -418,14 +599,37 @@ def install_interclub_player_pool_routes(app, *, get_supabase_client):
         db = get_supabase_client()
         # Fingerprint the submitted details, not mutable member data. An exact
         # network retry recovers its private link; another signup never can.
-        payload = body.model_dump(mode="json", exclude={"website"})
+        payload = body.model_dump(mode="json", exclude={"website"} | ({"player_id"} if "player_id" not in body.model_fields_set else set()))
         fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        if authorization and "player_id" not in body.model_fields_set:
+            settings = _one(db, POOL, share_id=str(share_id))
+            if not settings:
+                raise HTTPException(404, "This season signup link is unavailable.")
+            club, season = _season_club(db, settings["club_id"], settings["season_id"])
+            linked = _account_player(db, club["id"], season, authorization)
+            if linked and _name(linked["name"]) == _name(body.name):
+                payload["player_id"] = int(linked["id"])
         result = pool_rpc(db, "pcs_interclub_pool_public_action", {"p_action": "signup", "p_payload": {**payload, "share_id": str(share_id), "request_fingerprint": fingerprint}, "p_requester_hash": requester})
         if result["status"] == "already_registered":
             return {"status": "already_registered", "message": "If you have already joined, use your saved personal link or contact your club administrator. Your existing signup has not changed."}
         member = result["member"]
         _, season = _season_club(db, member["club_id"], member["season_id"])
-        return {"status": "registered", "message": "Your season signup is saved. Late additions need league organizer approval before playing." if member.get("late_join") else "Your season signup is saved. Your club will confirm your player record and invite you to individual meets.", "manage_url": pool_member_url(member, season)}
+        return {"status": "registered", "message": "Your season signup is saved. Late additions need league organizer approval before playing." if member.get("late_join") else "Your season signup is saved. Your club will invite you to individual meets.", "manage_url": pool_member_url(member, season)}
+
+    @app.get("/public/interclub-signups/{share_id}/players")
+    def signup_players(share_id: UUID, response: Response, q: str = Query(default="", max_length=120), authorization: str | None = auth_header()):
+        _private_headers(response)
+        db = get_supabase_client()
+        settings = _one(db, POOL, share_id=str(share_id))
+        if not settings:
+            raise HTTPException(404, "This season signup link is unavailable.")
+        club, season = _season_club(db, settings["club_id"], settings["season_id"])
+        if not settings["open"] or _season_end(season) <= datetime.now(timezone.utc):
+            raise HTTPException(409, "This season signup is closed.")
+        linked = _account_player(db, club["id"], season, authorization)
+        rows = pool_rpc(db, "pcs_interclub_pool_search_players", {"p_season_id": season["id"], "p_club_id": club["id"],
+            "p_query": q}) if len(q.strip()) >= 2 else []
+        return {"players": _choices(db, club["id"], season, rows), "linked_player": linked}
 
     @app.post("/public/interclub-player-response/review")
     def review_response(body: ResponseReview, response: Response):

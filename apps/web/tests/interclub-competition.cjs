@@ -16,7 +16,8 @@ const ScoreEditor = load(base + 'ScoreEditor.tsx', common).default;
 const PrintPacket = load(base + 'PrintPacket.tsx', common).PrintPacketContent;
 const Standings = load(base + 'Standings.tsx', common).default;
 let currentClub = 'alpha';
-const workspace = load(base + 'CompetitionWorkspace.tsx', { ...common, 'next/link': ({ children, href }) => React.createElement('a', { href }, children), '@/lib/adminAuthClient': { getAdminApiBaseUrl: () => 'https://api.test' }, '@/lib/adminWorkspace': { readBrowserWorkspace: () => ({ clubId: currentClub }) }, '@/lib/useAdminSession': { useAdminSession: () => ({}) }, '@/lib/useAdminWorkspace': { useAdminWorkspace: () => ({ clubId: currentClub }) }, './ScoreEditor': ScoreEditor, './PrintPacket': PrintPacket, './Standings': Standings, './ScheduleMeet': () => null });
+const workflow = load('app/admin/interclub/InterclubWorkflow.tsx', { 'next/link': ({ children, ...props }) => React.createElement('a', props, children), './workflow.module.css': css });
+const workspace = load(base + 'CompetitionWorkspace.tsx', { ...common, '../InterclubWorkflow': workflow, 'next/link': ({ children, href }) => React.createElement('a', { href }, children), '@/lib/adminAuthClient': { getAdminApiBaseUrl: () => 'https://api.test' }, '@/lib/adminWorkspace': { readBrowserWorkspace: () => ({ clubId: currentClub }) }, '@/lib/useAdminSession': { useAdminSession: () => ({}) }, '@/lib/useAdminWorkspace': { useAdminWorkspace: () => ({ clubId: currentClub }) }, './ScoreEditor': ScoreEditor, './PrintPacket': PrintPacket, './Standings': Standings, './ScheduleMeet': () => null });
 const nodeText = node => typeof node === 'string' ? node : node.children.map(nodeText).join('');
 const button = (tree, label) => tree.root.findAllByType('button').find(node => nodeText(node) === label);
 const text = tree => JSON.stringify(tree.toJSON());
@@ -52,6 +53,23 @@ async function qualifyingRoundRobin() {
   assert.equal(button(tree, 'Generate pairings').props.disabled, false, 'A third club can play its qualifying matchup at the same skill level');
   await act(async () => { selects[0].props.onChange({ target: { value: 'beta' } }); selects[1].props.onChange({ target: { value: 'alpha' } }); });
   assert.equal(button(tree, 'Generate pairings').props.disabled, true, 'An existing pair is blocked in either order');
+  await act(async () => tree.unmount());
+}
+
+async function missingLineups() {
+  global.fetch = async () => reply({ ...copy(detail), batch: null, teams: [] });
+  let tree;
+  await act(async () => { tree = create(React.createElement(workspace.MeetOperations, {
+    root: 'https://api.test/empty-meet', clubId: 'alpha', accessToken: 'token', phase: 'regular',
+    context, clubName, onLock() {}, onSeasonChange() {},
+  })); });
+  assert.equal(button(tree, 'Generate pairings').props.disabled, true, 'Pairings cannot be generated before at least two clubs have approved lineups');
+  const link = tree.root.findAllByType('a').find(node => nodeText(node) === 'Prepare lineups for this meet →');
+  const url = new URL(link.props.href, 'https://example.test');
+  assert.equal(url.searchParams.get('season'), 'season-1');
+  assert.equal(url.searchParams.get('meet'), 'meet-1');
+  assert.equal(url.searchParams.get('step'), 'lineups', 'Missing-roster message takes the organizer directly to that meet’s lineup workspace');
+  assert.equal(tree.root.findAllByType('a').some(node => node.props['aria-label'] === 'Approve results'), false, 'Approval is unavailable until scores are submitted');
   await act(async () => tree.unmount());
 }
 
@@ -101,9 +119,12 @@ async function revisionsAndStaleClub() {
   const props = { root, clubId: 'alpha', accessToken: 'token-1', phase: 'regular', context, clubName, onLock() {}, onSeasonChange() {} };
   await act(async () => { tree = create(React.createElement(workspace.MeetOperations, props)); });
   assert.equal(button(tree, 'Print meet packet').props.disabled, false);
+  const lineupLink = tree.root.findByProps({ 'aria-label': 'Lineups' });
+  assert.ok(lineupLink.props.href.includes('season=season-1') && lineupLink.props.href.includes('meet=meet-1'), 'Back to lineups preserves both season and meet');
   assert.equal(button(tree, 'Review and submit meet').props.disabled, true, 'Incomplete meet cannot be submitted');
   await act(async () => tree.root.findByType(ScoreEditor).props.onChange({ ...copy(document), weather: 'delay' }));
   assert.equal(button(tree, 'Print meet packet').props.disabled, true, 'Packet must reflect a saved revision');
+  assert.equal(tree.root.findAllByType('a').filter(node => node.props.href.includes('/interclub/registrations')).length, 0, 'Dirty scores disable workflow links that would abandon the draft');
   await act(async () => tree.update(React.createElement(workspace.MeetOperations, { ...props, accessToken: 'token-2' })));
   await act(async () => { void button(tree, 'Save all draft scores').props.onClick(); void button(tree, 'Save all draft scores').props.onClick(); });
   assert.equal(requests.filter(request => request.options.method).length, 1, 'Double click cannot create two revisions');
@@ -162,4 +183,4 @@ function writePrintReview() {
   fs.writeFileSync(output, '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Southern BCS paper packet review</title><style>' + stylesheet + screenPreview + '</style></head><body class="printBody"><div class="printPortal">' + render(document) + render(final) + '</div></body></html>');
   console.log('Print review fixture: ' + output);
 }
-(async () => { await scoreEntry(); printSafety(); await revisionsAndStaleClub(); await approval(); await qualifyingRoundRobin(); qualifyingDisplay(); writePrintReview(); console.log('PASS interclub competition: paper packet safety, scoped lineups, non-play scoring, exact revisions, stale club protection, approval and ratings status, qualification and joint Cup'); })().catch(error => { console.error(error); process.exit(1); });
+(async () => { await scoreEntry(); printSafety(); await revisionsAndStaleClub(); await approval(); await qualifyingRoundRobin(); await missingLineups(); qualifyingDisplay(); writePrintReview(); console.log('PASS interclub competition: paper packet safety, scoped lineups, non-play scoring, exact revisions, stale club protection, approval and ratings status, missing-lineup guidance, qualification and joint Cup'); })().catch(error => { console.error(error); process.exit(1); });

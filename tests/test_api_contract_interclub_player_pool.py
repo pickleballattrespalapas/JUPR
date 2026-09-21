@@ -46,6 +46,17 @@ def setup(monkeypatch):
         return Query(tables.get(name, []))
 
     def rpc(name, params):
+        if name == "pcs_interclub_pool_search_players":
+            state["reads"].append(name)
+            term = routes._name(params["p_query"])
+            rows = [row for row in tables["players"] if row["club_id"] == params["p_club_id"] and row["active"] and term in routes._name(row["name"])]
+            rows.sort(key=lambda row: (routes._name(row["name"]) != term, row["name"], row["id"]))
+            safe = [{key: row.get(key) for key in routes.PLAYER_FIELDS.split(",")} for row in rows[:20]]
+            return SimpleNamespace(execute=lambda: SimpleNamespace(data=safe))
+        if name == "pcs_interclub_pool_player_details":
+            state["reads"].append(name)
+            rows = [dict(player_id=pid, league_rating=None, eligible_divisions=[]) for pid in params["p_player_ids"]]
+            return SimpleNamespace(execute=lambda: SimpleNamespace(data=rows))
         state["calls"].append((name, params))
         def execute():
             if state["error"]:
@@ -151,9 +162,9 @@ def test_availability_settings_require_revision_and_aware_deadline(setup, patch)
 
 @pytest.mark.parametrize("patch", [dict(name=" "), dict(name="x" * 121), dict(email="invalid"),
     dict(email="x" * 255 + "@example.test"), dict(notes="x" * 1001), dict(request_id="bad"),
-    dict(player_id="1"), dict(club_id="beta"), dict(status="active"), dict(token="forged"),
+    dict(player_id="bad"), dict(player_id=-1), dict(club_id="beta"), dict(status="active"), dict(token="forged"),
     dict(email_consent=False), dict(divisions=["3.5", "3.5"])])
-def test_public_signup_rejects_bad_fields_and_profile_assignment(setup, patch):
+def test_public_signup_rejects_bad_fields_and_forged_scope(setup, patch):
     client, state = setup
     response = client.post(state["signup"], json={**state["signup_body"], **patch})
     assert response.status_code == 422
@@ -538,3 +549,88 @@ def test_pool_approval_stale_conflict_and_nonadmin_rejected(setup):
     assert client.post(state["base"] + "/pool/approvals", json=body).status_code == 409
     state["assignment"]["role"] = "operator"
     assert client.post(state["base"] + "/pool/approvals", json=body).status_code == 403
+
+
+@pytest.mark.parametrize("choice", [None, 1, "1"])
+def test_public_profile_selection_is_forwarded_without_account_ownership_changes(setup, choice):
+    client, state = setup
+    state["result"] = {"status": "registered", "member": state["member"]}
+    response = client.post(state["signup"], json={**state["signup_body"], "player_id": choice})
+    assert response.status_code == 200
+    assert state["calls"][-1][1]["p_payload"]["player_id"] == (int(choice) if choice else None)
+    assert len(state["calls"]) == 1
+    assert "user_id" not in state["calls"][0][1]["p_payload"]
+
+
+def test_omitting_public_profile_preserves_atomic_auto_match_and_stable_retry(setup):
+    client, state = setup
+    state["result"] = {"status": "registered", "member": state["member"]}
+    assert client.post(state["signup"], json=state["signup_body"]).status_code == 200
+    assert "player_id" not in state["calls"][-1][1]["p_payload"]
+
+
+def test_public_candidate_search_is_club_scoped_normalized_and_contact_free(setup):
+    client, state = setup
+    state["tables"]["players"][0].update(rating=1480, gender="M")
+    response = client.get(state["signup"] + "/players", params={"q": "Alex   Alpha"})
+    assert response.status_code == 200
+    assert response.json()["players"] == [dict(id="1", name="Alex Alpha", rating=3.7, gender="male", league_rating=None, eligible_divisions=[])]
+    assert response.json()["linked_player"] is None
+    assert "email" not in response.text and "token" not in response.text and "Private Beta" not in response.text
+    assert not state["calls"]
+    private_headers(response)
+    assert client.get(state["signup"] + "/players").json()["players"] == []
+
+
+def test_public_search_lists_exact_names_before_partial_results(setup):
+    client, state = setup
+    state["tables"]["players"] = [dict(id=i, club_id="alpha", name=f"A Alex Alpha {i}", active=True) for i in range(10, 35)] + [
+        dict(id=1, club_id="alpha", name="Alex Alpha", active=True), dict(id=2, club_id="alpha", name="ALEX  ALPHA", active=True)]
+    rows = client.get(state["signup"] + "/players", params={"q": "Alex Alpha"}).json()["players"]
+    assert {row["id"] for row in rows[:2]} == {"1", "2"}
+    assert len(rows) == 20
+
+
+def test_optional_expired_account_does_not_block_public_search_or_signup(setup, monkeypatch):
+    client, state = setup
+    monkeypatch.setattr(routes, "authenticate_bearer", lambda _: (_ for _ in ()).throw(HTTPException(401, "Expired")))
+    response = client.get(state["signup"] + "/players", params={"q": "Alex"}, headers={"Authorization": "Bearer expired"})
+    assert response.status_code == 200 and response.json()["linked_player"] is None
+    state["result"] = {"status": "registered", "member": state["member"]}
+    response = client.post(state["signup"], json=state["signup_body"], headers={"Authorization": "Bearer expired"})
+    assert response.status_code == 200
+
+
+def test_account_prefill_requires_one_verified_contact_in_same_club(setup, monkeypatch):
+    client, state = setup
+    monkeypatch.setattr(routes, "authenticate_bearer", lambda _: state["user"])
+    contact = dict(club_id="alpha", player_id=1, email_normalized=state["user"].email, request_status="active", verified_at="2026-01-01", unsubscribed_at=None)
+    state["tables"]["player_profile_update_subscriptions"] = [contact,
+        {**contact, "club_id": "beta", "player_id": 2}]
+    response = client.get(state["signup"] + "/players", headers={"Authorization": "Bearer verified"})
+    assert response.status_code == 200 and response.json()["linked_player"]["id"] == "1"
+    contact["verified_at"] = None
+    assert client.get(state["signup"] + "/players", headers={"Authorization": "Bearer verified"}).json()["linked_player"] is None
+    assert not state["calls"]
+
+
+def test_bulk_explicit_no_profile_choice_does_not_rematch_name(setup):
+    client, state = setup
+    state["tables"][routes.MEMBERS] = []
+    state["tables"]["players"].append(dict(id=3, club_id="alpha", name="ALEX  ALPHA", active=True))
+    body = {"members": [{"name": "Alex Alpha"}]}
+    assert client.post(state["base"] + "/pool/bulk-preview", json=body).json()["rows"][0]["status"] == "ambiguous"
+    body["members"][0]["player_id"] = None
+    row = client.post(state["base"] + "/pool/bulk-preview", json=body).json()["rows"][0]
+    assert row["status"] == "new" and row["player_id"] is None
+    assert not state["calls"]
+
+
+def test_admin_added_no_email_member_can_use_personal_link_to_withdraw(setup):
+    client, state = setup
+    state["member"]["email"] = ""
+    response = client.post("/public/interclub-player-response/respond", json={"token": token_for(state),
+        "expected_revision": 1, "action": "update_season", "status": "withdrawn", "name": state["member"]["name"],
+        "email": "", "divisions": ["3.5"], "notes": ""})
+    assert response.status_code == 200
+    assert state["calls"][-1][1]["p_payload"]["email"] == ""
