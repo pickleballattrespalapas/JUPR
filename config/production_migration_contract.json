@@ -111,7 +111,9 @@
     "fix_combined_rating_registration_save",
     "fix_team_tournament_touch_row_fields",
     "partner_email_invitations",
-    "direct_partner_request_delivery"
+    "direct_partner_request_delivery",
+    "complete_registration_cancellation",
+    "registration_cancellation_audit_policies"
   ],
   "required_ledger_names": [
     "add_admin_activity_log",
