@@ -99,6 +99,43 @@ test("authorized admin loads notifications once with bearer and club scope", asy
   expect(notificationRequests[0].url).toContain("/admin/clubs/tres_palapas/notifications");
 });
 
+test("home notifications remain useful on desktop and mobile and refresh honestly", async ({
+  page
+}, testInfo) => {
+  let view: "pending" | "empty" | "unavailable" = "pending";
+  const pageErrors: string[] = [];
+  page.on("pageerror", error => pageErrors.push(error.message));
+  await page.route(/\/admin\/auth\/capabilities(?:\?.*)?$/, route => route.fulfill({ json: capabilities }));
+  await page.route("**/admin/clubs/*/notifications", route => route.fulfill({ json: {
+    ...notifications,
+    categories: notifications.categories.map(category => ({ ...category, status: view === "unavailable" ? "unavailable" : "ready", total_count: view === "pending" ? 1 : view === "empty" ? 0 : null })),
+    items: view === "pending" ? notifications.items : []
+  } }));
+  await page.addInitScript(session => localStorage.setItem("jupr_admin_session_v1", JSON.stringify(session)), storedSession);
+  await page.goto("/admin", { waitUntil: "domcontentloaded" });
+  const center = page.getByRole("region", { name: "Notifications", exact: true });
+  const approval = center.getByRole("link", { name: /Monday round robin awaiting approval/ });
+  await expect(approval).toHaveAttribute("href", "/admin/play-generators/submissions");
+  await expect(center).toContainText("1 notice in your inbox");
+  await expect(center.getByRole("link", { name: /Open notification center/ })).toHaveAttribute("href", "/admin/notifications");
+  await page.screenshot({ path: testInfo.outputPath("admin-home-desktop.png"), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(approval).toBeVisible();
+  await expect(center.getByRole("button", { name: "Clear Monday round robin awaiting approval", exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("admin-home-mobile.png"), fullPage: true });
+  view = "empty";
+  await center.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(center).toContainText("No new notices in your selected categories");
+  await expect(approval).toHaveCount(0);
+  view = "unavailable";
+  await center.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(center).toContainText("Some notifications couldn’t be checked");
+  await expect(center.getByRole("alert")).toContainText("Their notices may be missing");
+  await expect(center).not.toContainText("No new notices");
+  expect(pageErrors).toEqual([]);
+});
+
 test("token change clears old notices before authorization denial", async ({
   page
 }) => {
