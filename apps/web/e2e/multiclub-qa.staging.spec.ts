@@ -169,22 +169,28 @@ test("dedicated QA admin switches three clubs and previews website controls", as
         const joined = details.own_participation?.status === "accepted";
         if (joined) {
           await expect(page.getByRole("heading", { name: `${club.name} has joined`, exact: true })).toBeVisible();
+          await expect(page.getByRole("region", { name: "Season player pool", exact: true })).toBeVisible();
+          await expect(page.getByRole("navigation", { name: "League workflow", exact: true }).getByRole("link", { name: "Player pool", exact: true })).toHaveAttribute("aria-current", "step");
+          // The pool opens with the season now. Reload explicitly so this waiter
+          // observes a fresh scoped read even if the initial request completed.
+          const reloadPool = page.getByRole("button", { name: "Reload player pool", exact: true });
+          await expect(reloadPool).toBeEnabled();
           const poolResult = page.waitForResponse(r => new URL(r.url()).pathname === `${seasonPath}/pool` && r.request().method() === "GET");
-          await page.getByRole("button", { name: "Build season player pool", exact: true }).click();
+          await reloadPool.click();
           const poolResponse = await poolResult;
           expect(poolResponse.status()).toBe(200);
           const pool = await poolResponse.json();
           expect(pool.members.every((member: {club_id: string; season_id: string}) => member.club_id === club.id && member.season_id === season.id)).toBe(true);
           await expect(page.getByRole("region", { name: "Season player pool", exact: true })).toBeVisible();
-          await page.getByRole("button", { name: "Close player pool", exact: true }).click();
-          const prepare = page.getByRole("button", { name: "Prepare meet roster", exact: true });
-          if (details.meets.some((m: { roster_open: boolean; club_ids: string[] }) => m.roster_open && m.club_ids.includes(club.id))) {
-            await prepare.click();
-            await expect(page.getByRole("region", { name: "Meet rosters", exact: true })).toBeFocused();
-          }
         }
         if (!organizer && !joined) await expect(page.getByRole("combobox", { name: "Meet", exact: true })).toHaveCount(0);
         if (details.meets.length && (organizer || joined)) {
+          const workflow = page.getByRole("navigation", { name: "League workflow", exact: true });
+          const lineups = workflow.getByRole("link", { name: "Lineups", exact: true });
+          await lineups.click();
+          await expect(lineups).toHaveAttribute("aria-current", "step");
+          await expect(page.getByRole("region", { name: "Meet rosters", exact: true })).toBeFocused();
+          if (joined) await expect(page.getByRole("region", { name: "Season player pool", exact: true })).toBeHidden();
           const meet = page.getByRole("combobox", { name: "Meet", exact: true });
           const meetId = await meet.inputValue();
           const reloadMeet = page.getByRole("button", { name: "Reload meet", exact: true });
@@ -199,12 +205,14 @@ test("dedicated QA admin switches three clubs and previews website controls", as
           await expect(page.getByText("Loading meet…", { exact: true })).toHaveCount(0);
           if (joined && roster.meet.club_ids.includes(club.id)) {
             const availabilityResult = page.waitForResponse(r => new URL(r.url()).pathname === `${seasonPath}/meets/${meetId}/availability` && r.request().method() === "GET");
-            await page.getByRole("button", { name: "Invite players & view availability", exact: true }).click();
+            const availabilityStep = workflow.getByRole("link", { name: "Meet availability", exact: true });
+            await availabilityStep.click();
             const availabilityResponse = await availabilityResult;
             expect(availabilityResponse.status()).toBe(200);
             const availability = await availabilityResponse.json();
             expect(availability.meet.id).toBe(meetId);
-            await expect(page.getByRole("button", { name: "Hide player availability", exact: true })).toBeVisible();
+            await expect(availabilityStep).toHaveAttribute("aria-current", "step");
+            await expect(page.getByRole("region", { name: "Meet player availability", exact: true })).toBeVisible();
           }
         }
         if (organizer || joined) {
