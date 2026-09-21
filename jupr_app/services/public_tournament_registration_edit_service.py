@@ -21,7 +21,6 @@ from jupr_app.domain.tournament_registration_repo import (
     save_registration,
 )
 from jupr_app.services.public_tournament_registration_service import (
-    _PARTNER_IDENTITY_RATING_AGE_FIELDS,
     _clean_email,
     _clean_text,
     _get_club_player,
@@ -96,12 +95,48 @@ def _selection_public_payload(selection: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _empty_partner_details(selection: dict[str, Any]) -> bool:
-    return all(
-        selection.get(key) is None
-        or (isinstance(selection.get(key), str) and not selection[key].strip())
-        for key in _PARTNER_IDENTITY_RATING_AGE_FIELDS
-    )
+def _selection_edit_values(selection: dict[str, Any]) -> dict[str, Any]:
+    """Compare editable values without treating invalid numbers as empty."""
+    values = _selection_public_payload(selection)
+    for key in ("id", "updated_at"):
+        values.pop(key)
+    for key in ("partner_skill", "partner_age"):
+        raw = selection.get(key)
+        values[key] = None if raw in (None, "") else _safe_float(raw)
+        if raw not in (None, "") and values[key] is None:
+            values[key] = ("invalid", str(raw))
+    return values
+
+
+def _unchanged_edit_selections(
+    *, stored: list[dict[str, Any]], resolved: list[dict[str, Any]], submitted: list[Any],
+) -> dict[str, dict[str, Any]]:
+    """Preserve only server-owned entries round-tripped without edits.
+
+    A confirmed reciprocal entry may be displayed with hydrated partner details.
+    Carry its stored row forward, rather than turning that display into a change
+    to the partner relationship. Version and identity checks still run below.
+    """
+    by_event = {str(row.get("event_option_id") or ""): (row, hydrated)
+                for row, hydrated in zip(stored, resolved)}
+    unchanged = {}
+    for raw in submitted:
+        if not isinstance(raw, dict):
+            continue
+        event_id = str(raw.get("event_option_id") or "")
+        pair = by_event.get(event_id)
+        if not pair:
+            continue
+        row, hydrated = pair
+        if raw.get("id") and str(raw["id"]) != str(row.get("id")):
+            raise TournamentRegistrationEditConflictError(
+                "Registration changed after it was loaded. Refresh the edit link and try again."
+            )
+        if _selection_edit_values(raw) in (
+            _selection_edit_values(row), _selection_edit_values(hydrated)
+        ):
+            unchanged[event_id] = dict(row)
+    return unchanged
 
 
 def _selections_with_confirmed_partners(
@@ -115,8 +150,8 @@ def _selections_with_confirmed_partners(
 
     Automatic pairing deliberately leaves the reciprocal selection's free-text
     partner fields empty. The confirmed team, not those fields, identifies the
-    partner. An empty HAS_PARTNER entry without a confirmed team is still
-    unpaired. Keep the selection IDs and versions intact for the atomic save.
+    partner. Keep saved partner states, selection IDs and versions intact for
+    the atomic save, including entries whose partner still needs validation.
     """
     selected = {
         str(row.get("id") or ""): row
@@ -152,14 +187,6 @@ def _selections_with_confirmed_partners(
                         "This event has conflicting partner records. Please contact tournament staff."
                     )
                 partners[selection_id] = (partner_id, partner_selection_id)
-    selections = [
-        {**row, "partner_mode": "NEEDS_PARTNER"}
-        if str(row.get("id") or "") in selected
-        and str(row.get("id") or "") not in partners
-        and _empty_partner_details(row)
-        else row
-        for row in selections
-    ]
     if not partners:
         return selections
     partner_entries = {
@@ -661,32 +688,17 @@ def submit_public_tournament_registration_edit(
         for event in (bundle.get("event_options") or [])
         if str(event.get("id") or "") in existing_selected_ids
     }
-    # Older, already-open edit pages can still submit an empty HAS_PARTNER
-    # flag. Only repair that exact pre-existing orphan, never a new partner
-    # choice, partial partner details, or an established team relationship.
+    # Existing entries are not new partner submissions. Preserve their exact
+    # stored state when only another event is changing.
     stored_selections = list(bundle.get("selections") or [])
     resolved_selections = _selections_with_confirmed_partners(
         supabase, tournament_id=tournament_id, registration_id=registration_id,
         selections=stored_selections,
     )
-    unpaired_event_ids = {
-        str(stored.get("event_option_id") or "")
-        for stored, resolved in zip(stored_selections, resolved_selections)
-        if str(stored.get("partner_mode") or "").upper() == "HAS_PARTNER"
-        and resolved.get("partner_mode") == "NEEDS_PARTNER"
-    }
-    payload = {
-        **payload,
-        "selections": [
-            {**row, "partner_mode": "NEEDS_PARTNER"}
-            if isinstance(row, dict)
-            and str(row.get("event_option_id") or "") in unpaired_event_ids
-            and str(row.get("partner_mode") or "").upper() == "HAS_PARTNER"
-            and _empty_partner_details(row)
-            else row
-            for row in (payload.get("selections") or [])
-        ],
-    }
+    unchanged_selections = _unchanged_edit_selections(
+        stored=stored_selections, resolved=resolved_selections,
+        submitted=payload.get("selections") or [],
+    )
     save_payload = build_validated_public_registration_save_payload(
         supabase,
         club_id=str(club_id),
@@ -695,6 +707,7 @@ def submit_public_tournament_registration_edit(
         payload=payload,
         locked_registration=registration,
         existing_event_options=existing_event_options,
+        unchanged_selections=unchanged_selections,
     )
     # The public edit form does not expose the derived/organizer-managed age
     # bracket, so retain it instead of clearing it on every edit.
@@ -746,6 +759,10 @@ def submit_public_tournament_registration_edit(
         expected_selection_versions=expected_selection_versions,
         atomic_edit=True,
         commerce_transaction=commerce_transaction,
+        preserved_selections={
+            str(row["id"]): row for row in unchanged_selections.values()
+            if str(row["id"]) in save_payload.get("_preserved_selection_ids", [])
+        },
     )
     pairing = None
     if invitation_token:

@@ -3236,6 +3236,7 @@ def save_registration(
     atomic_edit: bool = False,
     commerce_transaction: dict[str, Any] | None = None,
     trusted_admin_create: bool = False,
+    preserved_selections: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     email = _normalize_email(payload.get("email"))
     if not email:
@@ -3322,6 +3323,27 @@ def save_registration(
             raise ValueError(
                 f"{division_label} is not open for public registration (status={status_label}, enabled={bool(event.get('enabled', True))})."
             )
+
+        preserved = (preserved_selections or {}).get(str(selection.get("id") or ""))
+        if preserved is not None:
+            # This map comes only from the token-verified edit service, never
+            # from a public request. The transaction still checks all versions
+            # and active relationships before saving the complete registration.
+            if not atomic_edit or not expected_registration_id or (
+                str(preserved.get("registration_id")) != registration_id
+                or str(preserved.get("tournament_id")) != str(tournament_id)
+                or str(preserved.get("event_option_id")) != event_option_id
+                or selection != preserved
+            ):
+                raise ValueError("Only unchanged entries in this registration can be preserved.")
+            rows.append({key: preserved.get(key) for key in (
+                "id", "tournament_id", "registration_id", "registration_day_id",
+                "event_option_id", "partner_mode", "partner_name", "partner_email",
+                "partner_phone", "partner_dupr_id", "partner_skill", "partner_age",
+                "partner_gender", "partner_note", "show_on_partner_board", "sort_order",
+                "created_at", "updated_at",
+            )})
+            continue
 
         partner_email = _normalize_email(selection.get("partner_email")) or None
         partner_payload = {

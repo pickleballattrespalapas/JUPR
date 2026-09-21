@@ -1280,6 +1280,7 @@ def _validate_and_clean_selections(
     player_profile: dict[str, Any],
     primary_registration_id: str | None = None,
     existing_event_options: dict[str, dict[str, Any]] | None = None,
+    unchanged_selections: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     selectable = {str(event.get("id") or ""): event for event in (page.get("events") or []) if event.get("selectable")}
     allowed_existing = {str(key): value for key, value in (existing_event_options or {}).items() if value}
@@ -1308,7 +1309,8 @@ def _validate_and_clean_selections(
             family = _clean_text(event.get("event_family_label") or event.get("label") or "Event", limit=160)
             raise ValueError(f"Choose only one division for {family} on the same registration day.")
 
-        clean_selection = validate_and_clean_tournament_selection(
+        preserved = (unchanged_selections or {}).get(event_option_id)
+        clean_selection = dict(preserved) if preserved is not None else validate_and_clean_tournament_selection(
             supabase,
             club_id=str(club_id),
             tournament_id=str(tournament_id),
@@ -1336,6 +1338,7 @@ def build_validated_public_registration_save_payload(
     payload: dict[str, Any],
     locked_registration: dict[str, Any] | None = None,
     existing_event_options: dict[str, dict[str, Any]] | None = None,
+    unchanged_selections: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     locked = locked_registration or None
     validation_payload = dict(payload)
@@ -1373,6 +1376,19 @@ def build_validated_public_registration_save_payload(
         "gender": _clean_text(payload.get("gender"), limit=40),
         "age": _validated_age(payload.get("age"), label="Age"),
     }
+    # A change to the registrant's eligibility data affects every event. Only
+    # grandfather unchanged entries when the submitted profile is unchanged.
+    preserved = unchanged_selections or {}
+    if preserved:
+        canonical_doubles, canonical_singles = _canonical_player_skills(linked_player) if linked_player else (None, None)
+        expected_doubles = canonical_doubles if canonical_doubles is not None else _safe_float((locked or {}).get("doubles_skill"))
+        expected_singles = canonical_singles if canonical_singles is not None else _safe_float((locked or {}).get("singles_skill"))
+        if not locked or (
+            doubles_skill != expected_doubles or singles_skill != expected_singles
+            or player_profile["age"] != _safe_int(locked.get("age"))
+            or _normalized_gender(player_profile["gender"]) != _normalized_gender(locked.get("gender"))
+        ):
+            preserved = {}
     selections = _validate_and_clean_selections(
         supabase,
         club_id=str(club_id),
@@ -1382,6 +1398,7 @@ def build_validated_public_registration_save_payload(
         player_profile=player_profile,
         primary_registration_id=str(locked.get("id") or "") if locked else None,
         existing_event_options=existing_event_options,
+        unchanged_selections=preserved,
     )
     if any(_safe_bool(selection.get("show_on_partner_board")) for selection in selections) and not _safe_bool(
         payload.get("wants_partner_board_contact")
@@ -1403,6 +1420,7 @@ def build_validated_public_registration_save_payload(
         "notes": _clean_text(payload.get("notes"), limit=800),
         "wants_partner_board_contact": _safe_bool(payload.get("wants_partner_board_contact")),
         "selections": selections,
+        "_preserved_selection_ids": [str(row["id"]) for row in preserved.values()],
     }
     if locked:
         save_payload["payment_status"] = locked.get("payment_status") or "unpaid"
