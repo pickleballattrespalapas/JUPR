@@ -25,8 +25,10 @@ const eligibility = load("lib/tournamentRegistrationEligibility.ts", {
   "@/lib/tournamentSkillEligibility": load("lib/tournamentSkillEligibility.ts")
 });
 const ConfirmAction = () => null;
+const redirects = [];
 const Panel = load("app/admin/tournaments/registration/registrants/[registrationId]/TournamentRegistrantEditPanel.tsx", {
   "next/link": { __esModule: true, default: ({ children }) => children },
+  "next/navigation": { useRouter: () => ({ replace: href => redirects.push(href) }) },
   "@/components/ConfirmAction": { ConfirmAction },
   "@/components/interaction": { ...interaction, FormDialog: ({ open, children }) => open ? React.createElement("div", { role: "dialog" }, children) : null },
   "@/lib/tournamentRegistrationActionError": errors,
@@ -125,6 +127,7 @@ async function main() {
     if (options.method === "PATCH") {
       requests.push(JSON.parse(options.body));
       if (rejection) return new Response(JSON.stringify({ detail: rejection.detail }), { status: rejection.status });
+      if (requests.at(-1).registration_status === "cancelled") return new Response(JSON.stringify({ ok: true, registration_removed: true }));
       registration.registration_status = "confirmed";
       return new Response(JSON.stringify({ ok: true }));
     }
@@ -179,6 +182,17 @@ async function main() {
     assert.equal(field("Partner state").findByType("select").props.value, "NEEDS_PARTNER");
     assert.equal(renderer.root.findAllByType("input").find(node => node.props.type === "checkbox" && node.parent.type === "label" && content(node.parent).includes("Show this request")).props.checked, false, "Partner-board opt-in is not carried through a singles entry");
     await verifyPublicLegacyGenders();
+    await act(async () => field("Registration status").findByType("select").props.onChange({ target: { value: "cancelled" } }));
+    const cancellation = () => renderer.root.findAllByType(ConfirmAction).find(node => node.props.confirmLabel === "Yes, cancel and remove");
+    assert.equal(cancellation().props.tone, "danger");
+    assert.match(cancellation().props.description, /all its event entries and partner connections/);
+    rejection = { status: 409, detail: "Registration changed. Refresh and try again." };
+    await act(async () => { try { await cancellation().props.onConfirm("SAVE REGISTRATION"); } catch {} });
+    assert.deepEqual(redirects, [], "A failed cancellation keeps the admin on the editor");
+    rejection = null;
+    await act(async () => { completion = await cancellation().props.onConfirm("SAVE REGISTRATION"); });
+    assert.equal(completion.status, "success");
+    assert.deepEqual(redirects, ["/admin/tournaments/registration/registrants"], "Successful removal returns to the registrant list");
     console.log("Registration editors: saves, legacy gender/status, eligible events and singles partner controls passed.");
   } finally {
     if (renderer) await act(async () => renderer.unmount());
