@@ -158,7 +158,7 @@ export default function BulkRegistrationPanel({ apiBase, clubId, status, initial
         }
       );
       const updatedCount = payload.updated_count ?? payload.registration_ids?.length ?? 0;
-      const completion = actionSuccess("Registrations updated", `${updatedCount} registration${updatedCount === 1 ? "" : "s"} updated successfully.`);
+      const completion = actionSuccess(payload.registrations_removed ? "Registrations cancelled and removed" : "Registrations updated", `${updatedCount} registration${updatedCount === 1 ? "" : "s"} updated successfully.`);
       if (!actionRequest.isCurrent(generation)) return completion;
       const refreshed = await requestJson<AdminTournamentDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(requestedTournamentId)}`);
       if (!actionRequest.isCurrent(generation)) return completion;
@@ -231,7 +231,7 @@ export default function BulkRegistrationPanel({ apiBase, clubId, status, initial
               <textarea value={appendNote} onChange={(event) => setAppendNote(event.target.value)} rows={3} style={inputStyle} />
             </label>
             <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-              <ConfirmAction triggerLabel="Apply bulk update" title="Update the selected registrations?" description={`This applies the chosen status, payment, or note changes to ${selectedIds.length} selected registration${selectedIds.length === 1 ? "" : "s"}.`} confirmLabel="Yes, update registrations" confirmationText="BULK UPDATE REGISTRATIONS" tone={registrationStatus === "cancelled" || paymentStatus === "refunded" ? "danger" : "default"} disabled={!selectedIds.length || !detail.state_fingerprint || detail.registrations.filter((row) => selectedIds.includes(row.id)).some((row) => !row.updated_at)} busy={busy} onConfirm={saveBulkUpdate} />
+              <ConfirmAction triggerLabel="Apply bulk update" title="Update the selected registrations?" description={registrationStatus === "cancelled" ? `Remove ${selectedIds.length} registrations, all their event entries and partner connections. Remaining partners will need a partner. Returning players must register again.` : `This applies the chosen status, payment, or note changes to ${selectedIds.length} selected registration${selectedIds.length === 1 ? "" : "s"}.`} confirmLabel="Yes, update registrations" confirmationText="BULK UPDATE REGISTRATIONS" tone={registrationStatus === "cancelled" || paymentStatus === "refunded" ? "danger" : "default"} disabled={!selectedIds.length || !detail.state_fingerprint || detail.registrations.filter((row) => selectedIds.includes(row.id)).some((row) => !row.updated_at)} busy={busy} onConfirm={saveBulkUpdate} />
               <button type="button" onClick={() => setSelectedIds(detail.registrations.map((row) => row.id))} disabled={busy} style={ghostButtonStyle}>Select all loaded</button>
               <button type="button" onClick={() => setSelectedIds([])} disabled={busy} style={ghostButtonStyle}>Clear selection</button>
             </p>

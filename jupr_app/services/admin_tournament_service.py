@@ -8,6 +8,8 @@ from typing import Any
 from urllib.parse import urlencode
 
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
+from jupr_app.domain.admin.staff_policy import ADMIN_ROLES
+from jupr_app.domain.admin.roles import normalize_role
 from jupr_app.domain.tournament_registration_repo import (
     ADMIN_PAYMENT_STATUS_OPTIONS,
     ADMIN_REGISTRATION_STATUS_OPTIONS,
@@ -1176,6 +1178,8 @@ def update_admin_tournament_registration(
         "status" in update_payload
         and str(update_payload.get("status") or "") != _registration_status(before)
     )
+    if update_payload.get("status") == "cancelled" and normalize_role(actor_role) not in ADMIN_ROLES:
+        raise PermissionError("Only an administrator can cancel and remove a registration.")
     player_link_changed = (
         "player_id" in update_payload
         and update_payload.get("player_id") != _safe_int(before.get("player_id"))
@@ -1197,6 +1201,7 @@ def update_admin_tournament_registration(
         registration_id=clean_registration_id,
         payload=update_payload,
         expected_updated_at=clean_expected_updated_at,
+        actor_email=actor_email,
     )
     selection_count = _selection_count_for_registration(supabase, tournament_id=clean_tournament_id, registration_id=clean_registration_id)
     registration = _registration_payload(updated, selection_count=selection_count)
@@ -1218,7 +1223,8 @@ def update_admin_tournament_registration(
         warnings.append(audit_write.warning)
     if not audit_write.ok and is_api_audit_log_required():
         raise RuntimeError("audit log write required but unavailable")
-    return {"ok": True, "mode": "tournament_registration_update", "registration": registration, "warnings": warnings}
+    return {"ok": True, "mode": "tournament_registration_update", "registration": registration,
+            "registration_removed": bool(updated.get("removed")), "warnings": warnings}
 
 
 def create_admin_tournament_selection(
