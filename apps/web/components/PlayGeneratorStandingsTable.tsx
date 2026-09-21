@@ -46,6 +46,7 @@ export default function PlayGeneratorStandingsTable({ rows, sortMode }: Props) {
         border: "1px solid #e2e8f0",
         borderRadius: "14px",
         padding: "1rem",
+        minWidth: 0,
         background: "white"
       }}
     >

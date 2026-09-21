@@ -50,7 +50,7 @@ export default function GeneratorSubmission({ submission, canSubmit, defaultDate
         <label style={{ display: "grid", gap: 4 }}>Organizer’s name<input required maxLength={160} value={organizerName} onChange={e => setOrganizerName(e.target.value)} disabled={busy} style={field} /></label>
         <label style={{ display: "grid", gap: 4 }}>Date played<input required type="date" value={matchDate} onChange={e => setMatchDate(e.target.value)} disabled={busy} style={field} /></label>
         <button disabled={busy || !organizerName.trim() || !matchDate} type="submit" style={{ ...field, background: "#0f172a", color: "white", fontWeight: 700 }}>{busy ? "Submitting…" : "Submit for approval"}</button>
-      </form> : <p>Finish the session, then use the organizer link to submit the scored games. No account is required.</p>}
+      </form> : <p>The organizer can submit scored games using their organizer link after the session is finished. No account is required.</p>}
     </>}
     {error ? <p role="alert" style={{ color: "#b91c1c" }}>{error}</p> : null}
   </article>;

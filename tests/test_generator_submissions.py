@@ -263,6 +263,103 @@ def test_public_submission_api_needs_organizer_token_but_no_account(db):
     assert db.db["matches"] == []
 
 
+@pytest.fixture
+def public_client(db, monkeypatch):
+    from services.api.public_play_generator_routes import install_public_play_generator_routes
+
+    monkeypatch.setenv("JUPR_PUBLIC_LIVE_TOKEN_SECRET", "test-generator-secret-" * 3)
+    app = FastAPI()
+
+    def raise_error(exc):
+        status = 403 if isinstance(exc, PermissionError) else 409 if isinstance(exc, PublicLiveConflictError) else 400
+        raise HTTPException(status, str(exc))
+
+    install_public_play_generator_routes(app, get_club=lambda slug: {"id": "club"}, get_supabase_client=lambda: db,
+        public_club_payload=lambda club, slug: club, require_public_writes=lambda: None, require_service_role=lambda: None,
+        requester_hash=lambda request: "a" * 64, raise_public_error=raise_error, public_writes_enabled=lambda: True, service_role_configured=lambda: True)
+    return TestClient(app)
+
+
+@pytest.mark.parametrize("rating_mode", ["rated", "unrated"])
+@pytest.mark.parametrize("kind", ["round_robin", "ladder"])
+def test_public_http_rating_choice_survives_preview_play_and_approval(public_client, db, rating_mode, kind):
+    path = "/clubs/test/play-generators"
+    setup = {"generator_kind": kind, "play_format": "doubles", "title": "HTTP organizer session",
+             "participant_names": [f"Player {i}" for i in range(1, 9)],
+             "total_rounds": 2, "court_count": 2, "rating_mode": rating_mode}
+    response = public_client.post(f"{path}/preview", json=setup)
+    assert response.status_code == 200, response.text
+    preview = response.json()["preview"]
+    assert preview["ratingMode"] == rating_mode
+    other_mode = "unrated" if rating_mode == "rated" else "rated"
+    other_preview = public_client.post(f"{path}/preview", json={**setup, "rating_mode": other_mode}).json()["preview"]
+    assert other_preview["ratingMode"] == other_mode
+    assert other_preview["previewFingerprint"] != preview["previewFingerprint"]
+
+    response = public_client.post(f"{path}/sessions", json={**setup,
+        "preview_fingerprint": preview["previewFingerprint"], "idempotency_key": f"http-create-{kind}-{rating_mode}"})
+    assert response.status_code == 200, response.text
+    created = response.json()
+    session = created["session"]
+    session_path = f"{path}/sessions/{session['session_key']}"
+    assert session["rating_mode"] == rating_mode
+    assert session["unrated"] == (rating_mode == "unrated")
+
+    for number in (1, 2):
+        response = public_client.patch(f"{session_path}/rounds/{number}/scores", json={
+            "edit_token": created["edit_token"], "expected_version": session["version"],
+            "idempotency_key": f"http-scores-{number}",
+            "scores": [{"match_id": match["id"], "score_a": 11, "score_b": 7}
+                       for match in matches(session["event"]["rounds"][number - 1])]})
+        assert response.status_code == 200, response.text
+        session = response.json()["session"]
+        assert session["rating_mode"] == rating_mode
+        response = public_client.post(f"{session_path}/advance", json={
+            "edit_token": created["edit_token"], "expected_version": session["version"],
+            "idempotency_key": f"http-advance-{number}"})
+        assert response.status_code == 200, response.text
+        session = response.json()["session"]
+        assert session["rating_mode"] == rating_mode
+
+    assert session["status"] == "completed"
+    response = public_client.post(f"{session_path}/submit", json={
+        "edit_token": created["edit_token"], "expected_version": session["version"],
+        "idempotency_key": "http-submit-results", "organizer_name": "Guest organizer", "match_date": "2026-09-20"})
+    assert response.status_code == 200, response.text
+    session = response.json()["session"]
+    assert session["submission"]["rating_mode"] == rating_mode
+    assert db.db["matches"] == []
+    service.review_generator_submission(db, **review_args(session))
+    assert len(db.db["matches"]) == (12 if kind == "ladder" else 4)
+    assert {match["rating_scope"] for match in db.db["matches"]} == {"overall_only" if rating_mode == "rated" else "unrated"}
+    refreshed = public_client.get(session_path).json()["session"]
+    assert refreshed["rating_mode"] == rating_mode
+    assert refreshed["submission"]["approved_mode"] == rating_mode
+
+
+def test_public_http_changed_rating_choice_requires_fresh_preview(public_client, db):
+    path = "/clubs/test/play-generators"
+    setup = {"generator_kind": "round_robin", "play_format": "singles",
+             "participant_names": ["Player 1", "Player 2"], "rating_mode": "unrated"}
+    preview = public_client.post(f"{path}/preview", json=setup).json()["preview"]
+    response = public_client.post(f"{path}/sessions", json={**setup, "rating_mode": "rated",
+        "preview_fingerprint": preview["previewFingerprint"], "idempotency_key": "http-changed-mode"})
+    assert response.status_code == 400
+    assert "Preview the schedule again" in response.json()["detail"]
+    assert db.db["live_sessions"] == []
+
+
+@pytest.mark.parametrize("endpoint", ["preview", "sessions"])
+def test_public_http_rated_games_require_scores(public_client, db, endpoint):
+    response = public_client.post(f"/clubs/test/play-generators/{endpoint}", json={
+        "generator_kind": "round_robin", "play_format": "singles",
+        "participant_names": ["Player 1", "Player 2"], "rating_mode": "rated", "scoring_mode": "unscored",
+        "idempotency_key": "http-rated-unscored"})
+    assert response.status_code == 400
+    assert "require scores" in response.json()["detail"]
+    assert db.db["live_sessions"] == []
+
+
 def test_admin_api_denies_operators_and_cannot_override_organizer_mode(db, monkeypatch):
     from services.api import admin_play_generator_routes as routes
     session, token = completed_session(db, rating_mode="unrated")

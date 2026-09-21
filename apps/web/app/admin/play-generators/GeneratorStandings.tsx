@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import GeneratorSubmission, { GeneratorSubmissionStatus, generatorResultLabel } from "@/components/GeneratorSubmission";
 import PlayGeneratorStandingsTable, {
   PlayGeneratorStanding,
   standingsSortLabel
@@ -19,6 +20,9 @@ type Session = {
   version: string;
   generator_kind: string;
   play_format: string;
+  rating_mode?: "rated" | "unrated";
+  submission?: GeneratorSubmissionStatus | null;
+  created_at?: string;
   scoring_mode?: ScoringMode;
   current_round_number?: number | null;
   total_rounds?: number | null;
@@ -106,6 +110,23 @@ export default function AdminGeneratorStandings({ apiBase, clubId, sessionKey }:
     }
   }
 
+  async function submitResults(organizerName: string, matchDate: string): Promise<void> {
+    if (!apiBase || !accessToken || !session) throw new Error("Sign in to submit this session.");
+    const response = await fetch(
+      apiUrl(apiBase, `/admin/clubs/${encodeURIComponent(clubId)}/play-generators/sessions/${encodeURIComponent(sessionKey)}/submit`),
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ expected_version: session.version, organizer_name: organizerName, match_date: matchDate })
+      }
+    );
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(String(payload?.detail || `API error (${response.status})`));
+    if (!payload?.session) throw new Error("Could not confirm submission. Please try again.");
+    setSession(payload.session as Session);
+    setMessage("");
+  }
+
   if (!session) return <article style={cardStyle}><h1>Round-Robin standings</h1><p>{message}</p></article>;
 
   const scoringMode = session.scoring_mode || session.event.scoringMode || "scored";
@@ -121,16 +142,23 @@ export default function AdminGeneratorStandings({ apiBase, clubId, sessionKey }:
   }
 
   return (
-    <div style={{ display: "grid", gap: "1rem" }}>
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", minWidth: 0, gap: "1rem" }}>
       <article style={{ ...cardStyle, background: "#f8fafc" }}>
         <p style={{ margin: "0 0 0.4rem" }}><Link href="/admin/round-robin-generator">← Round-Robin Generator</Link></p>
         <h1 style={{ margin: "0 0 0.35rem" }}>{session.title} standings</h1>
-        <p style={{ margin: 0, color: "#475569" }}>{playFormatLabel(session.play_format)} · {standingsSortLabel(sortMode)} · {session.status}</p>
+        <p style={{ margin: 0, color: "#475569" }}>{playFormatLabel(session.play_format)} · {standingsSortLabel(sortMode)} · {session.status === "completed" ? "Complete" : "In progress"} · {session.submission?.status !== "approved" ? `${session.rating_mode === "rated" ? "Rated" : "Unrated"} · ` : ""}{generatorResultLabel(session.submission)}</p>
       </article>
       <nav aria-label="Round-Robin session navigation" style={{ ...cardStyle, display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
         <Link href={`/admin/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${currentRound}`} style={linkButton}>Current round</Link>
         {visibleRounds.map((row) => <Link key={row.number} href={`/admin/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${row.number}`} style={linkButton}>Round {row.number}</Link>)}
       </nav>
+      {session.status === "completed" || session.submission ? (
+        <div style={{ display: "grid", gap: "0.5rem" }}>
+          <GeneratorSubmission ratingMode={session.rating_mode || "unrated"} submission={session.submission} canSubmit={session.status === "completed" && Boolean(accessToken)} defaultDate={session.created_at} onSubmit={submitResults} />
+          {session.submission ? <button type="button" onClick={() => void loadSession()} style={{ ...linkButton, cursor: "pointer", justifySelf: "start", background: "white" }}>Refresh approval status</button> : null}
+          <p style={{ margin: 0 }}><Link href="/admin/play-generators/submissions">Review generator submissions</Link> (club administrators)</p>
+        </div>
+      ) : null}
       <PlayGeneratorStandingsTable rows={session.standings || []} sortMode={sortMode} />
       {session.status === "completed" ? (
         <article style={{ ...cardStyle, background: "#ecfdf5", borderColor: "#86efac" }}>
