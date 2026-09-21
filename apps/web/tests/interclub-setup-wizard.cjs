@@ -62,14 +62,15 @@ async function completeJourney() {
   await act(async () => tree.root.findByProps({ 'aria-label': 'Visiting Club' }).props.onChange());
   await click(tree, 'Save and continue');
   assert.equal(stored.draft.setup_step, 2);
-  assert.ok(text(tree).includes('3.5 to below 4.0'));
-  assert.equal(tree.root.findAllByProps({ 'aria-label': '3.5 maximum rating' }).length, 0, 'Rating bands follow the skill level automatically');
+  assert.ok(text(tree).includes('Below 4.0'));
+  assert.equal(tree.root.findAllByProps({ 'aria-label': '3.5 maximum rating' }).length, 0, 'Upper rating limits follow the division automatically');
   await act(async () => tree.root.findByProps({ 'aria-label': 'Include 4.0 division' }).props.onChange());
   await click(tree, 'Save and exit');
   assert.equal(closed, 1); assert.equal(stored.draft.registration_rules['3.5'].max_rating, 3.999);
+  assert.equal(stored.draft.registration_rules['3.5'].min_rating, null, 'Saving setup does not reintroduce a lower rating floor');
   await act(async () => tree.unmount()); props = { ...props, initialSeason: stored };
   await act(async () => { tree = create(React.createElement(Wizard, props)); });
-  assert.ok(text(tree).includes('3.5 to below 4.0'), 'Rules survive exit and reload');
+  assert.ok(text(tree).includes('Below 4.0'), 'Rules survive exit and reload');
   await click(tree, 'Save and continue'); await click(tree, 'Add a meet'); await click(tree, 'Save and exit');
   assert.equal(stored.draft.meets[0].starts_at, null, 'Unfinished meet can be resumed');
   await act(async () => tree.unmount()); props = { ...props, initialSeason: stored };
@@ -257,6 +258,22 @@ async function invitationDashboard() {
   await act(async () => tree.unmount());
 }
 
+function playUpRules() {
+  for (const division of ['2.5', '3.0', '3.5', '4.0', '4.5', 'Open', '4.5/Open']) {
+    assert.equal(helpers.emptyRule(division).min_rating, null, `${division} permits players below its label to play up`);
+  }
+  assert.equal(helpers.emptyRule('3.0').max_rating, 3.499);
+  assert.equal(helpers.emptyRule('Open').max_rating, null);
+  assert.equal(helpers.emptyRule('4.5/Open').max_rating, null);
+  assert.equal(helpers.divisionEligibilityLabel('3.0'), 'Below 3.5');
+  assert.equal(helpers.divisionEligibilityLabel('3.5'), 'Below 4.0');
+  assert.equal(helpers.divisionEligibilityLabel('oPeN'), 'Any positive rating');
+  assert.equal(helpers.divisionEligibilityLabel('4.5/Open'), 'Any positive rating');
+  assert.equal(helpers.divisionEligibilityLabel('garbage'), 'Rating eligibility unavailable');
+  const draft = helpers.newSeason().draft;
+  draft.registration_rules = { '3.5': { min_rating: 3.5, max_rating: 3.999, women_required: 2 } };
+  assert.equal(helpers.normalizeDraft(draft).registration_rules['3.5'].min_rating, null, 'Reloading old drafts removes their superseded lower bound');
+}
 function timezoneChecks() {
   assert.equal(helpers.meetUtcTime('2027-01-10T09:00', 'America/Mazatlan'), '2027-01-10T16:00:00.000Z');
   assert.equal(helpers.meetUtcTime('2027-07-10T09:00', 'America/New_York'), '2027-07-10T13:00:00.000Z');
@@ -264,4 +281,4 @@ function timezoneChecks() {
   assert.throws(() => helpers.meetUtcTime('2027-03-14T02:30', 'America/New_York'), /clock change/);
   assert.throws(() => helpers.meetUtcTime('2027-11-07T01:30', 'America/New_York'), /clock change/);
 }
-(async () => { timezoneChecks(); await completeJourney(); await conflictsAndContext(); await inviteDuringClubSelection(); await invitationDashboard(); console.log('Interclub wizard: invitation dashboard, inline club creation/selection, invitation links and renewal, saved progress, uncertain responses, duplicate actions, stale context and opened-season management passed.'); })().catch(e => { console.error(e); process.exitCode = 1; });
+(async () => { playUpRules(); timezoneChecks(); await completeJourney(); await conflictsAndContext(); await inviteDuringClubSelection(); await invitationDashboard(); console.log('Interclub wizard: invitation dashboard, inline club creation/selection, invitation links and renewal, saved progress, uncertain responses, duplicate actions, stale context and opened-season management passed.'); })().catch(e => { console.error(e); process.exitCode = 1; });

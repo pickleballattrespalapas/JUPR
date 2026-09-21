@@ -139,6 +139,33 @@ async function scoreEntry() {
   await act(async () => tree.unmount());
 }
 
+async function playUpReplacementEligibility() {
+  const low = { entry_id: 'play-up', name: 'Play Up Player', eligibility_rating: 2.9, rating: 4.8, division: '3.0', gender: 'female' };
+  for (const division of ['3.0', '3.5', '4.0', '4.5', 'Open', '4.5/Open', 'oPeN']) {
+    assert.equal(types.matchesSkillLevel(low, division), true, `A 2.9 player may play up into ${division}, regardless of a prior division label`);
+  }
+  assert.equal(types.matchesSkillLevel({ ...low, eligibility_rating: 3.49999 }, '3.0'), true, 'Use the exact ceiling rather than rounded display metadata');
+  assert.equal(types.matchesSkillLevel({ ...low, eligibility_rating: 3.5, division: '3.0' }, '3.0'), false, 'A matching old division label cannot bypass its upper limit');
+  assert.equal(types.matchesSkillLevel({ ...low, eligibility_rating: 4.0, division: '3.5' }, '3.5'), false);
+  assert.equal(types.matchesSkillLevel({ entry_id: 'seed', name: 'Seed', starting_rating: 2.9 }, '3.5'), true, 'Roster fallback uses the starting rating when no later eligibility rating exists');
+  assert.equal(types.matchesSkillLevel({ ...low, eligibility_rating: 9 }, '4.5/Open'), true, 'Open has no upper rating ceiling');
+  for (const rating of [undefined, null, 0, -1, NaN, Infinity]) {
+    for (const division of ['3.5', 'Open']) assert.equal(types.matchesSkillLevel({ entry_id: 'invalid', name: 'Invalid', eligibility_rating: rating }, division), false, 'A positive finite rating is required');
+  }
+  for (const division of ['', 'garbage', '3.1', '7.0', '4.5Open', ' Open ']) assert.equal(types.matchesSkillLevel(low, division), false, 'Unknown division labels do not silently become Open');
+  const atLimit = { ...low, entry_id: 'at-limit', name: 'At Upper Limit', eligibility_rating: 4.0, division: '3.5' };
+  const scoped = { ...detail, eligible_players: { ...detail.eligible_players, alpha: [...detail.eligible_players.alpha, low, atLimit] } };
+  let tree;
+  await act(async () => { tree = create(React.createElement(ScoreEditor, { detail: scoped, players: types.competitionPlayers(scoped), document, clubName, disabled: false, onChange() {} })); });
+  const selectors = tree.root.findAllByType('fieldset').filter(fieldset => fieldset.children.some(child => child.type === 'legend' && nodeText(child) === 'Alpha Club actual players')).flatMap(fieldset => fieldset.findAllByType('select'));
+  assert.ok(selectors.length);
+  for (const selector of selectors) {
+    assert.ok(selector.findAllByType('option').some(option => option.props.value === low.entry_id), 'The injury replacement picker offers a lower-rated eligible player');
+    assert.ok(!selector.findAllByType('option').some(option => option.props.value === atLimit.entry_id), 'The picker excludes a player at the division ceiling');
+  }
+  await act(async () => tree.unmount());
+}
+
 function printSafety() {
   const markup = renderToStaticMarkup(React.createElement(PrintPacket, { document, meet, seasonName: 'Southern BCS', timezone: 'America/Mazatlan', revision: 4, players: types.competitionPlayers(detail), clubName }));
   assert.ok(markup.includes('&lt;script&gt;alert(1)&lt;/script&gt;'), 'Player labels are escaped in print HTML');
@@ -226,4 +253,4 @@ function writePrintReview() {
   fs.writeFileSync(output, '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Southern BCS paper packet review</title><style>' + stylesheet + screenPreview + '</style></head><body class="printBody"><div class="printPortal">' + render(document) + render(final) + '</div></body></html>');
   console.log('Print review fixture: ' + output);
 }
-(async () => { await scoreEntry(); printSafety(); await revisionsAndStaleClub(); await approval(); await qualifyingRoundRobin(); await missingLineups(); await seasonRegistrationGate(); qualifyingDisplay(); writePrintReview(); console.log('PASS interclub competition: registration phase locks and background draft preservation, paper packet safety, scoped lineups, non-play scoring, exact revisions, approval and ratings status, missing-lineup guidance, qualification and joint Cup'); })().catch(error => { console.error(error); process.exit(1); });
+(async () => { await scoreEntry(); await playUpReplacementEligibility(); printSafety(); await revisionsAndStaleClub(); await approval(); await qualifyingRoundRobin(); await missingLineups(); await seasonRegistrationGate(); qualifyingDisplay(); writePrintReview(); console.log('PASS interclub competition: play-up replacement eligibility, registration phase locks and background draft preservation, paper packet safety, scoped lineups, non-play scoring, exact revisions, approval and ratings status, missing-lineup guidance, qualification and joint Cup'); })().catch(error => { console.error(error); process.exit(1); });

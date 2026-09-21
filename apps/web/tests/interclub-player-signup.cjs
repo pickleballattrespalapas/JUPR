@@ -237,7 +237,7 @@ async function missingLinkAndWrongResponseKind() {
 }
 
 async function signupProfileMatchingAndSafeFallback() {
-  const player = { id: 'player-1', name: 'Jo Player', rating: 3.456789, gender: 'Female', eligible_divisions: ['3.5'] };
+  const player = { id: 'player-1', name: 'Jo Player', rating: 3.456789, gender: 'Female', eligible_divisions: ['3.0', '3.5', '4.0', '4.5'] };
   const duplicate = { ...player, id: 'player-2', rating: 4.01 };
   let players = [player], posts = [], lookup;
   global.fetch = async (url, options) => {
@@ -264,7 +264,11 @@ async function signupProfileMatchingAndSafeFallback() {
   assert.equal(tree.root.findByProps({ 'aria-label': 'Club rating' }).props.value, '3.46');
   const divisionLabels = tree.root.findAllByProps({ type: 'checkbox' }).slice(0, 4).map(input => input.parent.findByType('span').children[0]);
   assert.deepEqual(divisionLabels, ['3.0', '3.5', '4.0', '4.5']);
+  assert.ok(content(tree).includes('Eligible divisions: 3.0, 3.5, 4.0, 4.5.'));
+  assert.ok(tree.root.findAllByProps({ type: 'checkbox' }).slice(0, 4).every(input => !input.props.checked), 'Broader eligibility does not automatically choose preferred divisions');
+  await act(async () => tree.root.findAllByProps({ type: 'checkbox' })[1].props.onChange({ target: { checked: true } }));
   await submit();
+  assert.deepEqual(posts.at(-1).divisions, ['3.5'], 'Only the player’s selected preference is submitted when several divisions are eligible');
   assert.equal(posts.at(-1).player_id, player.id, 'Unique normalized exact match is submitted automatically');
   assert.equal(Object.hasOwn(posts.at(-1), 'rating'), false, 'Browser does not submit a rating override');
   await act(async () => button(tree, 'This isn’t my profile').props.onClick());

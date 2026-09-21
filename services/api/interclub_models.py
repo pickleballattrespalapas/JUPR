@@ -19,14 +19,14 @@ class DivisionRule(BaseModel):
         return self
 
 def canonical_southern_bcs_rules(divisions: list[str]) -> dict[str, DivisionRule]:
-    """Display rules for the fixed half-point bands; SQL enforces exclusive upper bounds."""
+    """Players may play up; SQL enforces each numeric division's exclusive upper bound."""
     result = {}
     for division in divisions:
         if division in {"Open", "4.5/Open"}:
-            result[division] = DivisionRule(min_rating=4.5, max_rating=None, women_required=2)
+            result[division] = DivisionRule(min_rating=None, max_rating=None, women_required=2)
         else:
             level = float(division)
-            result[division] = DivisionRule(min_rating=level, max_rating=round(level + 0.499, 3), women_required=2)
+            result[division] = DivisionRule(min_rating=None, max_rating=round(level + 0.499, 3), women_required=2)
     return result
 
 class PlanningMeet(BaseModel):

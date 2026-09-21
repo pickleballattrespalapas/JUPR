@@ -59,7 +59,7 @@ async function clubsAndRosters() {
   assert.equal(tree.root.findAllByProps({ 'aria-label': 'Meet' }).length, 0, 'Pending invitation does not show meet roster controls');
   assert.ok(!requests.some(r => r.url.includes('/meets/')), 'Pending invitation does not fetch meet details');
   assert.ok(textContent(tree).includes('Coastal League') && textContent(tree).includes('alpha Club'));
-  assert.ok(textContent(tree).includes('3.5 to below 4.0') && !textContent(tree).includes('No minimum'), 'Existing seasons show the enforced skill band even if old saved rules omit its floor');
+  assert.ok(textContent(tree).includes('Below 4.0') && textContent(tree).includes('Players may play up'), 'Existing seasons explain the upper limit and playing up without imposing a lower floor');
   const seasonReadsBeforeAcceptance = requests.filter(r => r.url.endsWith(`/registrations/${sid}`)).length;
   await act(async () => { void button(tree, 'Accept invitation').props.onClick(); void button(tree, 'Accept invitation').props.onClick(); });
   assert.equal(requests.filter(r => r.options.method).length, 1);

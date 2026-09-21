@@ -27,9 +27,9 @@ def workflow(setup):
     state["tables"]["players"][0].update(rating=1524, gender="female")
     state["details"] = {
         1: dict(player_id=1, league_rating=4.02, eligible_divisions=["4.0"]),
-        3: dict(player_id=3, league_rating=3.6, eligible_divisions=["3.5"]),
+        3: dict(player_id=3, league_rating=3.6, eligible_divisions=["3.5", "4.0"]),
         4: dict(player_id=4, league_rating=4.1, eligible_divisions=["4.0"]),
-        5: dict(player_id=5, league_rating=3.63, eligible_divisions=["3.5"]),
+        5: dict(player_id=5, league_rating=3.63, eligible_divisions=["3.5", "4.0"]),
     }
     original_rpc = state["db"].rpc
     state["mutation"] = None
@@ -169,6 +169,55 @@ def test_public_candidate_and_admin_pool_use_same_club_and_rating_details(workfl
     assert forbidden.status_code == 200 and forbidden.json()["players"] == []
     assert signup.headers["cache-control"] == "no-store"
     assert signup.headers["referrer-policy"] == "no-referrer"
+
+
+def test_lower_rated_player_keeps_all_play_up_choices_through_bulk_add_and_reload(workflow):
+    client, state = workflow
+    eligible = ["3.0", "3.5", "4.0", "4.5", "5.0", "Open", "4.5/Open"]
+    state["season"]["details"]["divisions"] = eligible
+    state["tables"]["players"][0]["rating"] = 1160
+    # SQL supplies eligibility; this workflow must preserve every available
+    # division when a 2.9 player joins, including both Open labels.
+    state["details"][1] = dict(player_id=1, league_rating=2.9, eligible_divisions=eligible)
+    directory_before = deepcopy(state["tables"]["players"])
+
+    candidate_response = client.get(state["signup"] + "/players", params={"q": "Alex"})
+    assert candidate_response.status_code == 200
+    candidate = candidate_response.json()["players"][0]
+    assert candidate["rating"] == candidate["league_rating"] == 2.9
+    assert candidate["eligible_divisions"] == eligible
+
+    body = {"members": [{"player_id": "1"}]}
+    preview = client.post(state["base"] + "/pool/bulk-preview", json=body)
+    assert preview.status_code == 200
+    assert preview.json()["rows"][0]["divisions"] == eligible
+    selected = client.post(state["base"] + "/pool/bulk-preview", json={"members": [
+        {"player_id": "1", "divisions": ["4.0", "Open"]},
+    ]})
+    assert selected.status_code == 200
+    assert selected.json()["rows"][0]["divisions"] == ["4.0", "Open"]
+    assert selected.json()["rows"][0]["eligible_divisions"] == eligible
+    assert not bulk_calls(state)
+
+    def add_transaction(params):
+        assert params["p_members"][0]["divisions"] == eligible
+        state["tables"][routes.MEMBERS].append({
+            **state["member"], **params["p_members"][0], "player_id": 1,
+            "approval_status": "approved", "late_join": False,
+        })
+        return {"added_count": 1, "skipped_count": 0}
+
+    state["mutation"] = add_transaction
+    saved = client.post(state["base"] + "/pool/bulk-add", json=body)
+    assert saved.status_code == 200
+    assert saved.json()["added_count"] == 1
+    reloaded = client.get(state["base"] + "/pool")
+    assert reloaded.status_code == 200
+    member = reloaded.json()["members"][0]
+    assert member["divisions"] == member["eligible_divisions"] == eligible
+    assert member["rating"] == member["league_rating"] == 2.9
+    assert len(bulk_calls(state)) == 1
+    assert state["tables"]["players"] == directory_before
 
 
 def test_same_profile_repeated_with_different_names_and_emails_still_skips_duplicate(workflow):
