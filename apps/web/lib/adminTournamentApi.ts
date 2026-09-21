@@ -382,6 +382,8 @@ export type AdminTournamentLiveSnapshotResponse = AdminTournamentOpsSnapshotResp
 };
 
 export type AdminTournamentWriteResponse = {
+  registration_removed?: boolean;
+  registrations_removed?: boolean;
   ok: boolean;
   mode?: string;
   action?: string;
