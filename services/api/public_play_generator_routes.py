@@ -153,6 +153,7 @@ def install_public_play_generator_routes(
                 singles_court_count=payload.singles_court_count,
                 standings_sort=payload.standings_sort,
                 scoring_mode=payload.scoring_mode,
+                rating_mode=payload.rating_mode,
             )
         except Exception as exc:
             raise_public_error(exc)
@@ -204,6 +205,7 @@ def install_public_play_generator_routes(
                 preview_fingerprint=payload.preview_fingerprint,
                 standings_sort=payload.standings_sort,
                 scoring_mode=payload.scoring_mode,
+                rating_mode=payload.rating_mode,
                 idempotency_key=payload.idempotency_key,
                 requester_hash=requester_hash(request),
             )
