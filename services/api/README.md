@@ -78,7 +78,11 @@ Never put `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`, or other server-on
 
 ## Admin operations migration flags
 
-`GET /admin/operations/status?club_id=...` powers the Next `/admin` cockpit.
+`GET /admin/clubs/{club_id}/dashboard` powers Admin Home with permission-scoped,
+exact pending-work counts. Its authenticated response is private/no-store; an
+unavailable queue is returned independently without hiding successful counts.
+
+`GET /admin/operations/status?club_id=...` remains the technical system/pilot status endpoint.
 It requires a verified Supabase bearer token and at least one matching,
 club-scoped `admin_role_assignments` row before building or returning
 operational posture. Existing email-only assignments remain compatible; when a

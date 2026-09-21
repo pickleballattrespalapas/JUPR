@@ -12,6 +12,7 @@ from services.api.admin_auth_routes import (
 from services.api.admin_badge_diagnostics_routes import install_admin_badge_diagnostics_routes
 from services.api.admin_badge_management_routes import install_admin_badge_management_routes
 from services.api.admin_challenge_ladder_routes import install_admin_challenge_ladder_routes
+from services.api.admin_dashboard_routes import install_admin_dashboard_routes
 from services.api.admin_jupr_live_routes import install_admin_jupr_live_routes
 from services.api.admin_league_manager_routes import install_admin_league_manager_routes
 from services.api.admin_match_canonical_audit_routes import install_admin_match_canonical_audit_routes
@@ -62,6 +63,7 @@ def install_admin_operations_routes(app, *, get_supabase_client=None) -> None:
 
     if get_supabase_client is not None:
         install_admin_auth_routes(app, get_supabase_client=get_supabase_client)
+        install_admin_dashboard_routes(app, get_supabase_client=get_supabase_client)
         install_admin_match_log_routes(app, get_supabase_client=get_supabase_client)
         install_admin_replay_routes(app, get_supabase_client=get_supabase_client)
         install_admin_match_uploader_routes(app, get_supabase_client=get_supabase_client)

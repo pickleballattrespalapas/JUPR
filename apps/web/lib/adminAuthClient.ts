@@ -7,6 +7,7 @@ export type AdminCapabilityAssignment = {
   club_id: string;
   role: string;
   permissions: string[];
+  scopes?: Array<{ kind: string; program_type: string; resource_id: string }>;
 };
 
 export type AdminCapabilities = {

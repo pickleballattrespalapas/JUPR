@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import { actionSuccess } from "@/components/interaction";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
@@ -332,6 +332,13 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
     socialSubmissionStatus
   );
 
+  const overviewReady = Boolean(overview);
+  useEffect(() => {
+    if (overviewReady && window.location.hash === "#social-submissions") {
+      document.getElementById("social-submissions")?.scrollIntoView({ block: "start" });
+    }
+  }, [overviewReady]);
+
   if (status && !status.enabled) return <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Disabled</h2><p>Set <code>JUPR_ENABLE_NEXT_ADMIN_TOOLS=1</code> on FastAPI to enable guarded Admin Tools.</p></article>;
 
   const roleOptions = overview?.role_options || status?.roles || ["read_only", "scorekeeper", "organizer", "club_owner", "super_admin"];
@@ -382,7 +389,7 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
           <p><button type="button" onClick={() => downloadRatingReport(ratingReport)} disabled={!ratingReport.rows.length} style={buttonStyle}>Download {ratingReport.scope} CSV</button></p>
         </div>}
       </article>
-      <article style={cardStyle}>
+      <article id="social-submissions" style={{ ...cardStyle, scrollMarginTop: "1rem" }}>
         <h2 style={{ marginTop: 0 }}>Club Social submission review</h2>
         <p style={{ color: "#475569" }}>Review unrated Club Social event submissions for this club. Loading a queue is read-only. Approve or reject requires <code>manage_matches</code> permission, a current expected status, and a Yes/No confirmation dialog; the dialog supplies the internal API safeguard.</p>
         <div style={{ display: "grid", gridTemplateColumns: "minmax(180px, 1fr) auto", gap: "0.75rem", alignItems: "end" }}>

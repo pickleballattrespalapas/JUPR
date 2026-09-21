@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { PoolMember } from "@/lib/interclubPlayerPool";
 import { usePoolResource } from "./usePoolResource";
 import { RequestStatus } from "./PoolPanelCommon";
@@ -13,7 +13,16 @@ export default function SeasonEligibilityApprovals({ root, accessToken, clubs }:
 }) {
   const resource = usePoolResource<{ members: Applicant[] }>(`${root}/pool/approvals`, accessToken);
   const [message, setMessage] = useState("");
+  const section = useRef<HTMLElement | null>(null);
+  const followedAnchor = useRef(false);
   useEffect(() => setMessage(""), [root]);
+  useEffect(() => {
+    if (resource.loading || followedAnchor.current || typeof window === "undefined" ||
+        window.location.hash !== "#season-eligibility-approvals" || !section.current) return;
+    followedAnchor.current = true;
+    section.current.scrollIntoView({ block: "start" });
+    section.current.focus({ preventScroll: true });
+  }, [resource.loading]);
   async function decide(member: Applicant, approve: boolean, reason: string) {
     const response = await resource.perform(json => json(`${root}/pool/approvals`, "POST", {
       member_id: member.id, expected_revision: member.revision, approve, reason,
@@ -23,7 +32,7 @@ export default function SeasonEligibilityApprovals({ root, accessToken, clubs }:
       resource.reload();
     }
   }
-  return <section className={styles.panel} aria-label="Season eligibility approvals">
+  return <section id="season-eligibility-approvals" ref={section} tabIndex={-1} className={styles.panel} aria-label="Season eligibility approvals">
     <h3>Late season signups</h3>
     <p>Players joining after the season begins need the league organizer’s approval before a club can select them. Clubs keep control of player contact details.</p>
     <RequestStatus {...resource} />

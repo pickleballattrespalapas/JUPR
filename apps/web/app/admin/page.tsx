@@ -1,5 +1,5 @@
-import AdminOperationsCockpit from "./AdminOperationsCockpit";
+import AdminHome from "./AdminHome";
 
 export default function AdminEntryPage() {
-  return <AdminOperationsCockpit />;
+  return <AdminHome />;
 }

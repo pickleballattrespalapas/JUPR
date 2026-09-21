@@ -34,7 +34,7 @@ export default async function AdminSupportRequestsPage() {
       {status ? <SupportRequestsPanel apiBase={getAdminSupportRequestsApiBaseUrl()} clubId={clubId} status={status} /> : null}
 
       <p style={{ marginTop: "1rem" }}>
-        <Link href="/admin">Operations cockpit</Link> · <Link href="/admin/match-log">Match Log</Link> · <Link href="/admin/players">Player Editor</Link>
+        <Link href="/admin">Admin Home</Link> · <Link href="/admin/match-log">Match Log</Link> · <Link href="/admin/players">Player Editor</Link>
       </p>
     </section>
   );

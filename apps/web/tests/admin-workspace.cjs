@@ -26,6 +26,19 @@ const auth={getAdminApiBaseUrl:()=> 'https://test.invalid',signOutAdminSession:a
  let mounted=0;function Child(){const {clubId}=context.useAdminWorkspace();mounted++;return React.createElement('input',{'data-club':clubId,defaultValue:'unsaved draft'});}
  await act(async()=>tree=create(React.createElement(Shell,{workspace:selected},React.createElement(Child))));
  assert.equal(tree.root.findByType('input').props['data-club'],'beta');
+ const mobileMenu=()=>tree.root.findAllByType('button').find(button=>button.children.includes('Show menu')||button.children.includes('Hide menu'));
+ assert.equal(mobileMenu().props['aria-expanded'],false,'Mobile menu starts closed so the admin dashboard is immediately visible');
+ assert.equal(mobileMenu().props['aria-controls'],'admin-navigation-menu');
+ assert.equal(tree.root.findByProps({id:'admin-navigation-menu'}).type,'div');
+ await act(async()=>mobileMenu().props.onClick());
+ assert.equal(mobileMenu().props['aria-expanded'],true,'Show menu opens mobile navigation');
+ assert.ok(mobileMenu().children.includes('Hide menu'));
+ await act(async()=>tree.root.findByProps({'aria-label':'Collapse admin sidebar'}).props.onClick());
+ assert.equal(mobileMenu().props['aria-expanded'],true,'Desktop collapse does not overwrite mobile menu state');
+ await act(async()=>mobileMenu().props.onClick());
+ assert.equal(mobileMenu().props['aria-expanded'],false,'Hide menu closes mobile navigation');
+ assert.equal(tree.root.findByProps({'aria-label':'Expand admin sidebar'}).props['aria-expanded'],false,'Mobile collapse preserves the desktop sidebar choice');
+ await act(async()=>tree.root.findByProps({'aria-label':'Expand admin sidebar'}).props.onClick());
  const links=tree.root.findAllByType('a').map(n=>n.props.href).filter(h=>h.startsWith('/clubs/'));assert.ok(links.length>=4);assert.ok(links.every(h=>h.startsWith('/clubs/beta-club')));
  cookie=`${workspace.ADMIN_WORKSPACE_COOKIE}=${encodeURIComponent(JSON.stringify({clubId:'alpha',clubSlug:'alpha-club'}))}`;
  let prevented=false,stopped=false;await act(async()=>docEvents.get('click')({target:new Element(),preventDefault(){prevented=true},stopPropagation(){stopped=true}}));
