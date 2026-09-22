@@ -148,7 +148,9 @@ async function latePlayerRequests() {
   assert.equal(requests.at(-1).options.method, undefined, 'Opening late search is read-only');
   assert.equal(button(tree, 'Submit late player request').props.disabled, true);
   let choices = tree.root.findAllByProps({ type: 'radio' });
-  assert.equal(choices[1].props.disabled, true, 'Existing pool players cannot be requested twice');
+  assert.equal(choices.length, 1, 'Only a player without a season signup has a selectable radio');
+  assert.ok(tree.root.findByProps({ 'aria-label': 'View Existing Member in player pool' }), 'Existing players get a useful action instead of a disabled selector');
+  assert.ok(text(tree).includes('Already registered and approved. No late request is needed.'));
   await act(async () => choices[0].props.onChange());
   assert.equal(button(tree, 'Submit late player request').props.disabled, true, 'A selected player still requires a reason');
   await act(async () => tree.root.findByType('textarea').props.onChange({ target: { value: '   ' } }));
@@ -173,8 +175,9 @@ async function latePlayerRequests() {
   assert.equal(button(tree, 'Submit late player request'), undefined);
   await act(async () => button(tree, 'Request late player').props.onClick());
   choices = tree.root.findAllByProps({ type: 'radio' });
-  assert.equal(choices[0].props.disabled, true, 'The new pending player is not offered for another request');
-  assert.ok(text(tree).includes('Already awaiting approval'));
+  assert.equal(choices.length, 0, 'The new pending player is not offered for another request');
+  assert.ok(text(tree).includes('Awaiting commissioner approval. A request already exists.'));
+  assert.ok(text(tree).includes('Everyone on this page already has a season signup. View their status below, or search for another player.'));
   await act(async () => button(tree, 'Close late player request').props.onClick());
   pool = { ...pool, members: [existing, { ...pending, approval_status: 'approved', revision: 3, approval_reason: 'Visitor approved' }] };
   await act(async () => button(tree, 'Reload player pool').props.onClick());
@@ -222,6 +225,78 @@ async function lateRequestRecoveryAndScope() {
   await act(async () => finishOld(reply({ member: { ...member, name: 'OLD CLUB PLAYER' }, pool })));
   assert.ok(!text(tree).includes('OLD CLUB PLAYER'));
   assert.equal(tree.root.findAllByType('form').length, 0, 'The old club draft does not follow the administrator');
+  await act(async () => tree.unmount());
+}
+
+async function existingLatePlayerGuidance() {
+  const statusCases = [
+    { id: 'approved', name: 'Approved Player', player_id: 201, approval_status: 'approved', message: 'Already registered and approved. No late request is needed.' },
+    { id: 'pending', name: 'Pending Player', player_id: '202', approval_status: 'pending', message: 'Awaiting commissioner approval. A request already exists.' },
+    { id: 'rejected', name: 'Rejected Player', player_id: '203', approval_status: 'rejected', message: 'The existing request was rejected. View the signup for the decision.' },
+    { id: 'withdrawn', name: 'Withdrawn Player', player_id: '204', status: 'withdrawn', approval_status: 'approved', message: 'This signup was withdrawn. A new late request cannot replace it.' },
+    { id: 'unknown', name: 'Existing Player', player_id: '205', approval_status: undefined, message: 'A season signup already exists. View it to check its status.' },
+  ];
+  const members = statusCases.map(({ message, ...row }) => ({ ...member, ...row }));
+  const players = statusCases.map((row, index) => ({ id: index === 1 ? Number(row.player_id) : String(row.player_id), name: row.name, rating: 3.5, gender: 'female', eligible_divisions: ['3.5'] }));
+  let requests = [], viewed = [], submitted = [], tree;
+  global.fetch = async (url, options) => { requests.push({ url, options }); return reply({ players, next_offset: null }); };
+  const props = { root, accessToken: 'token', members, disabled: false, onClose() {}, onViewMember: row => viewed.push(row), onRequest: async body => { submitted.push(body); } };
+  await act(async () => { tree = create(React.createElement(late.PoolLateRequest, props)); });
+  assert.equal(tree.root.findAllByProps({ type: 'radio' }).length, 0, 'Existing signups of every status use readable status rows, including numeric/string ID matches');
+  assert.ok(text(tree).includes('Everyone on this page already has a season signup. View their status below, or search for another player.'));
+  assert.equal(button(tree, 'Submit late player request').props.disabled, true);
+  for (const [index, row] of statusCases.entries()) {
+    assert.ok(text(tree).includes(row.message), `${row.id} membership gets accurate next-step guidance`);
+    const view = tree.root.findByProps({ 'aria-label': `View ${row.name} in player pool` });
+    assert.equal(nodeText(view), 'View in player pool');
+    await act(async () => view.props.onClick());
+    assert.equal(viewed.at(-1), members[index], 'The view action passes the matched signup, not the directory profile');
+  }
+  assert.equal(requests.filter(row => row.options.method).length, 0, 'Viewing status does not send requests or change existing eligibility');
+  assert.equal(submitted.length, 0);
+  await act(async () => tree.unmount());
+
+  const sameNameNewPlayer = { ...players[0], id: '999' };
+  global.fetch = async () => reply({ players: [players[0], sameNameNewPlayer], next_offset: null });
+  await act(async () => { tree = create(React.createElement(late.PoolLateRequest, props)); });
+  assert.equal(tree.root.findAllByProps({ type: 'radio' }).length, 1, 'A different player ID stays selectable even when the name and rating match an existing signup');
+  assert.ok(!text(tree).includes('Everyone on this page already has a season signup.'));
+  await act(async () => tree.root.findByProps({ type: 'radio' }).props.onChange());
+  await act(async () => tree.root.findByType('textarea').props.onChange({ target: { value: 'Different player with the same name' } }));
+  assert.equal(button(tree, 'Submit late player request').props.disabled, false);
+  await act(async () => tree.root.findByType('form').props.onSubmit({ preventDefault() {} }));
+  assert.deepEqual(submitted, [{ player_id: 999, reason: 'Different player with the same name' }]);
+  await act(async () => tree.unmount());
+}
+
+async function viewWithdrawnPlayerFromLateSearch() {
+  const withdrawn = { ...member, id: 'withdrawn-1', name: 'Withdrawn Traveler', player_id: '301', status: 'withdrawn', approval_status: 'approved' };
+  const approved = { ...member, id: 'approved-1', name: 'Other Player', player_id: '302', approval_status: 'approved' };
+  const pool = { registration: closedWindow, can_request_late: true, signup: { open: false, revision: 1, url: null }, members: [withdrawn, approved], email_mode: 'dry_run' };
+  const directoryPlayer = { id: 301, name: withdrawn.name, rating: 3.45, gender: 'female', eligible_divisions: ['3.5'] };
+  let tree, requests = [], focused = [], nodes = [];
+  global.fetch = async (url, options) => { requests.push({ url, options }); return reply(url.includes('/pool/players?') ? { players: [directoryPlayer], next_offset: null } : pool); };
+  const props = { root, accessToken: 'token', clubName: 'Beta Club', season: { ...season, registration: closedWindow } };
+  await act(async () => { tree = create(React.createElement(panels.SeasonPlayerPool, props), { createNodeMock: element => {
+    const summary = React.Children.toArray(element.props.children).find(child => child?.type === 'summary');
+    const label = element.props['aria-label'] || summary?.props['aria-label'];
+    const node = { label, open: false, focus: () => focused.push(label), scrollIntoView() {}, querySelector: () => ({ focus: () => focused.push(label) }) };
+    nodes.push(node); return node;
+  } }); });
+  await act(async () => tree.root.findByProps({ placeholder: 'Name or email' }).props.onChange({ target: { value: 'Other Player' } }));
+  assert.equal(tree.root.findAllByProps({ 'aria-label': `Manage ${withdrawn.name}` }).length, 0, 'Withdrawn players are hidden by the default active filter and current query');
+  await act(async () => button(tree, 'Request late player').props.onClick());
+  const readsBeforeView = requests.length;
+  await act(async () => tree.root.findByProps({ 'aria-label': `View ${withdrawn.name} in player pool` }).props.onClick());
+  assert.equal(tree.root.findAllByProps({ 'aria-label': 'Request a late player' }).length, 0, 'View in player pool closes the late request form');
+  assert.equal(tree.root.findByProps({ placeholder: 'Name or email' }).props.value, withdrawn.name, 'The pool search jumps to the selected signup');
+  assert.equal(tree.root.findByType('select').props.value, 'all', 'The jump reveals withdrawn players by switching to all signups');
+  const manage = tree.root.findByProps({ 'aria-label': `Manage ${withdrawn.name}` });
+  assert.ok(manage.parent.props.open || nodes.some(node => node.label === `Manage ${withdrawn.name}` && node.open), 'The selected player’s Manage details open');
+  assert.ok(focused.includes(`Manage ${withdrawn.name}`), 'The destination receives keyboard focus');
+  assert.equal(button(tree, 'Restore season signup').props.disabled, true, 'Viewing the existing signup does not bypass the closed registration window');
+  assert.equal(requests.length, readsBeforeView, 'Jumping to an already-loaded signup needs no new request');
+  assert.equal(requests.filter(row => row.options.method).length, 0, 'The view action never restores or re-registers the player');
   await act(async () => tree.unmount());
 }
 
@@ -408,4 +483,4 @@ async function bulkAdd() {
   } finally { Date.now = originalNow; }
   await act(async () => tree.unmount());
 }
-(async () => { await seasonPool(); await latePlayerRequests(); await lateRequestRecoveryAndScope(); await backgroundLateRequestRefresh(); await availability(); await commissionerRegistrationGates(); await resumedRegistrationBoundary(); await invitationEmail(); await recoverSavedInvitations(); await bulkAdd(); console.log('PASS interclub player pool: scoped signup/linking, late requests and commissioner review status, commissioner registration phases, suspended boundary recovery, revision conflicts, stale responses, availability, bulk player matching and optional emails, email preview and dry-run delivery'); })().catch(error => { console.error(error); process.exit(1); });
+(async () => { await seasonPool(); await latePlayerRequests(); await existingLatePlayerGuidance(); await viewWithdrawnPlayerFromLateSearch(); await lateRequestRecoveryAndScope(); await backgroundLateRequestRefresh(); await availability(); await commissionerRegistrationGates(); await resumedRegistrationBoundary(); await invitationEmail(); await recoverSavedInvitations(); await bulkAdd(); console.log('PASS interclub player pool: scoped signup/linking, late requests, existing signup guidance and focused pool navigation, commissioner review status, commissioner registration phases, suspended boundary recovery, revision conflicts, stale responses, availability, bulk player matching and optional emails, email preview and dry-run delivery'); })().catch(error => { console.error(error); process.exit(1); });

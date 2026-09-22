@@ -25,6 +25,13 @@
 .panel summary { cursor: pointer; padding: .5rem 0; font-weight: 650; }
 .panel label.choice { flex-direction: row; align-items: center; gap: .75rem; padding: .7rem 0; font-weight: 400; }
 .candidates { max-height: 330px; overflow: auto; border-block: 1px solid #e1e8f1; margin: .9rem 0; }
+.panel fieldset.candidates { margin: .9rem 0; border-block: 1px solid #e1e8f1; }
+.candidates legend { font-weight: 650; padding: .4rem 0; }
+.existingSignups { margin: 1rem 0; padding: 1rem; max-height: 330px; overflow: auto; border: 1px solid #d9e3ee; border-radius: 10px; background: #f5f8fc; }
+.existingSignups h5 { margin: 0 0 .5rem; font-size: 1rem; }
+.existingSignup { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: .5rem 1rem; padding: .8rem 0; }
+.existingSignup + .existingSignup { border-top: 1px solid #d9e3ee; }
+.existingSignup p { margin: .25rem 0 0; font-size: .9rem; color: #576b80; }
 .preview { white-space: pre-wrap; background: #f5f8fc; border: 1px solid #d9e3ee; border-radius: 10px; padding: 1rem; overflow-wrap: anywhere; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(240px, 100%),1fr)); gap: 1rem; }
 .buttonLink { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: .65rem 1rem; border: 1px solid #bdcbdc; border-radius: 9px; font-weight: 650; color: #172335; text-decoration: none; }
