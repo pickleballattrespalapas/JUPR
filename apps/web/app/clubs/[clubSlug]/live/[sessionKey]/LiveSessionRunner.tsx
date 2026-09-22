@@ -1,5 +1,7 @@
 "use client";
 
+import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
+
 import Link from "@/components/PublicClubLink";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { PublicLiveMatch, PublicLiveSessionDetail } from "@/lib/api";
@@ -495,10 +497,10 @@ export default function LiveSessionRunner({ apiBase, clubSlug, initialSession }:
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.65rem" }}>
             <label style={{ display: "grid", gap: "0.25rem", fontWeight: 700 }}>
               Original player
-              <select value={subOriginalId} onChange={(event) => setSubOriginalId(event.target.value)} disabled={Boolean(operationKeys.substitute)} style={{ padding: "0.5rem", border: "1px solid #cbd5e1", borderRadius: "8px" }}>
+              <SearchablePlayerSelect aria-label="Original player" value={subOriginalId} onValueChange={playerValue => setSubOriginalId(playerValue)} disabled={Boolean(operationKeys.substitute)} style={{ padding: "0.5rem", border: "1px solid #cbd5e1", borderRadius: "8px" }}>
                 <option value="">Select player</option>
                 {session.participants.map((participant) => <option key={participant.id} value={participant.id}>{participant.name}</option>)}
-              </select>
+              </SearchablePlayerSelect>
             </label>
             <label style={{ display: "grid", gap: "0.25rem", fontWeight: 700 }}>
               Substitute name

@@ -1,5 +1,7 @@
 "use client";
 
+import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { ConfirmAction } from "@/components/ConfirmAction";
@@ -2867,10 +2869,10 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
               ))}
             </div>
             <label style={{ display: "block", marginTop: "0.75rem" }}>Add an existing club player, including a non-roster player<br />
-              <select value="" onChange={(event) => { if (event.target.value) { appendSelectedPlayerIds([Number(event.target.value)]); invalidateFlexRosterPlan("Existing club player added. Build fresh courts when the player list is final."); } }} disabled={busy} style={inputStyle}>
+              <SearchablePlayerSelect aria-label="Add an existing club player, including a non-roster player" value="" onValueChange={playerValue => { if (playerValue) { appendSelectedPlayerIds([Number(playerValue)]); invalidateFlexRosterPlan("Existing club player added. Build fresh courts when the player list is final."); } }} disabled={busy} style={inputStyle}>
                 <option value="">Choose an existing player…</option>
                 {knownPlayers.filter((player) => !attendeePlayerIds.includes(Number(player.id))).map((player) => <option key={String(player.id)} value={String(player.id)}>{player.name} · {playerJuprLabel(player)} · ID {player.id}</option>)}
-              </select>
+              </SearchablePlayerSelect>
             </label>
           </section>
 
@@ -3060,8 +3062,8 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
             <p style={{ color: "#475569" }}>A late arrival appends to the live order. A substitution replaces the selected ordered player. Completed rounds never change.</p>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.75rem" }}>
               <label>Action<br /><select value={rosterAction} onChange={(event) => { setRosterAction(event.target.value as "none" | "add" | "substitute"); markPlanStale(); }} disabled={busy} style={inputStyle}><option value="none">No roster change</option><option value="add">Add late arrival</option><option value="substitute">Substitute player</option></select></label>
-              {rosterAction !== "none" ? <label>Incoming player<br /><select value={incomingPlayerId} onChange={(event) => { setIncomingPlayerId(event.target.value); markPlanStale(); }} disabled={busy} style={inputStyle}><option value="">Select player…</option>{incomingPlayerOptions.map((player) => <option key={String(player.id)} value={String(player.id)}>{player.name}</option>)}</select></label> : null}
-              {rosterAction === "substitute" ? <label>Replace active player<br /><select value={replacedPlayerId} onChange={(event) => { setReplacedPlayerId(event.target.value); markPlanStale(); }} disabled={busy} style={inputStyle}><option value="">Select player…</option>{activeSessionRoster.map((player) => <option key={player.player_id} value={String(player.player_id)}>{player.player_name}</option>)}</select></label> : null}
+              {rosterAction !== "none" ? <label>Incoming player<br /><SearchablePlayerSelect aria-label="Incoming player" value={incomingPlayerId} onValueChange={playerValue => { setIncomingPlayerId(playerValue); markPlanStale(); }} disabled={busy} style={inputStyle}><option value="">Select player…</option>{incomingPlayerOptions.map((player) => <option key={String(player.id)} value={String(player.id)}>{player.name}</option>)}</SearchablePlayerSelect></label> : null}
+              {rosterAction === "substitute" ? <label>Replace active player<br /><SearchablePlayerSelect aria-label="Replace active player" value={replacedPlayerId} onValueChange={playerValue => { setReplacedPlayerId(playerValue); markPlanStale(); }} disabled={busy} style={inputStyle}><option value="">Select player…</option>{activeSessionRoster.map((player) => <option key={player.player_id} value={String(player.player_id)}>{player.player_name}</option>)}</SearchablePlayerSelect></label> : null}
             </div>
             {liveDomainStatus.submit_enabled ? (
               <details style={{ marginTop: "0.75rem" }}>

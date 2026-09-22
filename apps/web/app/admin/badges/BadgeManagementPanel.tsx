@@ -1,5 +1,7 @@
 "use client";
 
+import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
+
 import { useRef, useState } from "react";
 import { useAdminSession } from "@/lib/useAdminSession";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
@@ -110,7 +112,7 @@ export default function BadgeManagementPanel({ apiBase, clubId }: { apiBase: str
         <fieldset disabled={disabled || options.program?.revision !== options.program?.applied_revision} style={{ marginBottom: "1rem", border: "1px solid #cbd5e1", borderRadius: 8 }}>
           <legend>{tie.event_name} · {tie.completed_at.slice(0, 10)}</legend>
           <p>{tie.leaders[0]?.wins} wins · {tie.leaders[0]?.differential} point differential · {tie.leaders[0]?.points} total points</p>
-          <label>Winner<select name="winner_player_id" required defaultValue="" style={input}><option value="">Choose a tied player</option>{tie.leaders.map((leader, index) => <option key={leader.player_id ?? `guest-${index}`} value={leader.player_id ?? ""} disabled={!leader.player_id}>{leader.name}{leader.player_id ? "" : " (link to a club player first)"}</option>)}</select></label>
+          <label>Winner<SearchablePlayerSelect aria-label="Winner" name="winner_player_id" required defaultValue="" style={input}><option value="">Choose a tied player</option>{tie.leaders.map((leader, index) => <option key={leader.player_id ?? `guest-${index}`} value={leader.player_id ?? ""} disabled={!leader.player_id}>{leader.name}{leader.player_id ? "" : " (link to a club player first)"}</option>)}</SearchablePlayerSelect></label>
           <p><small>This decision records who won this round robin and updates their victory milestones.</small></p>
           <button type="submit" style={button}>Record winner</button>
         </fieldset>
@@ -124,7 +126,7 @@ export default function BadgeManagementPanel({ apiBase, clubId }: { apiBase: str
       <form onSubmit={event => { event.preventDefault(); void save("awards", { player_id: Number(player), badge_id: badgeId, criteria, note, contribution_date: day }); }}>
         <fieldset disabled={disabled} style={{ border: 0, padding: 0, margin: 0 }}>
           <div style={grid}>
-            <label>Player<select required style={input} value={player} onChange={event => setPlayer(event.target.value)}><option value="">Choose a player</option>{options?.players.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
+            <label>Player<SearchablePlayerSelect aria-label="Player" required style={input} value={player} onValueChange={playerValue => setPlayer(playerValue)}><option value="">Choose a player</option>{options?.players.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</SearchablePlayerSelect></label>
             <label>Badge<select style={input} value={badgeId} onChange={event => { setBadgeId(event.target.value); setCriteria([]); }}>{options?.badges.map(b => <option key={b.id} value={b.id} disabled={!b.available}>{b.name}{b.available ? "" : " (paused)"}</option>)}</select></label>
             <label>Contribution date<input style={input} type="date" required value={day} onChange={event => setDay(event.target.value)} /></label>
           </div>

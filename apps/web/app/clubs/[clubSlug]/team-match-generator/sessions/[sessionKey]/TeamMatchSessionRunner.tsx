@@ -1,5 +1,7 @@
 "use client";
 
+import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
+
 import Link from "@/components/PublicClubLink";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -577,17 +579,17 @@ export default function TeamMatchSessionRunner({ clubId, sessionKey }: { clubId:
                     {order.map((value, index) => (
                       <label key={`${side}-${index}`} style={{ display: "grid", gridTemplateColumns: "70px 1fr", gap: "0.5rem", alignItems: "center", marginTop: index ? "0.55rem" : 0, fontWeight: 700 }}>
                         {rotationPosition(index)}
-                        <select
+                        <SearchablePlayerSelect aria-label={[String(rotationPosition(index))].join(" ")}
                           value={value}
-                          onChange={(event) => {
+                          onValueChange={playerValue => {
                             const next = [...order];
-                            next[index] = event.target.value;
+                            next[index] = playerValue;
                             setOrder(next);
                           }}
                           style={input}
                         >
                           {teamPlayers(team).map((name) => <option key={name} value={name}>{name}</option>)}
-                        </select>
+                        </SearchablePlayerSelect>
                       </label>
                     ))}
                   </div>

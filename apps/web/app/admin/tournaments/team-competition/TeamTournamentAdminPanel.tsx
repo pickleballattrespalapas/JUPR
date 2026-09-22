@@ -1,5 +1,7 @@
 "use client";
 
+import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
+
 import Link from "next/link";
 import { useMemo, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
@@ -736,11 +738,11 @@ export default function TeamTournamentAdminPanel({
                       </label>
                       <label className={styles.field}>
                         Registration
-                        <select
+                        <SearchablePlayerSelect aria-label="Registration"
                           className={styles.select}
                           value={ratingRegistrationId}
-                          onChange={(event) =>
-                            setRatingRegistrationId(event.target.value)
+                          onValueChange={playerValue =>
+                            setRatingRegistrationId(playerValue)
                           }
                         >
                           <option value="">Choose player</option>
@@ -753,7 +755,7 @@ export default function TeamTournamentAdminPanel({
                               {text(registration, "email")}
                             </option>
                           ))}
-                        </select>
+                        </SearchablePlayerSelect>
                       </label>
                       <label className={styles.field}>
                         Verified doubles rating
@@ -1048,11 +1050,11 @@ export default function TeamTournamentAdminPanel({
                       </label>
                       <label className={styles.field}>
                         Captain registration
-                        <select
+                        <SearchablePlayerSelect aria-label="Captain registration"
                           className={styles.select}
                           value={captainRegistrationId}
-                          onChange={(event) =>
-                            setCaptainRegistrationId(event.target.value)
+                          onValueChange={playerValue =>
+                            setCaptainRegistrationId(playerValue)
                           }
                         >
                           <option value="">Choose captain</option>
@@ -1064,7 +1066,7 @@ export default function TeamTournamentAdminPanel({
                               {registrationName(registration)}
                             </option>
                           ))}
-                        </select>
+                        </SearchablePlayerSelect>
                       </label>
                     </div>
                     <div className={styles.rosterGrid}>
@@ -1134,11 +1136,11 @@ export default function TeamTournamentAdminPanel({
                 <div className={styles.grid}>
                   <label className={styles.field}>
                     Roster member
-                    <select
+                    <SearchablePlayerSelect aria-label="Roster member"
                       className={styles.select}
                       value={inviteMemberId}
-                      onChange={(event) => {
-                        const id = event.target.value;
+                      onValueChange={playerValue => {
+                        const id = playerValue;
                         setInviteMemberId(id);
                         const member = snapshot.members.find((row) => row.id === id);
                         setInviteEmail(member?.invited_email || "");
@@ -1157,7 +1159,7 @@ export default function TeamTournamentAdminPanel({
                             {member.display_name || member.display_name_snapshot}
                           </option>
                         ))}
-                    </select>
+                    </SearchablePlayerSelect>
                   </label>
                   <label className={styles.field}>
                     Invitation email
@@ -1918,10 +1920,10 @@ function RosterSlotEditor({
       <h4>{slotLabel(slot)}</h4>
       <label className={styles.field}>
         Existing registration (optional)
-        <select
+        <SearchablePlayerSelect aria-label="Existing registration (optional)"
           className={styles.select}
           value={draft.registrationId}
-          onChange={(event) => onRegistration(event.target.value)}
+          onValueChange={playerValue => onRegistration(playerValue)}
         >
           <option value="">Invite by email</option>
           {registrations.map((registration) => (
@@ -1932,7 +1934,7 @@ function RosterSlotEditor({
               {registrationName(registration)}
             </option>
           ))}
-        </select>
+        </SearchablePlayerSelect>
       </label>
       <label className={styles.field}>
         Name
@@ -2044,15 +2046,15 @@ function MatchupLineups({
               {event?.team_tiebreak_mode === "SINGLES" ? (
                 <label className={styles.field}>
                   Singles tiebreak player
-                  <select
+                  <SearchablePlayerSelect aria-label="Singles tiebreak player"
                     className={styles.select}
                     value={draft.tiebreakPlayerId}
-                    onChange={(change) =>
+                    onValueChange={playerValue =>
                       setDrafts((current) => ({
                         ...current,
                         [key]: {
                           ...draft,
-                          tiebreakPlayerId: change.target.value
+                          tiebreakPlayerId: playerValue
                         }
                       }))
                     }
@@ -2063,7 +2065,7 @@ function MatchupLineups({
                         {member.display_name || member.display_name_snapshot}
                       </option>
                     ))}
-                  </select>
+                  </SearchablePlayerSelect>
                 </label>
               ) : (
                 <p className={styles.hint}>

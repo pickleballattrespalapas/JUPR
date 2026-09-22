@@ -1,5 +1,7 @@
 "use client";
 
+import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
+
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
@@ -310,11 +312,11 @@ function PlayerSelect({ label, value, onChange, options }: { label: string; valu
   const currentInOptions = Boolean(value) && options.some((player) => String(player.id) === String(value));
   return (
     <label><strong>{label}</strong><br />
-      <select value={value} onChange={(event) => onChange(event.target.value)} style={inputStyle}>
+      <SearchablePlayerSelect aria-label={label} value={value} onValueChange={playerValue => onChange(playerValue)} style={inputStyle}>
         <option value="">Select player…</option>
         {value && !currentInOptions ? <option value={value}>Current player #{value}</option> : null}
         {options.map((player) => <option key={String(player.id)} value={String(player.id)}>{playerOptionLabel(player)}</option>)}
-      </select>
+      </SearchablePlayerSelect>
     </label>
   );
 }

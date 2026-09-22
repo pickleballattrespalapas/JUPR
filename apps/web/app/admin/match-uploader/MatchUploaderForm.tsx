@@ -1,5 +1,8 @@
 "use client";
 
+import PlayerSearchInput from "@/components/PlayerSearchInput";
+import { matchesPlayerSearch } from "@/lib/playerSearch";
+
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
@@ -338,7 +341,7 @@ function SearchablePlayerInput({
     : null;
   const matchingPlayers = cleanedQuery
     ? players.filter((player) =>
-        String(player.name).trim().toLocaleLowerCase().includes(cleanedQuery.toLocaleLowerCase()),
+        matchesPlayerSearch(String(player.name), cleanedQuery),
       )
     : players;
   const numericStartingJupr = Number(startingJupr);
@@ -406,32 +409,11 @@ function SearchablePlayerInput({
           </button>
         </div>
       ) : (
-        <input
-          id={inputId}
-          list={`${inputId}-options`}
-          value={query}
-          placeholder="Search player…"
-          autoComplete="off"
-          disabled={disabled || creating}
-          aria-invalid={invalid || undefined}
-          onChange={(event) => {
-            const next = event.target.value;
-            setQuery(next);
-            const match = players.find(
-              (player) =>
-                String(player.name).trim().toLocaleLowerCase()
-                === next.replace(/\s+/g, " ").trim().toLocaleLowerCase(),
-            );
-            onChange(match ? String(match.id) : "");
-          }}
-          style={validatedInputStyle}
-        />
+        <PlayerSearchInput id={inputId} value={query} placeholder="Search player…" disabled={disabled || creating}
+          aria-invalid={invalid || undefined} onTextChange={next => { setQuery(next); onChange(""); }}
+          options={players.map(player => ({ value: String(player.id), label: String(player.name) }))}
+          onPick={option => { setQuery(option.label); onChange(option.value); }} style={validatedInputStyle} />
       )}
-      <datalist id={`${inputId}-options`}>
-        {players.map((player) => (
-          <option key={String(player.id)} value={String(player.name)} />
-        ))}
-      </datalist>
         {unavailableExactPlayer ? (
           <p role="status" style={{ color: "#92400e", margin: "0.35rem 0 0", fontWeight: 700 }}>
             {String(unavailableExactPlayer.name)} is already used in this match. Clear that position before selecting this player here.
@@ -544,31 +526,10 @@ function SearchablePlayerMultiInput({
         <p style={{ color: "#64748b", fontSize: "0.85rem", margin: "0.35rem 0 0.5rem" }}>No players selected yet.</p>
       )}
       <div style={{ display: "grid", gridTemplateColumns: "minmax(140px, 1fr) auto", gap: "0.4rem" }}>
-        <input
-          id={inputId}
-          list={`${inputId}-options`}
-          value={query}
-          onChange={(event) => {
-          const next = event.target.value;
-          setQuery(next);
-          const normalizedNext = next.replace(/\s+/g, " ").trim().toLocaleLowerCase();
-          const match = players.find((player) =>
-            String(player.name).trim().toLocaleLowerCase() === normalizedNext
-            && !selectedNames.has(String(player.name).trim().toLocaleLowerCase()),
-          );
-          if (match) addPlayerName(String(match.name));
-        }}
-        onKeyDown={(event) => {
-            if (event.key === "Enter" && exactPlayer) {
-              event.preventDefault();
-              addPlayerName(String(exactPlayer.name));
-            }
-          }}
-          placeholder="Search player name…"
-          autoComplete="off"
-          disabled={disabled || creating}
-          style={inputStyle}
-        />
+        <PlayerSearchInput id={inputId} value={query} onTextChange={setQuery} placeholder="Search player name…"
+          disabled={disabled || creating} style={inputStyle}
+          options={players.filter(player => !selectedNames.has(String(player.name).trim().toLocaleLowerCase())).map(player => ({ value: String(player.id), label: String(player.name) }))}
+          onPick={option => addPlayerName(option.label)} />
         <button
           type="button"
           onClick={() => exactPlayer && addPlayerName(String(exactPlayer.name))}
@@ -578,11 +539,7 @@ function SearchablePlayerMultiInput({
           Add player
         </button>
       </div>
-      <datalist id={`${inputId}-options`}>
-        {players
-          .filter((player) => !selectedNames.has(String(player.name).trim().toLocaleLowerCase()))
-          .map((player) => <option key={String(player.id)} value={String(player.name)} />)}
-      </datalist>
+
       {cleanedQuery && !exactPlayer ? (
         <div style={{ display: "grid", gridTemplateColumns: "minmax(100px, 1fr) auto", gap: "0.4rem", marginTop: "0.4rem", alignItems: "end" }}>
           <label htmlFor={`${inputId}-starting-jupr`}>

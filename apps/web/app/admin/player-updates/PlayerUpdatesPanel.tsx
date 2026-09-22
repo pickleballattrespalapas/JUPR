@@ -1,5 +1,7 @@
 "use client";
 
+import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
+
 import { useMemo, useState } from "react";
 import { actionSuccess, actionUncertain } from "@/components/interaction";
 import type {
@@ -311,7 +313,7 @@ export default function PlayerUpdatesPanel({ apiBase, clubId, status }: Props) {
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>3. Active subscriptions and replacement history</h2>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
-          <label>Active subscription<br /><select value={selectedSubscriptionId} onChange={(event) => setSelectedSubscriptionId(event.target.value)} disabled={mutationControlsDisabled} style={inputStyle}><option value="">Select…</option>{activeSubscriptions.map((row) => <option key={row.id} value={row.id}>{row.player_name || `Player #${row.player_id}`} · {row.email}</option>)}</select></label>
+          <label>Active subscription<br /><SearchablePlayerSelect aria-label="Active subscription" value={selectedSubscriptionId} onValueChange={playerValue => setSelectedSubscriptionId(playerValue)} disabled={mutationControlsDisabled} style={inputStyle}><option value="">Select…</option>{activeSubscriptions.map((row) => <option key={row.id} value={row.id}>{row.player_name || `Player #${row.player_id}`} · {row.email}</option>)}</SearchablePlayerSelect></label>
           <label>Replacement email<br /><input type="email" required maxLength={320} value={replacementEmail} onChange={(event) => { setReplacementEmail(event.target.value); setReplacementOperationKey(""); }} disabled={mutationControlsDisabled} style={inputStyle} /></label>
           <label>Replacement note<br /><input value={replacementNote} onChange={(event) => { setReplacementNote(event.target.value); setReplacementOperationKey(""); }} disabled={mutationControlsDisabled} style={inputStyle} /></label>
           <ConfirmAction triggerLabel="Replace atomically" title="Replace this verified subscriber?" description="This creates the verified replacement and retains the prior subscription in history as unsubscribed." confirmLabel="Yes, replace subscriber" confirmationText="REPLACE VERIFIED SUBSCRIBER" disabled={mutationControlsDisabled || !selectedSubscription || !replacementEmail} busy={busy} onConfirm={replaceSubscriber} />
