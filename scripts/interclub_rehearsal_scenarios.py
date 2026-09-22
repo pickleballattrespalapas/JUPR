@@ -367,6 +367,12 @@ def season_adjustments(r):
             "post-close request remains pending even before season starts and preserves its explanation")
     r.check(not r.db("GET", "pcs_interclub_entries", season_id="eq."+s["id"], player_id="eq."+str(requests[0]["player_id"])),
             "pending late request cannot seed league participation")
+    candidates = r.api("GET", r.competition(club, s["id"], s["meets"][0]["id"]), actor=1)["eligible_players"]
+    r.check(sum(len(rows) for rows in candidates.values()) == len(s["players"])
+            and all(row["eligibility_rating"] == 3.75 and not row["rating_locked"]
+                    and "player_id" not in row and "email" not in row
+                    for rows in candidates.values() for row in rows),
+            "host meet context batches current ratings and excludes pending requests and private player identifiers")
     r.api("POST", root+"/pool/late-requests", requests[0], actor=1, expected=(409,))
     r.api("POST", r.registration(organizer, s["id"])+"/pool/late-requests", requests[0], actor=1, expected=(403,))
     decision = {"member_id": pending["id"], "expected_revision": pending["revision"],
