@@ -103,10 +103,12 @@ test("dedicated QA admin switches three clubs and previews website controls", as
 
   const playerSets: Set<number>[] = [];
   const competitionWrites: string[] = [];
+  const lateRequestWrites: string[] = [];
   const operationalReads: string[] = [];
   page.on("request", request => {
     const pathname = new URL(request.url()).pathname;
     if (pathname.includes("/interclub/competition") && !["GET", "HEAD", "OPTIONS"].includes(request.method())) competitionWrites.push(request.method() + " " + pathname);
+    if (pathname.endsWith("/pool/late-requests") && request.method() === "POST") lateRequestWrites.push(pathname);
     if (request.method() === "GET" && /\/interclub\/(registrations|competition)\/[^/]+\/meets\//.test(pathname)) operationalReads.push(pathname);
   });
   for (const club of clubs) {
@@ -207,6 +209,47 @@ test("dedicated QA admin switches three clubs and previews website controls", as
           const pool = await poolResponse.json();
           expect(pool.members.every((member: {club_id: string; season_id: string}) => member.club_id === club.id && member.season_id === season.id)).toBe(true);
           await expect(page.getByRole("region", { name: "Season player pool", exact: true })).toBeVisible();
+          if (meetPlanningOpen && pool.can_request_late && pool.members.some((member: { player_id: string | null }) => member.player_id)) {
+            const poolPanel = page.getByRole("region", { name: "Season player pool", exact: true });
+            const searchPath = `${seasonPath}/pool/players`;
+            const initialSearch = page.waitForResponse(r => new URL(r.url()).pathname === searchPath && new URL(r.url()).searchParams.get("q") === "" && r.request().method() === "GET");
+            await poolPanel.getByRole("button", { name: "Request late player", exact: true }).click();
+            const initial = await initialSearch;
+            expect(initial.status()).toBe(200);
+            const candidates: { id: string; name: string }[] = (await initial.json()).players;
+            const members: { id: string; name: string; player_id: string | null }[] = pool.members;
+            // Match identities first. A unique pool name makes the accessible
+            // Manage target unambiguous even when club profiles share a name.
+            const candidate = candidates.find(player => members.some(member => String(member.player_id) === String(player.id)
+              && members.filter(other => other.name === member.name).length === 1));
+            const form = poolPanel.getByRole("region", { name: "Request a late player", exact: true });
+            if (candidate) {
+              const member = members.find(row => String(row.player_id) === String(candidate.id))!;
+              const query = candidate.name.slice(0, 80);
+              const searched = page.waitForResponse(r => new URL(r.url()).pathname === searchPath && new URL(r.url()).searchParams.get("q") === query && r.request().method() === "GET");
+              await form.getByRole("searchbox", { name: "Find a late player in this club", exact: true }).fill(query);
+              const found = await searched;
+              expect(found.status()).toBe(200);
+              const matches: { id: string }[] = (await found.json()).players;
+              expect(matches.some(player => String(player.id) === String(candidate.id))).toBe(true);
+              const existing = form.getByRole("region", { name: "Existing season signups", exact: true });
+              await expect(existing.getByRole("radio", { includeHidden: true })).toHaveCount(0);
+              // Count by returned player IDs, so a new namesake may still have a radio.
+              await expect(form.getByRole("radio", { includeHidden: true })).toHaveCount(matches.filter(player => !members.some(row => String(row.player_id) === String(player.id))).length);
+              await existing.getByRole("button", { name: `View ${member.name} in player pool`, exact: true }).click();
+              await expect(form).toHaveCount(0);
+              await expect(poolPanel.getByRole("searchbox", { name: "Find in player pool", exact: true })).toHaveValue(member.name);
+              await expect(poolPanel.getByRole("combobox", { name: "Show players", exact: true })).toHaveValue("all");
+              const manage = poolPanel.locator("summary").filter({ hasText: /^Manage$/ }).and(poolPanel.getByLabel(`Manage ${member.name}`, { exact: true }));
+              await expect(manage).toBeFocused();
+              await expect(manage.locator("..")).toHaveAttribute("open", "");
+              await poolPanel.getByRole("searchbox", { name: "Find in player pool", exact: true }).fill("");
+              await poolPanel.getByRole("combobox", { name: "Show players", exact: true }).selectOption("active");
+            } else {
+              // No suitable existing identity on this read-only search page.
+              await form.getByRole("button", { name: "Close late player request", exact: true }).click();
+            }
+          }
         }
         if (!organizer && !joined) await expect(page.getByRole("combobox", { name: "Meet", exact: true })).toHaveCount(0);
         if (!meetPlanningOpen) {
@@ -362,6 +405,7 @@ test("dedicated QA admin switches three clubs and previews website controls", as
   });
   expect(deniedCompetition.status()).toBe(403);
   expect(competitionWrites, "The competition acceptance check must never generate, save, submit, approve or alter fixture data").toEqual([]);
+  expect(lateRequestWrites, "Viewing an existing signup must not create another late request").toEqual([]);
   await page.goto("/admin/login");
   const signedOut = page.waitForResponse(r => r.url().startsWith(`${expectedAuthOrigin}/auth/v1/logout`) && r.request().method() === "POST");
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
