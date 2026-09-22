@@ -187,12 +187,19 @@ def _eligible_players(db, season_id, meet):
             continue
         players = db.table("players").select("id,name,gender").eq("club_id", club_id).in_("id", [r["player_id"] for r in selected]).execute().data or []
         by_id = {str(p["id"]): p for p in players}
+        # The private helper resolves the same rating_at(now()) values in one
+        # database call, instead of one network round trip per pool player.
+        current_ratings = {}
+        if not locked and players:
+            details = db.rpc("pcs_interclub_pool_player_details", {"p_season_id": str(season_id), "p_club_id": club_id,
+                "p_player_ids": [int(player["id"]) for player in players]}).execute().data or []
+            current_ratings = {str(row["player_id"]): row.get("league_rating") for row in details}
         for entry in selected:
             player = by_id.get(str(entry["player_id"]))
             if not player:
                 continue
             snapshot = snapshots.get(entry["id"])
-            rating = snapshot["rating"] if snapshot else db.rpc("pcs_interclub_rating_at", {"p_season_id": str(season_id), "p_entry_id": entry["id"], "p_cutoff": datetime.now(timezone.utc).isoformat()}).execute().data
+            rating = snapshot["rating"] if snapshot else current_ratings.get(str(entry["player_id"]))
             if rating is None:
                 continue
             eligible.setdefault(club_id, []).append({"entry_id": entry["id"], "name": player["name"], "gender": snapshot["gender"] if snapshot else player["gender"],

@@ -50,6 +50,8 @@ def setup(monkeypatch):
                 error=RuntimeError('private SQL failure');error.code=state['error'];raise error
             if name=='pcs_update_interclub_meet_schedule':
                 return SimpleNamespace(data={'meet':{**meet,'revision':meet['revision']+1},'availability_reset_count':2,'rosters_refreshed':1,'publication_review_required':True})
+            if name=='pcs_interclub_pool_player_details':
+                return SimpleNamespace(data=deepcopy(state.get('rating_details',{}).get(params['p_club_id'],[])))
             return SimpleNamespace(data=deepcopy(saved))
         return SimpleNamespace(execute=execute)
     monkeypatch.setattr(admin_auth_routes,'authenticate_bearer',lambda _:user)
@@ -187,11 +189,65 @@ def test_fifth_approved_pool_player_is_available_without_private_contact_details
     entry_id=str(uuid4());member_id=str(uuid4())
     s['tables']['pcs_interclub_entries']=[dict(id=entry_id,club_id='home',season_id=s['season']['id'],player_id=50,pool_member_id=member_id,starting_rating=3.6)]
     s['tables']['pcs_interclub_meet_eligibility_snapshots']=[dict(meet_id=s['meet']['id'],entry_id=entry_id,club_id='home',rating=3.7,gender='female',deadline=s['meet']['roster_deadline'])]
-    s['tables']['players']=[dict(id=50,club_id='home',name='Approved substitute',gender='female',email='private@example.invalid')]
+    s['tables']['players']=[dict(id=50,club_id='home',name='Approved substitute',gender='male',email='private@example.invalid')]
     r=client.get(path(s));assert r.status_code==200
     choices=r.json()['eligible_players']['home']
     assert choices[0]['name']=='Approved substitute' and choices[0]['eligibility_rating']==3.7
+    assert choices[0]['gender']=='female' and choices[0]['rating_locked'] is True
     assert 'player_id' not in r.text and 'private@example' not in r.text
+    assert [name for name,_ in s['calls']]==['pcs_lock_interclub_meet_eligibility']
+
+
+def add_pool_choice(s, club, player_id, *, approval='approved', status='active'):
+    entry_id,member_id=str(uuid4()),str(uuid4())
+    s['tables']['pcs_interclub_entries'].append(dict(id=entry_id,club_id=club,season_id=s['season']['id'],player_id=player_id,pool_member_id=member_id,starting_rating=3.6))
+    s['tables']['pcs_interclub_pool_members'].append(dict(id=member_id,club_id=club,season_id=s['season']['id'],player_id=player_id,name=f'Pool {player_id}',approval_status=approval,status=status))
+    s['tables'].setdefault('players',[]).append(dict(id=player_id,club_id=club,name=f'Pool {player_id}',gender='female',email='private-pool@example.invalid'))
+    return entry_id
+
+
+def test_92_unfrozen_players_use_four_club_rating_calls_with_distinct_ratings(setup):
+    client,s=setup
+    clubs=['home','away','third','fourth'];s['meet']['club_ids']=clubs
+    s['tables']['pcs_interclub_participations']=[dict(season_id=s['season']['id'],club_id=c,status='accepted') for c in clubs]
+    s['rating_details']={club:[] for club in clubs};expected={};expected_ids={club:[] for club in clubs}
+    for index in range(92):
+        club=clubs[index%4];player_id=1000+index
+        entry=add_pool_choice(s,club,player_id)
+        rating=2.51+index/100
+        expected[entry]=rating;expected_ids[club].append(player_id)
+        # Mix ID representations and reverse rows to require identity mapping.
+        s['rating_details'][club].insert(0,dict(player_id=str(player_id) if index%2 else player_id,league_rating=rating,eligible_divisions=['3.0']))
+    add_pool_choice(s,'home',2001,approval='pending')
+    add_pool_choice(s,'home',2002,status='withdrawn')
+    add_pool_choice(s,'unrelated',2003)
+    response=client.get(path(s));assert response.status_code==200,response.text
+    choices=[row for rows in response.json()['eligible_players'].values() for row in rows]
+    assert len(choices)==92
+    assert {row['entry_id']:row['eligibility_rating'] for row in choices}==expected
+    assert all(row['rating_locked'] is False for row in choices)
+    assert len(s['calls'])==4
+    assert all(name=='pcs_interclub_pool_player_details' for name,_ in s['calls'])
+    for _,params in s['calls']:
+        assert params['p_season_id']==s['season']['id']
+        assert params['p_player_ids']==expected_ids[params['p_club_id']]
+    assert 'player_id' not in response.text and 'private-pool@example' not in response.text
+    assert 'pcs_interclub_meet_eligibility_snapshots' not in s['reads']
+
+
+def test_unfrozen_rating_batch_keeps_private_club_scope_and_omits_missing_ratings(setup):
+    client,s=setup;s['season']['organizer_club_id']='organizer'
+    valid=add_pool_choice(s,'home',50)
+    add_pool_choice(s,'home',51);add_pool_choice(s,'home',52);add_pool_choice(s,'away',53)
+    s['rating_details']={'home':[dict(player_id=50,league_rating=3.71),dict(player_id=51,league_rating=None)],
+                         'away':[dict(player_id=53,league_rating=4.2)]}
+    response=client.get(path(s));assert response.status_code==200,response.text
+    assert response.json()['lineups_hidden'] is True
+    choices=response.json()['eligible_players']
+    assert set(choices)=={'home'}
+    assert [(row['entry_id'],row['eligibility_rating']) for row in choices['home']]==[(valid,3.71)]
+    assert s['calls']==[('pcs_interclub_pool_player_details',dict(p_season_id=s['season']['id'],p_club_id='home',p_player_ids=[50,51,52]))]
+    assert 'private-pool@example' not in response.text and 'player_id' not in response.text
 
 
 def test_prepared_mixed_pairs_can_be_rearranged_but_not_replaced_with_nonroster_player(setup):
