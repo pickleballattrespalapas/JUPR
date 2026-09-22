@@ -907,7 +907,7 @@ def test_late_request_requires_an_active_player_from_this_club(late_request, pla
 
 @pytest.mark.parametrize("patch", [
     {"player_id": 0}, {"player_id": -1}, {"player_id": None}, {"player_id": "unknown"},
-    {"reason": ""}, {"reason": "   "}, {"reason": "x" * 501},
+    {"reason": "x" * 501},
     {"divisions": ["3.5", "3.5"]}, {"divisions": [""]}, {"divisions": ["not-a-season-division"]},
     {"actor_id": "forged"}, {"club_id": "beta"}, {"approval_status": "approved"},
     {"email_consent": True}, {"email": "injected@example.test"}, {"late_join": False},
@@ -973,3 +973,160 @@ def test_late_request_is_reviewable_only_by_the_season_organizer(late_request):
     assert name == "pcs_review_interclub_pool_member"
     assert params["p_club_id"] == "organizer" and params["p_actor_id"] == state["user"].user_id
     assert params["p_revision"] == member["revision"] and params["p_approve"] is True
+
+
+@pytest.mark.parametrize("reason", [None, "", "   "])
+def test_late_request_note_is_optional_without_changing_approval_authority(late_request, reason):
+    client, state = late_request
+    body = {"player_id": 1}
+    if reason is not None:
+        body["reason"] = reason
+    response = client.post(state["late_url"], json=body)
+    assert response.status_code == 200
+    assert state["calls"][0][1]["p_reason"] == ""
+    member = response.json()["member"]
+    assert member["late_request_reason"] == ""
+    assert member["late_requested_at"]
+    assert member["approval_status"] == "pending" and member["late_join"] is True
+
+
+def inline_player_body():
+    return {"request_id": str(uuid4()), "new_player": {
+        "name": "New Player", "starting_jupr": 3.25, "gender": "female", "email": "NEW@EXAMPLE.TEST"},
+        "divisions": ["4.0"]}
+
+
+@pytest.mark.parametrize("late", [False, True])
+def test_inline_profile_creation_uses_one_scoped_atomic_rpc(setup, late):
+    client, state = setup
+    set_registration_phase(state["season"], "closed" if late else "open")
+    state["result"] = {**state["member"], "name": "New Player", "player_id": 77,
+        "email": "new@example.test", "approval_status": "pending" if late else "approved", "late_join": late}
+    body = inline_player_body()
+    path = state["base"] + ("/pool/late-requests" if late else "/pool/create-player")
+    response = client.post(path, json=body)
+    assert response.status_code == 200
+    assert state["calls"] == [("pcs_interclub_register_new_player", {
+        "p_actor_id": state["user"].user_id, "p_actor_email": state["user"].email,
+        "p_club_id": "alpha", "p_season_id": state["season"]["id"], "p_late": late,
+        "p_request_id": body["request_id"], "p_new_player": {**body["new_player"], "email": "new@example.test"},
+        "p_divisions": ["4.0"], "p_reason": ""})]
+    assert response.json()["member"]["player_id"] == "77"
+    assert "manage_url" in response.json()["member"]
+    assert "token_nonce" not in response.text and "email_consent" not in response.text
+    assert len(state["tables"]["players"]) == 2, "No separate client-side profile insertion is attempted."
+    private_headers(response)
+
+
+@pytest.mark.parametrize("late", [False, True])
+@pytest.mark.parametrize("patch", [
+    {"name": ""}, {"starting_jupr": 0.99}, {"starting_jupr": 7.01}, {"starting_jupr": "NaN"},
+    {"starting_jupr": "Infinity"}, {"starting_jupr": True}, {"gender": "invalid"}, {"email": "invalid"},
+    {"club_id": "beta"}, {"rating": 1300}, {"active": True}, {"user_id": "forged"},
+])
+def test_inline_profile_rejects_invalid_or_forged_profile_fields(setup, late, patch):
+    client, state = setup
+    body = inline_player_body()
+    body["new_player"].update(patch)
+    path = state["base"] + ("/pool/late-requests" if late else "/pool/create-player")
+    assert client.post(path, json=body).status_code == 422
+    assert not state["calls"]
+
+
+@pytest.mark.parametrize("late", [False, True])
+@pytest.mark.parametrize("patch", [
+    {"request_id": None}, {"request_id": "bad"}, {"player_id": 1}, {"approval_status": "approved"},
+    {"email_consent": True}, {"divisions": ["3.5", "3.5"]}, {"divisions": ["5.0"]},
+])
+def test_inline_profile_rejects_invalid_registration_choice(setup, late, patch):
+    client, state = setup
+    set_registration_phase(state["season"], "closed" if late else "open")
+    body = {**inline_player_body(), **patch}
+    path = state["base"] + ("/pool/late-requests" if late else "/pool/create-player")
+    assert client.post(path, json=body).status_code == 422
+    assert not state["calls"]
+
+
+@pytest.mark.parametrize("late,phase", [
+    (late, phase) for late in (False, True) for phase in ("unconfigured", "scheduled", "open", "closed")
+    if phase != ("closed" if late else "open")])
+def test_inline_profile_respects_registration_phase_before_rpc(setup, phase, late):
+    client, state = setup
+    set_registration_phase(state["season"], phase)
+    path = state["base"] + ("/pool/late-requests" if late else "/pool/create-player")
+    assert client.post(path, json=inline_player_body()).status_code == 423
+    assert not state["calls"]
+
+
+@pytest.mark.parametrize("late", [False, True])
+@pytest.mark.parametrize("change", [{"role": "operator"}, {"club_id": "beta"}, {"revoked_at": "2020-01-01T00:00:00Z"}])
+def test_inline_profile_requires_active_admin_in_the_same_club(setup, late, change):
+    client, state = setup
+    state["assignment"].update(change)
+    path = state["base"] + ("/pool/late-requests" if late else "/pool/create-player")
+    assert client.post(path, json=inline_player_body()).status_code == 403
+    assert not state["calls"]
+
+
+@pytest.mark.parametrize("code,detail", [("P4091", "club profile"), ("P4092", "season signup")])
+def test_inline_profile_conflicts_explain_existing_profile_or_signup(setup, code, detail):
+    client, state = setup
+    state["error"] = code
+    response = client.post(state["base"] + "/pool/create-player", json=inline_player_body())
+    assert response.status_code == 409
+    assert detail in response.json()["detail"]
+    assert "private database" not in response.text
+
+
+def test_public_new_profile_uses_atomic_signup_and_never_account_autoselection(setup, monkeypatch):
+    client, state = setup
+    state["result"] = {"status": "registered", "member": state["member"]}
+    def forbidden_account_lookup(*args):
+        pytest.fail("Explicit new profile creation must not be replaced by account-based selection.")
+    monkeypatch.setattr(routes, "_account_player", forbidden_account_lookup)
+    body = {**state["signup_body"], "new_player": {"name": " Alex   Alpha ",
+        "starting_jupr": 3.25, "gender": None, "email": "ALEX@EXAMPLE.TEST"}}
+    response = client.post(state["signup"], json=body, headers={"Authorization": "Bearer session"})
+    assert response.status_code == 200
+    name, params = state["calls"][-1]
+    assert name == "pcs_interclub_pool_public_action"
+    payload = params["p_payload"]
+    assert payload["new_player"]["starting_jupr"] == 3.25
+    assert payload["new_player"]["email"] == "alex@example.test"
+    assert payload["email_consent"] is True and "player_id" not in payload
+    first_fingerprint = payload["request_fingerprint"]
+    assert client.post(state["signup"], json=body).json() == response.json()
+    assert state["calls"][-1][1]["p_payload"]["request_fingerprint"] == first_fingerprint
+    body["new_player"]["starting_jupr"] = 3.5
+    client.post(state["signup"], json=body)
+    assert state["calls"][-1][1]["p_payload"]["request_fingerprint"] != first_fingerprint
+
+
+@pytest.mark.parametrize("patch", [{"name": "Another Person"}, {"email": "other@example.test"},
+    {"starting_jupr": 0}, {"starting_jupr": "NaN"}, {"gender": "invalid"}])
+def test_public_new_profile_cannot_change_signup_identity_or_bypass_rating_validation(setup, patch):
+    client, state = setup
+    body = {**state["signup_body"], "new_player": {"name": "Alex Alpha", "email": "alex@example.test", "starting_jupr": 3.25, **patch}}
+    assert client.post(state["signup"], json=body).status_code == 422
+    assert not state["calls"]
+
+
+def test_public_new_profile_and_existing_player_selection_are_mutually_exclusive(setup):
+    client, state = setup
+    body = {**state["signup_body"], "player_id": 1, "new_player": {
+        "name": "Alex Alpha", "email": "alex@example.test", "starting_jupr": 3.25}}
+    assert client.post(state["signup"], json=body).status_code == 422
+    assert not state["calls"]
+
+
+def test_legacy_public_signup_fingerprint_and_explicit_null_fallback_are_unchanged(setup):
+    client, state = setup
+    state["result"] = {"status": "registered", "member": state["member"]}
+    for body in (state["signup_body"], {**state["signup_body"], "player_id": None}):
+        assert client.post(state["signup"], json=body).status_code == 200
+        payload = state["calls"][-1][1]["p_payload"]
+        assert "new_player" not in payload
+        original = {**body, "email": "alex@example.test"}
+        expected = routes.hashlib.sha256(routes.json.dumps(original, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        assert payload["request_fingerprint"] == expected
+        assert ("player_id" in payload) == ("player_id" in body)

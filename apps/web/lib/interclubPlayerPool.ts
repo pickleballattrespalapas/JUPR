@@ -49,7 +49,12 @@ export type BulkPoolPreviewRow = BulkPoolMember & {
 };
 export type BulkPoolPreview = { rows: BulkPoolPreviewRow[]; ready_count: number; duplicate_count: number; ambiguous_count: number };
 export type BulkPoolResult = { added_count: number; skipped_count: number; pool: SeasonPool };
-export type LatePlayerRequest = { player_id: number; divisions?: string[]; reason: string };
+export type NewClubPlayer = { name: string; starting_jupr: number; gender?: "male" | "female" | null; email?: string | null };
+export type NewPoolPlayerInput = { new_player: NewClubPlayer; divisions?: string[]; reason?: string };
+export type CreatePoolPlayerRequest = NewPoolPlayerInput & { request_id: string };
+export type ExistingLatePlayerRequest = { player_id: number; divisions?: string[]; reason?: string };
+export type LatePlayerInput = ExistingLatePlayerRequest | NewPoolPlayerInput;
+export type LatePlayerRequest = ExistingLatePlayerRequest | CreatePoolPlayerRequest;
 export type LatePlayerRequestResult = { member: PoolMember; pool: SeasonPool };
 
 export function poolRating(value: number | null | undefined): string {

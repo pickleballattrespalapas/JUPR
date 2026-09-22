@@ -25,6 +25,10 @@ const reply = (value, status = 200) => ({ ok: status < 400, status, json: async 
 const content = tree => JSON.stringify(tree.toJSON());
 const button = (tree, text) => tree.root.findAllByType('button').find(node => node.children.includes(text));
 const settleLookup = () => act(async () => new Promise(resolve => setTimeout(resolve, 275)));
+const fillNewProfile = (tree, rating = '3.5', gender = 'female') => act(async () => {
+  tree.root.findByProps({ 'aria-label': 'Starting JUPR' }).props.onChange({ target: { value: rating } });
+  tree.root.findByProps({ 'aria-label': 'Gender' }).props.onChange({ target: { value: gender } });
+});
 const club = { id: 'cabo', name: 'Cabo Test Club' };
 const openWindow = { opens_at: '2020-01-01T00:00:00Z', closes_at: '2099-01-01T00:00:00Z', revision: 1, status: 'open', can_register: true, meet_planning_open: false };
 const closedWindow = { ...openWindow, closes_at: '2020-02-01T00:00:00Z', status: 'closed', can_register: false, meet_planning_open: true };
@@ -58,13 +62,15 @@ async function signupConsentRetryAndPrivacy() {
     tree.root.findAllByProps({ type: 'checkbox' }).at(-1).props.onChange({ target: { checked: true } });
   });
   await settleLookup();
+  await fillNewProfile(tree);
   await act(async () => {
     void tree.root.findByType('form').props.onSubmit({ preventDefault() {} });
     void tree.root.findByType('form').props.onSubmit({ preventDefault() {} });
   });
   assert.equal(calls.filter(call => call.options.method).length, 1, 'Duplicate submits are blocked');
   const initial = JSON.parse(calls.at(-1).options.body);
-  assert.deepEqual(initial, { name: 'Jo Player', email: 'jo@example.test', divisions: ['3.5'], notes: '', email_consent: true, request_id: 'request-1' });
+  assert.deepEqual(initial, { name: 'Jo Player', email: 'jo@example.test', divisions: ['3.5'], notes: '', email_consent: true,
+    new_player: { name: 'Jo Player', email: 'jo@example.test', starting_jupr: 3.5, gender: 'female' }, request_id: 'request-1' });
   await act(async () => finish(reply({ detail: 'Try again.' }, 503)));
   await act(async () => { void tree.root.findByType('form').props.onSubmit({ preventDefault() {} }); });
   assert.equal(JSON.parse(calls.at(-1).options.body).request_id, initial.request_id, 'A safe retry reuses the same request ID');
@@ -82,6 +88,7 @@ async function signupConsentRetryAndPrivacy() {
     tree.root.findAllByProps({ type: 'checkbox' }).at(-1).props.onChange({ target: { checked: true } });
   });
   await settleLookup();
+  await fillNewProfile(tree);
   await act(async () => { void tree.root.findByType('form').props.onSubmit({ preventDefault() {} }); });
   await act(async () => finish(reply({ status: 'already_registered' })));
   assert.ok(content(tree).includes('Your earlier signup is still saved'));
@@ -137,6 +144,7 @@ async function signupClosingWhileFormIsOpen() {
     tree.root.findAllByProps({ type: 'checkbox' }).at(-1).props.onChange({ target: { checked: true } });
   });
   await settleLookup();
+  await fillNewProfile(tree);
   await act(async () => tree.root.findByType('form').props.onSubmit({ preventDefault() {} }));
   assert.equal(button(tree, 'Join the season player pool').props.disabled, true);
   assert.equal(tree.root.findByProps({ autoComplete: 'name' }).props.value, 'Jo Player');
@@ -271,9 +279,15 @@ async function signupProfileMatchingAndSafeFallback() {
   assert.deepEqual(posts.at(-1).divisions, ['3.5'], 'Only the player’s selected preference is submitted when several divisions are eligible');
   assert.equal(posts.at(-1).player_id, player.id, 'Unique normalized exact match is submitted automatically');
   assert.equal(Object.hasOwn(posts.at(-1), 'rating'), false, 'Browser does not submit a rating override');
+  assert.equal(Object.hasOwn(posts.at(-1), 'new_player'), false, 'Existing profiles never receive new-player fields');
   await act(async () => button(tree, 'This isn’t my profile').props.onClick());
+  const beforeNewProfile = posts.length;
+  await submit();
+  assert.equal(posts.length, beforeNewProfile, 'Creating a new profile requires a supplied rating');
+  await act(async () => button(tree, 'Ask my club to create or link my profile instead').props.onClick());
   await submit();
   assert.equal(posts.at(-1).player_id, null, 'Explicit opt out prevents server automatic linking');
+  assert.equal(Object.hasOwn(posts.at(-1), 'new_player'), false, 'Different people sharing a name can still ask the club to link their signup');
 
   players = [player, duplicate];
   await mount(); await settleLookup();
@@ -292,18 +306,21 @@ async function signupProfileMatchingAndSafeFallback() {
   await act(async () => tree.root.findByProps({ autoComplete: 'name' }).props.onChange({ target: { value: 'Different Person' } }));
   await act(async () => finishOld(reply({ players: [player], linked_player: null })));
   assert.equal(tree.root.findAllByProps({ 'aria-label': 'Club rating' }).length, 0, 'Late response cannot select the prior person');
-  await settleLookup(); await submit();
+  await settleLookup(); await fillNewProfile(tree, '3.25', 'male'); await submit();
   assert.equal(posts.at(-1).name, 'Different Person');
   assert.equal(Object.hasOwn(posts.at(-1), 'player_id'), false, 'Changing name removes the old profile from signup');
+  assert.deepEqual(posts.at(-1).new_player, { name: 'Different Person', email: 'jo@example.test', starting_jupr: 3.25, gender: 'male' });
 
   lookup = () => { throw Error('offline'); };
   await mount(); await settleLookup();
-  assert.ok(button(tree, 'Continue without a profile'));
+  assert.ok(button(tree, 'Create a new player profile'));
   const beforeFailure = posts.length;
   await submit(); assert.equal(posts.length, beforeFailure);
-  await act(async () => button(tree, 'Continue without a profile').props.onClick());
+  await act(async () => button(tree, 'Create a new player profile').props.onClick());
+  await fillNewProfile(tree, '4', '');
   await submit();
-  assert.equal(posts.at(-1).player_id, null, 'Lookup outages allow an explicit unmatched signup');
+  assert.deepEqual(posts.at(-1).new_player, { name: 'JO   Player', email: 'jo@example.test', starting_jupr: 4, gender: null }, 'Lookup outages allow explicit new-profile details without inventing gender');
+  assert.equal(Object.hasOwn(posts.at(-1), 'player_id'), false);
   await act(async () => tree.unmount());
 }
 
@@ -334,6 +351,78 @@ async function signupExistingAccountPrefill() {
   assert.equal(tree.root.findAllByProps({ 'aria-label': 'Club rating' }).length, 0, 'Search does not select the account profile over a different typed name');
   await act(async () => tree.unmount());
   currentSession = null;
+}
+
+async function signupNewProfileValidationAndRecovery() {
+  let posts = [], players = [], conflict = false;
+  const existing = { id: 'known-person', name: 'New Person', rating: 4.1, gender: 'female', eligible_divisions: ['4.0'] };
+  global.fetch = async (url, options) => {
+    if (options.method) {
+      posts.push(JSON.parse(options.body));
+      return reply({ detail: conflict ? 'A player with this name already exists. Choose the existing profile or ask your club for help.' : 'Try again.' }, conflict ? 409 : 503);
+    }
+    if (url.includes('/players')) return reply({ players, linked_player: null });
+    return reply({ club, season, signup: { open: true }, meets: [] });
+  };
+  let tree;
+  await act(async () => { tree = create(React.createElement(Signup, { shareId: 'shared' })); });
+  await act(async () => {
+    tree.root.findByProps({ autoComplete: 'name' }).props.onChange({ target: { value: 'New Person' } });
+    tree.root.findByProps({ type: 'email' }).props.onChange({ target: { value: 'new@example.test' } });
+    tree.root.findAllByProps({ type: 'checkbox' }).at(-1).props.onChange({ target: { checked: true } });
+  });
+  await settleLookup();
+  assert.ok(content(tree).includes('New player profile'));
+  assert.equal(tree.root.findByProps({ 'aria-label': 'Starting JUPR' }).props.required, true);
+  const submit = () => act(async () => tree.root.findByType('form').props.onSubmit({ preventDefault() {} }));
+  for (const rating of ['', '0.99', '7.01', 'Infinity', 'NaN']) {
+    await fillNewProfile(tree, rating, '');
+    await submit();
+    assert.equal(posts.length, 0, `${rating || 'Empty'} rating cannot create an unrated or invalid player`);
+  }
+  await fillNewProfile(tree, '1', '');
+  await submit();
+  assert.equal(posts.at(-1).new_player.starting_jupr, 1, 'The lower rating boundary is accepted');
+  assert.equal(posts.at(-1).new_player.gender, null, 'Gender is optional');
+  const firstId = posts.at(-1).request_id;
+  await submit();
+  assert.equal(posts.at(-1).request_id, firstId, 'Identical new-player retries reuse the original request');
+  await fillNewProfile(tree, '7', 'male');
+  await submit();
+  assert.equal(posts.at(-1).new_player.starting_jupr, 7, 'The upper rating boundary is accepted');
+  assert.notEqual(posts.at(-1).request_id, firstId, 'Changing new-player details starts a different idempotent request');
+
+  conflict = true;
+  await submit();
+  assert.ok(content(tree).includes('A player with this name already exists'), 'Creation conflicts retain the actionable server message');
+  assert.equal(button(tree, 'Join the season player pool').props.disabled, true);
+  assert.ok(button(tree, 'Search profiles again'));
+  players = [existing];
+  await act(async () => button(tree, 'Reload signup').props.onClick());
+  await act(async () => button(tree, 'Search profiles again').props.onClick());
+  await settleLookup();
+  assert.equal(tree.root.findByProps({ 'aria-label': 'Club rating' }).props.value, '4.1');
+  assert.equal(tree.root.findAllByProps({ 'aria-label': 'Starting JUPR' }).length, 0);
+  conflict = false;
+  await submit();
+  assert.equal(posts.at(-1).player_id, existing.id);
+  assert.equal(Object.hasOwn(posts.at(-1), 'new_player'), false, 'Recovering to an existing profile discards new rating/gender');
+
+  await act(async () => button(tree, 'This isn’t my profile').props.onClick());
+  await fillNewProfile(tree, '3.75', 'female');
+  players = [];
+  await act(async () => tree.root.findByProps({ autoComplete: 'name' }).props.onChange({ target: { value: 'Different New Person' } }));
+  await settleLookup();
+  assert.equal(tree.root.findByProps({ 'aria-label': 'Starting JUPR' }).props.value, '', 'A changed identity must supply its own rating');
+  assert.equal(tree.root.findByProps({ 'aria-label': 'Gender' }).props.value, '');
+  const beforeChangedName = posts.length;
+  await submit();
+  assert.equal(posts.length, beforeChangedName, 'A new name cannot reuse the declined profile’s entered rating');
+  await fillNewProfile(tree, '3.25', 'male');
+  await submit();
+  assert.deepEqual(posts.at(-1).new_player, { name: 'Different New Person', starting_jupr: 3.25, gender: 'male', email: 'new@example.test' });
+  assert.equal(Object.hasOwn(posts.at(-1), 'player_id'), false);
+  await act(async () => tree.unmount());
 }
 
 async function commissionerRegistrationWindow() {
@@ -381,6 +470,7 @@ async function commissionerRegistrationWindow() {
   await missingLinkAndWrongResponseKind();
   await signupProfileMatchingAndSafeFallback();
   await signupExistingAccountPrefill();
+  await signupNewProfileValidationAndRecovery();
   await commissionerRegistrationWindow();
   console.log('Interclub public player signup and response checks passed');
 })().catch(error => { console.error(error); process.exit(1); });

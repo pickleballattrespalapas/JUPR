@@ -82,11 +82,40 @@ class MemberDetails(StrictModel):
         return value
 
 
+class NewClubPlayer(StrictModel):
+    name: str = Field(min_length=1, max_length=120)
+    starting_jupr: float = Field(ge=1, le=7)
+    gender: Literal["male", "female"] | None = None
+    email: str | None = Field(default=None, max_length=254)
+
+    @field_validator("starting_jupr", mode="before")
+    @classmethod
+    def numeric_rating(cls, value):
+        if isinstance(value, bool):
+            raise ValueError("Enter a numeric starting JUPR.")
+        return value
+
+    @field_validator("email")
+    @classmethod
+    def optional_email(cls, value):
+        return MemberDetails.email_address(value) if value else ""
+
+
 class PoolSignup(MemberDetails):
     request_id: UUID
     email_consent: Literal[True]
     website: str = Field(default="", max_length=200)
     player_id: int | None = Field(default=None, gt=0)
+    new_player: NewClubPlayer | None = None
+
+    @model_validator(mode="after")
+    def new_profile_matches_signup(self):
+        if self.new_player is not None:
+            if self.player_id is not None:
+                raise ValueError("Choose an existing player or create a new one.")
+            if _name(self.new_player.name) != _name(self.name) or self.new_player.email != self.email:
+                raise ValueError("The new profile must use your signup name and email.")
+        return self
 
 
 class BulkPoolMember(StrictModel):
@@ -118,9 +147,31 @@ class BulkPoolMembers(StrictModel):
 
 
 class LatePlayerRequest(StrictModel):
-    player_id: int = Field(gt=0)
+    player_id: int | None = Field(default=None, gt=0)
+    new_player: NewClubPlayer | None = None
+    request_id: UUID | None = None
     divisions: list[str] = Field(default_factory=list, max_length=8)
-    reason: str = Field(min_length=1, max_length=500)
+    reason: str = Field(default="", max_length=500)
+
+    @field_validator("divisions")
+    @classmethod
+    def distinct_divisions(cls, value):
+        return MemberDetails.distinct_divisions(value)
+
+    @model_validator(mode="after")
+    def player_choice(self):
+        if (self.player_id is None) == (self.new_player is None):
+            raise ValueError("Choose an existing player or create a new one.")
+        if self.new_player is not None and self.request_id is None:
+            raise ValueError("Include a request ID when creating a player.")
+        return self
+
+
+class CreatePoolPlayer(StrictModel):
+    new_player: NewClubPlayer
+    request_id: UUID
+    divisions: list[str] = Field(default_factory=list, max_length=8)
+    reason: str = Field(default="", max_length=500)
 
     @field_validator("divisions")
     @classmethod
@@ -186,6 +237,8 @@ def pool_rpc(db, name, params):
             "P0002": (404, "This signup or invitation is unavailable."),
             "40001": (409, "This signup changed or has closed. Reload before continuing."),
             "23505": (409, "This player already has a season signup. Reload the player pool."),
+            "P4091": (409, "A club profile already uses this name. Choose the existing player, or ask your club to review the matching profiles."),
+            "P4092": (409, "A season signup already uses this name. Ask your club to link or review the existing signup."),
             "22023": (422, "Check the player, divisions and response deadline for this club."),
             "PT422": (422, "More than one club profile matches this name. Choose your profile or select that none of the matches is you."),
             "PT423": (423, "This action is locked by the season registration window. Reload the league workspace for its current dates."),
@@ -596,6 +649,24 @@ def install_interclub_player_pool_routes(app, *, get_supabase_client):
         result = pool_rpc(db, "pcs_interclub_pool_bulk_add", {**pool_actor(user, club_id, season_id), "p_members": members})
         return {"added_count": result["added_count"], "skipped_count": result["skipped_count"], "pool": _pool_payload(db, club, season)}
 
+    def create_pool_player(db, user, club, season, body, *, late):
+        if not set(body.divisions).issubset(season["details"]["divisions"]):
+            raise HTTPException(422, "Choose divisions from this season.")
+        _secret()
+        row = pool_rpc(db, "pcs_interclub_register_new_player", {
+            **pool_actor(user, club["id"], season["id"]), "p_late": late,
+            "p_request_id": str(body.request_id), "p_new_player": body.new_player.model_dump(mode="json"),
+            "p_divisions": body.divisions, "p_reason": body.reason})
+        member = {**_profile_summaries(db, club["id"], season, [row])[0], "manage_url": pool_member_url(row, season)}
+        return {"member": member, "pool": _pool_payload(db, club, season)}
+
+    @app.post("/admin/clubs/{club_id}/interclub/registrations/{season_id}/pool/create-player")
+    def create_member_player(club_id: str, season_id: UUID, body: CreatePoolPlayer, response: Response, authorization: str | None = auth_header()):
+        _private_headers(response)
+        db, user, club, season = pool_admin_context(get_supabase_client, authorization, club_id, season_id)
+        require_season_phase(season, intake=True)
+        return create_pool_player(db, user, club, season, body, late=False)
+
     @app.post("/admin/clubs/{club_id}/interclub/registrations/{season_id}/pool/late-requests")
     def request_late_member(club_id: str, season_id: UUID, body: LatePlayerRequest, response: Response, authorization: str | None = auth_header()):
         _private_headers(response)
@@ -605,6 +676,8 @@ def install_interclub_player_pool_routes(app, *, get_supabase_client):
             raise HTTPException(409, "This season has ended and no longer accepts late player requests.")
         if not set(body.divisions).issubset(season["details"]["divisions"]):
             raise HTTPException(422, "Choose divisions from this season.")
+        if body.new_player is not None:
+            return create_pool_player(db, user, club, season, body, late=True)
         player = _one(db, "players", PLAYER_FIELDS, club_id=club_id, active=True, id=body.player_id)
         if not player:
             raise HTTPException(422, "Choose an active player from this club.")
@@ -672,9 +745,10 @@ def install_interclub_player_pool_routes(app, *, get_supabase_client):
         require_season_phase(season, intake=True)
         # Fingerprint the submitted details, not mutable member data. An exact
         # network retry recovers its private link; another signup never can.
-        payload = body.model_dump(mode="json", exclude={"website"} | ({"player_id"} if "player_id" not in body.model_fields_set else set()))
+        payload = body.model_dump(mode="json", exclude={"website"} | {
+            key for key in ("player_id", "new_player") if key not in body.model_fields_set})
         fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        if authorization and "player_id" not in body.model_fields_set:
+        if authorization and body.new_player is None and "player_id" not in body.model_fields_set:
             linked = _account_player(db, club["id"], season, authorization)
             if linked and _name(linked["name"]) == _name(body.name):
                 payload["player_id"] = int(linked["id"])

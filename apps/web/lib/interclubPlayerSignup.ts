@@ -5,6 +5,7 @@ export type SignupMeet = { id: string; starts_at: string; host_club_id: string |
 export type SeasonSignupDetails = { club: SignupClub; season: SignupSeason; signup: { open: boolean }; meets: SignupMeet[] };
 export type SignupPlayer = { id: string; name: string; rating: number | null; league_rating?: number | null; gender: string | null; eligible_divisions: string[] };
 export type SignupPlayerMatches = { players: SignupPlayer[]; linked_player: SignupPlayer | null };
+export type SignupNewPlayer = { name: string; starting_jupr: number; gender: "male" | "female" | null; email: string };
 export type SeasonMember = { id: string; name: string; email: string; divisions: string[]; notes: string; status: "active" | "withdrawn"; revision: number };
 export type PlayerResponseDetails = {
   kind: "season" | "meet";
@@ -36,7 +37,7 @@ export async function playerSignupRequest<T>(path: string, signal: AbortSignal, 
   const data = await response.json().catch(() => null);
   if (!response.ok) {
     const message = response.status === 404 ? "This link is no longer available. Ask your club administrator for a new link."
-      : response.status === 409 ? "These details have changed or responses have closed. Reload the latest details before continuing."
+      : response.status === 409 ? typeof data?.detail === "string" ? data.detail : "These details have changed or responses have closed. Reload the latest details before continuing."
       : response.status === 429 ? "Too many attempts. Please wait a few minutes and try again."
       : typeof data?.detail === "string" ? data.detail : "We could not complete this request. Please try again.";
     throw new PlayerSignupError(message, response.status);

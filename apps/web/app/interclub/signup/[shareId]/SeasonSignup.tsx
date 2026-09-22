@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { adminSessionIsFresh, loadAdminSession } from "@/lib/adminAuthClient";
 import { registrationNameKey } from "@/lib/tournamentRegistrationProfile";
-import { formatSignupRating, PlayerSignupError, playerSignupRequest, seasonDates, SeasonSignupDetails, signupErrorMessage, signupMeetTime, SignupPlayer, SignupPlayerMatches, sortSignupDivisions } from "@/lib/interclubPlayerSignup";
+import { formatSignupRating, PlayerSignupError, playerSignupRequest, seasonDates, SeasonSignupDetails, signupErrorMessage, signupMeetTime, SignupNewPlayer, SignupPlayer, SignupPlayerMatches, sortSignupDivisions } from "@/lib/interclubPlayerSignup";
 import styles from "../../player-signup.module.css";
 import { registrationCanAccept, registrationWindowDates, registrationWindowMessage } from "@/lib/interclubRegistrationWindow";
 import { useRegistrationWindow } from "@/lib/useRegistrationWindow";
@@ -19,6 +19,8 @@ export default function SeasonSignup({ shareId }: { shareId: string }) {
   const [profile, setProfile] = useState<SignupPlayer | null>(null);
   const [candidates, setCandidates] = useState<SignupPlayer[] | null>(null);
   const [withoutProfile, setWithoutProfile] = useState(false);
+  const [newRating, setNewRating] = useState(""), [newGender, setNewGender] = useState<"" | "male" | "female">("");
+  const [deferProfile, setDeferProfile] = useState(false);
   const [lookupPending, setLookupPending] = useState(false), [lookupError, setLookupError] = useState("");
   const [lookupRetry, setLookupRetry] = useState(0);
   const [divisions, setDivisions] = useState<string[]>([]), [notes, setNotes] = useState("");
@@ -34,6 +36,8 @@ export default function SeasonSignup({ shareId }: { shareId: string }) {
   const { canRegister, now } = useRegistrationWindow(data?.season.registration, () => setReload(value => value + 1));
   const registrationDates = data ? registrationWindowDates(data.season.registration, data.season.timezone) : null;
   const needsProfileChoice = !profile && !withoutProfile && Boolean(candidates?.length || lookupError);
+  const showNewProfile = !profile && !lookupPending && !needsProfileChoice && Boolean(name.trim())
+    && (withoutProfile || candidates?.length === 0 || name.trim().length < 2);
 
   useEffect(() => {
     // Signup remains public. Only use an existing fresh session for account prefill.
@@ -49,6 +53,7 @@ export default function SeasonSignup({ shareId }: { shareId: string }) {
     identityVersion.current += 1; nameRef.current = "";
     mutation.current?.abort(); pending.current = false; retry.current = null;
     setName(""); setEmail(""); setProfile(null); setCandidates(null); setWithoutProfile(false);
+    setNewRating(""); setNewGender(""); setDeferProfile(false);
     setLookupPending(false); setLookupError(""); setDivisions([]); setNotes(""); setConsent(false);
     setBusy(false); setRegistration(null); setCopied(false);
   }, [shareId]);
@@ -106,25 +111,44 @@ export default function SeasonSignup({ shareId }: { shareId: string }) {
     identityVersion.current += 1;
     nameRef.current = value;
     setName(value); setProfile(null); setCandidates(null); setWithoutProfile(false); setLookupError("");
+    setNewRating(""); setNewGender(""); setDeferProfile(false);
     setLookupPending(value.trim().length >= 2);
   }
 
   function chooseProfile(player: SignupPlayer | null) {
     identityVersion.current += 1;
     setLookupPending(false); setLookupError(""); setProfile(player); setWithoutProfile(!player);
+    setNewRating(""); setNewGender(""); setDeferProfile(false);
     if (player) { nameRef.current = player.name; setName(player.name); }
+  }
+
+  function searchProfilesAgain() {
+    identityVersion.current += 1;
+    setWithoutProfile(false); setCandidates(null); setLookupError("");
+    setNewRating(""); setNewGender(""); setDeferProfile(false);
+    setLookupRetry(value => value + 1);
   }
 
   async function register() {
     if (pending.current || refreshRequired || !consent) return;
     if (!registrationCanAccept(data?.season.registration)) { setError(registrationWindowMessage(data?.season.registration)); setRefreshRequired(true); return; }
     if (lookupPending) { setError("Wait a moment while we check for your club profile."); return; }
-    if (needsProfileChoice) { setError("Choose your profile, or continue without one."); return; }
+    if (needsProfileChoice) { setError("Choose your profile, or confirm that none of the profiles is yours."); return; }
+    const selectedProfile = profile && registrationNameKey(name) === registrationNameKey(profile.name) ? profile : null;
+    const cleanName = name.trim(), cleanEmail = email.trim();
+    if (!cleanName || !cleanEmail) { setError("Enter your name and email."); return; }
+    let newPlayer: SignupNewPlayer | undefined;
+    if (!selectedProfile && !deferProfile) {
+      const rating = Number(newRating);
+      if (!newRating.trim() || !Number.isFinite(rating) || rating < 1 || rating > 7) {
+        setError("Enter a Starting JUPR between 1.0 and 7.0 for your new player profile."); return;
+      }
+      newPlayer = { name: cleanName, starting_jupr: rating, gender: newGender || null, email: cleanEmail };
+    }
     const body = {
-      name: name.trim(), email: email.trim(), divisions, notes: notes.trim(), email_consent: true,
-      ...(profile && registrationNameKey(name) === registrationNameKey(profile.name) ? { player_id: profile.id } : withoutProfile ? { player_id: null } : {}),
+      name: cleanName, email: cleanEmail, divisions, notes: notes.trim(), email_consent: true,
+      ...(selectedProfile ? { player_id: selectedProfile.id } : newPlayer ? { new_player: newPlayer } : { player_id: null }),
     };
-    if (!body.name || !body.email) { setError("Enter your name and email."); return; }
     const signature = JSON.stringify(body);
     if (retry.current?.signature !== signature) retry.current = { signature, requestId: crypto.randomUUID() };
     const controller = new AbortController(); mutation.current = controller; pending.current = true;
@@ -160,7 +184,7 @@ export default function SeasonSignup({ shareId }: { shareId: string }) {
             <label>Your name<input required maxLength={120} autoComplete="name" value={name} disabled={busy} onChange={event => changeName(event.target.value)} aria-describedby="profile-search-help" /></label>
             <p id="profile-search-help" className={styles.hint}>We’ll look for your existing {data.club.name} player profile and rating.</p>
             {lookupPending && <p className={styles.hint} role="status">Looking for your club profile…</p>}
-            {lookupError && <div className={styles.profileNotice} role="alert"><p>We couldn’t check player profiles. You can try again or let your club link your signup later.</p><div className={styles.actions}><button type="button" disabled={busy} onClick={() => setLookupRetry(value => value + 1)}>Try profile search again</button><button type="button" disabled={busy} onClick={() => chooseProfile(null)}>Continue without a profile</button></div></div>}
+            {lookupError && <div className={styles.profileNotice} role="alert"><p>We couldn’t check player profiles. Try again, or enter details for a new player profile.</p><div className={styles.actions}><button type="button" disabled={busy} onClick={() => setLookupRetry(value => value + 1)}>Try profile search again</button><button type="button" disabled={busy} onClick={() => chooseProfile(null)}>Create a new player profile</button></div></div>}
             {profile && <div className={styles.profileNotice}>
               <p><strong>{profile.name}</strong> · Existing club profile</p>
               <label>Club rating<input aria-label="Club rating" readOnly value={formatSignupRating(profile.rating)} /></label>
@@ -174,7 +198,19 @@ export default function SeasonSignup({ shareId }: { shareId: string }) {
               {candidates!.map(player => <label key={player.id} className={styles.choice}><input type="radio" name="club_profile" value={player.id} checked={false} onChange={() => chooseProfile(player)} /><span><strong>{player.name}</strong><small>Rating: {formatSignupRating(player.rating)}{player.gender ? ` · ${player.gender}` : ""}</small></span></label>)}
               <label className={styles.choice}><input type="radio" name="club_profile" value="none" checked={false} onChange={() => chooseProfile(null)} /><span>None of these is me</span></label>
             </fieldset>}
-            {!lookupPending && !lookupError && !profile && (withoutProfile || candidates?.length === 0) && <p className={styles.hint}>You can join without an existing profile. Your club can help link your player record and confirm your rating.</p>}
+            {showNewProfile && <fieldset disabled={busy} className={styles.profileMatches}>
+              <legend>New player profile</legend>
+              {deferProfile ? <>
+                <p className={styles.hint}>Your signup will be saved without a player profile. Your club must create or link your profile and confirm your rating before selecting you for a lineup.</p>
+                <button type="button" onClick={() => setDeferProfile(false)}>Create my player profile now</button>
+              </> : <>
+                <p className={styles.hint}>We’ll create your {data.club.name} player profile with your name and starting rating when you join. No account is needed.</p>
+                <label>Starting JUPR<input aria-label="Starting JUPR" required type="number" min="1" max="7" step="0.01" inputMode="decimal" value={newRating} onChange={event => setNewRating(event.target.value)} /><span className={styles.hint}>Enter your current playing level from 1.0 to 7.0.</span></label>
+                <label>Gender <span className={styles.hint}>(optional)</span><select aria-label="Gender" value={newGender} onChange={event => setNewGender(event.target.value as typeof newGender)}><option value="">Not specified</option><option value="female">Women</option><option value="male">Men</option></select><span className={styles.hint}>Your club needs this before assigning women’s, men’s, or mixed teams.</span></label>
+                <button type="button" onClick={() => setDeferProfile(true)}>Ask my club to create or link my profile instead</button>
+              </>}
+              {name.trim().length >= 2 && <button type="button" onClick={searchProfilesAgain}>Search profiles again</button>}
+            </fieldset>}
           </div>
           <label>Email<input required type="email" maxLength={254} autoComplete="email" value={email} disabled={busy} onChange={event => setEmail(event.target.value)} /><span className={styles.hint}>Your club will send meet invitations to this address.</span></label>
           <fieldset disabled={busy}><legend>Divisions you’re interested in</legend><div className={styles.choices}>{sortSignupDivisions(data.season.divisions).map(division => <label className={styles.choice} key={division}><input type="checkbox" checked={divisions.includes(division)} onChange={event => setDivisions(current => event.target.checked ? [...current, division] : current.filter(item => item !== division))} /><span>{division}</span></label>)}</div><p className={styles.hint}>You may play up. Select the divisions you prefer; your club checks each division’s upper rating limit before choosing teams.</p></fieldset>

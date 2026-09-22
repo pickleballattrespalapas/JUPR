@@ -7,7 +7,7 @@
 .muted { color: #475569; }
 .form { display: grid; gap: 22px; margin-top: 24px; }
 .form label:not(.choice) { display: grid; gap: 8px; font-weight: 650; }
-.form input:not([type="checkbox"]):not([type="radio"]), .form textarea { width: 100%; box-sizing: border-box; min-height: 48px; padding: 12px; border: 1px solid #94a3b8; border-radius: 9px; background: #fff; color: #172033; font: inherit; }
+.form input:not([type="checkbox"]):not([type="radio"]), .form textarea, .form select { width: 100%; box-sizing: border-box; min-height: 48px; padding: 12px; border: 1px solid #94a3b8; border-radius: 9px; background: #fff; color: #172033; font: inherit; }
 .form textarea { min-height: 100px; resize: vertical; }
 .form fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
 .form legend { font-weight: 650; margin-bottom: 10px; }
@@ -29,7 +29,7 @@
 .page .primary { background: #1d4ed8; border-color: #1d4ed8; color: #fff; }
 .page .primary:hover:not(:disabled) { background: #1e40af; border-color: #1e40af; }
 .page button:disabled { opacity: .55; cursor: not-allowed; }
-.page button:focus-visible, .page a:focus-visible, .form input:focus-visible, .form textarea:focus-visible { outline: 3px solid #60a5fa; outline-offset: 3px; }
+.page button:focus-visible, .page a:focus-visible, .form input:focus-visible, .form textarea:focus-visible, .form select:focus-visible { outline: 3px solid #60a5fa; outline-offset: 3px; }
 .notice, .success, .error { margin: 20px 0; padding: 18px; border: 1px solid #bfdbfe; border-radius: 12px; background: #eff6ff; }
 .success { background: #f0fdf4; border-color: #86efac; }
 .error { background: #fff7ed; border-color: #fdba74; color: #9a3412; }

@@ -15,8 +15,10 @@ const common = load(base + 'PoolPanelCommon.tsx', { './playerPool.module.css': {
 const mocks = { '@/lib/interclubRegistrationWindow': windowHelpers, '@/lib/useRegistrationWindow': windowHook, '@/lib/interclubPlayerPool': types, './usePoolResource': resource, './PoolPanelCommon': common, './playerPool.module.css': {} };
 const email = load(base + 'PoolInvitationEmail.tsx', mocks);
 const bulk = load(base + 'PoolBulkAdd.tsx', mocks);
-const late = load(base + 'PoolLateRequest.tsx', mocks);
-const panels = load(base + 'PlayerPoolPanels.tsx', { ...mocks, './PoolInvitationEmail': email, './PoolBulkAdd': bulk, './PoolLateRequest': late });
+const newPlayerFields = load(base + 'PoolNewPlayerFields.tsx', mocks);
+const newPlayerForm = load(base + 'PoolCreatePlayer.tsx', { ...mocks, './PoolNewPlayerFields': newPlayerFields });
+const late = load(base + 'PoolLateRequest.tsx', { ...mocks, './PoolNewPlayerFields': newPlayerFields });
+const panels = load(base + 'PlayerPoolPanels.tsx', { ...mocks, './PoolInvitationEmail': email, './PoolBulkAdd': bulk, './PoolLateRequest': late, './PoolCreatePlayer': newPlayerForm });
 const nodeText = node => typeof node === 'string' ? node : node.children.map(nodeText).join('');
 const button = (tree, label) => tree.root.findAllByType('button').find(node => nodeText(node) === label);
 const text = tree => JSON.stringify(tree.toJSON());
@@ -109,6 +111,7 @@ async function commissionerRegistrationGates() {
     const open = registrationWindow === openWindow;
     assert.equal(button(tree, 'Add players').props.disabled, !open, 'Only commissioner-open registration permits admin additions');
     assert.equal(button(tree, 'Invite club players by email').props.disabled, !open);
+    assert.equal(!!button(tree, 'Create new player'), open, 'Regular inline creation is only exposed while registration is open');
     assert.equal(!!button(tree, 'Request late player'), registrationWindow === closedWindow, 'Late requests require a server-confirmed closed registration window');
     assert.ok(tree.root.findByProps({ children: 'Open signup page' }), 'The signup page stays shareable in every phase');
     assert.equal(button(tree, 'Open season signup'), undefined);
@@ -152,9 +155,10 @@ async function latePlayerRequests() {
   assert.ok(tree.root.findByProps({ 'aria-label': 'View Existing Member in player pool' }), 'Existing players get a useful action instead of a disabled selector');
   assert.ok(text(tree).includes('Already registered and approved. No late request is needed.'));
   await act(async () => choices[0].props.onChange());
-  assert.equal(button(tree, 'Submit late player request').props.disabled, true, 'A selected player still requires a reason');
+  assert.equal(button(tree, 'Submit late player request').props.disabled, false, 'Selecting an eligible profile is enough; notes are optional');
+  assert.equal(tree.root.findByType('textarea').props.required, undefined);
   await act(async () => tree.root.findByType('textarea').props.onChange({ target: { value: '   ' } }));
-  assert.equal(button(tree, 'Submit late player request').props.disabled, true);
+  assert.equal(button(tree, 'Submit late player request').props.disabled, false, 'Whitespace-only optional notes do not block submission');
   await act(async () => tree.root.findByType('textarea').props.onChange({ target: { value: '  Arriving after registration closes.  ' } }));
   await act(async () => tree.update(React.createElement(panels.SeasonPlayerPool, { ...props, accessToken: 'token-2' })));
   assert.ok(text(tree).includes('Selected: '));
@@ -226,6 +230,130 @@ async function lateRequestRecoveryAndScope() {
   assert.ok(!text(tree).includes('OLD CLUB PLAYER'));
   assert.equal(tree.root.findAllByType('form').length, 0, 'The old club draft does not follow the administrator');
   await act(async () => tree.unmount());
+}
+
+async function fillNewPlayer(tree, values) {
+  for (const [label, value] of Object.entries(values)) await act(async () => tree.root.findByProps({ 'aria-label': label }).props.onChange({ target: { value } }));
+}
+
+async function inlinePlayerCreation() {
+  for (const isLate of [false, true]) {
+    const registration = isLate ? closedWindow : openWindow;
+    let pool = { registration, can_request_late: isLate, signup: { open: !isLate, revision: 1, url: null }, members: [], email_mode: 'dry_run' };
+    let requests = [], finish, tree;
+    global.fetch = async (url, options) => {
+      requests.push({ url, options });
+      if (options.method) return new Promise(resolve => { finish = resolve; });
+      return reply(url.includes('/pool/players?') ? { players: [], next_offset: null } : pool);
+    };
+    const props = { root, accessToken: 'token-1', clubName: 'Beta Club', season: { ...season, registration } };
+    await act(async () => { tree = create(React.createElement(panels.SeasonPlayerPool, props)); });
+    if (isLate) await act(async () => button(tree, 'Request late player').props.onClick());
+    await act(async () => button(tree, 'Create new player').props.onClick());
+    const submitLabel = isLate ? 'Create player and request late entry' : 'Create player and add to pool';
+    assert.equal(button(tree, submitLabel).props.disabled, true, 'Creating a player requires a name and reviewed starting rating');
+    assert.equal(tree.root.findByProps({ 'aria-label': 'Starting JUPR' }).props.value, '', 'Never silently assign a starting rating');
+    assert.equal(tree.root.findByProps({ 'aria-label': 'Gender (optional)' }).props.required, undefined);
+    assert.equal(tree.root.findByProps({ 'aria-label': 'Email (optional)' }).props.required, undefined);
+    assert.equal(tree.root.findByType('textarea').props.required, undefined, 'Notes are optional for both regular and late entry');
+    await fillNewPlayer(tree, { 'Player name': '  New Traveler  ', 'Starting JUPR': '0' });
+    assert.equal(button(tree, submitLabel).props.disabled, true);
+    await fillNewPlayer(tree, { 'Starting JUPR': '7.01' });
+    assert.equal(button(tree, submitLabel).props.disabled, true);
+    await fillNewPlayer(tree, { 'Starting JUPR': '3.45' });
+    assert.equal(button(tree, submitLabel).props.disabled, false, 'Name and reviewed rating suffice; gender, email and notes are optional');
+    if (!isLate) {
+      await fillNewPlayer(tree, { 'Email (optional)': 'invalid-email' });
+      assert.equal(button(tree, submitLabel).props.disabled, true);
+      await fillNewPlayer(tree, { 'Gender (optional)': 'female', 'Email (optional)': '  traveler@example.invalid  ' });
+    } else {
+      await act(async () => button(tree, 'Choose existing player').props.onClick());
+      assert.equal(tree.root.findAllByProps({ 'aria-label': 'Player name' }).length, 0);
+      await act(async () => button(tree, 'Create new player').props.onClick());
+      assert.equal(tree.root.findByProps({ 'aria-label': 'Player name' }).props.value, '  New Traveler  ', 'Switching entry modes preserves the new-player draft');
+    }
+    await act(async () => tree.update(React.createElement(panels.SeasonPlayerPool, { ...props, accessToken: 'token-2' })));
+    assert.equal(tree.root.findByProps({ 'aria-label': 'Starting JUPR' }).props.value, '3.45', 'Token refresh preserves new-player fields');
+    const form = tree.root.findByType('form');
+    await act(async () => { form.props.onSubmit({ preventDefault() {} }); form.props.onSubmit({ preventDefault() {} }); });
+    const writes = requests.filter(row => row.options.method);
+    assert.equal(writes.length, 1, 'Profile creation and season registration use one guarded atomic request');
+    assert.equal(writes[0].url, root + (isLate ? '/pool/late-requests' : '/pool/create-player'));
+    assert.equal(writes[0].options.headers.Authorization, 'Bearer token-2');
+    const body = JSON.parse(writes[0].options.body);
+    assert.match(body.request_id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+    assert.deepEqual(body.new_player, { name: 'New Traveler', starting_jupr: 3.45, ...(!isLate ? { gender: 'female', email: 'traveler@example.invalid' } : {}) });
+    assert.equal(body.reason, '', 'A new player can register without notes');
+    assert.ok(!Object.hasOwn(body, 'player_id') && !Object.hasOwn(body, 'email_consent'), 'The payload neither invents a profile ID nor claims consent');
+    const created = { ...member, id: 'created-1', name: 'New Traveler', email: isLate ? '' : 'traveler@example.invalid', player_id: '999', approval_status: isLate ? 'pending' : 'approved', late_join: isLate, late_request_reason: '', late_requested_at: isLate ? '2026-09-22T18:00:00Z' : null, rating: 3.45 };
+    pool = { ...pool, members: [created] };
+    await act(async () => finish(reply({ member: created, pool })));
+    assert.equal(button(tree, submitLabel), undefined);
+    if (isLate) {
+      assert.ok(text(tree).includes('Pending · cannot play'), 'A new player without notes still waits for commissioner approval');
+      assert.equal(button(tree, 'Change linked player'), undefined, 'Late identity stays fixed even when the optional request reason is blank');
+    } else assert.ok(text(tree).includes('club player created and added to the season pool.'));
+    assert.ok(!requests.some(row => row.url.includes('/emails') || row.url.includes('/bulk-') || row.url.includes('/players/editor')), 'Inline creation does not send email or chain a separate player write');
+    await act(async () => tree.unmount());
+  }
+}
+
+async function blankLateNotesAndCreateRecovery() {
+  const player = { id: '601', name: 'Existing Late Traveler', rating: 3.2, gender: 'female', eligible_divisions: ['3.5'] };
+  let pool = { registration: closedWindow, can_request_late: true, signup: { open: false, revision: 1, url: null }, members: [], email_mode: 'dry_run' };
+  let requests = [], finish, tree;
+  global.fetch = async (url, options) => {
+    requests.push({ url, options });
+    if (options.method) return new Promise(resolve => { finish = resolve; });
+    return reply(url.includes('/pool/players?') ? { players: [player], next_offset: null } : pool);
+  };
+  const props = { root, accessToken: 'token', clubName: 'Beta Club', season: { ...season, registration: closedWindow } };
+  await act(async () => { tree = create(React.createElement(panels.SeasonPlayerPool, props)); });
+  await act(async () => button(tree, 'Request late player').props.onClick());
+  await act(async () => tree.root.findByProps({ type: 'radio' }).props.onChange());
+  await act(async () => tree.root.findByType('form').props.onSubmit({ preventDefault() {} }));
+  assert.deepEqual(JSON.parse(requests.at(-1).options.body), { player_id: 601, reason: '' }, 'Existing profiles also support a late request with no reason');
+  const pending = { ...member, id: 'late-601', name: player.name, player_id: player.id, late_join: true, approval_status: 'pending', late_request_reason: '', late_requested_at: '2026-09-22T18:00:00Z' };
+  pool = { ...pool, members: [pending] };
+  await act(async () => finish(reply({ member: pending, pool })));
+  assert.ok(text(tree).includes('Pending · cannot play'));
+  assert.equal(button(tree, 'Change linked player'), undefined);
+  await act(async () => button(tree, 'Request late player').props.onClick());
+  await act(async () => button(tree, 'Create new player').props.onClick());
+  const fields = { 'Player name': 'Retry Traveler', 'Starting JUPR': '3.5' };
+  await fillNewPlayer(tree, fields);
+  await act(async () => tree.root.findByType('form').props.onSubmit({ preventDefault() {} }));
+  const firstCreation = JSON.parse(requests.at(-1).options.body);
+  await act(async () => finish(reply({ detail: 'Creation result could not be confirmed. Reload.' }, 503)));
+  assert.equal(button(tree, 'Create player and request late entry').props.disabled, true, 'An uncertain creation blocks another attempt until the pool is checked');
+  await act(async () => button(tree, 'Reload player pool').props.onClick());
+  await act(async () => button(tree, 'Create new player').props.onClick());
+  await fillNewPlayer(tree, fields);
+  await act(async () => tree.root.findByType('form').props.onSubmit({ preventDefault() {} }));
+  assert.deepEqual(JSON.parse(requests.at(-1).options.body), firstCreation, 'Retrying the same draft after reload reuses its request UUID');
+  const signal = requests.at(-1).options.signal, oldFinish = finish;
+  await act(async () => tree.update(React.createElement(panels.SeasonPlayerPool, { ...props, root: root.replace('/beta/', '/gamma/') })));
+  assert.equal(signal.aborted, true, 'A club change aborts a pending atomic creation');
+  await act(async () => oldFinish(reply({ member: { ...pending, name: 'STALE CREATED PLAYER' }, pool })));
+  assert.ok(!text(tree).includes('STALE CREATED PLAYER'));
+  await act(async () => tree.unmount());
+}
+
+async function inlineCreationClosingBoundary() {
+  const pool = { registration: openWindow, can_request_late: false, signup: { open: true, revision: 1, url: null }, members: [], email_mode: 'dry_run' };
+  let requests = [], tree;
+  global.fetch = async (url, options) => { requests.push({ url, options }); return reply(pool); };
+  const props = { root, accessToken: 'token', clubName: 'Beta Club', season };
+  await act(async () => { tree = create(React.createElement(panels.SeasonPlayerPool, props)); });
+  await act(async () => button(tree, 'Create new player').props.onClick());
+  await fillNewPlayer(tree, { 'Player name': 'Boundary Traveler', 'Starting JUPR': '3.5' });
+  const staleSubmit = tree.root.findByType('form').props.onSubmit, originalNow = Date.now;
+  try {
+    Date.now = () => Date.parse('2100-01-01T00:00:00Z');
+    await act(async () => staleSubmit({ preventDefault() {} }));
+    assert.equal(requests.filter(row => row.options.method).length, 0, 'An open-phase creation handler rechecks the clock before any mutation');
+    assert.ok(text(tree).includes('Season registration has closed.'));
+  } finally { Date.now = originalNow; await act(async () => tree.unmount()); }
 }
 
 async function existingLatePlayerGuidance() {
@@ -483,4 +611,4 @@ async function bulkAdd() {
   } finally { Date.now = originalNow; }
   await act(async () => tree.unmount());
 }
-(async () => { await seasonPool(); await latePlayerRequests(); await existingLatePlayerGuidance(); await viewWithdrawnPlayerFromLateSearch(); await lateRequestRecoveryAndScope(); await backgroundLateRequestRefresh(); await availability(); await commissionerRegistrationGates(); await resumedRegistrationBoundary(); await invitationEmail(); await recoverSavedInvitations(); await bulkAdd(); console.log('PASS interclub player pool: scoped signup/linking, late requests, existing signup guidance and focused pool navigation, commissioner review status, commissioner registration phases, suspended boundary recovery, revision conflicts, stale responses, availability, bulk player matching and optional emails, email preview and dry-run delivery'); })().catch(error => { console.error(error); process.exit(1); });
+(async () => { await seasonPool(); await latePlayerRequests(); await inlinePlayerCreation(); await blankLateNotesAndCreateRecovery(); await inlineCreationClosingBoundary(); await existingLatePlayerGuidance(); await viewWithdrawnPlayerFromLateSearch(); await lateRequestRecoveryAndScope(); await backgroundLateRequestRefresh(); await availability(); await commissionerRegistrationGates(); await resumedRegistrationBoundary(); await invitationEmail(); await recoverSavedInvitations(); await bulkAdd(); console.log('PASS interclub player pool: scoped signup/linking, atomic inline player creation and optional late notes, existing signup guidance and focused pool navigation, commissioner review status, commissioner registration phases, suspended boundary recovery, revision conflicts, stale responses, availability, bulk player matching and optional emails, email preview and dry-run delivery'); })().catch(error => { console.error(error); process.exit(1); });
