@@ -26,6 +26,7 @@ class FakeQuery:
         self.table_name = table_name
         self.filters: list[tuple[str, str, object]] = []
         self.limit_count: int | None = None
+        self.range_start: int = 0
         self.order_key: str | None = None
         self.order_desc = False
         self.insert_payload = None
@@ -50,6 +51,11 @@ class FakeQuery:
 
     def limit(self, value):
         self.limit_count = int(value)
+        return self
+
+    def range(self, start, end):
+        self.range_start = int(start)
+        self.limit_count = int(end) - int(start) + 1
         return self
 
     def order(self, key, desc=False):
@@ -115,7 +121,7 @@ class FakeQuery:
         if self.order_key:
             matched = sorted(matched, key=lambda row: str(row.get(self.order_key) or ""), reverse=self.order_desc)
         if self.limit_count is not None:
-            matched = matched[: self.limit_count]
+            matched = matched[self.range_start : self.range_start + self.limit_count]
         return SimpleNamespace(data=matched, count=len(matched))
 
 

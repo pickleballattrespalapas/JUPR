@@ -280,6 +280,46 @@ async function testAcceptedInvitationPrefill() {
   invitationContext = { token: "", invitation: null, error: "" };
 }
 
+async function testPartialNameSuggestions() {
+  let currentValue;
+  function Host() {
+    const [value, setValue] = React.useState({ name: "", email: "", age: "", gender: "", skill: "", phone: "", duprId: "" });
+    currentValue = value;
+    return React.createElement(PartnerDetails, { ...props, labelPrefix: "Partner", value, onChange: patch => setValue(current => ({ ...current, ...patch })) });
+  }
+  lookupResponse = async () => ({ data: { profile_match_kind: "name_partial", profile_candidates: [candidate] } });
+  await act(async () => { renderer = create(React.createElement(Host)); });
+  const count = lookups.length;
+  await change("Partner partner name", "F");
+  await settle();
+  assert.equal(lookups.length, count, "One letter must not request the whole club list");
+  assert.equal(currentValue.profileLookupPending, false);
+  await change("Partner partner name", "Fi");
+  await change("Partner partner name", "Fix");
+  await settle();
+  assert.equal(lookups.length, count + 1, "Typing is debounced");
+  assert.equal(lookups.at(-1).name, "Fix");
+  assert.equal(currentValue.profileId || "", "", "Even a single partial match requires the player's choice");
+  assert.equal(currentValue.profileChoiceRequired, true);
+  assert.equal(field("Partner partner skill").props.value, "");
+  await change("Partner partner email", "unfinished@");
+  await settle();
+  assert.equal(lookups.at(-1).email, null, "An unfinished email must not block name suggestions");
+  const candidateRadio = renderer.root.findAllByType("input").find(node => node.props.type === "radio" && content(node.parent).includes(candidate.display_name));
+  await act(async () => candidateRadio.props.onChange());
+  assert.equal(field("Partner partner name").props.value, candidate.display_name);
+  assert.equal(field("Partner partner skill").props.value, String(candidate.doubles_skill));
+  assert.equal(field("Partner partner skill").props.readOnly, true);
+  assert.equal(currentValue.profileLookupPending, false);
+  await change("Partner partner name", "Another");
+  assert.equal(field("Partner partner skill").props.value, "");
+  await change("Partner partner name", "");
+  await settle();
+  assert.equal(currentValue.profileLookupPending, false);
+  assert.equal(renderer.root.findAllByType("fieldset").length, 0);
+  await act(async () => renderer.unmount());
+}
+
 async function main() {
   const previousWindow = global.window;
   global.window = { location: { hash: "" }, addEventListener() {}, removeEventListener() {} };
@@ -292,6 +332,7 @@ async function main() {
     await testLookupRaceAndFallback();
     await testUnratedPartner();
     await testDuplicatePartnerChoice();
+    await testPartialNameSuggestions();
     await testAcceptedInvitationPrefill();
     console.log("Partner profiles: new/edit flows, prefill, eligibility, identity boundary, stale responses and manual fallback passed.");
   } finally { if (renderer) await act(async () => renderer.unmount()); global.window = previousWindow; }

@@ -4,6 +4,7 @@ import json
 import logging
 import math
 import re
+import unicodedata
 import uuid
 from datetime import date, datetime
 from typing import Any
@@ -191,7 +192,9 @@ def _public_registration_player(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _normalized_name(value: Any) -> str:
-    return " ".join(re.sub(r"[^a-z0-9 ]", " ", str(value or "").lower()).split())
+    text = unicodedata.normalize("NFKD", str(value or "").casefold())
+    text = "".join(char for char in text if not unicodedata.combining(char))
+    return " ".join("".join(char if char.isalnum() else " " for char in text).split())
 
 
 def _player_full_name(row: dict[str, Any]) -> str:
@@ -209,21 +212,38 @@ def _profile_candidates(
     first_name: Any,
     last_name: Any,
     email: Any,
+    allow_partial_name: bool = False,
 ) -> tuple[str, list[dict[str, Any]]]:
-    """Return a bounded, public-safe exact-match projection.
+    """Return bounded public-safe suggestions, optionally including partial names.
 
     This is a discovery hint, not proof of identity. Public intake never persists
     the returned player id; tournament staff must verify and link the profile.
     """
 
     try:
-        rows = _safe_rows(
-            supabase.table("players")
-            .select("*")
-            .eq("club_id", str(club_id))
-            .limit(2000)
-            .execute()
-        )
+        if allow_partial_name:
+            # A club can exceed the API's per-request row cap. Do not silently
+            # exclude later players from partner discovery.
+            rows = []
+            offset = 0
+            while True:
+                page = _safe_rows(
+                    supabase.table("players").select("*")
+                    .eq("club_id", str(club_id)).order("id")
+                    .range(offset, offset + 499).execute()
+                )
+                rows.extend(page)
+                if len(page) < 500:
+                    break
+                offset += len(page)
+        else:
+            rows = _safe_rows(
+                supabase.table("players")
+                .select("*")
+                .eq("club_id", str(club_id))
+                .limit(2000)
+                .execute()
+            )
     except Exception:
         rows = []
     active_rows = [row for row in rows if _player_is_active(row)]
@@ -246,6 +266,29 @@ def _profile_candidates(
             if requested_name and _normalized_name(_player_full_name(row)) == requested_name
         ]
         match_kind = "name_exact" if matches else "none"
+        if allow_partial_name:
+            def names(row: dict[str, Any]) -> set[str]:
+                return {
+                    _normalized_name(_player_full_name(row)),
+                    _normalized_name(row.get("display_name")),
+                    _normalized_name(row.get("name")),
+                } - {""}
+
+            matches = [row for row in active_rows if requested_name and requested_name in names(row)]
+            match_kind = "name_exact" if matches else "none"
+            if not matches and len(requested_name.replace(" ", "")) >= 2:
+                terms = requested_name.split()
+                matches = [
+                    row for row in active_rows
+                    if any(all(term in name for term in terms) for name in names(row))
+                ]
+                match_kind = "name_partial" if matches else "none"
+                # Favor the beginning of a first/last name, then other substrings.
+                matches.sort(key=lambda row: (
+                    not any(all(any(word.startswith(term) for word in name.split()) for term in terms) for name in names(row)),
+                    _normalized_name(row.get("display_name") or row.get("name") or _player_full_name(row)),
+                    str(row.get("id") or ""),
+                ))
 
     candidates: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -256,7 +299,7 @@ def _profile_candidates(
             continue
         seen.add(candidate_id)
         candidates.append(candidate)
-        if len(candidates) >= 3:
+        if len(candidates) >= (8 if match_kind == "name_partial" else 3):
             break
     return match_kind, candidates
 
@@ -921,6 +964,7 @@ def resolve_public_tournament_registration_profile(
         first_name=first_name,
         last_name=last_name,
         email=email,
+        allow_partial_name=True,
     )
     return {
         "ok": True,
@@ -959,7 +1003,7 @@ def resolve_public_tournament_partner_profile(
     name = _clean_text(payload.get("name"), limit=160)
     email = _clean_email(payload.get("email"))
     if not name:
-        raise ValueError("Enter your partner's full name.")
+        raise ValueError("Enter part of your partner's first or last name.")
     if email and not _EMAIL_RE.match(email):
         raise ValueError("Enter a valid partner email address.")
     page = build_public_tournament_registration_page(
@@ -975,7 +1019,7 @@ def resolve_public_tournament_partner_profile(
     first_name, _, last_name = name.partition(" ")
     match_kind, candidates = _profile_candidates(
         supabase, club_id=str(club_id), first_name=first_name,
-        last_name=last_name, email=email,
+        last_name=last_name, email=email, allow_partial_name=True,
     )
     return {
         "ok": True,
