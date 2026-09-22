@@ -16,6 +16,20 @@ players can join and club administrators can add verbal or email commitments.
 Meet availability, roster deadlines, lineups and competition settings unlock
 only after registration closes. Direct links obey the same restriction.
 
+After registration closes, review **Late player requests** in the season
+workspace. A club administrator selects an existing club player and gives a
+reason for the request. The player remains pending and cannot enter a lineup
+until the commissioner approves. Approval does not backdate eligibility for
+meet deadlines that have already passed. A request never reopens registration.
+
+Use **Meet schedule** in the same workspace to add a meet or edit an upcoming
+meet's date after registration closes. Dates use the season's timezone. Saved
+rosters are retained, but a changed meet time requires players to reconfirm
+availability; clubs reopen availability and share fresh response links. No
+messages are sent automatically. Started or scored meets use the existing
+weather/replay process so official results and locked eligibility remain intact.
+Republish the season to update a previously published public schedule.
+
 ## Club administrator
 
 1. Open **Interclub seasons** and select the season. Accepted clubs start with
@@ -51,7 +65,10 @@ messages without the admin's review. The club can invite players again as plans
 change, and an existing reply is retained when a new invitation is prepared.
 Clubs cannot open or close season registration individually. After the window
 closes, existing players can still be linked to their profiles, reviewed or
-withdrawn; new additions and restorations require an open registration window.
+withdrawn. Use **Request late player** for a new addition: select the player's
+existing club profile and explain the request. Its pending, approved or rejected
+status and the commissioner's decision are shown in the pool. Ordinary signup,
+bulk additions and restoration stay subject to the registration window.
 
 ## Player
 

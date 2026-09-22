@@ -71,11 +71,15 @@ remain visible rather than silently admitting an apparent transfer.
 2. Players join that club's season interest pool at the beginning of the season.
    Joining expresses interest; it does not commit the player to every meet or
    guarantee selection.
-3. Joining is possible only during the commissioner-set registration window,
-   including administrator additions for verbal or email commitments. Joining
-   after the season starts also requires **league organizer approval as a late
-   addition**. A club administrator cannot bypass this approval by directly
-   placing a new player on a meet roster.
+3. Ordinary signup and administrator bulk additions for verbal or email
+   commitments use the commissioner-set registration window. After it closes,
+   a club administrator may **request a late player** by selecting an existing
+   active club player and explaining the request. This remains pending until
+   the commissioner approves it, even when the season has not started yet.
+   Joining during an open window after the season starts also requires late
+   approval. Approval takes effect when given; it cannot admit a player into
+   an already closed meet cutoff. A club administrator cannot bypass approval
+   by directly placing a new player on a meet roster.
 4. Meet availability, deadlines, lineups and competition settings are locked
    until season registration closes. After it closes, the club invites pool
    members to report availability before each meet. Joe's
@@ -83,6 +87,14 @@ remain visible rather than silently admitting an apparent transfer.
    deadlines are configurable.
 5. The club administrator selects a meet-specific lineup from the approved pool.
    Availability responses and selected lineups remain distinct.
+6. After registration closes, the commissioner can add meets and adjust
+   upcoming meet dates from **Meet schedule** in the season workspace. Dates
+   use the season timezone and must remain within the season without club or
+   host scheduling conflicts. Changing a meet time preserves roster choices
+   but clears prior availability answers and closes availability collection;
+   clubs reopen it and invite players to reconfirm with fresh links. Changes
+   do not send messages automatically. Started or scored meets use the
+   weather/replay workflow. Republish to update an existing public schedule.
 
 Club administrators choose their participating skill levels **separately for each
 meet**. There is no season-long commitment to field a team at every level. The

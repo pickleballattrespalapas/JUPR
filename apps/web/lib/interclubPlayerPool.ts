@@ -3,10 +3,12 @@ export type PoolMember = {
   id: string; season_id: string; club_id: string; name: string; email: string; divisions: string[];
   notes: string; manage_url?: string; status: "active" | "withdrawn"; player_id: string | null; revision: number;
   approval_status?: "pending" | "approved" | "rejected"; late_join?: boolean; approval_reason?: string | null;
+  late_request_reason?: string | null; late_requested_at?: string | null;
   rating?: number | null; league_rating?: number | null; gender?: string | null; eligible_divisions?: string[];
 };
 export type SeasonPool = {
   registration?: SeasonRegistrationWindow;
+  can_request_late?: boolean;
   signup: { share_id: string | null; revision: number; open: boolean; url: string | null };
   members: PoolMember[]; email_mode: string;
 };
@@ -47,6 +49,8 @@ export type BulkPoolPreviewRow = BulkPoolMember & {
 };
 export type BulkPoolPreview = { rows: BulkPoolPreviewRow[]; ready_count: number; duplicate_count: number; ambiguous_count: number };
 export type BulkPoolResult = { added_count: number; skipped_count: number; pool: SeasonPool };
+export type LatePlayerRequest = { player_id: number; divisions?: string[]; reason: string };
+export type LatePlayerRequestResult = { member: PoolMember; pool: SeasonPool };
 
 export function poolRating(value: number | null | undefined): string {
   return typeof value === "number" && Number.isFinite(value) ? value.toFixed(2) : "Not rated";

@@ -551,6 +551,36 @@ def test_pool_approval_uses_verified_actor_and_revision(setup):
     assert client.post(state["base"] + "/pool/approvals", json={**body, "actor_id": str(uuid4())}).status_code == 422
 
 
+@pytest.mark.parametrize("history_count", [0, 1001])
+def test_approval_queue_excludes_ordinary_members_and_prioritizes_pending_over_history(setup, history_count):
+    client, state = setup
+    state["season"]["organizer_club_id"] = "alpha"
+    common = {**state["member"], "approval_reason": None}
+    ordinary = [{**common, "id": str(uuid4()), "name": f"A Ordinary {i}", "late_join": False,
+                 "approval_status": "approved"} for i in range(1001)]
+    history = [{**common, "id": str(uuid4()), "name": f"B Decided {i}", "late_join": True,
+                "approval_status": "approved" if i % 2 else "rejected"} for i in range(history_count)]
+    pending = [{**common, "id": str(uuid4()), "name": f"Z Pending {i}", "late_join": True,
+                "approval_status": "pending"} for i in range(2)]
+    hidden = [{**pending[0], "id": str(uuid4()), "status": "withdrawn"},
+              {**pending[0], "id": str(uuid4()), "season_id": str(uuid4())}]
+    state["tables"][routes.MEMBERS] = ordinary + history + hidden + pending
+    state["tables"][routes.LATE_REQUESTS] = [{"member_id": pending[0]["id"],
+        "season_id": state["season"]["id"], "club_id": "alpha", "reason": "Please review this late commitment.",
+        "requested_at": "2026-09-22T12:00:00Z"}]
+
+    response = client.get(state["base"] + "/pool/approvals")
+    assert response.status_code == 200
+    members = response.json()["members"]
+    assert [row["id"] for row in members[:2]] == [row["id"] for row in pending]
+    assert len(members) == min(1000, history_count + 2)
+    assert all(row["late_join"] is True for row in members)
+    assert all(row["approval_status"] in {"approved", "rejected"} for row in members[2:])
+    assert members[0]["late_request_reason"] == "Please review this late commitment."
+    assert not {row["id"] for row in hidden}.intersection(row["id"] for row in members)
+    assert not {"email", "notes", "token_nonce", "manage_url"}.intersection(members[0])
+
+
 def test_pool_approval_stale_conflict_and_nonadmin_rejected(setup):
     client, state = setup
     state["season"]["organizer_club_id"] = "alpha"
@@ -725,3 +755,221 @@ def test_closing_shared_registration_switches_from_intake_to_meet_planning(setup
     assert client.put(state["availability"], json={"expected_revision": 1, "open": True,
         "deadline": "2099-02-01T12:00:00Z"}).status_code == 200
     assert state["calls"][-1][1]["p_action"] == "availability"
+
+
+@pytest.fixture
+def late_request(setup):
+    client, state = setup
+    set_registration_phase(state["season"], "closed")
+    state["tables"][routes.MEMBERS].clear()
+    state["tables"]["pcs_interclub_late_player_requests"] = []
+    state["tables"]["players"][0].update(rating=1160, gender="female")
+    state["league_rating"] = 2.9
+    state["eligible_divisions"] = ["3.5", "4.0"]
+    state["late_body"] = {"player_id": 1, "reason": "Confirmed verbally after signup closed."}
+    state["late_url"] = state["base"] + "/pool/late-requests"
+    state["result"] = {
+        **state["member"], "player_id": 1, "email": "", "notes": "",
+        "approval_status": "pending", "late_join": True, "approval_reason": None,
+    }
+    original_rpc = state["db"].rpc
+
+    def rpc(name, params):
+        if name == "pcs_interclub_pool_player_details":
+            state["reads"].append(name)
+            return SimpleNamespace(execute=lambda: SimpleNamespace(data=[
+                dict(player_id=pid, league_rating=state["league_rating"], eligible_divisions=state["eligible_divisions"])
+                for pid in params["p_player_ids"]
+            ]))
+        result = original_rpc(name, params)
+        if name != "pcs_request_interclub_late_player":
+            return result
+
+        def execute():
+            member = {**result.execute().data, "divisions": params["p_divisions"]}
+            state["tables"][routes.MEMBERS].append(member)
+            state["tables"]["pcs_interclub_late_player_requests"].append({
+                "member_id": member["id"], "season_id": member["season_id"],
+                "club_id": member["club_id"], "player_id": member["player_id"],
+                "reason": params["p_reason"], "requested_at": "2026-09-22T12:00:00Z",
+                "requested_by": params["p_actor_id"],
+            })
+            return SimpleNamespace(data=member)
+
+        return SimpleNamespace(execute=execute)
+
+    state["db"].rpc = rpc
+    return client, state
+
+
+@pytest.mark.parametrize("divisions", [None, [], ["4.0"]])
+def test_late_request_uses_verified_actor_and_remains_pending_without_contact_consent(late_request, divisions):
+    client, state = late_request
+    body = {**state["late_body"], "reason": "  Confirmed verbally after signup closed.  "}
+    if divisions is not None:
+        body["divisions"] = divisions
+    response = client.post(state["late_url"], json=body)
+    assert response.status_code == 200
+    expected_divisions = divisions or state["eligible_divisions"]
+    assert state["calls"] == [("pcs_request_interclub_late_player", {
+        "p_actor_id": state["user"].user_id, "p_actor_email": state["user"].email,
+        "p_club_id": "alpha", "p_season_id": state["season"]["id"], "p_player_id": 1,
+        "p_divisions": expected_divisions, "p_reason": state["late_body"]["reason"],
+    })]
+    result = response.json()
+    assert result["pool"]["can_request_late"] is True
+    for member in (result["member"], result["pool"]["members"][0]):
+        assert member["player_id"] == "1" and member["divisions"] == expected_divisions
+        assert member["approval_status"] == "pending" and member["late_join"] is True
+        assert member["late_request_reason"] == state["late_body"]["reason"]
+        assert member["late_requested_at"] == "2026-09-22T12:00:00Z"
+        assert member["email"] == "" and member["approval_reason"] is None
+    assert "email_consent" not in response.text and "token_nonce" not in response.text
+    assert state["tables"]["players"][0]["rating"] == 1160
+    assert len(state["tables"][routes.RESPONSES]) == 1, "A late request does not create a meet RSVP."
+    private_headers(response)
+    reload = client.get(state["base"] + "/pool")
+    assert reload.status_code == 200
+    assert reload.json()["members"][0] == result["pool"]["members"][0]
+
+
+@pytest.mark.parametrize("phase", ["unconfigured", "scheduled", "open"])
+def test_late_requests_require_closed_registration(late_request, phase):
+    client, state = late_request
+    set_registration_phase(state["season"], phase)
+    assert client.get(state["base"] + "/pool").json()["can_request_late"] is False
+    response = client.post(state["late_url"], json=state["late_body"])
+    assert response.status_code == 423
+    private_headers(response)
+    assert not state["calls"]
+    assert not state["tables"][routes.MEMBERS]
+
+
+def test_late_request_is_unavailable_after_the_season_ends(late_request):
+    client, state = late_request
+    state["season"]["details"].update(start_date="2000-01-01", end_date="2000-03-31")
+    assert client.get(state["base"] + "/pool").json()["can_request_late"] is False
+    response = client.post(state["late_url"], json=state["late_body"])
+    assert response.status_code == 409
+    assert not state["calls"]
+
+
+@pytest.mark.parametrize("change", [dict(role="operator"), dict(club_id="beta"), dict(user_id="someone-else"),
+    dict(revoked_at="2020-01-01T00:00:00Z"), dict(expires_at="2020-01-01T00:00:00Z")])
+def test_late_request_requires_active_administrator_of_the_requesting_club(late_request, change):
+    client, state = late_request
+    state["assignment"].update(change)
+    assert client.post(state["late_url"], json=state["late_body"]).status_code == 403
+    assert not state["calls"]
+
+
+def test_late_request_requires_authentication(late_request, monkeypatch):
+    client, state = late_request
+
+    def deny(_):
+        raise HTTPException(401, "Sign in required")
+
+    monkeypatch.setattr(admin_auth_routes, "authenticate_bearer", deny)
+    assert client.post(state["late_url"], json=state["late_body"]).status_code == 401
+    assert not state["calls"]
+
+
+def test_late_request_checks_personal_link_configuration_before_saving(late_request, monkeypatch):
+    client, state = late_request
+
+    def unavailable():
+        raise ValueError("Signing configuration unavailable")
+
+    monkeypatch.setattr(routes, "get_explicit_registration_edit_token_secret", unavailable)
+    response = client.post(state["late_url"], json=state["late_body"])
+    assert response.status_code == 503
+    assert not state["calls"]
+    assert not state["tables"][routes.MEMBERS]
+
+
+@pytest.mark.parametrize("status", ["invited", "declined", "cancelled"])
+def test_late_request_requires_accepted_season_participation(late_request, status):
+    client, state = late_request
+    state["participation"]["status"] = status
+    assert client.post(state["late_url"], json=state["late_body"]).status_code == 404
+    assert not state["calls"]
+
+
+@pytest.mark.parametrize("player_id,active", [(2, True), (999, True), (1, False)])
+def test_late_request_requires_an_active_player_from_this_club(late_request, player_id, active):
+    client, state = late_request
+    state["tables"]["players"][0]["active"] = active
+    response = client.post(state["late_url"], json={**state["late_body"], "player_id": player_id})
+    assert response.status_code == 422
+    assert "Private Beta" not in response.text
+    assert not state["calls"]
+
+
+@pytest.mark.parametrize("patch", [
+    {"player_id": 0}, {"player_id": -1}, {"player_id": None}, {"player_id": "unknown"},
+    {"reason": ""}, {"reason": "   "}, {"reason": "x" * 501},
+    {"divisions": ["3.5", "3.5"]}, {"divisions": [""]}, {"divisions": ["not-a-season-division"]},
+    {"actor_id": "forged"}, {"club_id": "beta"}, {"approval_status": "approved"},
+    {"email_consent": True}, {"email": "injected@example.test"}, {"late_join": False},
+])
+def test_late_request_rejects_invalid_fields_and_forged_approval_or_consent(late_request, patch):
+    client, state = late_request
+    response = client.post(state["late_url"], json={**state["late_body"], **patch})
+    assert response.status_code == 422
+    private_headers(response)
+    assert not state["calls"]
+    assert not state["tables"][routes.MEMBERS]
+
+
+def test_unrated_active_club_player_can_request_review_without_implied_eligibility(late_request):
+    client, state = late_request
+    state["eligible_divisions"] = []
+    state["league_rating"] = None
+    state["tables"]["players"][0]["rating"] = None
+    response = client.post(state["late_url"], json=state["late_body"])
+    assert response.status_code == 200
+    assert state["calls"][0][1]["p_divisions"] == []
+    member = response.json()["pool"]["members"][0]
+    assert member["approval_status"] == "pending" and member["late_join"] is True
+    assert member["divisions"] == member["eligible_divisions"] == []
+    assert member["rating"] is None and member["league_rating"] is None
+
+
+@pytest.mark.parametrize("code,status", [("PT423", 423), ("23505", 409), ("22023", 422)])
+def test_late_request_surfaces_atomic_phase_duplicate_and_eligibility_rechecks(late_request, code, status):
+    client, state = late_request
+    state["error"] = code
+    response = client.post(state["late_url"], json=state["late_body"])
+    assert response.status_code == status
+    assert "private database" not in response.text
+    assert not state["tables"][routes.MEMBERS]
+    private_headers(response)
+
+
+def test_late_request_is_reviewable_only_by_the_season_organizer(late_request):
+    client, state = late_request
+    response = client.post(state["late_url"], json=state["late_body"])
+    assert response.status_code == 200
+    member = response.json()["member"]
+    approval = {"member_id": member["id"], "expected_revision": member["revision"],
+        "approve": True, "reason": "Approved for the remaining meets."}
+    assert client.post(state["base"] + "/pool/approvals", json=approval).status_code == 403
+    assert len(state["calls"]) == 1, "The requesting club cannot approve its own late player."
+
+    state["assignment"]["club_id"] = "organizer"
+    organizer_base = state["base"].replace("/alpha/", "/organizer/")
+    review = client.get(organizer_base + "/pool/approvals")
+    assert review.status_code == 200
+    pending = review.json()["members"][0]
+    assert pending["approval_status"] == "pending" and pending["late_join"] is True
+    assert pending["late_request_reason"] == state["late_body"]["reason"]
+    assert pending["late_requested_at"] == "2026-09-22T12:00:00Z"
+    assert not {"email", "notes", "token_nonce", "manage_url"}.intersection(pending)
+
+    state["result"] = {**state["tables"][routes.MEMBERS][0], "approval_status": "approved", "revision": 2}
+    approved = client.post(organizer_base + "/pool/approvals", json=approval)
+    assert approved.status_code == 200 and approved.json()["member"]["approval_status"] == "approved"
+    name, params = state["calls"][-1]
+    assert name == "pcs_review_interclub_pool_member"
+    assert params["p_club_id"] == "organizer" and params["p_actor_id"] == state["user"].user_id
+    assert params["p_revision"] == member["revision"] and params["p_approve"] is True

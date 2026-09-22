@@ -6,13 +6,14 @@ import { getAdminApiBaseUrl } from "@/lib/adminAuthClient";
 import { useAdminSession } from "@/lib/useAdminSession";
 import { useAdminWorkspace } from "@/lib/useAdminWorkspace";
 import { InterclubTeam, MeetRegistrationDetail, RegistrationDetail, RegistrationSeason, RosterVersion, apiError, composition, rosterStatus } from "@/lib/interclubRegistration";
-import { divisionEligibilityLabel, emptyRule } from "@/lib/interclubSetup";
+import { divisionEligibilityLabel, emptyRule, meetLocalTime, meetUtcTime } from "@/lib/interclubSetup";
 import styles from "./registrations.module.css";
 import { SeasonPlayerPool, MeetAvailability } from "./PlayerPoolPanels";
 import SeasonEligibilityApprovals from "./SeasonEligibilityApprovals";
 import InterclubWorkflow, { RegistrationStep, workflowHref } from "../InterclubWorkflow";
 import SeasonRegistrationWindow from "./SeasonRegistrationWindow";
 import { useRegistrationWindow } from "@/lib/useRegistrationWindow";
+import SeasonMeetSchedule from "./SeasonMeetSchedule";
 
 function loadErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && !(error instanceof TypeError) && !(error instanceof SyntaxError) ? error.message : fallback;
@@ -77,6 +78,7 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId, initialMeetId,
   const [reload, setReload] = useState(0);
   const [selectedMeet, setSelectedMeet] = useState(initialMeetId);
   const [step, setStep] = useState<RegistrationStep>(initialStep);
+  const [poolRefreshKey, setPoolRefreshKey] = useState(0), [approvalRefreshKey, setApprovalRefreshKey] = useState(0);
   const registrationCheck = useRef<AbortController | null>(null);
   const { meetPlanningOpen } = useRegistrationWindow(data?.season.registration, () => void recheckRegistration());
   const stepFocus = useRef(false);
@@ -184,6 +186,7 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId, initialMeetId,
       <header className={styles.seasonHeader}>
         <h2>{data.season.details.name}</h2>
         <p>{date(data.season.details.start_date)} – {date(data.season.details.end_date)} · Organized by {clubName(data.season.organizer_club_id)}</p>
+        {data.is_organizer && <p><a href="#meet-schedule">Meet schedule</a></p>}
       </header>
       {status === "invited" && <section className={`${styles.card} ${styles.invitation}`} aria-labelledby="invitation-title">
         <p className={styles.eyebrow}>Invitation to your club</p>
@@ -212,13 +215,15 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId, initialMeetId,
         {meetPlanningOpen && !data.meets.length && <p>The organizer will share your meet schedule here.</p>}
       </section>}
       {status === "accepted" && <section id="season-player-pool" hidden={activeStep !== "pool"} ref={poolSection} tabIndex={-1} className={styles.rosters} aria-label="Season player pool workspace">
-        <SeasonPlayerPool root={root} accessToken={accessToken} clubName={clubName(clubId)} season={data.season} />
+        <SeasonPlayerPool root={root} accessToken={accessToken} clubName={clubName(clubId)} season={data.season} refreshKey={poolRefreshKey} onLateRequested={() => setApprovalRefreshKey(value => value + 1)} />
       </section>}
       {status && !["invited", "accepted"].includes(status) && <section className={styles.card}>
         <h3 ref={confirmation} tabIndex={-1}>{status === "declined" ? "Invitation declined" : "Invitation cancelled"}</h3>
         <p>{clubName(clubId)} has not joined {data.season.details.name}. Ask {clubName(data.season.organizer_club_id)} for a new invitation if you want to take part.</p>
       </section>}
-      {(!hasWorkspace || !meetPlanningOpen) && <details className={styles.card}>
+      {data.is_organizer && <SeasonMeetSchedule root={`${api}/admin/clubs/${encodeURIComponent(clubId)}/interclub/competition/${encodeURIComponent(seasonId)}`} clubId={clubId} accessToken={accessToken}
+        seasonData={data} meetPlanningOpen={meetPlanningOpen} disabled={disabled} onSaved={() => void recheckRegistration()} />}
+      {!data.is_organizer && <details className={styles.card}>
         <summary>Planned meet dates ({schedule.length})</summary>
         <p>Meet times are shown in {data.season.details.timezone}.</p>
         {schedule.length ? <ul className={styles.schedule}>{schedule.map(meet => <li key={meet.id}><strong>{when(meet.starts_at)}</strong><span>Hosted by {clubName(meet.host_club_id)}</span></li>)}</ul> : <p>No meets are scheduled for your club yet.</p>}
@@ -230,7 +235,7 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId, initialMeetId,
           <label>Meet <select aria-label="Meet" value={selectedMeet} onChange={e => setSelectedMeet(e.target.value)}>
             {data.meets.map(meet => <option key={meet.id} value={meet.id}>{when(meet.starts_at)} · {clubName(meet.host_club_id)}{meet.roster_open ? "" : " · History"}</option>)}
           </select></label>
-          {selectedMeet && <MeetRegistration key={selectedMeet} root={`${root}/meets/${selectedMeet}`} accessToken={accessToken} clubId={clubId} seasonData={data} step={activeStep} onStep={selectStep} />}
+          {selectedMeet && <MeetRegistration key={selectedMeet} root={`${root}/meets/${selectedMeet}`} accessToken={accessToken} clubId={clubId} seasonData={data} step={activeStep} onStep={selectStep} playerRefreshKey={poolRefreshKey} />}
         </>}
         {data.teams.length > 0 && <details className={styles.card}><summary>Earlier season submissions (reference only)</summary>
           <p>These were submitted before rosters moved to individual meets. Choose players again for each upcoming meet.</p>
@@ -248,7 +253,7 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId, initialMeetId,
         </tbody></table></div>
         <p>Interclub ratings start from the represented club’s rating, then change with approved league results. Each meet locks the player’s league rating at its roster deadline. Players may play up: a 2.9 player can enter 3.0 or a higher division. Each numeric division requires a rating below its listed limit; Open divisions accept any positive rating. Every team has two women and two men.</p>
       </details>
-      {data.is_organizer && <SeasonEligibilityApprovals root={root} accessToken={accessToken} clubs={data.clubs} />}
+      {data.is_organizer && <SeasonEligibilityApprovals root={root} accessToken={accessToken} clubs={data.clubs} refreshKey={approvalRefreshKey} onDecision={() => setPoolRefreshKey(value => value + 1)} />}
       {data.is_organizer && <section id="club-responses" className={styles.card}><h3>Club responses</h3>
         <p>{data.participations.filter(p => p.status === "accepted").length} of {data.participations.length} clubs have accepted. Each club chooses its players separately for each meet.</p>
         <div className={styles.scroll}><table className={styles.table}><thead><tr><th>Club</th><th>Response</th><th>Invitation</th></tr></thead><tbody>
@@ -262,9 +267,9 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId, initialMeetId,
   </>;
 }
 
-function MeetRegistration({ root, accessToken, clubId, seasonData, step, onStep }: {
+function MeetRegistration({ root, accessToken, clubId, seasonData, step, onStep, playerRefreshKey }: {
   root: string; accessToken: string; clubId: string; seasonData: RegistrationDetail;
-  step: RegistrationStep; onStep: (step: RegistrationStep) => void;
+  step: RegistrationStep; onStep: (step: RegistrationStep) => void; playerRefreshKey: number;
 }) {
   const token = useRef(accessToken); token.current = accessToken;
   const [data, setData] = useState<MeetRegistrationDetail | null>(null);
@@ -278,6 +283,15 @@ function MeetRegistration({ root, accessToken, clubId, seasonData, step, onStep 
   const [availabilityVisited, setAvailabilityVisited] = useState(step === "availability");
   const [responses, setResponses] = useState<{ member_id: string; player_id: string | null; name: string; status: string; member_status?: string }[] | null>(null);
   const pending = useRef(false), mutation = useRef<AbortController | null>(null);
+  const currentMeetRevision = seasonData.meets.find(meet => meet.id === data?.meet.id)?.revision;
+  const loadedMeetRevision = data?.meet.revision;
+  const editingRoster = Boolean(editor);
+  useEffect(() => {
+    if (loadedMeetRevision == null || currentMeetRevision == null || currentMeetRevision <= loadedMeetRevision) return;
+    if (editingRoster) {
+      setBlocked(true); setMessage("This meet’s schedule changed. Your lineup draft is kept below. Reload the meet before saving it.");
+    } else setReload(value => value + 1);
+  }, [currentMeetRevision, loadedMeetRevision, editingRoster]);
   useEffect(() => { if (step === "availability") setAvailabilityVisited(true); }, [step]);
   useEffect(() => () => { mutation.current?.abort(); }, [root]);
   useEffect(() => {
@@ -336,8 +350,8 @@ function MeetRegistration({ root, accessToken, clubId, seasonData, step, onStep 
       <p>Roster deadline for this meet: {when(data.meet.roster_deadline)} ({seasonData.season.details.timezone}).</p>
       {data.meet.roster_open ? <p>Valid substitutions are allowed after the deadline, until this meet starts. A new team submitted after the deadline needs an organizer exception.</p>
         : <p>This meet has started. Its rosters and decisions are available as history.</p>}
-      {seasonData.is_organizer && data.meet.deadline_editable && <details className={styles.card}><summary>Change this meet’s roster deadline</summary><form onSubmit={e => { e.preventDefault(); void change("/deadline", "PUT", { expected_revision: data.meet.revision, roster_deadline: new Date(deadline).toISOString() }, "Meet roster deadline saved."); }}>
-        <label>Roster deadline (your device’s local time) <input required disabled={disabled} type="datetime-local" value={deadline} onChange={e => setDeadline(e.target.value)} /></label>
+      {seasonData.is_organizer && data.meet.deadline_editable && <details className={styles.card}><summary>Change this meet’s roster deadline</summary><form onSubmit={e => { e.preventDefault(); try { const cutoff = meetUtcTime(deadline, seasonData.season.details.timezone); if (!cutoff) throw new Error("Choose a valid roster deadline."); void change("/deadline", "PUT", { expected_revision: data.meet.revision, roster_deadline: cutoff }, "Meet roster deadline saved."); } catch (cause) { setMessage(cause instanceof Error ? cause.message : "Choose a valid roster deadline."); } }}>
+        <label>Roster deadline ({seasonData.season.details.timezone}) <input required disabled={disabled} type="datetime-local" max={meetLocalTime(data.meet.starts_at, seasonData.season.details.timezone)} value={deadline} onChange={e => setDeadline(e.target.value)} /></label>
         <p>The default is the meet’s start time. Set an earlier deadline before the first team submits.</p>
         <button disabled={disabled || !deadline} type="submit">Save meet deadline</button>
       </form></details>}
@@ -351,7 +365,7 @@ function MeetRegistration({ root, accessToken, clubId, seasonData, step, onStep 
       <div hidden={step !== "lineups"}>
       {ownMeet && data.meet.roster_open && <button disabled={disabled} onClick={() => setEditor({ team: null })}>Add a team for this meet</button>}
       {editor && <RosterEditor key={editor.team ? `${editor.team.id}:${editor.team.revision}` : "new"} root={root} accessToken={accessToken} clubName={clubName(clubId)} divisions={[...seasonData.season.details.divisions].sort((a, b) => Number.parseFloat(a) - Number.parseFloat(b) || a.localeCompare(b, undefined, { numeric: true }))} team={editor.team} disabled={disabled}
-        responses={responses} allowMissingPairing={(data.meet.competition_phase || "regular") === "regular"}
+        responses={responses} allowMissingPairing={(data.meet.competition_phase || "regular") === "regular"} refreshKey={playerRefreshKey}
         cancel={() => setEditor(null)} save={(id, body) => change(`/teams/${id}`, "PUT", { ...body, ...revision }, "Roster submitted for this meet.")} />}
       <h4>{seasonData.is_organizer ? "Teams for this meet" : "Your club’s teams for this meet"}</h4>
       {!data.teams.length && <p>No teams submitted for this meet yet. {ownMeet ? "Add a team above using the players who can attend." : "Each participating club needs to submit its lineup before the host can prepare pairings."}</p>}
@@ -371,11 +385,11 @@ function MeetRegistration({ root, accessToken, clubId, seasonData, step, onStep 
 }
 
 type PlayerChoice = { id: string; name: string; starting_rating: number | null; eligibility_rating?: number; rating_locked?: boolean; rating_deadline?: string };
-function RosterEditor({ root, accessToken, clubName, divisions, team, disabled, cancel, save, responses, allowMissingPairing }: {
+function RosterEditor({ root, accessToken, clubName, divisions, team, disabled, cancel, save, responses, allowMissingPairing, refreshKey }: {
   root: string; accessToken: string; clubName: string; divisions: string[]; team: InterclubTeam | null; disabled: boolean; cancel: () => void;
   save: (id: string, body: object) => Promise<boolean>;
   responses: { player_id: string | null; status: string; member_status?: string }[] | null;
-  allowMissingPairing: boolean;
+  allowMissingPairing: boolean; refreshKey: number;
 }) {
   const [id] = useState(() => team?.id || crypto.randomUUID());
   const [name, setName] = useState(team?.name || "");
@@ -393,6 +407,7 @@ function RosterEditor({ root, accessToken, clubName, divisions, team, disabled, 
   const responseByPlayer = new Map((responses || []).filter(r => r.player_id && r.member_status !== "withdrawn").map(r => [String(r.player_id), r.status]));
   const visibleChoices = availableOnly ? choices.filter(player => responseByPlayer.get(player.id) === "available" || selected.some(p => p.id === player.id)) : choices;
   const token = useRef(accessToken); token.current = accessToken;
+  useEffect(() => { setOffset(0); }, [refreshKey]);
   useEffect(() => {
     const controller = new AbortController(); setLoading(true); setError("");
     fetch(`${root}/players?q=${encodeURIComponent(query)}&offset=${offset}`, { headers: { Authorization: `Bearer ${token.current}` }, cache: "no-store", signal: controller.signal })
@@ -402,7 +417,7 @@ function RosterEditor({ root, accessToken, clubName, divisions, team, disabled, 
       }).catch(e => { if (!controller.signal.aborted) setError(e.message); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [root, query, offset]);
+  }, [root, query, offset, refreshKey]);
   function toggle(player: PlayerChoice) {
     setSelected(old => old.some(p => p.id === player.id) ? old.filter(p => p.id !== player.id) : old.length < requiredPlayers ? [...old, player] : old);
   }
