@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from itertools import combinations
 import json
 import time
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 from uuid import uuid4
 
 from scripts.run_interclub_rehearsal import iso, now
@@ -344,6 +344,75 @@ def qualifier(r):
     return s
 
 
+def inline_profile_evidence(r, season, club, member, *, name, rating, approved):
+    profiles = r.db("GET", "players", select="id,name,rating,starting_rating,gender,active",
+                    club_id="eq."+club, name="eq."+name)
+    r.check(len(profiles) == 1 and str(profiles[0]["id"]) == str(member["player_id"])
+            and profiles[0]["rating"] == rating*400 and profiles[0]["starting_rating"] == rating*400
+            and profiles[0]["active"] and profiles[0]["gender"] == "female"
+            and member["rating"] == rating and "3.5" in member["eligible_divisions"],
+            "inline profile is active, linked to its pool member and uses the submitted JUPR rating")
+    entries = r.db("GET", "pcs_interclub_entries", season_id="eq."+season["id"], player_id="eq."+str(member["player_id"]))
+    r.check((len(entries) == 1 and entries[0]["starting_rating"] == rating) if approved else not entries,
+            "inline profile receives a league entry only after season approval")
+
+
+def inline_registration(r, s):
+    """Open-season admin/public creation, retries and conflicts on synthetic data."""
+    r.phase("inline player creation during regular registration")
+    club = s["clubs"][0]
+    root = r.registration(club, s["id"])
+    public = "/public/interclub-signups/"+s["signup"][club]["share_id"]
+    baseline_id = next(p["id"] for p in s["players"] if p["club_id"] == club)
+    baseline = r.db("GET", "players", select="id,name,rating,starting_rating,gender", id="eq."+str(baseline_id))[0]
+    name = "Inline admin "+r.state["run"]
+    payload = {"request_id": str(uuid4()), "new_player": {"name": name, "starting_jupr": 3.25, "gender": "female"}, "divisions": ["3.5"]}
+    r.api("POST", root+"/pool/create-player", payload, actor=1, expected=(403,))
+    r.check(not r.db("GET", "players", select="id", club_id="eq."+club, name="eq."+name), "another club cannot create an inline player")
+    member = r.api("POST", root+"/pool/create-player", payload)["member"]
+    r.check(member["approval_status"] == "approved" and not member["email"], "regular admin inline creation links an approved preseason member without requiring email")
+    inline_profile_evidence(r, s, club, member, name=name, rating=3.25, approved=True)
+    replay = r.api("POST", root+"/pool/create-player", payload)["member"]
+    r.check(replay["id"] == member["id"] and replay["player_id"] == member["player_id"], "regular create retry returns the same member and player")
+    changed_name = name+" changed"
+    r.api("POST", root+"/pool/create-player", {**payload, "new_player": {**payload["new_player"], "name": changed_name}}, expected=(409,))
+    r.api("POST", root+"/pool/create-player", {**payload, "request_id": str(uuid4())}, expected=(409,))
+    r.check(not r.db("GET", "players", select="id", club_id="eq."+club, name="eq."+changed_name)
+            and len(r.db("GET", "pcs_interclub_pool_members", select="id", season_id="eq."+s["id"], player_id="eq."+str(member["player_id"]))) == 1,
+            "changed retries and duplicate names create neither an orphan profile nor a second signup")
+    r.api("POST", root+"/pool/create-player", {**payload, "request_id": str(uuid4()),
+        "new_player": {**payload["new_player"], "name": baseline["name"], "starting_jupr": 7}}, expected=(409,))
+    collision = "Inline existing signup "+r.state["run"]
+    r.api("POST", root+"/pool/bulk-add", {"members": [{"name": collision, "player_id": None}]})
+    r.api("POST", root+"/pool/create-player", {**payload, "request_id": str(uuid4()),
+        "new_player": {**payload["new_player"], "name": collision}}, expected=(409,))
+    r.check(not r.db("GET", "players", select="id", club_id="eq."+club, name="eq."+collision),
+            "an existing unlinked signup blocks duplicate profile creation without leaving an orphan")
+
+    public_name = "Inline public "+r.state["run"]
+    email = "inline-public-"+r.state["run"]+"@example.invalid"
+    signup = {"name": public_name, "email": email, "divisions": ["3.5"], "email_consent": True, "request_id": str(uuid4()),
+              "new_player": {"name": public_name, "email": email, "starting_jupr": 3.5, "gender": "female"}}
+    saved = r.api("POST", public, signup, actor=None)
+    r.check(saved["status"] == "registered" and "manage_url" in saved and "player_id" not in saved,
+            "anonymous new-profile signup returns its private management link without directory identity exposure")
+    r.secrets.append(token(saved["manage_url"]))
+    r.check(r.api("POST", public, signup, actor=None)["manage_url"] == saved["manage_url"], "public inline retry preserves the same private signup link")
+    public_member = next(m for m in r.api("GET", root+"/pool")["members"] if m["name"] == public_name and m["email"] == email)
+    inline_profile_evidence(r, s, club, public_member, name=public_name, rating=3.5, approved=True)
+    choices = r.api("GET", public+"/players?"+urlencode({"q": public_name}), actor=None)["players"]
+    r.check(any(str(p["id"]) == str(public_member["player_id"]) for p in choices)
+            and all("email" not in p for p in choices), "new public profile becomes searchable without exposing contact details")
+    r.api("POST", public, {**signup, "new_player": {**signup["new_player"], "starting_jupr": 6}}, actor=None, expected=(409,))
+    r.api("POST", public, {**signup, "request_id": str(uuid4())}, actor=None, expected=(409,))
+    r.check(len(r.db("GET", "players", select="id", club_id="eq."+club, name="eq."+public_name)) == 1
+            and r.db("GET", "players", select="id,name,rating,starting_rating,gender", id="eq."+str(baseline_id))[0] == baseline,
+            "inline retries and name collisions preserve existing club ratings and one public profile")
+    s["browser_admin_new_player"] = "Browser admin new "+r.state["run"]
+    s["browser_public_new_player"] = "Browser public new "+r.state["run"]
+    r.persist()
+
+
 def season_adjustments(r):
     """Commissioner exceptions and calendar edits use isolated future fixtures."""
     r.phase("closed registration late requests and upcoming meet changes")
@@ -351,6 +420,11 @@ def season_adjustments(r):
     club, organizer = s["clubs"][1], s["clubs"][0]
     root = r.registration(club, s["id"])
     review_root = r.registration(organizer, s["id"])+"/pool/approvals"
+    late_name = "Inline late "+r.state["run"]
+    new_late = {"request_id": str(uuid4()), "new_player": {"name": late_name, "starting_jupr": 3.25, "gender": "female"}, "divisions": ["3.5"]}
+    r.api("POST", root+"/pool/late-requests", new_late, actor=1, expected=(423,))
+    collision = "Inline late existing signup "+r.state["run"]
+    r.api("POST", root+"/pool/bulk-add", {"members": [{"name": collision, "player_id": None}]}, actor=1)
     requests = []
     for label in ("approved", "rejected"):
         player_id = 7000000000000 + int(uuid4().hex[:11], 16)
@@ -387,6 +461,36 @@ def season_adjustments(r):
         "approve": False, "reason": "Commissioner declines this rehearsal request"})["member"]
     r.check(rejected["approval_status"] == "rejected" and not r.db("GET", "pcs_interclub_entries",
         season_id="eq."+s["id"], player_id="eq."+str(requests[1]["player_id"])), "rejected request remains out of league participation")
+
+    r.api("POST", r.registration(organizer, s["id"])+"/pool/late-requests", new_late, actor=1, expected=(403,))
+    r.api("POST", root+"/pool/late-requests", new_late, actor=2, expected=(403,))
+    inline = r.api("POST", root+"/pool/late-requests", new_late, actor=1)["member"]
+    r.check(inline["approval_status"] == "pending" and inline["late_join"] and not inline["late_request_reason"],
+            "a newly created late player accepts omitted notes and still needs commissioner approval")
+    inline_profile_evidence(r, s, club, inline, name=late_name, rating=3.25, approved=False)
+    replay = r.api("POST", root+"/pool/late-requests", new_late, actor=1)["member"]
+    r.check(replay["id"] == inline["id"] and replay["player_id"] == inline["player_id"], "late create retry returns its existing pending member and player")
+    r.api("POST", root+"/pool/late-requests", {**new_late, "reason": "Changed retry"}, actor=1, expected=(409,))
+    r.api("POST", root+"/pool/late-requests", {**new_late, "request_id": str(uuid4())}, actor=1, expected=(409,))
+    r.api("POST", root+"/pool/late-requests", {**new_late, "request_id": str(uuid4()),
+        "new_player": {**new_late["new_player"], "name": collision}}, actor=1, expected=(409,))
+    r.check(not r.db("GET", "players", select="id", club_id="eq."+club, name="eq."+collision)
+            and len(r.db("GET", "pcs_interclub_pool_members", select="id", season_id="eq."+s["id"], player_id="eq."+str(inline["player_id"]))) == 1,
+            "late creation conflicts retain one signup and never leave an orphan profile")
+    stored = r.db("GET", "pcs_interclub_pool_members", select="email,consent_at", id="eq."+inline["id"])[0]
+    r.check(not stored["email"] and stored["consent_at"] is None, "admin inline late creation does not invent email consent")
+    decision = {"member_id": inline["id"], "expected_revision": inline["revision"], "approve": True, "reason": "Commissioner approves the new late profile"}
+    r.api("POST", root+"/pool/approvals", decision, actor=1, expected=(403,))
+    r.api("POST", review_root, decision)
+    inline_profile_evidence(r, s, club, next(m for m in r.api("GET", root+"/pool", actor=1)["members"] if m["id"] == inline["id"]),
+                            name=late_name, rating=3.25, approved=True)
+    blocked_name = "Closed regular inline "+r.state["run"]
+    blocked = {**new_late, "request_id": str(uuid4()), "new_player": {**new_late["new_player"], "name": blocked_name}}
+    r.api("POST", root+"/pool/create-player", blocked, actor=1, expected=(423,))
+    r.api("POST", "/public/interclub-signups/"+s["signup"][club]["share_id"], {"name": blocked_name,
+        "email": "closed-inline-"+r.state["run"]+"@example.invalid", "email_consent": True,
+        "request_id": str(uuid4()), "new_player": {**blocked["new_player"], "email": "closed-inline-"+r.state["run"]+"@example.invalid"}}, actor=None, expected=(423,))
+    r.check(not r.db("GET", "players", select="id", club_id="eq."+club, name="eq."+blocked_name), "closed regular admin and public signup cannot create directory profiles")
 
     meet = s["meets"][0]
     team = r.roster(s, meet, club, "3.5")["team"]
@@ -445,10 +549,7 @@ def season_adjustments(r):
     r.check(season["registration"] == window and len(projected) == 2
             and datetime.fromisoformat(projected[0]["starts_at"].replace("Z", "+00:00")) == earlier,
             "late approvals and calendar changes preserve closed registration and keep the season schedule current")
-    s["browser_late_player"] = "Browser late commitment"
-    r.db("POST", "players", {"id": 7000000000000 + int(uuid4().hex[:11], 16), "club_id": organizer,
-        "name": s["browser_late_player"], "normalized_name": "browser late "+s["id"],
-        "rating": 1500, "starting_rating": 1500, "active": True, "gender": "female"})
+    s["browser_late_player"] = "Browser late new "+r.state["run"]
     r.persist()
 
 
@@ -469,6 +570,7 @@ def run(r):
     # The browser completes score/approval flows on closed seasons, then joins
     # this separate open season without reopening any completed competition.
     r.phase("open registration fixture for anonymous browser signup")
-    r.season("browser-signup", club_count=2)
+    signup = r.season("browser-signup", club_count=2)
+    inline_registration(r, signup)
     r.phase("browser handoff")
     r.check(True,"API rehearsal complete; all synthetic sessions reserved for browser verification and cleanup")

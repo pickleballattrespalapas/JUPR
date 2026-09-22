@@ -495,6 +495,7 @@ def test_every_communications_route_has_an_independent_service_guard() -> None:
     ("admin-tools", "POST", "/admin/clubs/alpha/interclub/registrations/season/pool/bulk-preview"),
     ("admin-tools", "POST", "/admin/clubs/alpha/interclub/registrations/season/pool/bulk-add"),
     ("admin-tools", "POST", "/admin/clubs/alpha/interclub/registrations/season/pool/late-requests"),
+    ("admin-tools", "POST", "/admin/clubs/alpha/interclub/registrations/season/pool/create-player"),
     ("admin-tools", "PATCH", "/admin/clubs/alpha/interclub/registrations/season/pool/members/member"),
     ("admin-tools", "PUT", "/admin/clubs/alpha/interclub/registrations/season/meets/meet/availability"),
     ("admin-tools", "POST", "/admin/clubs/alpha/interclub/competition/season/meets"),

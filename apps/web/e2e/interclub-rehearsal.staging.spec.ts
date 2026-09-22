@@ -1,7 +1,20 @@
 import { expect, test } from "@playwright/test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { PoolMember } from "../lib/interclubPlayerPool";
 import { bootstrapStagingContext, expectedApiOrigin } from "./support/staging";
+
+function expectLinkedPoolMember(members: PoolMember[], name: string, rating: number, gender: string) {
+  const matching = members.filter(member => member.name === name);
+  expect(matching.length, "Inline creation must save exactly one linked season signup").toBe(1);
+  const member = matching[0];
+  expect(Number(member.player_id)).toBeGreaterThan(0);
+  expect(member.rating).toBe(rating);
+  expect(member.gender).toBe(gender);
+  expect(member.eligible_divisions).toContain("3.5");
+  expect(member.status).toBe("active");
+  return member;
+}
 
 // This private fixture stays outside uploaded artifacts. The session was issued
 // by staging Auth to a synthetic user restricted to this run's synthetic clubs.
@@ -99,6 +112,29 @@ test("interclub paper packet, score entry, approval and public results", async (
   await expect(page.getByRole("button", { name: "Reload meet", exact: true, includeHidden: true })).toHaveCount(0);
   expect(lockedReads, "An open signup season must not fetch operational meet details even from a direct URL").toEqual([]);
 
+  const signupPoolRoot = `${expectedApiOrigin}/admin/clubs/${club}/interclub/registrations/${signup.id}/pool`;
+  const adminPlayerName = `Browser admin new ${state.run}`;
+  const signupPool = page.getByRole("region", { name: "Season player pool", exact: true });
+  await signupPool.getByRole("button", { name: "Create new player", exact: true }).click();
+  const newPlayer = signupPool.getByRole("region", { name: "Create a new club player", exact: true });
+  await newPlayer.getByLabel("Player name", { exact: true }).fill(adminPlayerName);
+  await newPlayer.getByRole("spinbutton", { name: /^Starting JUPR/ }).fill("3.25");
+  await newPlayer.getByLabel("Gender (optional)", { exact: true }).selectOption("female");
+  await expect(newPlayer.getByLabel("Email (optional)", { exact: true })).toHaveValue("");
+  const adminCreated = page.waitForResponse(r => r.url() === `${signupPoolRoot}/create-player` && r.request().method() === "POST");
+  await newPlayer.getByRole("button", { name: "Create player and add to pool", exact: true }).click();
+  const adminCreatedResponse = await adminCreated;
+  expect(adminCreatedResponse.status()).toBe(200);
+  const adminCreatedResult = await adminCreatedResponse.json();
+  const adminMember = expectLinkedPoolMember(adminCreatedResult.pool.members, adminPlayerName, 3.25, "female");
+  expect(adminCreatedResult.member.id).toBe(adminMember.id);
+  expect(String(adminCreatedResult.member.player_id)).toBe(String(adminMember.player_id));
+  expect(adminMember.email).toBe("");
+  const adminPlayerRow = signupPool.getByRole("row").filter({ has: page.getByRole("rowheader").filter({ hasText: adminPlayerName }) });
+  await expect(adminPlayerRow).toHaveCount(1);
+  await expect(adminPlayerRow.getByRole("cell", { name: "3.25", exact: true }).first()).toBeVisible();
+  await expect(adminPlayerRow.getByRole("cell", { name: "Women", exact: true })).toBeVisible();
+
   const adjustments = state.seasons.find((s: { label: string }) => s.label === "season-adjustments");
   await page.goto(`/admin/interclub/registrations?season=${adjustments.id}`);
   const schedule = page.getByRole("region", { name: "Meet schedule", exact: true });
@@ -126,15 +162,36 @@ test("interclub paper packet, score entry, approval and public results", async (
   await expect(schedule.getByRole("row")).toHaveCount(4);
   const pool = page.getByRole("region", { name: "Season player pool", exact: true });
   await pool.getByRole("button", { name: "Request late player", exact: true }).click();
-  await pool.getByLabel("Find a late player in this club", { exact: true }).fill(adjustments.browser_late_player);
-  await pool.getByRole("radio", { name: new RegExp(adjustments.browser_late_player) }).check();
-  await pool.getByLabel("Reason for late entry", { exact: true }).fill("Player committed verbally after the season registration closed.");
-  await pool.getByRole("button", { name: "Submit late player request", exact: true }).click();
+  const lateRequest = pool.getByRole("region", { name: "Request a late player", exact: true });
+  await lateRequest.getByRole("button", { name: "Create new player", exact: true }).click();
+  await lateRequest.getByLabel("Player name", { exact: true }).fill(adjustments.browser_late_player);
+  await lateRequest.getByRole("spinbutton", { name: /^Starting JUPR/ }).fill("3.35");
+  await lateRequest.getByLabel("Gender (optional)", { exact: true }).selectOption("male");
+  await expect(lateRequest.getByLabel("Notes (optional)", { exact: true })).toHaveValue("");
+  const lateCreated = page.waitForResponse(r => r.url() === `${expectedApiOrigin}/admin/clubs/${club}/interclub/registrations/${adjustments.id}/pool/late-requests` && r.request().method() === "POST");
+  await lateRequest.getByRole("button", { name: "Create player and request late entry", exact: true }).click();
+  const lateCreatedResponse = await lateCreated;
+  expect(lateCreatedResponse.status()).toBe(200);
+  const lateCreatedResult = await lateCreatedResponse.json();
+  const lateMember = expectLinkedPoolMember(lateCreatedResult.pool.members, adjustments.browser_late_player, 3.35, "male");
+  expect(lateCreatedResult.member.id).toBe(lateMember.id);
+  expect(String(lateCreatedResult.member.player_id)).toBe(String(lateMember.player_id));
+  expect(lateMember.approval_status).toBe("pending");
+  expect(lateMember.late_join).toBe(true);
+  expect(lateMember.late_request_reason || "").toBe("");
+  const latePlayerRow = pool.getByRole("row").filter({ has: page.getByRole("rowheader").filter({ hasText: adjustments.browser_late_player }) });
+  await expect(latePlayerRow.getByRole("cell", { name: "Pending · cannot play", exact: true })).toBeVisible();
   const approvals = page.getByRole("region", { name: "Season eligibility approvals", exact: true });
   const applicant = approvals.getByRole("article").filter({ has: page.getByRole("heading", { name: adjustments.browser_late_player, exact: true }) });
   await expect(applicant.getByText(/Pending approval/)).toBeVisible();
   await applicant.getByLabel("Decision reason", { exact: true }).fill("Commissioner approves the late commitment.");
+  const lateApproved = page.waitForResponse(r => r.url() === `${expectedApiOrigin}/admin/clubs/${club}/interclub/registrations/${adjustments.id}/pool/approvals` && r.request().method() === "POST");
   await applicant.getByRole("button", { name: "Approve season eligibility", exact: true }).click();
+  const lateApprovedResponse = await lateApproved;
+  expect(lateApprovedResponse.status()).toBe(200);
+  const approvedMember = (await lateApprovedResponse.json()).member;
+  expect(approvedMember.id).toBe(lateMember.id);
+  expect(approvedMember.approval_status).toBe("approved");
   await expect(approvals.getByRole("status").filter({ hasText: `${adjustments.browser_late_player}: approved for the season pool.` })).toBeVisible();
   await page.screenshot({ path: join(reportDir, "interclub-season-adjustments.png"), fullPage: true });
 
@@ -150,15 +207,36 @@ test("interclub paper packet, score entry, approval and public results", async (
   await expect(publicPage.getByRole("heading", { name: "Season registration has closed.", exact: true })).toBeVisible();
   await expect(publicPage.getByRole("button", { name: "Join the season player pool", exact: true, includeHidden: true })).toHaveCount(0);
   await publicPage.goto(`/interclub/signup/${signup.signup[club].share_id}`);
-  await publicPage.getByLabel("Your name", { exact: true }).fill("Browser Rehearsal Player");
+  const publicPlayerName = `Browser public new ${state.run}`;
+  await publicPage.getByLabel("Your name", { exact: true }).fill(publicPlayerName);
+  const publicNewPlayer = publicPage.getByRole("group", { name: "New player profile", exact: true });
+  await expect(publicNewPlayer).toBeVisible();
+  await publicNewPlayer.getByLabel("Starting JUPR", { exact: true }).fill("3.15");
+  await publicNewPlayer.getByLabel("Gender", { exact: true }).selectOption("female");
   await publicPage.getByRole("textbox", { name: /^Email/ }).fill(`browser-${state.run}@example.invalid`);
   await publicPage.getByRole("checkbox",{ name:"3.5", exact:true }).check();
   await publicPage.getByRole("checkbox",{ name:/My club can email me invitations/ }).check();
+  const publicCreated = publicPage.waitForResponse(r => r.url() === `${expectedApiOrigin}/public/interclub-signups/${signup.signup[club].share_id}` && r.request().method() === "POST");
   await publicPage.getByRole("button",{ name:"Join the season player pool", exact:true }).click();
+  const publicCreatedResponse = await publicCreated;
+  expect(publicCreatedResponse.status()).toBe(200);
+  expect((await publicCreatedResponse.json()).status).toBe("registered");
   await expect(publicPage.getByRole("heading",{ name:"Your interest is registered", exact:true })).toBeVisible();
   await expect(publicPage.getByRole("link",{ name:"Manage my season signup", exact:true })).toHaveCount(1);
   await anonymous.close();
+  const refreshedPool = page.waitForResponse(r => r.url() === signupPoolRoot && r.request().method() === "GET");
+  await page.goto(`/admin/interclub/registrations?season=${signup.id}`);
+  const refreshedPoolResponse = await refreshedPool;
+  expect(refreshedPoolResponse.status()).toBe(200);
+  const persistedMembers = (await refreshedPoolResponse.json()).members;
+  const publicMember = expectLinkedPoolMember(persistedMembers, publicPlayerName, 3.15, "female");
+  expect(publicMember.email).toBe(`browser-${state.run}@example.invalid`);
+  expect(String(publicMember.player_id)).not.toBe(String(adminMember.player_id));
+  expect(expectLinkedPoolMember(persistedMembers, adminPlayerName, 3.25, "female").id).toBe(adminMember.id);
+  const publicPlayerRow = signupPool.getByRole("row").filter({ has: page.getByRole("rowheader").filter({ hasText: publicPlayerName }) });
+  await expect(publicPlayerRow).toHaveCount(1);
+  await expect(publicPlayerRow.getByRole("cell", { name: "3.15", exact: true }).first()).toBeVisible();
   expect(errors).toEqual([]);
   writeFileSync(join(reportDir,"interclub-browser.json"),JSON.stringify({ status:"passed",candidate_sha:state.sha,
-    checks:["paper_packet_pdf","six_game_ui_entry","dirty_navigation_lock","draft_reload","whole_meet_submission","organizer_approval","both_rating_streams","registration_phase_route_lock","upcoming_meet_edit","add_meet_after_registration","late_player_request_and_approval","anonymous_public_cup","closed_signup_readonly","anonymous_player_signup","no_browser_exceptions"] },null,2));
+    checks:["paper_packet_pdf","six_game_ui_entry","dirty_navigation_lock","draft_reload","whole_meet_submission","organizer_approval","both_rating_streams","registration_phase_route_lock","admin_inline_player_creation","upcoming_meet_edit","add_meet_after_registration","late_inline_player_creation_without_notes","late_player_request_and_approval","anonymous_public_cup","closed_signup_readonly","anonymous_inline_player_signup","persisted_inline_profile_ratings","no_browser_exceptions"] },null,2));
 });

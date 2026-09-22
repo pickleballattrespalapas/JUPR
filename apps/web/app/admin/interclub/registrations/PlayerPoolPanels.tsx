@@ -1,12 +1,13 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import type { InterclubMeet, RegistrationSeason } from "@/lib/interclubRegistration";
-import { availabilityLabel, poolGender, poolRating, sortedPoolDivisions, type AvailabilityResponse, type LatePlayerRequest, type LatePlayerRequestResult, type MeetAvailabilityData, type PoolMember, type SeasonPool } from "@/lib/interclubPlayerPool";
+import { availabilityLabel, poolGender, poolRating, sortedPoolDivisions, type AvailabilityResponse, type CreatePoolPlayerRequest, type LatePlayerInput, type LatePlayerRequestResult, type MeetAvailabilityData, type NewPoolPlayerInput, type PoolMember, type SeasonPool } from "@/lib/interclubPlayerPool";
 import { usePoolResource } from "./usePoolResource";
 import { InvitationEmail } from "./PoolInvitationEmail";
 import { RequestStatus, ShareLink } from "./PoolPanelCommon";
 import { PoolBulkAdd } from "./PoolBulkAdd";
 import { PoolLateRequest } from "./PoolLateRequest";
+import { PoolCreatePlayer } from "./PoolCreatePlayer";
 import { latestRegistrationWindow, registrationCanAccept, registrationMeetPlanning, registrationWindowDates, registrationWindowMessage } from "@/lib/interclubRegistrationWindow";
 import { useRegistrationWindow } from "@/lib/useRegistrationWindow";
 import styles from "./playerPool.module.css";
@@ -23,6 +24,8 @@ function SeasonPoolPanel({ root, accessToken, clubName, season, refreshKey, onLa
   const [memberFilter, setMemberFilter] = useState("active"), [message, setMessage] = useState("");
   const [invite, setInvite] = useState(false), [adding, setAdding] = useState(false), [query, setQuery] = useState(""), data = resource.data;
   const [requestingLate, setRequestingLate] = useState(false);
+  const [creatingPlayer, setCreatingPlayer] = useState(false);
+  const createRequestIds = useRef(new Map<string, string>());
   const memberToFocus = useRef<string | null>(null);
   const active = data?.members.filter(member => member.status === "active") || [];
   const visible = data?.members.filter(member => (memberFilter === "all" || member.status === memberFilter) && `${member.name} ${member.email}`.toLocaleLowerCase().includes(query.toLocaleLowerCase())).sort((a, b) => a.name.localeCompare(b.name)) || [];
@@ -31,13 +34,14 @@ function SeasonPoolPanel({ root, accessToken, clubName, season, refreshKey, onLa
   const { canRegister, meetPlanningOpen, now } = useRegistrationWindow(registration, reason => { if (reason === "boundary") resource.reload(); });
   const canRequestLate = meetPlanningOpen && data?.can_request_late === true;
   const registrationDates = registrationWindowDates(registration, season.details.timezone);
-  useEffect(() => { if (!canRegister) { setAdding(false); setInvite(false); } }, [canRegister]);
+  useEffect(() => { if (!canRegister) { setAdding(false); setInvite(false); setCreatingPlayer(false); } }, [canRegister]);
   useEffect(() => { if (!meetPlanningOpen) setRequestingLate(false); }, [meetPlanningOpen]);
   function viewMember(member: PoolMember) {
     memberToFocus.current = member.id;
     setQuery(member.name);
     setMemberFilter("all");
     setRequestingLate(false);
+    setCreatingPlayer(false);
   }
   function focusMember(details: HTMLDetailsElement | null, memberId: string) {
     if (!details || memberToFocus.current !== memberId) return;
@@ -46,8 +50,20 @@ function SeasonPoolPanel({ root, accessToken, clubName, season, refreshKey, onLa
     details.querySelector("summary")?.focus({ preventScroll: true });
     details.scrollIntoView({ block: "center" });
   }
-  async function requestLate(request: LatePlayerRequest) {
+  function identifyPlayerCreation(input: NewPoolPlayerInput, kind: "regular" | "late"): CreatePoolPlayerRequest {
+    const fingerprint = JSON.stringify({ kind, ...input });
+    let requestId = createRequestIds.current.get(fingerprint);
+    if (!requestId) { requestId = crypto.randomUUID(); createRequestIds.current.set(fingerprint, requestId); }
+    return { ...input, request_id: requestId };
+  }
+  async function createPlayer(input: NewPoolPlayerInput) {
+    if (!registrationCanAccept(registration)) { setMessage(registrationWindowMessage(registration)); return; }
+    const result = await resource.perform<LatePlayerRequestResult>(json => json(`${root}/pool/create-player`, "POST", identifyPlayerCreation(input, "regular")));
+    if (result) { resource.setData(result.pool); setCreatingPlayer(false); setMessage(`${result.member.name}: club player created and added to the season pool.`); if (result.member.approval_status === "pending" && result.member.late_join) onLateRequested?.(); }
+  }
+  async function requestLate(input: LatePlayerInput) {
     if (!data?.can_request_late || !registrationMeetPlanning(registration)) { setMessage("Late player requests are available after registration closes and before the season ends."); return; }
+    const request = "new_player" in input ? identifyPlayerCreation(input, "late") : input;
     const result = await resource.perform<LatePlayerRequestResult>(json => json(`${root}/pool/late-requests`, "POST", request));
     if (result) { resource.setData(result.pool); setRequestingLate(false); setMessage(`${result.member.name}: late entry requested. Pending commissioner approval; this player cannot play yet.`); onLateRequested?.(); }
   }
@@ -63,7 +79,8 @@ function SeasonPoolPanel({ root, accessToken, clubName, season, refreshKey, onLa
     <p className={styles.muted}>Signing up does not reserve a team place. Your club chooses its final lineup for each meet.</p>
     <RequestStatus {...resource} />{message && <p role="status" className={styles.notice}>{message}</p>}
     {data && <>
-      <div className={styles.toolbar}><button className={styles.primary} disabled={resource.disabled || !canRegister} onClick={() => { if (registrationCanAccept(registration)) setAdding(true); }}>Add players</button><span className={styles.muted}>Select club players or paste a list. Email is optional.</span></div>
+      <div className={styles.toolbar}><button className={styles.primary} disabled={resource.disabled || !canRegister} onClick={() => { if (registrationCanAccept(registration)) { setAdding(true); setCreatingPlayer(false); } }}>Add players</button>{canRegister && <button disabled={resource.disabled} onClick={() => { if (registrationCanAccept(registration)) { setCreatingPlayer(true); setAdding(false); } }}>Create new player</button>}<span className={styles.muted}>Select club players or paste a list. Email is optional.</span></div>
+      {creatingPlayer && canRegister && <PoolCreatePlayer disabled={resource.disabled} onCreate={createPlayer} onClose={() => setCreatingPlayer(false)} />}
       {adding && canRegister && <PoolBulkAdd registration={registration} root={root} accessToken={accessToken} divisions={season.details.divisions} members={data.members} onClose={() => setAdding(false)} onAdded={result => { resource.setData(result.pool); setAdding(false); setMessage(`${result.added_count} player${result.added_count === 1 ? "" : "s"} added to the season pool.${result.skipped_count ? ` ${result.skipped_count} already in the pool skipped.` : ""}`); }} />}
       {meetPlanningOpen && <div className={styles.toolbar}><button className={styles.primary} disabled={resource.disabled || !canRequestLate} onClick={() => setRequestingLate(true)}>Request late player</button><span className={styles.muted}>{canRequestLate ? "Commissioner approval is required before the player can play." : "Late player requests are unavailable for this season."}</span></div>}
       {requestingLate && canRequestLate && <PoolLateRequest root={root} accessToken={accessToken} members={data.members} disabled={resource.disabled} onClose={() => setRequestingLate(false)} onRequest={requestLate} onViewMember={viewMember} />}
@@ -89,7 +106,7 @@ function MemberCard({ member, root, accessToken, disabled, canRestore, onUpdate 
     <p className={styles.muted}>{member.player_id ? "Linked to this club’s player record." : "Not linked to a club player record. Link the correct player before choosing them for a roster."}</p>
     {member.late_request_reason && <p className={styles.notes}><strong>Late entry request:</strong> {member.late_request_reason}</p>}
     {member.approval_status && <p className={styles.notice}>{member.approval_status === "approved" ? "Approved for this season’s player pool." : member.approval_status === "rejected" ? "Rejected: this player cannot play in the season." : member.late_join ? "Pending commissioner approval: this player cannot join a lineup yet." : "Link this player before season eligibility can be confirmed."}{member.approval_reason && <> {member.approval_reason}</>}</p>}
-    <div className={styles.toolbar}>{!member.late_request_reason && <button disabled={disabled} onClick={() => setLinking(value => !value)}>{linking ? "Cancel player link" : member.player_id ? "Change linked player" : "Link club player"}</button>}<button disabled={disabled || (member.status === "withdrawn" && !canRestore)} onClick={() => void onUpdate(member, member.player_id, member.status === "active" ? "withdrawn" : "active")}>{member.status === "active" ? "Withdraw from season pool" : "Restore season signup"}</button></div>
+    <div className={styles.toolbar}>{!member.late_requested_at && !member.late_request_reason && <button disabled={disabled} onClick={() => setLinking(value => !value)}>{linking ? "Cancel player link" : member.player_id ? "Change linked player" : "Link club player"}</button>}<button disabled={disabled || (member.status === "withdrawn" && !canRestore)} onClick={() => void onUpdate(member, member.player_id, member.status === "active" ? "withdrawn" : "active")}>{member.status === "active" ? "Withdraw from season pool" : "Restore season signup"}</button></div>
     {member.manage_url && <details><summary>Player’s private signup update link</summary><p className={styles.muted}>Share only with {member.name}; this link lets them update or withdraw their season signup.</p><ShareLink url={member.manage_url} label={`Signup update link for ${member.name}`} /></details>}
     {linking && <PlayerLink member={member} root={root} accessToken={accessToken} disabled={disabled} onLink={async playerId => { if (await onUpdate(member, playerId, member.status)) setLinking(false); }} />}
   </article>;
