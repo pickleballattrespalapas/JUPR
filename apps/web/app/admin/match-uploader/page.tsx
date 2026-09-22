@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { getClubPlayers } from "@/lib/api";
+import { getClubPlayerOptions } from "@/lib/api";
 import { getAdminMatchUploaderApiBaseUrl, getAdminMatchUploaderStatus } from "@/lib/adminMatchUploaderApi";
 import MatchUploaderForm from "./MatchUploaderForm";
 
@@ -9,7 +9,7 @@ export default async function AdminMatchUploaderPage() {
   const clubSlug = "tres-palapas";
   const clubId = "tres_palapas";
   const [{ data: playersData, error: playersError }, { data: status, error: statusError }] = await Promise.all([
-    getClubPlayers(clubSlug),
+    getClubPlayerOptions(clubSlug),
     getAdminMatchUploaderStatus(clubId)
   ]);
   const players = playersData?.players ?? [];

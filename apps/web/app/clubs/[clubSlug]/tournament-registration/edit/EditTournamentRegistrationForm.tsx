@@ -226,10 +226,16 @@ export default function EditTournamentRegistrationForm({
   const doublesSkillReadOnly = ratingProfile?.doubles_skill != null;
   const singlesSkillReadOnly = ratingProfile?.singles_skill != null;
   const selectedProfileRef = useRef("");
-  const selectProfile = useCallback((candidate: PublicRegistrationPlayer | null) => {
+  const selectProfile = useCallback((candidate: PublicRegistrationPlayer | null, fillName = false) => {
     setProfileCandidateId(candidate?.id || "");
     setProfileChoiceMade(true);
+    setProfileLookupPending(false);
     if (candidate) {
+      if (fillName) {
+        const parts = candidate.display_name.trim().split(/\s+/);
+        setFirstName(parts[0] || "");
+        setLastName(parts.slice(1).join(" "));
+      }
       setDisplayName(candidate.display_name);
       setDuprId(candidate.dupr_id || "");
       setDoublesSkill(candidate.doubles_skill == null ? "" : String(candidate.doubles_skill));
@@ -244,13 +250,13 @@ export default function EditTournamentRegistrationForm({
   }, []);
 
   useEffect(() => {
-    if (registration.player_id || !firstName.trim() || !lastName.trim()) {
+    const fullName = `${firstName.trim()} ${lastName.trim()}`.trim();
+    if (registration.player_id || fullName.length < 2 || profileChoiceMade) {
       setProfileLookupPending(false);
       return;
     }
     const request = ++profileRequestId.current;
     const detailsVersion = profileDetailsVersion.current;
-    const fullName = `${firstName.trim()} ${lastName.trim()}`;
     setProfileLookupPending(true);
     const timer = setTimeout(async () => {
       try {
@@ -277,7 +283,7 @@ export default function EditTournamentRegistrationForm({
       }
     }, 250);
     return () => { clearTimeout(timer); profileRequestId.current += 1; };
-  }, [clubSlug, tournamentId, registrationSlug, registration.player_id, firstName, lastName, selectProfile]);
+  }, [clubSlug, tournamentId, registrationSlug, registration.player_id, firstName, lastName, selectProfile, profileChoiceMade]);
 
   function changeName(part: "first" | "last", name: string) {
     profileRequestId.current += 1;
@@ -285,7 +291,7 @@ export default function EditTournamentRegistrationForm({
     else setLastName(name);
     setProfileCandidates([]);
     setProfileLookupError(null);
-    setProfileLookupPending(!registration.player_id && Boolean(name.trim() && (part === "first" ? lastName : firstName).trim()));
+    setProfileLookupPending(!registration.player_id && `${name.trim()} ${(part === "first" ? lastName : firstName).trim()}`.trim().length >= 2);
     if (profileCandidateId) selectProfile(null);
     setProfileChoiceMade(false);
     setProfileCandidateId("");
@@ -632,8 +638,8 @@ export default function EditTournamentRegistrationForm({
             <legend>{profileCandidateId ? "Your matching profile is selected" : "Choose your player profile"}</legend>
             <div style={{ display: "grid", gap: "0.65rem" }}>
               {profileCandidates.map((candidate) => (
-                <label key={candidate.id}>
-                  <input type="radio" name="registration_profile" required checked={profileCandidateId === candidate.id} onChange={() => selectProfile(candidate)} />
+                <label key={candidate.id} style={{ minHeight: "44px", display: "flex", alignItems: "center", gap: "0.5rem", cursor: "pointer" }}>
+                  <input type="radio" name="registration_profile" required checked={profileCandidateId === candidate.id} onChange={() => selectProfile(candidate, true)} />
                   {" "}{candidate.display_name} · Doubles {candidate.doubles_skill ?? "not set"} · Singles {candidate.singles_skill ?? "not set"}
                 </label>
               ))}

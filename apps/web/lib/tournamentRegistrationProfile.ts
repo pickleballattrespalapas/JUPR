@@ -7,7 +7,7 @@ export function registrationNameKey(name: string): string {
 export function automaticRegistrationProfile(
   candidates: PublicRegistrationPlayer[],
   fullName: string,
-  matchKind?: "email_exact" | "name_exact" | "none"
+  matchKind?: "email_exact" | "name_exact" | "name_partial" | "none"
 ): PublicRegistrationPlayer | null {
   // The API's name match also handles a player's preferred display name.
   // Email alone may belong to another family member; never guess between rows.

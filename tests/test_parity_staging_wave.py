@@ -641,7 +641,7 @@ def test_remote_public_wave_waits_for_hydration_and_uses_stable_live_selectors()
     ).read_text(encoding="utf-8")
 
     hydration_wait = 'getByTestId("match-explorer-summary")'
-    first_controlled_change = "await me.selectOption(playerIds[0])"
+    first_controlled_change = "await choose(me, playerIds[0])"
     assert explorer.index(hydration_wait) < explorer.index(first_controlled_change)
     assert "badge-codex?bucket=all" in badges
     assert "bootstrapStagingContext(context)" in partner_board

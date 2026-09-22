@@ -1,5 +1,7 @@
 "use client";
 
+import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
+
 import Link from "next/link";
 import { useState } from "react";
 import type { PublicPlayer } from "@/lib/api";
@@ -182,10 +184,10 @@ export default function ScoreEntryForm({ apiBase, clubId, clubSlug = "tres-palap
           <label style={labelStyle}>League<input value={league} onChange={(event) => setLeague(event.target.value)} style={selectStyle} /></label>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem" }}>
-          <label style={labelStyle}>Team 1 Player 1<select value={t1p1} onChange={(event) => setT1p1(event.target.value)} style={selectStyle}><option value="">Select</option>{playerOptions}</select></label>
-          <label style={labelStyle}>Team 1 Player 2<select value={t1p2} onChange={(event) => setT1p2(event.target.value)} style={selectStyle}><option value="">Select</option>{playerOptions}</select></label>
-          <label style={labelStyle}>Team 2 Player 1<select value={t2p1} onChange={(event) => setT2p1(event.target.value)} style={selectStyle}><option value="">Select</option>{playerOptions}</select></label>
-          <label style={labelStyle}>Team 2 Player 2<select value={t2p2} onChange={(event) => setT2p2(event.target.value)} style={selectStyle}><option value="">Select</option>{playerOptions}</select></label>
+          <label style={labelStyle}>Team 1 Player 1<SearchablePlayerSelect aria-label="Team 1 Player 1" value={t1p1} onValueChange={playerValue => setT1p1(playerValue)} style={selectStyle}><option value="">Select</option>{playerOptions}</SearchablePlayerSelect></label>
+          <label style={labelStyle}>Team 1 Player 2<SearchablePlayerSelect aria-label="Team 1 Player 2" value={t1p2} onValueChange={playerValue => setT1p2(playerValue)} style={selectStyle}><option value="">Select</option>{playerOptions}</SearchablePlayerSelect></label>
+          <label style={labelStyle}>Team 2 Player 1<SearchablePlayerSelect aria-label="Team 2 Player 1" value={t2p1} onValueChange={playerValue => setT2p1(playerValue)} style={selectStyle}><option value="">Select</option>{playerOptions}</SearchablePlayerSelect></label>
+          <label style={labelStyle}>Team 2 Player 2<SearchablePlayerSelect aria-label="Team 2 Player 2" value={t2p2} onValueChange={playerValue => setT2p2(playerValue)} style={selectStyle}><option value="">Select</option>{playerOptions}</SearchablePlayerSelect></label>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: "0.75rem" }}>
           <label style={labelStyle}>Team 1 Score<input value={scoreT1} onChange={(event) => setScoreT1(event.target.value)} type="number" min={0} max={99} style={selectStyle} /></label>

@@ -53,6 +53,7 @@ export default function TournamentPartnerDetails({
   clubSlug, tournamentId, registrationSlug, labelPrefix, value, onChange
 }: Props) {
   const choiceId = useId();
+  const canSearch = value.name.trim().length >= 2;
   const skillReadOnly = Boolean(value.profileId && value.profileHasRating);
   const requestId = useRef(0);
   const detailsVersion = useRef(0);
@@ -72,17 +73,12 @@ export default function TournamentPartnerDetails({
     onChange({
       ...(value.profileId && patch.name !== undefined ? { skill: "", duprId: "" } : {}),
       ...patch, profileId: patch.name !== undefined ? "" : value.profileId,
-      ...(patch.name !== undefined ? { profileHasRating: false, profileChoiceMade: false, profileLookupPending: Boolean(patch.name.trim()), profileChoiceRequired: false } : {})
+      ...(patch.name !== undefined ? { profileHasRating: false, profileChoiceMade: false, profileLookupPending: patch.name.trim().length >= 2, profileChoiceRequired: false } : {})
     });
   }
 
   const findProfile = useCallback(async (retry = false) => {
-    if (!value.name.trim() || value.profileId || (value.profileChoiceMade && !retry)) return;
-    if (value.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.email.trim())) {
-      setError("Enter a valid partner email address, or leave it blank while finding their profile.");
-      onChangeRef.current({ profileLookupPending: false });
-      return;
-    }
+    if (!canSearch || value.profileId || (value.profileChoiceMade && !retry)) return;
     clearTimeout(lookupTimer.current);
     const id = ++requestId.current;
     const version = detailsVersion.current;
@@ -94,7 +90,8 @@ export default function TournamentPartnerDetails({
         tournament_id: tournamentId,
         registration_slug: registrationSlug || null,
         name: value.name.trim(),
-        email: value.email.trim() || null
+        // An email still being typed must not suppress name suggestions.
+        email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.email.trim()) ? value.email.trim() : null
       });
       if (id !== requestId.current) return;
       if (result.error || !result.data) {
@@ -119,10 +116,10 @@ export default function TournamentPartnerDetails({
         onChangeRef.current({ profileLookupPending: false });
       }
     }
-  }, [clubSlug, tournamentId, registrationSlug, value.name, value.email, value.profileId, value.profileChoiceMade]);
+  }, [clubSlug, tournamentId, registrationSlug, canSearch, value.name, value.email, value.profileId, value.profileChoiceMade]);
 
   useEffect(() => {
-    if (!value.name.trim() || value.profileId || value.profileChoiceMade) return;
+    if (!canSearch || value.profileId || value.profileChoiceMade) return;
     onChangeRef.current({ profileLookupPending: true });
     lookupTimer.current = setTimeout(() => { void findProfile(); }, 250);
     return () => {
@@ -130,9 +127,10 @@ export default function TournamentPartnerDetails({
       requestId.current += 1;
       onChangeRef.current({ profileLookupPending: false });
     };
-  }, [findProfile, value.name, value.profileId, value.profileChoiceMade]);
+  }, [findProfile, canSearch, value.name, value.profileId, value.profileChoiceMade]);
 
   function selectProfile(candidate: PublicRegistrationPlayer | null) {
+    clearTimeout(lookupTimer.current);
     requestId.current += 1;
     setPending(false);
     setError(null);
@@ -147,15 +145,42 @@ export default function TournamentPartnerDetails({
   return (
     <div style={{ display: "grid", gap: "0.75rem" }}>
       <p style={{ color: "#475569", margin: 0 }}>
-        Enter your partner’s full name to find their club profile, or fill in their details below.
+        Start typing your partner’s first or last name, then choose their profile from the suggestions.
+        If they don’t have a profile, enter their full name and details below.
         They don’t need to register separately.
       </p>
       <div style={gridStyle}>
+        <div style={{ display: "grid", gap: "0.5rem", alignContent: "start" }}>
         <label>Partner full name *<br />
-          <input required aria-label={`${labelPrefix} partner name`} placeholder="First and last name"
+          <input required aria-label={`${labelPrefix} partner name`} placeholder="Start typing a first or last name"
+            autoComplete="off" aria-describedby={`${choiceId}-help`}
             value={value.name} onChange={(event) => changeIdentity({ name: event.target.value })}
             onBlur={() => { if (!candidates && !pending) void findProfile(); }} style={inputStyle} />
         </label>
+        <p id={`${choiceId}-help`} style={{ margin: 0, color: "#475569", fontSize: "0.9rem" }}>Type at least 2 characters to see matching profiles.</p>
+        {pending ? <p role="status" style={{ margin: 0, color: "#475569" }}>Finding partner profiles…</p> : null}
+        {candidates?.length ? (
+          <fieldset style={{ margin: 0, padding: "0.75rem", border: "1px solid #cbd5e1", borderRadius: "8px" }}>
+            <legend>Is one of these your partner?</legend>
+            <div style={{ display: "grid", gap: "0.5rem" }}>
+              {candidates.map((candidate) => (
+                <label key={candidate.id} style={{ display: "flex", alignItems: "center", gap: "0.5rem", minHeight: "44px", cursor: "pointer" }}>
+                  <input type="radio" name={choiceId} required checked={value.profileId === candidate.id}
+                    onChange={() => selectProfile(candidate)} />
+                  <span><strong>{candidate.display_name}</strong><br />
+                    {candidate.doubles_skill == null ? "Doubles rating not set" : `Doubles ${formatRegistrationRating(candidate.doubles_skill)}`}
+                  </span>
+                </label>
+              ))}
+              <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", minHeight: "44px", cursor: "pointer" }}><input type="radio" name={choiceId} required checked={Boolean(value.profileChoiceMade && !value.profileId)}
+                onChange={() => selectProfile(null)} /> None of these is my partner</label>
+            </div>
+            {candidates.length >= 8 ? <p style={{ margin: "0.5rem 0 0", color: "#475569" }}>Keep typing to narrow the list.</p> : null}
+          </fieldset>
+        ) : candidates && !pending ? (
+          <p role="status" style={{ margin: 0, color: "#475569" }}>No matching profile found. Try their first or last name, or enter their full name and details below.</p>
+        ) : null}
+        </div>
         <label>Partner email *<br />
           <input required aria-label={`${labelPrefix} partner email`} type="email" placeholder="name@example.com"
             value={value.email} onChange={(event) => changeIdentity({ email: event.target.value })}
@@ -163,7 +188,7 @@ export default function TournamentPartnerDetails({
         </label>
       </div>
       {!value.profileId ? (
-        <button type="button" onClick={() => { void findProfile(true); }} disabled={pending || !value.name.trim()} style={buttonStyle}>
+        <button type="button" onClick={() => { void findProfile(true); }} disabled={pending || !canSearch} style={buttonStyle}>
           {pending ? "Finding partner profile…" : "Find partner profile"}
         </button>
       ) : (
@@ -173,24 +198,6 @@ export default function TournamentPartnerDetails({
         </p>
       )}
       {error ? <p role="alert" style={{ color: "#b91c1c", margin: 0 }}>{error}</p> : null}
-      {candidates?.length ? (
-        <fieldset style={{ margin: 0, padding: "0.75rem", border: "1px solid #cbd5e1", borderRadius: "8px" }}>
-          <legend>Is one of these your partner?</legend>
-          <div style={{ display: "grid", gap: "0.5rem" }}>
-            {candidates.map((candidate) => (
-              <label key={candidate.id}>
-                <input type="radio" name={choiceId} required checked={value.profileId === candidate.id}
-                  onChange={() => selectProfile(candidate)} /> {candidate.display_name}
-                {" · "}{candidate.doubles_skill == null ? "Doubles rating not set" : `Doubles ${formatRegistrationRating(candidate.doubles_skill)}`}
-              </label>
-            ))}
-            <label><input type="radio" name={choiceId} required checked={Boolean(value.profileChoiceMade && !value.profileId)}
-              onChange={() => selectProfile(null)} /> None of these is my partner</label>
-          </div>
-        </fieldset>
-      ) : candidates && !pending ? (
-        <p role="status" style={{ margin: 0, color: "#475569" }}>No matching profile found. Check their full name or email, or enter their details below.</p>
-      ) : null}
       <div style={gridStyle}>
         <label>Partner age *<br /><input required aria-label={`${labelPrefix} partner age`} type="number" min="1" max="120" value={value.age} onChange={(event) => onChange({ age: event.target.value })} style={inputStyle} /></label>
         <label>Partner gender *<br /><select required aria-label={`${labelPrefix} partner gender`} value={value.gender} onChange={(event) => onChange({ gender: event.target.value })} style={inputStyle}><option value="">Select</option>{registrationGenderOptions(value.gender).map((gender) => <option key={gender} value={gender}>{gender}</option>)}</select></label>

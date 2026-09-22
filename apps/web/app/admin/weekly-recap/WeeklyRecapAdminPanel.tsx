@@ -1,5 +1,7 @@
 "use client";
 
+import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
+
 import { useMemo, useState } from "react";
 import type {
   AdminWeeklyRecapCandidate,
@@ -409,10 +411,10 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initial
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem", marginTop: "0.75rem" }}>
                     {[0, 1, 2].map((slot) => (
                       <label key={slot}>Candidate {slot + 1}<br />
-                        <select value={edit.players?.[slot] || ""} onChange={(event) => updateSpotlightPlayer(key, slot, event.target.value)} disabled={mutationControlsDisabled || selectedRecap.status === "published"} style={inputStyle}>
+                        <SearchablePlayerSelect aria-label={["Candidate",String(slot + 1)].join(" ")} value={edit.players?.[slot] || ""} onValueChange={playerValue => updateSpotlightPlayer(key, slot, playerValue)} disabled={mutationControlsDisabled || selectedRecap.status === "published"} style={inputStyle}>
                           <option value="">None</option>
                           {options.map((candidate) => <option key={candidate.candidate_id} value={candidate.candidate_id}>{candidate.display}</option>)}
-                        </select>
+                        </SearchablePlayerSelect>
                       </label>
                     ))}
                   </div>

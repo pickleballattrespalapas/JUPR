@@ -1,5 +1,7 @@
 "use client";
 
+import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
+
 import { useMemo, useState } from "react";
 import type {
   AdminBadgeAuditResponse,
@@ -309,7 +311,7 @@ export default function BadgeDiagnosticsPanel({ apiBase, clubId, status }: Props
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>1. Scope</h2>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
-          <label>Player<br /><select value={playerId} onChange={(event) => setPlayerId(event.target.value)} style={inputStyle}><option value="">All players for audit</option>{players.map((player) => <option key={player.id} value={player.id}>{player.name} #{player.id}</option>)}</select></label>
+          <label>Player<br /><SearchablePlayerSelect aria-label="Player" value={playerId} onValueChange={playerValue => setPlayerId(playerValue)} style={inputStyle}><option value="">All players for audit</option>{players.map((player) => <option key={player.id} value={player.id}>{player.name} #{player.id}</option>)}</SearchablePlayerSelect></label>
           <label>Badge<br /><select value={badgeId} onChange={(event) => setBadgeId(event.target.value)} style={inputStyle}><option value="">All badges for audit</option>{badges.map((badge) => <option key={badge.badge_id} value={badge.badge_id}>{badge.name} · {badge.badge_id}</option>)}</select></label>
           <label>League<br /><input value={leagueId} onChange={(event) => setLeagueId(event.target.value)} placeholder="Optional" style={inputStyle} /></label>
           <label>Context ID<br /><input value={contextId} onChange={(event) => setContextId(event.target.value)} placeholder="Optional exact badge context" style={inputStyle} /></label>

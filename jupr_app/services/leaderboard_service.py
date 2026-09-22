@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from jupr_app.data.paged_reads import read_all_rows
+from jupr_app.domain.player_search import matches_player_search
 from jupr_app.domain.gamification.presentation import badge_category
 
 import re
@@ -509,7 +510,7 @@ def build_public_leaderboard(
     filtered = ranked
     if clean_search:
         needle = clean_search.casefold()
-        filtered = [row for row in ranked if needle in str(row.get("player_name") or "").casefold()]
+        filtered = [row for row in ranked if matches_player_search(row.get("player_name"), needle)]
 
     snapshot = None
     if player_id is not None and str(player_id).strip():

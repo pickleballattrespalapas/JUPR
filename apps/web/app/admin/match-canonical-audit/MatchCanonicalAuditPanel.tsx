@@ -1,5 +1,7 @@
 "use client";
 
+import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
+
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import { actionSuccess, type ActionCompletion } from "@/components/interaction";
@@ -208,7 +210,7 @@ export default function MatchCanonicalAuditPanel({ apiBase, clubId, status }: Pr
         <p style={{ color: "#475569" }}>Run this for one player at a time. Applying normalization is explicit and audit-flagged.</p>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
           <button type="button" onClick={loadOptions} disabled={busy || !accessToken} style={ghostButtonStyle}>{busy ? "Refreshing…" : "Refresh players/leagues"}</button>
-          <label>Player<br /><select value={playerId} onChange={(event) => { setPlayerId(event.target.value); setPreviewFingerprint(""); setMatchIds(""); }} style={inputStyle}>{(options?.players || []).map((player) => <option key={player.player_id} value={player.player_id}>{player.player_name} · #{player.player_id}</option>)}</select></label>
+          <label>Player<br /><SearchablePlayerSelect aria-label="Player" value={playerId} onValueChange={playerValue => { setPlayerId(playerValue); setPreviewFingerprint(""); setMatchIds(""); }} style={inputStyle}>{(options?.players || []).map((player) => <option key={player.player_id} value={player.player_id}>{player.player_name} · #{player.player_id}</option>)}</SearchablePlayerSelect></label>
           <label>League<br /><select value={leagueId} onChange={(event) => setLeagueId(event.target.value)} style={inputStyle}><option value="">All leagues</option>{(options?.leagues || []).map((league) => <option key={league} value={league}>{league}</option>)}</select></label>
           <label>Limit<br /><input value={limit} onChange={(event) => setLimit(event.target.value)} style={inputStyle} /></label>
           <button type="button" onClick={runAudit} disabled={busy || !playerId} style={buttonStyle}>Run audit</button>
