@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { getClubPlayers } from "@/lib/api";
+import { getClubPlayerOptions } from "@/lib/api";
 import { getAdminScoreEntryStatus, isNextAdminScoreEntryEnabled } from "@/lib/scoreEntry";
 import ScoreEntryForm from "./ScoreEntryForm";
 
@@ -29,7 +29,7 @@ export default async function ScoreEntryPage({ params }: ScoreEntryPageProps) {
     );
   }
 
-  const { data, error } = await getClubPlayers(clubSlug);
+  const { data, error } = await getClubPlayerOptions(clubSlug);
   const club = data?.club;
   const players = data?.players ?? [];
   const clubId = club?.id ?? clubSlug;

@@ -1,5 +1,7 @@
 "use client";
 
+import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MatchExplorerPreview, MatchExplorerPreviewResponse, PublicPlayer } from "@/lib/api";
 
@@ -376,10 +378,10 @@ export default function MatchExplorerForm({ apiBase, clubSlug, players, contexts
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem" }}>
-          <label style={labelStyle}>I am<select value={me} onChange={(event) => setMe(event.target.value)} style={selectStyle}><option value="">Select</option>{options}</select></label>
-          <label style={labelStyle}>My partner<select value={partner} onChange={(event) => setPartner(event.target.value)} style={selectStyle}><option value="">Select</option>{options}</select></label>
-          <label style={labelStyle}>Opponent 1<select value={opp1} onChange={(event) => setOpp1(event.target.value)} style={selectStyle}><option value="">Select</option>{options}</select></label>
-          <label style={labelStyle}>Opponent 2<select value={opp2} onChange={(event) => setOpp2(event.target.value)} style={selectStyle}><option value="">Select</option>{options}</select></label>
+          <label style={labelStyle}>I am<SearchablePlayerSelect aria-label="I am" value={me} onValueChange={setMe} style={selectStyle}><option value="">Select</option>{options}</SearchablePlayerSelect></label>
+          <label style={labelStyle}>My partner<SearchablePlayerSelect aria-label="My partner" value={partner} onValueChange={setPartner} style={selectStyle}><option value="">Select</option>{options}</SearchablePlayerSelect></label>
+          <label style={labelStyle}>Opponent 1<SearchablePlayerSelect aria-label="Opponent 1" value={opp1} onValueChange={setOpp1} style={selectStyle}><option value="">Select</option>{options}</SearchablePlayerSelect></label>
+          <label style={labelStyle}>Opponent 2<SearchablePlayerSelect aria-label="Opponent 2" value={opp2} onValueChange={setOpp2} style={selectStyle}><option value="">Select</option>{options}</SearchablePlayerSelect></label>
         </div>
 
         <div style={{ display: "flex", flexWrap: "wrap", gap: "0.6rem" }}>

@@ -9,7 +9,7 @@ test("player directory defaults active and keeps search plus stable links determ
   await page.goto(`/clubs/${clubSlug}/players`, { waitUntil: "domcontentloaded" });
 
   await expect(page.getByTestId("players-status-active")).toHaveAttribute("aria-current", "page");
-  const search = page.getByRole("searchbox", { name: "Find player" });
+  const search = page.getByRole("combobox", { name: "Find player" });
   await expect(search).toBeVisible();
   const rows = page.getByTestId("players-row");
   expect(await rows.count(), "staging should contain an active public player fixture").toBeGreaterThan(0);

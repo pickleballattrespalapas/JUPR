@@ -31,6 +31,13 @@ class FakeQuery:
         self._limit = int(value)
         return self
 
+    def order(self, *_args, **_kwargs):
+        return self
+
+    def range(self, start, end):
+        self._range = (start, end)
+        return self
+
     def execute(self):
         rows = list(self._rows)
         for key, expected in self._filters.items():
@@ -40,6 +47,8 @@ class FakeQuery:
                 rows = [row for row in rows if row.get(key) == expected]
         if self._limit is not None:
             rows = rows[: self._limit]
+        if hasattr(self, "_range"):
+            rows = rows[self._range[0]:self._range[1] + 1]
         return SimpleNamespace(data=rows)
 
 

@@ -1,0 +1,75 @@
+const assert = require('node:assert/strict');
+const React = require('react'), { act, create } = require('react-test-renderer');
+const load = require('./helpers/player-search-modules.cjs');
+const Select = load('@/components/SearchablePlayerSelect').default;
+const PublicSearch = load('@/components/PublicPlayerSearch').default;
+const { matchesPlayerSearch, fetchAllPublicPlayers } = load('@/lib/playerSearch');
+const h = React.createElement;
+const text = node => typeof node === 'string' ? node : (node.children || []).map(text).join('');
+const options = [['', 'Choose player'], ['11', 'Valé Verdugo'], ['12', 'Valerie Vega'], ['13', 'Valé Verdugo'], ['99', 'Unavailable Player', true]];
+let tree, selected, validity;
+const input = () => tree.root.findByType('input');
+const choices = () => tree.root.findAllByProps({ role: 'option' });
+const type = value => act(async () => input().props.onChange({ target: { value } }));
+const key = value => act(async () => input().props.onKeyDown({ key: value, preventDefault() {}, nativeEvent: {} }));
+const pick = value => act(async () => choices().find(node => text(node).includes(value)).props.onClick({ preventDefault() {} }));
+const settle = () => act(async () => new Promise(resolve => setTimeout(resolve, 270)));
+function Harness({ multiple = false, disabled = false }) {
+  const [value, setValue] = React.useState(multiple ? ['12'] : ''); selected = value;
+  return h(Select, { value, multiple, disabled, required: true, name: 'player_id', onValueChange: setValue, onValuesChange: setValue },
+    options.map(([id, label, disabled]) => h('option', { key: id, value: id, disabled }, label)));
+}
+(async () => {
+  assert.ok(matchesPlayerSearch('Valé Verdugo', 'VER VALE'));
+  assert.ok(matchesPlayerSearch('李 小龙', '小'));
+  assert.equal(matchesPlayerSearch('Valé Verdugo', 'Vega'), false);
+  await act(async () => { tree = create(h(Harness), { createNodeMock: element => element.type === 'input' ? { setCustomValidity: message => validity = message } : null }); });
+  assert.match(validity, /Choose a player/);
+  await type('V'); assert.equal(choices().length, 0);
+  await type('ve'); assert.equal(choices().length, 3); assert.equal(selected, '', 'Partial matches never silently select a profile');
+  await type('ver vale'); assert.equal(choices().length, 2);
+  assert.ok(choices().every(node => /#1[13]/.test(text(node))), 'Same-name profiles show distinct IDs');
+  await key('ArrowDown'); await key('Enter'); assert.equal(selected, '11'); assert.equal(validity, '');
+  assert.equal(tree.root.findByType('select').props.value, '11', 'Form payload keeps the player ID');
+  await type('no such player'); assert.equal(choices().length, 0); await key('Escape'); assert.equal(input().props.value, 'Valé Verdugo');
+  await act(async () => input().props.onFocus({ currentTarget: { select() {} } })); await pick('Choose player'); assert.equal(selected, '');
+  await type('Unavailable'); assert.equal(choices()[0].props.disabled, true); await pick('Unavailable'); assert.equal(selected, '');
+  await act(async () => tree.unmount());
+  await act(async () => { tree = create(h(Harness, { multiple: true })); });
+  await type('ver'); await pick('#13'); assert.deepEqual(selected, ['12', '13']);
+  await act(async () => tree.root.findAllByType('button').find(node => node.props['aria-label'] === 'Remove Valé Verdugo').props.onClick());
+  assert.deepEqual(selected, ['12'], 'Removing one selection preserves the others');
+  await act(async () => tree.unmount());
+  // An action picker that always has value="" must reset after adding a player.
+  await act(async () => { tree = create(h(Select, { value: '', onValueChange: value => selected = value }, options.map(([id, label]) => h('option', { key: id, value: id }, label)))); });
+  await type('Vega'); await pick('Vega'); assert.equal(selected, '12'); assert.equal(input().props.value, '');
+  await act(async () => tree.unmount());
+  // A query changed while the older request is pending must never show those results.
+  process.env.NEXT_PUBLIC_JUPR_API_BASE_URL = 'https://api.test';
+  const pending = []; global.fetch = (url, init) => new Promise(resolve => pending.push({ url, init, resolve }));
+  global.window = { location: { assign: path => selected = path } };
+  await act(async () => { tree = create(h(PublicSearch, { clubSlug: 'club-a', filters: { status: 'inactive' } })); });
+  await type('va'); await settle(); await type('al'); await settle();
+  assert.ok(pending[0].init.signal.aborted); assert.match(pending[1].url, /clubs\/club-a\/players\?status=inactive/);
+  await act(async () => pending[1].resolve({ ok: true, json: async () => ({ players: [{ id: 30, name: 'Alina Example', rating_jupr: 4.2 }] }) }));
+  assert.match(text(choices()[0]), /Alina Example/);
+  await act(async () => pending[0].resolve({ ok: true, json: async () => ({ players: [{ id: 31, name: 'Valé Verdugo' }] }) }));
+  assert.equal(choices().length, 1); assert.match(text(choices()[0]), /Alina Example/);
+  await pick('Alina'); assert.equal(selected, '/clubs/club-a/players/30');
+  await act(async () => tree.update(h(PublicSearch, { clubSlug: 'club-b', filters: { status: 'active' } })));
+  assert.equal(input().props.value, ''); await type('al'); assert.equal(choices().length, 0, 'Changing clubs never reuses the prior club results');
+  await settle(); await act(async () => pending.at(-1).resolve({ ok: false }));
+  assert.match(text(tree.toJSON()), /suggestions are unavailable/);
+  await type('a'); assert.equal(choices().length, 0);
+  await act(async () => tree.unmount());
+  const calls = [];
+  global.fetch = async url => { calls.push(url); return { ok: true, json: async () => calls.length === 1 ? { players: Array.from({length: 1000}, (_, id) => ({ id })), pagination: { has_more: true } } : { players: [{ id: 1001 }], pagination: { has_more: false } } }; };
+  const players = await fetchAllPublicPlayers('https://api.test/clubs/a/players?status=active', new AbortController().signal);
+  assert.equal(players.length, 1001); assert.match(calls[1], /offset=1000/); assert.match(calls[1], /status=active/);
+  const { getClubPlayerOptions } = load('@/lib/api');
+  const serverCalls = [];
+  global.fetch = async url => { serverCalls.push(url); return { ok: true, json: async () => ({ club: { id: 'a' }, players: [{ id: serverCalls.length }], pagination: { has_more: serverCalls.length === 1 } }) }; };
+  const roster = await getClubPlayerOptions('a', { status: 'all', noStore: true });
+  assert.equal(roster.data.players.length, 2); assert.match(serverCalls[0], /limit=1000/); assert.match(serverCalls[1], /offset=1/);
+  console.log('PASS player search: partial/accented names, duplicate IDs, explicit choices, keyboard, disabled and multiple selections, action reset, form IDs, stale requests, club scope, failures and pagination.');
+})().catch(error => { console.error(error); process.exit(1); });

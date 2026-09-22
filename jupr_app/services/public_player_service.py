@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from jupr_app.data.paged_reads import read_all_rows
+from jupr_app.domain.player_search import matches_player_search
 from jupr_app.domain.gamification.presentation import badge_category, badge_requirement, category_sort_key
 
 import json
@@ -182,28 +183,16 @@ def _public_league_rating(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _fetch_players(supabase: Any, club_id: str) -> list[dict[str, Any]]:
-    try:
-        return _safe_rows(
-            supabase.table("players")
-            .select(PLAYER_SELECT)
-            .eq("club_id", club_id)
-            .execute()
-        )
-    except Exception:
+    for columns in (PLAYER_SELECT, PLAYER_BASE_SELECT, PLAYER_MINIMAL_SELECT):
         try:
-            return _safe_rows(
-                supabase.table("players")
-                .select(PLAYER_BASE_SELECT)
-                .eq("club_id", club_id)
-                .execute()
+            return read_all_rows(
+                lambda: supabase.table("players").select(columns).eq("club_id", club_id),
+                order="id",
             )
         except Exception:
-            return _safe_rows(
-                supabase.table("players")
-                .select(PLAYER_MINIMAL_SELECT)
-                .eq("club_id", club_id)
-                .execute()
-            )
+            if columns == PLAYER_MINIMAL_SELECT:
+                raise
+    return []
 
 
 def _fetch_player(supabase: Any, club_id: str, player_id: int | str) -> dict[str, Any] | None:
@@ -900,7 +889,7 @@ def build_public_player_directory(
     query = query.casefold()
     rows = list(all_rows)
     if query:
-        rows = [row for row in rows if query in str(row.get("name") or "").casefold()]
+        rows = [row for row in rows if matches_player_search(row.get("name"), query)]
     if clean_status == "active":
         rows = [row for row in rows if row.get("is_active") is not False]
     elif clean_status == "inactive":

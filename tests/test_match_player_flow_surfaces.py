@@ -26,7 +26,8 @@ def test_match_uploader_has_searchable_players_and_flexible_workflows() -> None:
 
     assert "function SearchablePlayerInput" in source
     assert "function SearchablePlayerMultiInput" in source
-    assert 'list={`${inputId}-options`}' in source
+    assert "<PlayerSearchInput" in source
+    assert "onPick={option => addPlayerName(option.label)}" in source
     assert "Starting JUPR" in source
     assert "next_match_uploader_inline_new_player" in source
     assert "Create & add" in source

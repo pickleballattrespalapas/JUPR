@@ -30,6 +30,7 @@ assert.equal(profileHelpers.automaticRegistrationProfile([player], "  FIXTURE   
 assert.equal(profileHelpers.automaticRegistrationProfile([player, duplicate], player.display_name, "name_exact"), null);
 assert.equal(profileHelpers.automaticRegistrationProfile([player], "Someone Else", "email_exact"), null);
 assert.equal(profileHelpers.automaticRegistrationProfile([player], "Fixture", "none"), null);
+assert.equal(profileHelpers.automaticRegistrationProfile([player], "Fix", "name_partial"), null);
 assert.equal(profileHelpers.automaticRegistrationProfile([], player.display_name), null);
 assert.equal(profileHelpers.automaticRegistrationProfile([{ ...player, display_name: "Preferred Name" }], player.display_name, "name_exact").id, player.id);
 const eligibility = load("lib/tournamentRegistrationEligibility.ts", { "@/lib/tournamentSkillEligibility": load("lib/tournamentSkillEligibility.ts") });
@@ -224,6 +225,55 @@ async function testStaleEditLookup() {
   assert.equal(named("doubles_skill").props.value, "3.6", "Late matches cannot overwrite a newly typed value");
   assert.equal(named("registration_profile").props.checked, false);
 }
+
+async function testNameSuggestionsBeforeContactDetails() {
+  const suggested = { ...player, display_name: "Valeria Verdugo" };
+  resolveResponse = async () => ({ data: { can_start_new: true, profile_match_kind: "name_partial", profile_candidates: [suggested] } });
+  await mount(NewForm);
+  await act(async () => button("Start a registration").props.onClick());
+  await change("Last name", "V");
+  await settle();
+  assert.equal(requests.length, 0);
+  await change("Last name", "Ver");
+  await change("Last name", "Verdu");
+  await settle();
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].name, "Verdu");
+  assert.equal(requests[0].email, null, "Suggestions work before entering contact details");
+  assert.equal(field("First name").props.value, "", "Partial matches must not auto-fill a player");
+  const suggestion = renderer.root.findAllByType("button").find(node => text(node).startsWith("Valeria Verdugo ·"));
+  assert.ok(suggestion, "Matching players appear while typing");
+  await act(async () => suggestion.props.onClick());
+  assert.equal(field("First name").props.value, "Valeria");
+  assert.equal(field("Last name").props.value, "Verdugo");
+  await change("Email", "fixture@example.invalid");
+  await change("Age", "70");
+  await change("Gender", "Women");
+  // The contact preflight may suggest a different family member by email.
+  // Keep the profile the player explicitly selected, while still running it.
+  resolveResponse = async () => result([]);
+  await act(async () => button("Continue").props.onClick());
+  assert.equal(requests.at(-1).first_name, "Valeria");
+  assert.equal(field("Doubles skill").props.value, "4.1");
+  assert.equal(field("Doubles skill").props.readOnly, true);
+  assert.equal(field("Display name").props.value, "Valeria Verdugo");
+  await act(async () => button("Back").props.onClick());
+  await change("First name", "Different");
+  await act(async () => button("Continue").props.onClick());
+  assert.equal(field("Doubles skill").props.value, "", "Changing the name removes the old profile and its rating");
+
+  let finish;
+  resolveResponse = () => new Promise(resolve => { finish = resolve; });
+  await mount(NewForm);
+  await act(async () => button("Start a registration").props.onClick());
+  await change("First name", "Vale");
+  await settle();
+  await change("First name", "Other");
+  await act(async () => finish({ data: { profile_candidates: [suggested] } }));
+  assert.equal(renderer.root.findAllByType("button").some(node => text(node).startsWith("Valeria Verdugo ·")), false, "A late result cannot show suggestions for the previous name");
+  resolveResponse = async () => result([]);
+  await settle();
+}
 async function main() {
   const originalWindow = global.window;
   const originalFormData = global.FormData;
@@ -232,7 +282,7 @@ async function main() {
     const input = renderer.root.findAll(node => ["input", "select", "textarea"].includes(node.type) && node.props.name === name)[0];
     return input?.props.value ?? input?.props.defaultValue ?? null;
   } };
-  try { await testNew(); await testEdit(); await testMissingProfileRatings(); await testStaleEditLookup(); console.log("Automatic profiles: new/edit selection, save payloads, duplicates, opt out, existing links, stale responses and manual fallback passed."); }
+  try { await testNew(); await testEdit(); await testMissingProfileRatings(); await testStaleEditLookup(); await testNameSuggestionsBeforeContactDetails(); console.log("Automatic profiles: new/edit typeahead, selection, save payloads, duplicates, opt out, existing links, stale responses and manual fallback passed."); }
   finally { if (renderer) await act(async () => renderer.unmount()); global.window = originalWindow; global.FormData = originalFormData; }
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

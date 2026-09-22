@@ -11,7 +11,8 @@ def test_directory_has_visible_search_active_default_privacy_states_and_stable_l
     source = DIRECTORY.read_text(encoding="utf-8")
 
     assert 'return "active";' in source
-    assert 'name="q"' in source
+    assert "<PublicPlayerSearch" in source
+    assert 'name="q"' in Path("apps/web/components/PublicPlayerSearch.tsx").read_text(encoding="utf-8")
     assert 'data-testid="players-search-form"' in source
     assert "players-status-${item}" in source
     assert 'data-testid="players-row"' in source
@@ -84,7 +85,7 @@ def test_players_routes_have_loading_errors_and_route_specific_browser_evidence(
     assert "player-profile-route-error-state" in profile_error
     assert "players-status-active" in e2e
     assert "players-search-form" in e2e
-    assert 'getByRole("searchbox", { name: "Find player" })' in e2e
+    assert 'getByRole("combobox", { name: "Find player" })' in e2e
     assert 'getByRole("textbox", { name: "Find player" })' not in e2e
     assert "player-public-identity" in e2e
     assert "player-history-all" in e2e

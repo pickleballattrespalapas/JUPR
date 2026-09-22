@@ -1,5 +1,7 @@
 "use client";
 
+import { fetchAllPublicPlayers, matchesPlayerSearch } from "@/lib/playerSearch";
+
 import { useEffect, useMemo, useState } from "react";
 
 export type GeneratorKind = "round_robin" | "ladder";
@@ -325,41 +327,24 @@ export default function GeneratorRosterSetup({
 
   useEffect(() => {
     if (!apiBase) return;
-    let cancelled = false;
+    const controller = new AbortController();
     setDirectoryError(null);
-    void fetch(
-      apiUrl(
-        apiBase,
-        `/clubs/${encodeURIComponent(publicClubSlug)}/players?status=active&sort=name&limit=1000`
-      ),
-      { cache: "no-store" }
-    )
-      .then(async (response) => {
-        const payload = (await response.json().catch(() => null)) as DirectoryResponse | null;
-        if (!response.ok) {
-          throw new Error("Player search is temporarily unavailable.");
-        }
-        if (cancelled) return;
-        const rows = [...(payload?.players || [])]
-          .filter((player) => player && player.is_active !== false && String(player.name || "").trim())
-          .sort((left, right) => String(left.name).localeCompare(String(right.name)));
-        setDirectoryPlayers(rows);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setDirectoryPlayers([]);
-        setDirectoryError("Player search isn’t available right now. You can still type names below.");
-      });
-    return () => {
-      cancelled = true;
-    };
+    setDirectoryPlayers([]);
+    void fetchAllPublicPlayers<DirectoryPlayer>(
+      apiUrl(apiBase, `/clubs/${encodeURIComponent(publicClubSlug)}/players?status=active&sort=name`), controller.signal
+    ).then(players => {
+      if (!controller.signal.aborted) setDirectoryPlayers(players.filter(player => player.is_active !== false));
+    }).catch(() => {
+      if (!controller.signal.aborted) setDirectoryError("Player search isn’t available right now. You can still type names below.");
+    });
+    return () => controller.abort();
   }, [apiBase, publicClubSlug]);
 
   const filteredPlayerOptions = useMemo(() => {
     const query = normalizeRosterName(playerSearch);
     if (query.length < 2) return [];
     return directoryPlayers
-      .filter((player) => normalizeRosterName(player.name).includes(query))
+      .filter((player) => matchesPlayerSearch(player.name, query))
       .slice(0, 10);
   }, [directoryPlayers, playerSearch]);
 

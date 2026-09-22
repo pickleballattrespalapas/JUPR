@@ -1,3 +1,4 @@
+import PublicPlayerSearch from "@/components/PublicPlayerSearch";
 import Link from "next/link";
 import { getClubPlayers } from "@/lib/api";
 import type { PublicPlayer } from "@/lib/api";
@@ -134,7 +135,7 @@ export default async function ClubPlayersPage({ params, searchParams }: PlayersP
 
           <form method="get" action={`/clubs/${clubSlug}/players`} data-testid="players-search-form" style={{ ...cardStyle, marginBottom: "1rem", display: "grid", gridTemplateColumns: "minmax(220px, 1fr) auto", gap: "0.65rem", alignItems: "end" }}>
             <label htmlFor="players-search"><strong>Find player</strong><br />
-              <input id="players-search" name="q" defaultValue={q} type="search" placeholder="Search by player name" style={{ width: "100%", padding: "0.6rem", border: "1px solid #94a3b8", borderRadius: "8px", font: "inherit" }} />
+              <PublicPlayerSearch id="players-search" clubSlug={clubSlug} defaultValue={q} filters={{ status, sort: "name" }} />
             </label>
             <input type="hidden" name="status" value={status} />
             <input type="hidden" name="sort" value={sort} />

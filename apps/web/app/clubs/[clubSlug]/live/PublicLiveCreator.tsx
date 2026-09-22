@@ -1,5 +1,7 @@
 "use client";
 
+import { matchesPlayerSearch } from "@/lib/playerSearch";
+
 import { useEffect, useMemo, useState } from "react";
 import type { PublicPlayer } from "@/lib/api";
 import { publicLiveErrorText } from "@/lib/publicLiveErrorText";
@@ -89,7 +91,7 @@ export default function PublicLiveCreator({ apiBase, clubSlug, players = [] }: P
     const query = playerSearch.trim().toLowerCase();
     if (query.length < 2) return [];
     return playerOptions
-      .filter((player) => player.name.toLowerCase().includes(query))
+      .filter((player) => matchesPlayerSearch(player.name, query))
       .slice(0, 10);
   }, [playerOptions, playerSearch]);
   const countMessage = participantCount < 4

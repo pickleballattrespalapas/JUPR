@@ -1,5 +1,7 @@
 "use client";
 
+import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
+
 import { useRouter } from "next/navigation";
 import type { LeagueResultsPlayerOption } from "@/lib/api";
 
@@ -25,11 +27,11 @@ export default function LeaguePlayerSelect({ baseHref, players, selectedPlayerId
   return (
     <label>
       <strong>Player</strong><br />
-      <select
+      <SearchablePlayerSelect
         aria-label="Player summary"
         value={selectedPlayerId == null ? "" : String(selectedPlayerId)}
-        onChange={(event) => {
-          const playerId = event.target.value;
+        onValueChange={playerValue => {
+          const playerId = playerValue;
           router.push(playerId ? `${baseHref}?player=${encodeURIComponent(playerId)}` : baseHref);
         }}
         style={inputStyle}
@@ -40,7 +42,7 @@ export default function LeaguePlayerSelect({ baseHref, players, selectedPlayerId
             {player.player_name}
           </option>
         ))}
-      </select>
+      </SearchablePlayerSelect>
     </label>
   );
 }
