@@ -104,7 +104,7 @@ export type PublicRegistrationProfileResolutionResponse = {
   registration_open: boolean;
   registration_closed_reason?: string | null;
   masked_email: string;
-  profile_match_kind: "email_exact" | "name_exact" | "none";
+  profile_match_kind: "email_exact" | "name_exact" | "name_partial" | "none";
   profile_candidates: PublicRegistrationPlayer[];
   profile_policy: {
     linkage: "staff_review_required";

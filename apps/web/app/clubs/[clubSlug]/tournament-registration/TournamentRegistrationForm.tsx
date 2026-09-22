@@ -7,6 +7,7 @@ import {
   PublicRegistrationPlayer,
   PublicRegistrationProfileResolutionResponse,
   PublicRegistrationSelectionPayload,
+  resolveClubTournamentPartnerProfile,
   resolveClubTournamentRegistrationProfile,
   submitClubTournamentRegistration
 } from "@/lib/tournamentRegistrationApi";
@@ -85,6 +86,7 @@ const cardStyle = {
 
 const inputStyle = {
   width: "100%",
+  boxSizing: "border-box" as const,
   padding: "0.55rem",
   border: "1px solid #cbd5e1",
   borderRadius: "8px",
@@ -235,6 +237,11 @@ export default function TournamentRegistrationForm({
     singlesSkill: ""
   });
   const profileRequestId = useRef(0);
+  const nameRequestId = useRef(0);
+  const [nameCandidates, setNameCandidates] = useState<PublicRegistrationPlayer[] | null>(null);
+  const [nameLookupPending, setNameLookupPending] = useState(false);
+  const [nameLookupError, setNameLookupError] = useState<string | null>(null);
+  const [chosenNameProfile, setChosenNameProfile] = useState<PublicRegistrationPlayer | null>(null);
   const [profileChoiceMade, setProfileChoiceMade] = useState(false);
   const [resolution, setResolution] = useState<PublicRegistrationProfileResolutionResponse | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -271,7 +278,39 @@ export default function TournamentRegistrationForm({
     setSelectedIds(current => Array.from(new Set([...current, prefill.event_option_id])));
   }, [partnerInvitation.invitation]);
 
-  const selectedProfile = resolution?.profile_candidates.find((candidate) => candidate.id === profile.candidateId);
+  useEffect(() => {
+    const name = `${contact.firstName.trim()} ${contact.lastName.trim()}`.trim();
+    if (mode !== "new" || step !== 1 || name.length < 2 || profileChoiceMade) {
+      setNameLookupPending(false);
+      return;
+    }
+    const request = ++nameRequestId.current;
+    setNameLookupPending(true);
+    const timer = setTimeout(async () => {
+      try {
+        // Suggestions can be shown before contact details are complete. The
+        // Continue action still performs the existing-registration preflight.
+        const response = await resolveClubTournamentPartnerProfile(clubSlug, {
+          tournament_id: tournamentId, registration_slug: registrationSlug || null,
+          name, email: null
+        });
+        if (request !== nameRequestId.current) return;
+        if (response.error || !response.data) {
+          setNameLookupError("We couldn’t look up profiles right now. You can still enter your details and continue.");
+        } else {
+          setNameCandidates(response.data.profile_candidates);
+        }
+      } catch {
+        if (request === nameRequestId.current) setNameLookupError("We couldn’t look up profiles right now. You can still enter your details and continue.");
+      } finally {
+        if (request === nameRequestId.current) setNameLookupPending(false);
+      }
+    }, 250);
+    return () => { clearTimeout(timer); nameRequestId.current += 1; };
+  }, [clubSlug, tournamentId, registrationSlug, mode, step, contact.firstName, contact.lastName, profileChoiceMade]);
+
+  const selectedProfile = resolution?.profile_candidates.find((candidate) => candidate.id === profile.candidateId)
+    ?? (chosenNameProfile?.id === profile.candidateId ? chosenNameProfile : null);
   const doublesSkillReadOnly = selectedProfile?.doubles_skill != null;
   const singlesSkillReadOnly = selectedProfile?.singles_skill != null;
 
@@ -315,6 +354,10 @@ export default function TournamentRegistrationForm({
     setMode(nextMode);
     setStep(1);
     profileRequestId.current += 1;
+    nameRequestId.current += 1;
+    setNameCandidates(null);
+    setNameLookupError(null);
+    setChosenNameProfile(null);
     setResolution(null);
     setProfileChoiceMade(false);
     setSelectedIds([]);
@@ -355,6 +398,14 @@ export default function TournamentRegistrationForm({
       profileRequestId.current += 1;
       setPending(false);
       setResolution(null);
+      // Entering contact information after tapping a suggestion must keep it.
+      if (key === "email" && chosenNameProfile) return;
+      if (key !== "email") {
+        nameRequestId.current += 1;
+        setNameCandidates(null);
+        setNameLookupError(null);
+        setChosenNameProfile(null);
+      }
       setProfileChoiceMade(false);
       setProfile((current) => current.candidateId || key !== "email"
         ? { candidateId: "", displayName: "", duprId: "", doublesSkill: "", singlesSkill: "" }
@@ -445,8 +496,9 @@ export default function TournamentRegistrationForm({
         return;
       }
       const fullName = `${contact.firstName.trim()} ${contact.lastName.trim()}`.trim();
-      const candidates = response.data.profile_candidates;
-      setResolution(response.data);
+      const candidates = [...response.data.profile_candidates];
+      if (chosenNameProfile && !candidates.some((row) => row.id === chosenNameProfile.id)) candidates.unshift(chosenNameProfile);
+      setResolution({ ...response.data, profile_candidates: candidates });
       // Back/Continue must preserve the player's explicit choice, including None.
       if (!profileChoiceMade || (profile.candidateId && !candidates.some((row) => row.id === profile.candidateId))) {
         const candidate = automaticRegistrationProfile(candidates, fullName, response.data.profile_match_kind);
@@ -465,6 +517,7 @@ export default function TournamentRegistrationForm({
   }
 
   function selectCandidate(candidate: PublicRegistrationPlayer | null) {
+    setChosenNameProfile(candidate);
     setProfileChoiceMade(true);
     if (!candidate) {
       setProfile((current) => current.candidateId
@@ -479,6 +532,15 @@ export default function TournamentRegistrationForm({
       doublesSkill: candidate.doubles_skill == null ? "" : String(candidate.doubles_skill),
       singlesSkill: candidate.singles_skill == null ? "" : String(candidate.singles_skill)
     });
+  }
+
+  function selectNameSuggestion(candidate: PublicRegistrationPlayer) {
+    nameRequestId.current += 1;
+    setNameLookupPending(false);
+    setNameLookupError(null);
+    const parts = candidate.display_name.trim().split(/\s+/);
+    setContact((current) => ({ ...current, firstName: parts[0] || "", lastName: parts.slice(1).join(" ") }));
+    selectCandidate(candidate);
   }
 
   function validateSelections(): string | null {
@@ -841,8 +903,23 @@ export default function TournamentRegistrationForm({
             organizers can see your contact details.
           </p>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
-            <label>First name *<br /><input aria-label="First name" value={contact.firstName} onChange={(event) => updateContact("firstName", event.target.value)} style={inputStyle} /></label>
-            <label>Last name *<br /><input aria-label="Last name" value={contact.lastName} onChange={(event) => updateContact("lastName", event.target.value)} style={inputStyle} /></label>
+            <label>First name *<br /><input aria-label="First name" aria-describedby="player-name-search-help" placeholder="Start typing your name" autoComplete="off" value={contact.firstName} onChange={(event) => updateContact("firstName", event.target.value)} style={inputStyle} /></label>
+            <label>Last name *<br /><input aria-label="Last name" aria-describedby="player-name-search-help" placeholder="Or search by last name" autoComplete="off" value={contact.lastName} onChange={(event) => updateContact("lastName", event.target.value)} style={inputStyle} /></label>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <p id="player-name-search-help" style={{ margin: "0 0 0.5rem", color: "#475569" }}>Type at least 2 characters of your first or last name to find your club profile.</p>
+              {chosenNameProfile ? <p role="status" style={{ margin: 0, color: "#166534" }}>Profile selected: <strong>{chosenNameProfile.display_name}</strong>. Your profile ratings will be filled in.</p> : null}
+              {nameLookupPending ? <p role="status">Finding player profiles…</p> : null}
+              {nameLookupError ? <p role="status">{nameLookupError}</p> : null}
+              {!profileChoiceMade && nameCandidates?.length ? (
+                <fieldset style={{ margin: 0, border: "1px solid #cbd5e1", borderRadius: "8px", padding: "0.75rem" }}>
+                  <legend>Is one of these you?</legend>
+                  <div style={{ display: "grid", gap: "0.5rem" }}>
+                    {nameCandidates.map((candidate) => <button key={candidate.id} type="button" onClick={() => selectNameSuggestion(candidate)} style={{ ...secondaryButtonStyle, minHeight: "44px", textAlign: "left" }}>{candidateLabel(candidate)}</button>)}
+                  </div>
+                  {nameCandidates.length >= 8 ? <p style={{ marginBottom: 0 }}>Keep typing to narrow the list.</p> : null}
+                </fieldset>
+              ) : !chosenNameProfile && nameCandidates && !nameLookupPending && !nameLookupError ? <p role="status">No matching profile found. Try your first or last name, or enter your full name and continue.</p> : null}
+            </div>
             <label>Email *<br /><input aria-label="Email" type="email" value={contact.email} onChange={(event) => updateContact("email", event.target.value)} style={inputStyle} /></label>
             <label>Phone / WhatsApp<br /><input aria-label="Phone / WhatsApp" value={contact.phone} onChange={(event) => updateContact("phone", event.target.value)} style={inputStyle} /></label>
             <label>Age *<br /><input aria-label="Age" type="number" min="1" max="120" value={contact.age} onChange={(event) => updateContact("age", event.target.value)} style={inputStyle} /></label>
