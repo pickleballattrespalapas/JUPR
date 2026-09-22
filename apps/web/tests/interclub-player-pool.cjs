@@ -1,10 +1,11 @@
+const playerSearchModules = require("./helpers/player-search-modules.cjs");
 const assert = require('node:assert/strict'), fs = require('node:fs'), path = require('node:path');
 const React = require('react'), ts = require('typescript'), { create, act } = require('react-test-renderer');
 const base = 'app/admin/interclub/registrations/';
 function load(file, mocks = {}) {
   const code = ts.transpileModule(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true } }).outputText;
   const module = { exports: {} };
-  new Function('require', 'module', 'exports', code)(name => Object.hasOwn(mocks, name) ? mocks[name] : require(name), module, module.exports);
+  new Function('require', 'module', 'exports', code)(name => Object.hasOwn(mocks, name) ? mocks[name] : (playerSearchModules(name) || require(name)), module, module.exports);
   return module.exports;
 }
 const registration = load('lib/interclubRegistration.ts'), types = load('lib/interclubPlayerPool.ts');

@@ -1,6 +1,6 @@
 import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import { redirect } from "next/navigation";
-import { getClubPlayers } from "@/lib/api";
+import { getClubPlayerOptions } from "@/lib/api";
 import { getAdminLeagueLiveStatus, getAdminLeagueManagerStatus, getAdminLeagueManagerApiBaseUrl } from "@/lib/adminLeagueManagerApi";
 import { getAdminMatchUploaderStatus } from "@/lib/adminMatchUploaderApi";
 import { readLeagueRouteContext } from "@/lib/leagueRouteContext";
@@ -20,7 +20,7 @@ export default async function LeagueManagerLivePage({ searchParams }: Props) {
     getAdminLeagueManagerStatus(clubId),
     getAdminLeagueLiveStatus(clubId),
     getAdminMatchUploaderStatus(clubId),
-    getClubPlayers(clubSlug, { status: "all", limit: 1000, sort: "name", noStore: true })
+    getClubPlayerOptions(clubSlug, { status: "all", noStore: true })
   ]);
 
   return (

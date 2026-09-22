@@ -1,5 +1,7 @@
 "use client";
 
+import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
+
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
@@ -1233,8 +1235,8 @@ export default function TournamentOpsPanel({
                     <thead><tr>{["Team #", "Player 1", "Player 2", "Seed", "Notes", "Action"].map((header) => <th key={header} style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>{header}</th>)}</tr></thead>
                     <tbody>{teamRows.map((row, index) => <tr key={row.editor_key}>
                       <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}><input value={row.team_number} onChange={(event) => updateTeamRow(index, { team_number: event.target.value })} style={inputStyle} /></td>
-                      <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}><select value={playerSelectValue(row.player1_id)} onChange={(event) => updateTeamRow(index, { player1_id: event.target.value })} style={inputStyle}><option value="">Choose player…</option>{players.map((player) => <option key={player.id} value={String(player.id)}>{player.name}</option>)}</select></td>
-                      <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}><select value={playerSelectValue(row.player2_id)} onChange={(event) => updateTeamRow(index, { player2_id: event.target.value })} style={inputStyle}><option value="">Singles / no partner</option>{players.map((player) => <option key={player.id} value={String(player.id)}>{player.name}</option>)}</select></td>
+                      <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}><SearchablePlayerSelect value={playerSelectValue(row.player1_id)} onValueChange={playerValue => updateTeamRow(index, { player1_id: playerValue })} style={inputStyle}><option value="">Choose player…</option>{players.map((player) => <option key={player.id} value={String(player.id)}>{player.name}</option>)}</SearchablePlayerSelect></td>
+                      <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}><SearchablePlayerSelect value={playerSelectValue(row.player2_id)} onValueChange={playerValue => updateTeamRow(index, { player2_id: playerValue })} style={inputStyle}><option value="">Singles / no partner</option>{players.map((player) => <option key={player.id} value={String(player.id)}>{player.name}</option>)}</SearchablePlayerSelect></td>
                       <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}><input value={row.seed} onChange={(event) => updateTeamRow(index, { seed: event.target.value })} style={inputStyle} /></td>
                       <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}><input value={row.notes} onChange={(event) => updateTeamRow(index, { notes: event.target.value })} style={inputStyle} /></td>
                       <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}><button type="button" onClick={() => setTeamRows((current) => current.filter((_, rowIndex) => rowIndex !== index))} style={ghostButtonStyle}>Remove</button></td>
@@ -1355,7 +1357,7 @@ export default function TournamentOpsPanel({
                         return <tr key={importKey}>
                           <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}>{String(player.display_name || player.name || `Imported player ${index + 1}`)}</td>
                           <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}><select value={decision.action || "unresolved"} onChange={(event) => { const action = event.target.value; setResultsMappings((current) => ({ ...current, [importKey]: { action, player_id: action === "use_existing" ? current[importKey]?.player_id ?? null : null } })); setResultsReviewDirty(true); }} style={inputStyle}><option value="unresolved">Resolve before commit</option><option value="use_existing">Use existing player</option><option value="create_new">Create new player</option></select></td>
-                          <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}>{decision.action === "use_existing" ? <select value={String(decision.player_id || "")} onChange={(event) => { setResultsMappings((current) => ({ ...current, [importKey]: { action: "use_existing", player_id: event.target.value || null } })); setResultsReviewDirty(true); }} style={inputStyle}><option value="">Choose player…</option>{resultsPreview.player_options.map((option) => <option key={String(option.id)} value={String(option.id)}>{option.name}</option>)}</select> : <span>—</span>}</td>
+                          <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}>{decision.action === "use_existing" ? <SearchablePlayerSelect value={String(decision.player_id || "")} onValueChange={playerValue => { setResultsMappings((current) => ({ ...current, [importKey]: { action: "use_existing", player_id: playerValue || null } })); setResultsReviewDirty(true); }} style={inputStyle}><option value="">Choose player…</option>{resultsPreview.player_options.map((option) => <option key={String(option.id)} value={String(option.id)}>{option.name}</option>)}</SearchablePlayerSelect> : <span>—</span>}</td>
                           <td style={{ padding: "0.5rem", borderBottom: "1px solid #dbeafe" }}>{shortValue(suggestion.suggested_player_name || suggestion.suggested_name || suggestion.reason)}</td>
                         </tr>;
                       })}</tbody>

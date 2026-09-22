@@ -45,7 +45,7 @@ assert.match(form, /singlesScoreA \+ singlesScoreB <= 0/, "blank singles scores 
 assert.ok(form.includes('key={`singles-player-a-${singlesRow.playerA || "empty"}`}'), "singles Player 1 must remount cleanly after reset");
 assert.ok(form.includes('key={`singles-player-b-${singlesRow.playerB || "empty"}`}'), "singles Player 2 must remount cleanly after reset");
 assert.match(form, /failed\|conflict\|changed\|reload\|retry\|nothing/, "concurrency conflicts must render as errors");
-assert.match(form, /if \(match\) addPlayerName\(String\(match\.name\)\)/, "round-robin suggestion selection must add the player immediately");
+assert.match(form, /onPick={option => addPlayerName\(option.label\)}/, "round-robin suggestion selection must add the player immediately");
 assert.match(form, /function roundRobinPlayerRecords/, "round-robin results must calculate player records");
 assert.match(form, />Wins<\/th>/, "round-robin result modal must show wins");
 assert.match(form, />Losses<\/th>/, "round-robin result modal must show losses");

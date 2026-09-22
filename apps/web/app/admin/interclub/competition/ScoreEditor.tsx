@@ -1,5 +1,7 @@
 "use client";
 
+import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
+
 import { useState } from "react";
 import { CompetitionDocument, CompetitionEncounter, CompetitionGame, CompetitionPairing, CompetitionPlayer, GameStatus, MeetCompetition, activeSinglesPlayers, fromLocalInput, gameStatusLabels, matchesSkillLevel, pairingLabels, playerNames, singlesCourt, toLocalInput } from "@/lib/interclubCompetition";
 import styles from "./competition.module.css";
@@ -83,8 +85,8 @@ export default function ScoreEditor({ document, detail, players, clubName, disab
 }
 
 function PlayerSelect({ label, ids, options, disabled, onChange }: { label: string; ids: string[]; options: CompetitionPlayer[]; disabled: boolean; onChange: (ids: string[]) => void }) {
-  return <fieldset className={styles.players} disabled={disabled}><legend>{label}</legend>{ids.map((id, index) => <label key={index}>Player {index + 1}<select value={id} onChange={event => onChange(ids.map((old, i) => i === index ? event.target.value : old))}>
+  return <fieldset className={styles.players} disabled={disabled}><legend>{label}</legend>{ids.map((id, index) => <label key={index}>Player {index + 1}<SearchablePlayerSelect aria-label={["Player",String(index + 1)].join(" ")} value={id} onValueChange={playerValue => onChange(ids.map((old, i) => i === index ? playerValue : old))}>
     {!options.some(player => player.entry_id === id) && <option value={id}>Scheduled player</option>}
     {options.map(player => <option key={player.entry_id} value={player.entry_id}>{player.name}{(player.eligibility_rating ?? player.rating) != null ? ` · ${(player.eligibility_rating ?? player.rating)!.toFixed(3)}` : ""}</option>)}
-  </select></label>)}</fieldset>;
+  </SearchablePlayerSelect></label>)}</fieldset>;
 }

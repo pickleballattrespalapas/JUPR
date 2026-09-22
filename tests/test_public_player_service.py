@@ -335,3 +335,26 @@ def test_soft_deleted_matches_are_suppressed_from_all_public_match_reads():
         match["id"] != 99
         for match in get_public_matches(supabase, club_id="club-1")
     )
+
+
+def test_directory_partial_name_suggestions_are_accent_insensitive_and_club_scoped():
+    db = FakeSupabase()
+    db.rows_by_table['players'] += [
+        {'id': 61, 'club_id': 'club-1', 'name': 'Valé Verdugo', 'rating': 1700, 'active': True},
+        {'id': 62, 'club_id': 'club-1', 'name': 'Valé Verdugo', 'rating': 1600, 'active': True},
+        {'id': 63, 'club_id': 'club-2', 'name': 'Valé Verdugo', 'rating': 1800, 'active': True},
+    ]
+    result = build_public_player_directory(db, club_id='club-1', search='VER VALE')
+    assert {row['id'] for row in result['players']} == {61, 62}
+    assert all('email' not in row for row in result['players'])
+
+
+def test_directory_search_reads_past_supabase_row_cap():
+    db = FakeSupabase()
+    db.rows_by_table['players'] = [
+        {'id': index, 'club_id': 'club-1', 'name': f'Player {index}', 'active': True}
+        for index in range(1201)
+    ] + [{'id': 1202, 'club_id': 'club-1', 'name': 'Valé Verdugo', 'active': True}]
+    result = build_public_player_directory(db, club_id='club-1', search='verdu')
+    assert [row['id'] for row in result['players']] == [1202]
+    assert result['summary']['public_players'] == 1202

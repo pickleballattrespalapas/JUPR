@@ -1,5 +1,7 @@
 "use client";
 
+import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
+
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import { actionSuccess, type ActionCompletion } from "@/components/interaction";
@@ -514,7 +516,7 @@ export default function LeagueAwardsPanel({ apiBase, clubId, status }: Props) {
                     <legend style={{ fontWeight: 800 }}>{award.category_label || award.category_key} #{award.rank || 1}{award.is_co_winner ? " · co-winner" : ""}</legend>
                     <p style={{ color: "#475569" }}>Computed: {award.recipient_name || award.team_name || award.player_name || (award.player_id ? `Player ${award.player_id}` : "—")} · {award.metric_display || "—"} · Minimum sample {award.min_games ?? "—"}</p>
                     {isTeamAward ? <p style={{ color: "#64748b" }}>Team awards follow the frozen team standings and are recorded without a player-badge reassignment.</p> : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "0.75rem" }}>
-                      <label>Winner<br /><select value={draft.playerId} onChange={(event) => setOverrideDrafts((current) => ({ ...current, [key]: { ...draft, playerId: Number(event.target.value) } }))} disabled={!writeReady || Number(wizard.mint?.attempt_count || 0) > 0} style={inputStyle}>{(state?.eligible_players || []).map((player) => <option key={player.player_id} value={player.player_id}>{player.player_name} (#{player.player_id})</option>)}</select></label>
+                      <label>Winner<br /><SearchablePlayerSelect aria-label="Winner" value={draft.playerId} onValueChange={playerValue => setOverrideDrafts((current) => ({ ...current, [key]: { ...draft, playerId: Number(playerValue) } }))} disabled={!writeReady || Number(wizard.mint?.attempt_count || 0) > 0} style={inputStyle}>{(state?.eligible_players || []).map((player) => <option key={player.player_id} value={player.player_id}>{player.player_name} (#{player.player_id})</option>)}</SearchablePlayerSelect></label>
                       <label>Override reason {changed ? "(required)" : "(not needed)"}<br /><input value={draft.reason} onChange={(event) => setOverrideDrafts((current) => ({ ...current, [key]: { ...draft, reason: event.target.value } }))} disabled={!writeReady || !changed || Number(wizard.mint?.attempt_count || 0) > 0} style={inputStyle} /></label>
                     </div>}
                   </fieldset>

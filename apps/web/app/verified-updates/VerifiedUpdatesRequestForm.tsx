@@ -1,5 +1,7 @@
 "use client";
 
+import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
+
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import type { VerifiedUpdatePlayer, VerifiedUpdateRequestResponse, VerifiedUpdateStatusResponse } from "@/lib/verifiedUpdatesApi";
@@ -125,12 +127,12 @@ export default function VerifiedUpdatesRequestForm({ apiBase, clubSlug, players,
       <p style={{ color: "#475569" }}>Choose a player and enter where you&apos;d like to receive updates when new results are posted.</p>
       <form onSubmit={submitRequest} style={{ display: "grid", gap: "0.75rem" }}>
         <label>Player<br />
-          <select value={playerId} onChange={(event) => setPlayerId(event.target.value)} style={inputStyle}>
+          <SearchablePlayerSelect aria-label="Player" value={playerId} onValueChange={playerValue => setPlayerId(playerValue)} style={inputStyle}>
             {players.map((player) => {
               const status = requestStatusLabel(player.request_status);
               return <option key={player.id} value={player.id}>{player.name}{status ? ` · ${status}` : ""}</option>;
             })}
-          </select>
+          </SearchablePlayerSelect>
         </label>
         <div aria-live="polite">
           {!statusReady && !statusMessage ? <p style={{ color: "#475569" }}>Checking for an existing request…</p> : null}

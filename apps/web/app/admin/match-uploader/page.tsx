@@ -1,6 +1,6 @@
 import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import Link from "next/link";
-import { getClubPlayers } from "@/lib/api";
+import { getClubPlayerOptions } from "@/lib/api";
 import { getAdminMatchUploaderApiBaseUrl, getAdminMatchUploaderStatus } from "@/lib/adminMatchUploaderApi";
 import MatchUploaderForm from "./MatchUploaderForm";
 
@@ -9,7 +9,7 @@ const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: 
 export default async function AdminMatchUploaderPage() {
   const { clubId, clubSlug } = requireAdminWorkspace();
   const [{ data: playersData, error: playersError }, { data: status, error: statusError }] = await Promise.all([
-    getClubPlayers(clubSlug),
+    getClubPlayerOptions(clubSlug),
     getAdminMatchUploaderStatus(clubId)
   ]);
   const players = playersData?.players ?? [];

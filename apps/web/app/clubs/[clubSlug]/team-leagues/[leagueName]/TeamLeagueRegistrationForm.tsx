@@ -1,6 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
+
+import { useState } from "react";
 import type { PublicTeamLeagueDetail } from "@/lib/teamLeagueApi";
 
 type Props = {
@@ -67,7 +69,6 @@ export default function TeamLeagueRegistrationForm({
   detail
 }: Props) {
   const [signupType, setSignupType] = useState<"team" | "solo">("team");
-  const [search, setSearch] = useState("");
   const [playerId, setPlayerId] = useState("");
   const [partnerId, setPartnerId] = useState("");
   const [email, setEmail] = useState("");
@@ -78,12 +79,7 @@ export default function TeamLeagueRegistrationForm({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [messageTone, setMessageTone] = useState<"success" | "error" | null>(null);
-  const players = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    return detail.registration_players.filter((player) =>
-      !query || player.player_name.toLowerCase().includes(query)
-    );
-  }, [detail.registration_players, search]);
+  const players = detail.registration_players;
 
   async function submit() {
     if (!apiBase) {
@@ -162,25 +158,21 @@ export default function TeamLeagueRegistrationForm({
           <input type="radio" checked={signupType === "solo"} onChange={() => setSignupType("solo")} /> Find me a partner
         </label>
       </div>
-      <label style={{ minWidth: 0 }}>
-        Search players
-        <input style={input} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Type a player name" />
-      </label>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: "0.8rem", minWidth: 0 }}>
         <label style={{ minWidth: 0 }}>
           Your player profile
-          <select style={input} value={playerId} onChange={(event) => setPlayerId(event.target.value)}>
+          <SearchablePlayerSelect aria-label="Your player profile" style={input} value={playerId} onValueChange={playerValue => setPlayerId(playerValue)}>
             <option value="">Choose a player</option>
             {players.map((player) => <option key={player.player_id} value={player.player_id}>{player.player_name}{player.rating_jupr ? ` · ${player.rating_jupr.toFixed(2)}` : ""}</option>)}
-          </select>
+          </SearchablePlayerSelect>
         </label>
         {signupType === "team" ? (
           <label style={{ minWidth: 0 }}>
             Partner
-            <select style={input} value={partnerId} onChange={(event) => setPartnerId(event.target.value)}>
+            <SearchablePlayerSelect aria-label="Partner" style={input} value={partnerId} onValueChange={playerValue => setPartnerId(playerValue)}>
               <option value="">Choose a partner</option>
               {players.filter((player) => String(player.player_id) !== playerId).map((player) => <option key={player.player_id} value={player.player_id}>{player.player_name}{player.rating_jupr ? ` · ${player.rating_jupr.toFixed(2)}` : ""}</option>)}
-            </select>
+            </SearchablePlayerSelect>
           </label>
         ) : null}
       </div>

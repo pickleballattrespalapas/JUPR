@@ -11,7 +11,8 @@ def test_directory_has_visible_search_active_default_privacy_states_and_stable_l
     source = DIRECTORY.read_text(encoding="utf-8")
 
     assert 'return "active";' in source
-    assert 'name="q"' in source
+    assert "<PublicPlayerSearch" in source
+    assert 'name="q"' in Path("apps/web/components/PublicPlayerSearch.tsx").read_text(encoding="utf-8")
     assert 'data-testid="players-search-form"' in source
     assert "players-status-${item}" in source
     assert 'data-testid="players-row"' in source

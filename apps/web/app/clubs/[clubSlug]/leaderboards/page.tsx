@@ -1,3 +1,4 @@
+import PublicPlayerSearch from "@/components/PublicPlayerSearch";
 import { Display } from "@/components/ClubDisplay";
 import Link from "@/components/PublicClubLink";
 import { getClubLeaderboard } from "@/lib/api";
@@ -368,7 +369,7 @@ export default async function ClubLeaderboardPage({ params, searchParams }: Lead
           {state.season ? <input type="hidden" name="season" value={state.season} /> : null}
           <label style={{ display: "grid", gap: "0.3rem", minWidth: "min(100%, 280px)", flex: "1 1 320px", fontWeight: 700 }}>
             Find player
-            <input name="q" defaultValue={search} maxLength={120} placeholder="Search by player name" style={{ border: "1px solid #94a3b8", borderRadius: "8px", padding: "0.6rem 0.7rem", font: "inherit" }} />
+            <PublicPlayerSearch clubSlug={clubSlug} scope="leaderboards" defaultValue={search} filters={{ league_name: selectedLeague || "OVERALL", league_view: state.leagueView, status: state.status, season: state.season || "all" }} />
           </label>
           <button type="submit" style={{ border: 0, borderRadius: "999px", padding: "0.65rem 1rem", background: "#0f172a", color: "white", fontWeight: 800 }}>Search</button>
           {search ? <Link href={pageHref(clubSlug, state, { search: "", player: "", page: 1 })}>Clear search</Link> : null}

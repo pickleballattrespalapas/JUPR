@@ -1,5 +1,7 @@
 "use client";
 
+import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
+
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAdminSession } from "@/lib/useAdminSession";
@@ -20,16 +22,11 @@ const field = { padding: "0.6rem", border: "1px solid #cbd5e1", borderRadius: 8,
 function PlayerProfileChoice({ name, value, players, disabled, onChange }: {
   name: string; value?: number; players: Queue["players"]; disabled: boolean; onChange: (value: number) => void;
 }) {
-  const [search, setSearch] = useState(name);
-  const selected = players.find(player => player.id === value);
-  const choices = players.filter(player => player.name.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase())).slice(0, 25);
-  if (selected && !choices.some(player => player.id === value)) choices.unshift(selected);
   return <div style={{ display: "grid", gap: 4 }}>
     <strong>{name}</strong>
-    {!disabled ? <input type="search" aria-label={`Search club profiles for ${name}`} value={search} onChange={event => setSearch(event.target.value)} style={field} /> : null}
-    <select aria-label={`Club profile for ${name}`} value={value || ""} disabled={disabled} style={field} onChange={event => onChange(Number(event.target.value))}>
-      <option value="">Choose a club player</option>{choices.map(player => <option key={player.id} value={player.id}>{player.name}</option>)}
-    </select>
+    <SearchablePlayerSelect aria-label={`Club profile for ${name}`} value={value || ""} disabled={disabled} style={field} onValueChange={playerValue => onChange(Number(playerValue))}>
+      <option value="">Choose a club player</option>{players.map(player => <option key={player.id} value={player.id}>{player.name}</option>)}
+    </SearchablePlayerSelect>
   </div>;
 }
 

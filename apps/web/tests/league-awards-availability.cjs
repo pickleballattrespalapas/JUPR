@@ -1,3 +1,4 @@
+const playerSearchModules = require("./helpers/player-search-modules.cjs");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -10,7 +11,7 @@ function load(file, overrides = {}) {
     compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true }
   }).outputText;
   const mod = { exports: {} };
-  new Function("require", "module", "exports", output)(name => overrides[name] || require(name), mod, mod.exports);
+  new Function("require", "module", "exports", output)(name => overrides[name] || (playerSearchModules(name) || require(name)), mod, mod.exports);
   return mod.exports;
 }
 

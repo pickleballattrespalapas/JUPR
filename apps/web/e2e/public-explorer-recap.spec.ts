@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 import { bootstrapStagingContext, clubSlug } from "./support/staging";
 
 test.beforeEach(async ({ context }) => {
@@ -13,23 +13,29 @@ test("Match Explorer hydrates a share link and reacts through Python projections
   const partner = page.getByLabel("My partner");
   const opponentOne = page.getByLabel("Opponent 1");
   const opponentTwo = page.getByLabel("Opponent 2");
-  const playerIds = await me.locator("option").evaluateAll((options) =>
-    options.map((option) => (option as HTMLOptionElement).value).filter(Boolean)
+  const roster = await me.locator("..").locator("..").locator("select option").evaluateAll(options =>
+    options.map(option => ({ id: (option as HTMLOptionElement).value, name: option.textContent || "" })).filter(option => option.id)
   );
+  const playerIds = roster.map(player => player.id);
+  async function choose(field: Locator, id: string) {
+    const player = roster.find(player => player.id === id)!;
+    await field.fill(player.name);
+    await field.locator("..").locator(`[data-player-value="${id}"]`).click();
+  }
   expect(playerIds.length, "Match Explorer staging fixture needs four active public players").toBeGreaterThanOrEqual(4);
 
   // The initial projection proves React hydration and the debounced preview have
-  // settled before Playwright changes the controlled selects.
+  // settled before Playwright changes the controlled player fields.
   await expect(page.getByTestId("match-explorer-summary")).toContainText("Your team's win chance");
 
-  await me.selectOption(playerIds[0]);
-  await partner.selectOption(playerIds[0]);
+  await choose(me, playerIds[0]);
+  await choose(partner, playerIds[0]);
   await expect(page.getByTestId("match-explorer-validation")).toContainText("four different players");
   await expect(page.getByTestId("match-explorer-impact-chart")).toHaveCount(0);
 
-  await partner.selectOption(playerIds[1]);
-  await opponentOne.selectOption(playerIds[2]);
-  await opponentTwo.selectOption(playerIds[3]);
+  await choose(partner, playerIds[1]);
+  await choose(opponentOne, playerIds[2]);
+  await choose(opponentTwo, playerIds[3]);
   await page.getByLabel("Your points").fill("11");
   await page.getByLabel("Opponent points").fill("7");
 
@@ -45,10 +51,10 @@ test("Match Explorer hydrates a share link and reacts through Python projections
 
   const shareUrl = page.url();
   await page.goto(shareUrl, { waitUntil: "domcontentloaded" });
-  await expect(me).toHaveValue(playerIds[0]);
-  await expect(partner).toHaveValue(playerIds[1]);
-  await expect(opponentOne).toHaveValue(playerIds[2]);
-  await expect(opponentTwo).toHaveValue(playerIds[3]);
+  await expect(me).toHaveValue(roster[0].name);
+  await expect(partner).toHaveValue(roster[1].name);
+  await expect(opponentOne).toHaveValue(roster[2].name);
+  await expect(opponentTwo).toHaveValue(roster[3].name);
   await expect(page.getByTestId("match-explorer-impact-chart")).toContainText("Actual 11–7");
 });
 

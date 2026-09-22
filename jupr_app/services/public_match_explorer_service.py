@@ -162,6 +162,11 @@ def build_public_match_explorer_preview(
         raise ValueError("Selected rating context is unavailable.")
 
     public_players = get_public_players(supabase, club_id=str(club_id), limit=1000)
+    while len(public_players) and len(public_players) % 1000 == 0:
+        page = get_public_players(supabase, club_id=str(club_id), limit=1000, offset=len(public_players))
+        if not page:
+            break
+        public_players.extend(page)
     players_by_id: dict[int, dict[str, Any]] = {}
     for player in public_players:
         pid = _safe_int(player.get("id"))

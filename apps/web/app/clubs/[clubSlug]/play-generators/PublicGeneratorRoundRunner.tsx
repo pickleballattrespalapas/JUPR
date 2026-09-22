@@ -1,5 +1,7 @@
 "use client";
 
+import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
+
 import Link from "@/components/PublicClubLink";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -1090,10 +1092,10 @@ export default function GeneratorRoundRunner({
                 <label>
                   First player
                   <br />
-                  <select
+                  <SearchablePlayerSelect aria-label="First player"
                     value={firstSwapParticipant}
-                    onChange={(event_) => {
-                      const nextParticipant = event_.target.value;
+                    onValueChange={playerValue => {
+                      const nextParticipant = playerValue;
                       setFirstSwapParticipant(nextParticipant);
                       if (nextParticipant === secondSwapParticipant) {
                         setSecondSwapParticipant("");
@@ -1107,14 +1109,14 @@ export default function GeneratorRoundRunner({
                         {index + 1}. {participants.get(id)?.name || id}
                       </option>
                     ))}
-                  </select>
+                  </SearchablePlayerSelect>
                 </label>
                 <label>
                   Second player
                   <br />
-                  <select
+                  <SearchablePlayerSelect aria-label="Second player"
                     value={secondSwapParticipant}
-                    onChange={(event_) => setSecondSwapParticipant(event_.target.value)}
+                    onValueChange={playerValue => setSecondSwapParticipant(playerValue)}
                     style={inputStyle}
                   >
                     <option value="">Select player</option>
@@ -1125,7 +1127,7 @@ export default function GeneratorRoundRunner({
                         </option>
                       )
                     )}
-                  </select>
+                  </SearchablePlayerSelect>
                 </label>
               </>
             ) : null}
@@ -1134,9 +1136,9 @@ export default function GeneratorRoundRunner({
               <label>
                 Current player
                 <br />
-                <select
+                <SearchablePlayerSelect aria-label="Current player"
                   value={selectedParticipant}
-                  onChange={(event_) => setSelectedParticipant(event_.target.value)}
+                  onValueChange={playerValue => setSelectedParticipant(playerValue)}
                   style={inputStyle}
                 >
                   <option value="">Select player</option>
@@ -1150,7 +1152,7 @@ export default function GeneratorRoundRunner({
                         {participant.name}
                       </option>
                     ))}
-                </select>
+                </SearchablePlayerSelect>
               </label>
             ) : null}
 

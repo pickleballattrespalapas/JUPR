@@ -1,5 +1,5 @@
 import Link from "@/components/PublicClubLink";
-import { getClubMatchExplorerContext, getClubPlayers } from "@/lib/api";
+import { getClubMatchExplorerContext, getClubPlayerOptions } from "@/lib/api";
 import MatchExplorerForm from "./MatchExplorerForm";
 
 type MatchExplorerPageProps = {
@@ -21,7 +21,7 @@ function apiBase(): string {
 export default async function MatchExplorerPage({ params, searchParams }: MatchExplorerPageProps) {
   const { clubSlug } = params;
   const [playersResult, contextResult] = await Promise.all([
-    getClubPlayers(clubSlug),
+    getClubPlayerOptions(clubSlug),
     getClubMatchExplorerContext(clubSlug)
   ]);
   const club = playersResult.data?.club ?? contextResult.data?.club;
