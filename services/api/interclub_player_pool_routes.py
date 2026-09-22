@@ -29,6 +29,7 @@ POOL = "pcs_interclub_pool_settings"
 MEMBERS = "pcs_interclub_pool_members"
 SETTINGS = "pcs_interclub_availability_settings"
 RESPONSES = "pcs_interclub_availability_responses"
+LATE_REQUESTS = "pcs_interclub_late_player_requests"
 MEMBER_FIELDS = "id,season_id,club_id,name,email,divisions,notes,status,player_id,revision,created_at,updated_at,approval_status,late_join,approval_reason"
 APPROVAL_FIELDS = "id,club_id,name,player_id,revision,approval_status,late_join,approval_reason"
 MEET_FIELDS = "id,season_id,host_club_id,club_ids,starts_at,roster_deadline"
@@ -114,6 +115,17 @@ class BulkPoolMember(StrictModel):
 
 class BulkPoolMembers(StrictModel):
     members: list[BulkPoolMember] = Field(min_length=1, max_length=200)
+
+
+class LatePlayerRequest(StrictModel):
+    player_id: int = Field(gt=0)
+    divisions: list[str] = Field(default_factory=list, max_length=8)
+    reason: str = Field(min_length=1, max_length=500)
+
+    @field_validator("divisions")
+    @classmethod
+    def distinct_divisions(cls, value):
+        return MemberDetails.distinct_divisions(value)
 
 
 class ResponseReview(StrictModel):
@@ -329,8 +341,22 @@ def _profile_summaries(db, club_id, season, members):
     ids = sorted({int(m["player_id"]) for m in members if m.get("player_id") is not None})
     players = _rows(_query(db, "players", PLAYER_FIELDS, club_id=club_id).in_("id", ids)) if ids else []
     by_id = {str(row["id"]): row for row in _choices(db, club_id, season, players)}
-    return [{**_member(row), **{key: by_id.get(str(row.get("player_id")), {}).get(key, [] if key == "eligible_divisions" else None)
-             for key in ("rating", "league_rating", "gender", "eligible_divisions")}} for row in members]
+    summaries = [{**_member(row), **{key: by_id.get(str(row.get("player_id")), {}).get(key, [] if key == "eligible_divisions" else None)
+                  for key in ("rating", "league_rating", "gender", "eligible_divisions")}} for row in members]
+    return _late_request_metadata(db, season["id"], summaries, club_id=club_id)
+
+
+def _late_request_metadata(db, season_id, members, *, club_id=None):
+    if not members:
+        return []
+    filters = {"season_id": str(season_id)}
+    if club_id is not None:
+        filters["club_id"] = club_id
+    requests = _rows(_query(db, LATE_REQUESTS, "member_id,reason,requested_at", **filters)
+                     .in_("member_id", [row["id"] for row in members]))
+    by_id = {str(row["member_id"]): row for row in requests}
+    return [{**row, "late_request_reason": by_id.get(str(row["id"]), {}).get("reason"),
+             "late_requested_at": by_id.get(str(row["id"]), {}).get("requested_at")} for row in members]
 
 
 def _bulk_preview(db, club, season, body):
@@ -411,7 +437,8 @@ def _pool_payload(db, club, season):
     members = _rows(_query(db, MEMBERS, MEMBER_FIELDS + ",token_nonce", **filters).order("name").order("id").limit(1000))
     summaries = _profile_summaries(db, club["id"], season, members)
     return {"club": club, "season": _public_season(season), "registration": registration_state(season), "signup": _settings(_one(db, POOL, **filters), season),
-            "members": [{**summary, "manage_url": pool_member_url(row, season)} for row, summary in zip(members, summaries)], "email_mode": get_email_mode()}
+            "members": [{**summary, "manage_url": pool_member_url(row, season)} for row, summary in zip(members, summaries)], "email_mode": get_email_mode(),
+            "can_request_late": registration_state(season)["status"] == "closed" and _season_end(season) > datetime.now(timezone.utc)}
 
 
 def _availability_payload(db, club, season, meet):
@@ -506,8 +533,17 @@ def install_interclub_player_pool_routes(app, *, get_supabase_client):
     def get_approvals(club_id: str, season_id: UUID, response: Response, authorization: str | None = auth_header()):
         _private_headers(response)
         db, _ = organizer_context(club_id, season_id, authorization)
-        rows = _rows(_query(db, MEMBERS, APPROVAL_FIELDS, season_id=str(season_id), status="active").order("name").limit(1000))
-        return {"members": [{key: row.get(key) for key in APPROVAL_FIELDS.split(",")} for row in rows]}
+        filters = {"season_id": str(season_id), "status": "active", "late_join": True}
+        # Ordinary members and prior decisions must not fill the bounded queue
+        # before a commissioner sees the requests still awaiting a decision.
+        rows = _rows(_query(db, MEMBERS, APPROVAL_FIELDS, **filters, approval_status="pending")
+                     .order("name").order("id").limit(1000))
+        if len(rows) < 1000:
+            rows += _rows(_query(db, MEMBERS, APPROVAL_FIELDS, **filters)
+                          .in_("approval_status", ["approved", "rejected"])
+                          .order("name").order("id").limit(1000 - len(rows)))
+        members = [{key: row.get(key) for key in APPROVAL_FIELDS.split(",")} for row in rows]
+        return {"members": _late_request_metadata(db, season_id, members)}
 
     @app.post("/admin/clubs/{club_id}/interclub/registrations/{season_id}/pool/approvals")
     def review_approval(club_id: str, season_id: UUID, body: PoolApproval, response: Response, authorization: str | None = auth_header()):
@@ -515,7 +551,8 @@ def install_interclub_player_pool_routes(app, *, get_supabase_client):
         db, user = organizer_context(club_id, season_id, authorization)
         result = pool_rpc(db, "pcs_review_interclub_pool_member", {**pool_actor(user, club_id, season_id),
             "p_member_id": str(body.member_id), "p_revision": body.expected_revision, "p_approve": body.approve, "p_reason": body.reason})
-        return {"member": {key: result.get(key) for key in APPROVAL_FIELDS.split(",")}}
+        member = {key: result.get(key) for key in APPROVAL_FIELDS.split(",")}
+        return {"member": _late_request_metadata(db, season_id, [member])[0]}
 
     @app.get(base + "/pool")
     def get_pool(club_id: str, season_id: UUID, response: Response, authorization: str | None = auth_header()):
@@ -558,6 +595,25 @@ def install_interclub_player_pool_routes(app, *, get_supabase_client):
         members = [{key: row[key] for key in ("name", "email", "player_id", "divisions", "notes")} for row in preview["rows"]]
         result = pool_rpc(db, "pcs_interclub_pool_bulk_add", {**pool_actor(user, club_id, season_id), "p_members": members})
         return {"added_count": result["added_count"], "skipped_count": result["skipped_count"], "pool": _pool_payload(db, club, season)}
+
+    @app.post("/admin/clubs/{club_id}/interclub/registrations/{season_id}/pool/late-requests")
+    def request_late_member(club_id: str, season_id: UUID, body: LatePlayerRequest, response: Response, authorization: str | None = auth_header()):
+        _private_headers(response)
+        db, user, club, season = pool_admin_context(get_supabase_client, authorization, club_id, season_id)
+        require_season_phase(season)
+        if _season_end(season) <= datetime.now(timezone.utc):
+            raise HTTPException(409, "This season has ended and no longer accepts late player requests.")
+        if not set(body.divisions).issubset(season["details"]["divisions"]):
+            raise HTTPException(422, "Choose divisions from this season.")
+        player = _one(db, "players", PLAYER_FIELDS, club_id=club_id, active=True, id=body.player_id)
+        if not player:
+            raise HTTPException(422, "Choose an active player from this club.")
+        divisions = body.divisions or _choices(db, club_id, season, [player])[0]["eligible_divisions"]
+        _secret()
+        row = pool_rpc(db, "pcs_request_interclub_late_player", {**pool_actor(user, club_id, season_id),
+            "p_player_id": body.player_id, "p_divisions": divisions, "p_reason": body.reason})
+        member = {**_profile_summaries(db, club_id, season, [row])[0], "manage_url": pool_member_url(row, season)}
+        return {"member": member, "pool": _pool_payload(db, club, season)}
 
     @app.patch("/admin/clubs/{club_id}/interclub/registrations/{season_id}/pool/members/{member_id}")
     def update_member(club_id: str, season_id: UUID, member_id: UUID, body: PoolMemberUpdate, response: Response, authorization: str | None = auth_header()):

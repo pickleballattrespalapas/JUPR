@@ -6,13 +6,14 @@ type JsonRequest = <R>(url: string, method?: string, body?: object) => Promise<R
 class RequestError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
 }
-export function usePoolResource<T>(url: string, accessToken: string) {
+export function usePoolResource<T>(url: string, accessToken: string, refreshKey = 0) {
   const [data, setData] = useState<T | null>(null), [loading, setLoading] = useState(true);
   const [error, setError] = useState(""), [busy, setBusy] = useState(false), [blocked, setBlocked] = useState(false);
   const [revision, setRevision] = useState(0);
   const token = useRef(accessToken); token.current = accessToken;
   const pending = useRef(false), mutation = useRef<AbortController | null>(null);
   const generation = useRef(0);
+  const lastRead = useRef({ url, refreshKey });
   useEffect(() => () => { generation.current++; mutation.current?.abort(); }, [url]);
   const request = (signal: AbortSignal): JsonRequest => async <R,>(address: string, method?: string, body?: object): Promise<R> => {
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");
@@ -24,14 +25,19 @@ export function usePoolResource<T>(url: string, accessToken: string) {
     return value as R;
   };
   useEffect(() => {
-    const controller = new AbortController(); setLoading(true); setData(null); setError(""); setBlocked(false);
-    request(controller.signal)<T>(url).then(value => { if (!controller.signal.aborted) setData(value); })
+    const background = lastRead.current.url === url && lastRead.current.refreshKey !== refreshKey;
+    lastRead.current = { url, refreshKey };
+    const previousData = data;
+    const controller = new AbortController(); setLoading(true);
+    if (!background) { setData(null); setBlocked(false); setError(""); }
+    else if (!blocked) setError("");
+    request(controller.signal)<T>(url).then(value => { if (!controller.signal.aborted) setData(current => background && current !== previousData ? current : value); })
       .catch(reason => { if (!controller.signal.aborted) setError(reason instanceof RequestError ? reason.message : "Unable to load this section. Please try again."); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-    // Token refresh must preserve draft edits and selections.
+    // Token refresh preserves drafts. A background read must not replace a newer mutation result.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [url, revision]);
+  }, [url, revision, refreshKey]);
   async function perform<R>(operation: (json: JsonRequest) => Promise<R>, onError?: (status: number) => void): Promise<R | null> {
     if (pending.current || blocked) return null;
     pending.current = true; setBusy(true); setError("");

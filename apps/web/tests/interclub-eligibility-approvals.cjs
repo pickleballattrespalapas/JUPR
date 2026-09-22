@@ -10,21 +10,21 @@ const button=(tree,label)=>tree.root.findAllByType('button').find(n=>nodeText(n)
 const text=tree=>JSON.stringify(tree.toJSON()),reply=(body,status=200)=>({ok:status<400,status,json:async()=>body});
 const root='https://api.test/admin/clubs/organizer/interclub/registrations/season-1';
 const props={root,accessToken:'token-one',clubs:[{id:'away',name:'Away Club'}]};
-const member={id:'member-1',club_id:'away',name:'Late Traveler',player_id:'12',revision:4,approval_status:'pending',late_join:true};
+const member={id:'member-1',club_id:'away',name:'Late Traveler',player_id:'12',revision:4,approval_status:'pending',late_join:true,late_request_reason:'Club requests a visiting player arriving in February'};
 async function reviews(){
  let requests=[],finish,members=[member,{...member,id:'timely',name:'Timely Unlinked',late_join:false,player_id:null}];
  global.fetch=async(url,options)=>{requests.push({url,options});if(options.method==='POST')return new Promise(resolve=>{finish=resolve});return reply({members});};
  let tree;await act(async()=>{tree=create(React.createElement(Panel,props));});
  assert.equal(requests[0].url,root+'/pool/approvals');assert.equal(requests[0].options.headers.Authorization,'Bearer token-one');assert.equal(requests[0].options.cache,'no-store');
  assert.ok(text(tree).includes('Late Traveler')&&text(tree).includes('Away Club'));assert.ok(!text(tree).includes('Timely Unlinked'));
- assert.ok(text(tree).includes('league organizer')&&text(tree).includes('contact details'));
- assert.equal(button(tree,'Approve season eligibility').props.disabled,true);
+ assert.ok(text(tree).includes('commissioner')&&text(tree).includes('contact details'));
+ assert.ok(text(tree).includes('Club requests a visiting player arriving in February'));assert.ok(text(tree).includes('Cannot play'));assert.equal(button(tree,'Approve season eligibility').props.disabled,true);
  await act(async()=>tree.root.findByType('input').props.onChange({target:{value:'  Visitor arriving in February  '}}));
  await act(async()=>{void button(tree,'Approve season eligibility').props.onClick();void button(tree,'Approve season eligibility').props.onClick();});
  assert.equal(requests.filter(r=>r.options.method==='POST').length,1);
  assert.deepEqual(JSON.parse(requests.at(-1).options.body),{member_id:'member-1',expected_revision:4,approve:true,reason:'Visitor arriving in February'});assert.ok(!requests.at(-1).options.body.includes('email'));
- members=[{...member,revision:5,approval_status:'approved'}];await act(async()=>finish(reply({member:members[0]})));
- assert.ok(text(tree).includes('approved for the season pool'));assert.ok(text(tree).includes('No late signups are waiting'));
+ members=[{...member,revision:5,approval_status:'approved',approval_reason:'Visitor arriving in February'}];await act(async()=>finish(reply({member:members[0]})));
+ assert.ok(text(tree).includes('approved for the season pool'));assert.ok(text(tree).includes('Reviewed late players'));assert.ok(text(tree).includes('Visitor arriving in February'));assert.ok(text(tree).includes('No late player requests are waiting'));
  members=[{...member,revision:6}];await act(async()=>button(tree,'Refresh eligibility requests').props.onClick());
  await act(async()=>tree.update(React.createElement(Panel,{...props,accessToken:'token-two'})));
  await act(async()=>tree.root.findByType('input').props.onChange({target:{value:'Wrong club request'}}));await act(async()=>button(tree,'Do not approve').props.onClick());
@@ -33,8 +33,8 @@ async function reviews(){
  assert.equal(button(tree,'Do not approve').props.disabled,true);assert.equal(button(tree,'Approve season eligibility').props.disabled,true);assert.ok(text(tree).includes('signup changed'));
  members=[{...member,revision:7}];await act(async()=>button(tree,'Refresh eligibility requests').props.onClick());
  await act(async()=>tree.root.findByType('input').props.onChange({target:{value:'Organizer declined'}}));await act(async()=>button(tree,'Do not approve').props.onClick());
- members=[{...member,revision:8,approval_status:'rejected'}];await act(async()=>finish(reply({member:members[0]})));
- assert.ok(text(tree).includes('not approved'));assert.ok(text(tree).includes('No late signups are waiting'));await act(async()=>tree.unmount());
+ members=[{...member,revision:8,approval_status:'rejected',approval_reason:'Organizer declined'}];await act(async()=>finish(reply({member:members[0]})));
+ assert.ok(text(tree).includes('not approved'));assert.ok(text(tree).includes('Rejected · cannot play'));assert.ok(text(tree).includes('Organizer declined'));assert.ok(text(tree).includes('No late player requests are waiting'));await act(async()=>tree.unmount());
 }
 async function unlinkedAndStale(){
  let finish,lastSignal;global.fetch=async(url,options)=>{if(options.method){lastSignal=options.signal;return new Promise(resolve=>{finish=resolve})}return reply({members:[{...member,player_id:null}]});};
@@ -59,4 +59,23 @@ async function approvalAnchor(){
  assert.equal(scrolls,1,'Ordinary rerenders do not repeat the scroll');
  await act(async()=>tree.unmount());delete global.window;
 }
-(async()=>{await reviews();await unlinkedAndStale();await approvalAnchor();console.log('PASS interclub eligibility approvals: revisions, review, privacy, late-only queue, stale context and async deep link');})().catch(error=>{console.error(error);process.exit(1)});
+async function refreshedQueuePreservesDecision(){
+ let tree,finish,reads=0,decisions=0;
+ global.fetch=async(url,options)=>{
+  if(options.method)return reply({member:{...member,revision:5,approval_status:'approved'}});
+  if(reads++)return new Promise(resolve=>{finish=resolve;});
+  return reply({members:[member]});
+ };
+ const current={...props,refreshKey:0,onDecision:()=>{decisions++;}};
+ await act(async()=>{tree=create(React.createElement(Panel,current));});
+ await act(async()=>tree.root.findByType('input').props.onChange({target:{value:'Keep this decision reason'}}));
+ await act(async()=>tree.update(React.createElement(Panel,{...current,refreshKey:1})));
+ assert.equal(tree.root.findByType('input').props.value,'Keep this decision reason','A newly submitted request does not clear another commissioner decision draft');
+ await act(async()=>finish(reply({members:[member,{...member,id:'member-2',name:'Second Traveler'}]})));
+ assert.equal(tree.root.findAllByType('input')[0].props.value,'Keep this decision reason');
+ await act(async()=>button(tree,'Approve season eligibility').props.onClick());
+ assert.equal(decisions,1,'A completed decision refreshes the represented club pool');
+ await act(async()=>finish(reply({members:[]})));
+ await act(async()=>tree.unmount());
+}
+(async()=>{await reviews();await unlinkedAndStale();await approvalAnchor();await refreshedQueuePreservesDecision();console.log('PASS interclub eligibility approvals: revisions, request reasons and decisions, privacy, late-only queue, background draft preservation, stale context and async deep link');})().catch(error=>{console.error(error);process.exit(1)});

@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
@@ -17,7 +18,7 @@ from services.api.interclub_competition_models import CompetitionDocument
 from services.api.interclub_registration_routes import SEASON_FIELDS, MEET_FIELDS as REGISTRATION_MEET_FIELDS, TEAM_FIELDS, safe_roster
 from services.api.interclub_registration_phase import registration_season, registration_state, require_season_phase
 
-MEET_FIELDS = REGISTRATION_MEET_FIELDS
+MEET_FIELDS = REGISTRATION_MEET_FIELDS + ",schedule_editable,schedule_locked_reason,courts_editable,schedule_deadline_editable"
 
 Phase = Literal["regular", "final", "qualifier"]
 BATCH_FIELDS = "id,season_id,meet_id,phase,revision,state,document,roster_sources,ratings_status,ratings_error,approved_document,approved_revision,approved_at,updated_at"
@@ -32,6 +33,7 @@ class Revision(StrictModel):
 
 
 class CreateMeet(StrictModel):
+    request_id: UUID | None = None
     host_club_id: str = Field(min_length=1, max_length=100)
     club_ids: list[str] = Field(min_length=2, max_length=32)
     starts_at: AwareDatetime
@@ -46,9 +48,35 @@ class CreateMeet(StrictModel):
             raise ValueError("Choose each club only once.")
         if self.competition_phase == "regular" and len(self.club_ids) > 4:
             raise ValueError("A regular meet has two to four clubs.")
+        if self.host_club_id not in self.club_ids:
+            raise ValueError("The host club must participate in its meet.")
         if self.roster_deadline <= datetime.now(timezone.utc) or self.roster_deadline > self.starts_at:
             raise ValueError("Choose a future roster deadline no later than the meet.")
         return self
+
+
+class UpdateMeetSchedule(Revision):
+    starts_at: AwareDatetime
+    roster_deadline: AwareDatetime
+    courts: int = Field(ge=1, le=100)
+    duration_minutes: int = Field(ge=30, le=180)
+
+    @model_validator(mode="after")
+    def valid(self):
+        if self.starts_at <= datetime.now(timezone.utc) or self.roster_deadline > self.starts_at:
+            raise ValueError("Choose a future meet with its deadline no later than the start.")
+        return self
+
+
+def _schedule_dates(season, starts_at, duration_minutes):
+    details = season["details"]
+    zone = ZoneInfo(details["timezone"])
+    first, last = date.fromisoformat(details["start_date"]), date.fromisoformat(details["end_date"])
+    if not first <= starts_at.astimezone(zone).date() <= last or (starts_at + timedelta(minutes=duration_minutes)).astimezone(zone).date() > last:
+        raise HTTPException(422, "The whole meet must fall within the season dates in the league timezone.")
+    closes_at = datetime.fromisoformat(season["registration_closes_at"].replace("Z", "+00:00"))
+    if starts_at < closes_at:
+        raise HTTPException(422, "The meet must start after season registration closes.")
 
 
 class Generate(Revision):
@@ -120,6 +148,8 @@ def _rpc(db, params, name="pcs_write_interclub_competition"):
             "P0002": (404, "Meet or competition workspace unavailable."),
             "PT423": (423, "Meet planning is locked until season registration closes for all clubs."),
         }.get(code, (503, "Could not confirm the update. Reload before retrying."))
+        if name in {"pcs_create_interclub_competition_meet", "pcs_update_interclub_meet_schedule"} and code == "22023":
+            message = "Check season dates, registration close, accepted clubs and overlapping meets. The deadline must be no later than the start."
         raise HTTPException(status, message) from exc
 
 
@@ -386,9 +416,36 @@ def install_interclub_competition_routes(app, *, get_supabase_client):
         require_season_phase(season)
         if not set(body.club_ids).issubset(accepted) or body.host_club_id not in accepted:
             raise HTTPException(422, "Choose accepted clubs and an accepted host club.")
+        _schedule_dates(season, body.starts_at, body.duration_minutes)
         meet = _rpc(db, {"p_actor_id": user.user_id, "p_actor_email": user.email, "p_club_id": club_id,
                         "p_season_id": str(season_id), "p_meet": body.model_dump(mode="json")}, "pcs_create_interclub_competition_meet")
-        return {"meet": meet}
+        return {"meet": meet, "publication_review_required": True}
+
+    # Keep this fixed suffix before the generic /{phase} score route.
+    @app.put("/admin/clubs/{club_id}/interclub/competition/{season_id}/meets/{meet_id}/schedule")
+    def update_meet_schedule(club_id: str, season_id: UUID, meet_id: UUID, body: UpdateMeetSchedule, authorization: str | None = auth_header()):
+        db, user, assignments = actor(club_id, authorization)
+        season, accepted = access(db, club_id, season_id)
+        if season["organizer_club_id"] != club_id or not any(row["role"] in ADMIN_ROLES for row in assignments):
+            raise HTTPException(403, "Only the commissioner can change the meet schedule.")
+        require_season_phase(season)
+        meet, _, _ = meet_access(db, club_id, season, meet_id, assignments)
+        if meet["revision"] != body.expected_revision:
+            raise HTTPException(409, "This meet changed. Reload before saving.")
+        if meet.get("schedule_editable") is not True:
+            raise HTTPException(409, meet.get("schedule_locked_reason") or "This meet cannot be edited. Reload its schedule.")
+        if not set(meet["club_ids"]).issubset(accepted) or meet["host_club_id"] not in accepted:
+            raise HTTPException(422, "All scheduled clubs and the host must have accepted the season.")
+        _schedule_dates(season, body.starts_at, body.duration_minutes)
+        old_deadline = datetime.fromisoformat(meet["roster_deadline"].replace("Z", "+00:00"))
+        if body.roster_deadline != old_deadline and (not meet.get("schedule_deadline_editable") or body.roster_deadline <= datetime.now(timezone.utc)):
+            raise HTTPException(409, "Keep the frozen eligibility deadline or use the weather replay workflow.")
+        if body.courts != meet["courts"] and not meet.get("courts_editable"):
+            raise HTTPException(409, "Keep the courts assigned to the generated match schedule.")
+        return _rpc(db, {"p_actor_id": user.user_id, "p_actor_email": user.email, "p_club_id": club_id,
+                        "p_season_id": str(season_id), "p_meet_id": str(meet_id), "p_revision": body.expected_revision,
+                        "p_starts_at": body.starts_at.isoformat(), "p_deadline": body.roster_deadline.isoformat(),
+                        "p_duration": body.duration_minutes, "p_courts": body.courts}, "pcs_update_interclub_meet_schedule")
 
     @app.get("/admin/clubs/{club_id}/interclub/competition/{season_id}/meets/{meet_id}/{phase}")
     def detail(club_id: str, season_id: UUID, meet_id: UUID, phase: Phase, authorization: str | None = auth_header()):

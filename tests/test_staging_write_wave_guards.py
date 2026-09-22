@@ -494,8 +494,11 @@ def test_every_communications_route_has_an_independent_service_guard() -> None:
     ("admin-tools", "PUT", "/admin/clubs/alpha/interclub/registrations/season/registration-window"),
     ("admin-tools", "POST", "/admin/clubs/alpha/interclub/registrations/season/pool/bulk-preview"),
     ("admin-tools", "POST", "/admin/clubs/alpha/interclub/registrations/season/pool/bulk-add"),
+    ("admin-tools", "POST", "/admin/clubs/alpha/interclub/registrations/season/pool/late-requests"),
     ("admin-tools", "PATCH", "/admin/clubs/alpha/interclub/registrations/season/pool/members/member"),
     ("admin-tools", "PUT", "/admin/clubs/alpha/interclub/registrations/season/meets/meet/availability"),
+    ("admin-tools", "POST", "/admin/clubs/alpha/interclub/competition/season/meets"),
+    ("admin-tools", "PUT", "/admin/clubs/alpha/interclub/competition/season/meets/meet/schedule"),
     ("communications", "POST", "/admin/clubs/alpha/interclub/player-pools/season/emails/preview"),
     ("communications", "POST", "/admin/clubs/alpha/interclub/player-pools/season/emails"),
     ("communications", "POST", "/admin/clubs/alpha/interclub/player-pools/season/emails/operation/recipients/0/send"),
@@ -503,6 +506,8 @@ def test_every_communications_route_has_an_independent_service_guard() -> None:
 def test_interclub_player_pool_routes_require_their_exact_reviewed_wave(wave, method, path):
     assert wave_allows_request("open", method, path)
     assert wave_allows_request(wave, method, path)
+    assert {candidate for candidate in STAGING_WRITE_WAVES if wave_allows_request(candidate, method, path)} == {wave}
     assert not wave_allows_request(NO_WRITE_WAVE, method, path)
     assert not wave_allows_request("support-requests", method, path)
     assert not wave_allows_request(wave, method, path + "/extra")
+    assert all(not wave_allows_request(wave, other.upper(), path) for other in UNSAFE_METHODS if other.upper() != method)

@@ -13,7 +13,7 @@ export type CompetitionBatch = { meet_id: string; phase: CompetitionPhase; revis
 export type StandingRow = { club_id: string; division?: string; points: number; pairings_won: number; games_won: number; point_differential: number; meets_played?: number; regular_points?: number; championship_points?: number; qualified?: boolean; position?: number; tied?: boolean };
 export type StandingsGroup = { division: string; standings: StandingRow[]; qualifying_playoff_required?: boolean; tied_clubs?: string[] };
 export type Qualification = { qualifiers: string[]; playoff_required: string[]; eligible: string[]; status: "ready" | "playoff_required" | "insufficient_entries" };
-export type CompetitionMeet = InterclubMeet & { competition_phase?: CompetitionPhase };
+export type CompetitionMeet = InterclubMeet & { competition_phase?: CompetitionPhase; schedule_editable?: boolean; schedule_locked_reason?: string | null; schedule_deadline_editable?: boolean; courts_editable?: boolean };
 export type CompetitionContext = { season: RegistrationSeason; clubs: { id: string; name: string }[]; meets: CompetitionMeet[]; batches: CompetitionBatch[]; is_organizer: boolean; standings: { divisions: Record<string, StandingRow[]>; qualification: Record<string, Qualification> }; club_cup: { standings: StandingRow[]; champions: string[]; status: "provisional" | "complete" }; qualifying?: Record<string, Qualification> };
 export type MeetCompetition = { meet: CompetitionMeet; batch: CompetitionBatch | null; teams: CompetitionTeam[]; can_manage: boolean; is_organizer: boolean; lineups_hidden?: boolean; eligible_players?: Record<string, CompetitionPlayer[]>; display_players?: CompetitionPlayer[] };
 

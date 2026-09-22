@@ -10,6 +10,36 @@ and return JSON-compatible dictionaries. They raise `ValueError` with actionable
 messages on invalid input. Database revision, permissions, source roster checks,
 entry ownership, gender, rating cutoff, and late approvals are API concerns.
 
+## Upcoming meet schedule API
+
+Base `/admin/clubs/{club_id}/interclub/competition/{season_id}`. Scheduling
+requires the commissioner's administrator assignment and closed season
+registration. The season workspace exposes these actions under **Meet schedule**.
+
+- `POST {base}/meets` accepts `{request_id?:UUID,host_club_id,club_ids,starts_at,
+  roster_deadline,courts,duration_minutes,competition_phase}` and returns
+  `{meet,publication_review_required:true}`. Regular meets have two to four
+  accepted clubs. Identical request IDs and payloads return the original meet;
+  reusing an ID with different details returns 409.
+- `PUT {base}/meets/{meet_id}/schedule` accepts `{expected_revision,starts_at,
+  roster_deadline,courts,duration_minutes}` and returns
+  `{meet,availability_reset_count,rosters_refreshed,publication_review_required:true}`.
+  Host, clubs and competition phase remain bound to this meet. Changed revisions
+  return 409. The whole meet must fit the season's local dates, follow registration,
+  and avoid overlapping host/club commitments.
+- Meet context supplies `schedule_editable`, `schedule_locked_reason`,
+  `schedule_deadline_editable`, and `courts_editable`. Started, scored, replayed or
+  approved meets use the existing weather/results workflow. Once ratings are
+  frozen or a competition batch exists, the eligibility cutoff stays fixed.
+
+Changing a future unfrozen cutoff creates new roster revisions preserving player
+choices; existing exception decisions require review again. Changing the meet
+time or duration resets RSVP answers, rotates reply links and closes availability
+collection. Clubs must reopen collection and invite players to reconfirm. Previous
+responses and roster revisions remain audited. No invitations are sent by schedule
+edits. The season's canonical calendar projection updates immediately; a public
+publication remains unchanged until explicitly reviewed and republished.
+
 ```json
 {
   "schema_version": 1,

@@ -3,7 +3,7 @@ const React = require('react'), ts = require('typescript'), { create, act } = re
 function load(file, mocks = {}) {
   const code = ts.transpileModule(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true } }).outputText;
   const module = { exports: {} };
-  new Function('require', 'module', 'exports', code)(n => n === '@/lib/interclubRegistrationWindow' ? load('lib/interclubRegistrationWindow.ts') : n === '@/lib/useRegistrationWindow' ? load('lib/useRegistrationWindow.ts', { './interclubRegistrationWindow': load('lib/interclubRegistrationWindow.ts') }) : n === './SeasonRegistrationWindow' ? load('app/admin/interclub/registrations/SeasonRegistrationWindow.tsx', { '@/lib/interclubRegistration': helpers, './registrations.module.css': {} }) : n === '@/lib/interclubSetup' ? load('lib/interclubSetup.ts') : n === '../InterclubWorkflow' ? load('app/admin/interclub/InterclubWorkflow.tsx', { 'next/link': Link, './workflow.module.css': {} }) : n === './SeasonEligibilityApprovals' ? { default: () => null, __esModule: true } : n === './PlayerPoolPanels' ? { SeasonPlayerPool: p => React.createElement('section', { 'data-pool-root': p.root }), MeetAvailability: p => React.createElement('section', { 'data-availability-root': p.meetRoot, onResponses: p.onResponses }) } : Object.hasOwn(mocks, n) ? mocks[n] : require(n), module, module.exports);
+  new Function('require', 'module', 'exports', code)(n => n === '@/lib/interclubRegistrationWindow' ? load('lib/interclubRegistrationWindow.ts') : n === '@/lib/useRegistrationWindow' ? load('lib/useRegistrationWindow.ts', { './interclubRegistrationWindow': load('lib/interclubRegistrationWindow.ts') }) : n === './SeasonRegistrationWindow' ? load('app/admin/interclub/registrations/SeasonRegistrationWindow.tsx', { '@/lib/interclubRegistration': helpers, './registrations.module.css': {} }) : n === '@/lib/interclubSetup' ? load('lib/interclubSetup.ts') : n === '../InterclubWorkflow' ? load('app/admin/interclub/InterclubWorkflow.tsx', { 'next/link': Link, './workflow.module.css': {} }) : n === './SeasonMeetSchedule' ? { default: () => null, __esModule: true } : n === './SeasonEligibilityApprovals' ? { default: p => React.createElement('section', { 'data-eligibility-root': p.root, 'data-refresh-key': p.refreshKey, onDecision: p.onDecision }), __esModule: true } : n === './PlayerPoolPanels' ? { SeasonPlayerPool: p => React.createElement('section', { 'data-pool-root': p.root, 'data-refresh-key': p.refreshKey, onLateRequested: p.onLateRequested }), MeetAvailability: p => React.createElement('section', { 'data-availability-root': p.meetRoot, onResponses: p.onResponses }) } : Object.hasOwn(mocks, n) ? mocks[n] : require(n), module, module.exports);
   return module.exports;
 }
 const helpers = load('lib/interclubRegistration.ts');
@@ -479,6 +479,48 @@ async function phaseRefreshCannotUndoAcceptance() {
   } finally { global.window = originalWindow; }
 }
 
+async function updatedPlayersAndSchedulePreserveLineupDraft() {
+  const originalWindow = global.window; global.window = new EventTarget();
+  let currentMeet = { ...meet, host_club_id: 'alpha', club_ids: ['alpha', 'beta'], deadline_editable: false };
+  let people = lineup.map(player => ({ id: player.player_id, name: player.name, starting_rating: player.starting_rating }));
+  const reads = [], Page = phaseWorkspace(true); let tree;
+  global.fetch = async (url, options) => {
+    reads.push(url);
+    assert.equal(options.method, undefined, 'This scenario only refreshes confirmed data');
+    if (url.endsWith('/registrations')) return reply({ seasons: [season] });
+    if (url.includes('/players?')) return reply({ players: people, next_offset: null });
+    if (url.includes('/meets/')) return reply({ meet: currentMeet, teams: [], next_team_offset: null });
+    return reply({ season, meets: [currentMeet], is_organizer: true, own_participation: { status: 'accepted' }, participations: [], clubs: [{ id: 'alpha', name: 'Alpha Club' }], teams: [], next_team_offset: null });
+  };
+  try {
+    await act(async () => { tree = create(React.createElement(Page, { initialSeasonId: sid, initialMeetId: mid, initialStep: 'lineups' })); });
+    await act(async () => button(tree, 'Add a team for this meet').props.onClick());
+    const name = () => tree.root.findAllByType('input').find(input => input.props.maxLength === 80 && !input.props.type);
+    await act(async () => name().props.onChange({ target: { value: 'Draft lineup' } }));
+    await act(async () => tree.root.findAllByProps({ type: 'checkbox' }).slice(0, 4).forEach(input => input.props.onChange()));
+    people = [...people, { id: '5', name: 'Newly Approved Player', starting_rating: 3.2 }];
+    const beforePlayers = reads.filter(url => url.includes('/players?')).length;
+    const approvals = () => tree.root.findAll(node => node.props['data-eligibility-root'])[0];
+    const pool = () => tree.root.findAll(node => node.props['data-pool-root'])[0];
+    await act(async () => approvals().props.onDecision());
+    assert.equal(pool().props['data-refresh-key'], 1);
+    assert.equal(reads.filter(url => url.includes('/players?')).length, beforePlayers + 1, 'An approval refreshes an already-open player picker');
+    assert.ok(textContent(tree).includes('Newly Approved Player'));
+    assert.equal(name().props.value, 'Draft lineup');
+    assert.equal(tree.root.findAllByProps({ type: 'checkbox' }).filter(input => input.props.checked).length, 4, 'Approval refresh preserves current selections');
+    await act(async () => pool().props.onLateRequested());
+    assert.equal(approvals().props['data-refresh-key'], 1, 'A new request refreshes commissioner approvals');
+    currentMeet = { ...currentMeet, revision: currentMeet.revision + 1, starts_at: '2099-01-11T18:00:00Z' };
+    await act(async () => window.dispatchEvent(new Event('focus')));
+    assert.equal(name().props.value, 'Draft lineup', 'Schedule changes preserve an unsaved lineup');
+    assert.equal(button(tree, 'Submit four-player roster').props.disabled, true);
+    assert.ok(textContent(tree).includes('This meet’s schedule changed. Your lineup draft is kept below.'));
+    await act(async () => button(tree, 'Reload meet').props.onClick());
+    assert.equal(name(), undefined, 'Only the explicit reload discards the stale draft');
+    await act(async () => tree.unmount());
+  } finally { global.window = originalWindow; }
+}
+
 async function loadFailuresCanBeRetried() {
   const requests = [];
   global.fetch = (url, options) => new Promise((resolve, reject) => requests.push({ url, options, resolve, reject }));
@@ -531,5 +573,5 @@ async function loadFailuresCanBeRetried() {
   await act(async () => tree.unmount());
 }
 
-(async () => { await clubsAndRosters(); await invitationResponses(); await deepLinkContext(); await registrationPhaseLocks(); await commissionerWindowEditor(); await savedClosedWindowLoadsMeets(); await serverConfirmedWindowBoundary(); await phaseRefreshCannotUndoAcceptance(); await loadFailuresCanBeRetried(); console.log('Interclub registration: invitation outcomes, commissioner window dates, phase gates and server-confirmed boundaries, meet-specific lineups, scoped players, stale saves, deep-link context, stage draft preservation, load failures and retries passed.'); })()
+(async () => { await clubsAndRosters(); await invitationResponses(); await deepLinkContext(); await registrationPhaseLocks(); await commissionerWindowEditor(); await savedClosedWindowLoadsMeets(); await serverConfirmedWindowBoundary(); await phaseRefreshCannotUndoAcceptance(); await updatedPlayersAndSchedulePreserveLineupDraft(); await loadFailuresCanBeRetried(); console.log('Interclub registration: invitation outcomes, commissioner window dates, phase gates and server-confirmed boundaries, meet-specific lineups, scoped players, stale saves, deep-link context, stage draft preservation, load failures and retries passed.'); })()
   .catch(e => { console.error(e); process.exitCode = 1; });

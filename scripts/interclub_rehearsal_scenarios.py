@@ -344,11 +344,113 @@ def qualifier(r):
     return s
 
 
+def season_adjustments(r):
+    """Commissioner exceptions and calendar edits use isolated future fixtures."""
+    r.phase("closed registration late requests and upcoming meet changes")
+    s = r.season("season-adjustments", club_count=2)
+    club, organizer = s["clubs"][1], s["clubs"][0]
+    root = r.registration(club, s["id"])
+    review_root = r.registration(organizer, s["id"])+"/pool/approvals"
+    requests = []
+    for label in ("approved", "rejected"):
+        player_id = 7000000000000 + int(uuid4().hex[:11], 16)
+        r.db("POST", "players", {"id": player_id, "club_id": club,
+            "name": "Late request rehearsal "+label, "normalized_name": "late "+s["id"]+" "+label,
+            "rating": 1500, "starting_rating": 1500, "active": True, "gender": "female"})
+        requests.append({"player_id": player_id, "divisions": ["3.5"], "reason": "Verbal commitment after registration closed: "+label})
+    r.api("POST", root+"/pool/late-requests", requests[0], actor=1, expected=(423,))
+    r.close_registration(s)
+    window = dict(s["registration"])
+    pending = r.api("POST", root+"/pool/late-requests", requests[0], actor=1)["member"]
+    r.check(pending["approval_status"] == "pending" and pending["late_join"]
+            and pending["late_request_reason"] == requests[0]["reason"],
+            "post-close request remains pending even before season starts and preserves its explanation")
+    r.check(not r.db("GET", "pcs_interclub_entries", season_id="eq."+s["id"], player_id="eq."+str(requests[0]["player_id"])),
+            "pending late request cannot seed league participation")
+    r.api("POST", root+"/pool/late-requests", requests[0], actor=1, expected=(409,))
+    r.api("POST", r.registration(organizer, s["id"])+"/pool/late-requests", requests[0], actor=1, expected=(403,))
+    decision = {"member_id": pending["id"], "expected_revision": pending["revision"],
+                "approve": True, "reason": "Commissioner accepts the late commitment"}
+    r.api("POST", root+"/pool/approvals", decision, actor=1, expected=(403,))
+    approved = r.api("POST", review_root, decision)["member"]
+    r.api("POST", review_root, decision, expected=(409,))
+    r.check(approved["approval_status"] == "approved" and approved["late_request_reason"] == requests[0]["reason"]
+            and approved["approval_reason"] == decision["reason"], "commissioner approval retains separate request and decision reasons")
+    rejected = r.api("POST", root+"/pool/late-requests", requests[1], actor=1)["member"]
+    rejected = r.api("POST", review_root, {"member_id": rejected["id"], "expected_revision": rejected["revision"],
+        "approve": False, "reason": "Commissioner declines this rehearsal request"})["member"]
+    r.check(rejected["approval_status"] == "rejected" and not r.db("GET", "pcs_interclub_entries",
+        season_id="eq."+s["id"], player_id="eq."+str(requests[1]["player_id"])), "rejected request remains out of league participation")
+
+    meet = s["meets"][0]
+    team = r.roster(s, meet, club, "3.5")["team"]
+    original_players = [p["player_id"] for p in team["roster"]]
+    availability = root+"/meets/"+meet["id"]+"/availability"
+    r.api("PUT", availability, {"expected_revision": 0, "open": True, "deadline": iso(now()+timedelta(days=1))}, actor=1)
+    eroot = f"/admin/clubs/{club}/interclub/player-pools/{s['id']}/emails"
+    audience = r.api("GET", eroot+"/audience?kind=meet&meet_id="+meet["id"], actor=1)
+    member_id = next(c["id"] for c in audience["candidates"] if c["available"])
+    invitation = {"kind": "meet", "meet_id": meet["id"], "recipient_ids": [member_id], **audience["defaults"]}
+    preview = r.api("POST", eroot+"/preview", invitation, actor=1)
+    operation = str(uuid4())
+    r.api("POST", eroot, {**invitation, "operation_key": operation, "preview_fingerprint": preview["preview_fingerprint"]}, actor=1)
+    sent = r.api("POST", eroot+"/"+operation+"/recipients/0/send", actor=1)
+    r.check(sent["status"] == "dry_run", "reschedule rehearsal prepares a private RSVP without sending email")
+    response = next(row for row in r.api("GET", availability, actor=1)["responses"] if row["member_id"] == member_id)
+    old_token = token(response["response_url"])
+    r.secrets.append(old_token)
+    r.api("POST", "/public/interclub-player-response/respond", {"token": old_token, "action": "respond_meet",
+        "expected_revision": response["revision"], "status": "available"}, actor=None)
+    earlier = datetime.fromisoformat(meet["starts_at"].replace("Z", "+00:00"))-timedelta(hours=12)
+    update = {"expected_revision": meet["revision"], "starts_at": iso(earlier),
+        "roster_deadline": iso(earlier-timedelta(hours=1)), "duration_minutes": 180, "courts": meet["courts"]}
+    schedule = r.competition(organizer, s["id"])+"/meets/"+meet["id"]+"/schedule"
+    r.api("PUT", r.competition(club, s["id"])+"/meets/"+meet["id"]+"/schedule", update, actor=1, expected=(403,))
+    changed = r.api("PUT", schedule, update)
+    r.api("PUT", schedule, update, expected=(409,))
+    meet.update(changed["meet"])
+    saved = next(t for t in r.api("GET", root+"/meets/"+meet["id"], actor=1)["teams"] if t["id"] == team["id"])
+    r.check([p["player_id"] for p in saved["roster"]] == original_players and saved["revision"] == team["revision"]+1
+            and changed["rosters_refreshed"] == 1 and all(not p["rating_locked"] for p in saved["roster"]),
+            "moving an upcoming meet earlier preserves selected players in an audited roster revision")
+    state = r.api("GET", availability, actor=1)
+    r.check(not state["settings"]["open"] and all(row["status"] == "invited" and not row["responded_at"] for row in state["responses"])
+            and changed["availability_reset_count"] == 1, "changed meet closes collection and requires fresh availability confirmation")
+    r.api("POST", "/public/interclub-player-response/review", {"token": old_token}, actor=None, expected=(404,))
+    r.api("PUT", availability, {"expected_revision": state["settings"]["revision"], "open": True,
+        "deadline": iso(now()+timedelta(days=1))}, actor=1)
+    refreshed = r.api("GET", availability, actor=1)["responses"][0]
+    fresh_token = token(refreshed["response_url"])
+    r.secrets.append(fresh_token)
+    reconfirmed = r.api("POST", "/public/interclub-player-response/respond", {"token": fresh_token, "action": "respond_meet",
+        "expected_revision": refreshed["revision"], "status": "available"}, actor=None)
+    r.check(reconfirmed["availability"]["status"] == "available", "fresh private response works for the rescheduled meet")
+
+    create = {"request_id": str(uuid4()), "host_club_id": club, "club_ids": s["clubs"],
+        "starts_at": iso(now()+timedelta(days=9)), "roster_deadline": iso(now()+timedelta(days=8)),
+        "duration_minutes": 180, "courts": 12, "competition_phase": "regular"}
+    add_root = r.competition(organizer, s["id"])+"/meets"
+    created = r.api("POST", add_root, create)["meet"]
+    s["meets"].append(created)
+    r.check(r.api("POST", add_root, create)["meet"]["id"] == created["id"], "retrying Add meet creates one scheduled meet")
+    r.api("POST", add_root, {**create, "courts": 10}, expected=(409,))
+    season = r.api("GET", r.registration(organizer, s["id"]))["season"]
+    projected = r.db("GET", "pcs_interclub_seasons", select="details", id="eq."+s["id"])[0]["details"]["meets"]
+    r.check(season["registration"] == window and len(projected) == 2
+            and datetime.fromisoformat(projected[0]["starts_at"].replace("Z", "+00:00")) == earlier,
+            "late approvals and calendar changes preserve closed registration and keep the season schedule current")
+    s["browser_late_player"] = "Browser late commitment"
+    r.db("POST", "players", {"id": 7000000000000 + int(uuid4().hex[:11], 16), "club_id": organizer,
+        "name": s["browser_late_player"], "normalized_name": "browser late "+s["id"],
+        "rating": 1500, "starting_rating": 1500, "active": True, "gender": "female"})
+    r.persist()
+
+
 def run(r):
     failures = []
     # Every scenario uses fresh season players, so an assertion in one should
     # not prevent the remaining independent rehearsals from producing evidence.
-    for scenario in (full_season, incidents, qualifier):
+    for scenario in (full_season, incidents, qualifier, season_adjustments):
         try:
             scenario(r)
         except Exception as exc:

@@ -99,6 +99,45 @@ test("interclub paper packet, score entry, approval and public results", async (
   await expect(page.getByRole("button", { name: "Reload meet", exact: true, includeHidden: true })).toHaveCount(0);
   expect(lockedReads, "An open signup season must not fetch operational meet details even from a direct URL").toEqual([]);
 
+  const adjustments = state.seasons.find((s: { label: string }) => s.label === "season-adjustments");
+  await page.goto(`/admin/interclub/registrations?season=${adjustments.id}`);
+  const schedule = page.getByRole("region", { name: "Meet schedule", exact: true });
+  await expect(schedule.getByRole("button", { name: "Add meet", exact: true })).toBeEnabled();
+  await expect(schedule.getByRole("row")).toHaveCount(3);
+  await schedule.getByRole("button", { name: /^Edit date for/ }).first().click();
+  const localDate = (date: Date) => new Intl.DateTimeFormat("sv-SE", { timeZone: "America/Mazatlan", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
+    .format(date).replace(" ", "T");
+  await schedule.getByLabel("Meet date and time", { exact: true }).fill(localDate(new Date(Date.parse(adjustments.meets[0].starts_at)+86_400_000)));
+  const rescheduled = page.waitForResponse(r => r.url().endsWith(`/meets/${adjustments.meets[0].id}/schedule`) && r.request().method() === "PUT");
+  await schedule.getByRole("button", { name: "Save meet date", exact: true }).click();
+  expect((await rescheduled).status()).toBe(200);
+  await expect(schedule.getByRole("status").filter({ hasText: "Meet schedule saved." })).toBeVisible();
+  await schedule.getByRole("button", { name: "Add meet", exact: true }).click();
+  await expect(schedule.getByLabel("Competition", { exact: true })).toHaveValue("regular");
+  await schedule.getByLabel("Host club", { exact: true }).selectOption(club);
+  for (const checkbox of await schedule.getByRole("checkbox").all()) {
+    if (!(await checkbox.isChecked())) await checkbox.check();
+  }
+  await schedule.getByLabel("Meet date and time", { exact: true }).fill(localDate(new Date(Date.now()+11*86_400_000)));
+  await schedule.getByLabel("Roster deadline", { exact: true }).fill(localDate(new Date(Date.now()+10*86_400_000)));
+  const added = page.waitForResponse(r => r.url().endsWith(`/competition/${adjustments.id}/meets`) && r.request().method() === "POST");
+  await schedule.getByRole("button", { name: "Add meet", exact: true }).click();
+  expect((await added).status()).toBe(200);
+  await expect(schedule.getByRole("row")).toHaveCount(4);
+  const pool = page.getByRole("region", { name: "Season player pool", exact: true });
+  await pool.getByRole("button", { name: "Request late player", exact: true }).click();
+  await pool.getByLabel("Find a late player in this club", { exact: true }).fill(adjustments.browser_late_player);
+  await pool.getByRole("radio", { name: new RegExp(adjustments.browser_late_player) }).check();
+  await pool.getByLabel("Reason for late entry", { exact: true }).fill("Player committed verbally after the season registration closed.");
+  await pool.getByRole("button", { name: "Submit late player request", exact: true }).click();
+  const approvals = page.getByRole("region", { name: "Season eligibility approvals", exact: true });
+  const applicant = approvals.getByRole("article").filter({ has: page.getByRole("heading", { name: adjustments.browser_late_player, exact: true }) });
+  await expect(applicant.getByText(/Pending approval/)).toBeVisible();
+  await applicant.getByLabel("Decision reason", { exact: true }).fill("Commissioner approves the late commitment.");
+  await applicant.getByRole("button", { name: "Approve season eligibility", exact: true }).click();
+  await expect(approvals.getByRole("status").filter({ hasText: `${adjustments.browser_late_player}: approved for the season pool.` })).toBeVisible();
+  await page.screenshot({ path: join(reportDir, "interclub-season-adjustments.png"), fullPage: true });
+
   const anonymous = await browser.newContext({ baseURL: origin });
   await bootstrapStagingContext(anonymous);
   const publicPage = await anonymous.newPage();
@@ -121,5 +160,5 @@ test("interclub paper packet, score entry, approval and public results", async (
   await anonymous.close();
   expect(errors).toEqual([]);
   writeFileSync(join(reportDir,"interclub-browser.json"),JSON.stringify({ status:"passed",candidate_sha:state.sha,
-    checks:["paper_packet_pdf","six_game_ui_entry","dirty_navigation_lock","draft_reload","whole_meet_submission","organizer_approval","both_rating_streams","registration_phase_route_lock","anonymous_public_cup","closed_signup_readonly","anonymous_player_signup","no_browser_exceptions"] },null,2));
+    checks:["paper_packet_pdf","six_game_ui_entry","dirty_navigation_lock","draft_reload","whole_meet_submission","organizer_approval","both_rating_streams","registration_phase_route_lock","upcoming_meet_edit","add_meet_after_registration","late_player_request_and_approval","anonymous_public_cup","closed_signup_readonly","anonymous_player_signup","no_browser_exceptions"] },null,2));
 });

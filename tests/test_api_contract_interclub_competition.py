@@ -26,9 +26,9 @@ def setup(monkeypatch):
     sid, mid, uid = map(str,[uuid4(),uuid4(),uuid4()])
     user=SimpleNamespace(user_id=uid,email='qa@example.invalid')
     assignment=dict(club_id='home',email=user.email,user_id=uid,role='administrator')
-    season=dict(id=sid,organizer_club_id='home',details=dict(name='BCS QA',club_ids=['home','away'],divisions=['3.5']),rules={})
+    season=dict(id=sid,organizer_club_id='home',details=dict(name='BCS QA',club_ids=['home','away'],divisions=['3.5'],start_date='2099-01-01',end_date='2099-12-31',timezone='America/Mazatlan'),rules={})
     set_registration_phase(season, "closed")
-    meet=dict(id=mid,season_id=sid,plan_index=0,host_club_id='away',club_ids=['home','away'],starts_at='2099-01-10T18:00:00Z',roster_deadline='2099-01-09T18:00:00Z',revision=1,courts=2,duration_minutes=180)
+    meet=dict(id=mid,season_id=sid,plan_index=0,host_club_id='away',club_ids=['home','away'],starts_at='2099-01-10T18:00:00Z',roster_deadline='2099-01-09T18:00:00Z',revision=1,courts=2,duration_minutes=180,schedule_editable=True,schedule_locked_reason=None,schedule_deadline_editable=True,courts_editable=True)
     teams=[]
     for club in ['home','away']:
         teams.append(dict(id=str(uuid4()),season_id=sid,meet_id=mid,club_id=club,division='3.5',name=club,revision=1,withdrawn=False,status='eligible',issues=[],
@@ -48,6 +48,8 @@ def setup(monkeypatch):
         def execute():
             if state['error']:
                 error=RuntimeError('private SQL failure');error.code=state['error'];raise error
+            if name=='pcs_update_interclub_meet_schedule':
+                return SimpleNamespace(data={'meet':{**meet,'revision':meet['revision']+1},'availability_reset_count':2,'rosters_refreshed':1,'publication_review_required':True})
             return SimpleNamespace(data=deepcopy(saved))
         return SimpleNamespace(execute=execute)
     monkeypatch.setattr(admin_auth_routes,'authenticate_bearer',lambda _:user)
@@ -228,6 +230,85 @@ def test_meet_creation_requires_organizer_and_accepted_clubs(setup):
     assert client.post(base(s)+'/meets',json=payload).status_code==422
     s['assignment']['club_id']='away';payload['club_ids']=['home','away']
     assert client.post(base(s,'away')+'/meets',json=payload).status_code==403
+
+
+def schedule_payload(s, **changes):
+    return dict(expected_revision=s['meet']['revision'],starts_at='2099-01-08T18:00:00Z',
+                roster_deadline='2099-01-07T18:00:00Z',courts=2,duration_minutes=180,**changes)
+
+
+def schedule_path(s, club='home'):
+    return base(s,club)+f"/meets/{s['meet']['id']}/schedule"
+
+
+def test_schedule_static_route_preserves_provisional_rosters_and_passes_revision(setup):
+    client,s=setup
+    response=client.put(schedule_path(s),json=schedule_payload(s))
+    assert response.status_code==200, response.text
+    assert response.json()['availability_reset_count']==2
+    assert response.json()['rosters_refreshed']==1
+    assert response.json()['publication_review_required'] is True
+    name,payload=s['calls'][-1]
+    assert name=='pcs_update_interclub_meet_schedule'
+    assert payload==dict(p_actor_id=s['user'].user_id,p_actor_email=s['user'].email,p_club_id='home',
+                        p_season_id=s['season']['id'],p_meet_id=s['meet']['id'],p_revision=1,
+                        p_starts_at='2099-01-08T18:00:00+00:00',p_deadline='2099-01-07T18:00:00+00:00',p_duration=180,p_courts=2)
+
+
+@pytest.mark.parametrize('phase',['unconfigured','scheduled','open'])
+def test_schedule_edit_waits_for_closed_registration(setup,phase):
+    client,s=setup;set_registration_phase(s['season'],phase)
+    assert client.put(schedule_path(s),json=schedule_payload(s)).status_code==423
+    assert not s['calls']
+
+
+def test_schedule_edit_is_commissioner_only_not_host_operator(setup):
+    client,s=setup;s['assignment']['club_id']='away'
+    assert client.put(schedule_path(s,'away'),json=schedule_payload(s)).status_code==403
+    s['assignment'].update(club_id='home',role='operator',scopes=[{'kind':'club'}])
+    assert client.put(schedule_path(s),json=schedule_payload(s)).status_code==403
+    assert not s['calls']
+
+
+@pytest.mark.parametrize('change',[
+    {'expected_revision':0},{'host_club_id':'home'}, {'starts_at':'2000-01-01T00:00:00Z'},
+    {'starts_at':'2099-01-06T18:00:00Z'},{'starts_at':'2100-01-01T07:00:00Z'},
+    {'starts_at':'2100-01-01T06:00:00Z','duration_minutes':180},
+])
+def test_schedule_rejects_stale_identity_changes_invalid_or_out_of_season_dates(setup,change):
+    client,s=setup;payload={**schedule_payload(s),**change}
+    assert client.put(schedule_path(s),json=payload).status_code in (409,422)
+    assert not s['calls']
+
+
+def test_schedule_retains_frozen_cutoff_and_generated_courts(setup):
+    client,s=setup;s['meet'].update(schedule_deadline_editable=False,courts_editable=False,roster_deadline='2000-01-01T00:00:00Z')
+    payload={**schedule_payload(s),'roster_deadline':s['meet']['roster_deadline']}
+    assert client.put(schedule_path(s),json=payload).status_code==200
+    s['calls'].clear()
+    assert client.put(schedule_path(s),json={**payload,'roster_deadline':'2099-01-07T18:00:00Z'}).status_code==409
+    assert client.put(schedule_path(s),json={**payload,'courts':3}).status_code==409
+    assert not s['calls']
+
+
+def test_schedule_locked_reason_and_context_are_visible(setup):
+    client,s=setup;s['meet'].update(schedule_editable=False,schedule_locked_reason='Scores already entered. Use the weather replay workflow.')
+    response=client.put(schedule_path(s),json=schedule_payload(s))
+    assert response.status_code==409 and 'weather replay' in response.text
+    visible=client.get(base(s)).json()['meets'][0]
+    assert visible['schedule_editable'] is False and visible['schedule_deadline_editable'] is True
+    assert not s['calls']
+
+
+def test_meet_create_passes_request_identity_and_enforces_timezone_bounds(setup):
+    client,s=setup
+    payload=dict(request_id=str(uuid4()),host_club_id='away',club_ids=['home','away'],starts_at='2099-03-01T18:00:00Z',roster_deadline='2099-02-27T18:00:00Z',courts=2,duration_minutes=180,competition_phase='regular')
+    response=client.post(base(s)+'/meets',json=payload)
+    assert response.status_code==200 and response.json()['publication_review_required'] is True
+    assert s['calls'][-1][1]['p_meet']['request_id']==payload['request_id']
+    s['calls'].clear()
+    assert client.post(base(s)+'/meets',json={**payload,'starts_at':'2100-01-01T06:00:00Z'}).status_code==422
+    assert not s['calls']
 
 
 def test_wrong_meet_competition_phase_is_rejected(setup):
