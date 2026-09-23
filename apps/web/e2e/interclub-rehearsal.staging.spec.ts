@@ -242,6 +242,40 @@ test("interclub paper packet, score entry, approval and public results", async (
   const openedBoard: MeetSignupBoard = await openedResponse.json();
   const shareUrl = openedBoard.signup.url!;
   await expect(signupPanel.getByLabel("Share this meet signup link with your players", { exact: true })).toHaveValue(shareUrl);
+  // Register directly from a vacancy, then review the declared gender separately.
+  await signupPanel.getByRole("button", { name: "Add player to 3.5 women", exact: true }).click();
+  const picker = signupPanel.getByRole("region", { name: "Choose player for 3.5 women", exact: true });
+  const candidates = picker.getByRole("list", { name: "Eligible players by rating", exact: true });
+  await expect(candidates).toBeVisible();
+  const candidateText = await candidates.getByRole("button").allTextContents();
+  const candidateRatings = candidateText.map(text => Number(text.match(/League rating ([0-9.]+)/)![1]));
+  expect(candidateRatings).toEqual([...candidateRatings].sort((a, b) => b - a));
+  expect(candidateRatings.every(rating => rating > 0 && rating < 4)).toBe(true);
+  await candidates.getByRole("button").first().click();
+  await picker.getByLabel("Gender", { exact: true }).selectOption("non_binary");
+  await expect(picker.getByRole("status")).toContainText("An admin will review");
+  const manualAdd = page.waitForResponse(r => r.url() === `${queueRoot}/signup/actions` && r.request().method() === "POST");
+  await picker.getByRole("button", { name: "Submit for admin review", exact: true }).click();
+  const manualResponse = await manualAdd;
+  expect(manualResponse.status()).toBe(200);
+  const manualBoard: MeetSignupBoard = await manualResponse.json();
+  const reviewEntry = manualBoard.entries.find(entry => entry.declared_gender === "non_binary")!;
+  expect(reviewEntry.placement).toBe("review");
+  await signupPanel.getByText(`Manage ${reviewEntry.name}`, { exact: true }).click();
+  const reviewForm = signupPanel.getByRole("form", { name: `Review placement for ${reviewEntry.name}` });
+  await reviewForm.getByLabel("Lineup place", { exact: true }).selectOption("female");
+  const reviewed = page.waitForResponse(r => r.url() === `${queueRoot}/signup/actions` && r.request().method() === "POST");
+  await reviewForm.getByRole("button", { name: "Approve placement", exact: true }).click();
+  const reviewedResponse = await reviewed;
+  expect(reviewedResponse.status()).toBe(200);
+  const approved = ((await reviewedResponse.json()) as MeetSignupBoard).entries.find(entry => entry.id === reviewEntry.id)!;
+  expect(approved.declared_gender).toBe("non_binary");
+  expect(approved.reviewed_gender).toBe("female");
+  expect(approved.placement).toBe("confirmed");
+  await signupPanel.getByText(`Manage ${reviewEntry.name}`, { exact: true }).click();
+  const removed = page.waitForResponse(r => r.url() === `${queueRoot}/signup/actions` && r.request().method() === "POST");
+  await signupPanel.getByRole("button", { name: "Remove signup", exact: true }).click();
+  expect((await removed).status()).toBe(200);
   const meetAnonymous = await browser.newContext({ baseURL: origin });
   await bootstrapStagingContext(meetAnonymous);
   const meetPage = await meetAnonymous.newPage();
@@ -250,6 +284,7 @@ test("interclub paper packet, score entry, approval and public results", async (
   await meetPage.getByLabel("Find your name in the approved season pool", { exact: true }).fill(adjustments.browser_late_player);
   // Choosing a profile replaces the radio list with the selected profile card.
   await meetPage.getByRole("radio", { name: new RegExp(adjustments.browser_late_player) }).click();
+  await meetPage.getByLabel("Gender", { exact: true }).selectOption("female");
   await expect(meetPage.getByText(/Your 3.35 league rating is below 3.5/)).toBeVisible();
   await meetPage.getByRole("checkbox", { name: /This is my profile and I want to play/ }).check();
   const shareId = new URL(shareUrl).pathname.split("/").at(-1)!;

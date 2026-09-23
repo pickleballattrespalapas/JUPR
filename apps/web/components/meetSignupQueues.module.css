@@ -11,4 +11,7 @@
 .division li span { color: #48617b; font-size: .9rem; }
 .division small { display: block; margin-top: .35rem; color: #475569; line-height: 1.45; }
 .vacancy { padding: .85rem; border: 1px dashed #bdcbdc; border-radius: 8px; color: #48617b; }
+.division button.openSpot { width: 100%; display: flex; flex-wrap: wrap; justify-content: space-between; gap: .5rem; padding: 1rem; border: 1px dashed #6695d3; border-radius: 8px; background: #f3f8ff; color: #174a91; text-align: left; cursor: pointer; }
+.division button.openSpot:hover { background: #e6f0ff; }
+.division button.openSpot:focus-visible { outline: 3px solid #2563eb; outline-offset: 3px; }
 @media (max-width: 680px) { .columns { grid-template-columns: 1fr; } }
