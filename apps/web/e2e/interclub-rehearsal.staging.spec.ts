@@ -254,6 +254,9 @@ test("interclub paper packet, score entry, approval and public results", async (
   await candidates.getByRole("button").first().click();
   await picker.getByLabel("Gender", { exact: true }).selectOption("non_binary");
   await expect(picker.getByRole("status")).toContainText("An admin will review");
+  // Signup mutations refresh the parent meet and remount this panel. Wait for the
+  // new board before expanding Manage, or that refresh can close the form again.
+  const addedBoardRefresh = page.waitForResponse(r => r.url() === `${queueRoot}/signup` && r.request().method() === "GET");
   const manualAdd = page.waitForResponse(r => r.url() === `${queueRoot}/signup/actions` && r.request().method() === "POST");
   await picker.getByRole("button", { name: "Submit for admin review", exact: true }).click();
   const manualResponse = await manualAdd;
@@ -261,9 +264,12 @@ test("interclub paper packet, score entry, approval and public results", async (
   const manualBoard: MeetSignupBoard = await manualResponse.json();
   const reviewEntry = manualBoard.entries.find(entry => entry.declared_gender === "non_binary")!;
   expect(reviewEntry.placement).toBe("review");
+  expect((await addedBoardRefresh).status()).toBe(200);
   await signupPanel.getByText(`Manage ${reviewEntry.name}`, { exact: true }).click();
   const reviewForm = signupPanel.getByRole("form", { name: `Review placement for ${reviewEntry.name}` });
+  await expect(reviewForm).toBeVisible();
   await reviewForm.getByLabel("Lineup place", { exact: true }).selectOption("female");
+  const reviewedBoardRefresh = page.waitForResponse(r => r.url() === `${queueRoot}/signup` && r.request().method() === "GET");
   const reviewed = page.waitForResponse(r => r.url() === `${queueRoot}/signup/actions` && r.request().method() === "POST");
   await reviewForm.getByRole("button", { name: "Approve placement", exact: true }).click();
   const reviewedResponse = await reviewed;
@@ -272,6 +278,8 @@ test("interclub paper packet, score entry, approval and public results", async (
   expect(approved.declared_gender).toBe("non_binary");
   expect(approved.reviewed_gender).toBe("female");
   expect(approved.placement).toBe("confirmed");
+  expect((await reviewedBoardRefresh).status()).toBe(200);
+  await expect(reviewForm).toHaveCount(0);
   await signupPanel.getByText(`Manage ${reviewEntry.name}`, { exact: true }).click();
   const removed = page.waitForResponse(r => r.url() === `${queueRoot}/signup/actions` && r.request().method() === "POST");
   await signupPanel.getByRole("button", { name: "Remove signup", exact: true }).click();
