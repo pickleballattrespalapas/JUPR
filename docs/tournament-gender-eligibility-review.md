@@ -23,6 +23,11 @@ Decisions are stored in `public.tournament_gender_eligibility_reviews`, with
 reviewer and timestamp. Apply migration
 `20260923003009_tournament_gender_eligibility_reviews.sql` before deploying the
 API. The table has RLS enabled and is accessible only to the API service role.
+For a separately approved production release, verify that the protected
+`PRODUCTION_MIGRATION_LEDGER_HEAD` matches the resulting production ledger head.
+The head may remain unchanged if older migrations already have later version
+numbers. The deployment contract requires the new logical migration name and
+verifies the SQL fingerprint before the release can proceed.
 
 Regression coverage: `tests/test_api_contract_tournament_gender_review.py`,
 public-registration and draw-import contracts, and the web eligibility,
