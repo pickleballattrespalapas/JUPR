@@ -150,6 +150,7 @@ test("interclub paper packet, score entry, approval and public results", async (
   await expect(schedule.getByRole("status").filter({ hasText: "Meet schedule saved." })).toBeVisible();
   await schedule.getByRole("button", { name: "Add meet", exact: true }).click();
   await expect(schedule.getByLabel("Competition", { exact: true })).toHaveValue("regular");
+  await expect(schedule.getByText(/Season dates:/)).toBeVisible();
   await schedule.getByLabel("Host club", { exact: true }).selectOption(club);
   for (const checkbox of await schedule.getByRole("checkbox").all()) {
     if (!(await checkbox.isChecked())) await checkbox.check();
@@ -195,6 +196,35 @@ test("interclub paper packet, score entry, approval and public results", async (
   await expect(approvals.getByRole("status").filter({ hasText: `${adjustments.browser_late_player}: approved for the season pool.` })).toBeVisible();
   await page.screenshot({ path: join(reportDir, "interclub-season-adjustments.png"), fullPage: true });
 
+  // Follow the same path an administrator uses after adding a meet. No
+  // availability invitation is needed for verbally confirmed players.
+  await schedule.getByRole("link", { name: "Choose players for this meet", exact: true }).click();
+  await expect(page.getByRole("navigation", { name: "League workflow" }).getByRole("link", { name: "Lineups", exact: true })).toHaveAttribute("aria-current", "step");
+  const playerResponse = page.waitForResponse(r => r.url().includes(`/registrations/${adjustments.id}/meets/`) && new URL(r.url()).pathname.endsWith("/players"));
+  await page.getByRole("button", { name: "Add a team for this meet", exact: true }).click();
+  const availablePlayers = (await (await playerResponse).json()).players as { id: string; name: string; eligibility_rating: number; gender: string }[];
+  const roster = page.getByRole("form", { name: "Choose meet players", exact: true });
+  await roster.getByLabel("Lineup division", { exact: true }).selectOption("3.5");
+  await expect(roster.getByLabel("Player eligibility filter", { exact: true })).toHaveValue("eligible");
+  const selectedPlayers = ["female", "male"].flatMap(gender => availablePlayers.filter(player => player.gender === gender && player.eligibility_rating > 0 && player.eligibility_rating < 4).slice(0, 2));
+  expect(selectedPlayers).toHaveLength(4);
+  for (const player of selectedPlayers) await roster.getByRole("checkbox", { name: `Select ${player.name}`, exact: true }).check();
+  await expect(roster.getByRole("status", { name: "Lineup selection" })).toContainText("2 of 2 women · 2 of 2 men");
+  await page.screenshot({ path: join(reportDir, "interclub-guided-player-picker.png"), fullPage: true });
+  await roster.getByRole("button", { name: "Review season player pool", exact: true }).click();
+  await expect(pool).toBeVisible();
+  await page.getByRole("navigation", { name: "League workflow" }).getByRole("link", { name: "Lineups", exact: true }).click();
+  for (const player of selectedPlayers) await expect(roster.getByRole("checkbox", { name: `Select ${player.name}`, exact: true })).toBeChecked();
+  const rosterSaved = page.waitForResponse(r => r.url().includes(`/registrations/${adjustments.id}/meets/`) && r.url().includes("/teams/") && r.request().method() === "PUT");
+  await roster.getByRole("button", { name: "Submit four-player roster", exact: true }).click();
+  const rosterResult = await rosterSaved;
+  expect(rosterResult.status()).toBe(200);
+  const savedTeam = (await rosterResult.json()).team;
+  expect(savedTeam.status).toBe("eligible");
+  expect(savedTeam.roster.map((player: { player_id: string }) => String(player.player_id)).sort()).toEqual(selectedPlayers.map(player => String(player.id)).sort());
+  await expect(page.getByRole("status").filter({ hasText: "Lineup saved for this meet." })).toBeVisible();
+  await page.screenshot({ path: join(reportDir, "interclub-guided-lineup.png"), fullPage: true });
+
   const anonymous = await browser.newContext({ baseURL: origin });
   await bootstrapStagingContext(anonymous);
   const publicPage = await anonymous.newPage();
@@ -238,5 +268,5 @@ test("interclub paper packet, score entry, approval and public results", async (
   await expect(publicPlayerRow.getByRole("cell", { name: "3.15", exact: true }).first()).toBeVisible();
   expect(errors).toEqual([]);
   writeFileSync(join(reportDir,"interclub-browser.json"),JSON.stringify({ status:"passed",candidate_sha:state.sha,
-    checks:["paper_packet_pdf","six_game_ui_entry","dirty_navigation_lock","draft_reload","whole_meet_submission","organizer_approval","both_rating_streams","registration_phase_route_lock","admin_inline_player_creation","upcoming_meet_edit","add_meet_after_registration","late_inline_player_creation_without_notes","late_player_request_and_approval","anonymous_public_cup","closed_signup_readonly","anonymous_inline_player_signup","persisted_inline_profile_ratings","no_browser_exceptions"] },null,2));
+    checks:["paper_packet_pdf","six_game_ui_entry","dirty_navigation_lock","draft_reload","whole_meet_submission","organizer_approval","both_rating_streams","registration_phase_route_lock","admin_inline_player_creation","upcoming_meet_edit","add_meet_after_registration","late_inline_player_creation_without_notes","late_player_request_and_approval","guided_meet_lineup","eligible_player_filter","gender_composition","lineup_draft_preserved_on_pool_visit","anonymous_public_cup","closed_signup_readonly","anonymous_inline_player_signup","persisted_inline_profile_ratings","no_browser_exceptions"] },null,2));
 });

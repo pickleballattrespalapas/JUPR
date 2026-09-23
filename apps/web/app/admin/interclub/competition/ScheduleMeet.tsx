@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { readBrowserWorkspace } from "@/lib/adminWorkspace";
 import { CompetitionContext, CompetitionMeet, CompetitionPhase, competitionRequest, phaseLabels } from "@/lib/interclubCompetition";
-import { meetLocalTime, meetUtcTime } from "@/lib/interclubSetup";
+import { meetLocalTime, meetUtcTime, meetSeasonDateIssue, seasonDateLabel } from "@/lib/interclubSetup";
 import { registrationMeetPlanning } from "@/lib/interclubRegistrationWindow";
 import styles from "./competition.module.css";
 
@@ -49,6 +49,8 @@ export default function ScheduleMeet({ root, clubId, accessToken, context, disab
     if (Date.parse(cutoff) > Date.parse(start)) { setError("The roster deadline must be no later than the meet."); return; }
     if (deadlineEditable && Date.parse(cutoff) <= Date.now()) { setError("Choose a future roster deadline."); return; }
     if (!Number.isInteger(courts) || courts < 1 || courts > 100 || !Number.isInteger(minutes) || minutes < 30 || minutes > 180) { setError("Choose 1–100 courts and a duration of 30–180 minutes."); return; }
+    const seasonIssue = meetSeasonDateIssue(context.season.details, start, minutes);
+    if (seasonIssue) { setError(seasonIssue); return; }
     if (!meet && (!host || !clubs.includes(host) || clubs.length < 2 || (phase === "regular" && clubs.length > 4))) { setError("Choose a host and two to four participating clubs for a regular meet."); return; }
     const controller = new AbortController(); pending.current = controller; setBusy(true); setError("");
     try {
@@ -73,15 +75,22 @@ export default function ScheduleMeet({ root, clubId, accessToken, context, disab
     } finally { pending.current = null; if (!controller.signal.aborted) setBusy(false); }
   }
   const clubName = (id: string) => context.clubs.find(club => club.id === id)?.name || id;
+  let dateHint = "";
+  try {
+    const start = meetUtcTime(startsAt, timezone);
+    if (start && Number.isInteger(minutes) && minutes >= 30 && minutes <= 180) dateHint = meetSeasonDateIssue(context.season.details, start, minutes) || "";
+  } catch { /* The date input may still be incomplete. Validate it on submit. */ }
   return <details open={defaultOpen || Boolean(meet) || undefined} className={`${styles.page} ${styles.card}`}><summary>{meet ? "Edit meet date" : "Add meet"}</summary>
     <p>{meet ? `Hosted by ${clubName(meet.host_club_id)} · ${meet.club_ids.map(clubName).join(", ")}.` : "Choose a date, host and participating clubs. Clubs can then choose their lineups for this meet."} All times use {timezone}.</p>
+    <p><strong>Season dates: {seasonDateLabel(context.season.details.start_date)} – {seasonDateLabel(context.season.details.end_date)}.</strong> The meet must start and finish within these dates.</p>
+    {dateHint && dateHint !== error && <p role="status" className={styles.warning}>{dateHint}</p>}
     {error && <p role="alert" className={styles.error}>{error}</p>}
     {!permitted && <p className={styles.warning}>{meet?.schedule_locked_reason || "The commissioner can change the meet schedule after season registration closes."}</p>}
     <form onSubmit={event => { event.preventDefault(); void schedule(); }}><fieldset className={styles.gameFields} disabled={disabled || busy || blocked || !permitted}>
       <div className={styles.twoColumns}>
         {!meet && <><label>Competition<select aria-label="Competition" value={phase} onChange={event => setPhase(event.target.value as CompetitionPhase)}>{Object.entries(phaseLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
           <label>Host club<select aria-label="Host club" required value={host} onChange={event => { setHost(event.target.value); setClubs(old => event.target.value ? Array.from(new Set([...old, event.target.value])) : old); }}><option value="">Choose host</option>{context.clubs.map(club => <option key={club.id} value={club.id}>{club.name}</option>)}</select></label></>}
-        <label>Meet date and time ({timezone})<input aria-label="Meet date and time" required type="datetime-local" value={startsAt} onChange={event => changeStart(event.target.value)} /></label>
+        <label>Meet date and time ({timezone})<input aria-label="Meet date and time" required type="datetime-local" min={`${context.season.details.start_date}T00:00`} max={`${context.season.details.end_date}T23:59`} value={startsAt} onChange={event => changeStart(event.target.value)} /></label>
         <label>Roster deadline ({timezone})<input aria-label="Roster deadline" required type="datetime-local" max={startsAt || undefined} disabled={!deadlineEditable} value={deadline} onChange={event => setDeadline(event.target.value)} /></label>
         <label>Courts<input aria-label="Courts" required type="number" min={1} max={100} disabled={!courtsEditable} value={courts} onChange={event => setCourts(Number(event.target.value))} /></label>
         <label>Duration (minutes)<input aria-label="Duration (minutes)" required type="number" min={30} max={180} value={minutes} onChange={event => setMinutes(Number(event.target.value))} /></label>

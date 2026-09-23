@@ -114,4 +114,19 @@ async function schedulePanelGate() {
   await act(async () => button(tree, 'Add meet').props.onClick()); assert.equal(tree.root.findByType(Form).props.meet, undefined);
   await act(async () => tree.unmount());
 }
-(async () => { await createAndTimezone(); await ordinaryEditAndLockedFields(); await authorityAndUncertainSave(); await schedulePanelGate(); console.log('PASS interclub meet schedule: commissioner/registration/played locks, regular meet creation, season timezone, idempotency, ordinary date changes, protected cutoffs/courts, conflict recovery, and schedule navigation'); })().catch(error => { console.error(error); process.exitCode = 1; });
+async function visibleSeasonBounds() {
+  let tree; const requests = [];
+  global.fetch = async (url, options) => { requests.push({ url, options }); return reply({ meet }); };
+  await act(async () => { tree = create(React.createElement(Form, { ...base, meet, onScheduled() {} })); });
+  assert.equal(input(tree, 'Meet date and time').props.min, '2099-01-01T00:00');
+  assert.equal(input(tree, 'Meet date and time').props.max, '2099-03-31T23:59');
+  await set(tree, 'Meet date and time', '2098-12-31T10:00'); await submit(tree);
+  assert.equal(requests.length, 0); assert.match(nodeText(tree.root.findByProps({ role: 'alert' })), /Jan 1, 2099.*Mar 31, 2099.*America\/Mazatlan/);
+  await set(tree, 'Meet date and time', '2099-03-31T23:00'); await submit(tree);
+  assert.equal(requests.length, 0, 'A meet ending after the season is rejected before sending');
+  assert.match(nodeText(tree.root.findByProps({ role: 'alert' })), /ends on Apr 1, 2099/);
+  await set(tree, 'Meet date and time', '2099-03-31T20:00'); await submit(tree);
+  assert.equal(requests.length, 1, 'Valid local dates remain allowed even when the UTC date is the next day');
+  await act(async () => tree.unmount());
+}
+(async () => { await createAndTimezone(); await ordinaryEditAndLockedFields(); await authorityAndUncertainSave(); await schedulePanelGate(); await visibleSeasonBounds(); console.log('PASS interclub meet schedule: commissioner/registration/played locks, regular meet creation, season timezone, visible season bounds, idempotency, ordinary date changes, protected cutoffs/courts, conflict recovery, and schedule navigation'); })().catch(error => { console.error(error); process.exitCode = 1; });
