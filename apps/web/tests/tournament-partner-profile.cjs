@@ -105,8 +105,13 @@ async function testNewRegistration(rating = 3.4) {
   assert.match(content(renderer.root.findByProps({ role: "alert" })), /valid partner email/);
   await change("Below 9 partner email", "partner@example.invalid");
   assert.equal(field("Below 9 partner skill").props.value, String(candidate.doubles_skill));
+  await change("Below 9 partner gender", "Men");
+  assert.ok(renderer.root.findAllByProps({ role: "status" }).some(node => /Mixed doubles normally requires/.test(content(node))), "Same-gender pairs see a non-blocking warning");
   await act(async () => button("Review registration").props.onClick());
+  assert.ok(button("Submit registration"), "A warned pair can still reach submission");
   await act(async () => button("Back").props.onClick());
+  await change("Below 9 partner gender", "Non-binary");
+  assert.equal(renderer.root.findAllByProps({ role: "status" }).some(node => /Mixed doubles normally requires|admin approval/.test(content(node))), false, "Non-binary entries stay quiet");
   assert.equal(field("Below 9 partner skill").props.value, String(candidate.doubles_skill), "Selected profile survives review and back");
   assert.equal(renderer.root.findAllByProps({ "aria-label": "Below 9 partner DUPR ID" }).length, 0);
   assert.equal(field("Below 9 partner skill").props.readOnly, true, "The profile rating stays locked after review and back");
@@ -127,6 +132,7 @@ async function testNewRegistration(rating = 3.4) {
   assert.equal(submissions.at(-1).doubles_skill, 3.651203499999999);
   assert.equal(selection.partner_dupr_id, candidate.dupr_id);
   assert.equal(selection.partner_email, "partner@example.invalid");
+  assert.equal(selection.partner_gender, "Non-binary", "Submission preserves non-binary identity");
   assert.equal(selection.partner_note, "Public partner message");
   assert.equal(submissions.at(-1).notes, "Private staff message", "Public partner notes and private staff notes must remain separate when saving");
   assert.equal(selection.partner_player_id, undefined, "A public suggestion must not become a verified identity link");

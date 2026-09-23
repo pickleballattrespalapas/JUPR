@@ -412,6 +412,7 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("PATCH", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/selections/{selection_id}"),
         ("DELETE", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/selections/{selection_id}"),
         ("PUT", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/selections/{selection_id}/partner"),
+        ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/selections/{selection_id}/gender-review"),
         ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/team-competition/rating-verifications"),
         ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/team-competition/rating-reviews"),
         ("POST", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/team-competition/rating-reviews/close"),

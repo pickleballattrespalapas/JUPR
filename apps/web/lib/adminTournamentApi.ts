@@ -70,6 +70,16 @@ export type AdminTournamentRegistration = {
 };
 
 export type AdminTournamentSelection = {
+  gender_review?: {
+    status: "PENDING" | "APPROVED" | "DECLINED";
+    fingerprint: string;
+    review_version: string;
+    reason: string;
+    player_gender: string;
+    partner_gender: string;
+    reviewed_by?: string | null;
+    reviewed_at?: string | null;
+  } | null;
   id: string;
   registration_id: string;
   registration_day_id?: string | null;

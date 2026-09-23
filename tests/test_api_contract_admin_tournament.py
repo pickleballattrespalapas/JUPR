@@ -798,7 +798,7 @@ def test_admin_tournament_selection_update_enforces_skill_eligibility(monkeypatc
     assert tables["tournament_registration_selections"][0]["event_option_id"] == "event_1"
 
 
-def test_admin_tournament_selection_update_enforces_gender_eligibility(monkeypatch):
+def test_admin_tournament_selection_update_flags_gender_for_review(monkeypatch):
     tables = tournament_tables()
     tables["tournament_event_options"][1]["gender_restriction"] = "WOMEN"
     supabase = FakeSupabase(tables)
@@ -818,9 +818,15 @@ def test_admin_tournament_selection_update_enforces_gender_eligibility(monkeypat
         },
     )
 
-    assert response.status_code == 400
-    assert "limited to women's registrations" in response.json()["detail"]
-    assert tables["tournament_registration_selections"][0]["event_option_id"] == "event_1"
+    assert response.status_code == 200
+    assert tables["tournament_registration_selections"][0]["event_option_id"] == "event_2"
+    detail = TestClient(app).get(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour_1",
+        headers={"Authorization": "Bearer local"},
+    )
+    assert detail.status_code == 200
+    selection = next(row for row in detail.json()["selections"] if row["id"] == "selection_1")
+    assert selection["gender_review"]["status"] == "PENDING"
 
 
 def test_admin_tournament_selection_update_blocks_pending_partner_request_change(monkeypatch):

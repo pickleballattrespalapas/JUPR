@@ -1239,20 +1239,20 @@ def test_public_registration_enforces_division_gender_and_rating() -> None:
         }
     )
 
-    with pytest.raises(ValueError, match="women's registrations"):
-        submit_public_tournament_registration(
-            FakeSupabase(storage),
-            club_id="club-1",
-            payload={
-                "registration_slug": "tres-open",
-                "first_name": "Alex",
-                "email": "alex@example.com",
-                "gender": "Men",
-                "singles_skill": 3.2,
-                "terms_accepted": True,
-                "selections": [{"event_option_id": "event1", "partner_mode": "NONE"}],
-            },
-        )
+    accepted = submit_public_tournament_registration(
+        FakeSupabase(deepcopy(storage)),
+        club_id="club-1",
+        payload={
+            "registration_slug": "tres-open",
+            "first_name": "Alex",
+            "email": "alex@example.com",
+            "gender": "Men",
+            "singles_skill": 3.2,
+            "terms_accepted": True,
+            "selections": [{"event_option_id": "event1", "partner_mode": "NONE"}],
+        },
+    )
+    assert accepted["registration_id"]
 
     with pytest.raises(ValueError, match="above the 3.5 division cap"):
         submit_public_tournament_registration(
@@ -1451,25 +1451,25 @@ def test_public_registration_enforces_partner_identity_gender_and_rating() -> No
             },
         )
 
-    with pytest.raises(ValueError, match="one men's and one women's"):
-        submit_public_tournament_registration(
-            FakeSupabase(storage),
-            club_id="club-1",
-            payload={
-                **base,
-                "selections": [
-                    {
-                        "event_option_id": "event1",
-                        "partner_mode": "HAS_PARTNER",
-                        "partner_name": "Pat",
-                        "partner_email": "pat@example.com",
-                        "partner_age": 35,
-                        "partner_gender": "Women",
-                        "partner_skill": 3.2,
-                    }
-                ],
-            },
-        )
+    accepted = submit_public_tournament_registration(
+        FakeSupabase(deepcopy(storage)),
+        club_id="club-1",
+        payload={
+            **base,
+            "selections": [
+                {
+                    "event_option_id": "event1",
+                    "partner_mode": "HAS_PARTNER",
+                    "partner_name": "Pat",
+                    "partner_email": "pat@example.com",
+                    "partner_age": 35,
+                    "partner_gender": "Women",
+                    "partner_skill": 3.2,
+                }
+            ],
+        },
+    )
+    assert accepted["registration_id"]
 
     with pytest.raises(ValueError, match="above the 3.5 division cap"):
         submit_public_tournament_registration(

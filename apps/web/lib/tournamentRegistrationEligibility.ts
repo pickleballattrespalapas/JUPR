@@ -199,12 +199,7 @@ export function publicEventEligibilityReason(
   event: PublicRegistrationEvent,
   profile: RegistrationEligibilityProfile
 ): string | null {
-  const restriction = String(event.gender_restriction || "ANY").trim().toUpperCase();
-  const gender = normalizedGender(profile.gender);
-  if (["MEN", "MALE"].includes(restriction) && gender !== "MEN") return "This division is limited to men's registrations.";
-  if (["WOMEN", "FEMALE"].includes(restriction) && gender !== "WOMEN") return "This division is limited to women's registrations.";
-  if (restriction === "MIXED" && !["MEN", "WOMEN"].includes(gender)) return "Select an eligible gender for mixed doubles.";
-
+  // Gender conflicts are submitted for private admin review, not filtered out.
   const minimumAge = hardMinimumAge(event);
   const age = finiteNumber(profile.age);
   if (minimumAge != null && age != null && age < minimumAge) {
@@ -240,4 +235,27 @@ export function publicEventEligibilityReason(
 
 export function publicEventFamilyKey(event: PublicRegistrationEvent): string {
   return `${event.registration_day_id}::${event.event_family_label.trim().toLowerCase().replace(/\s+/g, " ")}`;
+}
+
+export function publicEventGenderNotice(
+  event: PublicRegistrationEvent,
+  profile: RegistrationEligibilityProfile,
+  partnerGender?: string | null
+): string | null {
+  // Non-binary entries use the same private review with no player-facing notice.
+  if ([profile.gender, partnerGender].some(value => String(value || "").toLowerCase().replace(/[^a-z]/g, "") === "nonbinary")) return null;
+  const restriction = String(event.gender_restriction || "ANY").trim().toUpperCase();
+  const player = normalizedGender(profile.gender);
+  const partner = normalizedGender(partnerGender);
+  if (!player) return null;
+  if (["MEN", "MALE"].includes(restriction) && (player !== "MEN" || (partner && partner !== "MEN"))) {
+    return "This division is listed for men. You can still submit this entry.";
+  }
+  if (["WOMEN", "FEMALE"].includes(restriction) && (player !== "WOMEN" || (partner && partner !== "WOMEN"))) {
+    return "This division is listed for women. You can still submit this entry.";
+  }
+  if (restriction === "MIXED" && (player === "OTHER" || (partner && (partner === "OTHER" || partner === player)))) {
+    return "Mixed doubles normally requires one man and one woman. You can still submit this entry.";
+  }
+  return null;
 }

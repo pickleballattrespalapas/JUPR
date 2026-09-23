@@ -123,7 +123,14 @@ async function main() {
     { id: "sel-single", registration_id: registration.id, event_option_id: "singles", event_label: "Singles entry", partner_mode: "NONE", updated_at: registration.updated_at },
     { id: "sel-double", registration_id: registration.id, event_option_id: "doubles", event_label: "Doubles entry", partner_mode: "NEEDS_PARTNER", partner_gender: "Male", show_on_partner_board: true, updated_at: registration.updated_at }
   ];
+  selections[1].gender_review = { status: "PENDING", fingerprint: "a".repeat(64), review_version: "b".repeat(64), reason: "Mixed doubles requires one men's and one women's registrant.", player_gender: "Women", partner_gender: "Non-binary" };
+  let eligibilityRequest;
   global.fetch = async (_url, options = {}) => {
+    if (String(_url).endsWith("/gender-review")) {
+      eligibilityRequest = JSON.parse(options.body);
+      selections[1].gender_review.status = eligibilityRequest.decision;
+      return new Response(JSON.stringify({ ok: true }));
+    }
     if (options.method === "PATCH") {
       requests.push(JSON.parse(options.body));
       if (rejection) return new Response(JSON.stringify({ detail: rejection.detail }), { status: rejection.status });
@@ -139,6 +146,11 @@ async function main() {
     const field = name => renderer.root.findAllByType("label").find(node => content(node).startsWith(name));
     assert.equal(field("Registration status").findByType("select").props.value, "confirmed");
     assert.equal(field("Gender").findByType("select").props.value, "Men");
+    assert.match(content(renderer.root), /Needs admin approval/);
+    await act(async () => renderer.root.findAllByType(ConfirmAction).find(node => node.props.triggerLabel === "Approve eligibility").props.onConfirm("REVIEW GENDER ELIGIBILITY"));
+    assert.equal(eligibilityRequest.decision, "APPROVED");
+    assert.equal(eligibilityRequest.expected_review_version, "b".repeat(64));
+    assert.match(content(renderer.root), /Gender eligibility: Approved/);
     await act(async () => field("Phone").findByType("input").props.onChange({ target: { value: "555-9999" } }));
     const save = () => renderer.root.findAllByType(ConfirmAction).find(node => node.props.confirmLabel === "Yes, save registration").props.onConfirm("SAVE REGISTRATION");
     let failure;
@@ -164,7 +176,7 @@ async function main() {
 
     const choices = () => field("Add another event entry").findByType("select");
     assert.equal(choices().props.value, "", "Loading a registration must not preselect an arbitrary event");
-    assert.deepEqual(choices().findAllByType("option").map(node => node.props.value), ["", "mixed", "other-singles"], "Gender, age, closed days and duplicate event families are excluded");
+    assert.deepEqual(choices().findAllByType("option").map(node => node.props.value), ["", "women", "mixed", "other-singles"], "Gender exceptions can be reviewed; age, closed days and duplicate event families stay excluded");
     const entry = title => renderer.root.findAllByType("section").find(node => node.findAllByType("h3").some(heading => content(heading) === title));
     assert.equal(entry("Singles entry").findAllByType("button").some(node => content(node) === "Change partner"), false);
     assert.equal(entry("Doubles entry").findAllByType("button").some(node => content(node) === "Change partner"), true);

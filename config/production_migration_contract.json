@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile": "next-fastapi-tournament-acceptance-2026-08-25",
-  "repository_migration_content_sha256": "91bf702e00c7767ee70dc79831e4857d989b0d390af5c9df29d04feef5607fcc",
+  "repository_migration_content_sha256": "574267f5c1592d9bd8eb8b102d058ad1bc1fac1435b6da0bd3bab087e92958ef",
   "allow_additional_ledger_names": false,
   "required_ledger_names": [
     "add_admin_activity_log",
@@ -121,6 +121,7 @@
     "tournament_day_live_ops",
     "tournament_day_operator_safety",
     "tournament_day_roster_authority",
+    "tournament_gender_eligibility_reviews",
     "tournament_live_operations",
     "tournament_operations_guard_surface",
     "tournament_operator_special_form_repair",
