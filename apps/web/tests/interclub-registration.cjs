@@ -3,7 +3,7 @@ const React = require('react'), ts = require('typescript'), { create, act } = re
 function load(file, mocks = {}) {
   const code = ts.transpileModule(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true } }).outputText;
   const module = { exports: {} };
-  new Function('require', 'module', 'exports', code)(n => n === '@/lib/interclubRegistrationWindow' ? load('lib/interclubRegistrationWindow.ts') : n === '@/lib/useRegistrationWindow' ? load('lib/useRegistrationWindow.ts', { './interclubRegistrationWindow': load('lib/interclubRegistrationWindow.ts') }) : n === './SeasonRegistrationWindow' ? load('app/admin/interclub/registrations/SeasonRegistrationWindow.tsx', { '@/lib/interclubRegistration': helpers, './registrations.module.css': {} }) : n === '@/lib/interclubSetup' ? load('lib/interclubSetup.ts') : n === '../InterclubWorkflow' ? load('app/admin/interclub/InterclubWorkflow.tsx', { 'next/link': Link, './workflow.module.css': {} }) : n === './SeasonMeetSchedule' ? { default: () => null, __esModule: true } : n === './SeasonEligibilityApprovals' ? { default: p => React.createElement('section', { 'data-eligibility-root': p.root, 'data-refresh-key': p.refreshKey, onDecision: p.onDecision }), __esModule: true } : n === './PlayerPoolPanels' ? { SeasonPlayerPool: p => React.createElement('section', { 'data-pool-root': p.root, 'data-refresh-key': p.refreshKey, onLateRequested: p.onLateRequested }), MeetAvailability: p => React.createElement('section', { 'data-availability-root': p.meetRoot, onResponses: p.onResponses }) } : Object.hasOwn(mocks, n) ? mocks[n] : require(n), module, module.exports);
+  new Function('require', 'module', 'exports', code)(n => n === '@/lib/interclubRegistrationWindow' ? load('lib/interclubRegistrationWindow.ts') : n === '@/lib/useRegistrationWindow' ? load('lib/useRegistrationWindow.ts', { './interclubRegistrationWindow': load('lib/interclubRegistrationWindow.ts') }) : n === './SeasonRegistrationWindow' ? load('app/admin/interclub/registrations/SeasonRegistrationWindow.tsx', { '@/lib/interclubRegistration': helpers, './registrations.module.css': {} }) : n === '@/lib/interclubSetup' ? load('lib/interclubSetup.ts') : n === '../InterclubWorkflow' ? load('app/admin/interclub/InterclubWorkflow.tsx', { 'next/link': Link, './workflow.module.css': {} }) : n === './SeasonMeetSchedule' ? { default: p => React.createElement('section', { 'data-schedule-root': p.root, onSelectMeet: p.onSelectMeet }), __esModule: true } : n === './SeasonEligibilityApprovals' ? { default: p => React.createElement('section', { 'data-eligibility-root': p.root, 'data-refresh-key': p.refreshKey, onDecision: p.onDecision }), __esModule: true } : n === './PlayerPoolPanels' ? { SeasonPlayerPool: p => React.createElement('section', { 'data-pool-root': p.root, 'data-refresh-key': p.refreshKey, onLateRequested: p.onLateRequested }), MeetAvailability: p => React.createElement('section', { 'data-availability-root': p.meetRoot, onResponses: p.onResponses }) } : Object.hasOwn(mocks, n) ? mocks[n] : require(n), module, module.exports);
   return module.exports;
 }
 const helpers = load('lib/interclubRegistration.ts');
@@ -322,6 +322,13 @@ async function deepLinkContext() {
   await act(async () => button(tree, 'Next: check meet availability').props.onClick());
   assert.equal(tree.root.findByProps({ 'aria-label': 'Meet' }).props.value, mid, 'Pool next action opens the own-club meet shown in the confirmation');
   assert.equal(tree.root.findByProps({ 'aria-label': 'Meet availability' }).props['aria-current'], 'step');
+  const schedule = tree.root.findAll(node => node.props['data-schedule-root'])[0];
+  await act(async () => schedule.props.onSelectMeet(mid2, 'lineups'));
+  assert.equal(tree.root.findByProps({ 'aria-label': 'Meet' }).props.value, mid2, 'The schedule link selects its meet in the mounted workspace');
+  assert.equal(tree.root.findByProps({ 'aria-label': 'Lineups' }).props['aria-current'], 'step');
+  await act(async () => tree.root.findByProps({ 'aria-label': 'Player pool' }).props.onClick({ preventDefault() {} }));
+  await act(async () => schedule.props.onSelectMeet(mid2, 'lineups'));
+  assert.equal(tree.root.findByProps({ id: 'season-player-pool' }).props.hidden, true, 'Reusing the same meet link opens Lineups again');
   await act(async () => tree.unmount());
 }
 
