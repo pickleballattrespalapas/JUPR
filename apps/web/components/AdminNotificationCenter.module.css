@@ -26,6 +26,12 @@
 .itemLink:hover { text-decoration: underline; }
 .itemBody p { margin: .35rem 0 0; color: #475569; font-size: .85rem; line-height: 1.45; }
 .itemActions { flex-shrink: 0; }
+.bulkControls { display: flex; flex-wrap: wrap; align-items: center; gap: .65rem 1rem; margin: 0 0 .8rem; }
+.selectAll { display: flex; align-items: center; gap: .6rem; min-height: 44px; cursor: pointer; font-size: .85rem; font-weight: 650; }
+.selectAll input, .itemSelect input { width: 19px; height: 19px; accent-color: #2563eb; margin: 0; cursor: pointer; }
+.itemSelect { display: flex; align-items: center; justify-content: center; min-width: 28px; min-height: 44px; cursor: pointer; align-self: flex-start; }
+.selectionCount { color: #526175; font-size: .8rem; }
+.reviewLink { display: inline-flex; align-items: center; min-height: 44px; padding: .5rem .65rem; font-size: .85rem; font-weight: 700; color: #1d4ed8; text-decoration: underline; text-underline-offset: 3px; }
 .itemActions button[aria-pressed="true"] { background: #eff6ff; border-color: #93b4ee; color: #1d4ed8; }
 .empty { padding: 1.25rem .25rem; color: #526175; font-size: .9rem; }
 .allLink { display: inline-block; min-height: 44px; align-content: center; font-weight: 600; margin-top: .4rem; font-size: .85rem; }
@@ -52,7 +58,9 @@
 .center a:focus-visible, .center button:focus-visible, .center input:focus-visible, .center summary:focus-visible, .center select:focus-visible { outline: 3px solid #2563eb; outline-offset: 3px; }
 @media (max-width: 650px) {
   .center { padding: 1rem; }
-  .item { align-items: flex-start; flex-direction: column; gap: .7rem; }
+  .item { align-items: flex-start; flex-wrap: wrap; gap: .7rem; }
+  .itemBody { flex-basis: calc(100% - 40px); }
+  .itemActions { width: 100%; }
   .settings { padding: .8rem; }
   .settings fieldset { grid-template-columns: minmax(0, 1fr); }
   .category { width: 100%; }

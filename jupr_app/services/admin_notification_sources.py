@@ -109,7 +109,7 @@ def _sources(db: Any, *, club_id: str, assignments: list[dict[str, Any]], now: d
                          id_field="session_key", time_field="submitted_at", version=_required(submission.get("id")),
                          title=_text(row.get("title"), "Generator results"),
                          description="Results awaiting approval." if submission.get("status") == "pending" else "Resume the interrupted results approval.",
-                         href="/admin/play-generators/submissions")
+                         href=_href("/admin/play-generators/submissions", session=row.get("session_key")))
         add("generator_submissions", "Generator result approvals", "Round-robin and ladder results awaiting approval.",
             "/admin/play-generators/submissions", "action", "live_sessions",
             "session_key,title,updated_at,generator_submission:state->generator_submission", generator,
@@ -125,18 +125,19 @@ def _sources(db: Any, *, club_id: str, assignments: list[dict[str, Any]], now: d
             href = _href("/admin/support-requests", status=status)
             add(key, label, "Requests for help, record corrections, or profile privacy.", href, "action",
                 "public_support_requests", "id,request_type,created_at,updated_at",
-                lambda row, href=href, label=label: _item(row, title=label,
+                lambda row, status=status, label=label: _item(row, title=label,
                     description={"data_correction": "A player requested a record correction.",
                                  "profile_privacy": "A player requested a profile privacy review."}.get(
                                      row.get("request_type"), "A player requested help."),
-                    href=href, version_field="updated_at"),
+                    href=_href("/admin/support-requests", status=status, request=row.get("id")), version_field="updated_at"),
                 filters=lambda q, status=status: q.eq("status", status))
 
     if PERMISSION_MANAGE_SUBSCRIPTIONS in permissions and is_admin_verified_updates_enabled():
         add("verified_updates", "Player update approvals", "Requests to receive a player's rating and results updates.",
             "/admin/player-updates/verified-requests", "action", "player_profile_update_subscriptions",
             "id,created_at,row_version", lambda row: _item(row, title="Player update request",
-                description="Verify permission to receive a player's updates.", href="/admin/player-updates/verified-requests",
+                description="Verify permission to receive a player's updates.",
+                href=_href("/admin/player-updates/verified-requests", request=row.get("id")),
                 version_field="row_version"), filters=lambda q: q.eq("request_status", REQUEST_STATUS_PENDING))
 
     if PERMISSION_MANAGE_MATCHES in permissions and is_admin_weekly_recap_enabled():
@@ -151,7 +152,8 @@ def _sources(db: Any, *, club_id: str, assignments: list[dict[str, Any]], now: d
         add("social_submissions", "Club Social result approvals", "Submitted Club Social results awaiting review.",
             "/admin/tools#social-submissions", "action", "live_events", "id,name,created_at,updated_at",
             lambda row: _item(row, title=_text(row.get("name"), "Club Social results"),
-                description="Review submitted Club Social results.", href="/admin/tools#social-submissions", version_field="updated_at"),
+                description="Review submitted Club Social results.",
+                href=_href("/admin/tools", submission=row.get("id")) + "#social-submissions", version_field="updated_at"),
             filters=lambda q: q.eq("result_mode", "social_unrated").eq("status", "pending"))
 
     if administrator:
@@ -159,7 +161,7 @@ def _sources(db: Any, *, club_id: str, assignments: list[dict[str, Any]], now: d
             "/admin/interclub", "action", "pcs_interclub_participations",
             "season_id,revision,updated_at,season:pcs_interclub_seasons!inner(id,details)",
             lambda row: _item(row, title=_season_name(row), description="Accept or decline your club's invitation.",
-                href=_href("/admin/interclub/registrations", season=row.get("season_id")),
+                href=_href("/admin/interclub/registrations", season=row.get("season_id")) + "#invitation-title",
                 id_field="season_id", time_field="updated_at", version_field="revision"),
             id_field="season_id", time_field="updated_at",
             filters=lambda q: q.eq("status", "invited").neq("season.organizer_club_id", club_id))
@@ -167,7 +169,7 @@ def _sources(db: Any, *, club_id: str, assignments: list[dict[str, Any]], now: d
             "/admin/interclub/competition", "action", "pcs_interclub_competition_batches",
             "id,season_id,meet_id,revision,updated_at,season:pcs_interclub_seasons!inner(id,details)",
             lambda row: _item(row, title=_season_name(row), description="Review submitted meet results.",
-                href=_href("/admin/interclub/competition", season=row.get("season_id"), meet=row.get("meet_id")),
+                href=_href("/admin/interclub/competition", season=row.get("season_id"), meet=row.get("meet_id")) + "#meet-results-review",
                 time_field="updated_at", version_field="revision"), time_field="updated_at", club_scoped=False,
             filters=lambda q: q.eq("state", "submitted").eq("season.organizer_club_id", club_id)
                 .lte("season.registration_closes_at", now.isoformat()))
@@ -176,7 +178,7 @@ def _sources(db: Any, *, club_id: str, assignments: list[dict[str, Any]], now: d
             "id,season_id,name,revision,created_at,pool_settings:pcs_interclub_pool_settings!inner(participation:pcs_interclub_participations!inner(season:pcs_interclub_seasons!inner(id)))",
             lambda row: _item(row, title=_text(row.get("name"), "Late interclub signup"),
                 description="Review eligibility for this late season signup.", version_field="revision",
-                href=_href("/admin/interclub/registrations", season=row.get("season_id"), step="pool") + "#season-eligibility-approvals"),
+                href=_href("/admin/interclub/registrations", season=row.get("season_id"), step="pool", member=row.get("id")) + "#season-eligibility-approvals"),
             club_scoped=False, filters=lambda q: q.eq("status", "active").eq("approval_status", "pending").eq("late_join", True)
                 .eq("pool_settings.participation.season.organizer_club_id", club_id))
 

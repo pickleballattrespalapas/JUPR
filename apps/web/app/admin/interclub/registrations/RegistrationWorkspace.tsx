@@ -83,9 +83,20 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId, initialMeetId,
   const { meetPlanningOpen } = useRegistrationWindow(data?.season.registration, () => void recheckRegistration());
   const stepFocus = useRef(false);
   const poolSection = useRef<HTMLElement | null>(null);
+  const invitationHeading = useRef<HTMLHeadingElement | null>(null);
+  const followedInvitation = useRef(false);
   const [responding, setResponding] = useState<"accept" | "decline" | null>(null);
   const responseFocus = useRef(false), confirmation = useRef<HTMLHeadingElement | null>(null), rosters = useRef<HTMLElement | null>(null);
   const pending = useRef(false), mutation = useRef<AbortController | null>(null);
+  useEffect(() => {
+    if (data?.own_participation?.status !== "invited" || followedInvitation.current || typeof window === "undefined" ||
+        window.location?.hash !== "#invitation-title" || !invitationHeading.current) return;
+    const linkedSeason = new URLSearchParams(window.location.search).get("season");
+    if (linkedSeason && linkedSeason !== seasonId) return;
+    followedInvitation.current = true;
+    invitationHeading.current.scrollIntoView({ block: "start" });
+    invitationHeading.current.focus({ preventScroll: true });
+  }, [data?.own_participation?.status, seasonId]);
   useEffect(() => { if (data && !meetPlanningOpen) setStep("pool"); }, [data, meetPlanningOpen]);
   useEffect(() => {
     if (responseFocus.current && data?.own_participation?.status !== "invited") {
@@ -190,7 +201,7 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId, initialMeetId,
       </header>
       {status === "invited" && <section className={`${styles.card} ${styles.invitation}`} aria-labelledby="invitation-title">
         <p className={styles.eyebrow}>Invitation to your club</p>
-        <h3 id="invitation-title">{clubName(clubId)} is invited</h3>
+        <h3 id="invitation-title" ref={invitationHeading} tabIndex={-1} style={{ scrollMarginTop: "1rem" }}>{clubName(clubId)} is invited</h3>
         <p>Accept to join {data.season.details.name}. You’ll choose available players separately for each meet.</p>
         <div className={styles.toolbar}>
           <button className={styles.primary} disabled={disabled} aria-busy={responding === "accept" || undefined} onClick={() => void change(`/participations/${encodeURIComponent(clubId)}`, "POST", { action: "accept", expected_revision: data.own_participation!.revision }, "", "accept")}>{responding === "accept" ? "Accepting…" : "Accept invitation"}</button>

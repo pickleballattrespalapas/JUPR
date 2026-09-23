@@ -130,6 +130,8 @@ def test_generator_is_individual_and_uses_submission_identity_not_count(db):
     assert reports(result)["generator_submissions"]["total_count"] == 2
     assert {item["source_id"] for item in result["items"]} == {"one", "two"}
     before = next(item for item in result["items"] if item["source_id"] == "one")
+    assert urlsplit(before["href"]).path == "/admin/play-generators/submissions"
+    assert parse_qs(urlsplit(before["href"]).query) == {"session": ["one"]}
     db.rows["live_sessions"][0] = row("new")
     after = collect(db)
     assert reports(after)["generator_submissions"]["total_count"] == 2
@@ -168,6 +170,39 @@ def test_interclub_approvals_filter_by_organizer_and_closed_registration(db):
     result = collect(db)
     assert {item["source_id"] for item in result["items"]} == {"mine", "late"}
     assert reports(result)["interclub_signups"]["total_count"] == 0
+    by_category = {item["category"]: urlsplit(item["href"]) for item in result["items"]}
+    assert parse_qs(by_category["interclub_results"].query) == {"season": ["season"], "meet": ["meet"]}
+    assert by_category["interclub_results"].fragment == "meet-results-review"
+    assert parse_qs(by_category["interclub_eligibility"].query) == {"season": ["season"], "step": ["pool"], "member": ["late"]}
+    assert by_category["interclub_eligibility"].fragment == "season-eligibility-approvals"
+
+
+def test_action_links_identify_the_specific_request_and_review_controls(db):
+    db.rows["public_support_requests"] = [
+        {"id": status + " /&?", "club_id": "club-a", "status": status, "request_type": "data_correction",
+         "created_at": STAMP, "updated_at": STAMP} for status in ("new", "in_review")]
+    db.rows["player_profile_update_subscriptions"] = [
+        {"id": "verified /&?", "club_id": "club-a", "request_status": service.REQUEST_STATUS_PENDING,
+         "created_at": STAMP, "row_version": 1}]
+    db.rows["live_events"] = [
+        {"id": "social /&?", "club_id": "club-a", "name": "Social", "result_mode": "social_unrated", "status": "pending",
+         "created_at": STAMP, "updated_at": STAMP}]
+    db.rows["pcs_interclub_participations"] = [
+        {"season_id": "invitation /&?", "club_id": "club-a", "status": "invited", "revision": 1, "updated_at": STAMP,
+         "season": {"organizer_club_id": "club-b", "details": {"name": "Season"}}}]
+    links = {item["category"]: urlsplit(item["href"]) for item in collect(db)["items"]}
+    for status in ("new", "in_review"):
+        link = links["support_" + status]
+        assert link.path == "/admin/support-requests"
+        assert parse_qs(link.query) == {"status": [status], "request": [status + " /&?"]}
+    assert links["verified_updates"].path == "/admin/player-updates/verified-requests"
+    assert parse_qs(links["verified_updates"].query) == {"request": ["verified /&?"]}
+    assert links["social_submissions"].path == "/admin/tools"
+    assert links["social_submissions"].fragment == "social-submissions"
+    assert parse_qs(links["social_submissions"].query) == {"submission": ["social /&?"]}
+    assert links["interclub_invitations"].path == "/admin/interclub/registrations"
+    assert links["interclub_invitations"].fragment == "invitation-title"
+    assert parse_qs(links["interclub_invitations"].query) == {"season": ["invitation /&?"]}
 
 
 def test_tournament_sources_use_safe_rpc_original_timestamps_and_surviving_destination(db):

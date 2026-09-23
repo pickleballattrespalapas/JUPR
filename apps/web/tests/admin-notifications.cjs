@@ -32,7 +32,8 @@ function eventTarget(listeners) {
 global.document = { ...eventTarget(documentEvents), visibilityState: "visible" };
 global.window = { ...eventTarget(events), setInterval(callback, delay) { timers.set(++timerId, { callback, delay }); return timerId; }, clearInterval(id) { timers.delete(id); } };
 const auth = { getAdminApiBaseUrl: () => "http://127.0.0.1:9", clearAdminSession() { clearCalls++; } };
-const api = load("lib/adminNotificationsApi.ts", { "@/lib/adminAuthClient": auth });
+const notificationsEvents = load("lib/adminNotificationsEvents.ts");
+const api = load("lib/adminNotificationsApi.ts", { "@/lib/adminAuthClient": auth, "@/lib/adminNotificationsEvents": notificationsEvents });
 const Center = load("components/AdminNotificationCenter.tsx", {
   "next/link": ({ children, ...props }) => React.createElement("a", props, children),
   "@/lib/adminNotificationsApi": api,
@@ -61,6 +62,7 @@ global.fetch = async (url, options = {}) => {
   if (override) { const handled = override(request); if (handled) return handled; }
   if (options.method === "PUT") {
     if (url.endsWith("/preferences")) preferences = { ...preferences, ...request.body.categories };
+    else if (url.endsWith("/bulk-clear")) sourceItems.filter(item => request.body.keys.includes(item.key)).forEach(item => { item.state = "cleared"; });
     else {
       const key = decodeURIComponent(url.split("/items/")[1]);
       const item = sourceItems.find(item => item.key === key);
@@ -72,7 +74,7 @@ global.fetch = async (url, options = {}) => {
 };
 const text = node => typeof node === "string" || typeof node === "number" ? String(node) : node?.children?.map(text).join(" ") || "";
 const content = tree => text(tree.toJSON());
-const button = (tree, label) => tree.root.findAllByType("button").find(node => text(node).trim() === label || new RegExp(`^${label}\\s+\\d+$`).test(text(node).trim()) || node.props["aria-label"] === label);
+const button = (tree, label) => tree.root.findAllByType("button").find(node => text(node).trim().replace(/\s+/g, " ") === label || new RegExp(`^${label}\\s+\\d+$`).test(text(node).trim()) || node.props["aria-label"] === label);
 const links = (tree, href) => tree.root.findAllByType("a").filter(node => node.props.href === href);
 const element = compact => React.createElement(Center, { key: `${accessToken}\u0000${clubId}`, accessToken, clubId, compact });
 async function mount(compact = false) { let tree; await act(async () => { tree = create(element(compact)); }); return tree; }
@@ -242,7 +244,56 @@ async function scopeChangesIgnoreLateReadAndMutation() {
   accessToken = "token-a"; clubId = "alpha";
 }
 
+async function selectNotice(tree, name, checked = true) {
+  const input = tree.root.findAllByType("input").find(node => node.props["aria-label"] === name);
+  assert.ok(input, `Expected checkbox ${name}`);
+  await act(async () => input.props.onChange({ target: { checked } }));
+}
+
+async function bulkClearRespectsSelectionFiltersAndFailures() {
+  reset();
+  const tree = await mount();
+  await selectNotice(tree, `Select ${approval.title}`);
+  assert.match(content(tree), /1\s+selected/);
+  await act(async () => tree.root.findByType("select").props.onChange({ target: { value: "registrations" } }));
+  assert.match(content(tree), /0\s+selected/);
+  await selectNotice(tree, "Select all shown notifications");
+  override = request => request.url.endsWith("/bulk-clear") ? reply({}, 503) : null;
+  await click(tree, "Clear selected (1)");
+  assert.ok(links(tree, registration.href).length);
+  assert.equal(sourceItems[1].state, "new");
+  assert.match(content(tree), /1\s+selected/, "Failed clear preserves selection for retry");
+  override = null;
+  await click(tree, "Clear selected (1)");
+  assert.equal(sourceItems[0].state, "new", "Hidden category was not cleared");
+  assert.equal(sourceItems[1].state, "cleared");
+  await act(async () => tree.root.findByType("select").props.onChange({ target: { value: "all" } }));
+  await itemClick(tree, approval, "Flag");
+  await selectNotice(tree, "Select all shown notifications");
+  await click(tree, "Clear selected (1)");
+  assert.equal(sourceItems[0].state, "cleared", "Explicit selection can clear flagged notices");
+  await click(tree, "Cleared");
+  assert.ok(links(tree, approval.href).length);
+  assert.ok(links(tree, registration.href).length);
+  assert.equal(tree.root.findAllByType("input").length, 0);
+  assert.deepEqual(requests.filter(request => request.url.endsWith("/bulk-clear")).map(request => request.body.keys), [[registration.key], [registration.key], [approval.key]]);
+  await unmount(tree);
+}
+
+async function compactSelectionOnlyClearsShownItems() {
+  reset();
+  sourceItems = Array.from({ length: 8 }, (_, index) => ({ ...approval, key: `generator:rr-${index}`, title: `Round robin ${index}`, href: `/admin/play-generators/submissions?session=rr-${index}` }));
+  const tree = await mount(true);
+  await selectNotice(tree, "Select all shown notifications");
+  await click(tree, "Clear selected (6)");
+  assert.equal(sourceItems.filter(item => item.state === "cleared").length, 6);
+  assert.match(content(tree), /0\s+selected/, "Newly displayed items remain unselected");
+  await unmount(tree);
+}
+
 (async () => {
+  await bulkClearRespectsSelectionFiltersAndFailures();
+  await compactSelectionOnlyClearsShownItems();
   await individualStatePersistsAndNewItemsRemainNew();
   await failedStateChangeRetainsTheNotification();
   await preferencesPersistOnlyAfterSuccessfulSave();

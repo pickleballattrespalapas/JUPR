@@ -236,6 +236,79 @@ def test_stale_clear_racing_a_source_change_is_rejected(fixture, monkeypatch):
     assert not fixture[0].writes
 
 
+def test_bulk_clear_is_one_personal_write_and_preserves_unselected_flags(fixture):
+    db, sources = fixture
+    keep = item("keep")
+    sources.items["club-a"].append(keep)
+    change(fixture, keep, "flagged")
+    change(fixture, item(), "flagged")
+    original = copy.deepcopy(sources.items)
+    db.writes.clear()
+    keys = [service.notification_key(record) for record in (item(), item("signup", category="activity"))]
+    result = service.clear_admin_notifications(db, **args(), keys=keys + [keys[0]])
+    assert len(db.writes) == 1 and len(db.writes[0][1]) == 2
+    assert all(row["state"] == "cleared" and row["club_id"] == "club-a" and row["user_id"] == USER for row in db.writes[0][1])
+    assert {row["key"]: row["state"] for row in result["items"]} == {
+        **dict.fromkeys(keys, "cleared"), service.notification_key(keep): "flagged"}
+    assert sources.items == original
+    assert all(row["state"] == "new" for row in feed(fixture, user=OTHER_USER)["items"])
+    sources.items["club-b"] = sources.items["club-a"]
+    assert all(row["state"] == "new" for row in feed(fixture, club="club-b")["items"])
+
+
+@pytest.mark.parametrize("failure", ["unknown", "stale", "unavailable", "disabled", "unauthorized"])
+def test_bulk_clear_validates_every_item_before_writing(fixture, monkeypatch, failure):
+    db, sources = fixture
+    activity = item("signup", category="activity")
+    change(fixture, activity, "flagged")
+    if failure == "stale":
+        monkeypatch.setattr(service, "resolve_admin_notification_item", lambda *a, **k: None)
+    elif failure == "unavailable":
+        sources.fail.add("actions")
+        # Saved state keeps the failed source identifiable so it produces 503.
+        snapshot = service._safe_item(item())
+        db.rows[service.STATES_TABLE].append(service._state_row(snapshot, club_id="club-a", user_id=USER, state="flagged", now=NOW))
+    elif failure == "disabled":
+        service.update_admin_notification_preferences(db, **args(), categories={"actions": False})
+    keys = [service.notification_key(activity), "a" * 64 if failure == "unknown" else service.notification_key(item())]
+    before = copy.deepcopy(db.rows)
+    db.writes.clear()
+    expected = service.NotificationUnavailable if failure == "unavailable" else service.NotificationConflict
+    with pytest.raises(expected):
+        service.clear_admin_notifications(db, **args(role="operator" if failure == "unauthorized" else "administrator"), keys=keys)
+    assert db.writes == [] and db.rows == before
+
+
+def test_bulk_clear_of_saved_old_activity_requires_the_current_users_flag(fixture):
+    db, _ = fixture
+    activity = item("signup", category="activity")
+    change(fixture, activity, "flagged")
+    key = service.notification_key(activity)
+    later = NOW + timedelta(days=60)
+    with pytest.raises(service.NotificationConflict):
+        service.clear_admin_notifications(db, **{**args(user=OTHER_USER), "now": later}, keys=[key])
+    result = service.clear_admin_notifications(db, **{**args(), "now": later}, keys=[key])
+    assert not any(row["key"] == key for row in result["items"])
+
+
+@pytest.mark.parametrize("keys", [[], ["a" * 63], [3], [None], "a" * 64, ["a" * 64] * (service.BULK_CLEAR_LIMIT + 1)])
+def test_bulk_clear_rejects_malformed_or_oversized_selection_without_writes(fixture, keys):
+    with pytest.raises(ValueError):
+        service.clear_admin_notifications(fixture[0], **args(), keys=keys)
+    assert not fixture[0].writes
+
+
+def test_bulk_clear_does_not_report_success_for_incomplete_database_confirmation(fixture, monkeypatch):
+    execute = Query.execute
+    def incomplete(self):
+        result = execute(self)
+        return SimpleNamespace(data=result.data[:1]) if self.payload is not None else result
+    monkeypatch.setattr(Query, "execute", incomplete)
+    with pytest.raises(service.NotificationUnavailable, match="Reload before retrying"):
+        service.clear_admin_notifications(fixture[0], **args(), keys=[service.notification_key(item()),
+            service.notification_key(item("signup", category="activity"))])
+
+
 @pytest.mark.parametrize("role", ["operator", "read_only", "scorekeeper"])
 def test_unauthorized_categories_cannot_be_enabled_and_saved_flags_are_hidden(fixture, role):
     change(fixture, item(), "flagged")
@@ -307,6 +380,23 @@ def test_http_contract_requires_session_and_club_binding_and_rejects_identity_sp
     assert not fixture[0].writes
 
 
+def test_bulk_clear_http_contract_is_authenticated_and_rejects_spoofed_identity(fixture, monkeypatch):
+    client = route_client(fixture, monkeypatch)
+    path = "/admin/clubs/club-a/notifications/bulk-clear"
+    headers = {"Authorization": "Bearer fixture-token"}
+    body = {"keys": [service.notification_key(item()), service.notification_key(item("signup", category="activity"))]}
+    assert client.put(path, json=body).status_code == 401
+    assert client.put(path.replace("club-a", "club-b"), headers=headers, json=body).status_code == 403
+    for invalid in ({**body, "user_id": OTHER_USER}, {**body, "state": "new"}, {"keys": []}, {"keys": ["bad"]},
+                    {"keys": [1]}, {"keys": ["a" * 64] * (service.BULK_CLEAR_LIMIT + 1)}):
+        assert client.put(path, headers=headers, json=invalid).status_code == 422
+    assert not fixture[0].writes
+    response = client.put(path, headers=headers, json=body)
+    assert response.status_code == 200 and response.headers["cache-control"] == "private, no-store"
+    assert all(row["state"] == "cleared" for row in response.json()["items"])
+    assert len(fixture[0].writes) == 1
+
+
 def test_staging_open_allows_personal_puts_and_emergency_stop_blocks_them(fixture, monkeypatch):
     client = route_client(fixture, monkeypatch, main=True)
     monkeypatch.setenv("JUPR_ENV", "staging")
@@ -317,10 +407,13 @@ def test_staging_open_allows_personal_puts_and_emergency_stop_blocks_them(fixtur
     assert response.status_code == 200, response.text
     response = client.put(base + "/items/" + service.notification_key(item()), headers=headers, json={"state": "flagged"})
     assert response.status_code == 200, response.text
+    response = client.put(base + "/bulk-clear", headers=headers, json={"keys": [service.notification_key(item())]})
+    assert response.status_code == 200, response.text
     monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "none")
     before = len(fixture[0].writes)
     assert client.put(base + "/preferences", headers=headers, json={"categories": {"actions": False}}).status_code == 403
     assert client.put(base + "/items/" + service.notification_key(item()), headers=headers, json={"state": "cleared"}).status_code == 403
+    assert client.put(base + "/bulk-clear", headers=headers, json={"keys": [service.notification_key(item())]}).status_code == 403
     assert len(fixture[0].writes) == before
 
 

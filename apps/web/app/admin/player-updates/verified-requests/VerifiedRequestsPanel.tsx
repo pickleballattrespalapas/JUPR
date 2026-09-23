@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import { actionSuccess } from "@/components/interaction";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
@@ -48,10 +48,15 @@ export default function VerifiedRequestsPanel({ apiBase, clubId, status }: Props
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [notes, setNotes] = useState<Record<string, string>>({});
-  const rowsRequest = useLatestRequestGuard(accessToken, () => {
+  const [linkedRequest, setLinkedRequest] = useState("");
+  const followedNotification = useRef("");
+  const loadedScope = useRef("");
+  const requestPanel = useRef<HTMLElement | null>(null);
+  const rowsRequest = useLatestRequestGuard(`${clubId}:${accessToken}`, () => {
+    loadedScope.current = "";
     setBusy(false); setMessage(null); setRows([]); setNotes({});
   });
-  const actionRequest = useLatestRequestGuard(accessToken);
+  const actionRequest = useLatestRequestGuard(`${clubId}:${accessToken}`);
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
     if (!apiBase) throw new Error("Missing JUPR API base URL.");
@@ -72,6 +77,7 @@ export default function VerifiedRequestsPanel({ apiBase, clubId, status }: Props
     try {
       const payload = await requestJson<ListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/verified-updates/requests?status=${encodeURIComponent(filter)}&limit=200`);
       if (!rowsRequest.isCurrent(generation)) return;
+      loadedScope.current = `${clubId}:${accessToken}`;
       setRows(payload.requests || []);
       setMessage(payload.requests?.length ? `Loaded ${payload.count ?? payload.requests.length} request(s).` : `No ${filter} requests.`);
     } catch (error) {
@@ -104,7 +110,21 @@ export default function VerifiedRequestsPanel({ apiBase, clubId, status }: Props
     }
   }
 
-  useAuthenticatedAutoLoad(status?.enabled ? accessToken : "", loadRows, filter);
+  useAuthenticatedAutoLoad(status?.enabled ? accessToken : "", loadRows, `${clubId}:${filter}`);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !accessToken || loadedScope.current !== `${clubId}:${accessToken}`) return;
+    const requestId = new URLSearchParams(window.location.search).get("request");
+    const linkKey = `${clubId}:${accessToken}:${requestId}`;
+    if (!requestId || followedNotification.current === linkKey || !rows.some(row => row.id === requestId)) return;
+    followedNotification.current = linkKey;
+    setLinkedRequest(requestId);
+  }, [accessToken, clubId, rows]);
+  useEffect(() => {
+    if (!linkedRequest || !requestPanel.current) return;
+    requestPanel.current.scrollIntoView({ block: "start" });
+    requestPanel.current.focus({ preventScroll: true });
+  }, [linkedRequest]);
 
   if (!status?.enabled) {
     return <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Verified requests are disabled</h2><p>{status?.warnings?.[0] || "Enable Player Updates Admin on FastAPI."}</p></article>;
@@ -129,7 +149,7 @@ export default function VerifiedRequestsPanel({ apiBase, clubId, status }: Props
         {message ? <p style={{ color: message.toLowerCase().includes("unable") || message.toLowerCase().includes("type") ? "#b91c1c" : "#166534" }}>{message}</p> : null}
       </article>
       {rows.map((row) => (
-        <article key={row.id} style={cardStyle}>
+        <article key={row.id} id={`verified-request-${row.id}`} ref={row.id === linkedRequest ? requestPanel : undefined} tabIndex={-1} style={{ ...cardStyle, ...(row.id === linkedRequest ? { borderColor: "#2563eb", background: "#eff6ff" } : {}), scrollMarginTop: "1rem" }}>
           <h3 style={{ marginTop: 0 }}>{row.player_name}</h3>
           <p style={{ color: "#475569" }}>#{row.player_id} · {row.email_masked || "email hidden"} · {row.request_status} · {row.created_at ? String(row.created_at).slice(0, 10) : "—"}</p>
           {row.request_note ? <p><strong>Requester note:</strong> {row.request_note}</p> : null}

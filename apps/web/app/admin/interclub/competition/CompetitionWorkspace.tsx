@@ -107,6 +107,8 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
   const [review, setReview] = useState<"submit" | "approve" | null>(null), [reason, setReason] = useState(""), [startsAt, setStartsAt] = useState(""), [deadline, setDeadline] = useState("");
   const token = useRef(accessToken); token.current = accessToken;
   const pending = useRef(false), controller = useRef<AbortController | null>(null);
+  const resultsReview = useRef<HTMLDivElement | null>(null);
+  const followedNotification = useRef(false);
   const dirty = !!draft && JSON.stringify(draft) !== JSON.stringify(detail?.batch?.document);
   useEffect(() => { onLock(dirty || busy); return () => onLock(false); }, [dirty, busy, onLock]);
   useEffect(() => {
@@ -120,6 +122,15 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
       .catch(cause => { if (!request.signal.aborted) setError(message(cause)); }).finally(() => { if (!request.signal.aborted) setLoading(false); });
     return () => { request.abort(); controller.current?.abort(); };
   }, [root, refresh]);
+  useEffect(() => {
+    if (loading || !detail?.batch || followedNotification.current || typeof window === "undefined" ||
+        window.location?.hash !== "#meet-results-review" || !resultsReview.current) return;
+    const linkedMeet = new URLSearchParams(window.location.search).get("meet");
+    if (linkedMeet && linkedMeet !== detail.meet.id) return;
+    followedNotification.current = true;
+    resultsReview.current.scrollIntoView({ block: "start" });
+    resultsReview.current.focus({ preventScroll: true });
+  }, [detail, loading]);
   async function change(action: string, body: Record<string, unknown> = {}): Promise<boolean> {
     if (pending.current || blocked || !detail) return false;
     if (readBrowserWorkspace()?.clubId !== clubId) { setBlocked(true); setError("Your selected club changed in another tab. Reopen meet operations for the current club."); return false; }
@@ -184,7 +195,7 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
       </div>}
     </div>}
     {batch && draft && <>
-      <div className={styles.card}>
+      <div id="meet-results-review" ref={resultsReview} tabIndex={-1} className={styles.card} style={{ scrollMarginTop: "1rem" }}>
         <div className={styles.toolbar}><div><p className={styles.eyebrow}>{phaseLabels[phase]} · Revision {batch.revision}</p><h2>{batch.state === "draft" ? "Meet score draft" : batch.state === "submitted" ? "Awaiting organizer approval" : "Official meet results"}</h2><p>{count?.entered} of {count?.total} game outcomes entered{dirty ? " · Unsaved changes" : " · Saved"}</p></div>
           <button onClick={() => window.print()} disabled={busy || dirty}>Print meet packet</button>
         </div>

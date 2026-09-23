@@ -81,8 +81,10 @@ Never put `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`, or other server-on
 `GET /admin/clubs/{club_id}/notifications` returns the personal inbox, category
 preferences, exact source counts, and independent source availability.
 `PUT .../notifications/preferences` accepts `{categories: {key: boolean}}` and
-`PUT .../notifications/items/{key}` accepts `{state: "new"|"flagged"|"cleared"}`;
-both return the updated feed. Verified JWT identity and active club assignments
+`PUT .../notifications/items/{key}` accepts `{state: "new"|"flagged"|"cleared"}`.
+`PUT .../notifications/bulk-clear` accepts `{keys: string[]}` (1–5000 keys),
+validates every selection before one atomic personal-state write, and preserves
+unselected notices. All three writes return the updated feed. Verified JWT identity and active club assignments
 scope every read/write. Browser callers cannot supply another user or snapshot.
 The `admin-notifications` staging wave (also included in `open`) allows these
 personal-state writes. They never mutate underlying club records or send email.

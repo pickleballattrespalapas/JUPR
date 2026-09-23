@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
+import re
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -16,6 +17,7 @@ from jupr_app.services.staging_write_guard import NON_STAGING_WRITE_ENVIRONMENTS
 
 HISTORY_DAYS = 30
 ITEM_LIMIT = 200
+BULK_CLEAR_LIMIT = 5000
 PREFERENCES_TABLE = "admin_notification_preferences"
 STATES_TABLE = "admin_notification_states"
 STATES = {"new", "flagged", "cleared"}
@@ -184,12 +186,7 @@ def update_admin_notification_preferences(db, *, club_id: str, user_id: str, ass
     return _feed(db, context, club_id=club_id, assignments=assignments, now=instant)
 
 
-def update_admin_notification_state(db, *, club_id: str, user_id: str, assignments: list[dict], key: str, state: str, now: datetime | None = None) -> dict:
-    _require_personal_writes()
-    if state not in STATES:
-        raise ValueError("Choose a supported notification state.")
-    instant = now or datetime.now(timezone.utc)
-    context = _context(db, club_id=club_id, user_id=user_id, assignments=assignments, now=instant)
+def _item_for_state_change(db, context: dict, *, club_id: str, assignments: list[dict], key: str, now: datetime) -> dict:
     item = context["items"].get(key)
     if item is None and key in context["states"]:
         item = _saved_snapshot(context["states"][key])
@@ -202,16 +199,30 @@ def update_admin_notification_state(db, *, club_id: str, user_id: str, assignmen
         raise NotificationUnavailable("This notification could not be checked. Try again before changing it.")
     if item["kind"] == "action":
         try:
-            current = _resolve(db, item, club_id=club_id, assignments=assignments, now=instant)
+            current = _resolve(db, item, club_id=club_id, assignments=assignments, now=now)
         except Exception as exc:
             raise NotificationUnavailable("This notification could not be checked. Try again before changing it.") from exc
         if current is None:
             raise NotificationConflict("This task has changed or is already resolved. Refresh your notifications.")
         item = current
-    elif _instant(item["occurred_at"]) < instant - timedelta(days=HISTORY_DAYS) and context["states"].get(key, {}).get("state") != "flagged":
+    elif _instant(item["occurred_at"]) < now - timedelta(days=HISTORY_DAYS) and context["states"].get(key, {}).get("state") != "flagged":
         raise NotificationConflict("This notification is outside your recent activity history.")
-    row = {"club_id": club_id, "user_id": user_id, "notification_key": key, "category_key": item["category"],
-           "kind": item["kind"], "state": state, "snapshot": item, "occurred_at": item["occurred_at"], "updated_at": instant.isoformat()}
+    return item
+
+
+def _state_row(item: dict, *, club_id: str, user_id: str, state: str, now: datetime) -> dict:
+    return {"club_id": club_id, "user_id": user_id, "notification_key": item["key"], "category_key": item["category"],
+            "kind": item["kind"], "state": state, "snapshot": item, "occurred_at": item["occurred_at"], "updated_at": now.isoformat()}
+
+
+def update_admin_notification_state(db, *, club_id: str, user_id: str, assignments: list[dict], key: str, state: str, now: datetime | None = None) -> dict:
+    _require_personal_writes()
+    if state not in STATES:
+        raise ValueError("Choose a supported notification state.")
+    instant = now or datetime.now(timezone.utc)
+    context = _context(db, club_id=club_id, user_id=user_id, assignments=assignments, now=instant)
+    item = _item_for_state_change(db, context, club_id=club_id, assignments=assignments, key=key, now=instant)
+    row = _state_row(item, club_id=club_id, user_id=user_id, state=state, now=instant)
     try:
         result = db.table(STATES_TABLE).upsert(row, on_conflict="club_id,user_id,notification_key").execute()
         if not isinstance(result.data, list) or len(result.data) != 1 or result.data[0].get("notification_key") != key:
@@ -220,4 +231,36 @@ def update_admin_notification_state(db, *, club_id: str, user_id: str, assignmen
         raise NotificationUnavailable("Could not confirm this notification change. Reload before retrying.") from exc
     context["states"][key] = row
     context["items"][key] = item
+    return _feed(db, context, club_id=club_id, assignments=assignments, now=instant)
+
+
+def clear_admin_notifications(db, *, club_id: str, user_id: str, assignments: list[dict], keys: list[str], now: datetime | None = None) -> dict:
+    """Validate every selected notice before one atomic personal-state upsert.
+
+    The client supplies identities only. Source records, permissions, snapshots,
+    and the user/club scope are all resolved on the server. A stale or unavailable
+    selected item rejects the entire selection without clearing the other items.
+    """
+    _require_personal_writes()
+    if not isinstance(keys, list) or not 1 <= len(keys) <= BULK_CLEAR_LIMIT or any(
+        not isinstance(key, str) or not re.fullmatch(r"[a-f0-9]{64}", key) for key in keys
+    ):
+        raise ValueError("Choose a supported number of notification keys.")
+    keys = list(dict.fromkeys(keys))
+    instant = now or datetime.now(timezone.utc)
+    context = _context(db, club_id=club_id, user_id=user_id, assignments=assignments, now=instant)
+    items = [_item_for_state_change(db, context, club_id=club_id, assignments=assignments, key=key, now=instant)
+             for key in keys]
+    rows = [_state_row(item, club_id=club_id, user_id=user_id, state="cleared", now=instant) for item in items]
+    try:
+        result = db.table(STATES_TABLE).upsert(rows, on_conflict="club_id,user_id,notification_key").execute()
+        if not isinstance(result.data, list) or len(result.data) != len(keys) or {
+            row.get("notification_key") for row in result.data
+        } != set(keys):
+            raise ValueError("Bulk notification save not confirmed")
+    except Exception as exc:
+        raise NotificationUnavailable("Could not confirm the selected notification changes. Reload before retrying.") from exc
+    for item, row in zip(items, rows):
+        context["states"][item["key"]] = row
+        context["items"][item["key"]] = item
     return _feed(db, context, club_id=club_id, assignments=assignments, now=instant)
