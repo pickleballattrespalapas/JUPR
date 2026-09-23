@@ -28,6 +28,8 @@ const secondMeet = { ...meet, id: mid2, starts_at: '2099-02-10T18:00:00Z', revis
 const team = { meet_id: mid, id: tid, club_id: 'beta', season_id: sid, name: 'Beta Blue', division: '3.5', revision: 1, withdrawn: false, status: 'needs_exception', roster: lineup, issues: [{ code: 'rating_above_maximum', message: 'Player exceeds rating limit.' }], late_change: true, decision_reason: null };
 
 async function clubsAndRosters() {
+  const originalWindow = global.window;
+  global.window = Object.assign(new EventTarget(), { location: { hash: '#invitation-title', search: `?season=${sid}` } });
   let clubId = 'beta', identity = 'b', role = 'administrator', token = 'token-1';
   let requests = [], finish, teams = [], ownStatus = 'invited';
   const participation = () => ({ season_id: sid, club_id: 'beta', status: ownStatus, revision: 2 });
@@ -55,6 +57,9 @@ async function clubsAndRosters() {
     focus() { focused.push(element.props.id); }, scrollIntoView() { scrolled.push(element.props.id); }
   }) }); });
   assert.equal(button(tree, 'Add a team for this meet'), undefined);
+  assert.equal(scrolled[0], 'invitation-title', 'The notification scrolls to the loaded invitation');
+  assert.equal(focused[0], 'invitation-title', 'The invitation receives keyboard focus');
+  assert.ok(requests.every(request => !request.options.method), 'Opening the invitation does not accept it');
   assert.ok(!requests.some(r => r.url.includes('/players')));
   assert.equal(tree.root.findAllByProps({ 'aria-label': 'Meet' }).length, 0, 'Pending invitation does not show meet roster controls');
   assert.ok(!requests.some(r => r.url.includes('/meets/')), 'Pending invitation does not fetch meet details');
@@ -183,6 +188,7 @@ async function clubsAndRosters() {
   assert.equal(requests.length, requestCount);
   assert.equal(tree.root.findAllByType('textarea').length, 0);
   await act(async () => tree.unmount());
+  global.window = originalWindow;
 }
 
 async function invitationResponses() {

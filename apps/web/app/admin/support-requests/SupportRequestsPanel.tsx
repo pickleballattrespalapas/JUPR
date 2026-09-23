@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import { actionSuccess } from "@/components/interaction";
@@ -76,7 +76,9 @@ function SupportRequestCard({ request, selected, disabled, onSelect }: { request
 
 export default function SupportRequestsPanel({ apiBase, clubId, status }: Props) {
   const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
-  const queryStatus = useSearchParams().get("status");
+  const searchParams = useSearchParams();
+  const queryStatus = searchParams.get("status");
+  const linkedRequest = searchParams.get("request");
   const linkedStatus = STATUS_OPTIONS.includes(queryStatus || "") ? queryStatus! : "new";
   const [statusFilter, setStatusFilter] = useState(linkedStatus);
   useEffect(() => { setStatusFilter(linkedStatus); }, [linkedStatus]);
@@ -84,6 +86,10 @@ export default function SupportRequestsPanel({ apiBase, clubId, status }: Props)
   const [requests, setRequests] = useState<AdminSupportRequest[]>([]);
   const [summary, setSummary] = useState<AdminSupportRequestsListResponse["summary"] | null>(null);
   const [selectedId, setSelectedId] = useState("");
+  const followedNotification = useRef("");
+  const loadedScope = useRef("");
+  const focusReview = useRef(false);
+  const reviewPanel = useRef<HTMLElement | null>(null);
   const [edit, setEdit] = useState<RequestEdit>({
     status: "in_review",
     adminNote: "",
@@ -94,7 +100,7 @@ export default function SupportRequestsPanel({ apiBase, clubId, status }: Props)
   });
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const requestsRequest = useLatestRequestGuard(accessToken, clearProtectedSupportRequests);
+  const requestsRequest = useLatestRequestGuard(`${clubId}:${accessToken}`, clearProtectedSupportRequests);
   const selected = requests.find((request) => request.id === selectedId) || null;
 
   function resetRequestEdit() {
@@ -109,6 +115,7 @@ export default function SupportRequestsPanel({ apiBase, clubId, status }: Props)
   }
 
   function clearProtectedSupportRequests() {
+    loadedScope.current = "";
     setRequests([]);
     setSummary(null);
     setSelectedId("");
@@ -143,6 +150,7 @@ export default function SupportRequestsPanel({ apiBase, clubId, status }: Props)
       if (typeFilter) params.set("request_type", typeFilter);
       const payload = await requestJson<AdminSupportRequestsListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/support-requests${params.toString() ? `?${params.toString()}` : ""}`);
       if (!requestsRequest.isCurrent(generation)) return;
+      loadedScope.current = `${clubId}:${accessToken}`;
       setRequests(payload.requests || []);
       setSummary(payload.summary || null);
       setMessage(`Loaded ${payload.requests?.length ?? 0} request(s).`);
@@ -153,7 +161,7 @@ export default function SupportRequestsPanel({ apiBase, clubId, status }: Props)
     }
   }
 
-  function selectRequest(request: AdminSupportRequest) {
+  const selectRequest = useCallback((request: AdminSupportRequest) => {
     setSelectedId(request.id);
     setEdit({
       status: request.status === "new" ? "in_review" : request.status,
@@ -164,7 +172,23 @@ export default function SupportRequestsPanel({ apiBase, clubId, status }: Props)
       resolutionEvidence: request.resolution_evidence || ""
     });
     setMessage(null);
-  }
+  }, []);
+
+  useEffect(() => {
+    const linkKey = `${clubId}:${accessToken}:${linkedRequest}`;
+    if (!accessToken || loadedScope.current !== `${clubId}:${accessToken}` || !linkedRequest || followedNotification.current === linkKey) return;
+    const request = requests.find(item => item.id === linkedRequest);
+    if (!request) return;
+    followedNotification.current = linkKey;
+    focusReview.current = true;
+    selectRequest(request);
+  }, [accessToken, clubId, linkedRequest, requests, selectRequest]);
+  useEffect(() => {
+    if (!selectedId || !focusReview.current || !reviewPanel.current) return;
+    focusReview.current = false;
+    reviewPanel.current.scrollIntoView({ block: "start" });
+    reviewPanel.current.focus({ preventScroll: true });
+  }, [selectedId]);
 
   async function saveStatus(confirmationText: string) {
     if (!selected) {
@@ -214,7 +238,7 @@ export default function SupportRequestsPanel({ apiBase, clubId, status }: Props)
   useAuthenticatedAutoLoad(
     status.enabled ? accessToken : "",
     loadRequests,
-    `${statusFilter}:${typeFilter}`
+    `${clubId}:${statusFilter}:${typeFilter}`
   );
 
   if (!status.enabled) {
@@ -248,8 +272,9 @@ export default function SupportRequestsPanel({ apiBase, clubId, status }: Props)
       {message ? <p style={{ color: message.toLowerCase().includes("error") || message.toLowerCase().includes("unable") ? "#b91c1c" : "#166534" }}>{message}</p> : null}
 
       {selected ? (
-        <article style={{ ...cardStyle, borderColor: "#2563eb" }}>
+        <article id="support-request-review" ref={reviewPanel} tabIndex={-1} style={{ ...cardStyle, borderColor: "#2563eb", scrollMarginTop: "1rem" }}>
           <h2 style={{ marginTop: 0 }}>Review selected request</h2>
+          <p><strong>{selected.subject || "Untitled request"}</strong> · {selected.requester_name}</p>
           <p style={{ color: "#475569" }}>Use this panel only to track review state. Apply actual corrections through Match Log, Player Editor, Tournament Admin, or Replay History.</p>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
             <label>Status<br /><select value={edit.status} onChange={(event) => setEdit((current) => ({ ...current, status: event.target.value }))} disabled={busy} style={inputStyle}>{STATUS_OPTIONS.map((option) => <option key={option} value={option}>{option.replace(/_/g, " ")}</option>)}</select></label>

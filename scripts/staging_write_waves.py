@@ -272,6 +272,7 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
     "admin-notifications": (
         ("PUT", "/admin/clubs/{club_id}/notifications/preferences"),
         ("PUT", "/admin/clubs/{club_id}/notifications/items/{key}"),
+        ("PUT", "/admin/clubs/{club_id}/notifications/bulk-clear"),
     ),
     "admin-tools": (
         ("POST", "/admin/clubs/{club_id}/tools/social-submissions/{event_id}/moderate"),

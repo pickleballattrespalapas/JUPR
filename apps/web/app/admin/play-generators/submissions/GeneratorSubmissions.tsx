@@ -41,6 +41,10 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const generation = useRef(0);
+  const queueScope = useRef("");
+  const followedNotification = useRef("");
+  const focusReview = useRef(false);
+  const reviewPanel = useRef<HTMLElement | null>(null);
   const request = useCallback(async (path: string, body?: unknown, signal?: AbortSignal) => {
     if (!apiBase || !accessToken) throw new Error("Sign in to review generator results.");
     const response = await fetch(`${apiBase.replace(/\/$/, "")}/admin/clubs/${encodeURIComponent(clubId)}/play-generators/${path}`, {
@@ -54,22 +58,23 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
   const refresh = useCallback(async () => {
     const current = ++generation.current;
     setBusy(true);
-    try { const payload = await request(`submissions?status=${status}`); if (current === generation.current) { setQueue(payload); setSelected(null); } }
+    try { const payload = await request(`submissions?status=${status}`); if (current === generation.current) { queueScope.current = `${clubId}:${accessToken}`; setQueue(payload); setSelected(null); } }
     catch (error) { if (current === generation.current) setMessage(error instanceof Error ? error.message : "Could not refresh results."); }
     finally { if (current === generation.current) setBusy(false); }
-  }, [request, status]);
+  }, [accessToken, clubId, request, status]);
   useEffect(() => {
     const controller = new AbortController();
     const current = ++generation.current;
+    queueScope.current = "";
     setQueue({ submissions: [], players: [] }); setSelected(null); setMessage("");
     if (!accessToken) return;
     setBusy(true);
     request(`submissions?status=${status}`, undefined, controller.signal).then(payload => {
-      if (!controller.signal.aborted && current === generation.current) setQueue(payload);
+      if (!controller.signal.aborted && current === generation.current) { queueScope.current = `${clubId}:${accessToken}`; setQueue(payload); }
     }).catch(error => { if (!controller.signal.aborted) setMessage(error.message); }).finally(() => { if (current === generation.current) setBusy(false); });
     return () => { controller.abort(); };
-  }, [accessToken, request, status]);
-  function select(item: Submission) {
+  }, [accessToken, clubId, request, status]);
+  const select = useCallback((item: Submission) => {
     setSelected(item); setReason(item.review?.request.reason || ""); setMatchDate(item.review?.request.match_date || item.match_date);
     const ids: Record<string, number> = {};
     for (const participant of item.participants) {
@@ -78,7 +83,24 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
       if (chosen) ids[participant.id] = chosen;
     }
     setMapping(item.review?.request.player_ids || ids);
-  }
+  }, [queue.players]);
+  useEffect(() => {
+    if (typeof window === "undefined" || !accessToken || queueScope.current !== `${clubId}:${accessToken}`) return;
+    const session = new URLSearchParams(window.location.search).get("session");
+    const linkKey = `${clubId}:${accessToken}:${session}`;
+    if (!session || followedNotification.current === linkKey) return;
+    const item = queue.submissions.find(submission => submission.session_key === session);
+    if (!item) return;
+    followedNotification.current = linkKey;
+    focusReview.current = true;
+    select(item);
+  }, [accessToken, clubId, queue.submissions, select]);
+  useEffect(() => {
+    if (!selected || !focusReview.current || !reviewPanel.current) return;
+    focusReview.current = false;
+    reviewPanel.current.scrollIntoView({ block: "start" });
+    reviewPanel.current.focus({ preventScroll: true });
+  }, [selected]);
   async function decide(action: ReviewRequest["action"]) {
     if (!selected) throw new Error("Choose a submission first.");
     setBusy(true); setMessage("");
@@ -109,7 +131,7 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
         <strong>{item.title}</strong><br />{item.match_date} · {item.match_count} games · {item.rating_mode === "rated" ? "Rated" : "Unrated"}<br />Submitted by {item.organizer_name}<br />{item.status === "processing" ? "Approval interrupted — resume review" : item.approved_mode || item.status}
       </button>)}
     </div>
-    {selected ? <article style={{ padding: "1rem", border: "1px solid #cbd5e1", borderRadius: 14 }}>
+    {selected ? <article id="generator-submission-review" ref={reviewPanel} tabIndex={-1} style={{ padding: "1rem", border: "1px solid #2563eb", borderRadius: 14, scrollMarginTop: "1rem" }}>
       <h2>{selected.title} · {selected.rating_mode === "rated" ? "Rated" : "Unrated"}</h2>
       <p>{selected.match_count} scored games · Submitted by {selected.organizer_name}</p>
       <label>Date played <input type="date" value={matchDate} disabled={!editable || busy} onChange={e => setMatchDate(e.target.value)} style={field} /></label>

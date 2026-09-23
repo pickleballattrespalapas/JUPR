@@ -78,4 +78,15 @@ async function refreshedQueuePreservesDecision(){
  await act(async()=>finish(reply({members:[]})));
  await act(async()=>tree.unmount());
 }
-(async()=>{await reviews();await unlinkedAndStale();await approvalAnchor();await refreshedQueuePreservesDecision();console.log('PASS interclub eligibility approvals: revisions, request reasons and decisions, privacy, late-only queue, background draft preservation, stale context and async deep link');})().catch(error=>{console.error(error);process.exit(1)});
+async function linkedMemberFocus(){
+ const scrolled=[],focused=[];
+ global.window={location:{hash:'#season-eligibility-approvals',search:'?member=member-2'}};
+ let finish;global.fetch=()=>new Promise(resolve=>{finish=resolve;});
+ let tree;await act(async()=>{tree=create(React.createElement(Panel,props),{createNodeMock:element=>({scrollIntoView:()=>scrolled.push(element.props.id),focus:()=>focused.push(element.props.id)})});});
+ assert.deepEqual(scrolled,[]);
+ await act(async()=>finish(reply({members:[member,{...member,id:'member-2',name:'Linked Traveler'}]})));
+ assert.deepEqual(scrolled,['season-eligibility-member-2']);assert.deepEqual(focused,['season-eligibility-member-2']);
+ assert.equal(tree.root.findByProps({id:'season-eligibility-member-2'}).props.style.borderColor,'#2563eb');
+ await act(async()=>tree.unmount());delete global.window;
+}
+(async()=>{await reviews();await unlinkedAndStale();await approvalAnchor();await refreshedQueuePreservesDecision();await linkedMemberFocus();console.log('PASS interclub eligibility approvals: revisions, request reasons and decisions, privacy, late-only queue, background draft preservation, stale context and async deep links to section and member');})().catch(error=>{console.error(error);process.exit(1)});

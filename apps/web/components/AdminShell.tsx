@@ -1,7 +1,8 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { signOutAdminSession } from "@/lib/adminAuthClient";
@@ -9,6 +10,9 @@ import { useAdminSession } from "@/lib/useAdminSession";
 import { useAvailableWorkspaces } from "@/lib/useAvailableWorkspaces";
 import { AdminWorkspaceContext } from "@/lib/useAdminWorkspace";
 import { ADMIN_WORKSPACE_CHANGE, canChooseAdminWorkspace, readBrowserWorkspace, sameWorkspace, type AdminWorkspace } from "@/lib/adminWorkspace";
+import type { AdminNotification } from "@/lib/adminNotificationsApi";
+import { notificationNavigation, notificationSummary } from "@/lib/adminNotificationNavigation";
+import { useAdminNotificationBadges } from "@/lib/useAdminNotificationBadges";
 import styles from "./AdminShell.module.css";
 
 type Props = {
@@ -178,17 +182,76 @@ const adminGroups: AdminGroup[] = [
   }
 ];
 
-function SidebarLink({ item, pathname }: { item: AdminLink; pathname: string }) {
+function NotificationBadge({ items, summaryId }: { items: AdminNotification[]; summaryId: string }) {
+  const anchor = useRef<HTMLSpanElement>(null);
+  const tooltip = useRef<HTMLSpanElement>(null);
+  const closeTimer = useRef<ReturnType<typeof setTimeout>>();
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState({ top: 8, left: 8 });
+  const summary = notificationSummary(items);
+  const hasNotifications = items.length > 0;
+  const show = useCallback(() => { clearTimeout(closeTimer.current); setOpen(true); }, []);
+  const hide = useCallback(() => { clearTimeout(closeTimer.current); setOpen(false); }, []);
+  const scheduleHide = () => {
+    clearTimeout(closeTimer.current);
+    closeTimer.current = setTimeout(() => setOpen(false), 120);
+  };
+  useEffect(() => {
+    if (!hasNotifications) { hide(); return; }
+    const parent = anchor.current?.closest("a, button");
+    if (!parent) return;
+    const onEscape = (event: Event) => { if ((event as KeyboardEvent).key === "Escape") hide(); };
+    parent.addEventListener("focus", show);
+    parent.addEventListener("blur", hide);
+    parent.addEventListener("keydown", onEscape);
+    return () => {
+      clearTimeout(closeTimer.current);
+      parent.removeEventListener("focus", show);
+      parent.removeEventListener("blur", hide);
+      parent.removeEventListener("keydown", onEscape);
+    };
+  }, [hasNotifications, show, hide]);
+  useLayoutEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const badge = anchor.current?.getBoundingClientRect();
+      const popup = tooltip.current?.getBoundingClientRect();
+      if (!badge || !popup) return;
+      const left = Math.max(8, Math.min(badge.right - popup.width, window.innerWidth - popup.width - 8));
+      const below = badge.bottom + 6;
+      const preferredTop = below + popup.height <= window.innerHeight - 8 ? below : badge.top - popup.height - 6;
+      const top = Math.max(8, Math.min(preferredTop, window.innerHeight - popup.height - 8));
+      setPosition({ top, left });
+    };
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => { window.removeEventListener("resize", place); window.removeEventListener("scroll", place, true); };
+  }, [open, summary]);
+  if (!items.length) return null;
+  return <span ref={anchor} className={styles.notificationBadgeWrapper} onMouseEnter={show} onMouseLeave={scheduleHide}>
+    <span className={styles.notificationBadge} aria-hidden="true">{items.length}</span>
+    <span id={summaryId} className={styles.notificationDescription}>{summary}</span>
+    {open && createPortal(<span ref={tooltip} role="tooltip" className={styles.notificationSummary}
+      style={position} onMouseEnter={show} onMouseLeave={scheduleHide}>{summary}</span>, document.body)}
+  </span>;
+}
+
+function SidebarLink({ item, pathname, notifications }: { item: AdminLink; pathname: string; notifications: AdminNotification[] }) {
   const active = item.active(pathname);
+  const summaryId = useId();
   return (
     <Link
       href={item.href}
+      aria-label={item.label}
       aria-current={active ? "page" : undefined}
+      aria-describedby={notifications.length ? summaryId : undefined}
       className={`${styles.link} ${active ? styles.active : ""}`}
       target={item.newTab ? "_blank" : undefined}
       rel={item.newTab ? "noreferrer" : undefined}
     >
-      {item.label}
+      <span className={styles.linkLabel}>{item.label}</span>
+      <NotificationBadge items={notifications} summaryId={summaryId} />
     </Link>
   );
 }
@@ -210,6 +273,10 @@ export default function AdminShell({ children, workspace }: Props) {
   const globalPage = pathname === "/admin/select-club" || pathname === "/admin/platform" || pathname === "/admin/accept-invitation";
   const activeClub = workspaces.find(club => club.club_id === workspace?.clubId && club.club_slug === workspace?.clubSlug);
   const canChoose = canChooseAdminWorkspace(workspaces);
+  const canReadNotifications = !authPage && !globalPage && !loading && loaded && !error && !contextChanged &&
+    Boolean(activeClub && session?.capabilities?.assignments.some(assignment => assignment.club_id === workspace?.clubId));
+  const notificationData = useAdminNotificationBadges(accessToken, workspace?.clubId || "", pathname, canReadNotifications);
+  const notificationCounts = notificationNavigation(notificationData, adminGroups);
 
   useEffect(() => {
     setMobileMenuOpen(false);
@@ -344,6 +411,8 @@ export default function AdminShell({ children, workspace }: Props) {
               const groupId = `admin-group-${group.label
                 .toLowerCase()
                 .replace(/[^a-z0-9]+/g, "-")}`;
+              const notifications = notificationCounts.byGroup[group.label] || [];
+              const summaryId = `${groupId}-notifications`;
               return (
                 <section key={group.label} className={styles.groupSection}>
                   <button
@@ -352,10 +421,13 @@ export default function AdminShell({ children, workspace }: Props) {
                       activeGroup ? styles.groupActive : ""
                     }`}
                     aria-expanded={!collapsed}
+                    aria-label={group.label}
                     aria-controls={groupId}
+                    aria-describedby={notifications.length ? summaryId : undefined}
                     onClick={() => toggleGroup(group.label)}
                   >
-                    <span>{group.label}</span>
+                    <span className={styles.groupLabel}>{group.label}</span>
+                    <NotificationBadge items={notifications} summaryId={summaryId} />
                     <span aria-hidden="true">{collapsed ? "+" : "−"}</span>
                   </button>
                   {!collapsed ? (
@@ -369,6 +441,7 @@ export default function AdminShell({ children, workspace }: Props) {
                           key={item.href}
                           item={item}
                           pathname={pathname}
+                          notifications={notificationCounts.byLink[item.href] || []}
                         />
                       ))}
                     </nav>

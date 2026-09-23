@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { clearAdminSession } from "@/lib/adminAuthClient";
-import { getAdminNotifications, updateAdminNotificationPreferences, updateAdminNotificationState, type AdminNotifications, type NotificationResult, type NotificationState } from "@/lib/adminNotificationsApi";
+import { clearAdminNotifications, getAdminNotifications, updateAdminNotificationPreferences, updateAdminNotificationState, type AdminNotifications, type NotificationResult, type NotificationState } from "@/lib/adminNotificationsApi";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import styles from "./AdminNotificationCenter.module.css";
 
@@ -19,6 +19,8 @@ function NotificationCenter({ accessToken, clubId, compact = false }: Props) {
   const [category, setCategory] = useState("all");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [preferences, setPreferences] = useState<Record<string, boolean>>({});
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const selectAll = useRef<HTMLInputElement>(null);
   const inFlight = useRef(false);
   const mounted = useRef(true);
   const request = useLatestRequestGuard(`${accessToken}\u0000${clubId}`);
@@ -92,6 +94,33 @@ function NotificationCenter({ accessToken, clubId, compact = false }: Props) {
   const filtered = items.filter(item => (filter === "inbox" ? item.state !== "cleared" : item.state === filter) && (category === "all" || item.category === category))
     .sort((a, b) => Number(b.state === "flagged") - Number(a.state === "flagged") || (b.occurred_at ?? "").localeCompare(a.occurred_at ?? "") || a.key.localeCompare(b.key));
   const displayed = compact ? filtered.slice(0, 6) : filtered;
+  const selectable = displayed.filter(item => item.state !== "cleared");
+  const selectedKeys = selectable.filter(item => selected.has(item.key)).map(item => item.key);
+  const allSelected = selectable.length > 0 && selectedKeys.length === selectable.length;
+  const selectableKey = JSON.stringify(selectable.map(item => item.key));
+  useEffect(() => {
+    // A filter change or refreshed feed must never leave hidden selections.
+    const visible = new Set<string>(JSON.parse(selectableKey));
+    setSelected(current => {
+      const next = new Set([...current].filter(key => visible.has(key)));
+      return next.size === current.size ? current : next;
+    });
+  }, [selectableKey]);
+  useEffect(() => {
+    if (selectAll.current) selectAll.current.indeterminate = selectedKeys.length > 0 && !allSelected;
+  }, [selectedKeys.length, allSelected]);
+  function toggleSelected(key: string, checked: boolean) {
+    setSelected(current => {
+      const next = new Set(current);
+      if (checked) next.add(key); else next.delete(key);
+      return next;
+    });
+  }
+  async function clearSelected() {
+    if (!selectedKeys.length) return;
+    const keys = [...selectedKeys];
+    if (await run(() => clearAdminNotifications(accessToken, clubId, keys), `${keys.length} ${keys.length === 1 ? "notice" : "notices"} cleared.`)) setSelected(new Set());
+  }
   const unavailable = data?.categories.filter(item => item.enabled && item.status === "unavailable") ?? [];
   const queues = data?.categories.filter(item => item.kind === "action") ?? [];
   const enabled = data?.categories.filter(item => item.enabled).length ?? 0;
@@ -131,17 +160,24 @@ function NotificationCenter({ accessToken, clubId, compact = false }: Props) {
     {data ? <>
       <div className={styles.filters}>
         <div className={styles.tabs} role="group" aria-label="Notification view">
-          {(["inbox", "flagged", "cleared"] as const).map(view => <button key={view} type="button" aria-pressed={filter === view} onClick={() => setFilter(view)}>{view === "inbox" ? "Inbox" : view === "flagged" ? "Flagged" : "Cleared"} <span>{counts[view]}</span></button>)}
+          {(["inbox", "flagged", "cleared"] as const).map(view => <button key={view} type="button" disabled={busy} aria-pressed={filter === view} onClick={() => { setSelected(new Set()); setFilter(view); }}>{view === "inbox" ? "Inbox" : view === "flagged" ? "Flagged" : "Cleared"} <span>{counts[view]}</span></button>)}
         </div>
-        {!compact ? <label className={styles.category}>Category <select value={category} onChange={event => setCategory(event.target.value)}><option value="all">All categories</option>{data.categories.filter(item => item.enabled).map(item => <option key={item.key} value={item.key}>{item.label}</option>)}</select></label> : null}
+        {!compact ? <label className={styles.category}>Category <select disabled={busy} value={category} onChange={event => { setSelected(new Set()); setCategory(event.target.value); }}><option value="all">All categories</option>{data.categories.filter(item => item.enabled).map(item => <option key={item.key} value={item.key}>{item.label}</option>)}</select></label> : null}
       </div>
+      {selectable.length ? <div className={styles.bulkControls} role="group" aria-label="Bulk notification actions">
+        <label className={styles.selectAll}><input ref={selectAll} type="checkbox" disabled={busy} checked={allSelected} aria-label="Select all shown notifications" onChange={event => setSelected(event.target.checked ? new Set(selectable.map(item => item.key)) : new Set())} />Select all shown</label>
+        <span className={styles.selectionCount} aria-live="polite">{selectedKeys.length} selected</span>
+        <button type="button" className={styles.primary} disabled={busy || !selectedKeys.length} onClick={() => void clearSelected()}>Clear selected{selectedKeys.length ? ` (${selectedKeys.length})` : ""}</button>
+      </div> : null}
       {displayed.length ? <ul className={styles.items}>{displayed.map(item => <li key={item.key} className={`${styles.item} ${item.state === "flagged" ? styles.flagged : ""}`}>
+        {item.state !== "cleared" ? <label className={styles.itemSelect}><input type="checkbox" disabled={busy} checked={selected.has(item.key)} aria-label={`Select ${item.title}`} onChange={event => toggleSelected(item.key, event.target.checked)} /></label> : null}
         <div className={styles.itemBody}>
           <div className={styles.itemMeta}><span>{item.state === "flagged" ? "⚑ Flagged · " : ""}{item.kind === "action" ? "Pending work" : "Club activity"}</span>{item.occurred_at && Number.isFinite(Date.parse(item.occurred_at)) ? <time dateTime={item.occurred_at}>{new Date(item.occurred_at).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}</time> : null}</div>
           <Link href={item.href} className={styles.itemLink}>{item.title}<span aria-hidden="true"> →</span></Link>
           {item.description ? <p>{item.description}</p> : null}
         </div>
         <div className={styles.itemActions}>
+          {item.kind === "action" ? <Link className={styles.reviewLink} href={item.href} aria-label={`Review ${item.title}`}>Review →</Link> : null}
           {item.state === "cleared" ? <button type="button" disabled={busy} onClick={() => void changeState(item.key, "new")} aria-label={`Restore ${item.title}`}>Restore</button> : <>
             <button type="button" disabled={busy} aria-pressed={item.state === "flagged"} onClick={() => void changeState(item.key, item.state === "flagged" ? "new" : "flagged")} aria-label={`${item.state === "flagged" ? "Unflag" : "Flag"} ${item.title}`}>{item.state === "flagged" ? "Unflag" : "Flag"}</button>
             <button type="button" disabled={busy} onClick={() => void changeState(item.key, "cleared")} aria-label={`Clear ${item.title}`}>Clear</button>
