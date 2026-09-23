@@ -51,7 +51,7 @@ export default function SeasonMeetSchedule({ root, clubId, accessToken, seasonDa
     <p>All dates and times use {timezone}.</p>
     {message && <div role="status" className={styles.notice}><p>{message}</p><div className={styles.toolbar}>
       {savedMeet && <Link className={styles.button} href={workflowHref("lineups", seasonData.season.id, savedMeet.id)} onClick={event => selectMeet(event, savedMeet.id, "lineups")}>{savedMeet.club_ids.includes(clubId) ? "Choose players for this meet" : "View meet lineups"}</Link>}
-      {savedMeet && <Link href={workflowHref("availability", seasonData.season.id, savedMeet.id)} onClick={event => selectMeet(event, savedMeet.id, "availability")}>Meet availability</Link>}
+      {savedMeet && <Link href={workflowHref("availability", seasonData.season.id, savedMeet.id)} onClick={event => selectMeet(event, savedMeet.id, "availability")}>Meet signup</Link>}
       <Link href={`/admin/interclub/publication?season=${encodeURIComponent(seasonData.season.id)}`}>Review public schedule</Link>
     </div></div>}
     {!meetPlanningOpen && <p>Adding meets and changing dates opens after season registration closes.</p>}

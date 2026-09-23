@@ -1479,5 +1479,8 @@ install_interclub_public_routes(app, get_supabase_client=get_supabase_client)
 from services.api.interclub_player_pool_routes import install_interclub_player_pool_routes
 install_interclub_player_pool_routes(app, get_supabase_client=get_supabase_client)
 
+from services.api.interclub_meet_signup_routes import install_interclub_meet_signup_routes
+install_interclub_meet_signup_routes(app, get_supabase_client=get_supabase_client)
+
 from services.api.interclub_player_email_routes import install_interclub_player_email_routes
 install_interclub_player_email_routes(app, get_supabase_client=get_supabase_client)

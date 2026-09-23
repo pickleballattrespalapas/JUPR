@@ -14,6 +14,7 @@ import InterclubWorkflow, { RegistrationStep, workflowHref } from "../InterclubW
 import SeasonRegistrationWindow from "./SeasonRegistrationWindow";
 import { useRegistrationWindow } from "@/lib/useRegistrationWindow";
 import SeasonMeetSchedule from "./SeasonMeetSchedule";
+import MeetSignupPanel from "./MeetSignupPanel";
 
 function loadErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && !(error instanceof TypeError) && !(error instanceof SyntaxError) ? error.message : fallback;
@@ -51,7 +52,7 @@ function ClubRegistrations({ clubId, accessToken, initialSeasonId, initialMeetId
   return <section className={styles.page}>
     <p className={styles.back}><Link href="/admin/interclub">← Interclub leagues</Link></p>
     <h1>League workspace</h1>
-    <p>The player pool is your season list. Choose a separate lineup from that pool for each meet.</p>
+    <p>Approve your season player pool, then share a meet signup link. Eligible signups fill each meet’s lineup and substitute pool.</p>
     <div className={styles.toolbar}>
       <label>Season <select value={selected} onChange={e => setSelected(e.target.value)} disabled={!loaded}>
         {!seasons.length && <option value="">{loading ? "Loading invitations…" : loaded ? "No open invitations" : "Choose a season"}</option>}
@@ -215,10 +216,10 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId, initialMeetId,
       {status === "accepted" && meetPlanningOpen && nextMeet && activeStep === "pool" && <section className={`${styles.card} ${styles.invitation}`} aria-label="Your next meet">
         <p className={styles.eyebrow}>Your next meet</p>
         <h3>{when(nextMeet.starts_at)} · {clubName(nextMeet.host_club_id)}</h3>
-        <p>Choose your division, then pick two women and two men from your approved season pool. Players confirmed verbally can be selected straight away.</p>
+        <p>Share a signup link for this meet. The first two eligible women and men in each division get spots; later signups join the substitute pool.</p>
         <div className={styles.toolbar}>
-          <button className={styles.primary} onClick={() => { setSelectedMeet(nextMeet.id); selectStep("lineups"); }}>Choose players for the next meet</button>
-          <button onClick={() => { setSelectedMeet(nextMeet.id); selectStep("availability"); }}>Check availability first (optional)</button>
+          <button className={styles.primary} onClick={() => { setSelectedMeet(nextMeet.id); selectStep("availability"); }}>Get signup link for the next meet</button>
+          <button onClick={() => { setSelectedMeet(nextMeet.id); selectStep("lineups"); }}>Choose players for the next meet</button>
         </div>
       </section>}
       {hasWorkspace && <InterclubWorkflow seasonId={seasonId} meetId={selectedMeet} current={activeStep} meetPlanningOpen={meetPlanningOpen}
@@ -230,7 +231,7 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId, initialMeetId,
         <h3 id="participation-confirmed" ref={confirmation} tabIndex={-1}>{clubName(clubId)} has joined</h3>
         <p>Your place in {data.season.details.name} is confirmed. {meetPlanningOpen ? "Season registration is closed. Check who is available for each meet, then choose that meet’s lineup." : "Use the season player pool to register your club’s players during the commissioner’s registration period."}</p>
         {meetPlanningOpen && <div className={styles.toolbar}>
-          {data.meets.length > 0 && <button onClick={() => { if (nextMeet) setSelectedMeet(nextMeet.id); selectStep("availability"); }}>Next: check meet availability</button>}
+          {data.meets.length > 0 && <button onClick={() => { if (nextMeet) setSelectedMeet(nextMeet.id); selectStep("availability"); }}>Next: open meet signup</button>}
         </div>}
         {meetPlanningOpen && nextMeet && <p><strong>Next meet:</strong> {when(nextMeet.starts_at)} · {clubName(nextMeet.host_club_id)}</p>}
         {meetPlanningOpen && !data.meets.length && <p>The organizer will share your meet schedule here.</p>}
@@ -248,8 +249,8 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId, initialMeetId,
         {schedule.length ? <ul className={styles.schedule}>{schedule.map(meet => <li key={meet.id}><strong>{when(meet.starts_at)}</strong><span>Hosted by {clubName(meet.host_club_id)}</span></li>)}</ul> : <p>No meets are scheduled for your club yet.</p>}
       </details>}
       {showRosters && <section id="meet-rosters" hidden={activeStep === "pool"} ref={rosters} tabIndex={-1} className={styles.rosters} aria-label="Meet rosters">
-        <h3>{activeStep === "availability" ? "Meet availability" : "Lineups"}</h3>
-        <p>{activeStep === "availability" ? "This optional step collects replies from your season pool. It does not add players to a lineup. If you already know who can attend, go straight to Lineups." : "Choose the meet below, then add your club’s team for each division you will enter. Each team needs two women and two men. You choose again for every meet."}</p>
+        <h3>{activeStep === "availability" ? "Meet signup" : "Lineups"}</h3>
+        <p>{activeStep === "availability" ? "Choose the meet below, open signup, and share its link with your players. Each club has its own spots and substitute queues." : "Review the teams filled through your meet signup link, or close signup to manage lineups manually. Each full team needs two women and two men."}</p>
         {!data.meets.length ? <p>No meets are scheduled for your club in this season.</p> : <>
           <label>Meet <select aria-label="Meet" value={selectedMeet} onChange={e => setSelectedMeet(e.target.value)}>
             {data.meets.map(meet => <option key={meet.id} value={meet.id}>{when(meet.starts_at)} · {clubName(meet.host_club_id)}{meet.roster_open ? "" : " · History"}</option>)}
@@ -303,6 +304,7 @@ function MeetRegistration({ root, accessToken, clubId, seasonData, step, onStep,
   const [reload, setReload] = useState(0);
   const [editor, setEditor] = useState<{ team: InterclubTeam | null } | null>(null);
   const [availabilityVisited, setAvailabilityVisited] = useState(step === "availability");
+  const [automaticSignup, setAutomaticSignup] = useState(false);
   const [responses, setResponses] = useState<{ member_id: string; player_id: string | null; name: string; status: string; member_status?: string }[] | null>(null);
   const pending = useRef(false), mutation = useRef<AbortController | null>(null);
   const currentMeetRevision = seasonData.meets.find(meet => meet.id === data?.meet.id)?.revision;
@@ -388,22 +390,23 @@ function MeetRegistration({ root, accessToken, clubId, seasonData, step, onStep,
         <p>The default is the meet’s start time. Set an earlier deadline before the first team submits.</p>
         <button disabled={disabled || !deadline} type="submit">Save meet deadline</button>
       </form></details>}
+      {ownMeet && <MeetSignupPanel root={root} accessToken={accessToken} onAutomatic={setAutomaticSignup} onChanged={() => { setEditor(null); setReload(value => value + 1); }} />}
       <div hidden={step !== "availability"}>
         {ownMeet ? <>
-          <p className={styles.notice}>Players who confirmed verbally or by email can go straight into your lineup, even without an email address. Sending availability invitations is optional. <button onClick={() => onStep("lineups")}>Choose lineups now</button></p>
-          {availabilityVisited && <MeetAvailability meetRoot={root} accessToken={accessToken} clubName={clubName(clubId)} season={seasonData.season} meet={data.meet} onResponses={setResponses} />}
-          <div className={styles.toolbar}><button className={styles.primary} onClick={() => onStep("lineups")}>Next: choose lineups</button></div>
+          <details><summary>Optional availability replies</summary><p>Availability replies collect interest only. Use the meet signup link above to reserve spots and keep a substitute queue.</p>
+          {availabilityVisited && <MeetAvailability meetRoot={root} accessToken={accessToken} clubName={clubName(clubId)} season={seasonData.season} meet={data.meet} onResponses={setResponses} />}</details>
+          <div className={styles.toolbar}><button className={styles.primary} onClick={() => onStep("lineups")}>Next: review lineups</button></div>
         </> : <p>Your club is not participating in this meet. Each participating club manages its own player availability. <button onClick={() => onStep("lineups")}>View meet lineups</button></p>}
       </div>
       <div hidden={step !== "lineups"}>
-      {ownMeet && data.meet.roster_open && !editor && <div className={styles.toolbar}><button className={styles.primary} disabled={disabled} onClick={() => setEditor({ team: null })}>Add a team for this meet</button><button onClick={() => onStep("pool")}>Missing a player? Open season pool</button></div>}
-      {editor && <RosterEditor key={editor.team ? `${editor.team.id}:${editor.team.revision}` : "new"} root={root} accessToken={accessToken} clubName={clubName(clubId)} divisions={[...seasonData.season.details.divisions].sort((a, b) => Number.parseFloat(a) - Number.parseFloat(b) || a.localeCompare(b, undefined, { numeric: true }))} team={editor.team} disabled={disabled}
+      {ownMeet && data.meet.roster_open && !editor && !automaticSignup && <div className={styles.toolbar}><button className={styles.primary} disabled={disabled} onClick={() => setEditor({ team: null })}>Add a team for this meet</button><button onClick={() => onStep("pool")}>Missing a player? Open season pool</button></div>}
+      {editor && !automaticSignup && <RosterEditor key={editor.team ? `${editor.team.id}:${editor.team.revision}` : "new"} root={root} accessToken={accessToken} clubName={clubName(clubId)} divisions={[...seasonData.season.details.divisions].sort((a, b) => Number.parseFloat(a) - Number.parseFloat(b) || a.localeCompare(b, undefined, { numeric: true }))} team={editor.team} disabled={disabled}
         responses={responses} allowMissingPairing={(data.meet.competition_phase || "regular") === "regular"} refreshKey={playerRefreshKey}
         teams={data.teams.filter(team => team.club_id === clubId)} onPool={() => onStep("pool")}
         cancel={() => setEditor(null)} save={(id, body) => change(`/teams/${id}`, "PUT", { ...body, ...revision }, "Lineup saved for this meet. An eligible lineup is ready to play; any late-team exception is listed below for commissioner approval.")} />}
       <h4>{seasonData.is_organizer ? "Teams for this meet" : "Your club’s teams for this meet"}</h4>
-      {!data.teams.length && <p>No teams submitted for this meet yet. {ownMeet ? "Add a team above using the players who can attend." : "Each participating club needs to submit its lineup before the host can prepare pairings."}</p>}
-      {data.teams.map(team => <TeamCard key={`${team.id}:${team.revision}:${team.status}`} team={team} clubName={clubName(team.club_id)} root={root} accessToken={accessToken} own={ownMeet && team.club_id === clubId && data.meet.roster_open} organizer={seasonData.is_organizer && data.meet.roster_open} disabled={disabled}
+      {!data.teams.length && <p>No teams submitted for this meet yet. {automaticSignup ? "The signup queue creates a team when two women and two men have reserved spots." : ownMeet ? "Open meet signup above, or add a team manually." : "Each participating club needs to submit its lineup before the host can prepare pairings."}</p>}
+      {data.teams.map(team => <TeamCard key={`${team.id}:${team.revision}:${team.status}`} team={team} clubName={clubName(team.club_id)} root={root} accessToken={accessToken} own={ownMeet && team.club_id === clubId && data.meet.roster_open && !automaticSignup} organizer={seasonData.is_organizer && data.meet.roster_open} disabled={disabled}
         edit={() => setEditor({ team })}
         withdraw={() => change(`/teams/${team.id}/withdraw`, "POST", { expected_revision: team.revision, ...revision }, "Team withdrawn from this meet. Earlier rosters remain in its history.")}
         decide={(approve, reason) => change(`/teams/${team.id}/eligibility`, "POST", { expected_revision: team.revision, ...revision, approve, reason }, approve ? "Exception approved for this meet roster." : "Exception declined for this meet roster.")} />)}

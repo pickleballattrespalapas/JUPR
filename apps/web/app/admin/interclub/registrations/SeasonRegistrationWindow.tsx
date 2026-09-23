@@ -65,7 +65,7 @@ export default function SeasonRegistrationWindow({ root, accessToken, season, co
     <p><strong>{({ unconfigured: "Registration dates not set", scheduled: "Registration has not opened yet", open: "Registration is open", closed: "Registration is closed" })[status]}</strong></p>
     {registration?.opens_at && registration.closes_at ? <p>Opens: {format(registration.opens_at)}<br />Closes: {format(registration.closes_at)}<br /><span className={styles.muted}>All times in {timezone}.</span></p>
       : <p>The league commissioner needs to set the opening and closing dates before players can register.</p>}
-    <p className={styles.muted}>The commissioner sets one registration period for every club. Meet availability, lineups, and meet settings open after registration closes.</p>
+    <p className={styles.muted}>The commissioner sets one registration period for every club. Meet signup, lineups, and meet settings open after registration closes.</p>
     {firstMeetAt && <p className={styles.muted}>First scheduled meet: {format(firstMeetAt)} ({timezone}). Registration must close by this time.</p>}
     {saved && <p role="status">Registration dates saved for every club in this league.</p>}
     {commissioner && !editing && <button onClick={() => { editRevision.current = registration?.revision || 0; setEditing(true); setSaved(false); setError(""); }}>{registration?.opens_at ? "Edit registration dates" : "Set registration dates"}</button>}
