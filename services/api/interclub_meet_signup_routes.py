@@ -26,6 +26,7 @@ from services.api.interclub_player_pool_routes import (
 SETTINGS = "pcs_interclub_meet_signup_settings"
 SIGNUPS = "pcs_interclub_meet_signups"
 PURPOSE = "pcs-interclub-meet-signup:v1"
+SignupGender = Literal["female", "male", "non_binary", "prefer_not_to_say"]
 BASE = "/admin/clubs/{club_id}/interclub/registrations/{season_id}/meets/{meet_id}/signup"
 PUBLIC = "/public/interclub-meet-signups"
 
@@ -35,6 +36,7 @@ class MeetJoin(StrictModel):
     name: str = Field(min_length=1, max_length=120)
     email: str = Field(default="", max_length=254)
     division: str = Field(min_length=1, max_length=20)
+    gender: SignupGender | None = None
     request_id: UUID
     confirm_self: Literal[True]
     website: str = Field(default="", max_length=200)
@@ -53,19 +55,23 @@ class MeetSignupSettings(StrictModel):
 
 
 class MeetSignupAction(StrictModel):
-    action: Literal["refresh", "promote", "remove", "add"]
+    action: Literal["refresh", "promote", "remove", "add", "review_gender"]
     id: UUID | None = None
     expected_revision: int | None = Field(default=None, ge=1)
     player_id: int | None = Field(default=None, gt=0)
     division: str | None = Field(default=None, min_length=1, max_length=20)
     request_id: UUID | None = None
+    gender: SignupGender | None = None
+    lineup_gender: Literal["female", "male"] | None = None
 
     @model_validator(mode="after")
     def action_fields(self):
-        if self.action in {"promote", "remove"} and (self.id is None or self.expected_revision is None):
+        if self.action in {"promote", "remove", "review_gender"} and (self.id is None or self.expected_revision is None):
             raise ValueError("Choose a signup and its current revision.")
         if self.action == "add" and None in (self.player_id, self.division, self.request_id):
             raise ValueError("Choose a player and division.")
+        if self.action == "review_gender" and self.lineup_gender is None:
+            raise ValueError("Choose a lineup place for this signup.")
         return self
 
 
@@ -145,6 +151,7 @@ def _entry(row, private=False, season=None):
     value = {key: row.get(key) for key in keys}
     if private:
         value.update(email=row["email"], player_id=str(row["player_id"]), revision=row["revision"], manage_url=_private_url(row, season))
+        value.update(declared_gender=row.get("declared_gender"), reviewed_gender=row.get("reviewed_gender"))
     return value
 
 
@@ -264,7 +271,7 @@ def install_interclub_meet_signup_routes(app, *, get_supabase_client):
         _secret()
         db = get_supabase_client()
         club, season, meet = _public_context(db, share_id)
-        payload = {**body.model_dump(mode="json", exclude={"website"}), "share_id": str(share_id)}
+        payload = {**body.model_dump(mode="json", exclude={"website"}, exclude_none=True), "share_id": str(share_id)}
         payload["fingerprint"] = _fingerprint(payload)
         result = _rpc(db, "join", payload, requester=_requester(request))
         if result.get("duplicate"):

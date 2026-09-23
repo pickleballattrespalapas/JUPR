@@ -215,7 +215,9 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         ROOT / "supabase/migrations",
     )
 
-    assert len(versions) == 138
+    assert len(versions) == 139
+    assert "20260923215248" in versions
+    assert "interclub_meet_signup_gender" in names
     assert {"20260923201534", "20260923203433"}.issubset(versions)
     assert {"interclub_meet_signup_queues", "interclub_meet_signup_lookup_index"}.issubset(contract["required_ledger_names"])
     assert "20260923003009" in versions
@@ -277,9 +279,9 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         "20261109004100",
     )
     assert {"20260908155131", "20260908164204"}.issubset(versions)
-    assert len(names) == 138
+    assert len(names) == 139
     assert all("XX" not in version for version in versions)
-    assert len(contract["required_ledger_names"]) == 138
+    assert len(contract["required_ledger_names"]) == 139
     assert "interclub_conflicts_are_not_serialization_failures" in contract["required_ledger_names"]
     assert {"interclub_competition_operations", "southern_bcs_eligibility", "interclub_rating_ledger", "interclub_publication_review_guard", "interclub_meet_overlap_guard", "southern_bcs_missing_pairing_rosters", "interclub_lineup_refresh_deadline_guard"}.issubset(contract["required_ledger_names"])
     assert {"public_club_sites", "public_club_directory_sort"}.issubset(contract["required_ledger_names"])

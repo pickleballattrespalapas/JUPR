@@ -83,6 +83,7 @@ def test_join_and_exact_retry_keep_request_and_private_fragment(meet_signup):
     params = [params for name, params in state["calls"] if name == "pcs_interclub_meet_signup_action"]
     assert params[0] == params[1]
     assert params[0]["p_actor_id"] is None
+    assert "gender" not in params[0]["p_payload"], "Legacy retry keeps its original fingerprint"
     state["result"] = {"duplicate": True}
     duplicate = client.post(state["public"], json={**state["body"], "request_id": str(uuid4())})
     assert duplicate.json()["duplicate"] is True
@@ -98,7 +99,7 @@ def test_private_link_is_scoped_signed_revocable_and_never_in_url_query(meet_sig
     assert client.post(routes.PUBLIC + "/review", json={"token": token}).status_code == 404
 
 
-@pytest.mark.parametrize("patch", [{"actor_id": str(uuid4())}, {"rating": 3.4}, {"gender": "male"}, {"club_id": "beta"}, {"confirm_self": False}, {"email": "bad"}])
+@pytest.mark.parametrize("patch", [{"actor_id": str(uuid4())}, {"rating": 3.4}, {"lineup_gender": "male"}, {"club_id": "beta"}, {"confirm_self": False}, {"email": "bad"}])
 def test_public_client_cannot_supply_scope_eligibility_or_actor(meet_signup, patch):
     client, state = meet_signup
     assert client.post(state["public"], json={**state["body"], **patch}).status_code == 422
@@ -127,3 +128,30 @@ def test_public_error_and_closed_intake_never_leak_database_details(meet_signup,
     state["calls"].clear()
     assert client.post(state["public"], json=state["body"]).status_code == 503
     assert not state["calls"]
+
+
+@pytest.mark.parametrize("gender", ["female", "male", "non_binary", "prefer_not_to_say"])
+def test_gender_choice_persists_only_in_private_responses(meet_signup, gender):
+    client, state = meet_signup
+    state["entry"].update(declared_gender=gender, reviewed_gender=None)
+    response = client.post(state["public"], json={**state["body"], "gender": gender})
+    assert response.status_code == 200
+    assert response.json()["entry"]["declared_gender"] == gender
+    assert state["calls"][-1][1]["p_payload"]["gender"] == gender
+    public = client.get(state["public"]).text
+    assert "declared_gender" not in public and "reviewed_gender" not in public
+
+
+def test_gender_validation_and_admin_review_scope(meet_signup):
+    client, state = meet_signup
+    assert client.post(state["public"], json={**state["body"], "gender": "anything"}).status_code == 422
+    body = {"action": "review_gender", "id": state["entry"]["id"], "expected_revision": 1}
+    assert client.post(state["admin"] + "/actions", json=body).status_code == 422
+    assert client.post(state["admin"] + "/actions", json={**body, "lineup_gender": "non_binary"}).status_code == 422
+    response = client.post(state["admin"] + "/actions", json={**body, "lineup_gender": "female"})
+    assert response.status_code == 200
+    params = state["calls"][-1][1]
+    assert params["p_action"] == "review_gender" and params["p_actor_id"] == state["user"].user_id
+    assert params["p_payload"]["club_id"] == "alpha"
+    state["assignment"]["club_id"] = "organizer"
+    assert client.post(state["admin"] + "/actions", json={**body, "lineup_gender": "female"}).status_code == 403

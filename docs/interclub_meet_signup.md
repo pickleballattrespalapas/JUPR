@@ -50,3 +50,8 @@ Verification: `tests/sql/interclub_meet_signup_transaction.sql` rolls back all
 fixtures; API capability tests cover privacy/scope; the staging browser rehearsal
 tests anonymous signup, concurrent capacity, ordered substitutes, retries,
 withdrawal into the real roster, and the mobile page.
+
+
+Admins can click a division opening or Add substitute to choose an approved player. Candidates load across all pages, exclude existing meet registrations and assigned lineups, and show eligible league ratings highest first. Playing-up choices are marked and remain waitlisted behind in-band signups.
+
+Both the player and admin registration forms require a gender selection: Woman, Man, Non-binary, or Prefer not to say. The latter two keep a place in the registration order but enter admin review with a clear message. Admins choose a women’s or men’s lineup place after review, retaining the player’s declared gender privately. The declaration is meet-specific and does not overwrite the club profile. Rating priority, capacity, deadlines and registration order still apply after approval.
