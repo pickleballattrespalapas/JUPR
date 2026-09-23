@@ -33,6 +33,19 @@ export function meetLocalTime(value: string | null, timeZone: string): string {
   return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}`;
 }
 
+export function seasonDateLabel(value: string): string {
+  return new Date(`${value}T12:00:00Z`).toLocaleDateString(undefined, { timeZone: "UTC", dateStyle: "medium" });
+}
+
+export function meetSeasonDateIssue(details: { start_date: string; end_date: string; timezone: string }, startsAt: string, durationMinutes: number): string | null {
+  const startDate = meetLocalTime(startsAt, details.timezone).slice(0, 10);
+  const endDate = meetLocalTime(new Date(Date.parse(startsAt) + durationMinutes * 60000).toISOString(), details.timezone).slice(0, 10);
+  if (startDate < details.start_date || startDate > details.end_date || endDate > details.end_date) {
+    return `Choose a meet that starts and finishes between ${seasonDateLabel(details.start_date)} and ${seasonDateLabel(details.end_date)} (${details.timezone}). The selected meet ends on ${seasonDateLabel(endDate)}.`;
+  }
+  return null;
+}
+
 // Derive possible offsets from the selected timezone, independently of the
 // browser's location. Reject clock-change gaps and ambiguous local times.
 export function meetUtcTime(local: string, timeZone: string): string | null {

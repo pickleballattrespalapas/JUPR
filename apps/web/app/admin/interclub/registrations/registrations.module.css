@@ -36,6 +36,16 @@
 .schedule span { color: #526174; }
 .rosters { scroll-margin-top: 24px; margin-top: 28px; }
 .rosters:focus { outline: none; }
+.lineupGuide { margin: 0; padding: 12px 14px; background: #eff6ff; border-radius: 8px; }
+.selectionSummary { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding: 14px; border: 1px solid #93c5fd; border-radius: 8px; background: #eff6ff; }
+.playerFilters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.playerDetails, .playerIssue { display: block; font-size: .9rem; line-height: 1.5; }
+.playerDetails { color: #526174; }
+.playerIssue { color: #92400e; }
+.unavailablePlayer { background: #f8fafc; }
+.form > label:has(input[type="checkbox"]) { display: flex; align-items: flex-start; gap: 10px; }
+.choices input[type="checkbox"] { flex: 0 0 auto; width: 18px; height: 18px; }
 @media(max-width: 640px) { .page { padding: 12px; } .card { padding: 14px; } }
+@media(max-width: 640px) { .playerFilters { grid-template-columns: 1fr; } }
 
 .card summary { cursor: pointer; font-weight: 700; }

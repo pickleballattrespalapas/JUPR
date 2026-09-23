@@ -22,7 +22,7 @@ const closedRegistration = { opens_at: '2000-01-01T00:00:00Z', closes_at: '2000-
 const season = { registration: closedRegistration, id: sid, organizer_club_id: 'alpha', source_revision: 2, roster_deadline: '2099-01-01T00:00:00Z', details: {
   name: 'Coastal League', start_date: '2099-01-10', end_date: '2099-03-31', timezone: 'America/Mazatlan', divisions: ['3.5'], club_ids: ['beta', 'gamma'], meets: []
 }, rules: { '3.5': { min_rating: null, max_rating: 3.75, women_required: 2 } } };
-const lineup = [1, 2, 3, 4].map(n => ({ entry_id: `entry-${n}`, player_id: String(n), name: `Player ${n}`, starting_rating: 3.5 }));
+const lineup = [1, 2, 3, 4].map(n => ({ entry_id: `entry-${n}`, player_id: String(n), name: `Player ${n}`, starting_rating: 3.5, gender: n <= 2 ? 'female' : 'male' }));
 const meet = { id: mid, season_id: sid, host_club_id: 'beta', club_ids: ['beta', 'gamma'], starts_at: '2099-01-10T18:00:00Z', roster_deadline: '2099-01-10T12:00:00Z', revision: 2, roster_open: true, deadline_editable: false, courts: 4 };
 const secondMeet = { ...meet, id: mid2, starts_at: '2099-02-10T18:00:00Z', revision: 1, deadline_editable: true };
 const team = { meet_id: mid, id: tid, club_id: 'beta', season_id: sid, name: 'Beta Blue', division: '3.5', revision: 1, withdrawn: false, status: 'needs_exception', roster: lineup, issues: [{ code: 'rating_above_maximum', message: 'Player exceeds rating limit.' }], late_change: true, decision_reason: null };
@@ -37,7 +37,7 @@ async function clubsAndRosters() {
     requests.push({ url, options });
     if (options.method) return new Promise(resolve => { finish = resolve; });
     if (url.endsWith('/registrations')) return reply({ seasons: [season] });
-    if (url.includes('/players?')) return reply({ players: [...lineup, { name: 'Player 5', player_id: '5', starting_rating: 3.4 }].map(p => ({ id: p.player_id, name: p.name, starting_rating: p.starting_rating })), next_offset: null });
+    if (url.includes('/players?')) return reply({ players: [...lineup, { name: 'Player 5', player_id: '5', starting_rating: 3.4, gender: 'female' }].map(p => ({ id: p.player_id, name: p.name, starting_rating: p.starting_rating, gender: p.gender })), next_offset: null });
     if (url.endsWith('/history')) return reply({ history: [{ ...team, submitted_at: '2099-01-01T00:00:00Z' }] });
     if (url.includes(`/meets/${mid2}`)) return reply({ meet: secondMeet, teams: [], next_team_offset: null });
     if (url.includes(`/meets/${mid}`)) return reply({ meet, teams, next_team_offset: null });
@@ -170,7 +170,7 @@ async function clubsAndRosters() {
   assert.equal(tree.root.findAllByType('form').length, 0);
   await act(async () => button(tree, 'Add a team for this meet').props.onClick());
   assert.equal(tree.root.findAllByProps({ type: 'checkbox' }).filter(i => i.props.checked).length, 0, 'Next meet starts with no assumed players');
-  assert.equal(name().props.value, '');
+  assert.equal(name().props.value, 'beta Club 3.5');
   assert.ok(requests.at(-1).url.includes(`/meets/${mid2}/players`));
   await act(async () => tree.root.findByProps({ 'aria-label': 'Missing pairing forfeit' }).props.onChange({ target: { checked: true } }));
   assert.ok(textContent(tree).includes('missing pairing will forfeit all three games'));
@@ -488,7 +488,7 @@ async function phaseRefreshCannotUndoAcceptance() {
 async function updatedPlayersAndSchedulePreserveLineupDraft() {
   const originalWindow = global.window; global.window = new EventTarget();
   let currentMeet = { ...meet, host_club_id: 'alpha', club_ids: ['alpha', 'beta'], deadline_editable: false };
-  let people = lineup.map(player => ({ id: player.player_id, name: player.name, starting_rating: player.starting_rating }));
+  let people = lineup.map(player => ({ id: player.player_id, name: player.name, starting_rating: player.starting_rating, gender: player.gender }));
   const reads = [], Page = phaseWorkspace(true); let tree;
   global.fetch = async (url, options) => {
     reads.push(url);
@@ -504,7 +504,7 @@ async function updatedPlayersAndSchedulePreserveLineupDraft() {
     const name = () => tree.root.findAllByType('input').find(input => input.props.maxLength === 80 && !input.props.type);
     await act(async () => name().props.onChange({ target: { value: 'Draft lineup' } }));
     await act(async () => tree.root.findAllByProps({ type: 'checkbox' }).slice(0, 4).forEach(input => input.props.onChange()));
-    people = [...people, { id: '5', name: 'Newly Approved Player', starting_rating: 3.2 }];
+    people = [...people, { id: '5', name: 'Newly Approved Player', starting_rating: 3.2, gender: 'female' }];
     const beforePlayers = reads.filter(url => url.includes('/players?')).length;
     const approvals = () => tree.root.findAll(node => node.props['data-eligibility-root'])[0];
     const pool = () => tree.root.findAll(node => node.props['data-pool-root'])[0];
@@ -579,5 +579,63 @@ async function loadFailuresCanBeRetried() {
   await act(async () => tree.unmount());
 }
 
-(async () => { await clubsAndRosters(); await invitationResponses(); await deepLinkContext(); await registrationPhaseLocks(); await commissionerWindowEditor(); await savedClosedWindowLoadsMeets(); await serverConfirmedWindowBoundary(); await phaseRefreshCannotUndoAcceptance(); await updatedPlayersAndSchedulePreserveLineupDraft(); await loadFailuresCanBeRetried(); console.log('Interclub registration: invitation outcomes, commissioner window dates, phase gates and server-confirmed boundaries, meet-specific lineups, scoped players, stale saves, deep-link context, stage draft preservation, load failures and retries passed.'); })()
+async function guidedLineupChoices() {
+  const people = [
+    { id: '1', name: 'Play Up Woman', starting_rating: 2.9, gender: 'female' },
+    { id: '2', name: 'Second Woman', starting_rating: 3.4999, gender: 'female' },
+    { id: '3', name: 'First Man', starting_rating: 3.4, gender: 'male' },
+    { id: '4', name: 'Second Man', starting_rating: 3.2, gender: 'male' },
+    { id: '5', name: 'Higher Woman', starting_rating: 3.5, gender: 'female' },
+    { id: '6', name: 'Profile Review', starting_rating: 3.1, gender: 'unknown' },
+    { id: '7', name: 'Already Picked', starting_rating: 3.1, gender: 'male' },
+  ];
+  const selectedSeason = { ...season, details: { ...season.details, divisions: ['3.0', '3.5'] } };
+  const assigned = { ...team, id: 'other-team', status: 'eligible', issues: [], roster: [{ ...people[6], player_id: '7' }] };
+  const requests = [], Page = phaseWorkspace(); let tree;
+  global.fetch = async (url, options) => {
+    requests.push({ url, options });
+    if (options.method) return reply({ team: { ...team, status: 'eligible' } });
+    if (url.endsWith('/registrations')) return reply({ seasons: [selectedSeason] });
+    if (url.includes('/players?')) return reply({ players: people, next_offset: null });
+    if (url.includes('/meets/')) return reply({ meet, teams: url.includes('team_offset=100') ? [assigned] : [], next_team_offset: url.includes('team_offset=100') ? null : 100 });
+    return reply({ season: selectedSeason, meets: [meet], is_organizer: false, own_participation: { status: 'accepted' }, participations: [], clubs: [{ id: 'beta', name: 'Beta Club' }], teams: [], next_team_offset: null });
+  };
+  await act(async () => { tree = create(React.createElement(Page, { initialSeasonId: sid })); });
+  await act(async () => button(tree, 'Choose players for the next meet').props.onClick());
+  assert.equal(tree.root.findByProps({ id: 'meet-rosters' }).props.hidden, false);
+  assert.equal(tree.root.findByProps({ 'aria-label': 'Lineups' }).props['aria-current'], 'step');
+  assert.ok(requests.some(request => request.url.includes('team_offset=100')), 'Assignments beyond the first page are loaded before selecting players');
+  await act(async () => button(tree, 'Add a team for this meet').props.onClick());
+  const select = name => tree.root.findByProps({ 'aria-label': name });
+  const pick = name => select(`Select ${name}`);
+  const choose = async name => act(async () => pick(name).props.onChange());
+  assert.equal(pick('Play Up Woman').props.disabled, false, 'Lower-rated players can play up');
+  assert.equal(pick('Second Woman').props.disabled, false, 'The exact unrounded rating below the ceiling remains eligible');
+  for (const name of ['Higher Woman', 'Profile Review', 'Already Picked']) assert.equal(tree.root.findAllByProps({ 'aria-label': `Select ${name}` }).length, 0);
+  await act(async () => select('Player eligibility filter').props.onChange({ target: { value: 'all' } }));
+  for (const name of ['Higher Woman', 'Profile Review', 'Already Picked']) assert.equal(pick(name).props.disabled, true);
+  assert.ok(textContent(tree).includes('Rating must be below 3.5 for 3.0'));
+  assert.ok(textContent(tree).includes('Gender needs review in the season player pool'));
+  assert.ok(textContent(tree).includes('Already selected for Beta Blue'));
+  await act(async () => select('Lineup division').props.onChange({ target: { value: '3.5' } }));
+  assert.equal(pick('Higher Woman').props.disabled, false);
+  await choose('Play Up Woman'); await choose('Second Woman'); await choose('Higher Woman'); await choose('First Man');
+  assert.equal(button(tree, 'Submit four-player roster').props.disabled, true, 'Three women and one man cannot be submitted');
+  assert.ok(textContent(tree).includes('3 of 2 women · 1 of 2 men'));
+  await act(async () => select('Lineup division').props.onChange({ target: { value: '3.0' } }));
+  assert.equal(pick('Higher Woman').props.checked, true, 'A division change preserves selections and explains problems');
+  assert.ok(textContent(tree).includes('Higher Woman: Rating must be below 3.5 for 3.0'));
+  await choose('Higher Woman'); await choose('Second Man');
+  assert.equal(button(tree, 'Submit four-player roster').props.disabled, false);
+  await act(async () => button(tree, 'Review season player pool').props.onClick());
+  assert.equal(tree.root.findByProps({ id: 'season-player-pool' }).props.hidden, false);
+  await act(async () => tree.root.findByProps({ 'aria-label': 'Lineups' }).props.onClick({ preventDefault() {} }));
+  assert.equal(pick('Play Up Woman').props.checked, true, 'Opening the pool does not discard a lineup draft');
+  await act(async () => tree.root.findByProps({ 'aria-label': 'Choose meet players' }).props.onSubmit({ preventDefault() {} }));
+  const body = JSON.parse(requests.find(request => request.options.method).options.body);
+  assert.deepEqual(body.player_ids, ['1', '2', '3', '4']); assert.equal(body.division, '3.0'); assert.equal(body.name, 'Beta Club 3.0');
+  await act(async () => tree.unmount());
+}
+
+(async () => { await clubsAndRosters(); await invitationResponses(); await deepLinkContext(); await registrationPhaseLocks(); await commissionerWindowEditor(); await savedClosedWindowLoadsMeets(); await serverConfirmedWindowBoundary(); await phaseRefreshCannotUndoAcceptance(); await updatedPlayersAndSchedulePreserveLineupDraft(); await loadFailuresCanBeRetried(); await guidedLineupChoices(); console.log('Interclub registration: invitation outcomes, commissioner window dates, phase gates and server-confirmed boundaries, meet-specific lineups, scoped players, stale saves, deep-link context, stage draft preservation, load failures, retries and guided eligible-player selection passed.'); })()
   .catch(e => { console.error(e); process.exitCode = 1; });
