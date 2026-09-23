@@ -131,6 +131,9 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
     NO_WRITE_WAVE: (),
     "public-intake-auth": (
         ("POST", "/public/interclub-signups/{share_id}"),
+        ("POST", "/public/interclub-meet-signups/{share_id}"),
+        ("POST", "/public/interclub-meet-signups/review"),
+        ("POST", "/public/interclub-meet-signups/withdraw"),
         ("POST", "/public/interclub-player-response/review"),
         ("POST", "/public/interclub-player-response/respond"),
         ("POST", "/clubs/{club_slug}/support/intake"),
@@ -307,6 +310,8 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/admin/clubs/{club_id}/interclub/registrations/{season_id}/pool/create-player"),
         ("PATCH", "/admin/clubs/{club_id}/interclub/registrations/{season_id}/pool/members/{member_id}"),
         ("PUT", "/admin/clubs/{club_id}/interclub/registrations/{season_id}/meets/{meet_id}/availability"),
+        ("PUT", "/admin/clubs/{club_id}/interclub/registrations/{season_id}/meets/{meet_id}/signup"),
+        ("POST", "/admin/clubs/{club_id}/interclub/registrations/{season_id}/meets/{meet_id}/signup/actions"),
         ("PUT", "/admin/clubs/{club_id}/interclub/setup"),
         ("POST", "/admin/clubs/{club_id}/interclub/setup/{season_id}/club-invitations"),
         ("POST", "/admin/clubs/{club_id}/interclub/setup/{season_id}/club-invitations/{invitation_id}"),

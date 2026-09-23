@@ -112,7 +112,7 @@ async function schedulePanelGate() {
   await act(async () => tree.root.findByType(Form).props.onScheduled({ ...meet, revision: 8 }, 'Meet schedule saved.'));
   assert.equal(changed.revision, 8); assert.ok(text(tree).includes('Meet schedule saved.')); assert.equal(tree.root.findAllByType(Form).length, 0); assert.equal(reads.length, 2);
   const links = tree.root.findAllByType('a'); let prevented = 0;
-  for (const label of ['Choose players for this meet', 'Meet availability', 'Choose players']) {
+  for (const label of ['Choose players for this meet', 'Meet signup', 'Choose players']) {
     await act(async () => links.find(link => nodeText(link) === label).props.onClick({ preventDefault() { prevented++; } }));
   }
   assert.deepEqual(selected, [{ id: meet.id, step: 'lineups' }, { id: meet.id, step: 'availability' }, { id: meet.id, step: 'lineups' }], 'Schedule links update the existing workspace instead of only changing its URL');

@@ -1,6 +1,8 @@
 import { expect, test } from "@playwright/test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import type { MeetSignupBoard, PrivateMeetSignup } from "../lib/interclubMeetSignup";
 import type { PoolMember } from "../lib/interclubPlayerPool";
 import { bootstrapStagingContext, expectedApiOrigin } from "./support/staging";
 
@@ -104,7 +106,7 @@ test("interclub paper packet, score entry, approval and public results", async (
   await expect(page.getByRole("region", { name: "Season player pool", exact: true })).toBeVisible();
   const workflow = page.getByRole("navigation", { name: "League workflow", exact: true });
   await expect(workflow.getByRole("link", { name: "Player pool", exact: true })).toHaveAttribute("aria-current", "step");
-  for (const label of ["Meet availability", "Lineups", "Run meet", "Approve results"]) {
+  for (const label of ["Meet signup", "Lineups", "Run meet", "Approve results"]) {
     await expect(workflow.getByRole("link", { name: label, exact: true })).toHaveCount(0);
     await expect(workflow.locator('[aria-disabled="true"]').filter({ has: page.getByText(label, { exact: true }) })).toHaveCount(1);
   }
@@ -228,6 +230,92 @@ test("interclub paper packet, score entry, approval and public results", async (
   await expect(page.getByRole("status").filter({ hasText: "Lineup saved for this meet." })).toBeVisible();
   await page.screenshot({ path: join(reportDir, "interclub-guided-lineup.png"), fullPage: true });
 
+  // Account-free signup and concurrent allocation into the actual lineup.
+  const queueMeet = adjustments.meets[1];
+  const queueRoot = `${expectedApiOrigin}/admin/clubs/${club}/interclub/registrations/${adjustments.id}/meets/${queueMeet.id}`;
+  await page.goto(`/admin/interclub/registrations?season=${adjustments.id}&meet=${queueMeet.id}&step=availability`);
+  const signupPanel = page.getByRole("region", { name: "Meet signup and substitute pool", exact: true });
+  const openedSignup = page.waitForResponse(r => r.url() === `${queueRoot}/signup` && r.request().method() === "PUT");
+  await signupPanel.getByRole("button", { name: "Open meet signup", exact: true }).click();
+  const openedResponse = await openedSignup;
+  expect(openedResponse.status()).toBe(200);
+  const openedBoard: MeetSignupBoard = await openedResponse.json();
+  const shareUrl = openedBoard.signup.url!;
+  await expect(signupPanel.getByLabel("Share this meet signup link with your players", { exact: true })).toHaveValue(shareUrl);
+  const meetAnonymous = await browser.newContext({ baseURL: origin });
+  await bootstrapStagingContext(meetAnonymous);
+  const meetPage = await meetAnonymous.newPage();
+  meetPage.on("pageerror", error => errors.push(error.message));
+  await meetPage.goto(new URL(shareUrl).pathname);
+  await meetPage.getByLabel("Find your name in the approved season pool", { exact: true }).fill(adjustments.browser_late_player);
+  await meetPage.getByRole("radio", { name: new RegExp(adjustments.browser_late_player) }).check();
+  await expect(meetPage.getByText(/Your 3.35 league rating is below 3.5/)).toBeVisible();
+  await meetPage.getByRole("checkbox", { name: /This is my profile and I want to play/ }).check();
+  const shareId = new URL(shareUrl).pathname.split("/").at(-1)!;
+  const joinUrl = `${expectedApiOrigin}/public/interclub-meet-signups/${shareId}`;
+  const joined = meetPage.waitForResponse(r => r.url() === joinUrl && r.request().method() === "POST");
+  await meetPage.getByRole("button", { name: "Sign me up for this meet", exact: true }).click();
+  const joinedResponse = await joined;
+  expect(joinedResponse.status()).toBe(200);
+  const playUp: PrivateMeetSignup = await joinedResponse.json();
+  expect(playUp.entry.priority).toBe("play_up");
+  expect(playUp.entry.placement).toBe("waitlist");
+  await expect(meetPage.getByRole("region", { name: "Your meet signup" })).toContainText("Substitute #1 · Playing up");
+
+  const ratedPlayers = adjustments.players.filter((player: { club_id: string; division: string }) => player.club_id === club && player.division === "3.5");
+  expect(ratedPlayers).toHaveLength(6);
+  const joins = await Promise.all(ratedPlayers.map(async (player: { id: number; name: string }) => {
+    const details = { player_id: player.id, name: player.name, division: "3.5", confirm_self: true, request_id: randomUUID() };
+    const response = await meetAnonymous.request.post(joinUrl, { data: details });
+    expect(response.status()).toBe(200);
+    return { details, result: await response.json() as PrivateMeetSignup };
+  }));
+  const boardResponse = await meetAnonymous.request.get(joinUrl);
+  expect(boardResponse.status()).toBe(200);
+  const board: MeetSignupBoard = await boardResponse.json();
+  expect(JSON.stringify(board)).not.toMatch(/token_nonce|manage_url|@example.invalid/);
+  for (const gender of ["female", "male"]) {
+    const ordered = board.entries.filter(entry => entry.gender === gender && entry.priority === "in_band");
+    expect(ordered.map(entry => entry.placement)).toEqual(["confirmed", "confirmed", "waitlist"]);
+    expect(ordered[2].queue_position).toBe(1);
+  }
+  expect(board.entries.find(entry => entry.id === playUp.entry.id)?.queue_position).toBe(2);
+  const sameRetry = await meetAnonymous.request.post(joinUrl, { data: joins[0].details });
+  expect((await sameRetry.json()).entry.manage_url).toBe(joins[0].result.entry.manage_url);
+  const duplicate = await meetAnonymous.request.post(joinUrl, { data: { ...joins[0].details, request_id: randomUUID() } });
+  expect((await duplicate.json()).duplicate).toBe(true);
+  const firstWoman = board.entries.find(entry => entry.gender === "female" && entry.placement === "confirmed")!;
+  const womanSignup = joins.find((join: { result: PrivateMeetSignup }) => join.result.entry.id === firstWoman.id)!.result;
+  const nextWoman = board.entries.find(entry => entry.gender === "female" && entry.placement === "waitlist")!;
+  const womanPage = await meetAnonymous.newPage();
+  womanPage.on("pageerror", error => errors.push(error.message));
+  const privateAddress = new URL(womanSignup.entry.manage_url!);
+  await womanPage.goto(privateAddress.pathname + privateAddress.hash);
+  await expect(womanPage.getByRole("region", { name: "Your meet signup" })).toContainText(firstWoman.name);
+  expect(new URL(womanPage.url()).hash).toBe("");
+  const withdrawal = womanPage.waitForResponse(r => r.url() === `${expectedApiOrigin}/public/interclub-meet-signups/withdraw` && r.request().method() === "POST");
+  await womanPage.getByRole("button", { name: "Withdraw from this meet", exact: true }).click();
+  const withdrawn = await withdrawal;
+  expect(withdrawn.status()).toBe(200);
+  const afterWithdrawal: PrivateMeetSignup = await withdrawn.json();
+  expect(afterWithdrawal.entry.status).toBe("withdrawn");
+  await expect(womanPage.getByRole("region", { name: "Your meet signup" })).toContainText("Withdrawn");
+  expect(afterWithdrawal.entries.find(entry => entry.id === nextWoman.id)?.placement).toBe("confirmed");
+  const lineupRead = await context.request.get(queueRoot, { headers: { Authorization: `Bearer ${user.token}` } });
+  expect(lineupRead.status()).toBe(200);
+  const autoTeam = (await lineupRead.json()).teams.find((team: { club_id: string; withdrawn: boolean }) => team.club_id === club && !team.withdrawn);
+  expect(autoTeam.status).toBe("eligible");
+  expect(autoTeam.roster.map((player: { name: string }) => player.name)).toContain(nextWoman.name);
+  expect(autoTeam.roster.map((player: { name: string }) => player.name)).not.toContain(firstWoman.name);
+  await meetPage.setViewportSize({ width: 390, height: 844 });
+  await meetPage.getByRole("button", { name: "Refresh signup", exact: true }).click();
+  await expect(meetPage.getByRole("region", { name: "Your meet signup" })).toContainText("Substitute #2 · Playing up");
+  await meetPage.screenshot({ path: join(reportDir, "interclub-meet-signup-mobile.png"), fullPage: true });
+  await signupPanel.getByRole("button", { name: "Refresh signups and lineups", exact: true }).click();
+  await expect(signupPanel.getByRole("region", { name: "3.5 women", exact: true })).toContainText(nextWoman.name);
+  await page.screenshot({ path: join(reportDir, "interclub-meet-signup-admin.png"), fullPage: true });
+  await meetAnonymous.close();
+
   const anonymous = await browser.newContext({ baseURL: origin });
   await bootstrapStagingContext(anonymous);
   const publicPage = await anonymous.newPage();
@@ -271,5 +359,5 @@ test("interclub paper packet, score entry, approval and public results", async (
   await expect(publicPlayerRow.getByRole("cell", { name: "3.15", exact: true }).first()).toBeVisible();
   expect(errors).toEqual([]);
   writeFileSync(join(reportDir,"interclub-browser.json"),JSON.stringify({ status:"passed",candidate_sha:state.sha,
-    checks:["paper_packet_pdf","six_game_ui_entry","dirty_navigation_lock","draft_reload","whole_meet_submission","organizer_approval","both_rating_streams","registration_phase_route_lock","admin_inline_player_creation","upcoming_meet_edit","add_meet_after_registration","late_inline_player_creation_without_notes","late_player_request_and_approval","guided_meet_lineup","eligible_player_filter","gender_composition","lineup_draft_preserved_on_pool_visit","anonymous_public_cup","closed_signup_readonly","anonymous_inline_player_signup","persisted_inline_profile_ratings","no_browser_exceptions"] },null,2));
+    checks:["shared_meet_signup","play_up_waitlist","concurrent_signup_capacity","rating_band_fifo","signup_retry_identity","withdrawal_promotes_actual_roster","mobile_signup","paper_packet_pdf","six_game_ui_entry","dirty_navigation_lock","draft_reload","whole_meet_submission","organizer_approval","both_rating_streams","registration_phase_route_lock","admin_inline_player_creation","upcoming_meet_edit","add_meet_after_registration","late_inline_player_creation_without_notes","late_player_request_and_approval","guided_meet_lineup","eligible_player_filter","gender_composition","lineup_draft_preserved_on_pool_visit","anonymous_public_cup","closed_signup_readonly","anonymous_inline_player_signup","persisted_inline_profile_ratings","no_browser_exceptions"] },null,2));
 });

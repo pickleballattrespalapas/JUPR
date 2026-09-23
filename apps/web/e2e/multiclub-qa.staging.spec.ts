@@ -10,7 +10,7 @@ const clubs = [
 async function expectMeetStepsLocked(page: Page) {
   const workflow = page.getByRole("navigation", { name: "League workflow", exact: true });
   await expect(workflow).toBeVisible();
-  for (const label of ["Meet availability", "Lineups", "Run meet", "Approve results"]) {
+  for (const label of ["Meet signup", "Lineups", "Run meet", "Approve results"]) {
     await expect(workflow.getByRole("link", { name: label, exact: true })).toHaveCount(0);
     await expect(workflow.locator('[aria-disabled="true"]').filter({ has: page.getByText(label, { exact: true }) })).toHaveCount(1);
   }
@@ -278,13 +278,14 @@ test("dedicated QA admin switches three clubs and previews website controls", as
           await expect(page.getByText("Loading meet…", { exact: true })).toHaveCount(0);
           if (joined && roster.meet.club_ids.includes(club.id)) {
             const availabilityResult = page.waitForResponse(r => new URL(r.url()).pathname === `${seasonPath}/meets/${meetId}/availability` && r.request().method() === "GET");
-            const availabilityStep = workflow.getByRole("link", { name: "Meet availability", exact: true });
+            const availabilityStep = workflow.getByRole("link", { name: "Meet signup", exact: true });
             await availabilityStep.click();
             const availabilityResponse = await availabilityResult;
             expect(availabilityResponse.status()).toBe(200);
             const availability = await availabilityResponse.json();
             expect(availability.meet.id).toBe(meetId);
             await expect(availabilityStep).toHaveAttribute("aria-current", "step");
+            await page.getByText("Optional availability replies", { exact: true }).click();
             await expect(page.getByRole("region", { name: "Meet player availability", exact: true })).toBeVisible();
           }
         }

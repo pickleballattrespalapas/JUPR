@@ -3,7 +3,7 @@ const React = require('react'), ts = require('typescript'), { create, act } = re
 function load(file, mocks = {}) {
   const code = ts.transpileModule(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true } }).outputText;
   const module = { exports: {} };
-  new Function('require', 'module', 'exports', code)(n => n === '@/lib/interclubRegistrationWindow' ? load('lib/interclubRegistrationWindow.ts') : n === '@/lib/useRegistrationWindow' ? load('lib/useRegistrationWindow.ts', { './interclubRegistrationWindow': load('lib/interclubRegistrationWindow.ts') }) : n === './SeasonRegistrationWindow' ? load('app/admin/interclub/registrations/SeasonRegistrationWindow.tsx', { '@/lib/interclubRegistration': helpers, './registrations.module.css': {} }) : n === '@/lib/interclubSetup' ? load('lib/interclubSetup.ts') : n === '../InterclubWorkflow' ? load('app/admin/interclub/InterclubWorkflow.tsx', { 'next/link': Link, './workflow.module.css': {} }) : n === './SeasonMeetSchedule' ? { default: p => React.createElement('section', { 'data-schedule-root': p.root, onSelectMeet: p.onSelectMeet }), __esModule: true } : n === './SeasonEligibilityApprovals' ? { default: p => React.createElement('section', { 'data-eligibility-root': p.root, 'data-refresh-key': p.refreshKey, onDecision: p.onDecision }), __esModule: true } : n === './PlayerPoolPanels' ? { SeasonPlayerPool: p => React.createElement('section', { 'data-pool-root': p.root, 'data-refresh-key': p.refreshKey, onLateRequested: p.onLateRequested }), MeetAvailability: p => React.createElement('section', { 'data-availability-root': p.meetRoot, onResponses: p.onResponses }) } : Object.hasOwn(mocks, n) ? mocks[n] : require(n), module, module.exports);
+  new Function('require', 'module', 'exports', code)(n => n === '@/lib/interclubRegistrationWindow' ? load('lib/interclubRegistrationWindow.ts') : n === '@/lib/useRegistrationWindow' ? load('lib/useRegistrationWindow.ts', { './interclubRegistrationWindow': load('lib/interclubRegistrationWindow.ts') }) : n === './SeasonRegistrationWindow' ? load('app/admin/interclub/registrations/SeasonRegistrationWindow.tsx', { '@/lib/interclubRegistration': helpers, './registrations.module.css': {} }) : n === '@/lib/interclubSetup' ? load('lib/interclubSetup.ts') : n === '../InterclubWorkflow' ? load('app/admin/interclub/InterclubWorkflow.tsx', { 'next/link': Link, './workflow.module.css': {} }) : n === './MeetSignupPanel' ? { default: p => React.createElement('section', { 'data-meet-signup-root': p.root, onAutomatic: p.onAutomatic }), __esModule: true } : n === './SeasonMeetSchedule' ? { default: p => React.createElement('section', { 'data-schedule-root': p.root, onSelectMeet: p.onSelectMeet }), __esModule: true } : n === './SeasonEligibilityApprovals' ? { default: p => React.createElement('section', { 'data-eligibility-root': p.root, 'data-refresh-key': p.refreshKey, onDecision: p.onDecision }), __esModule: true } : n === './PlayerPoolPanels' ? { SeasonPlayerPool: p => React.createElement('section', { 'data-pool-root': p.root, 'data-refresh-key': p.refreshKey, onLateRequested: p.onLateRequested }), MeetAvailability: p => React.createElement('section', { 'data-availability-root': p.meetRoot, onResponses: p.onResponses }) } : Object.hasOwn(mocks, n) ? mocks[n] : require(n), module, module.exports);
   return module.exports;
 }
 const helpers = load('lib/interclubRegistration.ts');
@@ -75,7 +75,7 @@ async function clubsAndRosters() {
   await act(async () => finish(reply({ participation: participation() })));
   assert.equal(requests.filter(r => r.url.endsWith(`/registrations/${sid}`)).length, seasonReadsBeforeAcceptance, 'Acceptance updates immediately without reloading the season');
   assert.ok(textContent(tree).includes('beta Club has joined'));
-  assert.ok(button(tree, 'Next: check meet availability'));
+  assert.ok(button(tree, 'Next: open meet signup'));
   assert.equal(focused.at(-1), 'participation-confirmed', 'Acceptance brings keyboard focus to the confirmation');
   assert.equal(tree.root.findByProps({ id: 'season-player-pool' }).props.hidden, false, 'Accepted clubs open directly on their player pool');
   assert.equal(tree.root.findAll(n => n.props['data-pool-root'])[0].props['data-pool-root'], `https://api.test/admin/clubs/beta/interclub/registrations/${sid}`);
@@ -94,15 +94,15 @@ async function clubsAndRosters() {
   await act(async () => tree.root.findAllByProps({ type: 'checkbox' }).slice(0, 4).forEach(i => i.props.onChange()));
   assert.equal(button(tree, 'Submit four-player roster').props.disabled, false);
   assert.equal(tree.root.findAllByProps({ type: 'checkbox' })[4].props.disabled, true, 'Fifth player cannot be selected');
-  await act(async () => tree.root.findByProps({ 'aria-label': 'Meet availability' }).props.onClick({ preventDefault() {} }));
+  await act(async () => tree.root.findByProps({ 'aria-label': 'Meet signup' }).props.onClick({ preventDefault() {} }));
   assert.equal(name().props.value, 'Beta Blue', 'Switching to availability preserves the lineup draft');
   await act(async () => tree.root.findAll(n => n.props['data-availability-root'])[0].props.onResponses([
     { member_id: 'm1', player_id: '1', name: 'Player 1', status: 'available', member_status: 'withdrawn' },
     { member_id: 'm2', player_id: '2', name: 'Player 2', status: 'available', member_status: 'active' },
     { member_id: 'm5', player_id: '5', name: 'Player 5', status: 'unavailable', member_status: 'active' },
   ]));
-  assert.ok(textContent(tree).includes('Sending availability invitations is optional.'));
-  await act(async () => button(tree, 'Choose lineups now').props.onClick());
+  assert.ok(textContent(tree).includes('Availability replies collect interest only.'));
+  await act(async () => button(tree, 'Next: review lineups').props.onClick());
   assert.equal(name().props.value, 'Beta Blue', 'Returning to lineups retains the draft and players');
   const availableFilter = () => tree.root.findAllByType('label').find(label => label.children.includes('Show only players who said they are available')).findByType('input');
   await act(async () => availableFilter().props.onChange({ target: { checked: true } }));
@@ -217,7 +217,7 @@ async function invitationResponses() {
   await act(async () => finish(reply({ detail: 'Invitation cannot be accepted right now.' }, 400)));
   assert.ok(textContent(tree).includes('Invitation cannot be accepted right now.'));
   assert.equal(button(tree, 'Accept invitation').props.disabled, false, 'A rejected request can be retried');
-  assert.equal(button(tree, 'Next: check meet availability'), undefined, 'Failed acceptance must not appear joined');
+  assert.equal(button(tree, 'Next: open meet signup'), undefined, 'Failed acceptance must not appear joined');
   assert.ok(!requests.some(r => r.url.includes('/meets/')));
   await respond('Accept invitation');
   await act(async () => finish(reply({ detail: 'Invitation changed. Reload before responding.' }, 409)));
@@ -233,7 +233,7 @@ async function invitationResponses() {
   status = 'declined'; revision = 4;
   await act(async () => finish(reply({ participation: participation() })));
   assert.equal(button(tree, 'Accept invitation'), undefined);
-  assert.equal(button(tree, 'Next: check meet availability'), undefined);
+  assert.equal(button(tree, 'Next: open meet signup'), undefined);
   assert.equal(tree.root.findAllByProps({ 'aria-label': 'Meet' }).length, 0);
   assert.ok(!requests.some(r => r.url.includes('/meets/')), 'Declining does not load roster details');
   await act(async () => tree.unmount());
@@ -245,7 +245,7 @@ async function invitationResponses() {
   status = 'accepted';
   await mount();
   assert.ok(textContent(tree).includes('beta Club has joined'), 'Reopening an accepted invitation shows its saved outcome');
-  assert.ok(button(tree, 'Next: check meet availability'));
+  assert.ok(button(tree, 'Next: open meet signup'));
   assert.equal(button(tree, 'Accept invitation'), undefined);
   await act(async () => tree.unmount());
 
@@ -273,7 +273,7 @@ async function invitationResponses() {
   await act(async () => finish(reply({ participation: { season_id: sid, club_id: 'beta', status: 'accepted', revision: 5 } })));
   assert.equal(button(tree, 'Accept invitation').props.disabled, true, 'Mismatched club response requires reloading');
   assert.ok(textContent(tree).includes('Could not confirm your club’s response.'));
-  assert.equal(button(tree, 'Next: check meet availability'), undefined, 'Another club’s success cannot unlock roster controls');
+  assert.equal(button(tree, 'Next: open meet signup'), undefined, 'Another club’s success cannot unlock roster controls');
   await act(async () => tree.unmount());
 
   clubId = 'alpha'; organizer = true;
@@ -311,7 +311,7 @@ async function deepLinkContext() {
   assert.ok(reads.some(url => url.endsWith(`/meets/${mid2}`)) && !reads.some(url => url.endsWith(`/meets/${mid}`)), 'Only the requested meet is loaded');
   const rulesTable = tree.root.findAllByType('table').find(table => table.findAllByType('caption').some(caption => caption.children.includes('Season eligibility rules')));
   assert.deepEqual(rulesTable.findByType('tbody').findAllByType('tr').map(row => row.findAllByType('td')[0].children[0]), ['3.0', '3.5', '4.0'], 'Skill levels display in numerical order');
-  for (const label of ['Player pool', 'Meet availability', 'Run meet', 'Approve results']) {
+  for (const label of ['Player pool', 'Meet signup', 'Run meet', 'Approve results']) {
     const url = new URL(tree.root.findByProps({ 'aria-label': label }).props.href, 'https://example.test');
     assert.equal(url.searchParams.get('season'), sid);
     assert.equal(url.searchParams.get('meet'), mid2);
@@ -319,9 +319,9 @@ async function deepLinkContext() {
   await act(async () => tree.unmount());
   await act(async () => { tree = create(React.createElement(Route, { searchParams: { season: sid } })); });
   assert.equal(tree.root.findByProps({ 'aria-label': 'Meet' }).props.value, mid, 'Organizer defaults to its own next meet, not the first visible meet for other clubs');
-  await act(async () => button(tree, 'Next: check meet availability').props.onClick());
+  await act(async () => button(tree, 'Next: open meet signup').props.onClick());
   assert.equal(tree.root.findByProps({ 'aria-label': 'Meet' }).props.value, mid, 'Pool next action opens the own-club meet shown in the confirmation');
-  assert.equal(tree.root.findByProps({ 'aria-label': 'Meet availability' }).props['aria-current'], 'step');
+  assert.equal(tree.root.findByProps({ 'aria-label': 'Meet signup' }).props['aria-current'], 'step');
   const schedule = tree.root.findAll(node => node.props['data-schedule-root'])[0];
   await act(async () => schedule.props.onSelectMeet(mid2, 'lineups'));
   assert.equal(tree.root.findByProps({ 'aria-label': 'Meet' }).props.value, mid2, 'The schedule link selects its meet in the mounted workspace');
@@ -362,7 +362,7 @@ async function registrationPhaseLocks() {
     assert.equal(tree.root.findAllByProps({ 'aria-label': 'Meet' }).length, 0, 'Meet selector is not mounted before registration closes');
     assert.equal(tree.root.findAllByProps({ id: 'meet-rosters' }).length, 0, 'Locked meet forms are absent, not merely hidden');
     assert.equal(tree.root.findAllByProps({ 'aria-disabled': 'true' }).length, 4);
-    assert.equal(button(tree, 'Next: check meet availability'), undefined);
+    assert.equal(button(tree, 'Next: open meet signup'), undefined);
     assert.equal(button(tree, 'Set registration dates'), undefined, 'A participating club cannot set commissioner dates');
     assert.equal(button(tree, 'Edit registration dates'), undefined);
     assert.ok(!reads.some(url => url.includes('/meets/')), 'A locked deep link never fetches meet settings or availability');
@@ -566,7 +566,7 @@ async function loadFailuresCanBeRetried() {
   await act(async () => requests.at(-1).resolve(reply({ season, meets: [meet], is_organizer: false,
     own_participation: { season_id: sid, club_id: 'beta', status: 'accepted', revision: 1 }, participations: [],
     clubs: [{ id: 'beta', name: 'Beta Club', slug: 'beta' }], teams: [], next_team_offset: null })));
-  assert.ok(button(tree, 'Next: check meet availability'));
+  assert.ok(button(tree, 'Next: open meet signup'));
   assert.equal(button(tree, 'Accept invitation'), undefined);
   assert.ok(content().includes('Loading meet…'));
   await act(async () => requests.at(-1).resolve(reply({ detail: 'This meet is temporarily unavailable.' }, 503)));
@@ -608,10 +608,16 @@ async function guidedLineupChoices() {
     return reply({ season: selectedSeason, meets: [meet], is_organizer: false, own_participation: { status: 'accepted' }, participations: [], clubs: [{ id: 'beta', name: 'Beta Club' }], teams: [], next_team_offset: null });
   };
   await act(async () => { tree = create(React.createElement(Page, { initialSeasonId: sid })); });
-  await act(async () => button(tree, 'Choose players for the next meet').props.onClick());
+  await act(async () => button(tree, 'Get signup link for the next meet').props.onClick());
+  assert.equal(tree.root.findByProps({ 'aria-label': 'Meet signup' }).props['aria-current'], 'step', 'The primary next-meet action opens shared signup');
+  await act(async () => tree.root.findByProps({ 'aria-label': 'Lineups' }).props.onClick({ preventDefault() {} }));
   assert.equal(tree.root.findByProps({ id: 'meet-rosters' }).props.hidden, false);
   assert.equal(tree.root.findByProps({ 'aria-label': 'Lineups' }).props['aria-current'], 'step');
   assert.ok(requests.some(request => request.url.includes('team_offset=100')), 'Assignments beyond the first page are loaded before selecting players');
+  const signupPanel = tree.root.findAll(node => node.props['data-meet-signup-root'])[0];
+  await act(async () => signupPanel.props.onAutomatic(true));
+  assert.equal(button(tree, 'Add a team for this meet'), undefined, 'Automatic signup protects its lineup from manual edits');
+  await act(async () => signupPanel.props.onAutomatic(false));
   await act(async () => button(tree, 'Add a team for this meet').props.onClick());
   const select = name => tree.root.findByProps({ 'aria-label': name });
   const pick = name => select(`Select ${name}`);

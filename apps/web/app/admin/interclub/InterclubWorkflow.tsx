@@ -15,8 +15,8 @@ export function workflowHref(step: LeagueStep, seasonId: string, meetId = ""): s
 
 const steps: { id: LeagueStep; label: string; hint: string }[] = [
   { id: "pool", label: "Player pool", hint: "Join once for the season" },
-  { id: "availability", label: "Meet availability", hint: "Optional: collect replies" },
-  { id: "lineups", label: "Lineups", hint: "Choose players for this meet" },
+  { id: "availability", label: "Meet signup", hint: "Share link · fill spots and subs" },
+  { id: "lineups", label: "Lineups", hint: "Review this meet’s teams" },
   { id: "run", label: "Run meet", hint: "Approved lineups required" },
   { id: "approve", label: "Approve results", hint: "Submitted scores required" },
 ];

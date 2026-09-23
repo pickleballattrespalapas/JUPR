@@ -461,6 +461,7 @@ def cleanup(directory):
             r.db("PATCH","pcs_interclub_seasons",{"registration_opens_at":iso(now()-timedelta(days=40)),
                 "registration_closes_at":iso(now()-timedelta(days=31))},id="eq."+season["id"])
             r.db("PATCH","pcs_interclub_availability_settings",{"open":False},season_id="eq."+season["id"])
+            r.db("PATCH","pcs_interclub_meet_signup_settings",{"open":False},season_id="eq."+season["id"])
             r.db("PATCH","pcs_interclub_publications",{"published":None,"published_at":None},season_id="eq."+season["id"])
         except Exception as exc:errors.append(r.redact(exc))
     for club in state["clubs"]:
