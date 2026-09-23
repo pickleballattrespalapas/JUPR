@@ -53,6 +53,8 @@
     "interclub_meet_overlap_guard",
     "interclub_meet_rosters",
     "interclub_meet_schedule_adjustments",
+    "interclub_meet_signup_lookup_index",
+    "interclub_meet_signup_queues",
     "interclub_participation_rosters",
     "interclub_player_interest_and_availability",
     "interclub_pool_profile_matching_bulk_add",
