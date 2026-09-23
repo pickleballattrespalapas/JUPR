@@ -33,6 +33,7 @@ type RegistrationSummary = {
   events: string[];
   extras: string[];
   totalMinor: number | null;
+  genderReviews: string[];
 };
 
 const cardStyle = {
@@ -223,6 +224,7 @@ export default function TournamentRegistrantListPanel({
       return {
         registration,
         events,
+        genderReviews: detail.selections.filter(selection => selection.registration_id === registration.id && selection.gender_review && selection.gender_review.status !== "APPROVED").map(selection => `${selection.event_label || "Event"}: ${selection.gender_review?.status === "DECLINED" ? "eligibility declined" : "needs gender eligibility approval"}`),
         extras: extraLabels(order),
         totalMinor: orderTotal(order)
       };
@@ -285,11 +287,12 @@ export default function TournamentRegistrantListPanel({
 
       {detail ? (
         <section aria-label="Tournament registrations" style={{ display: "grid", gap: "0.75rem" }}>
-          {visible.map(({ registration, events, extras, totalMinor }) => (
+          {visible.map(({ registration, events, extras, totalMinor, genderReviews }) => (
             <article key={registration.id} style={cardStyle}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap", alignItems: "flex-start" }}>
                 <div style={{ minWidth: 0 }}>
                   <h2 style={{ margin: 0 }}>{registration.display_name}</h2>
+                  {genderReviews.map(review => <p key={review} style={{ color: "#92400e", fontWeight: 700 }}>{review}</p>)}
                   <p style={{ color: "#475569", margin: "0.25rem 0 0", overflowWrap: "anywhere" }}>
                     {registration.email || "No email"}
                     {registration.phone ? ` · ${registration.phone}` : ""}

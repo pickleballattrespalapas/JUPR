@@ -514,6 +514,29 @@ export default function TournamentRegistrantEditPanel({
     }
   }
 
+  async function reviewGender(row: AdminTournamentSelection, decision: "APPROVED" | "DECLINED", confirmationText: string) {
+    if (!row.gender_review) throw new Error("Reload this entry before reviewing it.");
+    const generation = actionRequest.begin();
+    setBusy(true);
+    setMessage(null);
+    try {
+      await requestJson(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/selections/${encodeURIComponent(row.id)}/gender-review`, {
+        method: "POST", body: JSON.stringify({ decision, expected_review_version: row.gender_review.review_version, confirmation_text: confirmationText })
+      });
+      const completion = actionSuccess("Eligibility decision saved", decision === "APPROVED" ? "This entry’s gender eligibility is approved." : "This entry remains blocked from draw import.");
+      if (actionRequest.isCurrent(generation)) {
+        await loadDetail(row.id);
+        if (actionRequest.isCurrent(generation)) setMessage("Eligibility decision saved.");
+      }
+      return completion;
+    } catch (error) {
+      if (actionRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to save eligibility decision.");
+      throw error;
+    } finally {
+      if (actionRequest.isCurrent(generation)) setBusy(false);
+    }
+  }
+
   async function addSelection(confirmationText: string) {
     if (!availableNewEvents.some((event) => String(event.id) === newEventOptionId)) {
       setMessage("Choose a Division before adding an event entry.");
@@ -1135,6 +1158,18 @@ export default function TournamentRegistrantEditPanel({
                         <small style={{ color: "#64748b" }}>
                           Entry {row.id}
                         </small>
+                        {row.gender_review ? (
+                          <div style={{ marginTop: "0.75rem", color: row.gender_review.status === "APPROVED" ? "#166534" : "#92400e" }}>
+                            <strong>Gender eligibility: {row.gender_review.status === "PENDING" ? "Needs admin approval" : row.gender_review.status === "APPROVED" ? "Approved" : "Declined"}</strong>
+                            <p style={{ margin: "0.35rem 0" }}>{row.gender_review.reason}</p>
+                            <p style={{ margin: "0.35rem 0" }}>Player: {row.gender_review.player_gender}{row.gender_review.partner_gender ? ` · Partner: ${row.gender_review.partner_gender}` : ""}</p>
+                            <small>Private admin review. No player notification is sent.</small>
+                            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.5rem" }}>
+                              {row.gender_review.status !== "APPROVED" ? <ConfirmAction triggerLabel="Approve eligibility" title="Approve gender eligibility?" description="Allow this entry and current partner pair in this division. Other eligibility checks still apply." confirmLabel="Approve eligibility" confirmationText="REVIEW GENDER ELIGIBILITY" busy={busy} onConfirm={(text) => reviewGender(row, "APPROVED", text)} /> : null}
+                              {row.gender_review.status !== "DECLINED" ? <ConfirmAction triggerLabel="Decline eligibility" title="Decline gender eligibility?" description="Keep the registration on file and block this entry from draw import." confirmLabel="Decline eligibility" confirmationText="REVIEW GENDER ELIGIBILITY" tone="danger" busy={busy} onConfirm={(text) => reviewGender(row, "DECLINED", text)} /> : null}
+                            </div>
+                          </div>
+                        ) : null}
                       </div>
                       <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
                         <button

@@ -52,6 +52,28 @@ const doublesEvent = {
   gender_restriction: "ANY"
 };
 
+for (const [restriction, player, partner, warning] of [
+  ["MIXED", "Women", "Women", /one man and one woman/],
+  ["MIXED", "Male", "Men", /one man and one woman/],
+  ["MEN", "Women", "Men", /listed for men/],
+  ["WOMEN", "Women", "Male", /listed for women/],
+  ["MIXED", "Other", "Women", /one man and one woman/],
+  ["MIXED", "Women", "Non-binary", null],
+  ["MIXED", "Non-binary", "Women", null],
+  ["MIXED", "Women", "Men", null],
+  ["ANY", "Women", "Women", null],
+  ["MIXED", "Women", "", null]
+]) {
+  const event = { ...doublesEvent, gender_restriction: restriction };
+  assert.equal(eligibility.publicEventEligibilityReason(event, { gender: player, doublesSkill: 3 }), null, "Gender exceptions must not hide or block the event");
+  const notice = eligibility.publicEventGenderNotice(event, { gender: player }, partner);
+  if (warning) {
+    assert.match(notice, warning);
+    assert.match(notice, /can still submit/);
+    assert.doesNotMatch(notice, /admin|approval/i);
+  } else assert.equal(notice, null);
+}
+
 for (const [stored, expected] of [
   ["Female", "Women"], [" f ", "Women"], ["WOMAN", "Women"],
   ["Male", "Men"], ["m", "Men"], ["MEN", "Men"],
