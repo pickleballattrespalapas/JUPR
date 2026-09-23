@@ -248,7 +248,8 @@ test("interclub paper packet, score entry, approval and public results", async (
   meetPage.on("pageerror", error => errors.push(error.message));
   await meetPage.goto(new URL(shareUrl).pathname);
   await meetPage.getByLabel("Find your name in the approved season pool", { exact: true }).fill(adjustments.browser_late_player);
-  await meetPage.getByRole("radio", { name: new RegExp(adjustments.browser_late_player) }).check();
+  // Choosing a profile replaces the radio list with the selected profile card.
+  await meetPage.getByRole("radio", { name: new RegExp(adjustments.browser_late_player) }).click();
   await expect(meetPage.getByText(/Your 3.35 league rating is below 3.5/)).toBeVisible();
   await meetPage.getByRole("checkbox", { name: /This is my profile and I want to play/ }).check();
   const shareId = new URL(shareUrl).pathname.split("/").at(-1)!;
