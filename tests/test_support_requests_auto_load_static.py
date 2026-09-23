@@ -8,7 +8,7 @@ PANEL = Path(
 
 def test_support_filters_auto_load_and_cannot_race_a_status_write() -> None:
     assert "useAuthenticatedAutoLoad(" in PANEL
-    assert "`${statusFilter}:${typeFilter}`" in PANEL
+    assert "`${clubId}:${statusFilter}:${typeFilter}`" in PANEL
     filters = PANEL.split("<h2 style={{ marginTop: 0 }}>Filters</h2>", 1)[1].split(
         "{summary ?", 1
     )[0]

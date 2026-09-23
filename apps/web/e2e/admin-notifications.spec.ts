@@ -127,7 +127,7 @@ test("bulk selection clears the selected notices and updates sidebar counts and 
   await page.goto("/admin/notifications", { waitUntil: "domcontentloaded" });
   const center = page.getByRole("region", { name: "Notifications", exact: true });
   const inboxLink = page.getByRole("link", { name: "Notifications", exact: true });
-  const tournamentLink = page.getByRole("link", { name: "Tournaments", exact: true });
+  const tournamentLink = page.getByRole("link", { name: "Tournament Manager", exact: true });
   await expect(inboxLink).toContainText("2");
   await expect(tournamentLink).toContainText("1");
   await tournamentLink.locator('[aria-hidden="true"]').hover();

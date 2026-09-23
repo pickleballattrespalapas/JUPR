@@ -151,6 +151,9 @@ def test_modified_admin_actions_are_scoped_to_the_current_access_token() -> None
             assert "const actionRequest = useLatestRequestGuard(sessionScope);" in source
             assert "JSON.stringify([accessToken, apiBase, clubId, initialTournamentId, selectedTournamentId, selectedRegistrationIds, includeCancelled, includeRegistrationEvents, includeRegistrationEditLinks, broadcastSubject, broadcastMessage])" in source
             assert "useLatestRequestGuard(previewScope, clearBroadcastPreview)" in source
+        elif relative.endswith("VerifiedRequestsPanel.tsx"):
+            assert "const actionRequest = useLatestRequestGuard(`${clubId}:${accessToken}`);" in source
+            assert "useLatestRequestGuard(`${clubId}:${accessToken}`, () =>" in source
         else:
             assert "const actionRequest = useLatestRequestGuard(accessToken" in source, relative
         for action_name in action_names:
@@ -163,7 +166,7 @@ def test_modified_admin_actions_are_scoped_to_the_current_access_token() -> None
 def test_existing_shared_action_guards_remain_token_scoped() -> None:
     support = _source("apps/web/app/admin/support-requests/SupportRequestsPanel.tsx")
     support_action = _async_function_body(support, "saveStatus")
-    assert "useLatestRequestGuard(accessToken, clearProtectedSupportRequests)" in support
+    assert "useLatestRequestGuard(`${clubId}:${accessToken}`, clearProtectedSupportRequests)" in support
     assert "requestsRequest.begin()" in support_action
     assert "requestsRequest.isCurrent(" in support_action
 
@@ -216,6 +219,8 @@ def test_existing_shared_action_guards_remain_token_scoped() -> None:
         if relative.endswith("WeeklyRecapAdminPanel.tsx"):
             assert 'const requestScope = `${clubId}\\u0000${accessToken}`;' in source
             assert "const writeRequest = useLatestRequestGuard(requestScope);" in source
+        elif relative.endswith("AdminToolsPanel.tsx"):
+            assert "const actionRequest = useLatestRequestGuard(`${clubId}:${accessToken}`);" in source
         else:
             assert "useLatestRequestGuard(accessToken" in source
         for action in actions:
