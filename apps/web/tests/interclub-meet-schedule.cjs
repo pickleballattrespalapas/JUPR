@@ -97,11 +97,11 @@ async function authorityAndUncertainSave() {
   await act(async () => tree.unmount());
 }
 async function schedulePanelGate() {
-  let reads = [], tree, changed;
+  let reads = [], tree, changed; const selected = [];
   const played = { ...meet, id: 'played', starts_at: '2000-01-10T17:00:00Z', schedule_editable: false, schedule_locked_reason: 'Scores have been entered. Use the results workflow to protect recorded games.' };
   global.fetch = async (url, options) => { reads.push({ url, options }); return reply({ ...context, meets: [meet, played] }); };
   const seasonData = { season, is_organizer: true, clubs: context.clubs, meets: [meet, played] };
-  const props = { root: base.root, clubId: 'alpha', accessToken: 'token', seasonData, meetPlanningOpen: false, disabled: false, onSaved: value => { changed = value; } };
+  const props = { root: base.root, clubId: 'alpha', accessToken: 'token', seasonData, meetPlanningOpen: false, disabled: false, onSaved: value => { changed = value; }, onSelectMeet: (id, step) => selected.push({ id, step }) };
   await act(async () => { tree = create(React.createElement(Panel, props)); });
   assert.equal(reads.length, 0, 'No operational context fetch before registration closes'); assert.equal(button(tree, 'Add meet').props.disabled, true); assert.equal(tree.root.findAllByType(Form).length, 0);
   await act(async () => tree.update(React.createElement(Panel, { ...props, meetPlanningOpen: true })));
@@ -111,6 +111,14 @@ async function schedulePanelGate() {
   await act(async () => edits[1].props.onClick()); assert.equal(tree.root.findByType(Form).props.meet.id, meet.id);
   await act(async () => tree.root.findByType(Form).props.onScheduled({ ...meet, revision: 8 }, 'Meet schedule saved.'));
   assert.equal(changed.revision, 8); assert.ok(text(tree).includes('Meet schedule saved.')); assert.equal(tree.root.findAllByType(Form).length, 0); assert.equal(reads.length, 2);
+  const links = tree.root.findAllByType('a'); let prevented = 0;
+  for (const label of ['Choose players for this meet', 'Meet availability', 'Choose players']) {
+    await act(async () => links.find(link => nodeText(link) === label).props.onClick({ preventDefault() { prevented++; } }));
+  }
+  assert.deepEqual(selected, [{ id: meet.id, step: 'lineups' }, { id: meet.id, step: 'availability' }, { id: meet.id, step: 'lineups' }], 'Schedule links update the existing workspace instead of only changing its URL');
+  assert.equal(prevented, 3);
+  links.find(link => nodeText(link) === 'Choose players').props.onClick({ ctrlKey: true, preventDefault() { throw new Error('New-tab navigation must remain available'); } });
+  assert.equal(selected.length, 3);
   await act(async () => button(tree, 'Add meet').props.onClick()); assert.equal(tree.root.findByType(Form).props.meet, undefined);
   await act(async () => tree.unmount());
 }

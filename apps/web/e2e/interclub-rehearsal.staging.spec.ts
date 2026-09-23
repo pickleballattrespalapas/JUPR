@@ -159,7 +159,9 @@ test("interclub paper packet, score entry, approval and public results", async (
   await schedule.getByLabel("Roster deadline", { exact: true }).fill(localDate(new Date(Date.now()+10*86_400_000)));
   const added = page.waitForResponse(r => r.url().endsWith(`/competition/${adjustments.id}/meets`) && r.request().method() === "POST");
   await schedule.getByRole("button", { name: "Add meet", exact: true }).click();
-  expect((await added).status()).toBe(200);
+  const addedResponse = await added;
+  expect(addedResponse.status()).toBe(200);
+  const addedMeet = (await addedResponse.json()).meet;
   await expect(schedule.getByRole("row")).toHaveCount(4);
   const pool = page.getByRole("region", { name: "Season player pool", exact: true });
   await pool.getByRole("button", { name: "Request late player", exact: true }).click();
@@ -200,6 +202,7 @@ test("interclub paper packet, score entry, approval and public results", async (
   // availability invitation is needed for verbally confirmed players.
   await schedule.getByRole("link", { name: "Choose players for this meet", exact: true }).click();
   await expect(page.getByRole("navigation", { name: "League workflow" }).getByRole("link", { name: "Lineups", exact: true })).toHaveAttribute("aria-current", "step");
+  await expect(page.getByLabel("Meet", { exact: true })).toHaveValue(addedMeet.id);
   const playerResponse = page.waitForResponse(r => r.url().includes(`/registrations/${adjustments.id}/meets/`) && new URL(r.url()).pathname.endsWith("/players"));
   await page.getByRole("button", { name: "Add a team for this meet", exact: true }).click();
   const availablePlayers = (await (await playerResponse).json()).players as { id: string; name: string; eligibility_rating: number; gender: string }[];

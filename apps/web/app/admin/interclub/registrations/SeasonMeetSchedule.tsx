@@ -1,17 +1,18 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { type MouseEvent, useEffect, useRef, useState } from "react";
 import { CompetitionContext, CompetitionMeet, competitionRequest, phaseLabels } from "@/lib/interclubCompetition";
 import { registrationMeetPlanning } from "@/lib/interclubRegistrationWindow";
 import { RegistrationDetail } from "@/lib/interclubRegistration";
 import ScheduleMeet from "../competition/ScheduleMeet";
-import { workflowHref } from "../InterclubWorkflow";
+import { type RegistrationStep, workflowHref } from "../InterclubWorkflow";
 import styles from "./registrations.module.css";
 
-export default function SeasonMeetSchedule({ root, clubId, accessToken, seasonData, meetPlanningOpen, disabled, onSaved }: {
+export default function SeasonMeetSchedule({ root, clubId, accessToken, seasonData, meetPlanningOpen, disabled, onSaved, onSelectMeet }: {
   root: string; clubId: string; accessToken: string; seasonData: RegistrationDetail; meetPlanningOpen: boolean;
   disabled: boolean; onSaved: (meet: CompetitionMeet) => void;
+  onSelectMeet: (meetId: string, step: RegistrationStep) => void;
 }) {
   const [context, setContext] = useState<CompetitionContext | null>(null);
   const [loading, setLoading] = useState(false), [error, setError] = useState(""), [message, setMessage] = useState("");
@@ -40,12 +41,17 @@ export default function SeasonMeetSchedule({ root, clubId, accessToken, seasonDa
   const clubName = (id: string) => seasonData.clubs.find(club => club.id === id)?.name || context?.clubs.find(club => club.id === id)?.name || id;
   const meets = [...(context?.meets || seasonData.meet_schedule || seasonData.meets)].sort((a, b) => Date.parse(a.starts_at) - Date.parse(b.starts_at));
   const canEdit = Boolean(meetPlanningOpen && context?.is_organizer && registrationMeetPlanning(context.season.registration));
+  function selectMeet(event: MouseEvent<HTMLAnchorElement>, meetId: string, step: RegistrationStep) {
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    onSelectMeet(meetId, step);
+  }
   return <section id="meet-schedule" className={styles.card} aria-labelledby="meet-schedule-heading">
     <h3 id="meet-schedule-heading" ref={heading} tabIndex={-1}>Meet schedule</h3>
     <p>All dates and times use {timezone}.</p>
     {message && <div role="status" className={styles.notice}><p>{message}</p><div className={styles.toolbar}>
-      {savedMeet && <Link className={styles.button} href={workflowHref("lineups", seasonData.season.id, savedMeet.id)}>{savedMeet.club_ids.includes(clubId) ? "Choose players for this meet" : "View meet lineups"}</Link>}
-      {savedMeet && <Link href={workflowHref("availability", seasonData.season.id, savedMeet.id)}>Meet availability</Link>}
+      {savedMeet && <Link className={styles.button} href={workflowHref("lineups", seasonData.season.id, savedMeet.id)} onClick={event => selectMeet(event, savedMeet.id, "lineups")}>{savedMeet.club_ids.includes(clubId) ? "Choose players for this meet" : "View meet lineups"}</Link>}
+      {savedMeet && <Link href={workflowHref("availability", seasonData.season.id, savedMeet.id)} onClick={event => selectMeet(event, savedMeet.id, "availability")}>Meet availability</Link>}
       <Link href={`/admin/interclub/publication?season=${encodeURIComponent(seasonData.season.id)}`}>Review public schedule</Link>
     </div></div>}
     {!meetPlanningOpen && <p>Adding meets and changing dates opens after season registration closes.</p>}
@@ -63,7 +69,7 @@ export default function SeasonMeetSchedule({ root, clubId, accessToken, seasonDa
       <tbody>{meets.map(meet => {
         const current = context?.meets.find(value => value.id === meet.id);
         return <tr key={meet.id}><td>{when(meet.starts_at)}{current && <div className={styles.muted}>{phaseLabels[current.competition_phase || "regular"]}</div>}</td><td>{clubName(meet.host_club_id)}</td><td>{meet.club_ids.map(clubName).join(", ")}</td><td>
-          {meetPlanningOpen ? <Link href={workflowHref("lineups", seasonData.season.id, meet.id)} aria-label={`Lineups for ${when(meet.starts_at)}`}>{meet.club_ids.includes(clubId) && Date.parse(meet.starts_at) > Date.now() ? "Choose players" : "View lineups"}</Link> : "After registration closes"}
+          {meetPlanningOpen ? <Link href={workflowHref("lineups", seasonData.season.id, meet.id)} aria-label={`Lineups for ${when(meet.starts_at)}`} onClick={event => selectMeet(event, meet.id, "lineups")}>{meet.club_ids.includes(clubId) && Date.parse(meet.starts_at) > Date.now() ? "Choose players" : "View lineups"}</Link> : "After registration closes"}
         </td><td>
           {current && canEdit ? <><button disabled={disabled || loading || Boolean(editor) || current.schedule_editable !== true} aria-label={`Edit date for ${when(meet.starts_at)}`} onClick={() => { setEditor({ meet: current }); setMessage(""); }}>Edit date</button>
             {!current.schedule_editable && <p className={styles.muted}>{current.schedule_locked_reason || "This meet’s date is locked."}</p>}</> : <span>{!meetPlanningOpen ? "After registration closes" : loading ? "Loading schedule permissions…" : error ? "Reload schedule to check permissions" : "Only the commissioner can change dates"}</span>}

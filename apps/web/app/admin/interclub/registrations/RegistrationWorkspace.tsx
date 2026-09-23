@@ -78,6 +78,7 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId, initialMeetId,
   const [reload, setReload] = useState(0);
   const [selectedMeet, setSelectedMeet] = useState(initialMeetId);
   const [step, setStep] = useState<RegistrationStep>(initialStep);
+  const [stepNavigation, setStepNavigation] = useState(0);
   const [poolRefreshKey, setPoolRefreshKey] = useState(0), [approvalRefreshKey, setApprovalRefreshKey] = useState(0);
   const registrationCheck = useRef<AbortController | null>(null);
   const { meetPlanningOpen } = useRegistrationWindow(data?.season.registration, () => void recheckRegistration());
@@ -111,7 +112,7 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId, initialMeetId,
     const section = step === "pool" ? poolSection.current : rosters.current;
     section?.focus({ preventScroll: true }); section?.scrollIntoView({ block: "start" });
     stepFocus.current = false;
-  }, [step]);
+  }, [step, stepNavigation]);
   useEffect(() => {
     registrationCheck.current?.abort();
     const controller = new AbortController(); setData(null); setLoading(true); setLoadError(""); setBlocked(false);
@@ -187,7 +188,7 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId, initialMeetId,
   const activeStep = !meetPlanningOpen ? "pool" : status !== "accepted" && step !== "lineups" ? "lineups" : step;
   const nextMeet = data?.meets.find(meet => meet.roster_open && meet.club_ids.includes(clubId));
   const schedule = data?.meet_schedule || data?.meets || [];
-  function selectStep(value: RegistrationStep) { if (value !== "pool" && !meetPlanningOpen) return; stepFocus.current = true; setStep(value); }
+  function selectStep(value: RegistrationStep) { if (value !== "pool" && !meetPlanningOpen) return; stepFocus.current = true; setStep(value); setStepNavigation(count => count + 1); }
   return <>
     {loadError && <p role="alert" className={styles.notice}>{loadError}</p>}
     {message && <p role="status" className={styles.notice}>{message}</p>}
@@ -263,7 +264,8 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId, initialMeetId,
         </details>}
       </section>}
       {data.is_organizer && <SeasonMeetSchedule root={`${api}/admin/clubs/${encodeURIComponent(clubId)}/interclub/competition/${encodeURIComponent(seasonId)}`} clubId={clubId} accessToken={accessToken}
-        seasonData={data} meetPlanningOpen={meetPlanningOpen} disabled={disabled} onSaved={() => void recheckRegistration()} />}
+        seasonData={data} meetPlanningOpen={meetPlanningOpen} disabled={disabled} onSaved={() => void recheckRegistration()}
+        onSelectMeet={(meetId, value) => { setSelectedMeet(meetId); selectStep(value); }} />}
       <details className={styles.card}><summary>Divisions and eligibility rules</summary>
         <div className={styles.scroll}><table className={styles.table}><caption>Season eligibility rules</caption><thead><tr><th>Division</th><th>League rating</th><th>Team</th></tr></thead><tbody>
           {[...data.season.details.divisions].sort((a, b) => Number.parseFloat(a) - Number.parseFloat(b) || a.localeCompare(b, undefined, { numeric: true })).map(division => {
