@@ -268,5 +268,6 @@ def test_public_tournament_registration_integrity_errors_are_api_400(integrity_c
             "selections": [{"event_option_id": "event1", "partner_mode": "NONE"}],
         },
     )
-    assert wrong_gender.status_code == 400
-    assert "women's registrations" in wrong_gender.json()["detail"]
+    assert wrong_gender.status_code == 200
+    assert wrong_gender.json()["registration_id"]
+    assert "gender_review" not in wrong_gender.json()

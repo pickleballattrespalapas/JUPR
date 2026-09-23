@@ -13,6 +13,7 @@ from jupr_app.services.admin_tournament_draw_service import _draw_payload
 from jupr_app.services.admin_tournament_game_service import _require_reviewed_draw_version
 from jupr_app.services.admin_tournament_team_service import _team_payload, write_admin_tournament_draw_teams_atomic
 from jupr_app.services.admin_tournament_service import TOURNAMENT_SELECT, _clean_text, _first_row, is_admin_tournament_admin_enabled
+from jupr_app.services.admin_tournament_service import require_tournament_gender_approvals_for_import
 
 CONFIRM_IMPORT_REGISTRATIONS = "IMPORT REGISTRATIONS"
 STANDARD_DOUBLES_EVENT_TYPES = {
@@ -430,6 +431,7 @@ def import_admin_tournament_registrations_to_draw(
     current_teams = _teams_for_draw(supabase, tournament_id=clean_tournament_id, draw_id=clean_draw_id)
     start_slot = max([_safe_int(row.get("team_number")) or 0 for row in current_teams], default=0) + 1 if mode == "APPEND" else 1
     selected_player_ids: list[int] = []
+    imported_selection_ids: set[str] = set()
     unresolved: list[str] = []
     incomplete_combined_reviews: list[str] = []
     rows: list[dict[str, Any]] = []
@@ -558,6 +560,7 @@ def import_admin_tournament_registrations_to_draw(
 
             selected_player_ids.extend(team_player_ids)
             consumed_selection_ids.update(link_selection_ids)
+            imported_selection_ids.update(link_selection_ids)
             rows.append(
                 {
                     "id": str(uuid.uuid4()),
@@ -719,6 +722,7 @@ def import_admin_tournament_registrations_to_draw(
                     unresolved.append(_clean_text(selection.get("partner_name") or partner_email, limit=180))
                     continue
         selected_player_ids.append(player1_id)
+        imported_selection_ids.add(str(selection.get("id") or ""))
         if player2_id is not None:
             selected_player_ids.append(player2_id)
         rows.append(
@@ -784,6 +788,10 @@ def import_admin_tournament_registrations_to_draw(
             )
         raise ValueError("No confirmed registrations with linked player IDs were available for this draw.")
 
+    require_tournament_gender_approvals_for_import(
+        supabase, club_id=str(club_id), tournament_id=clean_tournament_id,
+        selection_ids=imported_selection_ids,
+    )
     before = [_team_payload(row) for row in current_teams]
     if dry_run:
         teams = [_team_payload(row) for row in rows]

@@ -439,26 +439,16 @@ def _validate_gender_eligibility(
     status = str(result.get("status") or "ELIGIBLE").upper()
     if status == "ELIGIBLE":
         return
+    if result.get("issue_type") == "GENDER_NOT_ELIGIBLE":
+        # Accept the entry without changing anyone's gender. Admin-only review
+        # is derived from the saved pair, and draw import requires approval.
+        return
     missing_fields = {str(value) for value in (result.get("missing_fields") or [])}
     if status == "MISSING_DATA" and str(partner_mode or "").upper() == "NEEDS_PARTNER" and missing_fields <= {"partner gender"}:
         # A player looking for a partner may register provisionally. The future
         # partner must satisfy the Division's gender rule before final pairing.
         return
     label = _event_label(event)
-    restriction = str(result.get("restriction") or "").upper()
-    player = str(result.get("player_gender") or "").upper()
-    partner_value = str(result.get("partner_gender") or "").upper()
-    issue_type = str(result.get("issue_type") or "").upper()
-    if issue_type == "GENDER_NOT_ELIGIBLE" and restriction == "MEN":
-        if player != "MEN":
-            raise ValueError(f"{label}: this division is limited to men's registrations.")
-        if partner_value != "MEN":
-            raise ValueError(f"{label}: both partners must be eligible for the men's division.")
-    if issue_type == "GENDER_NOT_ELIGIBLE" and restriction == "WOMEN":
-        if player != "WOMEN":
-            raise ValueError(f"{label}: this division is limited to women's registrations.")
-        if partner_value != "WOMEN":
-            raise ValueError(f"{label}: both partners must be eligible for the women's division.")
     raise ValueError(
         f"{label}: "
         f"{_clean_text(result.get('issue') or 'Gender eligibility requirements were not met.', limit=500)}"

@@ -25,6 +25,7 @@ import {
   normalizeRegistrationGender,
   registrationGenderOptions,
   publicEventEligibilityReason,
+  publicEventGenderNotice,
   publicEventCapacityLabel,
   publicEventFamilyKey,
   publicEventFormatLabel,
@@ -814,6 +815,7 @@ export default function EditTournamentRegistrationForm({
         const mode =
           partnerModes[editingEventId] ||
           (eventOption.partner_required ? "NEEDS_PARTNER" : "NONE");
+        const genderNotice = publicEventGenderNotice(eventOption, eligibilityProfile, mode === "HAS_PARTNER" ? partnerValue.gender : null);
         return (
           <InteractionDialog
             open={Boolean(editingEventId)}
@@ -838,6 +840,7 @@ export default function EditTournamentRegistrationForm({
             )}
           >
             <h3>{publicTournamentEventLabel(eventOption.event_family_label, eventOption.division_name)}</h3>
+            {genderNotice ? <p role="status" style={{ color: "#92400e" }}>{genderNotice}</p> : null}
             <p style={{ color: "#475569" }}>{scheduledDaysLabel(eventOption, dayById) || "Schedule TBD"}<br />{eventMeta(eventOption)}</p>
             <fieldset ref={eventEditorRef} disabled={pending} style={{ display: "grid", gap: "0.85rem", border: 0, padding: 0, margin: 0, minWidth: 0 }}>
               {invitedEvent ? <p>Partner: <strong>{partnerInvitation.invitation?.target_name}</strong>. PCS will add your partner automatically when you save. Keep this division selected to complete the partnership.</p> : eventOption.partner_required ? (
