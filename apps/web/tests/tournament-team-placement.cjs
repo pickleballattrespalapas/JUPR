@@ -76,3 +76,35 @@ assert.match(JSON.stringify(renderer.toJSON()), /Assigned Team/);
 assert.equal(renderer.root.findAllByProps({ "data-testid": "team-placement-pending" }).length, 0);
 act(() => renderer.unmount());
 console.log("Tournament solo placement and confirmation passed");
+
+async function testPublicRosterPlacementStatus() {
+  const entries = [
+    { public_entry_key: "solo", status: "Needs Team", entry_type: "Registration", members: [{ display_name: "Solo Entrant" }] },
+    { public_entry_key: "review", status: "Review", entry_type: "Team", members: [{ display_name: "Review Entrant" }] },
+    { public_entry_key: "confirmed", status: "Registered", entry_type: "Team", members: [{ display_name: "Confirmed Entrant" }] },
+  ].map(row => ({ ...row, event_day_label: "Day 1", event_family: "Team Tournament", division: "Mixed 5.0" }));
+  const RosterPage = load("app/clubs/[clubSlug]/tournament-roster/page.tsx", {
+    "@/components/PublicClubLink": { default: ({ children, ...props }) => React.createElement("a", props, children) },
+    "next/navigation": { redirect: () => assert.fail("Unexpected redirect") },
+    "@/components/PublicTournamentSponsors": { default: () => null },
+    "@/components/PublicTournamentModuleHeader": { default: () => null },
+    "@/lib/tournamentRegistrationApi": { getClubTournamentRoster: async () => ({ data: {
+      tournament: { id: "t1", name: "Tournament" }, settings: { registration_slug: "fixture" },
+      roster: { registrations_by_event: entries }, summary: { total_registrations: 3, total_players: 3 },
+    } }) },
+  }).default;
+  for (const [status, name] of [["Needs a team", "Solo Entrant"], ["Under review", "Review Entrant"], ["Registered", "Confirmed Entrant"]]) {
+    const page = await RosterPage({ params: { clubSlug: "fixture" }, searchParams: { tournament: "fixture", status } });
+    act(() => { renderer = create(page); });
+    const output = JSON.stringify(renderer.toJSON());
+    assert.ok(output.includes(name));
+    for (const other of ["Solo Entrant", "Review Entrant", "Confirmed Entrant"].filter(value => value !== name)) assert.ok(!output.includes(other));
+    assert.equal(output.includes("Registered individually; awaiting team assignment."), status === "Needs a team");
+    const statusOptions = renderer.root.findAllByType("select").find(node => node.props.name === "status").findAllByType("option");
+    assert.ok(statusOptions.some(option => option.props.value === "Needs a team"));
+    assert.ok(statusOptions.some(option => option.props.value === "Under review"));
+    act(() => renderer.unmount());
+  }
+  console.log("Public tournament roster: team placement, review, registration and status filters passed");
+}
+testPublicRosterPlacementStatus().catch(error => { console.error(error); process.exitCode = 1; });
