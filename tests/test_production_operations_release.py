@@ -6,7 +6,7 @@ import pytest
 from jupr_app.domain.gamification.badge_types import BadgeCandidate
 from jupr_app.services.production_feature_policy import production_feature_enabled
 from scripts.activate_operations_badges import select_additions
-from scripts.deployment_verifier import PRODUCTION_ENABLED_FEATURE_FLAGS, PRODUCTION_PRE_OPERATIONS_ENABLED_FEATURE_FLAGS
+from scripts.deployment_verifier import PRODUCTION_ENABLED_FEATURE_FLAGS, PRODUCTION_PRE_OPERATIONS_ENABLED_FEATURE_FLAGS, PRODUCTION_PRE_TEAM_LEAGUES_ENABLED_FEATURE_FLAGS
 
 
 @pytest.fixture
@@ -47,7 +47,7 @@ def test_activation_excludes_existing_and_revoked_badge_identities():
 
 def test_release_preserves_every_preexisting_production_gate():
     assert PRODUCTION_PRE_OPERATIONS_ENABLED_FEATURE_FLAGS <= PRODUCTION_ENABLED_FEATURE_FLAGS
-    assert PRODUCTION_ENABLED_FEATURE_FLAGS - PRODUCTION_PRE_OPERATIONS_ENABLED_FEATURE_FLAGS == {
+    assert PRODUCTION_PRE_TEAM_LEAGUES_ENABLED_FEATURE_FLAGS - PRODUCTION_PRE_OPERATIONS_ENABLED_FEATURE_FLAGS == {
         "JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS", "JUPR_ENABLE_NEXT_ADMIN_JUPR_LIVE",
         "JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP", "JUPR_ENABLE_NEXT_ADMIN_SHELL"}
 

@@ -123,7 +123,7 @@ class _CompositionSupabase:
 def _save_settings(monkeypatch, settings: dict) -> tuple[dict, _CompositionSupabase]:
     monkeypatch.setattr(
         "jupr_app.services.team_league_service._assert_admin_write_enabled",
-        lambda: None,
+        lambda _club_id: None,
     )
     supabase = _CompositionSupabase()
     result = save_admin_team_league_settings(
@@ -193,7 +193,7 @@ def test_admin_settings_reject_unsupported_composition_policy(
 ) -> None:
     monkeypatch.setattr(
         "jupr_app.services.team_league_service._assert_admin_write_enabled",
-        lambda: None,
+        lambda _club_id: None,
     )
     supabase = _CompositionSupabase()
 
@@ -238,7 +238,7 @@ def test_public_legacy_settings_receive_safe_fixed_pair_defaults() -> None:
 def test_public_multi_player_registration_remains_fail_closed(monkeypatch) -> None:
     monkeypatch.setattr(
         "jupr_app.services.team_league_service._assert_public_write_enabled",
-        lambda: None,
+        lambda _club_id: None,
     )
     supabase = _CompositionSupabase(
         settings={
@@ -284,7 +284,7 @@ def test_public_multi_player_registration_remains_fail_closed(monkeypatch) -> No
 def test_admin_can_create_a_forming_three_player_team(monkeypatch) -> None:
     monkeypatch.setattr(
         "jupr_app.services.team_league_service._assert_admin_write_enabled",
-        lambda: None,
+        lambda _club_id: None,
     )
     supabase = _CompositionSupabase(
         settings={
@@ -329,7 +329,7 @@ def test_admin_can_create_a_forming_three_player_team(monkeypatch) -> None:
 def test_create_team_retry_reaches_database_receipt_after_team_exists(monkeypatch) -> None:
     monkeypatch.setattr(
         "jupr_app.services.team_league_service._assert_admin_write_enabled",
-        lambda: None,
+        lambda _club_id: None,
     )
     supabase = _CompositionSupabase(
         settings={
@@ -403,7 +403,7 @@ def test_create_team_retry_reaches_database_receipt_after_team_exists(monkeypatc
 def test_roster_retry_forwards_stale_version_to_database_receipt(monkeypatch) -> None:
     monkeypatch.setattr(
         "jupr_app.services.team_league_service._assert_admin_write_enabled",
-        lambda: None,
+        lambda _club_id: None,
     )
     supabase = _CompositionSupabase(
         settings={"max_alternates": 1, "roster_version": 9},
@@ -499,7 +499,7 @@ def test_public_registration_rejects_ineligible_or_unknown_gender_before_write(
 ) -> None:
     monkeypatch.setattr(
         "jupr_app.services.team_league_service._assert_public_write_enabled",
-        lambda: None,
+        lambda _club_id: None,
     )
     supabase = _CompositionSupabase(
         settings={"team_category": category},
@@ -562,7 +562,7 @@ def test_admin_waitlist_pairing_enforces_category_before_write(
 ) -> None:
     monkeypatch.setattr(
         "jupr_app.services.team_league_service._assert_admin_write_enabled",
-        lambda: None,
+        lambda _club_id: None,
     )
     supabase = _CompositionSupabase(
         settings={"team_category": "mixed"},

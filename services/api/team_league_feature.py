@@ -17,8 +17,15 @@ def team_leagues_enabled() -> bool:
     return os.getenv("JUPR_ENV", "").strip().lower() in LOCAL_TEST_ENVIRONMENTS
 
 
-def require_team_leagues_enabled_or_403() -> None:
-    if not team_leagues_enabled():
+def require_team_leagues_enabled_or_403(club_id: str | None = None) -> None:
+    # Public routes check the global flag before resolving a slug, then check
+    # the resolved club. Admin routes already have a club id at entry.
+    outside_production_scope = (
+        os.getenv("JUPR_ENV", "").strip().lower() == "production"
+        and club_id is not None
+        and club_id != "tres_palapas"
+    )
+    if not team_leagues_enabled() or outside_production_scope:
         raise HTTPException(
             status_code=403,
             detail="Team leagues are temporarily unavailable.",

@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 FLAGS = {
     "badges": "JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS",
     "generators": "JUPR_ENABLE_NEXT_ADMIN_JUPR_LIVE",
+    "team_leagues": "JUPR_ENABLE_TEAM_LEAGUES",
 }
 
 

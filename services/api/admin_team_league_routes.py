@@ -186,7 +186,7 @@ def install_admin_team_league_routes(app, *, get_supabase_client) -> None:
     def get_admin_team_leagues(
         club_id: str, authorization: str | None = auth_header()
     ) -> dict[str, Any]:
-        require_team_leagues_enabled_or_403()
+        require_team_leagues_enabled_or_403(club_id)
         supabase = get_supabase_client()
         _role_or_403(
             supabase,
@@ -205,7 +205,7 @@ def install_admin_team_league_routes(app, *, get_supabase_client) -> None:
         league_name: str,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
-        require_team_leagues_enabled_or_403()
+        require_team_leagues_enabled_or_403(club_id)
         supabase = get_supabase_client()
         _role_or_403(
             supabase,
@@ -229,8 +229,8 @@ def install_admin_team_league_routes(app, *, get_supabase_client) -> None:
         payload: TeamLeagueSettingsRequest,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
-        require_team_leagues_enabled_or_403()
-        require_admin_team_league_write_or_403()
+        require_team_leagues_enabled_or_403(club_id)
+        require_admin_team_league_write_or_403(club_id)
         supabase = get_supabase_client()
         email, role = _role_or_403(
             supabase,
@@ -263,8 +263,8 @@ def install_admin_team_league_routes(app, *, get_supabase_client) -> None:
         payload: TeamLeagueCreateTeamRequest,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
-        require_team_leagues_enabled_or_403()
-        require_admin_team_league_write_or_403()
+        require_team_leagues_enabled_or_403(club_id)
+        require_admin_team_league_write_or_403(club_id)
         supabase = get_supabase_client()
         email, role = _role_or_403(
             supabase,
@@ -301,8 +301,8 @@ def install_admin_team_league_routes(app, *, get_supabase_client) -> None:
         payload: TeamLeagueRosterActionRequest,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
-        require_team_leagues_enabled_or_403()
-        require_admin_team_league_write_or_403()
+        require_team_leagues_enabled_or_403(club_id)
+        require_admin_team_league_write_or_403(club_id)
         supabase = get_supabase_client()
         email, role = _role_or_403(
             supabase,
@@ -342,7 +342,7 @@ def install_admin_team_league_routes(app, *, get_supabase_client) -> None:
         phase: str,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
-        require_team_leagues_enabled_or_403()
+        require_team_leagues_enabled_or_403(club_id)
         supabase = get_supabase_client()
         _role_or_403(
             supabase,
@@ -369,8 +369,8 @@ def install_admin_team_league_routes(app, *, get_supabase_client) -> None:
         payload: TeamLeagueScheduleCommitRequest,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
-        require_team_leagues_enabled_or_403()
-        require_admin_team_league_write_or_403()
+        require_team_leagues_enabled_or_403(club_id)
+        require_admin_team_league_write_or_403(club_id)
         supabase = get_supabase_client()
         email, role = _role_or_403(
             supabase,
@@ -409,8 +409,8 @@ def install_admin_team_league_routes(app, *, get_supabase_client) -> None:
         payload: TeamLeagueWaitlistActionRequest,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
-        require_team_leagues_enabled_or_403()
-        require_admin_team_league_write_or_403()
+        require_team_leagues_enabled_or_403(club_id)
+        require_admin_team_league_write_or_403(club_id)
         supabase = get_supabase_client()
         email, role = _role_or_403(
             supabase,
@@ -446,8 +446,8 @@ def install_admin_team_league_routes(app, *, get_supabase_client) -> None:
         payload: TeamLeagueFixtureScoreRequest,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
-        require_team_leagues_enabled_or_403()
-        require_admin_team_league_write_or_403()
+        require_team_leagues_enabled_or_403(club_id)
+        require_admin_team_league_write_or_403(club_id)
         supabase = get_supabase_client()
         email, role = _role_or_403(
             supabase,
@@ -488,8 +488,8 @@ def install_admin_team_league_routes(app, *, get_supabase_client) -> None:
         payload: TeamLeagueReconcileRequest,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
-        require_team_leagues_enabled_or_403()
-        require_admin_team_league_write_or_403()
+        require_team_leagues_enabled_or_403(club_id)
+        require_admin_team_league_write_or_403(club_id)
         supabase = get_supabase_client()
         email, role = _role_or_403(
             supabase,
@@ -518,7 +518,7 @@ def install_admin_team_league_routes(app, *, get_supabase_client) -> None:
         operation_id: str,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
-        require_team_leagues_enabled_or_403()
+        require_team_leagues_enabled_or_403(club_id)
         supabase = get_supabase_client()
         _role_or_403(
             supabase,
@@ -545,8 +545,8 @@ def install_admin_team_league_routes(app, *, get_supabase_client) -> None:
         payload: TeamLeagueRecoveryRequest,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
-        require_team_leagues_enabled_or_403()
-        require_admin_team_league_write_or_403()
+        require_team_leagues_enabled_or_403(club_id)
+        require_admin_team_league_write_or_403(club_id)
         supabase = get_supabase_client()
         email, role = _role_or_403(
             supabase,
