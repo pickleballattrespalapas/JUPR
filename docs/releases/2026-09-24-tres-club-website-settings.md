@@ -36,6 +36,10 @@ isolation, save/publish/restore/unpublish/republish, stale and revoked identitie
 audit completeness, client-role permissions, and leaderboard preservation;
 all rehearsal test data was rolled back.
 
+The migration was then applied to production. Before/after fingerprints confirm
+the existing leaderboard settings and original club fields are unchanged. The
+initial website preserves all existing public sections and search indexing.
+
 The web build waits for the new API capability before replacing the current
 website. The existing no-send SMTP preflight has a two-minute timeout so a
 connection stall fails safely instead of occupying the deployment queue for
