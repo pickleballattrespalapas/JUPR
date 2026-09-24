@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
+import Link from "@/components/PublicClubLink";
 import { partnerInvitationRequest, type PartnerInvitation } from "@/lib/tournamentPartnerInvitations";
 
 const button = { display: "inline-block", padding: "1rem 1.3rem", border: "1px solid #174f43", borderRadius: "10px", background: "#174f43", color: "white", fontSize: "1.15rem", fontWeight: 750, cursor: "pointer", textDecoration: "none" };

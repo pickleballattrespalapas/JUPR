@@ -53,7 +53,7 @@ global.fetch = async (url, options = {}) => {
   assert.deepEqual(leaderboardSettings().seasons, [], "No season is created automatically for existing clubs");
   assert.deepEqual(leaderboardSettings().cards, ["highest_rating", "most_improved", "best_win_pct", "most_wins"], "New choices do not change existing clubs' selected cards");
   assert.deepEqual(leaderboardSettings().card_options, {});
-  const Website = load("app/admin/website/page.tsx").default;
+  const Website = load("app/admin/leaderboard-settings/page.tsx").default;
   let tree;
   await act(async () => { tree = create(h(Website)); });
   const button = label => tree.root.findAllByType("button").find(item => text(item) === label);

@@ -1,0 +1,173 @@
+from copy import deepcopy
+from types import SimpleNamespace
+from uuid import uuid4
+import pytest
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
+from pydantic import ValidationError
+from services.api import admin_auth_routes, club_site_routes as routes
+from services.api.club_site_models import SiteDocument, SiteBlock
+
+class Query:
+    def __init__(self, rows): self.rows=deepcopy(rows); self.filters=[]; self.fields='*'; self.span=None
+    def select(self, fields, **kwargs): self.fields=fields; return self
+    def eq(self, key, value): self.filters.append(lambda r:r.get(key)==value); return self
+    def in_(self, key, values): self.filters.append(lambda r:r.get(key) in values); return self
+    def ilike(self,key,value): self.filters.append(lambda r:value.strip('%').casefold() in r.get(key,'').casefold());return self
+    def order(self,*args,**kwargs): return self
+    def range(self,a,b):self.span=(a,b+1);return self
+    def limit(self,n):self.span=(0,n);return self
+    def execute(self):
+        rows=[r for r in self.rows if all(f(r) for f in self.filters)];count=len(rows)
+        if self.span:rows=rows[slice(*self.span)]
+        if self.fields!='*':rows=[{k:r.get(k) for k in self.fields.split(',')} for r in rows]
+        return SimpleNamespace(data=rows,count=count)
+
+@pytest.fixture
+def setup(monkeypatch):
+    user=SimpleNamespace(user_id='verified',email='owner@example.test')
+    monkeypatch.setattr(admin_auth_routes,'authenticate_bearer',lambda _:user)
+    public=SiteDocument(name='Published Alpha').model_dump()
+    tables={'clubs':[dict(id='alpha',slug='alpha',name='Operational name',tagline='',logo_url='',is_active=True,public_site_status='published'),dict(id='beta',slug='beta',is_active=True,public_site_status='draft')],
+      'pcs_club_sites':[dict(club_id='alpha',revision=5,draft=SiteDocument(name='Private next version').model_dump(),published=public,published_at='2026-09-16T00:00:00Z')],
+      'admin_role_assignments':[dict(club_id='alpha',role='administrator',email=user.email,user_id=user.user_id)]}
+    state={'tables':tables,'calls':[],'error':None}
+    def rpc(name,args):
+        state['calls'].append((name,args))
+        def execute():
+            if state['error']:
+                e=RuntimeError('private internal failure');e.code=state['error'];raise e
+            return SimpleNamespace(data={'ok':True})
+        return SimpleNamespace(execute=execute)
+    db=SimpleNamespace(table=lambda n:Query(tables.get(n,[])),rpc=rpc)
+    app=FastAPI();routes.install_club_site_routes(app,get_supabase_client=lambda:db)
+    return TestClient(app),state,db
+
+def test_public_snapshot_never_returns_draft_or_contact(setup):
+    c,_,_=setup;r=c.get('/public/clubs/alpha/site');assert r.status_code==200
+    assert r.json()['document']['name']=='Published Alpha'
+    assert 'Private next version' not in r.text and 'owner@example.test' not in r.text
+    assert r.headers['cache-control']=='no-store' and 'noindex' in r.headers['x-robots-tag']
+    assert c.get('/public/clubs/beta/site').status_code==404
+    assert c.get('/public/clubs/missing/site').status_code==404
+
+def test_admin_cannot_read_or_publish_another_club(setup):
+    c,s,_=setup
+    assert c.get('/admin/clubs/beta/site').status_code==403
+    assert c.post('/admin/clubs/beta/site/publish',json={'revision':5}).status_code==403
+    assert not s['calls']
+
+@pytest.mark.parametrize('change',[{'role':'operator'},{'revoked_at':'2020-01-01'}, {'expires_at':'2020-01-01T00:00:00Z'},{'user_id':'someone-else'}])
+def test_operator_revoked_expired_foreign_identity_denied(setup,change):
+    c,s,_=setup;s['tables']['admin_role_assignments'][0].update(change)
+    assert c.get('/admin/clubs/alpha/site').status_code==403
+    assert c.put('/admin/clubs/alpha/site',json={'revision':5,'document':SiteDocument(name='X').model_dump()}).status_code==403
+
+def test_save_publication_identity_and_conflict_handling(setup):
+    c,s,_=setup;payload={'revision':5,'document':SiteDocument(name='New draft').model_dump()}
+    assert c.put('/admin/clubs/alpha/site',json=payload).status_code==200
+    name,args=s['calls'][-1];assert name=='save_club_website_settings'
+    assert args['p_actor_id']=='verified' and args['p_club_id']=='alpha' and args['p_action']=='save'
+    assert args['p_revision']==5 and args['p_document']['name']=='New draft'
+    s['error']='40001';assert c.post('/admin/clubs/alpha/site/publish',json={'revision':5}).status_code==409
+    s['error']='42501';assert c.post('/admin/clubs/alpha/site/publish',json={'revision':5}).status_code==403
+    assert c.put('/admin/clubs/alpha/site',json={**payload,'actor_id':'forged'}).status_code==422
+
+
+def test_leaderboard_settings_save_dates_as_json_without_changing_publication(setup):
+    c, state, _ = setup
+    settings = {
+        'cards': ['most_matches', 'most_improved'], 'show_summary': False,
+        'seasons': [{'id': 'winter', 'name': '2026–27', 'start_date': '2026-09-15',
+                     'end_date': '2027-09-14', 'timezone': 'America/Mazatlan'}],
+        'default_season_id': 'winter', 'min_games': 10,
+        'card_options': {'most_improved': {'minimum': 15, 'depth': 3}},
+        'timezone': 'America/Mazatlan',
+    }
+    doc = SiteDocument(name='Club', leaderboard=settings).model_dump(mode='json')
+    response = c.put('/admin/clubs/alpha/site', json={'revision': 5, 'document': doc})
+    assert response.status_code == 200
+    saved = state['calls'][-1][1]['p_document']['leaderboard']
+    assert saved == settings
+    assert c.get('/public/clubs/alpha/site').json()['document']['leaderboard']['seasons'] == []
+
+
+@pytest.mark.parametrize('settings', [
+    {'cards': ['most_wins', 'most_wins']},
+    {'cards': ['arbitrary_sql']},
+    {'card_options': {'unknown': {'minimum': 2}}},
+    {'card_options': {'close_game_record': {'minimum': -1}}},
+    {'card_options': {'most_upsets': {'minimum': 10001}}},
+    {'card_options': {'best_partnership': {'depth': 0}}},
+    {'card_options': {'playing_days': {'depth': 11}}},
+    {'card_options': {'hot_hand': {'sql': 'select *'}}},
+    {'timezone': 'not/a/zone'},
+    {'default_season_id': 'missing'},
+    {'min_games': -1},
+    {'seasons': [{'id': 'all', 'name': 'Reserved', 'start_date': '2026-09-15'}]},
+    {'seasons': [{'id': 's', 'name': 'Bad dates', 'start_date': '2026-09-15', 'end_date': '2026-09-14'}]},
+    {'seasons': [{'id': 's', 'name': 'Bad zone', 'start_date': '2026-09-15', 'timezone': 'not/a/zone'}]},
+    {'seasons': [{'id': 's', 'name': 'A', 'start_date': '2026-09-15'}, {'id': 's', 'name': 'B', 'start_date': '2026-09-16'}]},
+])
+def test_invalid_leaderboard_settings_cannot_be_saved(setup, settings):
+    c, state, _ = setup
+    doc = SiteDocument(name='Club').model_dump(mode='json')
+    doc['leaderboard'] = settings
+    assert c.put('/admin/clubs/alpha/site', json={'revision': 5, 'document': doc}).status_code == 422
+    assert not state['calls']
+
+
+def test_full_card_catalog_and_options_round_trip_through_publication(setup):
+    from jupr_app.domain.leaderboard_metrics import LEADERBOARD_CARD_KEYS
+    from services.api.club_site_models import LeaderboardSettings
+    c, state, _ = setup
+    settings = LeaderboardSettings(
+        cards=list(LEADERBOARD_CARD_KEYS),
+        card_options={key: {'minimum': 6, 'depth': 3} for key in LEADERBOARD_CARD_KEYS},
+        timezone='Pacific/Auckland',
+    ).model_dump(mode='json')
+    document = SiteDocument(name='Expanded choices', leaderboard=settings).model_dump(mode='json')
+    assert c.put('/admin/clubs/alpha/site', json={'revision': 5, 'document': document}).status_code == 200
+    saved = state['calls'][-1][1]['p_document']
+    assert saved['leaderboard'] == settings
+    row = state['tables']['pcs_club_sites'][0]
+    row['draft'] = saved
+    assert c.get('/public/clubs/alpha/site').json()['document']['leaderboard']['card_options'] == {}
+    row['published'] = deepcopy(saved)
+    public = c.get('/public/clubs/alpha/site').json()['document']['leaderboard']
+    assert public == settings
+
+def test_page_visibility_round_trip_uses_published_snapshot_and_keeps_shared_access(setup):
+    c, state, db = setup
+    draft = SiteDocument(name='New draft', page_visibility={'players':'private', 'matches':'private'}).model_dump()
+    assert c.put('/admin/clubs/alpha/site',json={'revision':5,'document':draft}).status_code == 200
+    _, args = state['calls'][-1]
+    assert args['p_document']['page_visibility'] == {'players':'private', 'matches':'private'}
+    row = state['tables']['pcs_club_sites'][0]
+    row['draft'] = draft
+    assert c.get('/public/clubs/alpha/site').json()['document']['page_visibility'] == {}
+    row['published'] = deepcopy(draft)
+    shared = c.get('/public/clubs/alpha/site')
+    assert shared.status_code == 200
+    assert shared.json()['document']['page_visibility']['players'] == 'private'
+    # A private section is unlisted, not authenticated. Keep direct public access.
+    assert routes.published_site(db, 'alpha')['club_id'] == 'alpha'
+    assert c.get('/public/clubs/beta/site').status_code == 404
+
+@pytest.mark.parametrize('visibility', [{'admin':'private'}, {'players':'secret'}, {'players':False}, None])
+def test_page_visibility_rejects_unknown_sections_or_states(setup,visibility):
+    c, state, _ = setup
+    document = SiteDocument(name='Alpha').model_dump()
+    document['page_visibility'] = visibility
+    assert c.put('/admin/clubs/alpha/site',json={'revision':5,'document':document}).status_code == 422
+    assert not state['calls']
+
+@pytest.mark.parametrize('url',['javascript:alert(1)','//evil.test','http://insecure.test','https://safe.test\\@evil.test','data:image/svg+xml;base64,PHN2Zz4='])
+def test_custom_content_cannot_execute_or_use_unsafe_links(url):
+    with pytest.raises(ValidationError):SiteBlock(id='x',kind='button',url=url)
+
+def test_duplicate_pages_and_image_accessibility_are_validated():
+    with pytest.raises(ValidationError):SiteDocument(name='X',pages=[{'slug':'home','title':'Home'},{'slug':'home','title':'Duplicate'}])
+    with pytest.raises(ValidationError):SiteBlock(id='x',kind='image',url='https://example.test/pic.png')
+    assert SiteBlock(id='x',kind='image',url='https://example.test/pic.png',alt='Courts').alt=='Courts'
+

@@ -1,10 +1,12 @@
 "use client";
 
 import Link from "next/link";
+import { publicClubPage, type PageNavigationSettings } from "@/lib/clubSite";
 import { usePathname } from "next/navigation";
 import styles from "./PublicSiteHeader.module.css";
 
 type Props = {
+  clubDocument?: PageNavigationSettings | null;
   productName: string;
   isStaging: boolean;
   stagingBuildSha: string | null;
@@ -120,9 +122,14 @@ function Brand({ productName, isStaging, stagingBuildSha }: Props) {
 export default function PublicSiteHeader({
   productName,
   isStaging,
-  stagingBuildSha
+  stagingBuildSha,
+  clubDocument
 }: Props) {
   const pathname = usePathname() || "/";
+
+  if (pathname.startsWith("/clubs/")) {
+    return isStaging ? <div className={styles.compactHeader}><Brand productName={productName} isStaging={isStaging} stagingBuildSha={stagingBuildSha} /></div> : null;
+  }
 
   if (pathname === "/admin" || pathname.startsWith("/admin/")) {
     return (
@@ -146,7 +153,7 @@ export default function PublicSiteHeader({
         />
       </div>
       <nav className={styles.nav} aria-label="Primary navigation">
-        {navigationItems.map((item) => {
+        {navigationItems.filter(item => !item.href.startsWith(`${clubBase}/`) || (clubDocument && publicClubPage(clubDocument, "tres-palapas", item.href))).map((item) => {
           const active = item.active(pathname);
           return (
             <Link

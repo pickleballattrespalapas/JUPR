@@ -1,6 +1,9 @@
 import { requestShareMetadata } from "@/lib/shareMetadata";
 import type { CSSProperties, ReactNode } from "react";
 import Link from "next/link";
+import { headers } from "next/headers";
+import { getPublicSite } from "@/lib/clubSiteServer";
+import { publicClubPage } from "@/lib/clubSite";
 import PublicSiteHeader from "@/components/PublicSiteHeader";
 import { InteractionProvider } from "@/components/interaction";
 
@@ -37,7 +40,10 @@ const footerStyle: CSSProperties = {
   fontSize: "0.9rem"
 };
 
-export default function RootLayout({ children }: { children: ReactNode }) {
+export default async function RootLayout({ children }: { children: ReactNode }) {
+  const path = headers().get("x-pcs-club-path") || "/";
+  const site = path.startsWith("/admin") ? null : await getPublicSite("tres-palapas").catch(() => null);
+  const showClubPage = (path: string) => !!site && !!publicClubPage(site.document, site.slug, path);
   const isStaging =
     (process.env.NEXT_PUBLIC_JUPR_ENV || "").trim().toLowerCase() ===
     "staging";
@@ -49,6 +55,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <InteractionProvider>
           <div style={shellStyle}>
             <PublicSiteHeader
+              clubDocument={site ? { page_visibility: site.document.page_visibility, pages: site.document.pages.map(({ slug, in_navigation }) => ({ slug, in_navigation })) } : null}
               productName={productName}
               isStaging={isStaging}
               stagingBuildSha={stagingBuildSha}
@@ -62,12 +69,12 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                 style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}
                 aria-label="Footer navigation"
               >
-                <Link href="/clubs/tres-palapas/leagues">Leagues</Link>
-                <Link href="/clubs/tres-palapas/tournaments">Tournaments</Link>
+                {showClubPage("/clubs/tres-palapas/leagues") && <Link href="/clubs/tres-palapas/leagues">Leagues</Link>}
+                {showClubPage("/clubs/tres-palapas/tournaments") && <Link href="/clubs/tres-palapas/tournaments">Tournaments</Link>}
                 <Link href="/admin/login">Staff sign in</Link>
                 <Link href="/site-map">Site map</Link>
-                <Link href="/clubs/tres-palapas/badge-codex">Badges & Trophies</Link>
-                <Link href="/clubs/tres-palapas/matches">Matches</Link>
+                {showClubPage("/clubs/tres-palapas/badge-codex") && <Link href="/clubs/tres-palapas/badge-codex">Badges & Trophies</Link>}
+                {showClubPage("/clubs/tres-palapas/matches") && <Link href="/clubs/tres-palapas/matches">Matches</Link>}
                 <Link href="/how-ratings-work">How ratings work</Link>
                 <Link href="/faq">FAQ</Link>
                 <Link href="/privacy">Privacy</Link>

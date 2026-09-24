@@ -47,7 +47,7 @@ async function verifyPublicLegacyGenders() {
     "@/lib/tournamentRegistrationApi": { resolveClubTournamentPartnerProfile: async () => ({ data: { profile_candidates: [] } }) }
   }).default;
   const PublicEditForm = load("app/clubs/[clubSlug]/tournament-registration/edit/EditTournamentRegistrationForm.tsx", {
-    "next/link": { __esModule: true, default: ({ children }) => children },
+    "@/components/PublicClubLink": { __esModule: true, default: ({ children }) => children },
     "@/lib/tournamentCommerceApi": {},
     "@/lib/tournamentRegistrationEligibility": eligibility,
     "@/lib/tournamentRegistrationApi": {

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "profile": "tres-operations-badges-2026-09-24",
-  "repository_migration_content_sha256": "720efc64ac0a0c7bfb3c67b63874597a6856c215f035a63197bd02fa20e2f09d",
+  "profile": "tres-club-website-settings-2026-09-24",
+  "repository_migration_content_sha256": "e8ba39cf72ffc93f9bfbc5599af32e39ac675c58162de4b3b4dd2958a4bc1a50",
   "allow_additional_ledger_names": true,
   "allowed_duplicate_ledger_names": [
     "tournament_admin_operations"
@@ -121,7 +121,8 @@
     "program_badge_expansion",
     "program_badge_reconciliation_actor",
     "program_badge_round_robin_state",
-    "club_leaderboard_settings"
+    "club_leaderboard_settings",
+    "club_website_settings"
   ],
   "required_ledger_names": [
     "add_admin_activity_log",
@@ -145,6 +146,7 @@
     "challenge_ladder_public_results",
     "club_leaderboard_settings",
     "club_staff_scopes",
+    "club_website_settings",
     "combined_rating_team_tournaments",
     "communications_outbox_stale_guards",
     "complete_registration_cancellation",

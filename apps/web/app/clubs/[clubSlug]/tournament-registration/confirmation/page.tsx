@@ -1,5 +1,5 @@
 import PublicTournamentSponsors from "@/components/PublicTournamentSponsors";
-import Link from "next/link";
+import Link from "@/components/PublicClubLink";
 import { getClubTournamentRegistrationConfirmation } from "@/lib/tournamentRegistrationApi";
 import { formatCommerceMoney } from "@/lib/tournamentCommerceApi";
 import {

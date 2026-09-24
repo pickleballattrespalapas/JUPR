@@ -1,5 +1,5 @@
 import PublicTournamentSponsors from "@/components/PublicTournamentSponsors";
-import Link from "next/link";
+import Link from "@/components/PublicClubLink";
 import PublicTournamentNav, {
   publicTournamentHref
 } from "@/components/PublicTournamentNav";

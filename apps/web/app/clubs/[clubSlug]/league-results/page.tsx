@@ -1,4 +1,5 @@
-import Link from "next/link";
+import { Display } from "@/components/ClubDisplay";
+import Link from "@/components/PublicClubLink";
 import { getClubLeagueResults } from "@/lib/api";
 import type {
   LeagueResultsHighlights,
@@ -173,7 +174,7 @@ function RecentMatchesTable({ rows, clubSlug }: { rows: LeagueResultsRecentMatch
         <thead>
           <tr>
             {["Date", "Week", "Partner", "Opponents", "Result", "Score", "Rating Δ"].map((heading) => (
-              <th key={heading} style={{ textAlign: "left", padding: "0.6rem", borderBottom: "1px solid #cbd5e1", fontSize: "0.8rem", color: "#475569" }}>{heading}</th>
+              <Display key={heading} field={heading === "Score" ? "result_scores" : heading === "Rating Δ" ? "rating_changes" : heading === "Games" ? "match_counts" : ["Wins", "Losses"].includes(heading) ? "records" : heading === "Win %" ? "win_percentage" : undefined}><th style={{ textAlign: "left", padding: "0.6rem", borderBottom: "1px solid #cbd5e1", fontSize: "0.8rem", color: "#475569" }}>{heading}</th></Display>
             ))}
           </tr>
         </thead>
@@ -185,8 +186,8 @@ function RecentMatchesTable({ rows, clubSlug }: { rows: LeagueResultsRecentMatch
               <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{row.partner ? <Link href={playerHref(clubSlug, row.partner.player_id)}>{row.partner.player_name}</Link> : "—"}</td>
               <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{row.opponents.map((opponent, index) => <span key={String(opponent.player_id)}>{index ? ", " : ""}<Link href={playerHref(clubSlug, opponent.player_id)}>{opponent.player_name}</Link></span>)}</td>
               <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0", fontWeight: 800 }}>{row.result}</td>
-              <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{row.score_for}-{row.score_against}</td>
-              <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{deltaLabel(row.rating_delta_jupr)}</td>
+              <Display field="result_scores"><td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{row.score_for}-{row.score_against}</td></Display>
+              <Display field="rating_changes"><td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{deltaLabel(row.rating_delta_jupr)}</td></Display>
             </tr>
           ))}
         </tbody>
@@ -240,7 +241,7 @@ function StatTable({ rows, clubSlug, title }: { rows: LeagueResultsStatRow[]; cl
               "Win %",
               "Rating Δ"
             ].map((heading) => (
-              <th key={heading} style={{ textAlign: "left", padding: "0.6rem", borderBottom: "1px solid #cbd5e1", fontSize: "0.8rem", color: "#475569" }}>{heading}</th>
+              <Display key={heading} field={heading === "Score" ? "result_scores" : heading === "Rating Δ" ? "rating_changes" : heading === "Games" ? "match_counts" : ["Wins", "Losses"].includes(heading) ? "records" : heading === "Win %" ? "win_percentage" : undefined}><th style={{ textAlign: "left", padding: "0.6rem", borderBottom: "1px solid #cbd5e1", fontSize: "0.8rem", color: "#475569" }}>{heading}</th></Display>
             ))}
           </tr>
         </thead>
@@ -251,11 +252,11 @@ function StatTable({ rows, clubSlug, title }: { rows: LeagueResultsStatRow[]; cl
               <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{row.week_num ? `Week ${row.week_num}` : "Season"}</td>
               <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{row.rank ?? "—"}</td>
               <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{row.rank_delta == null ? "—" : `${row.rank_delta >= 0 ? "+" : ""}${row.rank_delta}`}</td>
-              <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{row.games ?? 0}</td>
-              <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{row.wins ?? 0}</td>
-              <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{row.losses ?? 0}</td>
-              <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{percentLabel(row.win_pct)}</td>
-              <td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{deltaLabel(row.rating_delta_jupr)}</td>
+              <Display field="match_counts"><td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{row.games ?? 0}</td></Display>
+              <Display field="records"><td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{row.wins ?? 0}</td></Display>
+              <Display field="records"><td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{row.losses ?? 0}</td></Display>
+              <Display field="win_percentage"><td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{percentLabel(row.win_pct)}</td></Display>
+              <Display field="rating_changes"><td style={{ padding: "0.6rem", borderBottom: "1px solid #e2e8f0" }}>{deltaLabel(row.rating_delta_jupr)}</td></Display>
             </tr>
           ))}
         </tbody>
@@ -487,9 +488,9 @@ export default async function LeagueResultsPage({ params, searchParams }: League
               </p>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0.75rem" }}>
                 <article style={cardStyle}><strong>Rank</strong><br />{data.player_summary?.rank ?? "—"}</article>
-                <article style={cardStyle}><strong>League JUPR</strong><br />{ratingLabel(data.player_summary?.rating_jupr)}</article>
-                <article style={cardStyle}><strong>Games</strong><br />{data.player_summary?.games ?? 0}</article>
-                <article style={cardStyle}><strong>Win %</strong><br />{percentLabel(data.player_summary?.win_pct)}</article>
+                <Display field="ratings"><article style={cardStyle}><strong>League JUPR</strong><br />{ratingLabel(data.player_summary?.rating_jupr)}</article></Display>
+                <Display field="match_counts"><article style={cardStyle}><strong>Games</strong><br />{data.player_summary?.games ?? 0}</article></Display>
+                <Display field="win_percentage"><article style={cardStyle}><strong>Win %</strong><br />{percentLabel(data.player_summary?.win_pct)}</article></Display>
               </div>
               <PlayerTrend rows={playerWeeklyRows} playerName={selectedPlayerName} />
               <h3>Weekly results</h3>

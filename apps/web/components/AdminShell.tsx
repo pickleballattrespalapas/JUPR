@@ -42,7 +42,8 @@ const adminGroups: AdminGroup[] = [
         active: (pathname) => pathname === "/admin"
       },
       { label: "Notifications", href: "/admin/notifications", active: path => path === "/admin/notifications" },
-      { label: "Leaderboard settings", href: "/admin/website", active: path => path.startsWith("/admin/website") },
+      { label: "Club website", href: "/admin/website", active: path => path.startsWith("/admin/website") },
+      { label: "Leaderboard settings", href: "/admin/leaderboard-settings", active: path => path.startsWith("/admin/leaderboard-settings") },
       {
         label: "Match Uploader",
         href: "/admin/match-uploader",

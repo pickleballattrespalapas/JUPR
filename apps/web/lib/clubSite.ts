@@ -206,7 +206,6 @@ export const CLUB_LINKS = [
   ["Match Explorer", "match-explorer"],
   ["Weekly recap", "weekly-recap"],
   ["Badges & trophies", "badge-codex"],
-  ["Interclub leagues", "interclub"],
 ] as const;
 
 export type ClubPageKey = (typeof CLUB_LINKS)[number][1];
@@ -224,7 +223,6 @@ export const PAGE_SCOPE_LABELS: Record<ClubPageKey, string> = {
   "match-explorer": "Match Explorer",
   "weekly-recap": "Weekly recap",
   "badge-codex": "Badges and trophies catalogue",
-  interclub: "This club’s interclub league list",
 };
 export function publicClubLinks(doc: PageNavigationSettings) {
   return CLUB_LINKS.filter(([, key]) => doc.page_visibility?.[key] !== "private");
