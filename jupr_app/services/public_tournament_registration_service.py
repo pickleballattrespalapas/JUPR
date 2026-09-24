@@ -1197,9 +1197,18 @@ def validate_and_clean_tournament_selection(
 
     event_type = _clean_text(event.get("event_type"), limit=40).upper()
     singles_event = event_type == "SINGLES"
+    four_player_event = (
+        _clean_text(event.get("competition_format"), limit=40).upper()
+        == "FOUR_PLAYER_TEAM"
+    )
     partner_required = _safe_bool(event.get("partner_required"))
     partner_mode = str(clean_selection.get("partner_mode") or "NONE")
-    if partner_required and partner_mode not in {"HAS_PARTNER", "NEEDS_PARTNER"}:
+    # Four-player entrants register individually; the separate roster flow
+    # records their team. Legacy event metadata can still require a doubles
+    # partner, which must not block either a captain or a solo registrant.
+    if four_player_event and partner_mode != "NONE":
+        raise ValueError(f"{_event_label(event)}: register yourself, then choose your team separately.")
+    if not four_player_event and partner_required and partner_mode not in {"HAS_PARTNER", "NEEDS_PARTNER"}:
         raise ValueError(f"{_event_label(event)}: choose whether you have or need a partner.")
     if singles_event and partner_mode != "NONE":
         raise ValueError(f"{_event_label(event)} does not accept partner information.")

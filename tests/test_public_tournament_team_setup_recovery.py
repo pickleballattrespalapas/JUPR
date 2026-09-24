@@ -170,3 +170,51 @@ def test_team_setup_recovery_uses_registration_team_and_operation_truth(
     assert "must-not-leak" not in rendered
     assert "operation_key" not in rendered
     assert "request_fingerprint" not in rendered
+
+
+def test_solo_confirmation_follows_assignment_without_exposing_other_teams(monkeypatch):
+    import pytest
+
+    monkeypatch.setenv("JUPR_REGISTRATION_CONFIRMATION_SECRET", "team-recovery-unit-test-secret")
+    token = build_registration_confirmation_token(
+        tournament_id="t1", registration_id="solo", email="solo@example.invalid",
+    )
+    tables = {
+        "tournaments": [{"id": "t1", "club_id": "club1"}],
+        "tournament_registrations": [{"id": "solo", "tournament_id": "t1", "email": "solo@example.invalid", "status": "CONFIRMED"}],
+        "tournament_registration_selections": [{"registration_id": "solo", "tournament_id": "t1", "event_option_id": "e1"}],
+        "tournament_event_options": [{"id": "e1", "tournament_id": "t1", "competition_format": "FOUR_PLAYER_TEAM"}],
+        "tournament_four_player_teams": [{"id": "team1", "tournament_id": "t1", "event_option_id": "e1", "captain_registration_id": "captain", "status": "CONFIRMED", "name": "Assigned Team"}],
+        "tournament_four_player_team_members": [],
+    }
+    supabase = _Supabase(tables)
+
+    def state():
+        return build_public_four_player_team_setup_recovery(supabase, club_id="club1", confirmation_token=token)["events"][0]
+
+    assert state()["setup_state"] == "SETUP_REQUIRED"
+    member = {"id": "m1", "tournament_id": "t1", "team_id": "team1", "registration_id": "solo", "slot": "MAN_2", "status": "ACCEPTED", "display_name_snapshot": "Solo Player", "invited_email": "solo@example.invalid", "invitation_token_hash": "must-not-leak"}
+    tables["tournament_four_player_team_members"].append(member)
+    assigned = state()
+    assert assigned["setup_state"] == "COMPLETE"
+    assert assigned["team"]["name"] == "Assigned Team"
+    assert "must-not-leak" not in repr(assigned)
+    assert "solo@example.invalid" not in repr(assigned)
+    for status in ["REMOVED", "DECLINED", "CANCELLED"]:
+        member["status"] = status
+        assert state()["setup_state"] == "SETUP_REQUIRED"
+    member.update(status="INVITED", registration_id=None, invited_email=" SOLO@example.invalid ")
+    assert state()["setup_state"] == "COMPLETE"
+    member["registration_id"] = "another-registration"
+    assert state()["setup_state"] == "SETUP_REQUIRED", "Email cannot override an existing registration link"
+    member["registration_id"] = "solo"
+    member["tournament_id"] = "other-tournament"
+    assert state()["setup_state"] == "SETUP_REQUIRED"
+    member["tournament_id"] = "t1"
+    tables["tournament_four_player_teams"][0]["event_option_id"] = "unselected-event"
+    assert state()["setup_state"] == "SETUP_REQUIRED"
+    tables["tournament_four_player_teams"][0]["event_option_id"] = "e1"
+    tables["tournament_four_player_teams"][0]["status"] = "WITHDRAWN"
+    assert state()["setup_state"] == "SETUP_REQUIRED"
+    with pytest.raises(ValueError, match="different club"):
+        build_public_four_player_team_setup_recovery(supabase, club_id="foreign", confirmation_token=token)
