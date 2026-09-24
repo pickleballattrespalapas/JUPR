@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/PublicClubLink";
 import { getClubWeeklyRecaps, getWeeklyRecapPdfUrl } from "@/lib/weeklyRecapApi";
 import type { WeeklyRecapJson, WeeklyRecapSpotlight, WeeklyRecapTournament } from "@/lib/weeklyRecapApi";
 import PrintButton from "./PrintButton";

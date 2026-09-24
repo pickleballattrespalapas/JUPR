@@ -2,7 +2,7 @@
 
 import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
 
-import Link from "next/link";
+import Link from "@/components/PublicClubLink";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { PublicLiveMatch, PublicLiveSessionDetail } from "@/lib/api";
 import { publicLiveErrorText } from "@/lib/publicLiveErrorText";
@@ -585,7 +585,7 @@ export default function LiveSessionRunner({ apiBase, clubSlug, initialSession }:
                     {session.standings.map((row, index) => (
                       <tr key={`${row.participantId ?? row.name ?? index}`}>
                         <td style={tdStyle}>{String(row.rank ?? index + 1)}</td>
-                        <td style={tdStyle}>{String(row.name ?? "—")}</td>
+                        <td style={tdStyle}>{String(row.name ?? "—")}{row.winnerNeedsAdmin ? <small> · Tied for first; admin decision pending</small> : null}{row.winnerDecidedByAdmin ? <small> · Winner confirmed by admin</small> : null}</td>
                         <td style={tdStyle}>{String(row.wins ?? 0)}/{String(row.losses ?? 0)}</td>
                         <td style={tdStyle}>{String(row.differential ?? "—")}</td>
                       </tr>

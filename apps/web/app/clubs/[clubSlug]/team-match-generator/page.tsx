@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/PublicClubLink";
 import TeamMatchGenerator from "./TeamMatchGenerator";
 
 type Props = { params: { clubSlug: string } };

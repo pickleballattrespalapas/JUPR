@@ -68,7 +68,7 @@ async function main() {
     return structuredClone(state);
   };
   const ResponsePage = load("app/clubs/[clubSlug]/tournament-partner-request/PartnerInvitationResponse.tsx", {
-    "next/link": { __esModule: true, default: Link },
+    "@/components/PublicClubLink": { __esModule: true, default: Link },
     "@/lib/tournamentPartnerInvitations": { partnerInvitationRequest: request }
   }).default;
   await act(async () => { renderer = create(React.createElement(ResponsePage, { clubSlug: "fixture" })); });
@@ -100,7 +100,7 @@ async function main() {
   assert.deepEqual(registrationContext.invitation.registration_prefill, state.registration_prefill);
   await act(async () => renderer.unmount());
   const RosterPage = load("app/clubs/[clubSlug]/tournament-roster/page.tsx", {
-    "next/link": { __esModule: true, default: Link },
+    "@/components/PublicClubLink": { __esModule: true, default: Link },
     "next/navigation": { redirect: () => { throw Error("Unexpected redirect"); } },
     "@/components/PublicTournamentSponsors": { __esModule: true, default: () => null },
     "@/components/PublicTournamentModuleHeader": { __esModule: true, default: () => null },

@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/PublicClubLink";
 import { teamLeagueApiBaseUrl } from "@/lib/teamLeagueApi";
 import PartnerConfirmationPanel from "./PartnerConfirmationPanel";
 

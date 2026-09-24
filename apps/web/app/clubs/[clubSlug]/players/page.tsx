@@ -1,5 +1,6 @@
 import PublicPlayerSearch from "@/components/PublicPlayerSearch";
-import Link from "next/link";
+import { Display } from "@/components/ClubDisplay";
+import Link from "@/components/PublicClubLink";
 import { getClubPlayers } from "@/lib/api";
 import type { PublicPlayer } from "@/lib/api";
 
@@ -179,7 +180,7 @@ export default async function ClubPlayersPage({ params, searchParams }: PlayersP
           ) : (
             <div style={{ overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: "12px", background: "white" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.95rem", minWidth: "1020px" }}>
-                <thead><tr><th style={thStyle}>Player</th><th style={thStyle}>Doubles / overall</th><th style={thStyle}>Singles</th><th style={thStyle}>Doubles matches</th><th style={thStyle}>Singles matches</th><th style={thStyle}>Doubles record</th><th style={thStyle}>Singles record</th><th style={thStyle}>Win %</th><th style={thStyle}>Last played</th><th style={thStyle}>Status</th><th style={thStyle}>Links</th></tr></thead>
+                <thead><tr><th style={thStyle}>Player</th><Display field="ratings"><th style={thStyle}>Doubles / overall</th></Display><Display field="singles"><Display field="ratings"><th style={thStyle}>Singles</th></Display></Display><Display field="match_counts"><th style={thStyle}>Doubles matches</th></Display><Display field="singles"><Display field="match_counts"><th style={thStyle}>Singles matches</th></Display></Display><Display field="records"><th style={thStyle}>Doubles record</th></Display><Display field="singles"><Display field="records"><th style={thStyle}>Singles record</th></Display></Display><Display field="win_percentage"><th style={thStyle}>Win %</th></Display><Display field="last_played"><th style={thStyle}>Last played</th></Display><Display field="player_status"><th style={thStyle}>Status</th></Display><th style={thStyle}>Links</th></tr></thead>
                 <tbody>
                   {players.map((player) => {
                     const selected = String(player.id) === String(selectedPlayer);
@@ -187,15 +188,15 @@ export default async function ClubPlayersPage({ params, searchParams }: PlayersP
                     return (
                       <tr key={String(player.id)} id={playerAnchor(player.id)} data-testid="players-row" data-status={player.is_active === false ? "inactive" : "active"} style={{ background: selected ? "#eff6ff" : undefined }}>
                         <td style={tdStyle}><Link aria-label={`Open ${player.name} profile`} href={profileHref}><strong>{player.name}</strong></Link></td>
-                        <td style={tdStyle}>{ratingLabel(player.rating, player.rating_jupr)}</td>
-                        <td style={tdStyle}>{ratingLabel(player.singles_rating, player.singles_rating_jupr)}</td>
-                        <td style={tdStyle}>{player.matches_played ?? (player.wins ?? 0) + (player.losses ?? 0)}</td>
-                        <td style={tdStyle}>{player.singles_matches_played ?? (player.singles_wins ?? 0) + (player.singles_losses ?? 0)}</td>
-                        <td style={tdStyle}>{player.wins ?? 0}/{player.losses ?? 0}</td>
-                        <td style={tdStyle}>{player.singles_wins ?? 0}/{player.singles_losses ?? 0}</td>
-                        <td style={tdStyle}>{winPctLabel(player)}</td>
-                        <td style={tdStyle}>{dateLabel(player.last_game_at)}</td>
-                        <td style={tdStyle}>{player.is_active === false ? "Inactive" : "Active"}</td>
+                        <Display field="ratings"><td style={tdStyle}>{ratingLabel(player.rating, player.rating_jupr)}</td></Display>
+                        <Display field="singles"><Display field="ratings"><td style={tdStyle}>{ratingLabel(player.singles_rating, player.singles_rating_jupr)}</td></Display></Display>
+                        <Display field="match_counts"><td style={tdStyle}>{player.matches_played ?? (player.wins ?? 0) + (player.losses ?? 0)}</td></Display>
+                        <Display field="singles"><Display field="match_counts"><td style={tdStyle}>{player.singles_matches_played ?? (player.singles_wins ?? 0) + (player.singles_losses ?? 0)}</td></Display></Display>
+                        <Display field="records"><td style={tdStyle}>{player.wins ?? 0}/{player.losses ?? 0}</td></Display>
+                        <Display field="singles"><Display field="records"><td style={tdStyle}>{player.singles_wins ?? 0}/{player.singles_losses ?? 0}</td></Display></Display>
+                        <Display field="win_percentage"><td style={tdStyle}>{winPctLabel(player)}</td></Display>
+                        <Display field="last_played"><td style={tdStyle}>{dateLabel(player.last_game_at)}</td></Display>
+                        <Display field="player_status"><td style={tdStyle}>{player.is_active === false ? "Inactive" : "Active"}</td></Display>
                         <td style={tdStyle}>
                           <Link href={profileHref}>profile</Link><span style={{ color: "#64748b" }}> · </span>
                           <Link href={`/clubs/${clubSlug}/leaderboards?player=${encodeURIComponent(String(player.id))}#leaderboard-player-${encodeURIComponent(String(player.id))}`}>leaderboard</Link><span style={{ color: "#64748b" }}> · </span>

@@ -1,4 +1,6 @@
 import type { MetadataRoute } from "next";
+import { getPublicSite } from "@/lib/clubSiteServer";
+import { publicClubPage, clubPageHref } from "@/lib/clubSite";
 
 const publicRoutes = [
   "/",
@@ -40,10 +42,13 @@ function baseUrl(): string {
   ).replace(/\/$/, "");
 }
 
-export default function sitemap(): MetadataRoute.Sitemap {
+export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
+  const site = await getPublicSite("tres-palapas").catch(() => null);
+  const canIndex = (path: string) => !path.startsWith("/clubs/tres-palapas") || (!!site && site.document.visibility === "listed" && !!publicClubPage(site.document, site.slug, path));
+  const custom = site?.document.pages.filter(p => p.slug !== "home" && p.in_navigation).map(p => clubPageHref(site.slug, p.slug)) || [];
   const origin = baseUrl();
   const now = new Date();
-  return publicRoutes.map((path) => ({
+  return [...publicRoutes, ...custom].filter(canIndex).map((path) => ({
     url: `${origin}${path}`,
     lastModified: now,
     changeFrequency: "weekly",

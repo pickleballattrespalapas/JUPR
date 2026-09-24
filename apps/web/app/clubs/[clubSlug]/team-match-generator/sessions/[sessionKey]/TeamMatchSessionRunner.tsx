@@ -2,7 +2,7 @@
 
 import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
 
-import Link from "next/link";
+import Link from "@/components/PublicClubLink";
 import { useEffect, useMemo, useState } from "react";
 import {
   applyMixedLineups,

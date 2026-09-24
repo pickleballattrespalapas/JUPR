@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/PublicClubLink";
 import { getClubMatchExplorerContext, getClubPlayerOptions } from "@/lib/api";
 import MatchExplorerForm from "./MatchExplorerForm";
 

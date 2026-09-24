@@ -8,6 +8,7 @@ const REQUIRED_FLAGS = [
 
 function operationsReady(health) {
   return health?.ok === true
+    && health.club_website_settings_available === true
     && health.environment === "production"
     && health.fly_app_name === "juprleagues-api"
     && health.supabase_project_ref === "dnoockbwfenunhcibwfn"
@@ -25,7 +26,7 @@ async function waitForProductionApi({
 } = {}) {
   if (environment !== "production") return;
   const deadline = now() + timeoutMs;
-  console.log("Waiting for the production operations API before building the website.");
+  console.log("Waiting for the production club settings API before building the website.");
   while (now() < deadline) {
     try {
       const response = await request("https://api.juprleagues.com/health", {

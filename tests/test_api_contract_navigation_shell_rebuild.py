@@ -113,10 +113,13 @@ def test_leagues_hub_lists_active_leagues_and_opens_league_home() -> None:
     assert "Explore this league" in league_home
     assert "Team Leagues" not in leagues
     assert "Club Leaderboards" not in leagues
-    assert 'title: "Leagues"' in club
-    assert 'href: `${base}/leagues`' in club
-    assert 'title: "Tournaments"' in club
-    assert 'href: `${base}/tournaments`' in club
+    assert "ClubSiteContent" in club
+    content = read("components/ClubSiteContent.tsx")
+    links = read("lib/clubSite.ts")
+    assert "publicClubLinks(doc)" in content
+    assert "links.map" in content
+    assert '"Leagues", "leagues"' in links
+    assert '"Tournaments", "tournaments"' in links
     assert '"Leagues", "/clubs/tres-palapas/leagues"' in site_map
     assert '"Tournaments", "/clubs/tres-palapas/tournaments"' in site_map
     assert '"/clubs/tres-palapas/leagues"' in sitemap

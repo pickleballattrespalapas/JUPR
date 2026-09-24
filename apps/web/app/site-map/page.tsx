@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { getPublicSite } from "@/lib/clubSiteServer";
+import { publicClubPage } from "@/lib/clubSite";
 
 const cardStyle = {
   border: "1px solid #e2e8f0",
@@ -65,7 +67,9 @@ const routeGroups = [
   }
 ];
 
-export default function SiteMapPage() {
+export default async function SiteMapPage() {
+  const site = await getPublicSite("tres-palapas").catch(() => null);
+  const visibleLink = ([, href]: string[]) => !href.startsWith("/clubs/tres-palapas") || (!!site && !!publicClubPage(site.document, site.slug, href));
   return (
     <section>
       <p
@@ -96,7 +100,7 @@ export default function SiteMapPage() {
                 gap: "0.75rem"
               }}
             >
-              {group.routes.map(([label, href]) => (
+              {group.routes.filter(visibleLink).map(([label, href]) => (
                 <article key={href} style={cardStyle}>
                   <strong>
                     <Link href={href}>{label}</Link>

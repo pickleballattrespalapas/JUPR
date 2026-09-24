@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { getPublicSite } from "@/lib/clubSiteServer";
+import { publicClubPage } from "@/lib/clubSite";
 
 const cardStyle = {
   border: "1px solid #e2e8f0",
@@ -53,7 +55,9 @@ const featureGroups = [
   }
 ];
 
-export default function HomePage() {
+export default async function HomePage() {
+  const site = await getPublicSite("tres-palapas").catch(() => null);
+  const visibleLink = ([, href]: string[]) => !href.startsWith("/clubs/tres-palapas") || (!!site && !!publicClubPage(site.document, site.slug, href));
   return (
     <section>
       <div style={{ maxWidth: "820px", marginBottom: "1.5rem" }}>
@@ -67,7 +71,7 @@ export default function HomePage() {
           Follow scores and ratings, register for tournaments, find partners, and catch up on club news—all in one place.
         </p>
         <p style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-          {primaryLinks.map(([label, href]) => <Link key={href} href={href} style={{ fontWeight: 800 }}>{label}</Link>)}
+          {primaryLinks.filter(visibleLink).map(([label, href]) => <Link key={href} href={href} style={{ fontWeight: 800 }}>{label}</Link>)}
         </p>
       </div>
 
@@ -77,7 +81,7 @@ export default function HomePage() {
             <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>{group.title}</h2>
             <p style={{ color: "#475569" }}>{group.description}</p>
             <div style={{ display: "flex", gap: "0.55rem", flexWrap: "wrap" }}>
-              {group.links.map(([label, href]) => <Link key={href} href={href}>{label}</Link>)}
+              {group.links.filter(visibleLink).map(([label, href]) => <Link key={href} href={href}>{label}</Link>)}
             </div>
           </article>
         ))}

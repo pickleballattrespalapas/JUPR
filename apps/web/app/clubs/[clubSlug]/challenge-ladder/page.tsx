@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/PublicClubLink";
 import ChallengeLadderResultDetails from "@/components/ChallengeLadderResultDetails";
 import { getClubChallengeLadder } from "@/lib/challengeLadderApi";
 import type { PublicLadderChallenge, PublicLadderChallengeSide, PublicLadderPlayer, PublicLadderTier } from "@/lib/challengeLadderApi";

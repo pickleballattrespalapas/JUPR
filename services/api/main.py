@@ -840,6 +840,7 @@ def health() -> dict[str, Any]:
         payload.update(
             {
                 "environment": environment,
+                "club_website_settings_available": True,
                 "git_commit_sha": (
                     os.getenv("JUPR_IMAGE_BUILD_GIT_SHA", "").strip().lower()
                     or os.getenv("JUPR_DEPLOYMENT_GIT_SHA", "").strip().lower()
@@ -1481,6 +1482,9 @@ def submit_admin_match_batch(club_id: str, payload: MatchBatchRequest, authoriza
 from services.api.admin_staff_routes import install_admin_staff_routes
 from services.api.staff_access import install_staff_access
 install_admin_staff_routes(app, get_supabase_client=get_supabase_client)
+
+from services.api.club_site_routes import install_club_site_routes
+install_club_site_routes(app, get_supabase_client=get_supabase_client)
 
 from services.api.club_leaderboard_settings_routes import install_club_leaderboard_settings_routes
 install_club_leaderboard_settings_routes(app, get_supabase_client=get_supabase_client)
