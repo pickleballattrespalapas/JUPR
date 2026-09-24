@@ -3,7 +3,7 @@
 import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
 
 import { useState } from "react";
-import { CompetitionDocument, CompetitionEncounter, CompetitionGame, CompetitionPairing, CompetitionPlayer, GameStatus, MeetCompetition, activeSinglesPlayers, fromLocalInput, gameStatusLabels, matchesSkillLevel, pairingLabels, playerNames, singlesCourt, toLocalInput } from "@/lib/interclubCompetition";
+import { CompetitionDocument, CompetitionEncounter, CompetitionGame, CompetitionPairing, CompetitionPlayer, GameStatus, MeetCompetition, activeSinglesPlayers, fromLocalInput, gameStatusLabels, matchesSkillLevel, pairingLabels, playerNames, scheduledEncounters, scheduleRoundLabel, singlesCourt, toLocalInput } from "@/lib/interclubCompetition";
 import styles from "./competition.module.css";
 
 type Props = { document: CompetitionDocument; detail: MeetCompetition; players: Map<string, CompetitionPlayer>; clubName: (id: string) => string; disabled: boolean; onChange: (document: CompetitionDocument) => void };
@@ -33,8 +33,8 @@ export default function ScoreEditor({ document, detail, players, clubName, disab
       {divisions.length > 1 && <label>Show skill level<select value={division} onChange={event => setDivision(event.target.value)}><option value="">All skill levels</option>{divisions.map(value => <option key={value}>{value}</option>)}</select></label>}
     </div>
     <div className={styles.notice}>All three games are played in regular-season pairings. Only completed doubles games affect ratings. Enter the actual stopped score for an injury retirement; leave scores empty for an unplayed forfeit.</div>
-    {document.encounters.filter(encounter => !division || encounter.division === division).map(encounter => <article key={encounter.id} className={styles.card}>
-      <p className={styles.eyebrow}>Skill level {encounter.division} · Rotation {encounter.rotation}</p>
+    {scheduledEncounters(document).filter(encounter => !division || encounter.division === division).map(encounter => <article key={encounter.id} className={styles.card}>
+      <p className={styles.eyebrow}>Skill level {encounter.division} · {scheduleRoundLabel(document)} {encounter.rotation}</p>
       <h3>{clubName(encounter.club_a)} <span className={styles.muted}>vs</span> {clubName(encounter.club_b)}</h3>
       {encounter.pairings.map(pairing => <section key={pairing.id} className={styles.pairing} aria-label={`${pairingLabels[pairing.kind]} ${encounter.division}`}>
         <h4>{pairingLabels[pairing.kind]}{pairing.court ? ` · Court ${pairing.court}` : ""}</h4>

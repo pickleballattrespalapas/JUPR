@@ -34,7 +34,7 @@ def new_meet(r, s, phase="regular", clubs=None):
     return result
 
 
-def prepare(r, s, m, *, phase="regular", partial=(), mixed=False):
+def prepare(r, s, m, *, phase="regular", partial=(), mixed=False, generate_pairings=True):
     r.open_dates(s)
     # Keep successive rehearsed meets two days apart. Real scheduling guards
     # also apply to fixture time travel; finals must follow regular-season play.
@@ -47,7 +47,7 @@ def prepare(r, s, m, *, phase="regular", partial=(), mixed=False):
         for club in m["club_ids"]:
             r.roster(s, m, club, division, partial=club in partial)
     r.move_meet(s, m, when, deadline)
-    return r.generated(s, m, phase=phase, format="mixed" if mixed else "gender") if phase == "regular" else None
+    return r.generated(s, m, phase=phase, format="mixed" if mixed else "gender") if phase == "regular" and generate_pairings else None
 
 
 def rating_evidence(r, s, b, expected_games):
@@ -313,7 +313,7 @@ def incidents(r):
     rating_evidence(r,s,b,6)
     r.check(b["document"]["encounters"][0]["pairings"][0] == old,"completed weather replay keeps prior pairing and rates six games exactly once")
     ui_meet = new_meet(r,s)
-    ui_batch = prepare(r,s,ui_meet)
+    ui_batch = prepare(r,s,ui_meet,generate_pairings=False)
     s["browser_meet"] = ui_meet["id"]
     s["browser_batch"] = ui_batch
     r.persist()

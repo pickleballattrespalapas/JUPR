@@ -83,6 +83,62 @@ def test_two_levels_four_clubs_need_eight_courts_and_72_games():
         generate_round_robin("meet", entries, courts=7)
 
 
+@pytest.mark.parametrize("format", ["gender", "mixed"])
+def test_staggered_draw_fits_eight_courts_without_losing_games_or_double_booking(format):
+    # The reported case: three four-club divisions plus one three-club division.
+    entries = [entry(club, division) for division, clubs in
+               [("3.0", "abcd"), ("3.5", "abcd"), ("4.0", "abcd"), ("4.5", "abc")] for club in clubs]
+    simultaneous = generate_round_robin("meet", entries, courts=14, format=format)
+    doc = generate_round_robin("meet", entries, courts=8, format=format, schedule_mode="staggered")
+    assert doc == generate_round_robin("meet", list(reversed(entries)), courts=8, format=format, schedule_mode="staggered")
+    assert doc["schedule_mode"] == "staggered"
+    assert {e["rotation"] for e in doc["encounters"]} == set(range(1, 7))
+    assert {g["id"] for e in doc["encounters"] for p in e["pairings"] for g in p["games"]} == {
+        g["id"] for e in simultaneous["encounters"] for p in e["pairings"] for g in p["games"]}
+    for rotation in range(1, 7):
+        pairings = [p for e in doc["encounters"] if e["rotation"] == rotation for p in e["pairings"]]
+        courts = [p["court"] for p in pairings if p["court"]]
+        assert len(courts) == len(set(courts)) <= 8
+        assert min(courts) >= 1 and max(courts) <= 8
+        players = [player for p in pairings for side in ("a", "b") for player in p[f"players_{side}"]]
+        assert len(players) == len(set(players))
+    complete_doc(doc)
+    complete_doc(simultaneous)
+    # Actual timestamps do not come from a wave estimate.
+    for value in (doc, simultaneous):
+        for e in value["encounters"]:
+            for p in e["pairings"]:
+                for g in p["games"]:
+                    g["played_at"] = PLAYED_AT
+    assert league_standings([doc]) == league_standings([simultaneous])
+    assert len(rating_games(doc)) == 126
+
+
+def test_staggered_odd_court_capacity_and_partial_forfeits():
+    entries = [entry(club, division) for division in ("3.0", "3.5") for club in "abcd"]
+    doc = generate_round_robin("odd", entries, courts=3, schedule_mode="staggered")
+    assert len({e["rotation"] for e in doc["encounters"]}) == 12
+    assert all(p["court"] in (1, 2) for e in doc["encounters"] for p in e["pairings"])
+    partial = [entry(club) for club in "abcd"]
+    for row in partial:
+        row["roster"] = row["roster"][:2]
+    doc = generate_round_robin("partial", partial, courts=1, schedule_mode="staggered")
+    assert len({e["rotation"] for e in doc["encounters"]}) == 6
+    assert all(e["pairings"][0]["court"] == 1 and e["pairings"][1]["court"] is None for e in doc["encounters"])
+    assert all(g["status"] == "double_forfeit" for e in doc["encounters"] for g in e["pairings"][1]["games"])
+    with pytest.raises(ValueError, match="at least 2"):
+        generate_round_robin("full", entries, courts=1, schedule_mode="staggered")
+
+
+def test_legacy_schedule_defaults_and_invalid_staggered_capacity():
+    doc = regular()
+    doc.pop("schedule_mode")
+    assert validate_document(doc)["schedule_mode"] == "simultaneous"
+    for courts in (None, 0, -1, 101, True):
+        with pytest.raises(ValueError):
+            generate_round_robin("meet", [entry("a"), entry("b")], courts=courts, schedule_mode="staggered")
+
+
 @pytest.mark.parametrize("clubs", [("a",), ("a", "b", "c", "d", "e"), ("a", "a")])
 def test_bad_round_robin_entries_rejected(clubs):
     with pytest.raises(ValueError):

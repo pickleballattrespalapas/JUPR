@@ -7,11 +7,12 @@ import { readBrowserWorkspace } from "@/lib/adminWorkspace";
 import { useAdminSession } from "@/lib/useAdminSession";
 import { useAdminWorkspace } from "@/lib/useAdminWorkspace";
 import { RegistrationSeason } from "@/lib/interclubRegistration";
-import { CompetitionBatch, CompetitionContext, CompetitionDocument, CompetitionFormat, CompetitionPhase, MeetCompetition, competitionPath, competitionPlayers, competitionRequest, fromLocalInput, gameCount, phaseLabels } from "@/lib/interclubCompetition";
+import { CompetitionBatch, CompetitionContext, CompetitionDocument, CompetitionFormat, CompetitionPhase, CompetitionScheduleMode, MeetCompetition, competitionPath, competitionPlayers, competitionRequest, fromLocalInput, gameCount, phaseLabels } from "@/lib/interclubCompetition";
 import ScoreEditor from "./ScoreEditor";
 import PrintPacket from "./PrintPacket";
 import Standings from "./Standings";
 import ScheduleMeet from "./ScheduleMeet";
+import CourtSchedule from "./CourtSchedule";
 import styles from "./competition.module.css";
 import InterclubWorkflow, { workflowHref } from "../InterclubWorkflow";
 import { useRegistrationWindow } from "@/lib/useRegistrationWindow";
@@ -104,6 +105,7 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
   const [error, setError] = useState(""), [status, setStatus] = useState(""), [loading, setLoading] = useState(true), [busy, setBusy] = useState(false), [blocked, setBlocked] = useState(false), [refresh, setRefresh] = useState(0);
   const divisions = [...context.season.details.divisions].sort((a, b) => Number.parseFloat(a) - Number.parseFloat(b) || a.localeCompare(b, undefined, { numeric: true }));
   const [format, setFormat] = useState<CompetitionFormat>(phase === "regular" ? "gender" : "mlp"), [division, setDivision] = useState(divisions[0] || ""), [clubA, setClubA] = useState(""), [clubB, setClubB] = useState("");
+  const [scheduleMode, setScheduleMode] = useState<CompetitionScheduleMode>("staggered");
   const [review, setReview] = useState<"submit" | "approve" | null>(null), [reason, setReason] = useState(""), [startsAt, setStartsAt] = useState(""), [deadline, setDeadline] = useState("");
   const token = useRef(accessToken); token.current = accessToken;
   const pending = useRef(false), controller = useRef<AbortController | null>(null);
@@ -177,15 +179,19 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
     {blocked && <div className={styles.notice}><p>Reload the latest saved meet before continuing. Your last change may already have been saved.</p><button disabled={busy} onClick={() => { setReview(null); setRefresh(value => value + 1); }}>Reload saved meet</button></div>}
     {(!batch || phase !== "regular" && batch.state === "draft" && draft?.encounters.every(encounter => encounter.pairings.every(pairing => pairing.games.every(game => game.status === "pending")))) && <div className={styles.card}><h2>{batch ? "Add another skill-level matchup" : `Prepare ${phaseLabels[phase].toLowerCase()} pairings`}</h2>
       <p>The schedule uses the approved meet rosters. Clubs may enter different skill levels at each meet. Each skill level needs two to four clubs.</p>
-      {detail.can_manage && (phase === "regular" || detail.is_organizer) ? <form onSubmit={event => { event.preventDefault(); void change("generate", { format, ...(phase !== "regular" ? { division, club_a: clubA, club_b: clubB } : {}) }); }}>
+      {detail.can_manage && (phase === "regular" || detail.is_organizer) ? <form onSubmit={event => { event.preventDefault(); void change("generate", { format, ...(phase !== "regular" ? { division, club_a: clubA, club_b: clubB } : { schedule_mode: scheduleMode }) }); }}>
         <fieldset className={styles.gameFields} disabled={disabled || dirty}><div className={styles.toolbar}>
-          {phase === "regular" ? <label>Meet format<select value={format} onChange={event => setFormat(event.target.value as CompetitionFormat)}><option value="gender">Women’s and men’s doubles</option><option value="mixed">Two mixed doubles pairings</option></select></label> : <>
+          {phase === "regular" ? <><label>Meet format<select aria-label="Meet format" value={format} onChange={event => setFormat(event.target.value as CompetitionFormat)}><option value="gender">Women’s and men’s doubles</option><option value="mixed">Two mixed doubles pairings</option></select></label>
+            <label>Court schedule<select aria-label="Court schedule" value={scheduleMode} onChange={event => { setScheduleMode(event.target.value as CompetitionScheduleMode); setError(""); }}>
+              <option value="staggered">Staggered — fit {detail.meet.courts} courts</option><option value="simultaneous">All divisions at once</option>
+            </select></label></> : <>
             <label>Skill level<select value={division} onChange={event => { setDivision(event.target.value); setClubA(""); setClubB(""); }}>{divisions.map(value => <option key={value}>{value}</option>)}</select></label>
             <label>Club A<select required value={clubA} onChange={event => setClubA(event.target.value)}><option value="">Choose club</option>{candidates.filter(id => id !== clubB).map(id => <option key={id} value={id}>{clubName(id)}</option>)}</select></label>
             <label>Club B<select required value={clubB} onChange={event => setClubB(event.target.value)}><option value="">Choose club</option>{candidates.filter(id => id !== clubA).map(id => <option key={id} value={id}>{clubName(id)}</option>)}</select></label>
           </>}
           <button type="submit" className={styles.primary} disabled={alreadyScheduled || !hasPlayableLineups}>Generate pairings</button>
         </div></fieldset>
+        {phase === "regular" && <p>{scheduleMode === "staggered" ? `Matchups start in waves using up to ${detail.meet.courts} courts. Each full matchup uses two courts for its doubles pairings. Review the court schedule below after generating, then print it with the score sheets.` : `Each opponent rotation runs all divisions together. Generation checks that the draw fits the meet’s ${detail.meet.courts} available courts.`}</p>}
         {phase !== "regular" && <p>Each club fields two women and two men. The server checks current skill eligibility, prior regular-season appearances and championship qualification.</p>}
         {alreadyScheduled && <p>{phase === "qualifier" ? "This qualifying pair is already in the packet. Choose another pair." : `Skill level ${division} is already in this packet. Choose another skill level to add its matchup.`}</p>}
         {phase !== "regular" && candidates.length < 2 && <p className={styles.notice}>Two qualifying clubs need approved lineups for this meet and skill level. Check the standings below and prepare their meet rosters first.</p>}
@@ -195,6 +201,7 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
       </div>}
     </div>}
     {batch && draft && <>
+      {phase === "regular" && <CourtSchedule document={batch.document} clubName={clubName} />}
       <div id="meet-results-review" ref={resultsReview} tabIndex={-1} className={styles.card} style={{ scrollMarginTop: "1rem" }}>
         <div className={styles.toolbar}><div><p className={styles.eyebrow}>{phaseLabels[phase]} · Revision {batch.revision}</p><h2>{batch.state === "draft" ? "Meet score draft" : batch.state === "submitted" ? "Awaiting organizer approval" : "Official meet results"}</h2><p>{count?.entered} of {count?.total} game outcomes entered{dirty ? " · Unsaved changes" : " · Saved"}</p></div>
           <button onClick={() => window.print()} disabled={busy || dirty}>Print meet packet</button>

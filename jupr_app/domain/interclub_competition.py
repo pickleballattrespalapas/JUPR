@@ -204,6 +204,8 @@ def validate_document(document: dict | CompetitionDocument, official: bool = Fal
     doc = _normalize(document)
     if (doc["phase"] == "regular") == (doc["format"] == "mlp"):
         raise ValueError("Regular meets use gender or mixed doubles; finals and qualifiers use MLP.")
+    if doc["phase"] != "regular" and doc["schedule_mode"] == "staggered":
+        raise ValueError("Staggered scheduling is available for regular-season meets.")
     if official and not doc["encounters"]:
         raise ValueError("Generate at least one matchup before submitting a meet.")
     ids: set[str] = set()
@@ -349,7 +351,49 @@ def _new_encounter(meet_id: str, division: str, a: dict, b: dict, format: str, p
             "rotation": rotation, "pairings": pairings, "tiebreak": None}
 
 
-def generate_round_robin(meet_id: str, entries: list[dict], format: str = "gender", played_at: str | None = None, courts: int | None = None) -> dict:
+def assign_regular_courts(encounters: list[dict], courts: int | None, schedule_mode: str = "simultaneous") -> None:
+    """Keep each opponent round in order, splitting it into court-sized waves.
+
+    The two playable doubles pairings in a matchup start together. Forfeited
+    pairings take no court. IDs and lineups are independent of court allocation.
+    """
+    if schedule_mode not in {"simultaneous", "staggered"}:
+        raise ValueError("Choose simultaneous or staggered scheduling.")
+    if courts is not None and (isinstance(courts, bool) or not isinstance(courts, int) or not 1 <= courts <= 100):
+        raise ValueError("Choose between 1 and 100 available courts.")
+    if schedule_mode == "staggered" and courts is None:
+        raise ValueError("Set the available court count for a staggered schedule.")
+    ordered = sorted(encounters, key=lambda e: (e["rotation"], e["division"], e["club_a"], e["club_b"]))
+    next_rotation = 1
+    for _, group in groupby(ordered, key=lambda e: e["rotation"]):
+        # Materialize before changing rotation, which is also groupby's key.
+        round_encounters = list(group)
+        waves: list[dict] = []
+        needed = sum(bool(p["players_a"] and p["players_b"]) for e in round_encounters for p in e["pairings"])
+        if schedule_mode == "simultaneous" and courts is not None and needed > courts:
+            raise ValueError(f"This draw needs {needed} courts per rotation; {courts} are available. Choose Staggered under Court schedule, or increase the meet's court count.")
+        for encounter in round_encounters:
+            playable = [p for p in encounter["pairings"] if p["players_a"] and p["players_b"]]
+            players = {player for p in playable for side in ("a", "b") for player in p[f"players_{side}"]}
+            if courts is not None and len(playable) > courts:
+                raise ValueError(f"This matchup needs {len(playable)} courts so its doubles pairings can play together. Increase the meet's court count to at least {len(playable)}.")
+            wave = next((w for w in waves if (courts is None or w["used"] + len(playable) <= courts) and not w["players"] & players), None)
+            if wave is None:
+                if schedule_mode == "simultaneous" and waves:
+                    raise ValueError("A player cannot be assigned to two simultaneous matchups.")
+                wave = {"rotation": next_rotation + len(waves), "used": 0, "players": set()}
+                waves.append(wave)
+            encounter["rotation"] = wave["rotation"]
+            for pairing in encounter["pairings"]:
+                pairing["court"] = None
+                if pairing["players_a"] and pairing["players_b"]:
+                    wave["used"] += 1
+                    pairing["court"] = wave["used"]
+            wave["players"].update(players)
+        next_rotation += len(waves)
+
+
+def generate_round_robin(meet_id: str, entries: list[dict], format: str = "gender", played_at: str | None = None, courts: int | None = None, schedule_mode: str = "simultaneous") -> dict:
     if format not in {"gender", "mixed"}:
         raise ValueError("Choose gender or mixed doubles for a regular meet.")
     divisions: dict[str, list[dict]] = defaultdict(list)
@@ -379,9 +423,8 @@ def generate_round_robin(meet_id: str, entries: list[dict], format: str = "gende
                 court_counts[rotation] += sum(pairing["court"] is not None for pairing in encounter["pairings"])
                 encounters.append(encounter)
             circle = [circle[0], circle[-1], *circle[1:-1]]
-    if courts is not None and max(court_counts.values(), default=0) > courts:
-        raise ValueError(f"This draw needs {max(court_counts.values())} courts per rotation; {courts} are available. Increase courts or review a staggered schedule before printing.")
-    return validate_document({"meet_id": str(meet_id), "phase": "regular", "format": format, "encounters": encounters})
+    assign_regular_courts(encounters, courts, schedule_mode)
+    return validate_document({"meet_id": str(meet_id), "phase": "regular", "format": format, "schedule_mode": schedule_mode, "encounters": encounters})
 
 
 def generate_championship(meet_id: str, division: str, club_a: dict, club_b: dict, phase: str = "final", played_at: str | None = None) -> dict:

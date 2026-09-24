@@ -45,7 +45,7 @@ publication remains unchanged until explicitly reviewed and republished.
   "schema_version": 1,
   "meet_id": "meet-id",
   "phase": "regular",
-  "format": "gender",
+  "format": "gender", "schedule_mode": "staggered",
   "weather": "normal",
   "encounters": [{
     "id": "encounter-id", "division": "3.5",
@@ -98,7 +98,7 @@ it is derived from the skill level. This game never affects individual ratings.
 ## Function interface
 
 - `generate_round_robin(meet_id, entries, format="gender", played_at=None,
-  courts=None)`: entries are a list of `{division, club_id, team_id?, revision?,
+  courts=None, schedule_mode="simultaneous")`: entries are a list of `{division, club_id, team_id?, revision?,
   roster: [{entry_id, name?, gender, starting_rating?}]}`. Each complete roster
   contains two women and two men. A declared partial roster can contain two
   real players: two of one gender at a gender meet, or one woman and one man at
@@ -107,8 +107,23 @@ it is derived from the skill level. This game never affects individual ratings.
   pairings that can play use courts; no phantom player or score is generated.
   The result is one full regular document. Generated IDs
   are stable for the meet, phase, clubs, division, pairing, and game. Court
-  assignments do not overlap within a rotation; insufficient courts raise an
-  actionable error. Three-club entries produce three rotations with byes.
+  assignments do not overlap within a rotation. Simultaneous scheduling requires
+  enough courts for every division in that opponent round. Staggered scheduling
+  splits each opponent round into ordered waves using the meet's available
+  courts. Both playable doubles pairings in a matchup start together (two courts
+  for a full matchup); missing pairings consume no court. A wave starts after
+  the preceding wave finishes its three-game pairings; no estimated timestamp
+  is substituted for the actual game time. Three-club entries retain their byes.
+  Matchup, pairing and game IDs are unchanged by scheduling mode.
+
+The regular `/generate` request accepts `schedule_mode: "simultaneous" |
+"staggered"` (legacy callers default to simultaneous). **Run meet → Court
+schedule** defaults new UI draws to **Staggered — fit N courts**. The saved
+document records that mode; old documents default to simultaneous. The screen
+and paper packet show the same ordered wave/court assignments. Score edits
+cannot change the mode, waves or courts. Before play, refreshing approved
+lineups reallocates courts within those waves if a missing pairing becomes
+available. Weather replays retain the existing historical schedule.
 - `generate_championship(meet_id, division, club_a, club_b, phase="final",
   played_at=None)`: clubs use the same entry objects; returns an MLP document.
 - `validate_document(document, official=False)`: returns a normalized document.

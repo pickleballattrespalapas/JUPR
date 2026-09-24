@@ -2,13 +2,24 @@ import { apiError, type InterclubMeet, type RegistrationSeason } from "./intercl
 
 export type CompetitionPhase = "regular" | "final" | "qualifier";
 export type CompetitionFormat = "gender" | "mixed" | "mlp";
+export type CompetitionScheduleMode = "simultaneous" | "staggered";
 export type GameStatus = "pending" | "completed" | "retired" | "forfeit" | "double_forfeit" | "unplayed";
 export type CompetitionPlayer = { entry_id: string; name: string; gender?: string; rating?: number; eligibility_rating?: number; starting_rating?: number; division?: string; rating_locked?: boolean };
 export type CompetitionTeam = { id: string; club_id: string; division: string; revision: number; name: string; roster: CompetitionPlayer[] };
 export type CompetitionGame = { id: string; status: GameStatus; a: number | null; b: number | null; winner: "a" | "b" | null; players_a: string[]; players_b: string[]; played_at: string | null; injury_reason?: string | null };
 export type CompetitionPairing = { id: string; kind: "women" | "men" | "mixed_a" | "mixed_b"; court?: number | null; eligibility_deadline?: string | null; players_a: string[]; players_b: string[]; games: CompetitionGame[] };
 export type CompetitionEncounter = { id: string; division: string; club_a: string; club_b: string; rotation: number; pairings: CompetitionPairing[]; tiebreak: { status: "pending" | "completed"; a: number | null; b: number | null; order_a: string[]; order_b: string[] } | null };
-export type CompetitionDocument = { schema_version: 1; meet_id: string; phase: CompetitionPhase; format: CompetitionFormat; weather: "normal" | "delay" | "rescheduled" | "finalized_partial"; encounters: CompetitionEncounter[] };
+export type CompetitionDocument = { schema_version: 1; meet_id: string; phase: CompetitionPhase; format: CompetitionFormat; schedule_mode?: CompetitionScheduleMode; weather: "normal" | "delay" | "rescheduled" | "finalized_partial"; encounters: CompetitionEncounter[] };
+
+export function scheduleRoundLabel(document: CompetitionDocument): string {
+  return document.schedule_mode === "staggered" ? "Wave" : "Rotation";
+}
+
+export function scheduledEncounters(document: CompetitionDocument): CompetitionEncounter[] {
+  return [...document.encounters].sort((a, b) => a.rotation - b.rotation ||
+    Math.min(...a.pairings.map(p => p.court ?? 101)) - Math.min(...b.pairings.map(p => p.court ?? 101)) ||
+    a.division.localeCompare(b.division, undefined, { numeric: true }) || a.id.localeCompare(b.id));
+}
 export type CompetitionBatch = { meet_id: string; phase: CompetitionPhase; revision: number; state: "draft" | "submitted" | "approved"; document: CompetitionDocument; roster_sources: { team_id: string; revision: number }[]; ratings_status: "not_requested" | "pending" | "failed" | "completed"; ratings_error?: string | null; updated_at?: string };
 export type StandingRow = { club_id: string; division?: string; points: number; pairings_won: number; games_won: number; point_differential: number; meets_played?: number; regular_points?: number; championship_points?: number; qualified?: boolean; position?: number; tied?: boolean };
 export type StandingsGroup = { division: string; standings: StandingRow[]; qualifying_playoff_required?: boolean; tied_clubs?: string[] };

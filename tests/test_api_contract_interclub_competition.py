@@ -156,6 +156,40 @@ def test_generation_preserves_source_roster_revisions_and_no_contacts(setup):
     assert 'player_id' not in str(params['p_document']) and 'private@example' not in str(params)
 
 
+def test_staggered_generation_saves_court_limited_waves_and_refresh_keeps_them(setup):
+    client,s=setup
+    other=deepcopy(s['teams'])
+    for team in other:
+        team.update(id=str(uuid4()),division='4.0')
+        for player in team['roster']: player['entry_id']=str(uuid4())
+    s['teams'].extend(other)
+    assert client.post(path(s)+'/generate',json=dict(expected_revision=1,format='gender')).status_code==422
+    assert not s['calls']
+    r=client.post(path(s)+'/generate',json=dict(expected_revision=1,format='gender',schedule_mode='staggered'))
+    assert r.status_code==200
+    doc=s['calls'][-1][1]['p_document']
+    assert doc['schedule_mode']=='staggered'
+    assert {e['rotation'] for e in doc['encounters']}=={1,2}
+    assert all(p['court'] in (1,2) for e in doc['encounters'] for p in e['pairings'])
+    s['saved']['document']=doc
+    assert client.post(path(s)+'/refresh-lineups',json=dict(expected_revision=1)).status_code==200
+    refreshed=s['calls'][-1][1]['p_document']
+    assert refreshed['schedule_mode']=='staggered'
+    assert [(e['id'],e['rotation'],[p['court'] for p in e['pairings']]) for e in refreshed['encounters']]==[
+        (e['id'],e['rotation'],[p['court'] for p in e['pairings']]) for e in doc['encounters']]
+
+
+@pytest.mark.parametrize('change',['mode','wave','court'])
+def test_score_saves_cannot_change_generated_schedule(setup,change):
+    client,s=setup
+    doc=deepcopy(s['saved']['document'])
+    if change=='mode': doc['schedule_mode']='staggered'
+    elif change=='wave': doc['encounters'][0]['rotation']=2
+    else: doc['encounters'][0]['pairings'][0]['court']=3
+    assert client.put(path(s),json=dict(expected_revision=1,document=doc)).status_code==422
+    assert not s['calls']
+
+
 def test_scores_prevent_silent_regeneration(setup):
     client,s=setup;complete(s)
     assert client.post(path(s)+'/generate',json=dict(expected_revision=1,format='mixed')).status_code==409

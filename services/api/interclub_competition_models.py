@@ -63,5 +63,6 @@ class CompetitionDocument(BaseModel):
     meet_id: str = Field(min_length=1, max_length=120)
     phase: Literal["regular", "final", "qualifier"] = "regular"
     format: Literal["gender", "mixed", "mlp"] = "gender"
+    schedule_mode: Literal["simultaneous", "staggered"] = "simultaneous"
     weather: Literal["normal", "delay", "rescheduled", "finalized_partial"] = "normal"
     encounters: list[CompetitionEncounter] = Field(default_factory=list, max_length=2000)
