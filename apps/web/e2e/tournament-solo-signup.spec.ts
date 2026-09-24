@@ -33,7 +33,7 @@ for (const entry of ["solo", "team"] as const) {
     const roster = page.getByTestId("four-player-team-roster");
     await expect(roster).toBeVisible();
     await page.getByRole("button", { name: "Review registration", exact: true }).click();
-    await expect(page.getByRole("alert")).toContainText("Enter a team name");
+    await expect(page.getByRole("alert").filter({ hasText: "Enter a team name" })).toBeVisible();
     await plan.selectOption("solo");
     await expect(roster).toHaveCount(0);
     if (entry === "team") {
