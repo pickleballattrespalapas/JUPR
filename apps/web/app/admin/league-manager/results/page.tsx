@@ -1,3 +1,4 @@
+import LeagueManagerLoadError from "../LeagueManagerLoadError";
 import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import { redirect } from "next/navigation";
 import {
@@ -37,7 +38,7 @@ export default async function AdminLeagueResultsPage({ searchParams }: Props) {
         leagueType={context.leagueType || null}
       />
 
-      {error ? <p role="alert" style={{ color: "#b91c1c" }}>League Manager is unavailable. {error}</p> : null}
+      {error ? <LeagueManagerLoadError error={error} /> : null}
       {status ? (
         <LeagueResultsPanel
           apiBase={getAdminLeagueManagerApiBaseUrl()}

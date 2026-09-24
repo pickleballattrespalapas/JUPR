@@ -1,3 +1,4 @@
+import LeagueManagerLoadError from "../LeagueManagerLoadError";
 import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import { getAdminLeagueManagerApiBaseUrl, getAdminLeagueManagerStatus } from "@/lib/adminLeagueManagerApi";
 import LeagueManagerNav from "../LeagueManagerNav";
@@ -17,7 +18,7 @@ export default async function AdminLeagueCreatePage() {
       <p style={{ color: "#334155", maxWidth: "720px" }}>
         Choose the league structure and create an inactive draft. You will then complete schedule, courts, match rules, awards, and playoffs in the league setup wizard before activation. League mode and match format cannot be casually converted later.
       </p>
-      {error ? <p role="alert" style={{ color: "#b91c1c" }}>League Manager is unavailable. {error}</p> : null}
+      {error ? <LeagueManagerLoadError error={error} /> : null}
       {status ? <LeagueCreatePanel apiBase={getAdminLeagueManagerApiBaseUrl()} clubId={clubId} status={status} /> : null}
     </section>
   );

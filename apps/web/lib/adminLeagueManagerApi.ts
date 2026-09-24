@@ -303,13 +303,37 @@ async function fetchJson<T>(path: string): Promise<ApiResult<T>> {
   const apiBase = baseUrl();
   if (!apiBase) return { data: null, error: "Missing JUPR API base URL environment variable." };
   const url = `${apiBase.replace(/\/$/, "")}${path}`;
-  try {
-    const response = await fetch(url, { cache: "no-store" });
-    if (!response.ok) return { data: null, error: await apiErrorMessage(response) };
-    return { data: (await response.json()) as T, error: null };
-  } catch (error) {
-    return { data: null, error: `Unable to reach API: ${error instanceof Error ? error.message : "Unknown error"}` };
+  // These are status GETs only. A brief connection reset must not strand the
+  // entire league workspace. Keep both attempts bounded, including body reads.
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8_000);
+    try {
+      const response = await fetch(url, { method: "GET", cache: "no-store", signal: controller.signal });
+      if ([502, 503, 504].includes(response.status)) {
+        console.warn("[league-manager/status-read]", { path, attempt, status: response.status });
+        await response.body?.cancel();
+        if (attempt === 1) continue;
+        break;
+      }
+      if (!response.ok) return { data: null, error: await apiErrorMessage(response) };
+      return { data: (await response.json()) as T, error: null };
+    } catch (error) {
+      const transient = error instanceof TypeError ||
+        (error instanceof Error && ["AbortError", "TimeoutError"].includes(error.name));
+      const code = (error as { cause?: { code?: unknown } } | null)?.cause?.code;
+      console.warn("[league-manager/status-read]", {
+        path, attempt, transient,
+        errorName: error instanceof Error ? error.name : "UnknownError",
+        code: typeof code === "string" && /^[A-Z_]+$/.test(code) ? code : undefined
+      });
+      if (transient && attempt === 1) continue;
+      if (!transient) return { data: null, error: "The league service returned an unexpected response. Try loading again." };
+    } finally {
+      clearTimeout(timeout);
+    }
   }
+  return { data: null, error: "The connection to the league service was interrupted. Try loading again." };
 }
 
 export async function getAdminLeagueManagerStatus(clubId: string): Promise<ApiResult<AdminLeagueManagerStatusResponse>> {
