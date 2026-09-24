@@ -29,7 +29,7 @@ const text = tree => JSON.stringify(tree.toJSON());
 const button = (tree, label) => tree.root.findAllByType('button').find(node => node.children.includes(label));
 
 async function adminSlotFlow() {
-  const registered = { id: 'entry', player_id: 'signed', name: 'Registered', division: '3.0', gender: 'female', status: 'active', placement: 'confirmed', priority: 'in_band', rating: 3.1 };
+  const registered = { id: 'entry', revision: 1, player_id: 'signed', name: 'Registered', division: '3.0', gender: 'female', status: 'active', placement: 'confirmed', priority: 'in_band', rating: 3.1 };
   let current = { ...board, entries: [registered] }, payload, requests = [], tree;
   global.fetch = async (url, options) => {
     requests.push(url);
@@ -52,7 +52,10 @@ async function adminSlotFlow() {
   assert.equal(payload.player_id, 'top'); assert.equal(payload.gender, 'non_binary'); assert.equal(payload.division, '3.0');
   assert.ok(text(tree).includes('Waiting for admin review'));
   const review = tree.root.findByProps({ 'aria-label': 'Review placement for Z Highest' });
-  assert.equal(review.findByType('select').props.value, '');
+  assert.equal(review.findByProps({ 'aria-label': 'Lineup place' }).props.value, '');
+  await act(async () => review.findByProps({ 'aria-label': 'Lineup place' }).props.onChange({ target: { value: 'female' } }));
+  await act(async () => review.props.onSubmit({ preventDefault() {} }));
+  assert.equal(payload.action, 'review_gender'); assert.equal(payload.lineup_gender, 'female'); assert.equal(payload.id, 'new'); assert.equal(payload.expected_revision, 1);
   await act(async () => tree.unmount());
   current = { ...board, signup: { ...board.signup, open: false } };
   await act(async () => { tree = create(React.createElement(Panel, props)); });

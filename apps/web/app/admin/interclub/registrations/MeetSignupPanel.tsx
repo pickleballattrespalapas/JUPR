@@ -97,7 +97,7 @@ function GenderReview({ entry, disabled, onReview }: { entry: MeetSignupEntry; d
   const [gender, setGender] = useState<SignupSlotGender | "">("");
   return <form aria-label={`Review placement for ${entry.name}`} onSubmit={event => { event.preventDefault(); if (gender && !disabled) onReview(gender); }}>
     <p>Choose a lineup place after reviewing with the player. Their gender selection stays unchanged.</p>
-    <label>Lineup place<select required disabled={disabled} value={gender} onChange={event => setGender(event.target.value as SignupSlotGender | "")}>
+    <label>Lineup place<select aria-label="Lineup place" required disabled={disabled} value={gender} onChange={event => setGender(event.target.value as SignupSlotGender | "")}>
       <option value="">Choose lineup place</option><option value="female">Women’s place</option><option value="male">Men’s place</option>
     </select></label><button type="submit" disabled={disabled || !gender}>Approve placement</button>
   </form>;
