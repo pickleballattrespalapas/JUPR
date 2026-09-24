@@ -836,8 +836,9 @@ jobs:
           set -euo pipefail
           flyctl ssh console --quiet --app "$FLY_APP_NAME" \
             --command 'python -m scripts.activate_operations_badges --apply' \
-            > "$RUNNER_TEMP/production-badge-activation.json"
-          python -c 'import json,sys; result=json.load(open(sys.argv[1])); assert result.get("ok") is True; print(json.dumps(result,sort_keys=True))' \
+            > "$RUNNER_TEMP/production-badge-activation.raw"
+          python scripts/parse_badge_activation_output.py \
+            "$RUNNER_TEMP/production-badge-activation.raw" \
             "$RUNNER_TEMP/production-badge-activation.json"
 
       - name: Preserve production badge activation evidence
@@ -845,5 +846,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: production-badge-activation-${{ github.run_id }}
-          path: ${{ runner.temp }}/production-badge-activation.json
+          path: |
+            ${{ runner.temp }}/production-badge-activation.json
+            ${{ runner.temp }}/production-badge-activation.raw
           if-no-files-found: ignore
