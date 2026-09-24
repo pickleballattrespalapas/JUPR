@@ -20,6 +20,7 @@ import {
   formatRegistrationRating,
   publicEventCapacityLabel,
   publicEventEligibilityReason,
+  publicEventGenderNotice,
   publicEventFamilyKey,
   publicEventFormatLabel,
   publicScoringLabel,
@@ -899,7 +900,7 @@ export default function TournamentRegistrationForm({
           <PartnerInvitationRegistrationNotice invitation={partnerInvitation.invitation} error={partnerInvitation.error} />
           <h2 style={{ marginTop: 0 }}>1. Name and contact</h2>
           <p style={{ color: "#475569" }}>
-            We use your age and gender to show eligible divisions. Only
+            We use these details to check division requirements. Only
             organizers can see your contact details.
           </p>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
@@ -990,12 +991,14 @@ export default function TournamentRegistrationForm({
                 {dayEvents.map((eventOption) => {
                   const selected = selectedIds.includes(eventOption.id);
                   const partner = partnerDetails[eventOption.id] || emptyPartnerState(eventOption);
+                  const genderNotice = selected ? publicEventGenderNotice(eventOption, eligibilityProfile, partner.mode === "HAS_PARTNER" ? partner.gender : null) : null;
                   return (
                     <article key={eventOption.id} style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: selected ? "#f8fafc" : "white" }}>
                       <label style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start" }}>
                         <input type="checkbox" aria-label={`${eventOption.event_family_label} ${eventOption.division_name}`} checked={selected} disabled={eventOption.id === invitedEventId} onChange={(event) => toggleEvent(eventOption.id, event.target.checked)} />
                         <span><strong>{publicTournamentEventLabel(eventOption.event_family_label, eventOption.division_name)}</strong><br /><span style={{ color: "#64748b" }}>{scheduledDaysLabel(eventOption, daysById) || "Schedule TBD"}<br />{eventMeta(eventOption)}</span></span>
                       </label>
+                      {genderNotice ? <p role="status" style={{ color: "#92400e" }}>{genderNotice}</p> : null}
                       {selected && eventOption.id === invitedEventId ? <p>Partner: <strong>{partnerInvitation.invitation?.target_name}</strong>. PCS will add your partner automatically after registration.</p> : null}
                       {selected && eventOption.id !== invitedEventId &&
                       eventOption.partner_required &&
@@ -1034,7 +1037,7 @@ export default function TournamentRegistrationForm({
             </div>
           ))}
           {!eligibleEvents.length ? (
-            <p>{selectableEvents.length ? "No available divisions match your age, gender, and skill level." : "No events are open for registration."}</p>
+            <p>{selectableEvents.length ? "No available divisions match your age and skill level." : "No events are open for registration."}</p>
           ) : null}
           {selectedTeamEvents.map((teamEvent) => (
             <FourPlayerTeamRegistrationCard

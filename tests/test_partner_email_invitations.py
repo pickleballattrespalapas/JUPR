@@ -109,7 +109,7 @@ def test_shared_email_does_not_select_another_person(context):
         service._requester_registration(db, row)
 
 
-def test_pairing_resolves_verified_email_and_enforces_registration_eligibility(context, monkeypatch):
+def test_pairing_resolves_verified_email_and_allows_gender_review(context, monkeypatch):
     db, row, ctx = context
     stamp = "2026-09-09T12:00:00+00:00"
     requester = dict(id="requester", email=row["requester_email"], display_name="Casey Registered",
@@ -126,9 +126,12 @@ def test_pairing_resolves_verified_email_and_enforces_registration_eligibility(c
     assert selection == "requester-selection"
     assert set(versions.values()) == {stamp}
     assert service._requester_registration(db, row)["display_name"] == "Casey Registered"
-    requester["gender"] = "Women"
-    with pytest.raises(ValueError, match="[Mm]ixed"):
-        service._pairing_candidate(db, row, ctx)
+    for gender in ("Women", "Non-binary"):
+        requester["gender"] = gender
+        selection, versions = service._pairing_candidate(db, row, ctx)
+        assert selection == "requester-selection"
+        assert set(versions.values()) == {stamp}
+        assert requester["gender"] == gender
 
 
 def test_accept_uses_atomic_rpc_and_returns_updated_state(context, monkeypatch):

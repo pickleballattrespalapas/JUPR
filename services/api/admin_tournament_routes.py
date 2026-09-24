@@ -83,6 +83,7 @@ from jupr_app.services.admin_tournament_service import (
     delete_admin_tournament_selection,
     get_admin_tournament_detail,
     replace_admin_tournament_selection_partner,
+    review_admin_tournament_gender_eligibility,
     is_admin_tournament_admin_enabled,
     list_admin_tournaments,
     update_admin_tournament_registration,
@@ -367,6 +368,13 @@ class AdminTournamentGameScoreRequest(BaseModel):
     expected_draw_updated_at: str | None = None
     confirmation_text: str = ""
     source: str = "next_tournament_admin_score_game"
+
+
+class AdminTournamentGenderReviewRequest(BaseModel):
+    expected_review_version: str = Field(min_length=64, max_length=64)
+    decision: str = Field(pattern=r"^(APPROVED|DECLINED)$")
+    confirmation_text: str = ""
+    source: str = "next_tournament_gender_review"
 
 
 class AdminTournamentSelectionUpdateRequest(BaseModel):
@@ -2045,6 +2053,32 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
                 preflight=preflight,
                 mutate=mutate,
             )
+        except Exception as exc:
+            _handle(exc)
+
+    @app.post("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/selections/{selection_id}/gender-review")
+    def post_admin_tournament_gender_review(club_id: str, tournament_id: str, selection_id: str,
+            payload: AdminTournamentGenderReviewRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
+        if not is_admin_tournament_admin_enabled():
+            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_tournament_role_or_403(supabase=supabase, club_id=club_id, authorization=authorization, source=payload.source)
+        try:
+            _require_confirmation(payload.confirmation_text, "REVIEW GENDER ELIGIBILITY")
+            def review(*, dry_run=False):
+                return review_admin_tournament_gender_eligibility(supabase, club_id=club_id,
+                    tournament_id=tournament_id, selection_id=selection_id, decision=payload.decision,
+                    expected_review_version=payload.expected_review_version, actor_email=actor_email,
+                    actor_role=actor_role, dry_run=dry_run)
+            def current_state():
+                detail = get_admin_tournament_detail(supabase, club_id=club_id, tournament_id=tournament_id)
+                row = next((row for row in detail["selections"] if row["id"] == selection_id), {})
+                return (row.get("gender_review") or {}).get("review_version", "")
+            return _guarded_admin_mutation(supabase, club_id=club_id, surface="registration",
+                action="tournament_gender_eligibility_review", entity_type="tournament_registration_selection",
+                entity_id=selection_id, lock_scope=tournament_id, expected_state=payload.expected_review_version,
+                current_state=current_state, payload={"decision": payload.decision}, actor_email=actor_email,
+                actor_role=actor_role, source=payload.source, preflight=lambda: review(dry_run=True), mutate=review)
         except Exception as exc:
             _handle(exc)
 

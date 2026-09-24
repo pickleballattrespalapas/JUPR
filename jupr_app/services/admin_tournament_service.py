@@ -24,6 +24,7 @@ from jupr_app.domain.tournament_registration_repo import (
     update_admin_registration_selection,
 )
 from jupr_app.domain.tournament_admin_operations import stable_tournament_admin_fingerprint
+from jupr_app.domain.tournament_gender_review import REVIEW_TABLE, gender_review_snapshots, load_gender_reviews
 from jupr_app.domain.tournament_partner_service import admin_replace_partner_link
 from jupr_app.services.public_tournament_registration_service import (
     build_tournament_registration_player_profile,
@@ -782,6 +783,15 @@ def get_admin_tournament_detail(supabase: Any, *, club_id: str, tournament_id: s
         )
         for row in selections_raw
     ]
+    gender_reviews = load_gender_reviews(
+        supabase, tournament_id=clean_id,
+        snapshots=gender_review_snapshots(tournament_id=clean_id, events=event_options,
+            registrations=registrations_raw, selections=selections),
+    )
+    for selection in selections:
+        review = gender_reviews.get(selection["id"])
+        # Snapshots contain private identity details and are only used server-side.
+        selection["gender_review"] = {key: value for key, value in review.items() if key != "snapshot"} if review else None
     state_fingerprint = _admin_detail_state_fingerprint(
         tournament=tournament,
         settings=settings,
@@ -801,6 +811,49 @@ def get_admin_tournament_detail(supabase: Any, *, club_id: str, tournament_id: s
         "state_fingerprint": state_fingerprint,
         "warnings": [],
     }
+
+
+def review_admin_tournament_gender_eligibility(
+    supabase: Any, *, club_id: str, tournament_id: str, selection_id: str,
+    decision: str, expected_review_version: str, actor_email: str, actor_role: str,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    if str(actor_role).strip().lower() not in CANCELLATION_ADMIN_ROLES:
+        raise PermissionError("Only an administrator can approve gender eligibility exceptions.")
+    if decision not in {"APPROVED", "DECLINED"}:
+        raise ValueError("Choose approve or decline.")
+    detail = get_admin_tournament_detail(supabase, club_id=club_id, tournament_id=tournament_id)
+    selection = next((row for row in detail["selections"] if row["id"] == selection_id), None)
+    review = (selection or {}).get("gender_review")
+    if not review or review["review_version"] != expected_review_version:
+        raise StaleTournamentRegistrationSelectionError("This entry changed. Reload it before reviewing gender eligibility.")
+    if registration_is_imported_to_draw(supabase, tournament_id=tournament_id, selection_id=selection_id):
+        raise ValueError("This entry is already in a draw. Remove it from the draw before changing its eligibility decision.")
+    if dry_run:
+        return {"ok": True, "dry_run": True}
+    row = {
+        "fingerprint": review["fingerprint"], "tournament_id": tournament_id,
+        "event_option_id": selection["event_option_id"], "decision": decision,
+        "reviewed_by": actor_email, "reviewed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    # Only the authenticated API service can write this table. The fingerprint
+    # binds the decision to this exact division and current participant pair.
+    saved = supabase.table(REVIEW_TABLE).upsert(row, on_conflict="fingerprint").execute().data
+    if not saved:
+        raise RuntimeError("The eligibility decision could not be confirmed. Reload and try again.")
+    return {"ok": True, "gender_review": {**review, "status": decision, "reviewed_by": actor_email}}
+
+
+def require_tournament_gender_approvals_for_import(
+    supabase: Any, *, club_id: str, tournament_id: str, selection_ids: set[str],
+) -> None:
+    if not selection_ids:
+        return
+    detail = get_admin_tournament_detail(supabase, club_id=club_id, tournament_id=tournament_id)
+    blocked = [row for row in detail["selections"] if row["id"] in selection_ids
+               and row.get("gender_review") and row["gender_review"]["status"] != "APPROVED"]
+    if blocked:
+        raise ValueError("Gender eligibility needs administrator approval before these entries can enter the draw. Open Registrants to review the flagged entries.")
 
 
 def build_admin_tournament_registration_import_handoff(
