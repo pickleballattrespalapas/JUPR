@@ -1,3 +1,4 @@
+import LeagueManagerLoadError from "./LeagueManagerLoadError";
 import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import Link from "next/link";
 import { getAdminLeagueManagerApiBaseUrl, getAdminLeagueManagerStatus } from "@/lib/adminLeagueManagerApi";
@@ -17,7 +18,7 @@ export default async function AdminLeagueManagerPage() {
         Create a new league or open an existing league.
       </p>
 
-      {error ? <p role="alert" style={{ color: "#b91c1c" }}>League Manager is unavailable. {error}</p> : null}
+      {error ? <LeagueManagerLoadError error={error} /> : null}
       {status ? <LeagueManagerPanel apiBase={getAdminLeagueManagerApiBaseUrl()} clubId={clubId} status={status} /> : null}
 
       <p style={{ marginTop: "1rem" }}>
