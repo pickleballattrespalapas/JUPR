@@ -14,7 +14,7 @@ export default async function AdminSelectedLeaguePage({ searchParams }: Props) {
   if (!context.leagueId) redirect("/admin/league-manager");
   const leagueName = context.leagueName || context.leagueId;
 
-  const { clubId } = requireAdminWorkspace();
+  const { clubId, clubSlug } = requireAdminWorkspace();
   const { data: status, error } = await getAdminLeagueManagerStatus(clubId);
 
   return (
@@ -28,6 +28,7 @@ export default async function AdminSelectedLeaguePage({ searchParams }: Props) {
         <LeagueHomePanel
           apiBase={getAdminLeagueManagerApiBaseUrl()}
           clubId={clubId}
+          clubSlug={clubSlug}
           status={status}
           initialLeagueId={context.leagueId}
           initialLeague={leagueName}

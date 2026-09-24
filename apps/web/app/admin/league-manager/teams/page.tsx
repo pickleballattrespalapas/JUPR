@@ -17,7 +17,7 @@ export default async function AdminTeamLeaguesPage({ searchParams }: Props) {
     redirect(leagueRouteHref("/admin/league-manager/league", context));
   }
 
-  const { clubId } = requireAdminWorkspace();
+  const { clubId, clubSlug } = requireAdminWorkspace();
   const { data: status, error } = await getAdminLeagueManagerStatus(clubId);
   return (
     <section>
@@ -27,7 +27,7 @@ export default async function AdminTeamLeaguesPage({ searchParams }: Props) {
       {error ? <LeagueManagerLoadError error={error} /> : null}
       {status ? (
         <SelectedLeaguePanelScope leagueName={leagueName}>
-          <TeamLeaguesPanel apiBase={getAdminLeagueManagerApiBaseUrl()} clubId={clubId} status={status} />
+          <TeamLeaguesPanel apiBase={getAdminLeagueManagerApiBaseUrl()} clubId={clubId} clubSlug={clubSlug} status={status} />
         </SelectedLeaguePanelScope>
       ) : null}
     </section>

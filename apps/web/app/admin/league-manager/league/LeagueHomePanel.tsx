@@ -14,10 +14,12 @@ import { isTeamLeagueType, leagueRouteHref, normalizeLeagueType } from "@/lib/le
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { useAdminSession } from "@/lib/useAdminSession";
 import LeagueManagerNav from "../LeagueManagerNav";
+import TeamLeagueRegistrationLink from "../TeamLeagueRegistrationLink";
 
 type Props = {
   apiBase: string | null;
   clubId: string;
+  clubSlug: string;
   status: AdminLeagueManagerStatusResponse;
   initialLeagueId?: string | null;
   initialLeague: string;
@@ -124,7 +126,7 @@ function moduleDescriptionsFor(status: string) {
   };
 }
 
-export default function LeagueHomePanel({ apiBase, clubId, status, initialLeagueId, initialLeague, initialLeagueType }: Props) {
+export default function LeagueHomePanel({ apiBase, clubId, clubSlug, status, initialLeagueId, initialLeague, initialLeagueType }: Props) {
   const router = useRouter();
   const { accessToken, loading: sessionLoading } = useAdminSession();
   const [detail, setDetail] = useState<AdminLeagueManagerDetailResponse | null>(null);
@@ -310,6 +312,8 @@ export default function LeagueHomePanel({ apiBase, clubId, status, initialLeague
               <div><strong>K-factor</strong><br />{detail.league.k_factor ?? "—"}</div>
             </div>
           </article>
+
+          {isTeamLeagueType(leagueType) ? <TeamLeagueRegistrationLink clubSlug={clubSlug} leagueName={leagueName} /> : null}
 
           <section aria-label={`${leagueName} modules`}>
             <h2>League tools</h2>

@@ -98,6 +98,7 @@ async function fetchJson<T>(path: string): Promise<ApiResult<T>> {
   if (!base) return { data: null, error: "Team leagues are unavailable." };
   try {
     const response = await fetch(`${base.replace(/\/$/, "")}${path}`, {
+      signal: AbortSignal.timeout(8000),
       next: { revalidate: 30 }
     });
     if (!response.ok) {
