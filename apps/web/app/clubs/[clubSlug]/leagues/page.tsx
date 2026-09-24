@@ -1,6 +1,8 @@
 import Link from "@/components/PublicClubLink";
 import { publicLeagueHomeHref } from "@/components/PublicLeagueNav";
 import { getClubLeagueResults } from "@/lib/api";
+import { getPublicTeamLeagues } from "@/lib/teamLeagueApi";
+import TeamLeagueCards from "@/components/TeamLeagueCards";
 
 type Props = {
   params: { clubSlug: string };
@@ -29,11 +31,17 @@ function viewHref(clubSlug: string, view: LeagueView): string {
 }
 
 export default async function PublicLeaguesPage({ params, searchParams }: Props) {
-  const { data, error } = await getClubLeagueResults(params.clubSlug);
   const view = selectedView(searchParams);
+  const [{ data, error }, teamResult] = await Promise.all([
+    getClubLeagueResults(params.clubSlug),
+    getPublicTeamLeagues(params.clubSlug, view)
+  ]);
   const activeLeagues = data?.leagues || [];
   const pastLeagues = data?.past_leagues || [];
-  const leagues = view === "past" ? pastLeagues : activeLeagues;
+  const teamLeagues = teamResult.data?.leagues || [];
+  const teamNames = new Set(teamLeagues.map((league) => league.league_name));
+  const leagues = (view === "past" ? pastLeagues : activeLeagues).filter((league) => !teamNames.has(league.name));
+  const teamListHref = `/clubs/${encodeURIComponent(params.clubSlug)}/team-leagues${view === "past" ? "?view=past" : ""}`;
 
   return (
     <section>
@@ -55,7 +63,7 @@ export default async function PublicLeaguesPage({ params, searchParams }: Props)
       <p style={{ color: "#334155", maxWidth: "820px" }}>
         {view === "past"
           ? "Choose a past league to see its final standings and results."
-          : "Choose a league to see standings, weekly results, and player stats."}
+          : "Register for a team league, or choose a league to see standings, weekly results, and player stats."}
       </p>
 
       <nav
@@ -86,6 +94,16 @@ export default async function PublicLeaguesPage({ params, searchParams }: Props)
         })}
       </nav>
 
+      <section aria-label="Team leagues" style={{ marginBottom: "1.5rem" }}>
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", flexWrap: "wrap", gap: "0.5rem" }}>
+          <h2>Team leagues</h2>
+          <Link href={teamListHref}>{view === "past" ? "All past team leagues" : "All team leagues and registration"}</Link>
+        </div>
+        {teamResult.error ? <p role="status">Team leagues could not be loaded. <Link href={teamListHref}>Try opening team leagues</Link>.</p>
+          : teamLeagues.length ? <TeamLeagueCards clubSlug={params.clubSlug} leagues={teamLeagues} past={view === "past"} />
+          : <p>{view === "past" ? "No past team leagues yet." : "No active team leagues right now."}</p>}
+      </section>
+
       {error ? (
         <article
           role="alert"
@@ -102,6 +120,8 @@ export default async function PublicLeaguesPage({ params, searchParams }: Props)
       ) : null}
 
       {leagues.length ? (
+        <section aria-label="League standings and results">
+        <h2>League standings and results</h2>
         <div
           style={{
             display: "grid",
@@ -136,7 +156,8 @@ export default async function PublicLeaguesPage({ params, searchParams }: Props)
             </Link>
           ))}
         </div>
-      ) : !error ? (
+        </section>
+      ) : !error && !teamLeagues.length && !teamResult.error ? (
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>
             {view === "past" ? "No past leagues" : "No active leagues"}

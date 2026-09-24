@@ -97,6 +97,7 @@ def test_admin_surfaces_advertise_normalized_rosters_but_public_form_stays_pair_
         "apps/web/app/admin/league-manager/settings/TeamLeagueSetupPanel.tsx"
     )
     public_list = _read("apps/web/app/clubs/[clubSlug]/team-leagues/page.tsx")
+    public_cards = _read("apps/web/components/TeamLeagueCards.tsx")
     public_detail = _read(
         "apps/web/app/clubs/[clubSlug]/team-leagues/[leagueName]/page.tsx"
     )
@@ -127,7 +128,8 @@ def test_admin_surfaces_advertise_normalized_rosters_but_public_form_stays_pair_
         assert phrase in admin_surfaces
     assert "Need a substitute for one match?" in registration
     assert "team_size} players per team" in public_detail
-    assert "league.team_size" in public_list
+    assert "<TeamLeagueCards" in public_list
+    assert "league.team_size" in public_cards
     assert "team_size: 2 | 3 | 4" in api_types
     assert "max_alternates" in surfaces
     assert "substitute_pool_enabled" in surfaces
