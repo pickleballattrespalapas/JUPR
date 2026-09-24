@@ -193,10 +193,9 @@ export default function FourPlayerTeamSetupRecovery({
 
   return (
     <section style={{ marginTop: "1rem" }} data-testid="team-setup-recovery">
-      <h2>Complete your four-player team</h2>
+      <h2>Your four-player team</h2>
       <p style={{ color: "#475569" }}>
-        Finish setting up your team below. Refreshing this page won’t create a
-        duplicate.
+        Check your team below. If you registered on your own, the organizer can place you on a team.
       </p>
       {message ? (
         <p
@@ -254,38 +253,45 @@ export default function FourPlayerTeamSetupRecovery({
           };
           return (
             <article key={event.id} style={cardStyle}>
-              <FourPlayerTeamRegistrationCard
-                event={registrationEvent}
-                captainName={recovery.captain.display_name}
-                captainEmail={recovery.captain.email}
-                captainGender={recovery.captain.gender || ""}
-                value={draft}
-                onChange={(next) =>
-                  setDrafts((current) => ({
-                    ...current,
-                    [event.id]: next
-                  }))
-                }
-              />
-              <button
-                type="button"
-                disabled={Boolean(pendingEventId)}
-                onClick={() => void submitTeam(event.id)}
-                style={{
-                  marginTop: "0.75rem",
-                  padding: "0.7rem 1rem",
-                  borderRadius: "10px",
-                  border: "1px solid #0f172a",
-                  background: "#0f172a",
-                  color: "white",
-                  fontWeight: 800,
-                  cursor: "pointer"
-                }}
-              >
-                {pendingEventId === event.id
-                  ? "Saving…"
-                  : "Save team"}
-              </button>
+              <h3 style={{ marginTop: 0 }}>{publicTournamentEventLabel(event.event_family_label, event.division_name)}</h3>
+              <p data-testid="team-placement-pending">
+                Your individual registration is saved. You haven’t been assigned to a team yet. The organizer can find you in the players needing a team list.
+              </p>
+              <details open={needsAttention || undefined}>
+                <summary style={{ cursor: "pointer", fontWeight: 700 }}>I have a team to add</summary>
+                <FourPlayerTeamRegistrationCard
+                  event={registrationEvent}
+                  captainName={recovery.captain.display_name}
+                  captainEmail={recovery.captain.email}
+                  captainGender={recovery.captain.gender || ""}
+                  value={draft}
+                  onChange={(next) =>
+                    setDrafts((current) => ({
+                      ...current,
+                      [event.id]: next
+                    }))
+                  }
+                />
+                <button
+                  type="button"
+                  disabled={Boolean(pendingEventId)}
+                  onClick={() => void submitTeam(event.id)}
+                  style={{
+                    marginTop: "0.75rem",
+                    padding: "0.7rem 1rem",
+                    borderRadius: "10px",
+                    border: "1px solid #0f172a",
+                    background: "#0f172a",
+                    color: "white",
+                    fontWeight: 800,
+                    cursor: "pointer"
+                  }}
+                >
+                  {pendingEventId === event.id
+                    ? "Saving…"
+                    : "Save team"}
+                </button>
+              </details>
             </article>
           );
         })}
