@@ -459,7 +459,7 @@ def build_public_four_player_team_setup_recovery(
     club_id: str,
     confirmation_token: str,
 ) -> dict[str, Any]:
-    """Return captain-authorized, durable team-setup state.
+    """Return registration-authorized, durable team-setup state.
 
     The registration selection is the durable setup intent.  Completed team
     rows and the existing operation ledger distinguish a committed request
@@ -518,6 +518,25 @@ def build_public_four_player_team_setup_recovery(
         and str(event.get("competition_format") or "").upper()
         == "FOUR_PLAYER_TEAM"
     ]
+    tournament_members = _rows(
+        supabase,
+        "tournament_four_player_team_members",
+        filters=(("tournament_id", tournament_id),),
+    )
+    registration_email = str(registration.get("email") or "").strip().lower()
+    member_team_ids = {
+        str(member.get("team_id") or "")
+        for member in tournament_members
+        if str(member.get("status") or "").upper() in {"INVITED", "ACCEPTED"}
+        and (
+            str(member.get("registration_id") or "") == registration_id
+            or (
+                not member.get("registration_id")
+                and str(member.get("invited_email") or "").strip().lower()
+                == registration_email
+            )
+        )
+    }
     active_teams = [
         team
         for team in _rows(
@@ -525,28 +544,27 @@ def build_public_four_player_team_setup_recovery(
             "tournament_four_player_teams",
             filters=(
                 ("tournament_id", tournament_id),
-                ("captain_registration_id", registration_id),
             ),
         )
         if str(team.get("status") or "").upper()
-        not in {"WITHDRAWN", "CANCELLED"}
+        not in {"WITHDRAWN", "CANCELLED", "CANCELED"}
+        and (
+            str(team.get("captain_registration_id") or "") == registration_id
+            or str(team.get("id") or "") in member_team_ids
+        )
     ]
     team_by_event: dict[str, dict[str, Any]] = {}
     for team in active_teams:
         event_option_id = str(team.get("event_option_id") or "")
         if event_option_id in team_by_event:
             raise RuntimeError(
-                "Multiple active team setups exist for the same captain and event."
+                "Multiple active team setups exist for the same registration and event."
             )
         team_by_event[event_option_id] = team
     active_team_ids = {str(team.get("id") or "") for team in active_teams}
     members = [
         member
-        for member in _rows(
-            supabase,
-            "tournament_four_player_team_members",
-            filters=(("tournament_id", tournament_id),),
-        )
+        for member in tournament_members
         if str(member.get("team_id") or "") in active_team_ids
         and str(member.get("status") or "").upper() != "REMOVED"
     ]
