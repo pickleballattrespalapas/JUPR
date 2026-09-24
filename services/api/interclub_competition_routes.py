@@ -81,6 +81,7 @@ def _schedule_dates(season, starts_at, duration_minutes):
 
 class Generate(Revision):
     format: Literal["gender", "mixed", "mlp"] = "gender"
+    schedule_mode: Literal["simultaneous", "staggered"] = "simultaneous"
     division: str | None = Field(default=None, max_length=20)
     club_a: str | None = Field(default=None, max_length=100)
     club_b: str | None = Field(default=None, max_length=100)
@@ -247,9 +248,9 @@ def _prepared_for_lineup_changes(document):
 
 def _fixed_schedule(previous, current, current_deadline):
     """Scores are editable; an opponent or backdated eligibility snapshot is not."""
-    before = {(row["id"], row["division"], row["club_a"], row["club_b"]) for row in previous["encounters"]}
-    after = {(row["id"], row["division"], row["club_a"], row["club_b"]) for row in current["encounters"]}
-    if before != after or previous["format"] != current["format"]:
+    before = {(row["id"], row["division"], row["club_a"], row["club_b"], row["rotation"]) for row in previous["encounters"]}
+    after = {(row["id"], row["division"], row["club_a"], row["club_b"], row["rotation"]) for row in current["encounters"]}
+    if before != after or previous["format"] != current["format"] or previous.get("schedule_mode", "simultaneous") != current.get("schedule_mode", "simultaneous"):
         raise HTTPException(422, "Keep the generated schedule. Create a new draft schedule before entering results to change opponents.")
     old_pairs, new_pairs = _pairings(previous), _pairings(current)
     if old_pairs.keys() != new_pairs.keys():
@@ -276,6 +277,8 @@ def _fixed_schedule(previous, current, current_deadline):
                     chosen[pairing_key] = lineup
     for key, old in old_pairs.items():
         new = new_pairs[key]
+        if old.get("court") != new.get("court"):
+            raise HTTPException(422, "Keep the generated court assignments when entering scores.")
         if not prepared and (old["players_a"] != new["players_a"] or old["players_b"] != new["players_b"]):
             raise HTTPException(422, "Keep the prepared lineup. Record an injury replacement on its actual game, or refresh replay lineups.")
         if old["id"] != new["id"] or [g["id"] for g in old["games"]] != [g["id"] for g in new["games"]]:
@@ -475,7 +478,7 @@ def install_interclub_competition_routes(app, *, get_supabase_client):
             if phase == "regular":
                 if body.format == "mlp":
                     raise ValueError("Regular meets use gender or mixed doubles.")
-                document = engine.generate_round_robin(str(meet_id), teams, format=body.format, played_at=None, courts=meet["courts"])
+                document = engine.generate_round_robin(str(meet_id), teams, format=body.format, played_at=None, courts=meet["courts"], schedule_mode=body.schedule_mode)
             else:
                 if not all([body.division, body.club_a, body.club_b]) or body.club_a == body.club_b:
                     raise ValueError("Choose a skill level and two different qualifying clubs.")
@@ -565,6 +568,11 @@ def install_interclub_competition_routes(app, *, get_supabase_client):
                     if reversed_sides and winner in {"a", "b"}:
                         winner = "b" if winner == "a" else "a"
                     game.update(status=fresh_game["status"], winner=winner, a=None, b=None, players_a=[], players_b=[], played_at=None, injury_reason=None)
+        if before_play and not is_replay:
+            try:
+                engine.assign_regular_courts(document["encounters"], meet["courts"], document.get("schedule_mode", "simultaneous"))
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from exc
         return {"batch": write(db, user, club_id, season_id, meet_id, phase, "refresh_lineups", body.expected_revision,
                                document=_validate(document), sources=_sources(teams))}
 

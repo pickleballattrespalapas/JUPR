@@ -13,6 +13,7 @@ const registration = load('lib/interclubRegistration.ts');
 const types = load('lib/interclubCompetition.ts', { './interclubRegistration': registration });
 const css = new Proxy({}, { get: (_, key) => key === '__esModule' ? false : key });
 const common = { '@/lib/interclubCompetition': types, './competition.module.css': css };
+common['./CourtSchedule'] = load(base + 'CourtSchedule.tsx', common);
 const ScoreEditor = load(base + 'ScoreEditor.tsx', common).default;
 const PrintPacket = load(base + 'PrintPacket.tsx', common).PrintPacketContent;
 const Standings = load(base + 'Standings.tsx', common).default;
@@ -75,6 +76,43 @@ async function missingLineups() {
   assert.equal(url.searchParams.get('step'), 'lineups', 'Missing-roster message takes the organizer directly to that meet’s lineup workspace');
   assert.equal(tree.root.findAllByType('a').some(node => node.props['aria-label'] === 'Approve results'), false, 'Approval is unavailable until scores are submitted');
   await act(async () => tree.unmount());
+}
+
+async function staggeredSchedule() {
+  let saved = { ...copy(detail), batch: null }, requests = [], tree;
+  global.fetch = async (url, options) => {
+    if (options.method) {
+      requests.push({ url, body: JSON.parse(options.body) });
+      saved = { ...saved, batch: { ...copy(batch), document: { ...copy(document), schedule_mode: requests.at(-1).body.schedule_mode } } };
+      return reply({ batch: saved.batch });
+    }
+    return reply(saved);
+  };
+  await act(async () => { tree = create(React.createElement(workspace.MeetOperations, {
+    root: 'https://api.test/new-meet', clubId: 'alpha', accessToken: 'token', phase: 'regular', context, clubName, onLock() {}, onSeasonChange() {},
+  })); });
+  const choice = tree.root.findByProps({ 'aria-label': 'Court schedule' });
+  assert.equal(choice.props.value, 'staggered');
+  assert.ok(nodeText(choice).includes('fit 2 courts'));
+  await act(async () => choice.props.onChange({ target: { value: 'simultaneous' } }));
+  assert.ok(text(tree).includes('Each opponent rotation runs all divisions together'));
+  await act(async () => choice.props.onChange({ target: { value: 'staggered' } }));
+  await act(async () => tree.root.findByType('form').props.onSubmit({ preventDefault() {} }));
+  assert.deepEqual(requests[0].body, { expected_revision: 0, format: 'gender', schedule_mode: 'staggered' });
+  assert.ok(text(tree).includes('Staggered starts') && text(tree).includes('Wave'));
+  await act(async () => tree.unmount());
+
+  const doc = { ...copy(document), schedule_mode: 'staggered' };
+  const later = copy(doc.encounters[0]);
+  later.id = 'later'; later.rotation = 2; later.division = '4.0';
+  later.pairings.forEach(p => { p.id += '-later'; });
+  doc.encounters.unshift(later); // Intentionally store the later wave first.
+  const markup = renderToStaticMarkup(React.createElement(PrintPacket, { document: doc, meet, seasonName: 'Southern BCS', timezone: 'America/Mazatlan', revision: 4, players: types.competitionPlayers(detail), clubName }));
+  assert.ok(markup.includes('Staggered starts') && markup.includes('>Wave</th>'));
+  assert.ok(markup.indexOf('Wave 1') < markup.indexOf('Wave 2'), 'Printed score sheets follow playing order');
+  const schedule = types.scheduledEncounters(doc);
+  assert.deepEqual(schedule.map(e => e.rotation), [1, 2]);
+  assert.equal(doc.encounters[0].rotation, 2, 'Sorting the displayed schedule does not mutate saved data');
 }
 
 async function seasonRegistrationGate() {
@@ -254,4 +292,4 @@ function writePrintReview() {
   fs.writeFileSync(output, '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Southern BCS paper packet review</title><style>' + stylesheet + screenPreview + '</style></head><body class="printBody"><div class="printPortal">' + render(document) + render(final) + '</div></body></html>');
   console.log('Print review fixture: ' + output);
 }
-(async () => { await scoreEntry(); await playUpReplacementEligibility(); printSafety(); await revisionsAndStaleClub(); await approval(); await qualifyingRoundRobin(); await missingLineups(); await seasonRegistrationGate(); qualifyingDisplay(); writePrintReview(); console.log('PASS interclub competition: play-up replacement eligibility, registration phase locks and background draft preservation, paper packet safety, scoped lineups, non-play scoring, exact revisions, approval and ratings status, missing-lineup guidance, qualification and joint Cup'); })().catch(error => { console.error(error); process.exit(1); });
+(async () => { await scoreEntry(); await playUpReplacementEligibility(); printSafety(); await staggeredSchedule(); await revisionsAndStaleClub(); await approval(); await qualifyingRoundRobin(); await missingLineups(); await seasonRegistrationGate(); qualifyingDisplay(); writePrintReview(); console.log('PASS interclub competition: staggered generation and printed wave order, play-up replacement eligibility, registration phase locks and background draft preservation, paper packet safety, scoped lineups, non-play scoring, exact revisions, approval and ratings status, missing-lineup guidance, qualification and joint Cup'); })().catch(error => { console.error(error); process.exit(1); });

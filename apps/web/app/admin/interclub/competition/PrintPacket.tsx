@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { CompetitionDocument, CompetitionPlayer, pairingLabels, phaseLabels, playerNames, singlesCourt } from "@/lib/interclubCompetition";
+import { CompetitionDocument, CompetitionPlayer, pairingLabels, phaseLabels, playerNames, scheduledEncounters, scheduleRoundLabel, singlesCourt } from "@/lib/interclubCompetition";
+import { CourtAssignments } from "./CourtSchedule";
 import { InterclubMeet } from "@/lib/interclubRegistration";
 import styles from "./competition.module.css";
 
@@ -27,9 +28,8 @@ export function PrintPacketContent({ document, meet, seasonName, timezone, revis
       <h1>{seasonName}</h1><h2>{phaseLabels[document.phase]} · {when(meet.starts_at)}</h2>
       <p>Host: {clubName(meet.host_club_id)} · Times: {timezone} · Roster deadline: {when(meet.roster_deadline)}</p>
       <h3>Court assignments</h3>
-      <table><thead><tr><th>Rotation</th><th>Court</th><th>Skill</th><th>Club matchup</th><th>Pairing</th></tr></thead><tbody>
-        {document.encounters.flatMap(encounter => encounter.pairings.map(pairing => <tr key={`${encounter.id}:${pairing.id}`}><td>{encounter.rotation}</td><td>{pairing.court || "Assign: ____"}</td><td>{encounter.division}</td><td>{clubName(encounter.club_a)} vs {clubName(encounter.club_b)}</td><td>{pairingLabels[pairing.kind]}</td></tr>))}
-      </tbody></table>
+      {document.schedule_mode === "staggered" && <p><strong>Staggered starts:</strong> complete all three games in each pairing before moving to the next wave. Start each wave after the previous wave finishes; exact times depend on match length.</p>}
+      <CourtAssignments document={document} clubName={clubName} />
       <h3>At the courts</h3>
       <ul>
         <li>{document.phase === "regular" ? "Play all three games in every doubles pairing. Each player plays 3, 6 or 9 games for a two-, three- or four-club field." : "Play women’s doubles, men’s doubles and both mixed doubles games. At 2–2, play the rotating singles tiebreak."}</li>
@@ -42,8 +42,8 @@ export function PrintPacketContent({ document, meet, seasonName, timezone, revis
       <p>Organizer: __________________________ Phone: __________________________</p>
       <p>Started: __________ Weather pause: __________ Resumed: __________ Ended: __________</p>
     </section>
-    {document.encounters.map(encounter => <section key={encounter.id} className={`${styles.printPage} ${document.phase !== "regular" ? styles.printMlp : ""}`}>
-      <p>{seasonName} · {when(meet.starts_at)} · Revision {revision} · Rotation {encounter.rotation}</p>
+    {scheduledEncounters(document).map(encounter => <section key={encounter.id} className={`${styles.printPage} ${document.phase !== "regular" ? styles.printMlp : ""}`}>
+      <p>{seasonName} · {when(meet.starts_at)} · Revision {revision} · {scheduleRoundLabel(document)} {encounter.rotation}</p>
       <h2>Skill {encounter.division}: {clubName(encounter.club_a)} vs {clubName(encounter.club_b)}</h2>
       <p>Side-out scoring to 11 · Win by two · No cap{document.phase === "regular" ? " · Play all three games" : " · One game per doubles pairing"}</p>
       {encounter.pairings.map(pairing => <section key={pairing.id} className={styles.printPairing}>

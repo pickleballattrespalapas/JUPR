@@ -47,8 +47,18 @@ test("interclub paper packet, score entry, approval and public results", async (
   await context.addCookies([{ name: "jupr_admin_workspace_v1", value: encodeURIComponent(JSON.stringify({ clubId: club, clubSlug: club })),
     url: origin, secure: true, sameSite: "Lax" }]);
   const route = `/admin/interclub/competition?season=${season.id}&meet=${season.browser_meet}`;
+  const apiRoot = `${expectedApiOrigin}/admin/clubs/${club}/interclub/competition/${season.id}/meets/${season.browser_meet}/regular`;
   await page.goto(route);
+  await expect(page.getByRole("combobox", { name: "Court schedule", exact: true })).toHaveValue("staggered", { timeout: 30_000 });
+  const generation = page.waitForResponse(r => r.url() === apiRoot+"/generate" && r.request().method() === "POST");
+  await page.getByRole("button", { name: "Generate pairings", exact: true }).click();
+  const generated = await generation;
+  expect(generated.status()).toBe(200);
+  season.browser_batch = (await generated.json()).batch;
+  expect(season.browser_batch.document.schedule_mode).toBe("staggered");
   await expect(page.getByRole("heading", { name: "Meet score draft", exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("region", { name: "Court schedule", exact: true }).getByRole("columnheader", { name: "Wave", exact: true })).toBeVisible();
+  await page.screenshot({ path: join(reportDir, "interclub-staggered-schedule.png"), fullPage: true });
   await expect(page.getByRole("button", { name: "Review and submit meet", exact: true })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Print meet packet", exact: true })).toBeEnabled();
   await page.emulateMedia({ media: "print" });
@@ -68,7 +78,6 @@ test("interclub paper packet, score entry, approval and public results", async (
   for (const input of await page.getByLabel("Actual time played (your device’s time)", { exact: true }).all()) await input.fill(played);
   await expect(page.getByRole("combobox", { name: /^Season/ })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Print meet packet", exact: true })).toBeDisabled();
-  const apiRoot = `${expectedApiOrigin}/admin/clubs/${club}/interclub/competition/${season.id}/meets/${season.browser_meet}/regular`;
   const save = page.waitForResponse(r => r.url() === apiRoot && r.request().method() === "PUT");
   await page.getByRole("button", { name: "Save all draft scores", exact: true }).first().click();
   expect((await save).status()).toBe(200);
