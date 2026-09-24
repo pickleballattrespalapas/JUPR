@@ -24,7 +24,7 @@ IMMUTABLE_IMAGE_REF = (
     f"registry.fly.io/{verifier.PRODUCTION_FLY_APP}@{IMAGE_DIGEST}"
 )
 FLY_CONFIG_SHA = "4" * 64
-MIGRATION_PROFILE = "tres-club-website-settings-2026-09-24"
+MIGRATION_PROFILE = "tres-club-team-leagues-2026-09-24"
 MIGRATION_CONTRACT = verifier.load_migration_contract(
     ROOT / "config/production_migration_contract.json",
     ROOT / "supabase/migrations",
@@ -106,8 +106,8 @@ def _health_payload(*, feature_profile: str = "release") -> dict:
             "worker_run_log_required": True,
             "email_mode": verifier.expected_production_email_mode(profile=feature_profile),
             "live_player_update_email_enabled": features["JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL"],
-            "smtp_configured": feature_profile in {"pre_awards", "pre_operations", "release"},
-            "player_update_worker_running": feature_profile in {"pre_awards", "pre_operations", "release"},
+            "smtp_configured": feature_profile in {"pre_awards", "pre_operations", "pre_team_leagues", "release"},
+            "player_update_worker_running": feature_profile in {"pre_awards", "pre_operations", "pre_team_leagues", "release"},
         },
     }
 
@@ -274,6 +274,7 @@ def test_reviewed_projection_preserves_live_and_adds_email_and_awards() -> None:
         "JUPR_ENABLE_NEXT_ADMIN_JUPR_LIVE",
         "JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP",
         "JUPR_ENABLE_NEXT_ADMIN_SHELL",
+        "JUPR_ENABLE_TEAM_LEAGUES",
         "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE",
         "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_DOMAIN",
         "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_SUBMIT",
@@ -294,12 +295,7 @@ def test_reviewed_projection_preserves_live_and_adds_email_and_awards() -> None:
         "JUPR_ENABLE_TOURNAMENT_TEAM_COMPETITION",
         "JUPR_ENABLE_TOURNAMENT_WRITES_PRODUCTION",
     }
-    assert all(
-        verifier.expected_production_feature_flags()[name] is False
-        for name in (
-            "JUPR_ENABLE_TEAM_LEAGUES",
-        )
-    )
+    assert verifier.expected_production_feature_flags()["JUPR_ENABLE_TEAM_LEAGUES"] is True
     assert (
         verifier.PRODUCTION_ENABLED_FEATURE_FLAGS
         - verifier.PRODUCTION_LIVE_BASELINE_ENABLED_FEATURE_FLAGS
@@ -309,6 +305,7 @@ def test_reviewed_projection_preserves_live_and_adds_email_and_awards() -> None:
         "JUPR_ENABLE_NEXT_ADMIN_JUPR_LIVE",
         "JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP",
         "JUPR_ENABLE_NEXT_ADMIN_SHELL",
+        "JUPR_ENABLE_TEAM_LEAGUES",
         "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE",
         "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_DOMAIN",
         "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_SUBMIT",
@@ -384,7 +381,7 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         ROOT / "supabase/migrations",
     )
 
-    assert len(versions) == 129
+    assert len(versions) == 131
     assert "20260923003009" in versions
     assert "tournament_gender_eligibility_reviews" in contract["required_ledger_names"]
     assert {"complete_registration_cancellation", "registration_cancellation_audit_policies"}.issubset(contract["required_ledger_names"])
@@ -429,11 +426,11 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         "20261109004000",
         "20261109004100",
     )
-    assert len(names) == 129
+    assert len(names) == 131
     assert all("XX" not in version for version in versions)
-    assert len(contract["required_ledger_names"]) == 116
+    assert len(contract["required_ledger_names"]) == 118
     assert "partner_email_invitations" in contract["required_ledger_names"]
-    assert len(contract["deployment_order"]) == 116
+    assert len(contract["deployment_order"]) == 118
     assert set(contract["deployment_order"]) == set(
         contract["required_ledger_names"]
     )
@@ -1792,7 +1789,7 @@ def test_email_release_cannot_attest_missing_sender_or_worker():
 def test_smtp_authentication_probe_runs_before_any_production_mutation():
     workflow = (ROOT / ".github/workflows/fly_api_deploy.yml").read_text()
     assert workflow.index("production_email_probe.py") < workflow.index("flyctl secrets set")
-    assert "baseline|pre_email|pre_awards|pre_operations|release" in workflow
+    assert "baseline|pre_email|pre_awards|pre_operations|pre_team_leagues|release" in workflow
     assert "JUPR_EMAIL_MODE=dry_run" not in workflow
     assert "expected_production_email_mode(profile=" in workflow
 

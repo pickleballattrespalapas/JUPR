@@ -1,5 +1,6 @@
 // Keep the current website serving while the separately deployed API catches up.
 const REQUIRED_FLAGS = [
+  "JUPR_ENABLE_TEAM_LEAGUES",
   "JUPR_ENABLE_NEXT_ADMIN_SHELL",
   "JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP",
   "JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS",

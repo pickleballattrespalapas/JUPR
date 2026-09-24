@@ -119,7 +119,7 @@ def test_public_team_league_mutation_denies_production_before_service(
         handler("club", "Open", payload)
     except HTTPException as exc:
         assert exc.status_code == 403
-        assert "staging-only" in str(exc.detail)
+        assert "temporarily unavailable" in str(exc.detail)
     else:
         raise AssertionError("production mutation was not denied")
     assert called == {"service": False}
@@ -162,13 +162,13 @@ def test_admin_team_league_mutation_denies_production_before_auth_or_service(
         handler("club", "Open", payload, "Bearer ignored")
     except HTTPException as exc:
         assert exc.status_code == 403
-        assert "staging-only" in str(exc.detail)
+        assert "temporarily unavailable" in str(exc.detail)
     else:
         raise AssertionError("production mutation was not denied")
     assert called == {"client": False}
 
 
-def test_admin_create_team_route_is_wired_and_staging_only(monkeypatch) -> None:
+def test_admin_create_team_route_rejects_unapproved_production_club(monkeypatch) -> None:
     app = FakeApp()
     called = {"client": False}
 
@@ -205,7 +205,7 @@ def test_admin_create_team_route_is_wired_and_staging_only(monkeypatch) -> None:
         app.routes[route]("club", "Open", payload, "Bearer ignored")
     except HTTPException as exc:
         assert exc.status_code == 403
-        assert "staging-only" in str(exc.detail)
+        assert "temporarily unavailable" in str(exc.detail)
     else:
         raise AssertionError("production create-team mutation was not denied")
     assert called == {"client": False}

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "profile": "tres-club-website-settings-2026-09-24",
-  "repository_migration_content_sha256": "e8ba39cf72ffc93f9bfbc5599af32e39ac675c58162de4b3b4dd2958a4bc1a50",
+  "profile": "tres-club-team-leagues-2026-09-24",
+  "repository_migration_content_sha256": "cd74c965f223a6bf1f9c7ef98e0ff9d0b560f00ad931d8eb90eca1f6b44e17bd",
   "allow_additional_ledger_names": true,
   "allowed_duplicate_ledger_names": [
     "tournament_admin_operations"
@@ -122,7 +122,9 @@
     "program_badge_reconciliation_actor",
     "program_badge_round_robin_state",
     "club_leaderboard_settings",
-    "club_website_settings"
+    "club_website_settings",
+    "club_team_league_admin_rosters",
+    "team_league_match_exclusion_compatibility"
   ],
   "required_ledger_names": [
     "add_admin_activity_log",
@@ -146,6 +148,7 @@
     "challenge_ladder_public_results",
     "club_leaderboard_settings",
     "club_staff_scopes",
+    "club_team_league_admin_rosters",
     "club_website_settings",
     "combined_rating_team_tournaments",
     "communications_outbox_stale_guards",
@@ -207,6 +210,7 @@
     "standard_tournament_substitute_policy",
     "team_league_awards_hardening",
     "team_league_composition_settings",
+    "team_league_match_exclusion_compatibility",
     "team_league_normalized_rosters_substitute_pool",
     "team_league_registration_identity_recovery",
     "team_league_trigger_function_security_hardening",

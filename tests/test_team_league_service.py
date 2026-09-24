@@ -748,7 +748,7 @@ def test_team_league_confirmations_are_distinct() -> None:
     assert len(confirmations) == 12
 
 
-def test_team_league_runtime_gates_deny_production(monkeypatch) -> None:
+def test_team_league_runtime_gates_deny_unapproved_production(monkeypatch) -> None:
     monkeypatch.setenv("JUPR_ENV", "production")
     monkeypatch.setenv(
         "JUPR_ENABLE_STAGING_NEXT_ADMIN_LEAGUE_MANAGER_WRITES", "1"
@@ -758,7 +758,7 @@ def test_team_league_runtime_gates_deny_production(monkeypatch) -> None:
 
     assert staging_admin_team_league_writes_enabled() is False
     assert staging_public_team_league_writes_enabled() is False
-    with pytest.raises(PermissionError, match="staging-only"):
+    with pytest.raises(PermissionError, match="not enabled for this club and environment"):
         save_admin_team_league_settings(
             object(),
             club_id="club",
@@ -771,7 +771,7 @@ def test_team_league_runtime_gates_deny_production(monkeypatch) -> None:
             actor_role="club_owner",
             source="test",
         )
-    with pytest.raises(PermissionError, match="staging-only"):
+    with pytest.raises(PermissionError, match="not enabled for this club and environment"):
         confirm_public_team_league_partner(
             object(),
             club_id="club",

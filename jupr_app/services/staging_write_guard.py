@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 
+from jupr_app.services.production_feature_policy import production_feature_enabled
 
 PUBLIC_INTAKE_WRITE_FLAG = "JUPR_ENABLE_STAGING_PUBLIC_INTAKE_WRITES"
 LEAGUE_MANAGER_WRITE_FLAG = "JUPR_ENABLE_STAGING_NEXT_ADMIN_LEAGUE_MANAGER_WRITES"
@@ -83,17 +84,14 @@ def _local_test_writes_enabled() -> bool:
     }
 
 
-def staging_admin_team_league_writes_enabled() -> bool:
-    """Keep the unaccepted team-league surface outside production.
-
-    Local/test environments remain usable for deterministic verification. The
-    only hosted environment that can write is isolated staging, and it must
-    have both the reviewed League Manager wave and its existing write flag.
-    """
+def staging_admin_team_league_writes_enabled(club_id: str | None = None) -> bool:
+    """Allow staging waves or the explicitly approved Tres production release."""
 
     environment = os.getenv("JUPR_ENV", "").strip().lower()
     if _local_test_writes_enabled():
         return True
+    if environment == "production":
+        return production_feature_enabled("team_leagues", str(club_id))
     if environment != "staging":
         return False
     return (
@@ -102,9 +100,11 @@ def staging_admin_team_league_writes_enabled() -> bool:
     )
 
 
-def require_staging_admin_team_league_writes() -> None:
-    if staging_admin_team_league_writes_enabled():
+def require_staging_admin_team_league_writes(club_id: str | None = None) -> None:
+    if staging_admin_team_league_writes_enabled(club_id):
         return
+    if os.getenv("JUPR_ENV", "").strip().lower() == "production":
+        raise PermissionError("Admin team-league writes are not enabled for this club and environment.")
     raise PermissionError(
         "Admin team-league writes are staging-only. Open only the approved "
         f"{TEAM_LEAGUE_ADMIN_WRITE_WAVE} wave with "
@@ -112,10 +112,12 @@ def require_staging_admin_team_league_writes() -> None:
     )
 
 
-def staging_public_team_league_writes_enabled() -> bool:
+def staging_public_team_league_writes_enabled(club_id: str | None = None) -> bool:
     environment = os.getenv("JUPR_ENV", "").strip().lower()
     if _local_test_writes_enabled():
         return True
+    if environment == "production":
+        return production_feature_enabled("team_leagues", str(club_id))
     if environment != "staging":
         return False
     return (
@@ -124,9 +126,11 @@ def staging_public_team_league_writes_enabled() -> bool:
     )
 
 
-def require_staging_public_team_league_writes() -> None:
-    if staging_public_team_league_writes_enabled():
+def require_staging_public_team_league_writes(club_id: str | None = None) -> None:
+    if staging_public_team_league_writes_enabled(club_id):
         return
+    if os.getenv("JUPR_ENV", "").strip().lower() == "production":
+        raise PermissionError("Public team-league writes are not enabled for this club and environment.")
     raise PermissionError(
         "Public team-league writes are staging-only. Open only the approved "
         f"{TEAM_LEAGUE_PUBLIC_WRITE_WAVE} wave with "

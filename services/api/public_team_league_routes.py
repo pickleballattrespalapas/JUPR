@@ -74,6 +74,7 @@ def install_public_team_league_routes(
         require_team_leagues_enabled_or_403()
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
+        require_team_leagues_enabled_or_403(club_id)
         try:
             result = list_public_team_leagues(
                 get_supabase_client(), club_id=club_id, league_view=view
@@ -92,6 +93,7 @@ def install_public_team_league_routes(
         require_team_leagues_enabled_or_403()
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
+        require_team_leagues_enabled_or_403(club_id)
         try:
             result = get_public_team_league(
                 get_supabase_client(),
@@ -114,9 +116,10 @@ def install_public_team_league_routes(
         payload: PublicTeamLeagueRegistrationRequest,
     ) -> dict[str, Any]:
         require_team_leagues_enabled_or_403()
-        require_public_team_league_write_or_403()
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
+        require_team_leagues_enabled_or_403(club_id)
+        require_public_team_league_write_or_403(club_id)
         public_base_url = (
             f"{get_next_web_base_url().rstrip('/')}/clubs/"
             f"{quote(str(club.get('slug') or club_slug).strip(), safe='-')}"
@@ -151,9 +154,10 @@ def install_public_team_league_routes(
         payload: PublicTeamLeaguePartnerConfirmationRequest,
     ) -> dict[str, Any]:
         require_team_leagues_enabled_or_403()
-        require_public_team_league_write_or_403()
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
+        require_team_leagues_enabled_or_403(club_id)
+        require_public_team_league_write_or_403(club_id)
         try:
             result = confirm_public_team_league_partner(
                 get_supabase_client(),

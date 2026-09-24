@@ -172,12 +172,12 @@ def _confirm(value: Any, expected: str) -> None:
         raise ValueError(f"Type {expected} to continue.")
 
 
-def _assert_public_write_enabled() -> None:
-    require_staging_public_team_league_writes()
+def _assert_public_write_enabled(club_id: str) -> None:
+    require_staging_public_team_league_writes(club_id)
 
 
-def _assert_admin_write_enabled() -> None:
-    require_staging_admin_team_league_writes()
+def _assert_admin_write_enabled(club_id: str) -> None:
+    require_staging_admin_team_league_writes(club_id)
 
 
 def partner_token_secret() -> str:
@@ -732,7 +732,7 @@ def register_public_team_league(
     public_base_url: str,
     club_name: str,
 ) -> dict[str, Any]:
-    _assert_public_write_enabled()
+    _assert_public_write_enabled(club_id)
     clean_league_name = _text(league_name, 120)
     settings = _one(
         supabase,
@@ -961,7 +961,7 @@ def confirm_public_team_league_partner(
     accept: bool,
     idempotency_key: str,
 ) -> dict[str, Any]:
-    _assert_public_write_enabled()
+    _assert_public_write_enabled(club_id)
     key = _operation_key(idempotency_key)
     if not _one(
         supabase,
@@ -1128,7 +1128,7 @@ def save_admin_team_league_settings(
     actor_role: str,
     source: str,
 ) -> dict[str, Any]:
-    _assert_admin_write_enabled()
+    _assert_admin_write_enabled(club_id)
     _confirm(confirmation_text, SAVE_SETTINGS_CONFIRMATION)
     key = _operation_key(idempotency_key)
     roster_policy = normalize_roster_settings(settings)
@@ -1213,7 +1213,7 @@ def create_admin_team_league_team(
 ) -> dict[str, Any]:
     """Create a forming normalized team with a captain and optional primary."""
 
-    _assert_admin_write_enabled()
+    _assert_admin_write_enabled(club_id)
     _confirm(confirmation_text, CREATE_TEAM_CONFIRMATION)
     clean_name = _text(team_name, 120)
     if not clean_name:
@@ -1317,7 +1317,7 @@ def admin_team_league_roster_action(
 ) -> dict[str, Any]:
     """Apply one normalized assigned-roster or substitute-pool mutation."""
 
-    _assert_admin_write_enabled()
+    _assert_admin_write_enabled(club_id)
     clean_action = _text(action, 40).lower()
     if clean_action not in {"add_member", "remove_member", "set_pool"}:
         raise ValueError("Choose add member, remove member, or update substitute pool.")
@@ -1470,7 +1470,7 @@ def admin_team_league_waitlist_action(
     team_name: str = "",
     source: str = "next_team_league_waitlist",
 ) -> dict[str, Any]:
-    _assert_admin_write_enabled()
+    _assert_admin_write_enabled(club_id)
     clean_action = _text(action, 20).lower()
     if clean_action not in {"pair", "withdraw"}:
         raise ValueError("Choose pair or withdraw.")
@@ -1830,7 +1830,7 @@ def commit_admin_team_league_schedule(
     actor_role: str,
     source: str,
 ) -> dict[str, Any]:
-    _assert_admin_write_enabled()
+    _assert_admin_write_enabled(club_id)
     clean_phase = _text(phase, 20).lower()
     if clean_phase not in {"regular", "playoff"}:
         raise ValueError("Choose the regular season or playoffs.")
@@ -2084,7 +2084,7 @@ def score_admin_team_league_fixture(
     score_note: str = "",
     source: str = "next_team_league_score",
 ) -> dict[str, Any]:
-    _assert_admin_write_enabled()
+    _assert_admin_write_enabled(club_id)
     clean_status = _text(status, 20).lower()
     if clean_status not in {"complete", "forfeit"}:
         raise ValueError("Choose a played result or a forfeit.")
@@ -2390,7 +2390,7 @@ def reconcile_admin_team_league_fixture(
     actor_role: str,
     source: str = "next_team_league_reconcile",
 ) -> dict[str, Any]:
-    _assert_admin_write_enabled()
+    _assert_admin_write_enabled(club_id)
     _confirm(confirmation_text, RECONCILE_FIXTURE_CONFIRMATION)
     detail = get_admin_team_league(
         supabase, club_id=str(club_id), league_name=league_name
@@ -2524,7 +2524,7 @@ def resolve_admin_team_league_operation(
     actor_role: str,
     source: str = "next_team_league_recovery",
 ) -> dict[str, Any]:
-    _assert_admin_write_enabled()
+    _assert_admin_write_enabled(club_id)
     clean_resolution = _text(resolution, 20).lower()
     if clean_resolution not in {"finalize", "compensate"}:
         raise ValueError("Choose finalize or compensate.")

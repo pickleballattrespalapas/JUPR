@@ -200,18 +200,23 @@ PRODUCTION_PRE_OPERATIONS_ENABLED_FEATURE_FLAGS = frozenset({
     *PRODUCTION_PRE_AWARDS_ENABLED_FEATURE_FLAGS,
     "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE",
 })
-PRODUCTION_ENABLED_FEATURE_FLAGS = frozenset({
+PRODUCTION_PRE_TEAM_LEAGUES_ENABLED_FEATURE_FLAGS = frozenset({
     *PRODUCTION_PRE_OPERATIONS_ENABLED_FEATURE_FLAGS,
     "JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS",
     "JUPR_ENABLE_NEXT_ADMIN_JUPR_LIVE",
     "JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP",
     "JUPR_ENABLE_NEXT_ADMIN_SHELL",
 })
+PRODUCTION_ENABLED_FEATURE_FLAGS = frozenset({
+    *PRODUCTION_PRE_TEAM_LEAGUES_ENABLED_FEATURE_FLAGS,
+    "JUPR_ENABLE_TEAM_LEAGUES",
+})
 PRODUCTION_FEATURE_PROFILES = {
     "pre_email": PRODUCTION_PRE_EMAIL_ENABLED_FEATURE_FLAGS,
     "baseline": PRODUCTION_LIVE_BASELINE_ENABLED_FEATURE_FLAGS,
     "pre_awards": PRODUCTION_PRE_AWARDS_ENABLED_FEATURE_FLAGS,
     "pre_operations": PRODUCTION_PRE_OPERATIONS_ENABLED_FEATURE_FLAGS,
+    "pre_team_leagues": PRODUCTION_PRE_TEAM_LEAGUES_ENABLED_FEATURE_FLAGS,
     "release": PRODUCTION_ENABLED_FEATURE_FLAGS,
 }
 if not PRODUCTION_ENABLED_FEATURE_FLAGS.issubset(PRODUCTION_FEATURE_FLAGS):
@@ -889,7 +894,7 @@ def expected_production_controlled_write_flags(
 def expected_production_email_mode(*, profile: str = "release") -> str:
     if profile not in PRODUCTION_FEATURE_PROFILES:
         raise ValueError(f"Unknown production feature profile: {profile}")
-    return "live" if profile in {"pre_awards", "pre_operations", "release"} else "dry_run"
+    return "live" if profile in {"pre_awards", "pre_operations", "pre_team_leagues", "release"} else "dry_run"
 
 
 def production_feature_profile_from_health(health: Any) -> str | None:
