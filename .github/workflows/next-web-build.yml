@@ -122,3 +122,8 @@ jobs:
         run: npm run test:component
       - name: Build Next app
         run: npm run build
+
+      - name: Install browser for tournament registration checks
+        run: npx playwright install --with-deps chromium
+      - name: Verify individual and full-team tournament registration
+        run: npx playwright test e2e/tournament-solo-signup.spec.ts --workers=1 --retries=0

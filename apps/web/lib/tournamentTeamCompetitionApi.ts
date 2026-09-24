@@ -31,6 +31,7 @@ export type FourPlayerTeamMember = {
 
 export type FourPlayerTeam = {
   id: string;
+  captain_registration_id?: string | null;
   event_option_id: string;
   draw_id?: string | null;
   name: string;

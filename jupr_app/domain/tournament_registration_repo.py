@@ -3874,6 +3874,13 @@ def build_public_tournament_roster_state(
 ) -> dict[str, Any]:
     state = build_registration_state(supabase, tournament, settings, days, event_options)
     event_lookup = {str(row.get("id")): row for row in (state.get("event_options") or [])}
+    confirmed_registration_ids = {
+        str(registration_id)
+        for row in state.get("registrations") or []
+        if str(row.get("status") or "").upper() in {"CONFIRMED", "ADMIN_CONFIRMED"}
+        for registration_id in [row.get("id"), *(row.get("_collapsed_from_ids") or [])]
+        if registration_id
+    }
 
     status_map = {
         "CONFIRMED": "Registered",
@@ -3882,6 +3889,7 @@ def build_public_tournament_roster_state(
         "REVIEW": "Review",
         "PARTNER_MISSING": "Review",
         "NEEDS_PARTNER": "Needs Partner",
+        "NEEDS_TEAM": "Needs Team",
         "PENDING_PARTNER_REQUEST": "Pending Partner Request",
         "LEGACY_PARTNER_UNRESOLVED": "Review",
     }
@@ -4032,6 +4040,16 @@ def build_public_tournament_roster_state(
                 for value in (entry.get("source_registration_ids") or [])
                 if str(value or "").strip()
             )
+            if (
+                status == "REVIEW"
+                and entry.get("entry_type") == "four_player_team_setup_required"
+                and event_option.get("competition_format") == "FOUR_PLAYER_TEAM"
+                and registration_ids
+                and all(value in confirmed_registration_ids for value in registration_ids)
+            ):
+                # The signup is confirmed; the player is waiting for placement.
+                # Keep the compiler's draw-readiness blocker unchanged.
+                status = "NEEDS_TEAM"
             entry_source = "|".join(selection_ids or registration_ids)
             public_entry_key = build_public_tournament_reference(
                 tournament_id=str(tournament.get("id") or ""),
@@ -4055,7 +4073,7 @@ def build_public_tournament_roster_state(
                 confirmed_teams.append(event_row)
             elif status == "PENDING_PARTNER_REQUEST":
                 pending_partner_requests.append(event_row)
-            elif status not in {"NEEDS_PARTNER", "WAITLIST"}:
+            elif status not in {"NEEDS_PARTNER", "NEEDS_TEAM", "WAITLIST"}:
                 unresolved_partner_entries.append(event_row)
 
             if status == "NEEDS_PARTNER":

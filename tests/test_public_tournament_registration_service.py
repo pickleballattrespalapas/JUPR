@@ -1490,3 +1490,65 @@ def test_public_registration_enforces_partner_identity_gender_and_rating() -> No
                 ],
             },
         )
+
+
+@pytest.mark.parametrize("gender", ["Men", "Women"])
+def test_four_player_registration_saves_individual_without_partner_or_team(monkeypatch, gender):
+    monkeypatch.setenv("JUPR_WEB_BASE_URL", "https://staging.example.test")
+    monkeypatch.setenv("JUPR_REGISTRATION_CONFIRMATION_SECRET", "unit-test-confirmation-secret")
+    monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("JUPR_EMAIL_MODE", "dry_run")
+    monkeypatch.setattr(
+        "jupr_app.services.public_tournament_registration_service.send_tournament_registration_confirmation_email",
+        lambda **kwargs: {"status": "dry_run"},
+    )
+    storage = fake_storage()
+    storage["tournament_event_options"][0].update(
+        competition_format="FOUR_PLAYER_TEAM", team_roster_size=4,
+        event_type="MIXED_DOUBLES", gender_restriction="MIXED", partner_required=True,
+    )
+    result = submit_public_tournament_registration(
+        FakeSupabase(storage), club_id="club-1", payload={
+            "registration_slug": "tres-open", "first_name": "Solo", "last_name": "Player",
+            "email": "solo@example.invalid", "doubles_skill": 4.0, "gender": gender,
+            "age": 40, "terms_accepted": True,
+            "selections": [{"event_option_id": "event1", "partner_mode": "NONE"}],
+        },
+    )
+    assert result["ok"] is True
+    assert result["confirmation_token"]
+    assert result["email_delivery"]["status"] == "dry_run"
+    registration, = storage["tournament_registrations"]
+    selection, = storage["tournament_registration_selections"]
+    assert registration["status"].upper() == "CONFIRMED"
+    assert selection["registration_id"] == registration["id"]
+    assert selection["event_option_id"] == "event1"
+    assert selection["partner_mode"] == "NONE"
+    assert not selection.get("partner_email")
+    assert not selection.get("show_on_partner_board")
+    assert not storage.get("tournament_four_player_teams")
+    assert not storage.get("tournament_four_player_team_members")
+
+
+@pytest.mark.parametrize("competition_format, mode, message", [
+    ("STANDARD", "NONE", "choose whether you have or need a partner"),
+    ("FOUR_PLAYER_TEAM", "NEEDS_PARTNER", "choose your team separately"),
+    ("FOUR_PLAYER_TEAM", "HAS_PARTNER", "choose your team separately"),
+])
+def test_team_signup_does_not_mix_four_player_rosters_with_doubles_partners(competition_format, mode, message):
+    storage = fake_storage()
+    storage["tournament_event_options"][0].update(
+        competition_format=competition_format, event_type="MIXED_DOUBLES",
+        gender_restriction="MIXED", partner_required=True,
+    )
+    with pytest.raises(ValueError, match=message):
+        submit_public_tournament_registration(
+            FakeSupabase(storage), club_id="club-1", payload={
+                "registration_slug": "tres-open", "first_name": "Solo", "last_name": "Player",
+                "email": "solo@example.invalid", "doubles_skill": 4.0, "gender": "Men",
+                "age": 40, "terms_accepted": True,
+                "selections": [{"event_option_id": "event1", "partner_mode": mode}],
+            },
+        )
+    assert not storage["tournament_registrations"]
+    assert not storage["tournament_registration_selections"]
