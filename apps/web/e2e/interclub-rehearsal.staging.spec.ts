@@ -332,7 +332,8 @@ test("interclub paper packet, score entry, approval and public results", async (
   expect((await duplicate.json()).duplicate).toBe(true);
   const firstWoman = board.entries.find(entry => entry.gender === "female" && entry.placement === "confirmed")!;
   const womanSignup = joins.find((join: { result: PrivateMeetSignup }) => join.result.entry.id === firstWoman.id)!.result;
-  const nextWoman = board.entries.find(entry => entry.gender === "female" && entry.placement === "waitlist")!;
+  const nextWoman = board.entries.find(entry => entry.gender === "female" && entry.placement === "waitlist" && entry.priority === "in_band" && entry.queue_position === 1)!;
+  expect(nextWoman.id).not.toBe(playUp.entry.id);
   const womanPage = await meetAnonymous.newPage();
   womanPage.on("pageerror", error => errors.push(error.message));
   const privateAddress = new URL(womanSignup.entry.manage_url!);
@@ -347,6 +348,7 @@ test("interclub paper packet, score entry, approval and public results", async (
   expect(afterWithdrawal.entry.status).toBe("withdrawn");
   await expect(womanPage.getByRole("region", { name: "Your meet signup" })).toContainText("Withdrawn");
   expect(afterWithdrawal.entries.find(entry => entry.id === nextWoman.id)?.placement).toBe("confirmed");
+  expect(afterWithdrawal.entries.find(entry => entry.id === playUp.entry.id)?.placement).toBe("waitlist");
   const lineupRead = await context.request.get(queueRoot, { headers: { Authorization: `Bearer ${user.token}` } });
   expect(lineupRead.status()).toBe(200);
   const autoTeam = (await lineupRead.json()).teams.find((team: { club_id: string; withdrawn: boolean }) => team.club_id === club && !team.withdrawn);
@@ -355,7 +357,7 @@ test("interclub paper packet, score entry, approval and public results", async (
   expect(autoTeam.roster.map((player: { name: string }) => player.name)).not.toContain(firstWoman.name);
   await meetPage.setViewportSize({ width: 390, height: 844 });
   await meetPage.getByRole("button", { name: "Refresh signup", exact: true }).click();
-  await expect(meetPage.getByRole("region", { name: "Your meet signup" })).toContainText("Substitute #2 · Playing up");
+  await expect(meetPage.getByRole("region", { name: "Your meet signup" })).toContainText("Substitute #1 · Playing up");
   await meetPage.screenshot({ path: join(reportDir, "interclub-meet-signup-mobile.png"), fullPage: true });
   await signupPanel.getByRole("button", { name: "Refresh signups and lineups", exact: true }).click();
   await expect(signupPanel.getByRole("region", { name: "3.5 women", exact: true })).toContainText(nextWoman.name);
