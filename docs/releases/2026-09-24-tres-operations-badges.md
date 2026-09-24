@@ -75,6 +75,10 @@ Final counts may change if real results arrive between preview and deployment.
 
 ## Deployment and recovery
 
+Production web builds wait for the required production API capabilities before
+building, leaving the existing website active while Fly catches up. Preview and
+local builds do not contact production for this check.
+
 Require successful API, web and browser checks on the release candidate. Apply
 the seven reviewed migrations, merge the selected candidate into production,
 then use the existing trigger-only production release mechanism. Its schema
