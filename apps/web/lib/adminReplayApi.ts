@@ -106,7 +106,7 @@ async function fetchJson<T>(
 }
 
 export async function getAdminReplayStatus(
-  clubId = "tres_palapas",
+  clubId: string,
   options: {
     accessToken?: string;
     apiBase?: string | null;

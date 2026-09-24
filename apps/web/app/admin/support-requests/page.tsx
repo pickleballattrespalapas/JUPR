@@ -1,3 +1,4 @@
+import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import Link from "next/link";
 import { getAdminSupportRequestsApiBaseUrl, getAdminSupportRequestsStatus } from "@/lib/adminSupportRequestsApi";
 import SupportRequestsPanel from "./SupportRequestsPanel";
@@ -7,7 +8,7 @@ export const dynamic = "force-dynamic";
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 
 export default async function AdminSupportRequestsPage() {
-  const clubId = "tres_palapas";
+  const { clubId } = requireAdminWorkspace();
   const { data: status, error } = await getAdminSupportRequestsStatus(clubId);
 
   return (
@@ -33,7 +34,7 @@ export default async function AdminSupportRequestsPage() {
       {status ? <SupportRequestsPanel apiBase={getAdminSupportRequestsApiBaseUrl()} clubId={clubId} status={status} /> : null}
 
       <p style={{ marginTop: "1rem" }}>
-        <Link href="/admin">Operations cockpit</Link> · <Link href="/admin/match-log">Match Log</Link> · <Link href="/admin/players">Player Editor</Link>
+        <Link href="/admin">Admin Home</Link> · <Link href="/admin/match-log">Match Log</Link> · <Link href="/admin/players">Player Editor</Link>
       </p>
     </section>
   );

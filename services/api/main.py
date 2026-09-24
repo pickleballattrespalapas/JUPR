@@ -17,13 +17,15 @@ from supabase import Client, create_client
 from jupr_app.data.load import load_data
 from jupr_app.domain.admin.roles import PERMISSION_ENTER_SCORES, has_permission, resolve_admin_role
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
+from jupr_app.domain.leaderboard_metrics import LEADERBOARD_CARD_KEYS
 from jupr_app.domain.tournament_registration_repo import public_registration_error_scope
 from jupr_app.services.direct_match_entry_service import (
     DirectMatchConflictError,
     DirectMatchRecoveryRequiredError,
     submit_atomic_direct_matches,
 )
-from jupr_app.services.leaderboard_service import LeaderboardDataUnavailable, build_public_leaderboard
+from jupr_app.services.leaderboard_service import LeaderboardDataUnavailable, LeaderboardPeriodInvalid, build_public_leaderboard
+from services.api.club_site_models import LeaderboardSettings
 from jupr_app.services.public_live_service import is_public_live_session_row, public_live_session_detail, public_live_sessions_from_rows
 from jupr_app.services.public_live_operation_service import (
     PublicLiveConflictError,
@@ -114,6 +116,10 @@ PUBLIC_LEADERBOARD_ENTRY_FIELDS = {
     "badges",
     "badge_count",
     "updated_at",
+    "metric_value",
+    "metric_display",
+    "metric_sample",
+    "team_key",
 }
 PUBLIC_LEADERBOARD_BADGE_FIELDS = {"badge_id", "name", "prestige", "category", "icon_key", "rarity", "earned_at"}
 PUBLIC_LIVE_SESSION_SUMMARY_SELECT = "club_id,session_key,title,status,state,version,created_at,updated_at,last_seen_at,expires_at,completed_at"
@@ -201,7 +207,7 @@ app.add_middleware(
     allow_origins=get_cors_allowed_origins(),
     allow_origin_regex=get_cors_allowed_origin_regex(),
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -494,6 +500,14 @@ def _normalize_public_leaderboard_rows(rows: list[dict[str, Any]]) -> list[dict[
     normalized: list[dict[str, Any]] = []
     for idx, row in enumerate(rows, start=1):
         clean = {key: row.get(key) for key in PUBLIC_LEADERBOARD_ENTRY_FIELDS if key in row}
+        if isinstance(row.get("team_members"), list):
+            clean["team_members"] = [
+                {"player_id": member["player_id"], "player_name": member["player_name"]}
+                for member in row["team_members"]
+                if isinstance(member, dict)
+                and isinstance(member.get("player_id"), (str, int))
+                and isinstance(member.get("player_name"), str)
+            ][:2]
         clean["badges"] = [
             {key: badge.get(key) for key in PUBLIC_LEADERBOARD_BADGE_FIELDS if key in badge}
             for badge in (row.get("badges") or [])
@@ -524,7 +538,12 @@ def _normalize_public_leaderboard_projection(payload: dict[str, Any]) -> dict[st
     pagination = payload.get("pagination") if isinstance(payload.get("pagination"), dict) else {}
     snapshot_rows = _normalize_public_leaderboard_rows([payload["snapshot"]]) if isinstance(payload.get("snapshot"), dict) else []
     highlights = payload.get("highlights") if isinstance(payload.get("highlights"), dict) else {}
+    settings = LeaderboardSettings.model_validate(payload.get("leaderboard_settings") or {}).model_dump(mode="json")
+    period_id = (payload.get("period") or {}).get("id")
+    period = next((item for item in settings["seasons"] if item["id"] == period_id), None)
     return {
+        "leaderboard_settings": settings,
+        "period": period or {"id": None, "name": "All time", "start_date": None, "end_date": None, "timezone": settings["timezone"]},
         "scopes": scopes,
         "selected_scope": selected_scope,
         "scope": {
@@ -554,7 +573,7 @@ def _normalize_public_leaderboard_projection(payload: dict[str, Any]) -> dict[st
         "snapshot": snapshot_rows[0] if snapshot_rows else None,
         "highlights": {
             key: _normalize_public_leaderboard_rows(highlights.get(key) or [])
-            for key in ("highest_rating", "most_improved", "best_win_pct", "most_wins")
+            for key in LEADERBOARD_CARD_KEYS
         },
         "pagination": {
             "total": max(0, int(pagination.get("total") or 0)),
@@ -576,6 +595,7 @@ def _build_leaderboard_response(
     player_id: str | None = None,
     limit: int = 50,
     offset: int = 0,
+    season: str | None = None,
 ) -> dict[str, Any]:
     club = get_club(club_slug)
     club_id = str(club.get("id") or club.get("club_id") or club_slug)
@@ -592,7 +612,10 @@ def _build_leaderboard_response(
             player_id=player_id,
             limit=limit,
             offset=offset,
+            **({"season": season} if season is not None else {}),
         )
+    except LeaderboardPeriodInvalid as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except LeaderboardDataUnavailable as exc:
         raise HTTPException(status_code=503, detail="Leaderboard data is temporarily unavailable.") from exc
     return {"club": _public_club_payload(club, club_slug), **_normalize_public_leaderboard_projection(projection)}
@@ -792,6 +815,10 @@ async def stop_player_email_worker() -> None:
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
+
+
+from services.api.program_badge_worker import install_program_badge_worker
+install_program_badge_worker(app, get_supabase_client=get_supabase_client)
 
 
 @app.get("/health")
@@ -1090,6 +1117,7 @@ def get_club_leaderboard(
     player_id: str | None = Query(default=None, max_length=120),
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
+    season: str | None = Query(default=None, max_length=80),
 ) -> dict[str, Any]:
     return _build_leaderboard_response(
         club_slug,
@@ -1101,6 +1129,7 @@ def get_club_leaderboard(
         player_id=player_id,
         limit=limit,
         offset=offset,
+        season=season,
     )
 
 
@@ -1115,6 +1144,7 @@ def get_club_leaderboard_compat(
     player_id: str | None = Query(default=None, max_length=120),
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
+    season: str | None = Query(default=None, max_length=80),
 ) -> dict[str, Any]:
     return _build_leaderboard_response(
         club_slug,
@@ -1126,6 +1156,7 @@ def get_club_leaderboard_compat(
         player_id=player_id,
         limit=limit,
         offset=offset,
+        season=season,
     )
 
 
@@ -1444,3 +1475,13 @@ def submit_admin_match_batch(club_id: str, payload: MatchBatchRequest, authoriza
             "operator_rule": "Retry the exact unchanged request after an interrupted response; the same idempotency key cannot create a duplicate.",
         },
     }
+
+
+# Install after all routes so the scope boundary covers every registered family.
+from services.api.admin_staff_routes import install_admin_staff_routes
+from services.api.staff_access import install_staff_access
+install_admin_staff_routes(app, get_supabase_client=get_supabase_client)
+
+from services.api.club_leaderboard_settings_routes import install_club_leaderboard_settings_routes
+install_club_leaderboard_settings_routes(app, get_supabase_client=get_supabase_client)
+install_staff_access(app, get_supabase_client=get_supabase_client)

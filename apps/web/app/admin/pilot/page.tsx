@@ -1,8 +1,10 @@
+import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import Link from "next/link";
 import { getAdminApiBaseUrl } from "@/lib/adminMatchLogApi";
 import AdminPilotPreflightPanel from "./AdminPilotPreflightPanel";
 
 export default function AdminPilotPage() {
+  const { clubId } = requireAdminWorkspace();
   return (
     <section>
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
@@ -12,7 +14,7 @@ export default function AdminPilotPage() {
       <p style={{ color: "#334155", maxWidth: "860px" }}>
         Use this page from a signed-in admin browser session before the first pilot operation. It checks the API flag status and your staff session using safe validation requests.
       </p>
-      <AdminPilotPreflightPanel apiBase={getAdminApiBaseUrl()} clubId="tres_palapas" />
+      <AdminPilotPreflightPanel apiBase={getAdminApiBaseUrl()} clubId={clubId} />
       <p style={{ marginTop: "1rem" }}>
         <Link href="/admin/match-log">Open Match Log</Link> · <Link href="/admin/replay-history">Open Replay History</Link> · <Link href="/admin">Operations cockpit</Link>
       </p>

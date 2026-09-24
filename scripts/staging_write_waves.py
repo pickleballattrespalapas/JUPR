@@ -61,6 +61,8 @@ STAGING_WRITE_WAVES: dict[str, tuple[str, ...]] = {
     "badge-diagnostics": _admin_wave(
         "JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS",
     ),
+    "admin-notifications": (),
+    "club-settings": (),
     "admin-tools": _admin_wave(
         "JUPR_ENABLE_NEXT_ADMIN_TOOLS",
     ),
@@ -166,6 +168,7 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("PATCH", "/admin/clubs/{club_id}/verified-updates/requests/{subscription_id}"),
         ("POST", "/admin/clubs/{club_id}/weekly-recap/generate"),
         ("PATCH", "/admin/clubs/{club_id}/weekly-recap/recaps/{week_start}"),
+        ("DELETE", "/admin/clubs/{club_id}/weekly-recap/recaps/{week_start}"),
         ("POST", "/admin/clubs/{club_id}/weekly-recap/recaps/{week_start}/publish"),
     ),
     "match-player": (
@@ -254,11 +257,25 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/guests"),
     ),
     "badge-diagnostics": (
+        ("POST", "/admin/clubs/{club_id}/badge-management/awards"),
+        ("POST", "/admin/clubs/{club_id}/badge-management/seasons"),
+        ("POST", "/admin/clubs/{club_id}/badge-management/round-robin-winners"),
         ("PATCH", "/admin/clubs/{club_id}/badges/{badge_id}/state"),
         ("POST", "/admin/clubs/{club_id}/badges/recompute"),
         ("PATCH", "/admin/clubs/{club_id}/badges/revoke"),
     ),
+    "admin-notifications": (
+        ("PUT", "/admin/clubs/{club_id}/notifications/preferences"),
+        ("PUT", "/admin/clubs/{club_id}/notifications/items/{key}"),
+        ("PUT", "/admin/clubs/{club_id}/notifications/bulk-clear"),
+    ),
+    "club-settings": (
+        ("PUT", "/admin/clubs/{club_id}/leaderboard-settings"),
+        ("POST", "/admin/clubs/{club_id}/leaderboard-settings/publish"),
+        ("POST", "/admin/clubs/{club_id}/leaderboard-settings/discard"),
+    ),
     "admin-tools": (
+        ("PUT", "/admin/clubs/{club_id}/staff"),
         ("POST", "/admin/clubs/{club_id}/tools/social-submissions/{event_id}/moderate"),
         ("POST", "/admin/clubs/{club_id}/tools/backfills/tournament-matches/apply"),
         ("PATCH", "/admin/clubs/{club_id}/tools/roles"),
@@ -307,6 +324,8 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/advance"),
         ("POST", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/roster"),
         ("POST", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/complete"),
+        ("POST", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/submit"),
+        ("POST", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/review"),
         ("POST", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/publish"),
     ),
     "public-live": (
@@ -323,6 +342,7 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/clubs/{club_slug}/play-generators/sessions/{session_key}/advance"),
         ("POST", "/clubs/{club_slug}/play-generators/sessions/{session_key}/roster"),
         ("POST", "/clubs/{club_slug}/play-generators/sessions/{session_key}/complete"),
+        ("POST", "/clubs/{club_slug}/play-generators/sessions/{session_key}/submit"),
     ),
     "tournament-mutations": (
         ("PATCH", "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}"),

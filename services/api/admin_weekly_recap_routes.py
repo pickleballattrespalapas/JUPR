@@ -6,10 +6,11 @@ from typing import Any, Literal
 from fastapi import HTTPException, Query
 from pydantic import BaseModel, Field
 
-from jupr_app.domain.admin.roles import PERMISSION_MANAGE_MATCHES, has_permission, resolve_admin_role
+from jupr_app.domain.admin.roles import PERMISSION_DELETE_MATCHES, PERMISSION_MANAGE_MATCHES, has_permission, resolve_admin_role
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.services.admin_weekly_recap_service import (
     build_admin_weekly_recap_status,
+    delete_admin_weekly_recap_draft,
     generate_admin_weekly_recap,
     get_admin_weekly_recap,
     is_admin_weekly_recap_enabled,
@@ -31,6 +32,7 @@ class AdminWeeklyRecapGenerateRequest(BaseModel):
     confirmation_text: str = ""
     source: str = "next_weekly_recap_generate"
     expected_row_version: int | None = Field(default=None, ge=1)
+    expected_recap_id: str | None = Field(default=None, min_length=1, max_length=100)
 
 
 class AdminWeeklyRecapSaveRequest(BaseModel):
@@ -39,6 +41,7 @@ class AdminWeeklyRecapSaveRequest(BaseModel):
     confirmation_text: str = ""
     source: str = "next_weekly_recap_save"
     expected_row_version: int | None = Field(default=None, ge=1)
+    expected_recap_id: str | None = Field(default=None, min_length=1, max_length=100)
 
 
 class AdminWeeklyRecapPublishRequest(BaseModel):
@@ -48,6 +51,13 @@ class AdminWeeklyRecapPublishRequest(BaseModel):
     confirmation_text: str = ""
     source: str = "next_weekly_recap_publish"
     expected_row_version: int | None = Field(default=None, ge=1)
+    expected_recap_id: str | None = Field(default=None, min_length=1, max_length=100)
+
+
+class AdminWeeklyRecapDeleteRequest(BaseModel):
+    expected_recap_id: str = Field(min_length=1, max_length=100)
+    expected_row_version: int = Field(ge=1)
+    confirmation_text: str = ""
 
 
 def _require_service_role() -> None:
@@ -121,9 +131,10 @@ def install_admin_weekly_recap_routes(app, *, get_supabase_client) -> None:
             raise HTTPException(status_code=403, detail="Next Weekly Recap Admin is disabled.")
         _require_service_role()
         supabase = get_supabase_client()
-        _resolve_weekly_recap_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source="next_weekly_recap_list")
+        _, actor_role = _resolve_weekly_recap_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source="next_weekly_recap_list")
         try:
-            return list_admin_weekly_recaps(supabase, club_id=str(club_id), limit=limit)
+            result = list_admin_weekly_recaps(supabase, club_id=str(club_id), limit=limit)
+            return {**result, "can_delete_drafts": has_permission(actor_role, PERMISSION_DELETE_MATCHES)}
         except Exception as exc:
             _handle_common(exc)
 
@@ -171,6 +182,7 @@ def install_admin_weekly_recap_routes(app, *, get_supabase_client) -> None:
                 tz_name=payload.tz_name,
                 source=payload.source,
                 expected_row_version=payload.expected_row_version,
+                expected_recap_id=payload.expected_recap_id,
             )
         except Exception as exc:
             _handle_common(exc)
@@ -200,6 +212,37 @@ def install_admin_weekly_recap_routes(app, *, get_supabase_client) -> None:
                 tz_name=payload.tz_name,
                 source=payload.source,
                 expected_row_version=payload.expected_row_version,
+                expected_recap_id=payload.expected_recap_id,
+            )
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.delete("/admin/clubs/{club_id}/weekly-recap/recaps/{week_start}")
+    def delete_weekly_recap_draft(
+        club_id: str,
+        week_start: str,
+        payload: AdminWeeklyRecapDeleteRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_weekly_recap_enabled():
+            raise HTTPException(status_code=403, detail="Next Weekly Recap Admin is disabled.")
+        _require_communications_mutations()
+        _require_service_role()
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_weekly_recap_role_or_403(
+            supabase=supabase, club_id=str(club_id), authorization=authorization,
+            source="next_weekly_recap_delete",
+        )
+        try:
+            return delete_admin_weekly_recap_draft(
+                supabase,
+                club_id=str(club_id),
+                week_start=str(week_start),
+                expected_recap_id=payload.expected_recap_id,
+                expected_row_version=payload.expected_row_version,
+                actor_email=actor_email,
+                actor_role=actor_role,
+                confirmation_text=payload.confirmation_text,
             )
         except Exception as exc:
             _handle_common(exc)
@@ -230,6 +273,7 @@ def install_admin_weekly_recap_routes(app, *, get_supabase_client) -> None:
                 tz_name=payload.tz_name,
                 source=payload.source,
                 expected_row_version=payload.expected_row_version,
+                expected_recap_id=payload.expected_recap_id,
             )
         except Exception as exc:
             _handle_common(exc)

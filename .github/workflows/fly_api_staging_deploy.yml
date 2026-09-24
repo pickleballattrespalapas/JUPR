@@ -40,6 +40,8 @@ on:
           - open
           - public-intake-auth
           - communications
+          - admin-notifications
+          - club-settings
           - match-player
           - match-exclusion-recovery
           - support-requests

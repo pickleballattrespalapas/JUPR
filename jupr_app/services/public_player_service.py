@@ -18,7 +18,7 @@ PLAYER_MINIMAL_SELECT = "id,club_id,name,rating,wins,losses,matches_played"
 LEAGUE_RATINGS_SELECT = "id,club_id,player_id,league_name,rating,starting_rating,wins,losses,matches_played,is_active"
 LEAGUE_META_VISIBILITY_SELECT = "club_id,league_name,is_active,status"
 MATCH_SELECT = "*"
-PLAYER_BADGE_SELECT = "club_id,player_id,badge_id,earned_at,context_type,context_id,value_num,value_json,revoked_at"
+PLAYER_BADGE_SELECT = "id,club_id,player_id,badge_id,earned_at,context_type,context_id,value_num,value_json,revoked_at"
 PLAYER_BADGE_FALLBACK_SELECT = "club_id,player_id,badge_id,earned_at,context_type,context_id,value_num,value_json"
 BADGE_SELECT = "badge_id,name,category,prestige,rarity,tier,icon_key,lore,hint,scope,state,is_active"
 
@@ -492,6 +492,12 @@ def _public_awards(supabase: Any, *, club_id: str, player_id: int | str) -> dict
                     "requirements": badge_requirement(badge_id),
                     "count": len(cabinet_rows),
                     "last_earned_at": max(earned_values) or None,
+                    "achievements": [
+                        {"id": str(row.get("id")), "earned_at": _json_safe(row.get("earned_at")),
+                         "detail": _plain_text(_json_object(row.get("value_json")).get("tape_excerpt"), limit=500)}
+                        for row in cabinet_rows
+                        if _json_object(row.get("value_json")).get("rule_version") == "program-badges-v1"
+                    ],
                 }
             )
         for row in trophy_rows:

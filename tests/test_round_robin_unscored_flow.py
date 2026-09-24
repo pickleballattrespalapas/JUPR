@@ -200,7 +200,8 @@ def test_public_and_staff_component_navigation_contracts() -> None:
 
     assert "Boolean(editToken)" in public_runner
     assert "{scoredSession ? (" in admin_runner
-    assert "Official results" in admin_runner
+    assert "{scoredSession && !session.official_publish?.published_match_ids?.length" in admin_runner
+    assert "<GeneratorSubmission" in admin_runner
 
 
 def test_standings_pages_own_scored_progression_and_completion() -> None:

@@ -83,7 +83,7 @@ def test_admin_recap_has_full_unpublished_preview_and_print_surface() -> None:
     preview = _read("apps/web/app/admin/weekly-recap/AdminWeeklyRecapPreview.tsx")
     panel = _read("apps/web/app/admin/weekly-recap/WeeklyRecapAdminPanel.tsx")
 
-    assert "Unpublished draft — operator preview only" in preview
+    assert "Draft preview · Not published" in preview
     assert "window.print()" in preview
     assert "<NumberStrip recap={recap}" in preview
     assert "Around the Club" in preview
@@ -99,5 +99,10 @@ def test_guarded_off_communications_status_cards_do_not_prompt_for_sign_in() -> 
     ):
         page = _read(relative_path)
         assert "Sign in to load" not in page
-        assert "Available after admin sign-in" in page
-        assert "Guarded off" in page
+        if "weekly-recap" in relative_path:
+            assert "guarded FastAPI/Python" not in page
+            assert "manage_matches" not in page
+            assert "delete drafts you no longer need" in page
+        else:
+            assert "Available after admin sign-in" in page
+            assert "Guarded off" in page

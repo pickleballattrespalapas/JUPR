@@ -29,6 +29,7 @@ const serverSnapshot: AdminSessionState = {
 let sharedSnapshot: AdminSessionState = serverSnapshot;
 let initialized = false;
 let restoreRequest: Promise<void> | null = null;
+let sessionRevision = 0;
 const listeners = new Set<() => void>();
 
 function emit(next: AdminSessionState): void {
@@ -70,19 +71,30 @@ async function restoreSharedSession(
 
   restoreRequest = (async () => {
     try {
-      const authorized = await restoreAuthorizedAdminSession(undefined, {
-        changeSource: SHARED_SESSION_CHANGE_SOURCE
-      });
-      emit(snapshotFromSession(authorized));
-    } catch (error) {
-      emit(
-        snapshotFromSession(null, {
-          message:
-            error instanceof Error
-              ? error.message
-              : "Unable to refresh admin session."
-        })
-      );
+      // Session changes during a pending check must be verified after that
+      // check finishes. Never publish its result over a newer token or logout.
+      while (true) {
+        const revision = sessionRevision;
+        try {
+          const authorized = await restoreAuthorizedAdminSession(undefined, {
+            changeSource: SHARED_SESSION_CHANGE_SOURCE
+          });
+          if (revision !== sessionRevision) continue;
+          emit(snapshotFromSession(authorized));
+          return;
+        } catch (error) {
+          if (revision !== sessionRevision) continue;
+          emit(
+            snapshotFromSession(null, {
+              message:
+                error instanceof Error
+                  ? error.message
+                  : "Unable to refresh admin session."
+            })
+          );
+          return;
+        }
+      }
     } finally {
       restoreRequest = null;
     }
@@ -97,6 +109,7 @@ function handleSessionChange(event: Event): void {
       ? String(event.detail.source || "")
       : "";
   if (eventSource === SHARED_SESSION_CHANGE_SOURCE) return;
+  sessionRevision += 1;
 
   const stored = loadAdminSession();
   const trusted = Boolean(

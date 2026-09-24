@@ -1,3 +1,4 @@
+import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import Link from "next/link";
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
@@ -5,13 +6,14 @@ const swatchStyle = (background: string) => ({ width: "100%", minHeight: "72px",
 const buttonStyle = { display: "inline-block", padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800, textDecoration: "none" };
 const ghostButtonStyle = { ...buttonStyle, background: "white", color: "#0f172a" };
 
-const routeGroups = [
-  ["Public", ["/", "/clubs/tres-palapas", "/clubs/tres-palapas/leaderboards", "/clubs/tres-palapas/match-explorer", "/clubs/tres-palapas/players"]],
-  ["Tournament", ["/clubs/tres-palapas/tournament-registration", "/clubs/tres-palapas/tournament-roster", "/clubs/tres-palapas/tournament-partner-board", "/admin/tournaments", "/admin/tournament-live"]],
+const routeGroups = (clubSlug: string) => [
+  ["Public", ["/", `/clubs/${encodeURIComponent(clubSlug)}`, `/clubs/${encodeURIComponent(clubSlug)}/leaderboards`, `/clubs/${encodeURIComponent(clubSlug)}/match-explorer`, `/clubs/${encodeURIComponent(clubSlug)}/players`]],
+  ["Tournament", [`/clubs/${encodeURIComponent(clubSlug)}/tournament-registration`, `/clubs/${encodeURIComponent(clubSlug)}/tournament-roster`, `/clubs/${encodeURIComponent(clubSlug)}/tournament-partner-board`, "/admin/tournaments", "/admin/tournament-live"]],
   ["Operations", ["/admin", "/admin/match-log", "/admin/match-uploader", "/admin/league-manager", "/admin/tools", "/admin/badges"]]
 ] as const;
 
 export default function ThemeQaPage() {
+  const { clubSlug } = requireAdminWorkspace();
   return (
     <section>
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
@@ -67,7 +69,7 @@ export default function ThemeQaPage() {
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>Route smoke groups</h2>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "0.75rem" }}>
-            {routeGroups.map(([heading, routes]) => (
+            {routeGroups(clubSlug).map(([heading, routes]) => (
               <section key={heading}>
                 <h3>{heading}</h3>
                 <ul>

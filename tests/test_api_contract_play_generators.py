@@ -30,7 +30,7 @@ def test_generator_preview_and_round_runner_contracts() -> None:
     assert "Download CSV" in workspace
     assert "Download one-sheet PDF" in workspace
     assert 'import("jspdf")' in workspace
-    assert "Start session" in workspace
+    assert "Start ${ratingMode} session" in workspace
     assert "Only Round 1 is shown" in workspace
     assert '"jspdf"' in package
 

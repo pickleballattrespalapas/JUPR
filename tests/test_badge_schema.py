@@ -90,6 +90,15 @@ def test_badge_ids_snapshot():
         "mentor",
     ]
     badge_ids = [badge.id for badge in load_badge_definitions()]
+    expected += [
+        "leagues_completed_5", "leagues_completed_10", "leagues_completed_25",
+        "tournaments_completed_5", "tournaments_completed_10", "tournaments_completed_25",
+        "round_robins_completed_5", "round_robins_completed_10", "round_robins_completed_25",
+        "matches_together_10", "matches_together_25", "matches_together_50",
+        "wins_together_10", "wins_together_25", "wins_together_50",
+        "five_winning_partners", "triple_crown", "round_robin_wins_1", "round_robin_wins_5",
+        "round_robin_wins_10", "round_robin_wins_25", "round_robin_wins_50",
+    ]
     assert badge_ids == expected
 
 

@@ -18,7 +18,7 @@ export default async function LegacyScoreEntryPage({ params }: LegacyScoreEntryP
         <p style={{ color: "#475569" }}>
           This guarded workflow is available only in explicitly enabled staff environments.
         </p>
-        <p><Link href="/admin">Return to the operations cockpit</Link></p>
+        <p><Link href="/admin">Return to Admin Home</Link></p>
       </section>
     );
   }
@@ -40,7 +40,7 @@ export default async function LegacyScoreEntryPage({ params }: LegacyScoreEntryP
         The older club-ID score-entry address now resolves to the auth-aware club route. No score was submitted.
       </p>
       {error ? <p style={{ color: "#b91c1c" }}>{error}</p> : null}
-      <p><Link href="/admin">Return to the operations cockpit</Link></p>
+      <p><Link href="/admin">Return to Admin Home</Link></p>
     </section>
   );
 }

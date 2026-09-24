@@ -1,3 +1,4 @@
+import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import Link from "next/link";
 import AdminToolsPanel from "./AdminToolsPanel";
 
@@ -22,7 +23,7 @@ async function loadStatus(clubId: string): Promise<{ data: StatusResponse | null
 }
 
 export default async function AdminToolsPage() {
-  const clubId = "tres_palapas";
+  const { clubId } = requireAdminWorkspace();
   const { data: status, error } = await loadStatus(clubId);
   return (
     <section>
@@ -35,7 +36,7 @@ export default async function AdminToolsPage() {
         <p><Link href="/admin/top-players-printable">Previous-month Top 50</Link></p>
       </article>
       <AdminToolsPanel apiBase={apiBase()} clubId={clubId} status={status} />
-      <p style={{ marginTop: "1rem" }}><Link href="/admin/top-players-printable">Previous-month Top 50</Link> · <Link href="/admin/replay-history">Replay History</Link> · <Link href="/admin/badges">Badge Diagnostics</Link> · <Link href="/admin/match-canonical-audit">Match Canonical Audit</Link> · <Link href="/admin">Operations cockpit</Link></p>
+      <p style={{ marginTop: "1rem" }}><Link href="/admin/top-players-printable">Previous-month Top 50</Link> · <Link href="/admin/replay-history">Replay History</Link> · <Link href="/admin/badges">Badge Diagnostics</Link> · <Link href="/admin/match-canonical-audit">Match Canonical Audit</Link> · <Link href="/admin">Admin Home</Link></p>
     </section>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import { actionSuccess } from "@/components/interaction";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
@@ -77,6 +77,10 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
   const [socialSubmissionStatus, setSocialSubmissionStatus] = useState("pending");
   const [socialSubmissionQueue, setSocialSubmissionQueue] = useState<SocialSubmissionListResponse | null>(null);
   const [selectedSocialSubmissionId, setSelectedSocialSubmissionId] = useState("");
+  const followedNotification = useRef("");
+  const socialQueueScope = useRef("");
+  const focusSocialReview = useRef(false);
+  const socialReviewPanel = useRef<HTMLElement | null>(null);
   const [socialSubmissionAction, setSocialSubmissionAction] = useState<"approve" | "reject">("approve");
   const [socialSubmissionReason, setSocialSubmissionReason] = useState("");
   const [roleOperationKey, setRoleOperationKey] = useState("");
@@ -91,11 +95,12 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
   const [overviewMessage, setOverviewMessage] = useState<string | null>(null);
   const [socialQueueLoading, setSocialQueueLoading] = useState(false);
   const [socialQueueMessage, setSocialQueueMessage] = useState<string | null>(null);
-  const overviewRequest = useLatestRequestGuard(accessToken, clearProtectedAdminToolsState);
-  const socialQueueRequest = useLatestRequestGuard(accessToken);
-  const actionRequest = useLatestRequestGuard(accessToken);
+  const overviewRequest = useLatestRequestGuard(`${clubId}:${accessToken}`, clearProtectedAdminToolsState);
+  const socialQueueRequest = useLatestRequestGuard(`${clubId}:${accessToken}`);
+  const actionRequest = useLatestRequestGuard(`${clubId}:${accessToken}`);
 
   function clearProtectedAdminToolsState() {
+    socialQueueScope.current = "";
     socialQueueRequest.invalidate();
     actionRequest.invalidate();
     setOverview(null);
@@ -213,17 +218,18 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
     try {
       const payload = await requestJson<SocialSubmissionListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tools/social-submissions?status=${encodeURIComponent(socialSubmissionStatus)}&limit=100`);
       if (!socialQueueRequest.isCurrent(generation)) return;
+      socialQueueScope.current = `${clubId}:${accessToken}`;
       setSocialSubmissionQueue(payload);
       setSocialQueueMessage(`Loaded ${payload.submissions.length} ${payload.status} Club Social submission(s). No rows were written.`);
     } catch (error) { if (socialQueueRequest.isCurrent(generation)) setSocialQueueMessage(error instanceof Error ? error.message : "Unable to load the Club Social review queue."); }
     finally { if (socialQueueRequest.isCurrent(generation)) setSocialQueueLoading(false); }
   }
 
-  function selectSocialSubmission(submission: SocialSubmission) {
+  const selectSocialSubmission = useCallback((submission: SocialSubmission) => {
     setSelectedSocialSubmissionId(submission.id);
     setSocialSubmissionAction(submission.status === "saved" ? "reject" : "approve");
     setSocialSubmissionReason("");
-  }
+  }, []);
 
   async function moderateSocialSubmission(confirmationText: string) {
     const selected = socialSubmissionQueue?.submissions.find((submission) => submission.id === selectedSocialSubmissionId);
@@ -324,13 +330,38 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
   useAuthenticatedAutoLoad(
     status?.enabled !== false ? accessToken : "",
     loadOverview,
-    flaggedOnly ? "flagged" : "all"
+    `${clubId}:${flaggedOnly ? "flagged" : "all"}`
   );
   useAuthenticatedAutoLoad(
     status?.enabled !== false ? accessToken : "",
     loadSocialSubmissionQueue,
-    socialSubmissionStatus
+    `${clubId}:${socialSubmissionStatus}`
   );
+
+  const overviewReady = Boolean(overview);
+  useEffect(() => {
+    if (overviewReady && window.location.hash === "#social-submissions") {
+      document.getElementById("social-submissions")?.scrollIntoView({ block: "start" });
+    }
+  }, [overviewReady]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !accessToken || socialQueueScope.current !== `${clubId}:${accessToken}`) return;
+    const submissionId = new URLSearchParams(window.location.search).get("submission");
+    const linkKey = `${clubId}:${accessToken}:${submissionId}`;
+    if (!submissionId || followedNotification.current === linkKey) return;
+    const submission = socialSubmissionQueue?.submissions.find(item => item.id === submissionId);
+    if (!submission) return;
+    followedNotification.current = linkKey;
+    focusSocialReview.current = true;
+    selectSocialSubmission(submission);
+  }, [accessToken, clubId, socialSubmissionQueue, selectSocialSubmission]);
+  useEffect(() => {
+    if (!selectedSocialSubmissionId || !focusSocialReview.current || !socialReviewPanel.current) return;
+    focusSocialReview.current = false;
+    socialReviewPanel.current.scrollIntoView({ block: "start" });
+    socialReviewPanel.current.focus({ preventScroll: true });
+  }, [selectedSocialSubmissionId, overviewReady]);
 
   if (status && !status.enabled) return <article style={{ ...cardStyle, background: "#f8fafc" }}><h2 style={{ marginTop: 0 }}>Disabled</h2><p>Set <code>JUPR_ENABLE_NEXT_ADMIN_TOOLS=1</code> on FastAPI to enable guarded Admin Tools.</p></article>;
 
@@ -382,7 +413,7 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
           <p><button type="button" onClick={() => downloadRatingReport(ratingReport)} disabled={!ratingReport.rows.length} style={buttonStyle}>Download {ratingReport.scope} CSV</button></p>
         </div>}
       </article>
-      <article style={cardStyle}>
+      <article id="social-submissions" style={{ ...cardStyle, scrollMarginTop: "1rem" }}>
         <h2 style={{ marginTop: 0 }}>Club Social submission review</h2>
         <p style={{ color: "#475569" }}>Review unrated Club Social event submissions for this club. Loading a queue is read-only. Approve or reject requires <code>manage_matches</code> permission, a current expected status, and a Yes/No confirmation dialog; the dialog supplies the internal API safeguard.</p>
         <div style={{ display: "grid", gridTemplateColumns: "minmax(180px, 1fr) auto", gap: "0.75rem", alignItems: "end" }}>
@@ -399,7 +430,7 @@ export default function AdminToolsPanel({ apiBase, clubId, status }: Props) {
             const targetStatus = socialSubmissionAction === "approve" ? "saved" : "rejected";
             const isNoOp = selected.status === targetStatus;
             const expectedConfirmation = socialSubmissionQueue.confirmation_text[socialSubmissionAction];
-            return <section style={{ border: "1px solid #bfdbfe", background: "#eff6ff", borderRadius: "12px", padding: "1rem", marginTop: "1rem" }}>
+            return <section id="social-submission-review" ref={socialReviewPanel} tabIndex={-1} style={{ border: "1px solid #2563eb", background: "#eff6ff", borderRadius: "12px", padding: "1rem", marginTop: "1rem", scrollMarginTop: "1rem" }}>
               <h3 style={{ marginTop: 0 }}>Review: {selected.name}</h3>
               <p><strong>Status:</strong> {selected.status} · <strong>Submitted by:</strong> {selected.submitted_by_name} · <strong>Mode:</strong> {selected.submission_mode}</p>
               {selected.rejection_reason ? <p><strong>Previous rejection reason:</strong> {selected.rejection_reason}</p> : null}

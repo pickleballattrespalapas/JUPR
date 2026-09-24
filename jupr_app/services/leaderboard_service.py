@@ -3,9 +3,18 @@ from __future__ import annotations
 from jupr_app.data.paged_reads import read_all_rows
 from jupr_app.domain.player_search import matches_player_search
 from jupr_app.domain.gamification.presentation import badge_category
+from jupr_app.domain.leaderboard_metrics import (
+    EXTENDED_CARD_KEYS,
+    compute_overall_metrics,
+    overall_highlights,
+    team_upset_highlights,
+)
 
 import re
+from datetime import date, datetime, time, timedelta, timezone
+from math import isfinite
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from jupr_app.services.public_league_visibility import (
     ACTIVE_LEAGUE_VIEW,
@@ -59,6 +68,156 @@ class LeaderboardDataUnavailable(RuntimeError):
     """Raised when the server-only leaderboard source cannot be read."""
 
 
+class LeaderboardPeriodInvalid(ValueError):
+    """Raised when a requested leaderboard season does not belong to this club."""
+
+
+def _leaderboard_settings(supabase: Any, club_id: str) -> dict[str, Any]:
+    from services.api.club_site_models import LeaderboardSettings
+
+    try:
+        rows = supabase.table("club_leaderboard_settings").select("published").eq("club_id", club_id).execute().data or []
+    except Exception as exc:
+        # Older installations without the optional club website table keep the
+        # lifetime defaults. An outage must not silently switch an active season.
+        code = str(getattr(exc, "code", ""))
+        if code not in {"42P01", "PGRST205"}:
+            raise LeaderboardDataUnavailable("Unable to read the leaderboard settings.") from exc
+        rows = []
+    published = (rows[0].get("published") or {}) if rows else {}
+    try:
+        return LeaderboardSettings.model_validate(published or {}).model_dump(mode="json")
+    except ValueError as exc:
+        raise LeaderboardDataUnavailable("The published leaderboard settings are invalid.") from exc
+
+
+def _selected_period(settings: dict[str, Any], requested: str | None) -> dict[str, Any]:
+    selected = settings.get("default_season_id") if requested is None else str(requested).strip()
+    if selected in (None, "", "all"):
+        return {"id": None, "name": "All time", "start_date": None, "end_date": None, "timezone": settings.get("timezone", "America/Mazatlan")}
+    found = next((item for item in settings["seasons"] if item["id"] == selected), None)
+    if found is None:
+        raise LeaderboardPeriodInvalid("This leaderboard season is not available. Choose another season or All time.")
+    return dict(found)
+
+
+def _match_time(value: Any) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
+    except (ValueError, TypeError):
+        return None
+
+
+def _period_bounds(period: dict[str, Any]) -> tuple[datetime | None, datetime | None]:
+    zone = ZoneInfo(period["timezone"])
+    start = datetime.combine(date.fromisoformat(period["start_date"]), time.min, zone).astimezone(timezone.utc) if period.get("start_date") else None
+    end = datetime.combine(date.fromisoformat(period["end_date"]) + timedelta(days=1), time.min, zone).astimezone(timezone.utc) if period.get("end_date") else None
+    return start, end
+
+
+def _overall_matches(
+    supabase: Any, *, club_id: str, period: dict[str, Any], now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Read and normalize one complete Overall history for both stats and cards.
+
+    Rated popup/tournament games belong to Overall. Singles and unrated games
+    do not. Retain valid legacy ties, but never infer a winner for those games.
+    """
+    start, end = _period_bounds(period)
+    as_of = now or datetime.now(timezone.utc)
+    slots = ("t1_p1", "t1_p2", "t2_p1", "t2_p2")
+    columns = "id,club_id,date,match_format,rating_scope,deleted_at,score_t1,score_t2," + ",".join(
+        item for slot in slots for item in (slot, f"{slot}_r", f"{slot}_r_end")
+    )
+
+    def query_matches():
+        query = supabase.table("matches").select(columns).eq("club_id", club_id).lte("date", as_of.isoformat())
+        if start is not None:
+            query = query.gte("date", start.isoformat())
+        return query.lt("date", end.isoformat()) if end is not None else query
+
+    try:
+        matches = read_all_rows(query_matches, order="id")
+    except Exception as exc:
+        raise LeaderboardDataUnavailable("Unable to read the complete leaderboard match history.") from exc
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def score(value: Any) -> int | None:
+        if isinstance(value, bool):
+            return None
+        try:
+            parsed = float(value)
+            return int(parsed) if parsed.is_integer() else None
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    for match in matches:
+        match_id = str(match.get("id") or "")
+        when = _match_time(match.get("date"))
+        if not match_id or match_id in seen or when is None or when > as_of or match.get("deleted_at"):
+            continue
+        if str(match.get("club_id")) != str(club_id):
+            continue
+        if (start is not None and when < start) or (end is not None and when >= end):
+            continue
+        if str(match.get("match_format") or "").lower() == "singles" or str(match.get("rating_scope") or "").lower() in {"unrated", "singles"}:
+            continue
+        participants = [str(match.get(slot) or "") for slot in slots]
+        if any(not pid or pid == "0" for pid in participants) or len(set(participants)) != 4:
+            continue
+        s1, s2 = score(match.get("score_t1")), score(match.get("score_t2"))
+        if s1 is None or s2 is None or min(s1, s2) < 0 or s1 + s2 <= 0:
+            continue
+        seen.add(match_id)
+        result.append({**match, "date": when.isoformat(), "score_t1": s1, "score_t2": s2})
+    return sorted(result, key=lambda item: (_match_time(item["date"]), _safe_int(item["id"], 0), str(item["id"])))
+
+
+def _period_rows(
+    supabase: Any, rows: list[dict[str, Any]], *, club_id: str, period: dict[str, Any], now: datetime | None = None,
+    matches: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Derive a season without changing persisted ratings or lifetime counters."""
+    _, end = _period_bounds(period)
+    as_of = now or datetime.now(timezone.utc)
+    ongoing = end is None or as_of < end
+    if matches is None:
+        matches = _overall_matches(supabase, club_id=club_id, period=period, now=as_of)
+    history: dict[str, list[tuple[dict[str, Any], str]]] = {str(row["player_id"]): [] for row in rows}
+    for match in matches:
+        for slot in ("t1_p1", "t1_p2", "t2_p1", "t2_p2"):
+            pid = str(match[slot])
+            if pid in history:
+                history[pid].append((match, slot))
+
+    output: list[dict[str, Any]] = []
+    for row in rows:
+        selected = history[str(row["player_id"])]
+        baseline = None
+        # Use the rating carried into the first seasonal game, including any
+        # off-season staff correction. Missing snapshots must remain unknown.
+        if selected:
+            match, slot = selected[0]
+            baseline = _safe_float(match.get(f"{slot}_r"))
+        wins = losses = 0
+        for match, slot in selected:
+            difference = int(match["score_t1"]) - int(match["score_t2"])
+            own_difference = difference if slot.startswith("t1") else -difference
+            wins += int(own_difference > 0)
+            losses += int(own_difference < 0)
+        gain = 0.0 if not selected else None
+        if selected and baseline is not None:
+            last, slot = selected[-1]
+            finish = _safe_float(row.get("rating")) if ongoing else _safe_float(last.get(f"{slot}_r_end"))
+            if finish is not None:
+                gain = (_jupr(finish) or 0.0) - (_jupr(baseline) or 0.0)
+        output.append({**row, "wins": wins, "losses": losses, "matches_played": len(selected),
+                       "starting_rating": baseline, "rating_gain_jupr": gain})
+    return output
+
+
 def _safe_rows(response: Any) -> list[dict[str, Any]]:
     try:
         return [dict(row) for row in (response.data or [])]
@@ -107,7 +266,8 @@ def _safe_float(value: Any, default: float | None = None) -> float | None:
     if value is None or value == "":
         return default
     try:
-        return float(value)
+        parsed = float(value)
+        return parsed if isfinite(parsed) else default
     except Exception:
         return default
 
@@ -328,7 +488,7 @@ def _decorate_rows(
     previous_rating: float | None = None
     for rank, row in enumerate(ordered, start=1):
         rating = _safe_float(row.get("rating"))
-        starting_rating = _safe_float(row.get("starting_rating"), rating)
+        starting_rating = _safe_float(row.get("starting_rating"), None if "rating_gain_jupr" in row else rating)
         rating_jupr = _jupr(rating)
         starting_jupr = _jupr(starting_rating)
         wins = _safe_int(row.get("wins"), 0) or 0
@@ -346,7 +506,7 @@ def _decorate_rows(
             "rating_jupr": rating_jupr,
             "starting_rating": starting_rating,
             "starting_rating_jupr": starting_jupr,
-            "rating_gain_jupr": (
+            "rating_gain_jupr": row["rating_gain_jupr"] if "rating_gain_jupr" in row else (
                 None if rating_jupr is None or starting_jupr is None else rating_jupr - starting_jupr
             ),
             "gap_jupr": (
@@ -397,13 +557,18 @@ def _highlight_rows(rows: list[dict[str, Any]], *, min_games: int, league_name: 
                 return float("-inf")
             return _safe_float(raw, 0.0) or 0.0
 
-        return sorted(source, key=lambda row: (-value(row), int(row.get("rank") or 0)))[:5]
+        eligible = source
+        if key != "rating_jupr":
+            eligible = [row for row in source if int(row.get("matches_played") or 0) >= max(1, min_games)
+                        and row.get(key) is not None]
+        return sorted(eligible, key=lambda row: (-value(row), int(row.get("rank") or 0)))[:5]
 
     return {
         "highest_rating": top("rating_jupr", null_last=True),
         "most_improved": top("rating_gain_jupr", null_last=True),
         "best_win_pct": top("win_pct", null_last=True),
         "most_wins": top("wins"),
+        "most_matches": top("matches_played"),
     }
 
 
@@ -419,6 +584,7 @@ def build_public_leaderboard(
     player_id: str | int | None = None,
     limit: int = DEFAULT_PAGE_SIZE,
     offset: int = 0,
+    season: str | None = None,
 ) -> dict[str, Any]:
     """Build the complete, public-safe leaderboard projection for one scope.
 
@@ -480,8 +646,25 @@ def build_public_leaderboard(
     )
     min_games = max(0, _safe_int(selected_meta.get("min_games"), 0) or 0)
 
+    from services.api.club_site_models import LeaderboardSettings
+    settings = _leaderboard_settings(supabase, cid) if cid else LeaderboardSettings().model_dump(mode="json")
+    period = _selected_period(settings, season if selected == OVERALL_SCOPE else "all")
+
+    metrics: dict[str, dict[str, Any]] = {}
     if selected == OVERALL_SCOPE:
         base_rows = _overall_rows(players, club_id=cid)
+        min_games = settings["min_games"]
+        extended = bool(EXTENDED_CARD_KEYS.intersection(settings["cards"]))
+        as_of = datetime.now(timezone.utc)
+        matches = _overall_matches(supabase, club_id=cid, period=period, now=as_of) if cid and (period["id"] is not None or extended) else []
+        if period["id"] is not None:
+            base_rows = _period_rows(supabase, base_rows, club_id=cid, period=period, matches=matches, now=as_of)
+        if extended:
+            metrics = compute_overall_metrics(
+                matches, names={str(row["player_id"]): row["player_name"] for row in base_rows},
+                timezone=period["timezone"],
+                partnership_minimum=(settings.get("card_options", {}).get("best_partnership") or {}).get("minimum", 0),
+            )
     elif selected:
         base_rows = _league_rows(rating_rows, players, club_id=cid, league_name=selected)
     else:
@@ -524,11 +707,22 @@ def build_public_leaderboard(
     total = len(displayed)
     page_rows = displayed[safe_offset : safe_offset + safe_limit]
     active_count = sum(1 for row in base_rows if row.get("is_active") is True)
+    if selected == OVERALL_SCOPE:
+        card_options = settings.get("card_options") or {}
+        highlights = overall_highlights(filtered, metrics=metrics, min_games=min_games, card_options=card_options)
+        highlights["biggest_upset"] = team_upset_highlights(
+            matches, players=all_ranked, status=clean_status, search=clean_search,
+            min_games=min_games, options=card_options.get("biggest_upset") or {},
+        )
+    else:
+        highlights = _highlight_rows(filtered, min_games=min_games, league_name=selected)
 
     return {
         "scopes": scopes,
         "selected_scope": selected,
         "scope": selected_meta,
+        "leaderboard_settings": settings,
+        "period": period,
         "filters": {
             "league_view": clean_league_view,
             "status": clean_status,
@@ -544,7 +738,7 @@ def build_public_leaderboard(
         },
         "leaderboard": page_rows,
         "snapshot": snapshot,
-        "highlights": _highlight_rows(filtered, min_games=min_games, league_name=selected),
+        "highlights": highlights,
         "pagination": {
             "total": total,
             "offset": safe_offset,

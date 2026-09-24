@@ -1,3 +1,4 @@
+import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import GeneratorWorkspace from "@/app/admin/play-generators/GeneratorWorkspace";
 
 type StatusResponse = {
@@ -26,7 +27,7 @@ async function loadStatus(clubId: string): Promise<StatusResponse | null> {
 }
 
 export default async function RoundRobinGeneratorPage() {
-  const clubId = "tres_palapas";
+  const { clubId } = requireAdminWorkspace();
   const status = await loadStatus(clubId);
   return (
     <section>

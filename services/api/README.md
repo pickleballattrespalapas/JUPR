@@ -78,7 +78,28 @@ Never put `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`, or other server-on
 
 ## Admin operations migration flags
 
-`GET /admin/operations/status?club_id=...` powers the Next `/admin` cockpit.
+`GET /admin/clubs/{club_id}/notifications` returns the personal inbox, category
+preferences, exact source counts, and independent source availability.
+`PUT .../notifications/preferences` accepts `{categories: {key: boolean}}` and
+`PUT .../notifications/items/{key}` accepts `{state: "new"|"flagged"|"cleared"}`.
+`PUT .../notifications/bulk-clear` accepts `{keys: string[]}` (1–5000 keys),
+validates every selection before one atomic personal-state write, and preserves
+unselected notices. All three writes return the updated feed. Verified JWT identity and active club assignments
+scope every read/write. Browser callers cannot supply another user or snapshot.
+The `admin-notifications` staging wave (also included in `open`) allows these
+personal-state writes. They never mutate underlying club records or send email.
+
+Migration `admin_personal_notifications` adds service-role-only RLS tables and a
+narrow club-filtered tournament event projection. Cancellation audit contacts and
+private snapshots never enter the inbox. Activity covers 30 days; flagged activity
+is retained, while saved action states are revalidated against current sources.
+Disabled categories preserve state but hide their notices. Persistence failures
+fail the feed rather than presenting saved choices as defaults.
+
+`GET /admin/clubs/{club_id}/dashboard` remains available for aggregate review-queue
+counts. Both read endpoints are authenticated and private/no-store.
+
+`GET /admin/operations/status?club_id=...` remains the technical system/pilot status endpoint.
 It requires a verified Supabase bearer token and at least one matching,
 club-scoped `admin_role_assignments` row before building or returning
 operational posture. Existing email-only assignments remain compatible; when a

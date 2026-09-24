@@ -1,3 +1,4 @@
+import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import { redirect } from "next/navigation";
 import TournamentPhaseNav from "@/components/TournamentPhaseNav";
 import {
@@ -16,7 +17,7 @@ export default async function TournamentRegistrantEditPage({ params, searchParam
   const registrationId = decodeURIComponent(String(params.registrationId || "")).trim();
   if (!context.tournamentId) redirect("/admin/tournaments");
   if (!registrationId) redirect(tournamentRouteHref("/admin/tournaments/registration/registrants", context));
-  const clubId = "tres_palapas";
+  const { clubId } = requireAdminWorkspace();
   const { data, error } = await getAdminTournamentStatus(clubId);
   return (
     <section>

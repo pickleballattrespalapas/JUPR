@@ -7,6 +7,7 @@ export type AdminCapabilityAssignment = {
   club_id: string;
   role: string;
   permissions: string[];
+  scopes?: Array<{ kind: string; program_type: string; resource_id: string }>;
 };
 
 export type AdminCapabilities = {
@@ -188,10 +189,6 @@ export function getAdminApiBaseUrl(): string | null {
   return cleanBaseUrl(process.env.NEXT_PUBLIC_JUPR_API_BASE_URL) || null;
 }
 
-export function getDefaultAdminClubId(): string {
-  return String(process.env.NEXT_PUBLIC_JUPR_ADMIN_CLUB_ID || "tres_palapas").trim() || "tres_palapas";
-}
-
 export function safeAdminNextPath(value: string | null | undefined, fallback = "/admin"): string {
   const requested = String(value || "").trim();
   if (!requested || !requested.startsWith("/") || requested.startsWith("//") || requested.includes("\\") || /[\u0000-\u001f]/.test(requested)) {
@@ -365,7 +362,7 @@ export async function sendPasswordResetEmail(email: string, redirectTo?: string)
 
 export async function authorizeAdminSession(
   session: AdminSession,
-  requestedClubId = getDefaultAdminClubId()
+  requestedClubId = ""
 ): Promise<AdminSession> {
   const apiBase = getAdminApiBaseUrl();
   if (!apiBase) throw new Error("JUPR admin API configuration is missing.");
@@ -399,7 +396,7 @@ export async function authorizeAdminSession(
 
 export async function authorizeAndSaveAdminSession(
   session: AdminSession,
-  requestedClubId = getDefaultAdminClubId(),
+  requestedClubId = "",
   options: { preserveOnUnavailable?: boolean } = {}
 ): Promise<AdminSession> {
   try {
@@ -453,7 +450,7 @@ export async function refreshAdminSession(session = loadAdminSession()): Promise
 }
 
 export async function restoreAuthorizedAdminSession(
-  requestedClubId = getDefaultAdminClubId(),
+  requestedClubId = "",
   options: { changeSource?: string } = {}
 ): Promise<AdminSession | null> {
   if (!canUseBrowserStorage()) return null;
@@ -542,6 +539,66 @@ export function consumeHashSession(options: { requireRecovery?: boolean } = {}):
   );
   cleanAuthCallbackUrl();
   return session;
+}
+
+// Invitation sign-in deliberately returns an unpersisted session. A new staff
+// account has no capabilities until it explicitly accepts the invitation.
+export async function consumeStaffInvitationSession(): Promise<AdminSession | null> {
+  if (typeof window === "undefined") return null;
+  const tokenHash = new URLSearchParams(window.location.hash.replace(/^#/, "")).get("staff_token_hash");
+  if (!tokenHash) return refreshAdminSession(consumeHashSession() || loadAdminSession());
+  cleanAuthCallbackUrl();
+  const config = getAdminAuthConfig();
+  if (!config) throw new Error("Sign-in is unavailable.");
+  const response = await fetch(`${config.supabaseUrl}/auth/v1/verify`, {
+    method: "POST",
+    headers: { apikey: config.supabaseAnonKey, "Content-Type": "application/json" },
+    body: JSON.stringify({ token_hash: tokenHash, type: "email" })
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok || !payload?.access_token) throw new Error("This sign-in link is invalid or expired. Request another email.");
+  return normalizeSession(payload);
+}
+
+// The invited recipient has authenticated but has no club grant yet. Password
+// setup uses their own bearer session, never an admin credential or recovery bypass.
+export async function setInvitationPassword(password: string, session: AdminSession): Promise<AdminSession> {
+  if (password.length < ADMIN_PASSWORD_MIN_LENGTH) {
+    throw new Error(`Use at least ${ADMIN_PASSWORD_MIN_LENGTH} characters for your password.`);
+  }
+  if (!session?.access_token || session.recovery) throw new Error("Verify your email again to set a password.");
+  const current = await refreshAdminSession(session);
+  const config = getAdminAuthConfig();
+  if (!current || !config) throw new Error("Your sign-in expired. Request another verification link.");
+  let response: Response;
+  try {
+    response = await fetch(`${config.supabaseUrl}/auth/v1/user`, {
+      method: "PUT",
+      headers: {
+        apikey: config.supabaseAnonKey,
+        Authorization: `Bearer ${current.access_token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ password })
+    });
+  } catch {
+    throw new Error("Could not confirm your password was saved. Try signing in with the new password, or request another verification link.");
+  }
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    const detail = authResponseError(payload);
+    if (payload?.code === "same_password" || detail.includes("same password") || detail.includes("different from the old")) {
+      throw new Error("That is already your password. Choose a different one, or continue with your existing password.");
+    }
+    if (payload?.code === "weak_password" || detail.includes("weak") || detail.includes("password should") || detail.includes("password must") || detail.includes("at least")) {
+      throw new Error("Choose a longer, unique password that meets the account password requirements.");
+    }
+    if (response.status === 401 || response.status === 403 || payload?.code === "reauthentication_needed") {
+      throw new Error("Your sign-in needs to be verified again. Request another verification link.");
+    }
+    throw new Error("Unable to save your password right now. Try again, or request another verification link.");
+  }
+  return current;
 }
 
 async function exchangeRecoveryCode(code: string): Promise<AdminSession> {

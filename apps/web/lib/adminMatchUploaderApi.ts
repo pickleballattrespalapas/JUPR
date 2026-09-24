@@ -196,6 +196,6 @@ async function fetchJson<T>(path: string): Promise<ApiResult<T>> {
   }
 }
 
-export async function getAdminMatchUploaderStatus(clubId = "tres_palapas"): Promise<ApiResult<AdminMatchUploaderStatusResponse>> {
+export async function getAdminMatchUploaderStatus(clubId: string): Promise<ApiResult<AdminMatchUploaderStatusResponse>> {
   return fetchJson<AdminMatchUploaderStatusResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/match-uploader/status`);
 }
