@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
-import { actionSuccess, type ActionCompletion } from "@/components/interaction";
+import { actionSuccess, InteractionActionError, type ActionCompletion } from "@/components/interaction";
 import type { AdminLeagueManagerStatusResponse } from "@/lib/adminLeagueManagerApi";
 import { useAdminSession } from "@/lib/useAdminSession";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
@@ -114,7 +114,10 @@ export default function TeamLeagueSetupPanel({ apiBase, clubId, leagueName, leag
   const [idempotencyKey, setIdempotencyKey] = useState(operationKey);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const requestGuard = useLatestRequestGuard(`${accessToken}\u0000${leagueName}`, clearProtectedState);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadedScope, setLoadedScope] = useState<string | null>(null);
+  const scopeKey = `${apiBase}\u0000${clubId}\u0000${accessToken}\u0000${leagueName}`;
+  const requestGuard = useLatestRequestGuard(scopeKey, clearProtectedState);
 
   function clearProtectedState() {
     setSettings(null);
@@ -124,6 +127,8 @@ export default function TeamLeagueSetupPanel({ apiBase, clubId, leagueName, leag
     setIdempotencyKey(operationKey());
     setBusy(false);
     setMessage(null);
+    setLoadError(null);
+    setLoadedScope(null);
   }
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
@@ -134,7 +139,16 @@ export default function TeamLeagueSetupPanel({ apiBase, clubId, leagueName, leag
     if (options?.body) headers.set("Content-Type", "application/json");
     const response = await fetch(apiUrl(apiBase, path), { ...options, headers });
     const payload = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(String(payload?.detail || `API error (${response.status})`));
+    if (!response.ok) {
+      const detail = typeof payload?.detail === "string" ? payload.detail : `API error (${response.status})`;
+      if (response.status === 403 && detail === "Team leagues are temporarily unavailable.") {
+        throw new InteractionActionError("Team league setup is not enabled on this site yet.", { kind: "forbidden" });
+      }
+      if (response.status === 403 && detail.startsWith("Admin team-league writes are staging-only.")) {
+        throw new InteractionActionError("Saving team league settings is not enabled on this site yet.", { kind: "forbidden" });
+      }
+      throw new Error(detail);
+    }
     return payload as T;
   }
 
@@ -151,6 +165,8 @@ export default function TeamLeagueSetupPanel({ apiBase, clubId, leagueName, leag
     const generation = requestGuard.begin();
     setBusy(true);
     setMessage(null);
+    setLoadError(null);
+    setLoadedScope(null);
     try {
       const payload = await requestJson<TeamLeagueListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/team-leagues`);
       if (!requestGuard.isCurrent(generation)) return;
@@ -159,9 +175,10 @@ export default function TeamLeagueSetupPanel({ apiBase, clubId, leagueName, leag
       setSettings(loaded);
       setDraft(nextDraft);
       setLoadedDraft(nextDraft);
+      setLoadedScope(scopeKey);
     } catch (error) {
       if (requestGuard.isCurrent(generation)) {
-        setMessage(error instanceof Error ? error.message : "Unable to load team league setup.");
+        setLoadError(error instanceof Error ? error.message : "Unable to load team league setup.");
       }
     } finally {
       if (requestGuard.isCurrent(generation)) setBusy(false);
@@ -179,6 +196,9 @@ export default function TeamLeagueSetupPanel({ apiBase, clubId, leagueName, leag
   }
 
   async function save(confirmationText: string): Promise<ActionCompletion> {
+    if (loadedScope !== scopeKey || !writeReady || !isDraft) {
+      throw new InteractionActionError("Team league settings must load successfully before you can save changes.", { kind: "forbidden" });
+    }
     const teamSize = Number(draft.teamSize);
     const maxAlternates = Number(draft.maxAlternates);
     const mixedRequiredMen = Number(draft.mixedRequiredMen);
@@ -238,11 +258,25 @@ export default function TeamLeagueSetupPanel({ apiBase, clubId, leagueName, leag
     }
   }
 
-  useAuthenticatedAutoLoad(accessToken ? `${accessToken}\u0000${leagueName}` : "", load);
+  useAuthenticatedAutoLoad(accessToken ? scopeKey : "", load);
 
   const isDraft = leagueStatus === "draft";
   const writeReady = status.league_manager_writes_enabled !== false;
   const hasChanges = JSON.stringify(draft) !== JSON.stringify(loadedDraft);
+
+  if (loadedScope !== scopeKey) {
+    return (
+      <article style={cardStyle} data-testid="team-league-setup">
+        <h2 style={{ marginTop: 0 }}>Team league setup</h2>
+        {loadError ? (
+          <>
+            <p role="alert" style={{ color: "#b91c1c" }}>{loadError} No team settings have been changed.</p>
+            <button type="button" onClick={() => void load()} disabled={busy}>Check availability again</button>
+          </>
+        ) : <p role="status">{accessToken ? "Loading team league setup…" : "Sign in to view team league setup."}</p>}
+      </article>
+    );
+  }
 
   return (
     <article style={cardStyle} data-testid="team-league-setup">
