@@ -87,6 +87,7 @@ function statusLabel(entry: PublicTournamentRosterEntry): string {
   if (value === "registered") return "Registered";
   if (value === "waitlist") return "Waitlisted";
   if (value === "needs partner") return "Needs a partner";
+  if (value === "needs team") return "Needs a team";
   if (value === "pending partner request") return "Partner request pending";
   if (value === "pending registration") return "Pending registration";
   return "Under review";
@@ -96,7 +97,7 @@ function statusStyle(status: string) {
   if (status === "Registered") {
     return { background: "#dcfce7", borderColor: "#86efac", color: "#166534" };
   }
-  if (status === "Needs a partner" || status === "Partner request pending" || status === "Pending registration") {
+  if (status === "Needs a partner" || status === "Needs a team" || status === "Partner request pending" || status === "Pending registration") {
     return { background: "#fef3c7", borderColor: "#fde68a", color: "#92400e" };
   }
   if (status === "Waitlisted") {
@@ -390,6 +391,11 @@ export default async function TournamentRosterPage({
                           </li>
                         ))}
                       </ul>
+                      {status === "Needs a team" ? (
+                        <p style={{ margin: "0.65rem 0 0", color: "#475569" }}>
+                          Registered individually; awaiting team assignment.
+                        </p>
+                      ) : null}
                       {entry.combined_rating != null ? (
                         <p style={{ margin: "0.65rem 0 0", fontWeight: 700 }}>
                           Combined rating: {entry.combined_rating.toFixed(2)}

@@ -236,3 +236,42 @@ def test_public_tournament_roster_reports_missing_schema() -> None:
     assert payload["available"] is False
     assert payload["tournament"] is None
     assert "tournament_registration_selections" in str(payload["setup_error"])
+
+
+@pytest.mark.parametrize("registration_status, expected", [
+    ("confirmed", "Needs Team"), ("ADMIN_CONFIRMED", "Needs Team"),
+    ("REVIEW", "Review"), ("PENDING", "Review"), ("UNKNOWN", "Review"),
+])
+def test_solo_four_player_roster_distinguishes_team_placement_from_review(registration_status, expected):
+    from jupr_app.domain.tournament_registration_repo import build_registration_state
+
+    storage = fake_storage()
+    storage["tournament_event_options"][0].update(
+        competition_format="FOUR_PLAYER_TEAM", team_roster_size=4,
+        event_type="MIXED_DOUBLES", partner_required=True, gender_restriction="MIXED",
+    )
+    storage["tournament_registrations"] = [{
+        "id": "solo", "tournament_id": "t1", "display_name": "Solo Player",
+        "email": "solo.private@example.invalid", "status": registration_status,
+        "gender": "Men", "doubles_skill": 5.24, "age": 38,
+    }]
+    storage["tournament_registration_selections"] = [{
+        "id": "solo-selection", "registration_id": "solo", "tournament_id": "t1",
+        "event_option_id": "event1", "registration_day_id": "day1", "partner_mode": "NONE",
+    }]
+    supabase = FakeSupabase(storage)
+    payload = build_public_tournament_roster_page(supabase, club_id="club-1", registration_slug="tres-open")
+    entry, = payload["roster"]["registrations_by_event"]
+    assert entry["status"] == expected
+    assert entry["members"][0]["display_name"] == "Solo Player"
+    assert not payload["roster"]["confirmed_teams"]
+    assert not payload["roster"]["players_needing_partners"]
+    assert bool(payload["roster"]["unresolved_partner_entries"]) == (expected == "Review")
+    assert "solo.private@example.invalid" not in json.dumps(payload)
+    state = build_registration_state(
+        supabase, storage["tournaments"][0], storage["tournament_registration_settings"][0],
+        storage["tournament_registration_days"], storage["tournament_event_options"],
+    )
+    compiled, = state["event_rosters"][0]["entries"]
+    assert compiled["status"] == "REVIEW", "An individual signup must not become a draw-ready four-player team"
+    assert any(issue["issue_type"] == "FOUR_PLAYER_TEAM_SETUP_REQUIRED" for issue in state["issues"])
