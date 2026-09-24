@@ -1,3 +1,4 @@
+import LeagueManagerLoadError from "../LeagueManagerLoadError";
 import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import { redirect } from "next/navigation";
 import { getClubPlayerOptions } from "@/lib/api";
@@ -31,10 +32,10 @@ export default async function LeagueManagerLivePage({ searchParams }: Props) {
       <h1 style={{ marginTop: 0 }}>{leagueName} live rounds</h1>
       <LeagueManagerNav leagueId={context.leagueId} leagueName={leagueName} leagueType={context.leagueType || null} />
 
-      {leagueError ? <p role="alert" style={{ color: "#b91c1c" }}>League Manager is unavailable. {leagueError}</p> : null}
-      {liveDomainError ? <p role="alert" style={{ color: "#b91c1c" }}>League Live is unavailable. {liveDomainError}</p> : null}
-      {uploaderError ? <p role="alert" style={{ color: "#b91c1c" }}>Match Uploader is unavailable. {uploaderError}</p> : null}
-      {playersError ? <p role="alert" style={{ color: "#b91c1c" }}>Player lookup is unavailable. {playersError}</p> : null}
+      {leagueError ? <LeagueManagerLoadError error={leagueError} /> : null}
+      {liveDomainError ? <LeagueManagerLoadError error={liveDomainError} service="League Live" /> : null}
+      {uploaderError ? <LeagueManagerLoadError error={uploaderError} service="Match Uploader" /> : null}
+      {playersError ? <LeagueManagerLoadError error={playersError} service="Player lookup" /> : null}
 
       {leagueStatus && liveDomainStatus && uploaderStatus ? (
         <SelectedLeaguePanelScope leagueName={leagueName}>
