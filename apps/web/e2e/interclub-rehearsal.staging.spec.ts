@@ -268,7 +268,9 @@ test("interclub paper packet, score entry, approval and public results", async (
   await signupPanel.getByText(`Manage ${reviewEntry.name}`, { exact: true }).click();
   const reviewForm = signupPanel.getByRole("form", { name: `Review placement for ${reviewEntry.name}` });
   await expect(reviewForm).toBeVisible();
-  await reviewForm.getByLabel("Lineup place", { exact: true }).selectOption("female");
+  const lineupPlace = reviewForm.getByLabel("Lineup place", { exact: true });
+  await expect(lineupPlace).toBeVisible();
+  await lineupPlace.selectOption("female");
   const reviewedBoardRefresh = page.waitForResponse(r => r.url() === `${queueRoot}/signup` && r.request().method() === "GET");
   const reviewed = page.waitForResponse(r => r.url() === `${queueRoot}/signup/actions` && r.request().method() === "POST");
   await reviewForm.getByRole("button", { name: "Approve placement", exact: true }).click();
