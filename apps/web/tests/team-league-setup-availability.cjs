@@ -74,6 +74,38 @@ const assertNoEditor = () => {
   assert.equal(tree.root.findByType(ConfirmAction).props.disabled, true);
   await act(async () => tree.unmount());
 
+  // A new two-player league can save defaults; four-player settings persist on reload.
+  for (const size of [2, 4]) {
+    let persisted = null;
+    let savedCount = 0;
+    global.fetch = async (_url, request) => {
+      if (request.method === "PUT") {
+        const body = JSON.parse(request.body);
+        assert.equal(body.expected_settings_version, 0);
+        assert.equal(body.settings.team_size, size);
+        assert.equal(body.settings.mixed_required_men, size / 2);
+        assert.equal(body.settings.mixed_required_women, size / 2);
+        persisted = { ...body.settings, league_name: props.leagueName, settings_version: 1 };
+        savedCount++;
+        return response({ committed: true });
+      }
+      return response({ leagues: persisted ? [persisted] : [] });
+    };
+    await act(async () => { tree = create(React.createElement(Setup, props)); });
+    assert.equal(tree.root.findByType(ConfirmAction).props.disabled, false);
+    if (size === 4) {
+      await act(async () => tree.root.findAllByType("select")[0].props.onChange({ target: { value: "4" } }));
+      assert.match(text(), /An admin assembles these rosters/);
+    }
+    await act(async () => tree.root.findByType(ConfirmAction).props.onConfirm("SAVE TEAM LEAGUE"));
+    assert.equal(savedCount, 1);
+    await act(async () => tree.unmount());
+    await act(async () => { tree = create(React.createElement(Setup, props)); });
+    assert.equal(tree.root.findAllByType("select")[0].props.value, String(size));
+    assert.equal(tree.root.findByType(ConfirmAction).props.disabled, true);
+    await act(async () => tree.unmount());
+  }
+
   global.fetch = async () => response({ detail: "Temporary load failure." }, 503);
   await act(async () => { tree = create(React.createElement(Setup, props)); });
   assert.match(text(), /Temporary load failure/);
