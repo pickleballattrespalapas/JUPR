@@ -1,3 +1,4 @@
+import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import Link from "next/link";
 import VerifiedRequestsPanel from "./VerifiedRequestsPanel";
 
@@ -22,7 +23,7 @@ async function loadStatus(clubId: string): Promise<{ data: StatusResponse | null
 }
 
 export default async function VerifiedUpdateRequestsAdminPage() {
-  const clubId = "tres_palapas";
+  const { clubId } = requireAdminWorkspace();
   const { data: status, error } = await loadStatus(clubId);
   return (
     <section>

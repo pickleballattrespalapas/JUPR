@@ -1,3 +1,5 @@
+import type { LeaderboardCard, LeaderboardSettings } from "@/lib/clubSite";
+
 export type ClubSummary = {
   id: string;
   slug: string;
@@ -10,13 +12,17 @@ export type ClubSummary = {
   is_active?: boolean | null;
 };
 
+export type LeaderboardTeamMember = { player_id: string | number; player_name: string };
+
 export type LeaderboardEntry = {
   rank?: number | null;
   rank_position?: number | null;
   club_id?: string;
   league_name?: string | null;
-  player_id?: string | number;
+  player_id?: string | number | null;
   player_name: string;
+  team_key?: string;
+  team_members?: [LeaderboardTeamMember, LeaderboardTeamMember];
   rating?: number | null;
   rating_jupr?: number | null;
   starting_rating?: number | null;
@@ -33,6 +39,9 @@ export type LeaderboardEntry = {
   badges?: LeaderboardBadge[];
   badge_count?: number;
   updated_at?: string | null;
+  metric_value?: number | null;
+  metric_display?: string | null;
+  metric_sample?: number | null;
 };
 
 export type LeaderboardBadge = {
@@ -71,12 +80,15 @@ export type LeaderboardResponse = {
   };
   leaderboard: LeaderboardEntry[];
   snapshot?: LeaderboardEntry | null;
-  highlights: {
-    highest_rating: LeaderboardEntry[];
-    most_improved: LeaderboardEntry[];
-    best_win_pct: LeaderboardEntry[];
-    most_wins: LeaderboardEntry[];
+  leaderboard_settings?: LeaderboardSettings;
+  period?: {
+    id: string | null;
+    name: string;
+    start_date: string | null;
+    end_date: string | null;
+    timezone: string | null;
   };
+  highlights: Partial<Record<LeaderboardCard, LeaderboardEntry[]>>;
   pagination: { total: number; offset: number; limit: number; has_more: boolean };
 };
 
@@ -193,6 +205,7 @@ export type PublicBadgeAward = {
   requirements?: string | null;
   count: number;
   last_earned_at?: string | null;
+  achievements?: { id: string; earned_at?: string | null; detail?: string | null }[];
 };
 
 export type PublicTrophy = {
@@ -596,6 +609,7 @@ export type LeaderboardRequest = {
   search?: string | null;
   sort?: "rank" | "rating" | "matches" | "win_pct" | "gain" | "name";
   playerId?: string | number | null;
+  season?: string | null;
   limit?: number;
   offset?: number;
 };
@@ -611,6 +625,7 @@ export async function getClubLeaderboard(
   if (options.search) params.set("q", String(options.search));
   if (options.sort) params.set("sort", options.sort);
   if (options.playerId != null && String(options.playerId).trim()) params.set("player_id", String(options.playerId));
+  if (options.season) params.set("season", options.season);
   if (options.limit != null) params.set("limit", String(options.limit));
   if (options.offset != null) params.set("offset", String(options.offset));
   const query = params.toString();

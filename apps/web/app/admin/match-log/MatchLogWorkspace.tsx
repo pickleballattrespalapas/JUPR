@@ -1,4 +1,5 @@
 "use client";
+import { useAdminWorkspace } from "@/lib/useAdminWorkspace";
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -116,7 +117,7 @@ function DuplicateGroupCard({ group, resolved = false }: { group: AdminDuplicate
 }
 
 export default function MatchLogWorkspace({ searchParams, mode }: MatchLogWorkspaceProps) {
-  const clubId = "tres_palapas";
+  const { clubId } = useAdminWorkspace();
   const { accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
   const apiBase = getAdminApiBaseUrl();
   const [rawData, setRawData] = useState<AdminMatchLogResponse | null>(null);
@@ -266,6 +267,7 @@ export default function MatchLogWorkspace({ searchParams, mode }: MatchLogWorksp
   }, [
     accessToken,
     apiBase,
+    clubId,
     contextIdsParam,
     contextTypeParam,
     endDateParam,
@@ -378,7 +380,7 @@ export default function MatchLogWorkspace({ searchParams, mode }: MatchLogWorksp
           <h2 style={{ marginTop: 0 }}>Next Match Log is disabled</h2>
           <p style={muted}>{data.warnings?.[0] || "Use Streamlit Match Log until this workflow is enabled for the pilot."}</p>
           <p style={{ marginBottom: 0 }}>
-            <Link href="/admin">Back to operations cockpit</Link>
+            <Link href="/admin">Back to Admin Home</Link>
           </p>
         </article>
       ) : null}

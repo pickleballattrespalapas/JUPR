@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/PublicClubLink";
 import type { LeagueAwardProgress, LeagueAwardProgressRow, LeagueAwardRace } from "@/lib/api";
 
 const cardStyle = {

@@ -151,6 +151,9 @@ def test_modified_admin_actions_are_scoped_to_the_current_access_token() -> None
             assert "const actionRequest = useLatestRequestGuard(sessionScope);" in source
             assert "JSON.stringify([accessToken, apiBase, clubId, initialTournamentId, selectedTournamentId, selectedRegistrationIds, includeCancelled, includeRegistrationEvents, includeRegistrationEditLinks, broadcastSubject, broadcastMessage])" in source
             assert "useLatestRequestGuard(previewScope, clearBroadcastPreview)" in source
+        elif relative.endswith("VerifiedRequestsPanel.tsx"):
+            assert "const actionRequest = useLatestRequestGuard(`${clubId}:${accessToken}`);" in source
+            assert "useLatestRequestGuard(`${clubId}:${accessToken}`, () =>" in source
         else:
             assert "const actionRequest = useLatestRequestGuard(accessToken" in source, relative
         for action_name in action_names:
@@ -163,7 +166,7 @@ def test_modified_admin_actions_are_scoped_to_the_current_access_token() -> None
 def test_existing_shared_action_guards_remain_token_scoped() -> None:
     support = _source("apps/web/app/admin/support-requests/SupportRequestsPanel.tsx")
     support_action = _async_function_body(support, "saveStatus")
-    assert "useLatestRequestGuard(accessToken, clearProtectedSupportRequests)" in support
+    assert "useLatestRequestGuard(`${clubId}:${accessToken}`, clearProtectedSupportRequests)" in support
     assert "requestsRequest.begin()" in support_action
     assert "requestsRequest.isCurrent(" in support_action
 
@@ -192,7 +195,7 @@ def test_existing_shared_action_guards_remain_token_scoped() -> None:
         (
             "apps/web/app/admin/weekly-recap/WeeklyRecapAdminPanel.tsx",
             "writeRequest",
-            ("generateDraft", "saveDraft", "publishAction"),
+            ("generateDraft", "saveDraft", "publishAction", "deleteDraft"),
         ),
         (
             "apps/web/app/admin/league-manager/awards/LeagueAwardsPanel.tsx",
@@ -213,7 +216,13 @@ def test_existing_shared_action_guards_remain_token_scoped() -> None:
         ),
     ):
         source = _source(relative)
-        assert f"useLatestRequestGuard(accessToken" in source
+        if relative.endswith("WeeklyRecapAdminPanel.tsx"):
+            assert 'const requestScope = `${clubId}\\u0000${accessToken}`;' in source
+            assert "const writeRequest = useLatestRequestGuard(requestScope);" in source
+        elif relative.endswith("AdminToolsPanel.tsx"):
+            assert "const actionRequest = useLatestRequestGuard(`${clubId}:${accessToken}`);" in source
+        else:
+            assert "useLatestRequestGuard(accessToken" in source
         for action in actions:
             body = _async_function_body(source, action)
             assert f"{request_name}.begin()" in body, f"{relative}:{action}"
@@ -242,22 +251,24 @@ def test_admin_session_ignores_unrelated_storage_events() -> None:
     assert 'window.addEventListener("storage", load);' not in hook
 
 
-def test_admin_operations_cockpit_is_client_gated_and_bearer_authorized() -> None:
+def test_admin_home_is_client_gated_and_bearer_authorized() -> None:
     page = _source("apps/web/app/admin/page.tsx")
-    cockpit = _source("apps/web/app/admin/AdminOperationsCockpit.tsx")
-    api = _source("apps/web/lib/adminOperationsApi.ts")
+    home = _source("apps/web/app/admin/AdminHome.tsx")
+    api = _source("apps/web/lib/adminNotificationsApi.ts")
+    notifications = _source("apps/web/components/AdminNotificationCenter.tsx")
 
-    assert "getAdminOperationsStatus" not in page
-    assert "AdminOperationsCockpit" in page
-    assert '"use client";' in cockpit
-    assert "useAdminSession()" in cockpit
-    assert "useAuthenticatedAutoLoad(accessToken, loadStatus, clubId)" in cockpit
-    assert "useLatestRequestGuard" in cockpit
-    assert "if (sessionLoading || !accessToken || !session)" in cockpit
-    assert "setData(null)" in cockpit
+    assert "getAdminDashboard" not in page
+    assert "AdminHome" in page
+    assert '"use client";' in home
+    assert "useAdminSession()" in home
+    assert "<AdminNotificationCenter accessToken={accessToken} clubId={clubId} compact" in home
+    assert "useAuthenticatedAutoLoad(accessToken, refresh, clubId)" in notifications
+    assert "useLatestRequestGuard" in notifications
+    assert "if (sessionLoading || !accessToken || !session)" in home
+    assert "setData(null)" in notifications
     assert "Authorization: `Bearer ${accessToken}`" in api
     assert 'cache: "no-store"' in api
-    assert "club_id" in api
+    assert "encodeURIComponent(clubId)" in api
 
 
 def test_admin_pilot_match_log_readiness_forwards_the_bearer_token() -> None:

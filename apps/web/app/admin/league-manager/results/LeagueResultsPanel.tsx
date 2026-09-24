@@ -1,4 +1,5 @@
 "use client";
+import { useAdminWorkspace } from "@/lib/useAdminWorkspace";
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -135,6 +136,7 @@ export default function LeagueResultsPanel({
   initialLeague,
   initialLeagueType
 }: Props) {
+  const { clubSlug } = useAdminWorkspace();
   const router = useRouter();
   const { accessToken, loading: sessionLoading } = useAdminSession();
   const [results, setResults] = useState<AdminLeagueResultsResponse | null>(null);
@@ -223,7 +225,7 @@ export default function LeagueResultsPanel({
   const leagueName = results?.league_name || initialLeague;
   const leagueId = results?.league_id || initialLeagueId;
   const leagueType = results?.league_type || initialLeagueType || "Individual";
-  const publicHref = leagueRouteHref("/clubs/tres-palapas/league-results", {
+  const publicHref = leagueRouteHref(`/clubs/${encodeURIComponent(clubSlug)}/league-results`, {
     leagueId,
     leagueName,
     leagueType

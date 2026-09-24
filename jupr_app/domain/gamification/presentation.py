@@ -14,6 +14,10 @@ _CATEGORIES = {badge_id: category for category, ids in _GROUPS.items() for badge
 
 
 def badge_category(badge_id: str) -> str:
+    from jupr_app.domain.gamification.program_badge_catalog import PROGRAM_BADGES
+    for badge in PROGRAM_BADGES:
+        if badge.id == str(badge_id):
+            return badge.category
     return _CATEGORIES.get(str(badge_id), "Match Achievements")
 
 

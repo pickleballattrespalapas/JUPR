@@ -838,7 +838,7 @@ def test_private_operation_schema_and_ui_recovery_contracts() -> None:
     assert "for update" in migration
     assert "jupr_tournament_not_empty" in migration
     assert "grant execute on function public.admin_delete_empty_tournament_draft_cas" in migration
-    assert 'allow_methods=["GET", "POST", "PUT", "PATCH", "OPTIONS"]' in api_main
+    assert 'allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]' in api_main
     assert "Review publish impact (dry run)" in setup_panel
     assert "expected_state_fingerprint" in setup_panel
     assert "direct_import_available" in registration_panel

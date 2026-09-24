@@ -5,6 +5,7 @@ from typing import Any, Callable
 from fastapi import HTTPException, Query
 
 from jupr_app.domain.admin.roles import ALL_ROLES, ROLE_PERMISSION_MATRIX
+from jupr_app.domain.admin.staff_policy import assignment_active
 from services.api.auth import authenticate_bearer, auth_header
 
 
@@ -20,6 +21,8 @@ def _matching_assignments(
 ) -> list[dict[str, Any]]:
     assignments: list[dict[str, Any]] = []
     for row in rows:
+        if not assignment_active(row):
+            continue
         row_user_id = str(row.get("user_id") or "").strip()
         if row_user_id and row_user_id != user_id:
             continue
@@ -31,6 +34,7 @@ def _matching_assignments(
             {
                 "club_id": club_id,
                 "role": role,
+                **({"scopes": row.get("scopes", []), "expires_at": row.get("expires_at")} if role in {"administrator", "operator"} else {}),
                 "permissions": sorted(ROLE_PERMISSION_MATRIX.get(role, frozenset())),
             }
         )
@@ -56,7 +60,7 @@ def require_admin_assignments(
         rows = (
             get_supabase_client()
             .table("admin_role_assignments")
-            .select("club_id,role,user_id")
+            .select("*")
             .eq("email", user.email)
             .execute()
             .data
@@ -77,6 +81,28 @@ def require_admin_assignments(
 
 def install_admin_auth_routes(app, *, get_supabase_client) -> None:
     """Install the verified JWT -> JUPR capability boundary used by admin login."""
+
+    @app.get("/admin/auth/workspaces")
+    def get_admin_workspaces(
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        _, assignments = require_admin_assignments(
+            get_supabase_client=get_supabase_client, authorization=authorization,
+        )
+        club_ids = sorted({row["club_id"] for row in assignments})
+        try:
+            # Only assigned club identities are disclosed, including draft accounts
+            # whose administrators need access to complete onboarding.
+            clubs = get_supabase_client().table("clubs").select(
+                "id,slug,name"
+            ).in_("id", club_ids).order("name").execute().data or []
+        except Exception as exc:
+            raise HTTPException(503, "Club workspaces are temporarily unavailable.") from exc
+        return {"workspaces": [
+            {"club_id": row["id"], "club_slug": row["slug"], "club_name": row["name"],
+             "roles": sorted({a["role"] for a in assignments if a["club_id"] == row["id"]})}
+            for row in clubs if row["id"] in club_ids
+        ]}
 
     @app.get("/admin/auth/capabilities")
     def get_admin_auth_capabilities(

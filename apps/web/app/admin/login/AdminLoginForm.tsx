@@ -130,7 +130,7 @@ export default function AdminLoginForm() {
         <p style={{ color: "#92400e" }}>
           Set the browser-safe Supabase URL/key and <code>NEXT_PUBLIC_JUPR_API_BASE_URL</code> in the Vercel environment before using the Next admin login shell.
         </p>
-        <p style={{ marginBottom: 0 }}><Link href="/admin">Back to operations cockpit</Link></p>
+        <p style={{ marginBottom: 0 }}><Link href="/admin">Back to Admin Home</Link></p>
       </article>
     );
   }
@@ -148,7 +148,7 @@ export default function AdminLoginForm() {
           <Link href="/admin/match-uploader">Open Match Uploader</Link>
           <Link href="/admin/match-log">Open Match Log</Link>
           <Link href="/admin/players">Open Player Editor</Link>
-          <Link href="/admin">Operations cockpit</Link>
+          <Link href="/admin">Admin Home</Link>
           <button type="button" onClick={onSignOut} disabled={busy} style={ghostButtonStyle}>Sign out</button>
         </div>
         {message ? <p style={{ color: message.includes("Signed") || message.includes("cleared") ? "#166534" : "#b91c1c" }}>{message}</p> : null}

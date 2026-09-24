@@ -24,7 +24,7 @@ IMMUTABLE_IMAGE_REF = (
     f"registry.fly.io/{verifier.PRODUCTION_FLY_APP}@{IMAGE_DIGEST}"
 )
 FLY_CONFIG_SHA = "4" * 64
-MIGRATION_PROFILE = "next-fastapi-tournament-acceptance-2026-08-25"
+MIGRATION_PROFILE = "tres-operations-badges-2026-09-24"
 MIGRATION_CONTRACT = verifier.load_migration_contract(
     ROOT / "config/production_migration_contract.json",
     ROOT / "supabase/migrations",
@@ -106,8 +106,8 @@ def _health_payload(*, feature_profile: str = "release") -> dict:
             "worker_run_log_required": True,
             "email_mode": verifier.expected_production_email_mode(profile=feature_profile),
             "live_player_update_email_enabled": features["JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL"],
-            "smtp_configured": feature_profile in {"pre_awards", "release"},
-            "player_update_worker_running": feature_profile in {"pre_awards", "release"},
+            "smtp_configured": feature_profile in {"pre_awards", "pre_operations", "release"},
+            "player_update_worker_running": feature_profile in {"pre_awards", "pre_operations", "release"},
         },
     }
 
@@ -270,6 +270,10 @@ def test_reviewed_projection_preserves_live_and_adds_email_and_awards() -> None:
     }
     assert verifier.PRODUCTION_ENABLED_FEATURE_FLAGS == {
         *email_flags,
+        "JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS",
+        "JUPR_ENABLE_NEXT_ADMIN_JUPR_LIVE",
+        "JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP",
+        "JUPR_ENABLE_NEXT_ADMIN_SHELL",
         "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE",
         "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_DOMAIN",
         "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_SUBMIT",
@@ -301,6 +305,10 @@ def test_reviewed_projection_preserves_live_and_adds_email_and_awards() -> None:
         - verifier.PRODUCTION_LIVE_BASELINE_ENABLED_FEATURE_FLAGS
     ) == {
         *email_flags,
+        "JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS",
+        "JUPR_ENABLE_NEXT_ADMIN_JUPR_LIVE",
+        "JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP",
+        "JUPR_ENABLE_NEXT_ADMIN_SHELL",
         "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE",
         "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_DOMAIN",
         "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_SUBMIT",
@@ -376,12 +384,12 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         ROOT / "supabase/migrations",
     )
 
-    assert len(versions) == 121
+    assert len(versions) == 128
     assert "20260923003009" in versions
     assert "tournament_gender_eligibility_reviews" in contract["required_ledger_names"]
     assert {"complete_registration_cancellation", "registration_cancellation_audit_policies"}.issubset(contract["required_ledger_names"])
     assert "20260909203736" in versions
-    assert versions[-34:] == (
+    assert versions[-38:] == (
         "20261030010000",
         "20261101000000",
         "20261102000000",
@@ -412,16 +420,20 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         "20261108028000",
         "20261109000000",
         "20261109001000",
+        "20261109001100",
+        "20261109001200",
+        "20261109001300",
+        "20261109001400",
         "20261109002000",
         "20261109003000",
         "20261109004000",
         "20261109004100",
     )
-    assert len(names) == 121
+    assert len(names) == 128
     assert all("XX" not in version for version in versions)
-    assert len(contract["required_ledger_names"]) == 108
+    assert len(contract["required_ledger_names"]) == 115
     assert "partner_email_invitations" in contract["required_ledger_names"]
-    assert len(contract["deployment_order"]) == 108
+    assert len(contract["deployment_order"]) == 115
     assert set(contract["deployment_order"]) == set(
         contract["required_ledger_names"]
     )
@@ -1567,7 +1579,7 @@ def test_production_workflow_is_exact_candidate_and_never_creates_or_retargets_a
     assert "/database/query\"" not in workflow
     assert workflow.count(
         "${{ secrets.FLY_SSH_TOKEN || secrets.FLY_API_TOKEN }}"
-    ) == 6
+    ) == 7
     assert "PRODUCTION_SOURCE_BRANCH: rollback-feb8" in workflow
     assert "ref: rollback-feb8" in workflow
     assert "github.event.repository.default_branch" not in workflow
@@ -1680,7 +1692,7 @@ def test_production_workflow_verifies_database_runtime_cors_and_final_write_poli
     assert 'sha256sum "$PREDEPLOY_CONFIG"' not in workflow
     assert '&& [ "$DEPLOY_OUTCOME" != "skipped" ]; then' in workflow
     assert workflow.index("--no-pending-only") < workflow.index("flyctl secrets set")
-    assert workflow.count("flyctl ssh console") == 4
+    assert workflow.count("flyctl ssh console") == 5
     assert 'expected_production_feature_flags(profile="release")' in workflow
     assert 'PRODUCTION_FEATURE_PROFILE="$live_feature_profile"' in workflow
     assert 'final_feature_profile="$rollback_feature_profile"' in workflow
@@ -1780,16 +1792,16 @@ def test_email_release_cannot_attest_missing_sender_or_worker():
 def test_smtp_authentication_probe_runs_before_any_production_mutation():
     workflow = (ROOT / ".github/workflows/fly_api_deploy.yml").read_text()
     assert workflow.index("production_email_probe.py") < workflow.index("flyctl secrets set")
-    assert "baseline|pre_email|pre_awards|release" in workflow
+    assert "baseline|pre_email|pre_awards|pre_operations|release" in workflow
     assert "JUPR_EMAIL_MODE=dry_run" not in workflow
     assert "expected_production_email_mode(profile=" in workflow
 
 
 def test_awards_release_preserves_live_email_and_exact_previous_profile():
     previous = _health_payload(feature_profile="pre_awards")
-    released = _health_payload(feature_profile="release")
+    released = _health_payload(feature_profile="pre_operations")
     assert verifier.production_feature_profile_from_health(previous) == "pre_awards"
-    assert verifier.production_feature_profile_from_health(released) == "release"
+    assert verifier.production_feature_profile_from_health(released) == "pre_operations"
     assert verifier.expected_production_email_mode(profile="pre_awards") == "live"
     assert [flag for flag in previous["feature_flags"]
             if previous["feature_flags"][flag] != released["feature_flags"][flag]] == [

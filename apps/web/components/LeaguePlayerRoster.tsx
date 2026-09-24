@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import Link from "@/components/PublicClubLink";
 import { useMemo, useState } from "react";
 import type { LeagueResultsStanding } from "@/lib/api";
 

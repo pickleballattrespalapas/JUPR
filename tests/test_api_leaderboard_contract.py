@@ -99,3 +99,118 @@ def test_primary_and_compat_routes_return_same_normalized_contract(client):
     assert second["rank"] == 2
     assert "rank_position" not in second or second["rank_position"] is None
     assert "internal_notes" not in second
+
+
+@pytest.mark.parametrize('suffix', ['', '/public'])
+def test_season_parameter_and_public_settings_contract(client, monkeypatch, suffix):
+    from services.api import main
+    from services.api.club_site_models import LeaderboardSettings
+    previous = main.build_public_leaderboard
+    settings = LeaderboardSettings(cards=['most_matches'], show_summary=False, seasons=[{
+        'id': 'winter', 'name': 'Winter', 'start_date': '2026-09-15',
+        'end_date': None, 'timezone': 'America/Mazatlan',
+    }], default_season_id='winter').model_dump(mode='json')
+
+    def build(db, *, season=None, **kwargs):
+        assert season == 'winter'
+        payload = previous(db, **kwargs)
+        payload['leaderboard_settings'] = settings
+        payload['period'] = {**settings['seasons'][0], 'secret': 'hidden'}
+        payload['highlights']['most_matches'] = payload['leaderboard']
+        return payload
+
+    monkeypatch.setattr(main, 'build_public_leaderboard', build)
+    response = client.get(f'/clubs/test-club/leaderboards{suffix}?season=winter')
+    assert response.status_code == 200
+    data = response.json()
+    assert data['leaderboard_settings'] == settings
+    assert data['period'] == settings['seasons'][0]
+    assert len(data['highlights']['most_matches']) == 2
+    assert 'email' not in data['highlights']['most_matches'][0]
+
+
+def test_unknown_season_returns_actionable_client_error(client, monkeypatch):
+    from services.api import main
+    from jupr_app.services.leaderboard_service import LeaderboardPeriodInvalid
+
+    def build(*args, **kwargs):
+        raise LeaderboardPeriodInvalid('That leaderboard season is unavailable. Choose another season or All time.')
+
+    monkeypatch.setattr(main, 'build_public_leaderboard', build)
+    response = client.get('/clubs/test-club/leaderboards?season=deleted')
+    assert response.status_code == 422
+    assert 'All time' in response.json()['detail']
+
+
+@pytest.mark.parametrize('suffix', ['', '/public'])
+def test_all_card_metrics_are_public_but_internal_calculations_are_not(client, monkeypatch, suffix):
+    from jupr_app.domain.leaderboard_metrics import LEADERBOARD_CARD_KEYS
+    from services.api import main
+    from services.api.club_site_models import LeaderboardSettings
+    previous = main.build_public_leaderboard
+    settings = LeaderboardSettings(
+        cards=list(LEADERBOARD_CARD_KEYS),
+        card_options={'best_partnership': {'minimum': 8, 'depth': 3}},
+        timezone='Pacific/Auckland',
+    ).model_dump(mode='json')
+
+    def build(db, **kwargs):
+        payload = previous(db, **kwargs)
+        payload['leaderboard_settings'] = settings
+        payload['highlights'] = {key: [{
+            **payload['leaderboard'][0], 'metric_value': 75.0,
+            'metric_display': '75.0% with Blair · 8 games', 'metric_sample': 8,
+            '_partners': {'private': 'internal calculation'},
+        }] for key in LEADERBOARD_CARD_KEYS}
+        payload['highlights']['private_metric'] = [{'email': 'hidden'}]
+        return payload
+
+    monkeypatch.setattr(main, 'build_public_leaderboard', build)
+    response = client.get(f'/clubs/test-club/leaderboards{suffix}')
+    assert response.status_code == 200
+    data = response.json()
+    assert data['leaderboard_settings'] == settings
+    assert data['period']['timezone'] == 'Pacific/Auckland'
+    assert set(data['highlights']) == set(LEADERBOARD_CARD_KEYS)
+    for rows in data['highlights'].values():
+        assert rows[0]['metric_value'] == 75.0
+        assert rows[0]['metric_display'] == '75.0% with Blair · 8 games'
+        assert rows[0]['metric_sample'] == 8
+        assert 'email' not in rows[0]
+        assert '_partners' not in rows[0]
+
+
+@pytest.mark.parametrize('suffix', ['', '/public'])
+def test_team_upset_projection_keeps_both_teammates_without_private_fields(client, monkeypatch, suffix):
+    from services.api import main
+    previous = main.build_public_leaderboard
+
+    def build(db, **kwargs):
+        payload = previous(db, **kwargs)
+        payload['highlights']['biggest_upset'] = [{
+            'rank': 1, 'team_key': 'p1:p2', 'player_id': None,
+            'player_name': 'Alex & Blair',
+            'team_members': [
+                {'player_id': 'p1', 'player_name': 'Alex', 'email': 'private@example.test'},
+                {'player_id': 'p2', 'player_name': 'Blair', 'internal_notes': 'hidden'},
+            ],
+            'metric_value': 0.474, 'metric_display': '+0.474 JUPR', 'metric_sample': 2,
+            'matches_played': 8, '_matches': [{'secret': 'hidden'}],
+        }]
+        return payload
+
+    monkeypatch.setattr(main, 'build_public_leaderboard', build)
+    response = client.get(f'/clubs/test-club/leaderboards{suffix}')
+    assert response.status_code == 200
+    teams = response.json()['highlights']['biggest_upset']
+    assert len(teams) == 1
+    assert teams[0]['team_key'] == 'p1:p2'
+    assert teams[0]['player_id'] is None
+    assert teams[0]['team_members'] == [
+        {'player_id': 'p1', 'player_name': 'Alex'},
+        {'player_id': 'p2', 'player_name': 'Blair'},
+    ]
+    assert teams[0]['rank'] == 1
+    assert teams[0]['metric_value'] == 0.474
+    assert teams[0]['metric_sample'] == 2
+    assert '_matches' not in teams[0]

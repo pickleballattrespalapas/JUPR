@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.services.production_feature_policy import production_feature_enabled
+
 import copy
 import hashlib
 import os
@@ -143,6 +145,11 @@ def _session_payload(row: dict[str, Any]) -> dict[str, Any]:
         "standings_sort": str(event.get("standingsSort") or "wins") if event else "wins",
         "standings": generator_event_standings(event) if event else [],
         "official_publish": _as_dict(state.get("official_publish")),
+        "rating_mode": str(event.get("ratingMode") or "rated"),
+        "submission": {
+            key: value for key, value in (state.get("generator_submission") or {}).items()
+            if key in {"status", "approved_mode", "rating_mode", "submitted_at", "reviewed_at", "match_date", "match_count", "rejection_reason"}
+        } or None,
     }
 
 
@@ -186,7 +193,7 @@ def build_play_generator_status(supabase: Any | None, *, club_id: str) -> dict[s
             status = str(row.get("status") or "")
             if status in counts:
                 counts[status] += 1
-    writes_enabled = is_staging_write_gate_enabled(JUPR_LIVE_WRITE_FLAG)
+    writes_enabled = production_feature_enabled("generators", club_id) or is_staging_write_gate_enabled(JUPR_LIVE_WRITE_FLAG)
     return {
         "enabled": True,
         "writes_enabled": writes_enabled,
@@ -263,6 +270,7 @@ def preview_play_generator(
     singles_court_count: int = 0,
     standings_sort: str = "wins",
     scoring_mode: str = "scored",
+    rating_mode: str = "unrated",
 ) -> dict[str, Any]:
     names, ids = _resolve_names_and_ids(
         supabase,
@@ -282,6 +290,7 @@ def preview_play_generator(
         singles_court_count=singles_court_count,
         standings_sort=standings_sort,
         scoring_mode=scoring_mode,
+        rating_mode=rating_mode,
     )
     return {
         "ok": True,
@@ -336,6 +345,7 @@ def create_play_generator_session(
     source: str,
     standings_sort: str = "wins",
     scoring_mode: str = "scored",
+    rating_mode: str = "unrated",
 ) -> dict[str, Any]:
     preview = preview_play_generator(
         supabase,
@@ -351,6 +361,7 @@ def create_play_generator_session(
         singles_court_count=singles_court_count,
         standings_sort=standings_sort,
         scoring_mode=scoring_mode,
+        rating_mode=rating_mode,
     )["preview"]
     supplied = _clean_text(preview_fingerprint, limit=128)
     if supplied and supplied != str(preview.get("previewFingerprint") or ""):
@@ -489,6 +500,8 @@ def _persist_event(
     expected_version: str,
     status: str | None = None,
 ) -> dict[str, Any]:
+    if _state(before).get("generator_submission"):
+        raise ValueError("Submitted results are locked for administrator review.")
     state = _put_event(_state(before), event)
     now = _now_iso()
     patch = {
@@ -795,11 +808,9 @@ def _publish_payloads(
     }
     event_play_format = str(event.get("playFormat") or "doubles")
     generator_kind = str(event.get("generatorKind") or "round_robin")
-    context_type = (
-        "round_robin_generator"
-        if generator_kind == "round_robin"
-        else "ladder_generator"
-    )
+    # Generators enter the ordinary direct-match pipeline. Keep their display
+    # type below; the atomic RPC reserves nonempty contexts for linked events.
+    context_type = ""
     match_type = (
         "Round-Robin Generator"
         if generator_kind == "round_robin"
@@ -840,6 +851,7 @@ def _publish_payloads(
             ),
             "live_match_id": match_id,
             "match_format": match_format,
+            "rating_scope": "unrated" if event.get("ratingMode") == "unrated" else "overall_only",
             "s1": score_a,
             "s2": score_b,
             "score_t1": score_a,
@@ -881,7 +893,11 @@ def publish_play_generator_matches(
     actor_role: str,
     source: str,
 ) -> dict[str, Any]:
+    if actor_role not in {"administrator", "club_owner", "super_admin"}:
+        raise PermissionError("Only a club administrator can publish generator results. Submit them for approval.")
     before = _live_row(supabase, club_id=str(club_id), session_key=str(session_key))
+    if _state(before).get("generator_submission"):
+        raise ValueError("Approve these results from the generator submissions queue.")
     if str(before.get("updated_at") or "") != str(expected_version or ""):
         raise ValueError("This generator session changed. Reload it before publishing.")
     state = _state(before)
@@ -963,6 +979,8 @@ def publish_play_generator_matches(
     )
     newly_published = [str(payload["live_match_id"]) for payload in payloads]
     official["published_match_ids"] = sorted(published_ids.union(newly_published))
+    official["match_context_by_live_id"] = {**dict(official.get("match_context_by_live_id") or {}),
+        **{str(payload["live_match_id"]): str(payload["context_id"]) for payload in payloads}}
     official["published_at"] = _now_iso()
     official["publish_result"] = result
     state["official_publish"] = official

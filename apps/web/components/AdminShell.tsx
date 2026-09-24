@@ -1,15 +1,23 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { signOutAdminSession } from "@/lib/adminAuthClient";
 import { useAdminSession } from "@/lib/useAdminSession";
+import { useAvailableWorkspaces } from "@/lib/useAvailableWorkspaces";
+import { AdminWorkspaceContext } from "@/lib/useAdminWorkspace";
+import { ADMIN_WORKSPACE_CHANGE, canChooseAdminWorkspace, readBrowserWorkspace, sameWorkspace, type AdminWorkspace } from "@/lib/adminWorkspace";
+import type { AdminNotification } from "@/lib/adminNotificationsApi";
+import { notificationNavigation, notificationSummary } from "@/lib/adminNotificationNavigation";
+import { useAdminNotificationBadges } from "@/lib/useAdminNotificationBadges";
 import styles from "./AdminShell.module.css";
 
 type Props = {
   children: ReactNode;
+  workspace: AdminWorkspace | null;
 };
 
 type AdminLink = {
@@ -33,6 +41,8 @@ const adminGroups: AdminGroup[] = [
         href: "/admin",
         active: (pathname) => pathname === "/admin"
       },
+      { label: "Notifications", href: "/admin/notifications", active: path => path === "/admin/notifications" },
+      { label: "Leaderboard settings", href: "/admin/website", active: path => path.startsWith("/admin/website") },
       {
         label: "Match Uploader",
         href: "/admin/match-uploader",
@@ -75,6 +85,11 @@ const adminGroups: AdminGroup[] = [
         label: "Ladder Generator",
         href: "/admin/ladder-generator",
         active: (pathname) => pathname.startsWith("/admin/ladder-generator")
+      },
+      {
+        label: "Generator submissions",
+        href: "/admin/play-generators/submissions",
+        active: pathname => pathname.startsWith("/admin/play-generators/submissions")
       },
       {
         label: "Challenge Ladder",
@@ -138,25 +153,25 @@ const adminGroups: AdminGroup[] = [
       },
       {
         label: "Club Home ↗",
-        href: "/clubs/tres-palapas",
+        href: "/clubs/{club}",
         active: () => false,
         newTab: true
       },
       {
         label: "Leagues ↗",
-        href: "/clubs/tres-palapas/leagues",
+        href: "/clubs/{club}/leagues",
         active: () => false,
         newTab: true
       },
       {
         label: "Tournaments ↗",
-        href: "/clubs/tres-palapas/tournaments",
+        href: "/clubs/{club}/tournaments",
         active: () => false,
         newTab: true
       },
       {
         label: "Leaderboards ↗",
-        href: "/clubs/tres-palapas/leaderboards",
+        href: "/clubs/{club}/leaderboards",
         active: () => false,
         newTab: true
       }
@@ -164,32 +179,139 @@ const adminGroups: AdminGroup[] = [
   }
 ];
 
-function SidebarLink({ item, pathname }: { item: AdminLink; pathname: string }) {
+function NotificationBadge({ items, summaryId }: { items: AdminNotification[]; summaryId: string }) {
+  const anchor = useRef<HTMLSpanElement>(null);
+  const tooltip = useRef<HTMLSpanElement>(null);
+  const closeTimer = useRef<ReturnType<typeof setTimeout>>();
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState({ top: 8, left: 8 });
+  const summary = notificationSummary(items);
+  const hasNotifications = items.length > 0;
+  const show = useCallback(() => { clearTimeout(closeTimer.current); setOpen(true); }, []);
+  const hide = useCallback(() => { clearTimeout(closeTimer.current); setOpen(false); }, []);
+  const scheduleHide = () => {
+    clearTimeout(closeTimer.current);
+    closeTimer.current = setTimeout(() => setOpen(false), 120);
+  };
+  useEffect(() => {
+    if (!hasNotifications) { hide(); return; }
+    const parent = anchor.current?.closest("a, button");
+    if (!parent) return;
+    const onEscape = (event: Event) => { if ((event as KeyboardEvent).key === "Escape") hide(); };
+    parent.addEventListener("focus", show);
+    parent.addEventListener("blur", hide);
+    parent.addEventListener("keydown", onEscape);
+    return () => {
+      clearTimeout(closeTimer.current);
+      parent.removeEventListener("focus", show);
+      parent.removeEventListener("blur", hide);
+      parent.removeEventListener("keydown", onEscape);
+    };
+  }, [hasNotifications, show, hide]);
+  useLayoutEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const badge = anchor.current?.getBoundingClientRect();
+      const popup = tooltip.current?.getBoundingClientRect();
+      if (!badge || !popup) return;
+      const left = Math.max(8, Math.min(badge.right - popup.width, window.innerWidth - popup.width - 8));
+      const below = badge.bottom + 6;
+      const preferredTop = below + popup.height <= window.innerHeight - 8 ? below : badge.top - popup.height - 6;
+      const top = Math.max(8, Math.min(preferredTop, window.innerHeight - popup.height - 8));
+      setPosition({ top, left });
+    };
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => { window.removeEventListener("resize", place); window.removeEventListener("scroll", place, true); };
+  }, [open, summary]);
+  if (!items.length) return null;
+  return <span ref={anchor} className={styles.notificationBadgeWrapper} onMouseEnter={show} onMouseLeave={scheduleHide}>
+    <span className={styles.notificationBadge} aria-hidden="true">{items.length}</span>
+    <span id={summaryId} className={styles.notificationDescription}>{summary}</span>
+    {open && createPortal(<span ref={tooltip} role="tooltip" className={styles.notificationSummary}
+      style={position} onMouseEnter={show} onMouseLeave={scheduleHide}>{summary}</span>, document.body)}
+  </span>;
+}
+
+function SidebarLink({ item, pathname, notifications }: { item: AdminLink; pathname: string; notifications: AdminNotification[] }) {
   const active = item.active(pathname);
+  const summaryId = useId();
   return (
     <Link
       href={item.href}
+      aria-label={item.label}
       aria-current={active ? "page" : undefined}
+      aria-describedby={notifications.length ? summaryId : undefined}
       className={`${styles.link} ${active ? styles.active : ""}`}
       target={item.newTab ? "_blank" : undefined}
       rel={item.newTab ? "noreferrer" : undefined}
     >
-      {item.label}
+      <span className={styles.linkLabel}>{item.label}</span>
+      <NotificationBadge items={notifications} summaryId={summaryId} />
     </Link>
   );
 }
 
-export default function AdminShell({ children }: Props) {
+export default function AdminShell({ children, workspace }: Props) {
   const pathname = usePathname() || "/admin";
   const router = useRouter();
-  const { session, accessToken } = useAdminSession();
+  const { session, accessToken, loading } = useAdminSession();
+  const { workspaces, error, loaded, retry } = useAvailableWorkspaces(accessToken, session?.user?.id || session?.user?.email || accessToken);
+  const [contextChanged, setContextChanged] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(
     {}
   );
   const authPage =
     pathname === "/admin/login" || pathname === "/admin/reset-password";
+  const globalPage = pathname === "/admin/select-club" || pathname === "/admin/platform" || pathname === "/admin/accept-invitation";
+  const activeClub = workspaces.find(club => club.club_id === workspace?.clubId && club.club_slug === workspace?.clubSlug);
+  const canChoose = canChooseAdminWorkspace(workspaces);
+  const canReadNotifications = !authPage && !globalPage && !loading && loaded && !error && !contextChanged &&
+    Boolean(activeClub && session?.capabilities?.assignments.some(assignment => assignment.club_id === workspace?.clubId));
+  const notificationData = useAdminNotificationBadges(accessToken, workspace?.clubId || "", pathname, canReadNotifications);
+  const notificationCounts = notificationNavigation(notificationData, adminGroups);
+
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [pathname]);
+
+  useEffect(() => {
+    // A previous account's navigation cookie must not make a single-club user
+    // choose their club or leave them stranded in the previous workspace.
+    if (!authPage && !globalPage && !loading && accessToken && loaded && !error &&
+        !canChoose && workspaces.length === 1 && !activeClub) {
+      router.replace("/admin/select-club");
+    }
+  }, [authPage, globalPage, loading, accessToken, loaded, error, canChoose, workspaces.length, activeClub, router]);
+
+  useEffect(() => {
+    if (authPage || globalPage || !accessToken || !workspace) return;
+    const check = () => setContextChanged(!sameWorkspace(readBrowserWorkspace(), workspace));
+    check();
+    window.addEventListener("storage", check);
+    window.addEventListener("focus", check);
+    window.addEventListener(ADMIN_WORKSPACE_CHANGE, check);
+    const timer = window.setInterval(check, 1000);
+    // Check before any click/submit so a second tab cannot change the cookie
+    // between a periodic check and an action or navigation in this tab.
+    const guard = (event: Event) => {
+      if (event.target instanceof Element && event.target.closest("[data-workspace-reload]")) return;
+      if (!sameWorkspace(readBrowserWorkspace(), workspace)) {
+        event.preventDefault(); event.stopPropagation(); setContextChanged(true);
+      }
+    };
+    document.addEventListener("click", guard, true);
+    document.addEventListener("submit", guard, true);
+    return () => {
+      window.removeEventListener("storage", check); window.removeEventListener("focus", check);
+      window.removeEventListener(ADMIN_WORKSPACE_CHANGE, check); window.clearInterval(timer);
+      document.removeEventListener("click", guard, true); document.removeEventListener("submit", guard, true);
+    };
+  }, [workspace, authPage, globalPage, accessToken]);
 
   useEffect(() => {
     const activeGroup = adminGroups.find((group) =>
@@ -202,7 +324,17 @@ export default function AdminShell({ children }: Props) {
     });
   }, [pathname]);
 
-  if (authPage || !accessToken) return <>{children}</>;
+  if (authPage || globalPage) return <>{children}</>;
+  if (loading) return <p role="status">Checking club access…</p>;
+  if (!accessToken) return <section><h1>Admin sign-in required</h1><Link href={`/admin/login?next=${encodeURIComponent(pathname)}`}>Sign in</Link></section>;
+  if (loaded && !error && !canChoose && workspaces.length === 1 && !activeClub) return <p role="status">Opening your club…</p>;
+  if (!workspace) return <section><h1>Choose a club workspace</h1><Link href="/admin/select-club">Choose club</Link></section>;
+  if (contextChanged) return <section><h1>Club selection changed</h1><p>A different club was selected in another tab. Reload to open the selected club.</p><button data-workspace-reload onClick={() => window.location.assign("/admin")}>Reload workspace</button></section>;
+  if (error) return <p role="alert">{error} <button onClick={retry}>Try again</button></p>;
+  if (!loaded) return <p role="status">Loading club workspace…</p>;
+  if (!activeClub || !session?.capabilities?.assignments.some(assignment => assignment.club_id === workspace.clubId)) return <section><h1>Choose an available club</h1><p>Your account does not currently have access to this workspace.</p><Link href="/admin/select-club">Choose club</Link></section>;
+  const groups = adminGroups.map(group => ({ ...group, links: group.links.map(item => ({ ...item, href: item.href.replace("/clubs/{club}", `/clubs/${encodeURIComponent(activeClub.club_slug)}`) })) }));
+  const currentPage = groups.flatMap(group => group.links).find(item => item.active(pathname))?.label || "Admin workspace";
 
   async function signOut() {
     if (signingOut) return;
@@ -231,13 +363,27 @@ export default function AdminShell({ children }: Props) {
       <aside
         className={`${styles.sidebar} ${
           sidebarCollapsed ? styles.sidebarCollapsed : ""
-        }`}
+        } ${mobileMenuOpen ? styles.mobileMenuOpen : ""}`}
         aria-label="Admin workspace navigation"
       >
+        <div className={styles.mobileHeader}>
+          <button
+            type="button"
+            className={styles.mobileMenuToggle}
+            aria-expanded={mobileMenuOpen}
+            aria-controls="admin-navigation-menu"
+            onClick={() => setMobileMenuOpen(current => !current)}
+          >
+            <span aria-hidden="true">{mobileMenuOpen ? "×" : "☰"}</span>
+            {mobileMenuOpen ? "Hide menu" : "Show menu"}
+          </button>
+          <span className={styles.mobileLocation}>{currentPage}</span>
+        </div>
         <button
           type="button"
           className={styles.sidebarToggle}
           aria-expanded={!sidebarCollapsed}
+          aria-controls="admin-navigation-menu"
           aria-label={sidebarCollapsed ? "Expand admin sidebar" : "Collapse admin sidebar"}
           title={sidebarCollapsed ? "Expand admin sidebar" : "Collapse admin sidebar"}
           onClick={() => setSidebarCollapsed((current) => !current)}
@@ -246,21 +392,24 @@ export default function AdminShell({ children }: Props) {
           {!sidebarCollapsed ? <span>Collapse</span> : null}
         </button>
 
-        {!sidebarCollapsed ? (
-          <>
+        <div id="admin-navigation-menu" className={styles.navigationBody}>
             <div className={styles.identity}>
               <p className={styles.eyebrow}>Admin workspace</p>
+              <strong>{activeClub.club_name}</strong>
+              {canChoose && <p><Link href="/admin/select-club">Switch club</Link></p>}
               <p className={styles.email}>
                 {session?.user?.email || "Authorized staff account"}
               </p>
             </div>
 
-            {adminGroups.map((group) => {
+            {groups.map((group) => {
               const collapsed = Boolean(collapsedGroups[group.label]);
               const activeGroup = group.links.some((item) => item.active(pathname));
               const groupId = `admin-group-${group.label
                 .toLowerCase()
                 .replace(/[^a-z0-9]+/g, "-")}`;
+              const notifications = notificationCounts.byGroup[group.label] || [];
+              const summaryId = `${groupId}-notifications`;
               return (
                 <section key={group.label} className={styles.groupSection}>
                   <button
@@ -269,10 +418,13 @@ export default function AdminShell({ children }: Props) {
                       activeGroup ? styles.groupActive : ""
                     }`}
                     aria-expanded={!collapsed}
+                    aria-label={group.label}
                     aria-controls={groupId}
+                    aria-describedby={notifications.length ? summaryId : undefined}
                     onClick={() => toggleGroup(group.label)}
                   >
-                    <span>{group.label}</span>
+                    <span className={styles.groupLabel}>{group.label}</span>
+                    <NotificationBadge items={notifications} summaryId={summaryId} />
                     <span aria-hidden="true">{collapsed ? "+" : "−"}</span>
                   </button>
                   {!collapsed ? (
@@ -286,6 +438,7 @@ export default function AdminShell({ children }: Props) {
                           key={item.href}
                           item={item}
                           pathname={pathname}
+                          notifications={notificationCounts.byLink[item.href] || []}
                         />
                       ))}
                     </nav>
@@ -307,14 +460,17 @@ export default function AdminShell({ children }: Props) {
                 {signingOut ? "Signing out…" : "Sign out"}
               </button>
             </div>
-          </>
-        ) : (
+        </div>
+        {sidebarCollapsed ? (
           <p className={styles.collapsedLabel} aria-hidden="true">
             Admin
           </p>
-        )}
+        ) : null}
       </aside>
-      <div className={styles.content}>{children}</div>
+      <div className={styles.content}>
+        <p className={styles.eyebrow} aria-label="Current club">{activeClub.club_name}</p>
+        <AdminWorkspaceContext.Provider key={workspace.clubId} value={workspace}>{children}</AdminWorkspaceContext.Provider>
+      </div>
     </div>
   );
 }

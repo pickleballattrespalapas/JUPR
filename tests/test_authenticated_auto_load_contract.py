@@ -94,10 +94,10 @@ def test_admin_buttons_do_not_reintroduce_known_manual_prerequisites() -> None:
 
 def test_secondary_operator_queues_auto_load_and_filter_changes_refetch() -> None:
     scoped = {
-        "apps/web/app/admin/player-updates/verified-requests/VerifiedRequestsPanel.tsx": "filter",
+        "apps/web/app/admin/player-updates/verified-requests/VerifiedRequestsPanel.tsx": "`${clubId}:${filter}`",
         "apps/web/app/admin/player-updates/PlayerUpdatesPanel.tsx": '`${startDate}\\u0000${endDate}`',
         "apps/web/app/admin/jupr-live/JuprLiveAdminPanel.tsx": 'filter || "all"',
-        "apps/web/app/admin/tools/AdminToolsPanel.tsx": "socialSubmissionStatus",
+        "apps/web/app/admin/tools/AdminToolsPanel.tsx": "`${clubId}:${socialSubmissionStatus}`",
     }
     unscoped = (
         "apps/web/app/admin/badges/BadgeDiagnosticsPanel.tsx",
@@ -195,11 +195,11 @@ def test_admin_tools_scopes_reads_independently_and_guards_every_secondary_actio
 
     assert source.count("useAuthenticatedAutoLoad(") >= 2
     assert "loadAdminToolsWorkspace" not in source
-    assert 'flaggedOnly ? "flagged" : "all"' in source
-    assert "socialSubmissionStatus" in source
-    assert "const overviewRequest = useLatestRequestGuard(accessToken, clearProtectedAdminToolsState);" in source
-    assert "const socialQueueRequest = useLatestRequestGuard(accessToken);" in source
-    assert "const actionRequest = useLatestRequestGuard(accessToken);" in source
+    assert '`${clubId}:${flaggedOnly ? "flagged" : "all"}`' in source
+    assert "`${clubId}:${socialSubmissionStatus}`" in source
+    assert "const overviewRequest = useLatestRequestGuard(`${clubId}:${accessToken}`, clearProtectedAdminToolsState);" in source
+    assert "const socialQueueRequest = useLatestRequestGuard(`${clubId}:${accessToken}`);" in source
+    assert "const actionRequest = useLatestRequestGuard(`${clubId}:${accessToken}`);" in source
     assert source.count("const generation = actionRequest.begin();") >= 8
     assert source.count("if (!actionRequest.isCurrent(generation)) return") >= 8
     assert "overviewMessage" in source
@@ -298,7 +298,8 @@ def test_secondary_reports_actions_and_recap_writes_ignore_old_token_responses()
     assert "if (!tierReviewRequest.isCurrent(generation)) return;" in ladder
     assert "const actionRequest = useLatestRequestGuard(accessToken);" in awards
     assert awards.count("if (!actionRequest.isCurrent(generation)) return") >= 2
-    assert "const writeRequest = useLatestRequestGuard(accessToken);" in recap
+    assert 'const requestScope = `${clubId}\\u0000${accessToken}`;' in recap
+    assert "const writeRequest = useLatestRequestGuard(requestScope);" in recap
     assert recap.count("const generation = writeRequest.begin();") >= 3
     assert recap.count("if (!writeRequest.isCurrent(generation)) return") >= 5
 

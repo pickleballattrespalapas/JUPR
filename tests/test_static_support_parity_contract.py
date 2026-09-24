@@ -78,7 +78,7 @@ def test_admin_support_queue_auto_loads_and_keeps_notes_optional():
     assert "useAuthenticatedAutoLoad(" in panel
     assert 'status.enabled ? accessToken : ""' in panel
     assert "loadRequests," in panel
-    assert "`${statusFilter}:${typeFilter}`" in panel
+    assert "`${clubId}:${statusFilter}:${typeFilter}`" in panel
     assert "Refresh requests" in panel
     assert ">Load requests<" not in panel
     assert "Admin note (optional)" in panel

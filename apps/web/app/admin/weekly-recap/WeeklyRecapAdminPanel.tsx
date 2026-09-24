@@ -5,6 +5,7 @@ import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
 import { useMemo, useState } from "react";
 import type {
   AdminWeeklyRecapCandidate,
+  AdminWeeklyRecapDeleteResponse,
   AdminWeeklyRecapDetailResponse,
   AdminWeeklyRecapListResponse,
   AdminWeeklyRecapRow,
@@ -14,7 +15,7 @@ import type {
 import { ConfirmAction } from "@/components/ConfirmAction";
 import { actionSuccess } from "@/components/interaction";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
-import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
+import { useAdminSession } from "@/lib/useAdminSession";
 import AdminWeeklyRecapPreview from "./AdminWeeklyRecapPreview";
 import { clubTodayIso, clubWeekStartIso } from "@/lib/clubDate";
 
@@ -90,10 +91,11 @@ function buildEditsPayload(lookingAhead: string[], spotlightEdits: Record<string
 }
 
 export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initialWeekStart = "", printMode = false }: Props) {
-  const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
+  const { accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
   const [weekStart, setWeekStart] = useState(() => clubWeekStartIso());
   const [weekEnd, setWeekEnd] = useState(() => clubTodayIso());
   const [recaps, setRecaps] = useState<AdminWeeklyRecapRow[]>([]);
+  const [canDeleteDrafts, setCanDeleteDrafts] = useState(false);
   const [selectedWeekStart, setSelectedWeekStart] = useState(initialWeekStart);
   const [selectedRecap, setSelectedRecap] = useState<AdminWeeklyRecapRow | null>(null);
   const [candidates, setCandidates] = useState<Record<string, AdminWeeklyRecapCandidate[]>>({});
@@ -102,9 +104,10 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initial
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [messageSeverity, setMessageSeverity] = useState<"success" | "error" | null>(null);
-  const listRequest = useLatestRequestGuard(accessToken, clearProtectedRecapState);
-  const recapRequest = useLatestRequestGuard(accessToken);
-  const writeRequest = useLatestRequestGuard(accessToken);
+  const requestScope = `${clubId}\u0000${accessToken}`;
+  const listRequest = useLatestRequestGuard(requestScope, clearProtectedRecapState);
+  const recapRequest = useLatestRequestGuard(requestScope);
+  const writeRequest = useLatestRequestGuard(requestScope);
 
   const candidateKeys = useMemo(() => normalizeCandidateKeys(candidates), [candidates]);
   const mutationControlsDisabled = busy || !status.mutations_enabled;
@@ -149,6 +152,7 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initial
     recapRequest.invalidate();
     writeRequest.invalidate();
     setBusy(false); setMessage(null); setMessageSeverity(null);
+    setCanDeleteDrafts(false);
     setRecaps([]); setSelectedWeekStart(""); setSelectedRecap(null); setCandidates({}); setSpotlightEdits({});
   }
 
@@ -162,6 +166,7 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initial
       if (!listRequest.isCurrent(generation)) return;
       const nextRecaps = payload.recaps || [];
       setRecaps(nextRecaps);
+      setCanDeleteDrafts(Boolean(payload.can_delete_drafts));
       if (selectedWeekStart && !nextRecaps.some((recap) => recap.week_start === selectedWeekStart)) {
         recapRequest.invalidate();
         setSelectedWeekStart("");
@@ -230,7 +235,7 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initial
     try {
       const payload = await requestJson<AdminWeeklyRecapWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/weekly-recap/generate`, {
         method: "POST",
-        body: JSON.stringify({ week_start: weekStart, week_end: weekEnd, confirmation_text: confirmationText, expected_row_version: selectedRecap?.week_start === weekStart ? selectedRecap.row_version : null, source: "next_weekly_recap_generate" })
+        body: JSON.stringify({ week_start: weekStart, week_end: weekEnd, confirmation_text: confirmationText, expected_recap_id: selectedRecap?.week_start === weekStart ? selectedRecap.id : null, expected_row_version: selectedRecap?.week_start === weekStart ? selectedRecap.row_version : null, source: "next_weekly_recap_generate" })
       });
       const completion = actionSuccess("Weekly recap draft generated", "The draft was generated from current match, social, and tournament data.");
       if (!writeRequest.isCurrent(generation)) return completion;
@@ -264,7 +269,7 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initial
     try {
       const payload = await requestJson<AdminWeeklyRecapWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/weekly-recap/recaps/${encodeURIComponent(selectedRecap.week_start)}`, {
         method: "PATCH",
-        body: JSON.stringify({ edits_json: buildEditsPayload(lookingAhead, spotlightEdits), confirmation_text: confirmationText, expected_row_version: selectedRecap.row_version, source: "next_weekly_recap_save" })
+        body: JSON.stringify({ edits_json: buildEditsPayload(lookingAhead, spotlightEdits), confirmation_text: confirmationText, expected_recap_id: selectedRecap.id, expected_row_version: selectedRecap.row_version, source: "next_weekly_recap_save" })
       });
       const completion = actionSuccess("Weekly recap draft saved", "The looking-ahead and spotlight edits were saved to the draft.");
       if (!writeRequest.isCurrent(generation)) return completion;
@@ -296,7 +301,7 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initial
     try {
       const payload = await requestJson<AdminWeeklyRecapWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/weekly-recap/recaps/${encodeURIComponent(selectedRecap.week_start)}/publish`, {
         method: "POST",
-        body: JSON.stringify({ action, edits_json: buildEditsPayload(lookingAhead, spotlightEdits), confirmation_text: confirmationText, expected_row_version: selectedRecap.row_version, source: action === "publish" ? "next_weekly_recap_publish" : "next_weekly_recap_unpublish" })
+        body: JSON.stringify({ action, edits_json: buildEditsPayload(lookingAhead, spotlightEdits), confirmation_text: confirmationText, expected_recap_id: selectedRecap.id, expected_row_version: selectedRecap.row_version, source: action === "publish" ? "next_weekly_recap_publish" : "next_weekly_recap_unpublish" })
       });
       const completion = actionSuccess(action === "publish" ? "Weekly recap published" : "Weekly recap unpublished", action === "publish" ? "The recap is now visible on the public Weekly Recap page." : "The recap was removed from the public page and returned to draft.");
       if (!writeRequest.isCurrent(generation)) return completion;
@@ -317,6 +322,46 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initial
     }
   }
 
+  async function deleteDraft(confirmationText: string) {
+    if (!selectedRecap?.id || selectedRecap.status !== "draft" || !canDeleteDrafts) {
+      throw new Error("Load a draft before deleting it.");
+    }
+    const target = selectedRecap;
+    const generation = writeRequest.begin();
+    setBusy(true);
+    setMessage(null);
+    setMessageSeverity(null);
+    try {
+      const payload = await requestJson<AdminWeeklyRecapDeleteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/weekly-recap/recaps/${encodeURIComponent(target.week_start)}`, {
+        method: "DELETE",
+        body: JSON.stringify({ expected_recap_id: target.id, expected_row_version: target.row_version, confirmation_text: confirmationText })
+      });
+      const completion = actionSuccess("Weekly recap draft deleted", `The draft for ${target.week_start} through ${target.week_end} was deleted. Recorded games and player results are unchanged.`);
+      if (!writeRequest.isCurrent(generation)) return completion;
+      recapRequest.invalidate();
+      listRequest.invalidate();
+      setRecaps((current) => current.filter((recap) => recap.id !== payload.deleted_recap_id));
+      setSelectedWeekStart("");
+      setSelectedRecap(null);
+      setCandidates({});
+      setLookingAhead(["", "", ""]);
+      setSpotlightEdits({});
+      await loadRecaps();
+      if (!writeRequest.isCurrent(generation)) return completion;
+      setMessage(`Draft deleted. ${(payload.warnings || []).join(" ")}`.trim());
+      setMessageSeverity("success");
+      return completion;
+    } catch (error) {
+      if (writeRequest.isCurrent(generation)) {
+        setMessage(error instanceof Error ? error.message : "Unable to delete weekly recap draft.");
+        setMessageSeverity("error");
+      }
+      throw error;
+    } finally {
+      if (writeRequest.isCurrent(generation)) setBusy(false);
+    }
+  }
+
   function updateSpotlight(key: string, patch: Partial<SpotlightEdit>) {
     setSpotlightEdits((current) => ({ ...current, [key]: { ...(current[key] || { include: true, order: "999", description: "", players: [] }), ...patch } }));
   }
@@ -328,27 +373,22 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initial
     updateSpotlight(key, { players: nextPlayers });
   }
 
-  useAuthenticatedAutoLoad(status.enabled ? accessToken : "", loadInitialRecapWorkspace, initialWeekStart);
+  useAuthenticatedAutoLoad(status.enabled ? accessToken : "", loadInitialRecapWorkspace, `${clubId}\u0000${initialWeekStart}`);
 
   if (!status.enabled) {
     return (
       <article style={{ ...cardStyle, background: "#f8fafc" }}>
-        <h2 style={{ marginTop: 0 }}>Weekly Recap Admin is disabled</h2>
-        <p style={{ color: "#475569" }}>Enable <code>JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP</code> on FastAPI before using this workflow.</p>
-        {status.warnings?.map((warning) => <p key={warning} style={{ color: "#92400e" }}>{warning}</p>)}
+        <h2 style={{ marginTop: 0 }}>Weekly recaps are unavailable</h2>
+        <p style={{ color: "#475569" }}>Weekly recaps have not been enabled for this site yet.</p>
       </article>
     );
   }
 
   return (
     <div style={{ display: "grid", gap: "1rem" }}>
-      {!status.mutations_enabled ? <p role="status" style={{ color: "#92400e" }}><strong>Read-only:</strong> saved recaps and unpublished previews remain available, while generate, save, publish, and unpublish actions stay disabled until the isolated communications write wave is active.</p> : null}
-      <article style={{ ...cardStyle, background: "#f8fafc" }}>
-        <h2 style={{ marginTop: 0 }}>Admin session</h2>
-        <p style={{ color: "#475569" }}>{adminSessionLabel(session)}</p>
-        {sessionLoading ? <p>Checking session…</p> : null}
-        {sessionMessage ? <p style={{ color: "#64748b" }}>{sessionMessage}</p> : null}
-      </article>
+      {!status.mutations_enabled ? <p role="status" style={{ color: "#92400e" }}><strong>Read-only:</strong> saved recaps and unpublished previews remain available, while generate, save, publish, unpublish, and delete actions stay disabled.</p> : null}
+      {sessionLoading ? <p>Checking sign-in…</p> : null}
+      {sessionMessage ? <p style={{ color: "#64748b" }}>{sessionMessage}</p> : null}
 
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>1. Generate or load a recap</h2>
@@ -358,7 +398,7 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initial
           <ConfirmAction
             triggerLabel={targetExistingRecap ? "Regenerate draft" : "Generate draft"}
             title={targetExistingRecap ? "Regenerate this weekly recap draft?" : "Generate this weekly recap draft?"}
-            description={targetExistingRecap ? `This rebuilds the recap for ${weekStart} through ${weekEnd} from current staging data and discards its saved looking-ahead and spotlight edits.` : `This generates a new recap for ${weekStart} through ${weekEnd} from current staging data.`}
+            description={targetExistingRecap ? `This rebuilds the recap for ${weekStart} through ${weekEnd} from current club results and discards its saved looking-ahead and spotlight edits.` : `This generates a new recap for ${weekStart} through ${weekEnd} from current club results.`}
             confirmLabel={targetExistingRecap ? "Yes, regenerate draft" : "Yes, generate draft"}
             confirmationText="GENERATE RECAP"
             tone={targetExistingRecap ? "danger" : "default"}
@@ -367,7 +407,7 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initial
             onConfirm={generateDraft}
           />
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "minmax(240px, 1fr) auto auto", gap: "0.75rem", marginTop: "0.75rem", alignItems: "end" }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", marginTop: "0.75rem", alignItems: "end" }}>
           <label>Existing recaps<br />
             <select value={selectedWeekStart} onChange={(event) => selectRecap(event.target.value)} disabled={busy} style={inputStyle}>
               <option value="">Select recap…</option>
@@ -376,6 +416,19 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initial
           </label>
           <button type="button" onClick={loadRecaps} disabled={busy || !accessToken} style={ghostButtonStyle}>{busy ? "Refreshing…" : "Refresh recaps"}</button>
           <button type="button" onClick={() => loadSelectedRecap()} disabled={busy || !selectedWeekStart} style={ghostButtonStyle}>Retry selected recap</button>
+          {canDeleteDrafts && selectedRecap?.status === "draft" ? (
+            <ConfirmAction
+              triggerLabel="Delete draft"
+              title="Delete this recap draft?"
+              description={`Permanently delete the draft for ${selectedRecap.week_start} through ${selectedRecap.week_end}? Recorded games, ratings, and player results will stay as they are.`}
+              confirmLabel="Delete draft"
+              confirmationText="DELETE RECAP"
+              tone="danger"
+              disabled={mutationControlsDisabled || !selectedRecap.id}
+              busy={busy}
+              onConfirm={deleteDraft}
+            />
+          ) : null}
         </div>
         {message ? <p role={messageSeverity === "error" ? "alert" : "status"} style={{ color: messageSeverity === "error" ? "#b91c1c" : "#166534" }}>{message}</p> : null}
       </article>
@@ -454,8 +507,8 @@ export default function WeeklyRecapAdminPanel({ apiBase, clubId, status, initial
           </article>
 
           <article style={cardStyle}>
-            <h2 className="admin-recap-no-print" style={{ marginTop: 0 }}>5. Full unpublished preview and print proof</h2>
-            <p className="admin-recap-no-print" style={{ color: "#475569" }}>This renders the complete saved <code>final_json</code> even while status is draft. It never exposes an unpublished recap through the public API.</p>
+            <h2 className="admin-recap-no-print" style={{ marginTop: 0 }}>5. Full preview and print</h2>
+            <p className="admin-recap-no-print" style={{ color: "#475569" }}>Preview the saved recap below. Drafts stay private until you publish them.</p>
             <AdminWeeklyRecapPreview recap={selectedRecap} printMode={printMode} />
           </article>
         </>

@@ -12,7 +12,7 @@ const file = path.join(__dirname,'../app/clubs/[clubSlug]/badge-codex/page.tsx')
 const output = ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX,esModuleInterop:true}}).outputText;
 const mod = {exports:{}};
 new Function('require','module','exports',output)((name)=>{
- if(name==='next/link') return {__esModule:true,default:({children,...props})=>React.createElement('a',props,children)};
+ if(name==='@/components/PublicClubLink') return {__esModule:true,default:({children,...props})=>React.createElement('a',props,children)};
  if(name==='@/lib/badgeApi') return {getClubBadgeCodex:async()=>({data:payload,error:null})};
  return require(name);
 },mod,mod.exports);

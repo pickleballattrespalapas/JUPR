@@ -581,6 +581,8 @@ def _load_matches(
         "date",
         "league",
         "match_type",
+        "match_format",
+        "rating_scope",
         "week_tag",
         "t1_p1",
         "t1_p2",
@@ -634,6 +636,8 @@ def _dedupe_matches(df: pd.DataFrame) -> pd.DataFrame:
         "date",
         "league",
         "match_type",
+        "match_format",
+        "rating_scope",
         "week_tag",
         "t1_p1",
         "t1_p2",
@@ -1011,7 +1015,9 @@ def _compute_stats(
         p2 = _safe_int(match.get("t1_p2"))
         p3 = _safe_int(match.get("t2_p1"))
         p4 = _safe_int(match.get("t2_p2"))
-        if any(pid is None for pid in (p1, p2, p3, p4)):
+        singles = (str(match.get("match_format") or "").lower() != "doubles"
+                   and p1 is not None and p3 is not None and p2 is None and p4 is None)
+        if not singles and any(pid is None for pid in (p1, p2, p3, p4)):
             continue
         s1 = int(match.get("score_t1", 0) or 0)
         s2 = int(match.get("score_t2", 0) or 0)
@@ -1030,8 +1036,10 @@ def _compute_stats(
         r3_end = _safe_float(match.get("t2_p1_r_end"), r3)
         r4_end = _safe_float(match.get("t2_p2_r_end"), r4)
 
-        team1_avg = (r1 + r2) / 2.0 if r1 is not None and r2 is not None else None
-        team2_avg = (r3 + r4) / 2.0 if r3 is not None and r4 is not None else None
+        team1_avg = r1 if singles else (r1 + r2) / 2.0 if r1 is not None and r2 is not None else None
+        team2_avg = r3 if singles else (r3 + r4) / 2.0 if r3 is not None and r4 is not None else None
+        match_format = "singles" if singles else "doubles"
+        unrated = match.get("rating_scope") == "unrated"
 
         event_key = _resolve_event_key(match)
         if event_key is not None:
@@ -1041,6 +1049,8 @@ def _compute_stats(
                 event_meta["round_robins"].setdefault(event_key[1], {})
 
         def update_player(pid: int, win: int, loss: int, opp_avg: float | None, pre: float | None, end: float | None):
+            if pid is None:
+                return
             if pid not in stats:
                 stats[pid] = {
                     "games": 0,
@@ -1059,13 +1069,13 @@ def _compute_stats(
                 entry["opponent_ratings"].append(float(opp_avg))
             if event_key is not None:
                 entry["event_keys"].append(event_key)
-            if entry["start_rating"] is None and pre is not None:
-                entry["start_rating"] = float(pre)
-            if end is not None:
-                entry["end_rating"] = float(end)
+            if not unrated and pre is not None and end is not None:
+                formats = entry.setdefault("rating_by_format", {})
+                track = formats.setdefault(match_format, {"start": float(pre), "end": float(pre)})
+                track["end"] = float(end)
 
         def update_event(pid: int, win: int, loss: int, opp_avg: float | None, pre: float | None, end: float | None):
-            if event_key is None:
+            if event_key is None or pid is None:
                 return
             if event_key not in event_stats:
                 event_stats[event_key] = {}
@@ -1084,10 +1094,10 @@ def _compute_stats(
             entry["losses"] += loss
             if opp_avg is not None:
                 entry["opponent_ratings"].append(float(opp_avg))
-            if entry["start_rating"] is None and pre is not None:
-                entry["start_rating"] = float(pre)
-            if end is not None:
-                entry["end_rating"] = float(end)
+            if not unrated and pre is not None and end is not None:
+                formats = entry.setdefault("rating_by_format", {})
+                track = formats.setdefault(match_format, {"start": float(pre), "end": float(pre)})
+                track["end"] = float(end)
 
         update_player(p1, int(t1_win), int(t2_win), team2_avg, r1, r1_end)
         update_player(p2, int(t1_win), int(t2_win), team2_avg, r2, r2_end)
@@ -1104,7 +1114,7 @@ def _compute_stats(
             if gap > 0:
                 giant_slayer_candidates.append(
                     {
-                        "player_ids": [p1, p2],
+                        "player_ids": [p1] if singles else [p1, p2],
                         "gap_elo": gap,
                         "gap_jupr": gap / 400.0,
                         "match_id": match.get("id"),
@@ -1116,7 +1126,7 @@ def _compute_stats(
             if gap > 0:
                 giant_slayer_candidates.append(
                     {
-                        "player_ids": [p3, p4],
+                        "player_ids": [p3] if singles else [p3, p4],
                         "gap_elo": gap,
                         "gap_jupr": gap / 400.0,
                         "match_id": match.get("id"),
@@ -1133,8 +1143,10 @@ def _compute_stats(
 
 def _finalize_rating_deltas(stats: dict[int, dict], rating_map: dict[int, float]) -> None:
     for pid, entry in stats.items():
-        start = entry.get("start_rating")
-        end = entry.get("end_rating")
+        formats = entry.get("rating_by_format") or {}
+        primary = formats.get("doubles") or formats.get("singles") or {}
+        start = primary.get("start", entry.get("start_rating"))
+        end = primary.get("end", entry.get("end_rating"))
         if start is None:
             start = rating_map.get(pid, 1200.0)
         if end is None:

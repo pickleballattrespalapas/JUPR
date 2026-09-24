@@ -47,10 +47,10 @@ export default function AdminWeeklyRecapPreview({ recap: row, printMode = false 
         }
       `}</style>
       <header style={{ borderBottom: "2px solid #0f172a", paddingBottom: "0.75rem" }}>
-        <p style={{ color: row.status === "published" ? "#166534" : "#92400e", textTransform: "uppercase", fontWeight: 900, letterSpacing: "0.08em" }}>{row.status === "published" ? "Published recap preview" : "Unpublished draft — operator preview only"}</p>
+        <p style={{ color: row.status === "published" ? "#166534" : "#92400e", textTransform: "uppercase", fontWeight: 900, letterSpacing: "0.08em" }}>{row.status === "published" ? "Published recap preview" : "Draft preview · Not published"}</p>
         <h1 style={{ marginBottom: "0.25rem" }}>Weekly Recap · {row.week_start} to {row.week_end}</h1>
         <p style={{ color: "#475569" }}>Version {row.row_version || 1} · Loaded {String(row.updated_at || "unknown update time")}</p>
-        {!printMode ? <button type="button" className="admin-recap-no-print" onClick={() => window.print()} style={{ padding: "0.55rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "white", fontWeight: 800 }}>Print / save unpublished preview</button> : null}
+        {!printMode ? <button type="button" className="admin-recap-no-print" onClick={() => window.print()} style={{ padding: "0.55rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "white", fontWeight: 800 }}>Print / save preview</button> : null}
       </header>
       <NumberStrip recap={recap} />
       <section><h2>Spotlight Reel</h2>{spotlight.length ? <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))", gap: "1rem" }}>{spotlight.map((item) => <Spotlight key={`${item.key}-${item.order}`} item={item} />)}</div> : <p>No spotlight reel in this draft.</p>}</section>

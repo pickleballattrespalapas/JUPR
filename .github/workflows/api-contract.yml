@@ -101,3 +101,7 @@ jobs:
             tests/test_parity_manual_book.py \
             tests/test_parity_staging_wave.py \
             tests/test_prepare_parity_tournament_live_fixture.py
+
+      - name: Verify selected operations and badge release
+        run: |
+          python -m pytest -q tests/test_production_operations_release.py tests/test_club_leaderboard_settings_api.py tests/test_badge_reactivation.py tests/test_badge_rivalry_activation.py tests/test_badge_seasons_and_community.py tests/test_program_badges.py tests/test_program_badge_service.py tests/test_api_badge_management.py tests/test_generator_submissions.py tests/test_leaderboard_seasons.py tests/test_overall_leaderboard_metrics.py tests/test_club_staff_access.py tests/test_admin_notifications.py tests/test_admin_notification_sources.py tests/test_admin_dashboard.py tests/test_admin_weekly_recap_delete.py

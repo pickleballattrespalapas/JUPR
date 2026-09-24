@@ -30,10 +30,12 @@ def test_public_header_uses_leagues_and_tournaments_hubs() -> None:
 def test_admin_sidebar_is_authorized_session_only_and_collapsible() -> None:
     shell = read("components/AdminShell.tsx")
     styles = read("components/AdminShell.module.css")
-    layout = read("app/admin/layout.tsx")
+    template = read("app/admin/template.tsx")
 
     assert "useAdminSession" in shell
-    assert "if (authPage || !accessToken)" in shell
+    assert "if (authPage || globalPage)" in shell
+    assert "if (!accessToken)" in shell
+    assert "!activeClub" in shell
     assert 'pathname === "/admin/login"' in shell
     assert 'pathname === "/admin/reset-password"' in shell
     assert 'aria-label="Admin workspace navigation"' in shell
@@ -57,7 +59,8 @@ def test_admin_sidebar_is_authorized_session_only_and_collapsible() -> None:
     assert "sidebarCollapsed" in styles
     assert "groupToggle" in styles
     assert "signOutAdminSession" in shell
-    assert "AdminShell" in layout
+    assert "AdminShell" in template
+    assert "getAdminWorkspace()" in template
 
 
 def test_public_tournament_selection_is_separate_from_selected_workspace() -> None:

@@ -10,11 +10,11 @@ const cardStyle = {
 const faqItems = [
   {
     question: "What is a club rating?",
-    answer: "Pickleball Club Sandwich supports club-specific pickleball ratings used to create better matchups, seed events, and keep leveled play fair. Ratings are displayed on a 1.000–7.000 scale."
+    answer: "JUPR is an in-house club rating used to create better matchups, seed events, and keep leveled play fair. It is displayed on a 1.000–7.000 scale and is not intended to be a national or universal rating."
   },
   {
     question: "How do I get a rating?",
-    answer: "You get a rating after your first club-approved matches. Your rating may move more quickly at first while JUPR gets a clearer picture of your level."
+    answer: "You get a rating after your first club-approved rated match. The same calculation rules apply from day one—there is no provisional period or special new-player multiplier."
   },
   {
     question: "What matches count?",
@@ -22,7 +22,7 @@ const faqItems = [
   },
   {
     question: "What affects rating movement?",
-    answer: "Movement depends on opponent strength, expected outcome, scoreline, and consistency over time. A close loss to a stronger team can move differently than a one-sided expected win."
+    answer: "Movement depends on the two teams’ ratings before the match and the final score. It does not use recency, reliability, or a changing new-player factor. A close loss to a stronger team can move differently than a one-sided expected win."
   },
   {
     question: "Can my rating go up after a loss?",
@@ -34,7 +34,7 @@ const faqItems = [
   },
   {
     question: "How does the system work for doubles?",
-    answer: "Doubles results update each individual player. The system evaluates the strength of both teams, then adjusts each player based on the outcome and score."
+    answer: "The system compares the average rating of each two-player team. After the result, both partners receive the same rating change based on the matchup and score."
   },
   {
     question: "What is the difference between overall and league ratings?",
@@ -50,7 +50,7 @@ const faqItems = [
   },
   {
     question: "Why can JUPR differ from DUPR or my bracket level?",
-    answer: "JUPR uses official results from this club. Other ratings and brackets may use different matches, rules, and scales."
+    answer: "JUPR uses official results from this club for in-club programming. DUPR, bracket levels, and other systems may use different matches, rules, and scales, so they are not expected to match."
   }
 ];
 

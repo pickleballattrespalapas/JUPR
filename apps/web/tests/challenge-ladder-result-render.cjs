@@ -25,6 +25,8 @@ const output = ts.transpileModule(source, {
 const compiled = new Module(componentPath, module);
 compiled.filename = componentPath;
 compiled.paths = Module._nodeModulePaths(path.dirname(componentPath));
+const originalRequire = compiled.require.bind(compiled);
+compiled.require = name => originalRequire(name === "@/components/PublicClubLink" ? "next/link" : name);
 compiled._compile(output, componentPath);
 const ChallengeLadderResultDetails = compiled.exports.default;
 

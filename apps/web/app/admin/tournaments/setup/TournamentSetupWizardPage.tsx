@@ -1,3 +1,4 @@
+import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import { redirect } from "next/navigation";
 import type { TournamentSetupStep } from "@/components/TournamentSetupWizardNav";
 import TournamentSetupWizardPanel from "./TournamentSetupWizardPanel";
@@ -61,7 +62,7 @@ export default async function TournamentSetupWizardPage({
   const resolveDivisionId = first(searchParams?.resolveDivision).trim();
   if (!context.tournamentId) redirect("/admin/tournaments");
 
-  const clubId = "tres_palapas";
+  const { clubId } = requireAdminWorkspace();
   const { data: status, error } = await loadStatus(clubId);
 
   return (

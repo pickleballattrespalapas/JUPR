@@ -10,7 +10,7 @@ from jupr_app.domain.gamification.requirements import load_requirements_map
 
 BadgeStatus = Literal["live", "tracked", "seasonal", "curated", "retired"]
 BadgeScope = Literal["match", "week", "month", "season", "league", "lifetime"]
-AwardTiming = Literal["live", "on_league_close", "manual", "disabled"]
+AwardTiming = Literal["live", "on_league_close", "on_program_change", "manual", "disabled"]
 
 
 @dataclass(frozen=True)
@@ -103,24 +103,21 @@ def _build_badge_metadata() -> dict[str, dict[str, str]]:
             "top_performer_most_improved",
             "top_performer_best_win_pct",
             "top_performer_most_wins",
-            "league_champion",
-            "league_runner_up",
-            "league_third_place",
-            "podium",
         ],
         status="seasonal",
         scope="season",
         award_timing="on_league_close",
     )
 
-    assign(["breakthrough", "above_expectations", "clutch_performer"], status="tracked", scope="lifetime", award_timing="disabled")
-    assign(["dominant_run"], status="tracked", scope="league", award_timing="disabled")
-    assign(["high_output", "rivalry_win"], status="tracked", scope="match", award_timing="disabled")
-    assign(["nemesis_found", "rivalry_streak", "settled_the_score"], status="tracked", scope="lifetime", award_timing="disabled")
-    assign(["battle_tested", "consistency", "mr_reliable"], status="tracked", scope="season", award_timing="disabled")
-    assign(["good_sport", "community_builder"], status="curated", scope="lifetime", award_timing="manual")
-    assign(["mentor"], status="curated", scope="match", award_timing="manual")
+    assign(["league_champion", "league_runner_up", "league_third_place", "podium"], status="retired", scope="league", award_timing="disabled")
+    assign(["breakthrough"], status="live", scope="league", award_timing="live")
+    assign(["above_expectations", "rivalry_win"], status="live", scope="match", award_timing="live")
+    assign(["clutch_performer", "dominant_run", "high_output", "nemesis_found", "rivalry_streak", "settled_the_score"], status="live", scope="lifetime", award_timing="live")
+    assign(["battle_tested", "consistency", "mr_reliable"], status="live", scope="season", award_timing="live")
+    assign(["good_sport", "community_builder", "mentor"], status="curated", scope="lifetime", award_timing="manual")
 
+    from jupr_app.domain.gamification.program_badge_catalog import PROGRAM_BADGE_IDS
+    assign(PROGRAM_BADGE_IDS, status="live", scope="lifetime", award_timing="on_program_change")
     return metadata
 
 
@@ -128,7 +125,7 @@ BADGE_METADATA = _build_badge_metadata()
 
 _VALID_STATUS = {"live", "tracked", "seasonal", "curated", "retired"}
 _VALID_SCOPE = {"match", "week", "month", "season", "league", "lifetime"}
-_VALID_AWARD_TIMING = {"live", "on_league_close", "manual", "disabled"}
+_VALID_AWARD_TIMING = {"live", "on_league_close", "on_program_change", "manual", "disabled"}
 
 _REQUIRED_BADGE_TITLES = [
     "Level Up",

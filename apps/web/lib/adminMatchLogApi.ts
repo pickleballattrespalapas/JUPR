@@ -277,8 +277,8 @@ async function fetchJson<T>(path: string, accessToken?: string): Promise<ApiResu
   }
 }
 
-export async function getAdminMatchLog(params?: {
-  clubId?: string;
+export async function getAdminMatchLog(params: {
+  clubId: string;
   filter?: string | null;
   matchId?: string | number | null;
   matchIds?: string | Array<string | number> | null;
@@ -291,7 +291,7 @@ export async function getAdminMatchLog(params?: {
   endDate?: string | null;
   limit?: string | number | null;
 }, accessToken?: string): Promise<ApiResult<AdminMatchLogResponse>> {
-  const clubId = params?.clubId || "tres_palapas";
+  const clubId = params.clubId;
   const query = new URLSearchParams();
   if (params?.filter) query.set("filter", String(params.filter));
   if (params?.matchIds) {
