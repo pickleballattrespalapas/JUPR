@@ -1,32 +1,12 @@
 import Link from "@/components/PublicClubLink";
 import { getPublicTeamLeagues } from "@/lib/teamLeagueApi";
+import TeamLeagueCards from "@/components/TeamLeagueCards";
 
 type Props = {
   params: { clubSlug: string };
   searchParams?: Record<string, string | string[] | undefined>;
 };
 type LeagueView = "active" | "past";
-const card = {
-  border: "1px solid #e2e8f0",
-  borderRadius: "14px",
-  padding: "1rem",
-  background: "white"
-};
-
-function categoryLabel(category: string): string {
-  return ({ mens: "Men's", womens: "Women's", mixed: "Mixed", open: "Open" } as Record<string, string>)[category] || "Open";
-}
-
-function leagueStatusLabel(status: string): string {
-  return ({
-    registration_open: "Registration open",
-    registration_closed: "Registration closed",
-    scheduled: "Schedule published",
-    active: "Season in progress",
-    playoffs: "Playoffs",
-    complete: "Complete"
-  } as Record<string, string>)[status] || "League available";
-}
 
 function selectedView(searchParams: Props["searchParams"]): LeagueView {
   const raw = searchParams?.view;
@@ -65,32 +45,12 @@ export default async function TeamLeaguesPage({ params, searchParams }: Props) {
         })}
       </nav>
       {error ? <p style={{ color: "#b91c1c" }}>{error}</p> : null}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "1rem" }}>
-        {(data?.leagues || []).map((league) => (
-          <article key={league.league_name} style={card}>
-            <h2 style={{ marginTop: 0 }}>{league.league_name}</h2>
-            <p>{league.venue || "Venue to be announced"}</p>
-            <p>{categoryLabel(league.team_category)} · {league.team_size} players per team{league.max_alternates ? ` · up to ${league.max_alternates} alternate${league.max_alternates === 1 ? "" : "s"}` : ""}</p>
-            <p>
-              {league.registration_open
-                ? "Registration open"
-                : league.registration_configured_open && !league.online_team_registration_supported
-                  ? "Contact staff to register"
-                : leagueStatusLabel(league.status)}
-              {" · "}
-              {league.allow_substitutes ? "Substitutes allowed" : "No substitutes"}
-            </p>
-            <Link href={`/clubs/${params.clubSlug}/team-leagues/${encodeURIComponent(league.league_name)}`}>
-              Open league
-            </Link>
-          </article>
-        ))}
-      </div>
+      <TeamLeagueCards clubSlug={params.clubSlug} leagues={data?.leagues || []} past={view === "past"} />
       {!error && !data?.leagues?.length ? (
         <p>{view === "past" ? "No past team leagues yet." : "No active team leagues right now."}</p>
       ) : null}
       <p style={{ marginTop: "1rem" }}>
-        <Link href={`/clubs/${params.clubSlug}`}>Club home</Link>
+        <Link href={`/clubs/${params.clubSlug}/leagues`}>All leagues</Link> · <Link href={`/clubs/${params.clubSlug}`}>Club home</Link>
       </p>
     </section>
   );

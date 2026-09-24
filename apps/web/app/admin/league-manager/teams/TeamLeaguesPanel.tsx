@@ -13,8 +13,9 @@ import type {
 import { isTeamLeagueType } from "@/lib/leagueRouteContext";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
+import TeamLeagueRegistrationLink from "../TeamLeagueRegistrationLink";
 
-type Props = { apiBase: string | null; clubId: string; status: AdminLeagueManagerStatusResponse };
+type Props = { apiBase: string | null; clubId: string; clubSlug: string; status: AdminLeagueManagerStatusResponse };
 type TeamSettings = {
   league_name: string;
   status?: string;
@@ -311,7 +312,7 @@ function ScoreFixtureCard({
   );
 }
 
-export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
+export default function TeamLeaguesPanel({ apiBase, clubId, clubSlug, status }: Props) {
   const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
   const [leagueNames, setLeagueNames] = useState<string[]>([]);
   const [teamLeagueRows, setTeamLeagueRows] = useState<TeamSettings[]>([]);
@@ -742,7 +743,7 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
     <div style={{ display: "grid", gap: "1rem" }}>
       <article style={{ ...cardStyle, background: "#f8fafc" }}>
         <h2 style={{ marginTop: 0 }}>Choose a league</h2>
-        <p style={{ color: "#475569" }}>Signed in as {adminSessionLabel(session)}. Payment remains offline; team-league writes remain staging-only.</p>
+        <p style={{ color: "#475569" }}>Signed in as {adminSessionLabel(session)}. Players pay the organizer separately.</p>
         {sessionLoading ? <p>Checking session…</p> : null}
         {sessionMessage ? <p style={{ color: "#b91c1c" }}>{sessionMessage}</p> : null}
         {!accessToken && !sessionLoading ? <p><Link href="/admin/login">Open admin login</Link></p> : null}
@@ -757,6 +758,7 @@ export default function TeamLeaguesPanel({ apiBase, clubId, status }: Props) {
 
       {detail ? (
         <>
+          <TeamLeagueRegistrationLink clubSlug={clubSlug} leagueName={detail.settings.league_name} />
           <article style={cardStyle}>
             <h2 style={{ marginTop: 0 }}>Teams and standings</h2>
             <div style={{ overflowX: "auto" }}>
