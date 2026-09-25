@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+import pytest
 
 from tests.conftest import require_api_dependency
 from tests.test_admin_player_editor_service import FakeSupabase, fake_storage
@@ -92,7 +93,10 @@ def test_player_editor_list_and_detail_contract(monkeypatch):
     assert detail["league_ratings"][0]["league_name"] == "Open"
 
 
-def test_player_editor_create_and_patch_contract(monkeypatch):
+@pytest.mark.parametrize("environment", ["test", "production"])
+def test_player_editor_create_and_patch_contract(monkeypatch, environment):
+    monkeypatch.setenv("JUPR_ENV", environment)
+    monkeypatch.setenv("JUPR_PRODUCTION_WRITE_POLICY", "enabled")
     storage = fake_storage()
     monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR", "1")
     monkeypatch.setenv("SUPABASE_URL", "http://example.local")

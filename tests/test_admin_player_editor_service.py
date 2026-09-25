@@ -26,6 +26,8 @@ class FakeQuery:
         self.order_key: str | None = None
         self.order_desc = False
         self.limit_value: int | None = None
+        self.range_value: tuple[int, int] | None = None
+        self.orders = []
         self.insert_payload = None
         self.update_payload = None
 
@@ -43,6 +45,11 @@ class FakeQuery:
     def order(self, key, desc=False):
         self.order_key = key
         self.order_desc = bool(desc)
+        self.orders.append((key, bool(desc)))
+        return self
+
+    def range(self, start, end):
+        self.range_value = (start, end)
         return self
 
     def limit(self, value):
@@ -61,8 +68,11 @@ class FakeQuery:
         rows = list(table)
         for key, expected in self.filters:
             rows = [row for row in rows if str(row.get(key)) == str(expected)]
-        if self.order_key:
-            rows = sorted(rows, key=lambda row: str(row.get(self.order_key) or ""), reverse=self.order_desc)
+        for key, desc in reversed(self.orders):
+            rows = sorted(rows, key=lambda row: row.get(key) or "", reverse=desc)
+        if self.range_value is not None:
+            start, end = self.range_value
+            rows = rows[start:end + 1]
         if self.limit_value is not None:
             rows = rows[: self.limit_value]
         return rows
@@ -152,6 +162,63 @@ def test_list_and_detail_player_editor(monkeypatch) -> None:
     assert detail["player"]["rating_jupr"] == 3.5
     assert detail["league_ratings"][0]["league_name"] == "Open"
     assert detail["match_reference_counts"]["total"] == 2
+
+
+def test_roster_pages_all_players_with_duplicate_names_and_club_scope(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR", "1")
+    storage = fake_storage()
+    storage["players"] = [
+        {"club_id": "club", "id": i, "name": "Same Name", "rating": 1400}
+        for i in reversed(range(1, 1202))
+    ] + [{"club_id": "other", "id": 9999, "name": "Other Club"}]
+    result = list_admin_player_editor_players(FakeSupabase(storage), club_id="club")
+    assert result["count"] == 1201
+    assert [row["id"] for row in result["players"]] == list(range(1, 1202))
+
+
+@pytest.mark.parametrize("starting_rating", [1401.23456789, None])
+def test_rating_only_update_preserves_starting_rating_and_history(monkeypatch, starting_rating):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR", "1")
+    original_eq = FakeQuery.eq
+
+    def reject_null_equality(query, field, value):
+        if field == "starting_rating":
+            assert value is not None, "PostgREST requires IS NULL for a missing starting rating"
+        return original_eq(query, field, value)
+
+    monkeypatch.setattr(FakeQuery, "eq", reject_null_equality)
+    storage = fake_storage()
+    storage["players"][0]["starting_rating"] = starting_rating
+    before = dict(storage["players"][0])
+    db = FakeSupabase(storage)
+    detail = get_admin_player_editor_detail(db, club_id="club", player_id=1)
+    result = update_admin_player_editor_player(
+        db, club_id="club", player_id=1, patch={"rating_jupr": 4.408},
+        actor_email="owner@example.com", actor_role="club_owner",
+        expected_state_fingerprint=detail["player"]["state_fingerprint"],
+        idempotency_key="rating-only-update",
+    )
+    assert result["player"]["rating_jupr"] == 4.408
+    assert storage["players"][0] == {**before, "rating": 4.408 * 400}
+
+
+def test_production_editor_does_not_enable_merge(monkeypatch):
+    monkeypatch.setenv("JUPR_ENV", "production")
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR", "1")
+    monkeypatch.delenv("JUPR_ENABLE_NEXT_ADMIN_PLAYER_MERGE", raising=False)
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "test-role")
+    status = build_admin_player_editor_status(FakeSupabase(fake_storage()), club_id="club")
+    assert status["enabled"] is True
+    assert status["merge_enabled"] is False
+    assert status["transactional_merge_ready"] is False
+
+    from jupr_app.services.admin_player_merge_service import execute_admin_player_merge
+    with pytest.raises(PermissionError, match="merging is not enabled"):
+        execute_admin_player_merge(
+            None, club_id="club", source_player_id=1, target_player_id=2,
+            actor_email="owner@example.com", actor_role="club_owner",
+            confirmation_text="MERGE", preview_fingerprint="a" * 64,
+        )
 
 
 def test_create_player_editor_player_writes_audit(monkeypatch) -> None:

@@ -33,6 +33,15 @@ def is_admin_player_editor_enabled() -> bool:
     return _truthy_env("JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR")
 
 
+def is_admin_player_merge_enabled() -> bool:
+    # Preserve the staging pilot, but activating profile edits must not also
+    # release production merges before their replay/recovery acceptance gate.
+    default = "0" if os.getenv("JUPR_ENV", "").strip().lower() in {"production", "prod"} else "1"
+    return is_admin_player_editor_enabled() and os.getenv(
+        "JUPR_ENABLE_NEXT_ADMIN_PLAYER_MERGE", default
+    ).strip().lower() in TRUTHY_ENV_VALUES
+
+
 def is_api_audit_log_required() -> bool:
     return _truthy_env("JUPR_REQUIRE_API_AUDIT_LOG")
 
@@ -119,14 +128,21 @@ def _league_rating_payload(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _fetch_players(supabase: Any, *, club_id: str) -> list[dict[str, Any]]:
-    rows = _safe_rows(
-        supabase.table("players")
-        .select("id,club_id,name,rating,starting_rating,wins,losses,matches_played,active,inactive_at,last_game_at")
-        .eq("club_id", str(club_id))
-        .order("name", desc=False)
-        .execute()
-    )
-    return [_player_payload(row) for row in rows if _safe_int(row.get("id")) is not None]
+    players: list[dict[str, Any]] = []
+    offset = 0
+    while True:
+        query = (
+            supabase.table("players")
+            .select("id,club_id,name,rating,starting_rating,wins,losses,matches_played,active,inactive_at,last_game_at")
+            .eq("club_id", str(club_id))
+            .order("name", desc=False)
+            .order("id", desc=False)
+        )
+        rows = _safe_rows(query.range(offset, offset + 499).execute())
+        players.extend(_player_payload(row) for row in rows if _safe_int(row.get("id")) is not None)
+        if not rows:
+            return players
+        offset += len(rows)
 
 
 def _fetch_player_row(supabase: Any, *, club_id: str, player_id: int) -> dict[str, Any] | None:
@@ -490,7 +506,7 @@ def build_admin_player_editor_status(supabase: Any | None, *, club_id: str) -> d
             player_count = len(_fetch_players(supabase, club_id=str(club_id)))
         except Exception:
             player_count = None
-        if os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip():
+        if is_admin_player_merge_enabled() and os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip():
             try:
                 _safe_rows(
                     supabase.table("admin_player_merge_operations")
@@ -511,10 +527,12 @@ def build_admin_player_editor_status(supabase: Any | None, *, club_id: str) -> d
         "player_merge_endpoint": "/admin/clubs/{club_id}/players/editor/merge",
         "merge_operation_endpoint": "/admin/clubs/{club_id}/players/editor/merge/{operation_id}",
         "transactional_merge_ready": transactional_merge_ready,
+        "merge_enabled": is_admin_player_merge_enabled(),
         "player_count": player_count,
         "warnings": [
-            "Player create/update, league-rating edits, social identity linking, and stale-guarded atomic merge are enabled. Every merge remains pending until succeeded full-replay evidence is attached or pre-replay compensation completes.",
-            *([] if transactional_merge_ready else ["Transactional merge is not write-ready until FastAPI has SUPABASE_SERVICE_ROLE_KEY and the merge migration."]),
+            "Player profile and league-rating changes are saved with an audit record.",
+            *(["Account merging is not enabled."] if not is_admin_player_merge_enabled() else
+              ([] if transactional_merge_ready else ["Transactional merge is not write-ready until FastAPI has SUPABASE_SERVICE_ROLE_KEY and the merge migration."])),
         ],
     }
 
@@ -819,14 +837,11 @@ def update_admin_player_editor_player(
         .update(update_payload)
         .eq("club_id", str(club_id))
         .eq("id", int(player_id))
-        .eq("name", before_row.get("name"))
-        .eq("rating", before_row.get("rating"))
-        .eq("starting_rating", before_row.get("starting_rating"))
-        .eq("wins", before_row.get("wins"))
-        .eq("losses", before_row.get("losses"))
-        .eq("matches_played", before_row.get("matches_played"))
         .eq("active", before_row.get("active", before_row.get("is_active", True)))
     )
+    for field in ("name", "rating", "starting_rating", "wins", "losses", "matches_played"):
+        value = before_row.get(field)
+        update_query = update_query.is_(field, None) if value is None else update_query.eq(field, value)
     if before_row.get("inactive_at") is None:
         update_query = update_query.is_("inactive_at", None)
     else:
