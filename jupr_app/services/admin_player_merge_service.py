@@ -8,7 +8,7 @@ import os
 from uuid import UUID, uuid4
 
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
-from jupr_app.services.admin_player_editor_service import is_admin_player_editor_enabled
+from jupr_app.services.admin_player_editor_service import is_admin_player_editor_enabled, is_admin_player_merge_enabled
 
 CONFIRM_MERGE = "MERGE"
 CONFIRM_COMPENSATE = "COMPENSATE MERGE"
@@ -590,6 +590,8 @@ def execute_admin_player_merge(
     operation_id: str | None = None,
     source: str = "next_player_editor_merge",
 ) -> dict[str, Any]:
+    if not is_admin_player_merge_enabled():
+        raise PermissionError("Player account merging is not enabled.")
     if str(confirmation_text or "").strip().upper() != CONFIRM_MERGE:
         raise ValueError(f"Type {CONFIRM_MERGE} to merge player records.")
     supplied_fingerprint = str(preview_fingerprint or "").strip().lower()

@@ -33,13 +33,25 @@ def production(monkeypatch):
 
 def test_team_release_changes_only_team_flag_and_preserves_live_rollback():
     previous = _health_payload(feature_profile="pre_team_leagues")
-    released = _health_payload(feature_profile="release")
+    released = _health_payload(feature_profile="pre_player_editor")
     assert verifier.production_feature_profile_from_health(previous) == "pre_team_leagues"
-    assert verifier.production_feature_profile_from_health(released) == "release"
+    assert verifier.production_feature_profile_from_health(released) == "pre_player_editor"
     assert verifier.expected_production_email_mode(profile="pre_team_leagues") == "live"
     assert [flag for flag in previous["feature_flags"]
             if previous["feature_flags"][flag] != released["feature_flags"][flag]] == [
         "JUPR_ENABLE_TEAM_LEAGUES"
+    ]
+
+
+def test_player_editor_release_preserves_exact_live_rollback():
+    previous = _health_payload(feature_profile="pre_player_editor")
+    released = _health_payload(feature_profile="release")
+    assert verifier.production_feature_profile_from_health(previous) == "pre_player_editor"
+    assert verifier.production_feature_profile_from_health(released) == "release"
+    assert verifier.expected_production_email_mode(profile="pre_player_editor") == "live"
+    assert [flag for flag in previous["feature_flags"]
+            if previous["feature_flags"][flag] != released["feature_flags"][flag]] == [
+        "JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR"
     ]
 
 

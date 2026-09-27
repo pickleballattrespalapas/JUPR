@@ -26,7 +26,7 @@ const buttonStyle = { padding: "0.6rem 0.9rem", borderRadius: "999px", border: "
 const ghostButtonStyle = { ...buttonStyle, background: "white", color: "#0f172a" };
 const leagueRatingConfirmText = "SAVE LEAGUE RATING"; const socialConfirmText = "LINK SOCIAL"; const mergeConfirmText = "MERGE"; const compensateConfirmText = "COMPENSATE MERGE"; const replayEvidenceConfirmText = "CONFIRM REPLAY RECOVERY";
 function apiUrl(apiBase: string, path: string): string { return `${apiBase.replace(/\/$/, "")}${path}`; }
-function juprLabel(value?: number | null): string { return value == null ? "—" : Number(value).toFixed(2); }
+function juprLabel(value?: number | null): string { return value == null ? "—" : Number(value).toFixed(3); }
 function socialLabel(row: AdminPlayerSocialIdentity): string { return `${row.display_name || "Unknown"}${row.linked_player_name ? ` → ${row.linked_player_name}` : " [unlinked]"}`; }
 function playerOptionLabel(player: AdminPlayerEditorPlayer): string { return `${player.name} #${player.id}${player.active === false ? " [inactive]" : ""}`; }
 function sumRecord(values?: Record<string, number>): number { if (values?.total != null) return Number(values.total || 0); return Object.values(values || {}).reduce((sum, value) => sum + Number(value || 0), 0); }
@@ -162,16 +162,18 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
     if (!requireReady()) return;
     setSaving(true);
     try {
-      const [playerPayload, socialPayload] = await Promise.all([
+      const [playerPayload, socialResult] = await Promise.all([
         requestJson<AdminPlayerEditorListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/players`),
         requestJson<AdminPlayerSocialIdentityListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/players/editor/social-identities`)
+          .then(data => ({ data, error: null }), error => ({ data: null, error }))
       ]);
       if (!workspaceRequest.isCurrent(generation)) return;
       const nextPlayers = playerPayload.players || [];
-      const nextSocialPeople = socialPayload.people || [];
+      const socialPayload = socialResult.data;
+      const nextSocialPeople = socialPayload?.people || [];
       setPlayers(nextPlayers);
       setSocialPeople(nextSocialPeople);
-      setSocialPlayers(socialPayload.players || []);
+      setSocialPlayers(socialPayload?.players || []);
       if (selectedPlayerBeforeRefresh && !nextPlayers.some((row) => String(row.id) === selectedPlayerBeforeRefresh)) {
         detailRequest.invalidate();
         setSelectedId("");
@@ -180,7 +182,9 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
       if (!selectedSocialBeforeRefresh || !nextSocialPeople.some((row) => row.id === selectedSocialBeforeRefresh)) {
         seedSocialForm(nextSocialPeople[0] || null);
       }
-      setMessage(`Loaded ${playerPayload.count ?? nextPlayers.length} player(s) and ${socialPayload.summary?.people ?? nextSocialPeople.length} social identit${nextSocialPeople.length === 1 ? "y" : "ies"}.`);
+      setMessage(socialResult.error
+        ? `Loaded ${playerPayload.count ?? nextPlayers.length} players. Social identities are unavailable; you can still edit player profiles.`
+        : `Loaded ${playerPayload.count ?? nextPlayers.length} players.`);
     } catch (error) {
       if (workspaceRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load Player Editor options.");
     } finally {
@@ -334,13 +338,22 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
       setMessage(`Resolve exact operation ${writeRecovery.operationKey} before saving another player change.`);
       return;
     }
+    if (!detail?.player.state_fingerprint) { setMessage("Reload this player before saving so the current server version can be verified."); return; }
     const rating = Number(editRating);
     const starting = Number(editStartingRating);
-    if (!editName.trim() || !Number.isFinite(rating) || !Number.isFinite(starting) || rating < 1 || rating > 7 || starting < 1 || starting > 7) { setMessage("Name, Overall JUPR, and Starting JUPR are required. Ratings must be between 1.0 and 7.0."); return; }
-    if (!detail?.player.state_fingerprint) { setMessage("Reload this player before saving so the current server version can be verified."); return; }
+    const ratingChanged = editRating !== String(detail.player.rating_jupr ?? "");
+    const startingChanged = editStartingRating !== String(detail.player.starting_jupr ?? "");
+    if (!editName.trim() || (ratingChanged && (!Number.isFinite(rating) || rating < 1 || rating > 7)) || (startingChanged && (!Number.isFinite(starting) || starting < 1 || starting > 7))) { setMessage("A name is required. Changed ratings must be between 1.0 and 7.0."); return; }
     const generation = actionRequest.begin();
     const requestedPlayerId = selectedId;
-    const request = { name: editName.trim(), rating_jupr: rating, starting_jupr: starting, active: editActive, expected_state_fingerprint: detail.player.state_fingerprint, source: "next_player_editor_update" };
+    const patch = {
+      ...(editName.trim() !== detail.player.name ? { name: editName.trim() } : {}),
+      ...(ratingChanged ? { rating_jupr: rating } : {}),
+      ...(startingChanged ? { starting_jupr: starting } : {}),
+      ...(editActive !== (detail.player.active !== false) ? { active: editActive } : {}),
+    };
+    if (!Object.keys(patch).length) { setMessage("No changes to save."); return; }
+    const request = { ...patch, expected_state_fingerprint: detail.player.state_fingerprint, source: "next_player_editor_update" };
     const operationScope = `player:${clubId}:${requestedPlayerId}`;
     const idempotencyKey = mutationOperationKey(operationScope, request);
     setSaving(true);
@@ -353,7 +366,7 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
         await loadDetail(String(payload.player.id));
         if (!actionRequest.isCurrent(generation)) return;
       }
-      setMessage(null); setResultDialog(`Player saved: ${payload.player?.name || editName.trim()}. Use Match Log and Replay History if downstream rating repair is needed.`);
+      setMessage(null); setResultDialog(`Player saved: ${payload.player?.name || editName.trim()}.`);
     } catch (error) {
       const uncertain = playerEditorWriteIsUncertain(error);
       if (uncertain) {
@@ -662,18 +675,18 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
       </article>
     ) : null}
     {mergeAttempted && mergeOperationId && !mergePreview && !mergeRecovery ? <article style={{ ...cardStyle, background: "#fef2f2", borderColor: "#fca5a5" }}><h2 style={{ marginTop: 0 }}>Merge outcome unknown</h2><p>Do not retry with a new operation. Check operation <code>{mergeOperationId}</code> first; an idempotent server retry uses this same ID.</p><button type="button" onClick={lookupMergeOperation} disabled={saving || !accessToken} style={ghostButtonStyle}>Check merge operation</button></article> : null}
-    <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Player Editor admin session</h2><p style={{ color: "#475569" }}>This route supports roster/detail read, add player, basic player updates, guarded league-rating edits, Club Social identity linking, and guarded player merge. Merges require Replay History after execution.</p><div style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: accessToken ? "#f0fdf4" : "#fffbeb", marginBottom: "1rem" }}><strong>{accessToken ? `Admin session: ${adminSessionLabel(session)}` : "Admin session required"}</strong><p style={{ margin: "0.35rem 0 0", color: accessToken ? "#166534" : "#92400e" }}>{accessToken ? "Ready to send authorized Player Editor requests." : sessionLoading ? "Checking admin session…" : "Sign in before using the Player Editor."}</p>{sessionMessage ? <p style={{ color: "#b91c1c", marginBottom: 0 }}>{sessionMessage}</p> : null}{!accessToken && !sessionLoading ? <p style={{ marginBottom: 0 }}><Link href="/admin/login">Open admin login</Link></p> : null}</div><button type="button" onClick={loadWorkspace} disabled={saving || !accessToken} style={buttonStyle}>{saving ? "Refreshing…" : "Refresh players and identities"}</button>{status.warnings?.length ? <ul style={{ color: "#92400e" }}>{status.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}</article>
-    <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Add new player</h2><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", alignItems: "end" }}><label><strong>Name *</strong><br /><input required value={newName} onChange={(event) => setNewName(event.target.value)} style={inputStyle} /></label><label><strong>Starting JUPR *</strong><br /><input required value={newStartingJupr} onChange={(event) => setNewStartingJupr(event.target.value)} type="number" min={1} max={7} step={0.1} placeholder="Required" style={inputStyle} /><br /><small style={{ color: "#64748b" }}>Enter a reviewed starting value; no default is assumed.</small></label><button type="button" onClick={createPlayer} disabled={saving || !accessToken || Boolean(writeRecovery) || !newName.trim() || !Number.isFinite(Number(newStartingJupr)) || Number(newStartingJupr) < 1 || Number(newStartingJupr) > 7} style={ghostButtonStyle}>Add player</button></div></article>
+    <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Player Editor admin session</h2><p style={{ color: "#475569" }}>Search for a player, make your changes, and choose Save player. Only fields you change will be updated.</p><div style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem", background: accessToken ? "#f0fdf4" : "#fffbeb", marginBottom: "1rem" }}><strong>{accessToken ? `Admin session: ${adminSessionLabel(session)}` : "Admin session required"}</strong><p style={{ margin: "0.35rem 0 0", color: accessToken ? "#166534" : "#92400e" }}>{accessToken ? "Ready to send authorized Player Editor requests." : sessionLoading ? "Checking admin session…" : "Sign in before using the Player Editor."}</p>{sessionMessage ? <p style={{ color: "#b91c1c", marginBottom: 0 }}>{sessionMessage}</p> : null}{!accessToken && !sessionLoading ? <p style={{ marginBottom: 0 }}><Link href="/admin/login">Open admin login</Link></p> : null}</div><button type="button" onClick={loadWorkspace} disabled={saving || !accessToken} style={buttonStyle}>{saving ? "Refreshing…" : "Refresh players and identities"}</button>{status.warnings?.length ? <ul style={{ color: "#92400e" }}>{status.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}</article>
+    <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Add new player</h2><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", alignItems: "end" }}><label><strong>Name *</strong><br /><input required value={newName} onChange={(event) => setNewName(event.target.value)} style={inputStyle} /></label><label><strong>Starting JUPR *</strong><br /><input required value={newStartingJupr} onChange={(event) => setNewStartingJupr(event.target.value)} type="number" min={1} max={7} step={0.001} placeholder="Required" style={inputStyle} /><br /><small style={{ color: "#64748b" }}>Enter a reviewed starting value; no default is assumed.</small></label><button type="button" onClick={createPlayer} disabled={saving || !accessToken || Boolean(writeRecovery) || !newName.trim() || !Number.isFinite(Number(newStartingJupr)) || Number(newStartingJupr) < 1 || Number(newStartingJupr) > 7} style={ghostButtonStyle}>Add player</button></div></article>
     <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Select player</h2><SearchablePlayerSelect aria-label="Select player" value={selectedId} onValueChange={playerValue => loadDetail(playerValue)} style={inputStyle} disabled={saving || !accessToken}><option value="">Choose a player</option>{players.map((player) => <option key={player.id} value={String(player.id)}>{playerOptionLabel(player)}</option>)}</SearchablePlayerSelect></article>
-    {detail ? <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Manage player</h2><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "0.75rem" }}><label><strong>Name</strong><br /><input value={editName} onChange={(event) => setEditName(event.target.value)} style={inputStyle} /></label><label><strong>Overall JUPR</strong><br /><input value={editRating} onChange={(event) => setEditRating(event.target.value)} type="number" min={1} max={7} step={0.01} style={inputStyle} /></label><label><strong>Starting JUPR</strong><br /><input value={editStartingRating} onChange={(event) => setEditStartingRating(event.target.value)} type="number" min={1} max={7} step={0.01} style={inputStyle} /></label><label><strong>Active</strong><br /><select value={editActive ? "yes" : "no"} onChange={(event) => setEditActive(event.target.value === "yes")} style={inputStyle}><option value="yes">Active</option><option value="no">Inactive</option></select></label></div><p><button type="button" onClick={savePlayer} disabled={saving || !accessToken || Boolean(writeRecovery)} style={buttonStyle}>{saving ? "Saving…" : "Save player"}</button></p><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "0.75rem", marginTop: "1rem" }}><div><strong>Wins</strong><br />{detail.player.wins ?? 0}</div><div><strong>Losses</strong><br />{detail.player.losses ?? 0}</div><div><strong>Matches</strong><br />{detail.player.matches_played ?? 0}</div><div><strong>Match refs</strong><br />{detail.match_reference_counts?.total ?? 0}</div></div></article> : null}
+    {detail ? <article style={cardStyle}><h2 style={{ marginTop: 0 }}>Manage player</h2><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "0.75rem" }}><label><strong>Name</strong><br /><input value={editName} onChange={(event) => setEditName(event.target.value)} style={inputStyle} /></label><label><strong>Overall JUPR</strong><br /><input value={editRating} onChange={(event) => setEditRating(event.target.value)} type="number" min={1} max={7} step={0.001} style={inputStyle} /></label><label><strong>Starting JUPR</strong><br /><input value={editStartingRating} onChange={(event) => setEditStartingRating(event.target.value)} type="number" min={1} max={7} step={0.001} style={inputStyle} /></label><label><strong>Active</strong><br /><select value={editActive ? "yes" : "no"} onChange={(event) => setEditActive(event.target.value === "yes")} style={inputStyle}><option value="yes">Active</option><option value="no">Inactive</option></select></label></div><p><button type="button" onClick={savePlayer} disabled={saving || !accessToken || Boolean(writeRecovery)} style={buttonStyle}>{saving ? "Saving…" : "Save player"}</button></p><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "0.75rem", marginTop: "1rem" }}><div><strong>Wins</strong><br />{detail.player.wins ?? 0}</div><div><strong>Losses</strong><br />{detail.player.losses ?? 0}</div><div><strong>Matches</strong><br />{detail.player.matches_played ?? 0}</div><div><strong>Match refs</strong><br />{detail.match_reference_counts?.total ?? 0}</div></div></article> : null}
     {detail?.league_ratings?.length ? (
       <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>League ratings</h2>
         <p style={{ color: "#475569" }}>League-rating edits are audit-flagged because they can diverge from replayed history. Use them for targeted corrections only, then run Replay History if needed.</p>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
           <label><strong>League rating row</strong><br /><select value={selectedLeagueRatingId} onChange={(event) => seedLeagueRatingForm(detail.league_ratings.find((row) => String(row.id) === event.target.value) || null)} style={inputStyle}><option value="">Choose league rating…</option>{detail.league_ratings.map((row) => <option key={row.id} value={String(row.id)}>{row.league_name} · {juprLabel(row.rating_jupr)}</option>)}</select></label>
-          <label><strong>League JUPR</strong><br /><input value={editLeagueRating} onChange={(event) => setEditLeagueRating(event.target.value)} type="number" min={1} max={7} step={0.01} style={inputStyle} /></label>
-          <label><strong>League starting JUPR</strong><br /><input value={editLeagueStartingRating} onChange={(event) => setEditLeagueStartingRating(event.target.value)} type="number" min={1} max={7} step={0.01} style={inputStyle} /></label>
+          <label><strong>League JUPR</strong><br /><input value={editLeagueRating} onChange={(event) => setEditLeagueRating(event.target.value)} type="number" min={1} max={7} step={0.001} style={inputStyle} /></label>
+          <label><strong>League starting JUPR</strong><br /><input value={editLeagueStartingRating} onChange={(event) => setEditLeagueStartingRating(event.target.value)} type="number" min={1} max={7} step={0.001} style={inputStyle} /></label>
           <label><strong>League active</strong><br /><select value={editLeagueActive ? "yes" : "no"} onChange={(event) => setEditLeagueActive(event.target.value === "yes")} style={inputStyle}><option value="yes">Active</option><option value="no">Inactive</option></select></label>
         </div>
         <p>
@@ -728,7 +741,7 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
         </>
       ) : <p style={{ color: "#64748b" }}>{saving ? "Loading Club Social identities…" : "No Club Social identities are available."}</p>}
     </article>
-    <article style={{ ...cardStyle, background: "#fff7ed", borderColor: "#fed7aa" }}>
+    {status.merge_enabled !== false ? <article style={{ ...cardStyle, background: "#fff7ed", borderColor: "#fed7aa" }}>
       <h2 style={{ marginTop: 0 }}>Merge player accounts</h2>
       <p style={{ color: "#7c2d12" }}>Merge rewires Source → Target in one guarded database transaction, records a recovery operation, then deactivates the source. A succeeded full Replay History job must be attached afterward.</p>
       {status.transactional_merge_ready === false ? <p style={{ color: "#b91c1c" }}><strong>Merge write unavailable:</strong> FastAPI has not confirmed its server-only service role and transaction contract.</p> : null}
@@ -765,7 +778,7 @@ export default function PlayerEditorPanel({ apiBase, clubId, status }: Props) {
           </p>
         </div>
       ) : null}
-    </article>
+    </article> : null}
     {mergeRecovery?.operation_id ? (
       <article style={{ ...cardStyle, background: mergeRecovery.operation_status === "merged_pending_replay" ? "#fffbeb" : "#f0fdf4", borderColor: mergeRecovery.operation_status === "merged_pending_replay" ? "#f59e0b" : "#86efac" }}>
         <h2 style={{ marginTop: 0 }}>Merge recovery</h2>
