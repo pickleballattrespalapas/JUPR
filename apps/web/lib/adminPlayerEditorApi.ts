@@ -8,6 +8,7 @@ export type AdminPlayerEditorStatusResponse = {
   merge_operation_endpoint?: string | null;
   operation_endpoint?: string | null;
   transactional_merge_ready?: boolean;
+  merge_enabled?: boolean;
   player_count?: number | null;
   warnings: string[];
 };

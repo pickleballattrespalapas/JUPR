@@ -106,8 +106,8 @@ def _health_payload(*, feature_profile: str = "release") -> dict:
             "worker_run_log_required": True,
             "email_mode": verifier.expected_production_email_mode(profile=feature_profile),
             "live_player_update_email_enabled": features["JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL"],
-            "smtp_configured": feature_profile in {"pre_awards", "pre_operations", "pre_team_leagues", "release"},
-            "player_update_worker_running": feature_profile in {"pre_awards", "pre_operations", "pre_team_leagues", "release"},
+            "smtp_configured": feature_profile in {"pre_awards", "pre_operations", "pre_team_leagues", "pre_player_editor", "release"},
+            "player_update_worker_running": feature_profile in {"pre_awards", "pre_operations", "pre_team_leagues", "pre_player_editor", "release"},
         },
     }
 
@@ -275,6 +275,7 @@ def test_reviewed_projection_preserves_live_and_adds_email_and_awards() -> None:
         "JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP",
         "JUPR_ENABLE_NEXT_ADMIN_SHELL",
         "JUPR_ENABLE_TEAM_LEAGUES",
+        "JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR",
         "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE",
         "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_DOMAIN",
         "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_SUBMIT",
@@ -306,6 +307,7 @@ def test_reviewed_projection_preserves_live_and_adds_email_and_awards() -> None:
         "JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP",
         "JUPR_ENABLE_NEXT_ADMIN_SHELL",
         "JUPR_ENABLE_TEAM_LEAGUES",
+        "JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR",
         "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_AWARDS_WRITE",
         "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_DOMAIN",
         "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_SUBMIT",
@@ -1789,7 +1791,7 @@ def test_email_release_cannot_attest_missing_sender_or_worker():
 def test_smtp_authentication_probe_runs_before_any_production_mutation():
     workflow = (ROOT / ".github/workflows/fly_api_deploy.yml").read_text()
     assert workflow.index("production_email_probe.py") < workflow.index("flyctl secrets set")
-    assert "baseline|pre_email|pre_awards|pre_operations|pre_team_leagues|release" in workflow
+    assert "baseline|pre_email|pre_awards|pre_operations|pre_team_leagues|pre_player_editor|release" in workflow
     assert "JUPR_EMAIL_MODE=dry_run" not in workflow
     assert "expected_production_email_mode(profile=" in workflow
 
