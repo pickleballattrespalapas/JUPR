@@ -130,6 +130,7 @@ test("interclub paper packet, score entry, approval and public results", async (
   expect(substitute, "Synthetic meet has an eligible female reserve").toBeTruthy();
   const gameCard = page.locator(`[id="interclub-game-${injuredGame.id}"]`);
   await gameCard.getByText("Substitute a player · Game 2", { exact: true }).click();
+  await expect(gameCard.getByRole("combobox", { name: "Injured player", exact: true })).toBeVisible();
   await gameCard.getByLabel("Injured player", { exact: true }).selectOption(`a:${injuredPair.players_a[0]}`);
   await gameCard.getByRole("combobox", { name: "Replacement", exact: true }).fill(substitute.name);
   await gameCard.getByRole("option", { name: substitute.name, exact: true }).click();

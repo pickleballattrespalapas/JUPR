@@ -18,7 +18,7 @@ export default function InjurySubstitutionEditor({ document, row, detail, player
   return <div>
     <p>Replace a player only because of injury, between games. Start on the first game the replacement plays; keep the injured player on any game they retired from.</p>
     <div className={styles.twoColumns}>
-      <label>Injured player<select value={selection} disabled={disabled} onChange={event => { setSelection(event.target.value); setIncoming(""); setError(""); }}>
+      <label>Injured player<select aria-label="Injured player" value={selection} disabled={disabled} onChange={event => { setSelection(event.target.value); setIncoming(""); setError(""); }}>
         <option value="">Choose the injured player</option>
         {(["a", "b"] as const).flatMap(value => gamePlayers(row, value).map(id => <option key={`${value}:${id}`} value={`${value}:${id}`}>{players.get(id)?.name || "Scheduled player"} · {clubName(row.encounter[`club_${value}`])}</option>))}
       </select></label>
