@@ -110,12 +110,59 @@ test("interclub paper packet, score entry, approval and public results", async (
   await page.keyboard.press("Enter");
   const savedScores = await save;
   expect(savedScores.status()).toBe(200);
-  for (const encounter of (await savedScores.json()).batch.document.encounters) for (const pairing of encounter.pairings) for (const game of pairing.games) {
+  const savedScoreBatch = (await savedScores.json()).batch;
+  for (const encounter of savedScoreBatch.document.encounters) for (const pairing of encounter.pairings) for (const game of pairing.games) {
     expect(Date.parse(game.played_at)).toBeGreaterThanOrEqual(entryStartedAt);
     expect(Date.parse(game.played_at)).toBeLessThanOrEqual(await page.evaluate(() => Date.now()));
     expect(Date.parse(game.played_at)).toBeLessThan(Date.parse(scheduledMeetDate));
   }
   await expect(page.getByText("All draft changes saved", { exact: true })).toBeVisible();
+  // Exercise both a new one-time injury entry and a draft left by the old
+  // per-game editor. All writes are confined to this run's synthetic meet.
+  const meetRead = await context.request.get(apiRoot, { headers: { Authorization: `Bearer ${user.token}` } });
+  expect(meetRead.status()).toBe(200);
+  const meetDetail = await meetRead.json();
+  const injuredEncounter = savedScoreBatch.document.encounters[0];
+  const injuredPair = injuredEncounter.pairings.find((p: { kind: string }) => p.kind === "women");
+  const injuredGame = injuredPair.games[1];
+  const substitute = meetDetail.eligible_players[injuredEncounter.club_a].find((p: { entry_id: string; gender: string; eligibility_rating?: number; rating?: number; starting_rating?: number }) =>
+    Number(p.eligibility_rating ?? p.rating ?? p.starting_rating) < Number(injuredEncounter.division) + .5 && ["female", "f"].includes(p.gender.toLowerCase()) && !injuredPair.players_a.includes(p.entry_id));
+  expect(substitute, "Synthetic meet has an eligible female reserve").toBeTruthy();
+  const gameCard = page.locator(`[id="interclub-game-${injuredGame.id}"]`);
+  await gameCard.getByText("Substitute a player · Game 2", { exact: true }).click();
+  await gameCard.getByLabel("Injured player", { exact: true }).selectOption(`a:${injuredPair.players_a[0]}`);
+  await gameCard.getByRole("combobox", { name: "Replacement", exact: true }).fill(substitute.name);
+  await gameCard.getByRole("option", { name: substitute.name, exact: true }).click();
+  await gameCard.getByRole("button", { name: "Apply substitution to remaining games", exact: true }).click();
+  const substitutionSave = page.waitForResponse(r => r.url() === apiRoot && r.request().method() === "PUT");
+  await page.getByRole("button", { name: "Save all draft scores", exact: true }).last().click();
+  const substitutionResponse = await substitutionSave;
+  expect(substitutionResponse.status()).toBe(200);
+  const appliedBatch = (await substitutionResponse.json()).batch;
+  const appliedPair = appliedBatch.document.encounters[0].pairings.find((p: { id: string }) => p.id === injuredPair.id);
+  expect(appliedPair.games[0]).toEqual(injuredPair.games[0]);
+  for (const game of appliedPair.games.slice(1)) {
+    expect(game.players_a).toContain(substitute.entry_id);
+    expect(game.players_a).not.toContain(injuredPair.players_a[0]);
+    expect(game.injury_reason).toBe("Injury");
+  }
+  const legacyDraft = JSON.parse(JSON.stringify(savedScoreBatch.document));
+  const legacyGame = legacyDraft.encounters[0].pairings.find((p: { id: string }) => p.id === injuredPair.id).games[1];
+  legacyGame.players_a = [substitute.entry_id, injuredPair.players_a[1]];
+  legacyGame.injury_reason = null;
+  const legacySave = await context.request.put(apiRoot, { headers: { Authorization: `Bearer ${user.token}` }, data: { expected_revision: appliedBatch.revision, document: legacyDraft } });
+  expect(legacySave.status()).toBe(200);
+  await page.reload();
+  const attention = page.getByRole("region", { name: "Substitutions needing attention", exact: true });
+  await expect(attention.getByRole("heading", { name: "One substitution needs attention", exact: true })).toBeVisible();
+  await attention.getByRole("button", { name: "Show this substitution", exact: true }).click();
+  await expect(gameCard).toBeFocused();
+  await expect(gameCard.locator("details[data-substitution]")).toHaveAttribute("open", "");
+  await attention.getByRole("button", { name: "Carry substitute forward", exact: true }).click();
+  await expect(attention).toHaveCount(0);
+  const repairedSave = page.waitForResponse(r => r.url() === apiRoot && r.request().method() === "PUT");
+  await page.getByRole("button", { name: "Save all draft scores", exact: true }).last().click();
+  expect((await repairedSave).status()).toBe(200);
   await page.reload();
   await expect(page.getByRole("button", { name: "Review and submit meet", exact: true })).toBeEnabled();
   await page.getByRole("button", { name: "Review and submit meet", exact: true }).click();

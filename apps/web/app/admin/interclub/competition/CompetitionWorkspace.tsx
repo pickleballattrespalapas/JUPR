@@ -9,6 +9,7 @@ import { useAdminWorkspace } from "@/lib/useAdminWorkspace";
 import { RegistrationSeason } from "@/lib/interclubRegistration";
 import { CompetitionBatch, CompetitionContext, CompetitionDocument, CompetitionFormat, CompetitionPhase, CompetitionScheduleMode, MeetCompetition, automaticDraftScores, competitionPath, competitionPlayers, competitionRequest, fromLocalInput, gameCount, gameHasOutcome, phaseLabels } from "@/lib/interclubCompetition";
 import ScoreEditor from "./ScoreEditor";
+import SubstitutionRepair from "./SubstitutionRepair";
 import PrintPacket from "./PrintPacket";
 import Standings from "./Standings";
 import ScheduleMeet from "./ScheduleMeet";
@@ -17,6 +18,7 @@ import styles from "./competition.module.css";
 import InterclubWorkflow, { workflowHref } from "../InterclubWorkflow";
 import { useRegistrationWindow } from "@/lib/useRegistrationWindow";
 import type { MeetPdfScope } from "@/lib/interclubMeetPdf";
+import { gameFromError, reviewSubstitutions, substitutionEligibilityProblem, substituteForRemainingGames, type SubstitutionReview } from "@/lib/interclubSubstitutions";
 
 export default function CompetitionWorkspace({ initialSeasonId, initialMeetId }: { initialSeasonId: string; initialMeetId: string }) {
   const { session, accessToken, loading } = useAdminSession();
@@ -108,6 +110,8 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
   const [format, setFormat] = useState<CompetitionFormat>(phase === "regular" ? "gender" : "mlp"), [division, setDivision] = useState(divisions[0] || ""), [clubA, setClubA] = useState(""), [clubB, setClubB] = useState("");
   const [scheduleMode, setScheduleMode] = useState<CompetitionScheduleMode>("staggered");
   const [scoreDivision, setScoreDivision] = useState("");
+  const [focusGame, setFocusGame] = useState<{ id: string; substitution: boolean; sequence: number } | null>(null);
+  const [undoSubstitution, setUndoSubstitution] = useState<CompetitionDocument | null>(null);
   const [review, setReview] = useState<"submit" | "approve" | null>(null), [reason, setReason] = useState(""), [startsAt, setStartsAt] = useState(""), [deadline, setDeadline] = useState("");
   const token = useRef(accessToken); token.current = accessToken;
   const pending = useRef(false), controller = useRef<AbortController | null>(null);
@@ -155,11 +159,21 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
       if (["approve", "retry-ratings", "reschedule", "refresh-lineups"].includes(action)) onSeasonChange();
       return true;
     } catch (cause) {
-      if (!request.signal.aborted) { const code = (cause as { status?: number })?.status; if ((!received && !code) || code && ([401, 403, 409].includes(code) || code >= 500)) setBlocked(true); setError(message(cause)); }
+      if (!request.signal.aborted) { const code = (cause as { status?: number })?.status; if ((!received && !code) || code && ([401, 403, 409].includes(code) || code >= 500)) setBlocked(true); setError(message(cause));
+        const gameId = draft && gameFromError(draft, message(cause)); if (gameId) goToGame(gameId, /injur|substitut|lineup|player/i.test(message(cause)));
+      }
       return false;
     } finally { pending.current = false; if (!request.signal.aborted) setBusy(false); }
   }
-  function edit(document: CompetitionDocument) { setDraft(automaticDraftScores(document)); setReview(null); setStatus(""); }
+  function edit(document: CompetitionDocument) { setDraft(automaticDraftScores(document)); setReview(null); setStatus(""); setError(""); setUndoSubstitution(null); }
+  function goToGame(id: string, substitution = true) { setScoreDivision(""); setFocusGame(old => ({ id, substitution, sequence: (old?.sequence || 0) + 1 })); }
+  function repairSubstitution(change: SubstitutionReview) {
+    if (!draft) return;
+    try {
+      const result = substituteForRemainingGames(draft, change, change.reason);
+      edit(result.document); setUndoSubstitution(draft); setStatus(`Substitution applied to ${result.changedGames} games. Scores are unchanged. Save when ready.`);
+    } catch (cause) { setError(message(cause)); }
+  }
   function finishScoreEntry() {
     const target = [saveScores.current, reviewScores.current].find(button => button && !button.disabled);
     if (!target) return false;
@@ -187,6 +201,9 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
   if (loading) return <p role="status">Loading this meet…</p>;
   if (!detail) return <div className={styles.error}><p role="alert">{error || "This meet could not be loaded."}</p><button onClick={() => setRefresh(value => value + 1)}>Retry loading meet</button></div>;
   const players = competitionPlayers(detail), count = draft ? gameCount(draft) : null;
+  const substitutionPool = (change: SubstitutionReview) => detail.eligible_players?.[change.row.encounter[`club_${change.side}`]] || detail.teams.find(team => team.club_id === change.row.encounter[`club_${change.side}`] && team.division === change.row.encounter.division)?.roster || [];
+  const substitutionProblems = draft && batch?.state === "draft" ? reviewSubstitutions(draft).filter(change => change.missingReason || change.returningGames.length || substitutionEligibilityProblem(change, substitutionPool(change), players)) : [];
+  const errorGame = draft && gameFromError(draft, error);
   const firstMissingOutcome = draft?.encounters.flatMap(encounter => encounter.pairings.flatMap(pairing => pairing.games)).find(game => !gameHasOutcome(game));
   const canRefreshStartingLineups = phase === "regular" && new Date(detail.meet.starts_at).getTime() > Date.now() && !!draft?.encounters.every(encounter => encounter.pairings.every(pairing => pairing.games.every(game => game.status === "pending" && game.a === null && game.b === null || ["forfeit", "double_forfeit"].includes(game.status) && (!pairing.players_a.length || !pairing.players_b.length))));
   const qualification = context.standings?.qualification?.[division] || context.qualifying?.[division];
@@ -204,7 +221,7 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
       current={batch?.state === "submitted" || batch?.state === "approved" ? "approve" : "run"}
       disabled={dirty || busy} unavailable={batch?.state === "submitted" || batch?.state === "approved" ? [] : ["approve"]}
       hints={{ run: !batch ? hasPlayableLineups ? "Prepare approved lineups" : "Lineups needed first" : batch.state === "draft" ? "Enter and submit scores" : "Scores submitted", approve: batch?.state === "approved" ? "Official results" : batch?.state === "submitted" ? "Ready for organizer review" : "Submit scores first" }} />
-    {error && <p className={styles.error} role="alert">{error}</p>}{status && <p className={styles.success} role="status">{status}</p>}
+    {error && <div className={styles.error} role="alert">{error}{errorGame && <button onClick={() => goToGame(errorGame, /injur|substitut|lineup|player/i.test(error))}>Go to this game</button>}</div>}{status && <p className={styles.success} role="status">{status}</p>}
     {detail.lineups_hidden && <p className={styles.notice}>Opposing lineups become available at the roster deadline. You can still manage your club’s roster.</p>}
     {blocked && <div className={styles.notice}><p>Reload the latest saved meet before continuing. Your last change may already have been saved.</p><button disabled={busy} onClick={() => { setReview(null); setRefresh(value => value + 1); }}>Reload saved meet</button></div>}
     {(!batch || phase !== "regular" && batch.state === "draft" && draft?.encounters.every(encounter => encounter.pairings.every(pairing => pairing.games.every(game => game.status === "pending")))) && <div className={styles.card}><h2>{batch ? "Add another skill-level matchup" : `Prepare ${phaseLabels[phase].toLowerCase()} pairings`}</h2>
@@ -231,7 +248,7 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
       </div>}
     </div>}
     {batch && draft && <>
-      {phase === "regular" && <CourtSchedule document={batch.document} clubName={clubName} />}
+      {phase === "regular" && <details open={!count?.entered} className={styles.card}><summary>Court schedule</summary><CourtSchedule document={batch.document} clubName={clubName} /></details>}
       <div id="meet-results-review" ref={resultsReview} tabIndex={-1} className={styles.card} style={{ scrollMarginTop: "1rem" }}>
         <div className={styles.toolbar}><div><p className={styles.eyebrow}>{phaseLabels[phase]} · Revision {batch.revision}</p><h2>{batch.state === "draft" ? "Meet score draft" : batch.state === "submitted" ? "Awaiting organizer approval" : "Official meet results"}</h2><p>{count?.entered} of {count?.total} game outcomes entered{dirty ? " · Unsaved changes" : " · Saved"}</p></div>
           <div className={styles.toolbar}>
@@ -260,7 +277,8 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
           <h3>{review === "submit" ? "Submit the complete meet?" : `Approve revision ${batch.revision}?`}</h3>
           <p>{review === "submit" ? "Check both clubs’ signed sheets, actual players, stopped injury scores and any weather decisions. This sends the whole saved meet to the organizer." : "This exact saved revision becomes official for standings and starts rating updates for completed doubles games. Retirements, unplayed forfeits and rotating singles do not change ratings."}</p>
           {review === "submit" && firstMissingOutcome && <p className={styles.warning} role="alert">{count!.total - count!.entered} games still need a result. Enter both final scores, or choose an outcome under “No score or injury.” <a href={`#interclub-game-${firstMissingOutcome.id}`} onClick={() => setScoreDivision("")}>Go to the first incomplete game</a></p>}
-          <div className={styles.toolbar}><button className={styles.primary} disabled={disabled || dirty || review === "submit" && !!firstMissingOutcome} onClick={() => void change(review)}>{review === "submit" ? "Submit all official scores" : "Approve this revision"}</button><button disabled={busy} onClick={() => setReview(null)}>Keep reviewing</button></div>
+          {review === "submit" && !!substitutionProblems.length && <p className={styles.warning}>Resolve the substitutions below before submitting. Your scores can still be saved.</p>}
+          <div className={styles.toolbar}><button className={styles.primary} disabled={disabled || dirty || review === "submit" && (!!firstMissingOutcome || !!substitutionProblems.length)} onClick={() => void change(review)}>{review === "submit" ? "Submit all official scores" : "Approve this revision"}</button><button disabled={busy} onClick={() => setReview(null)}>Keep reviewing</button></div>
         </div>}
         {detail.is_organizer && batch.state !== "draft" && <details><summary>Correct submitted or official scores</summary><p>Corrections create a new draft and must be submitted and approved again. The earlier result remains in the audit history.</p><label>Reason for correction<textarea value={reason} onChange={event => setReason(event.target.value)} /></label><button disabled={disabled || !reason.trim()} onClick={() => void change("reopen", { reason: reason.trim() })}>Open correction draft</button></details>}
       </div>
@@ -274,7 +292,13 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
           </fieldset>
         </form>}
       </details>
-      <ScoreEditor document={draft} detail={detail} players={players} clubName={clubName} disabled={!editable} onChange={edit} divisionFilter={scoreDivision} onDivisionFilterChange={setScoreDivision} onScoreEntryEnd={finishScoreEntry} />
+      {!!substitutionProblems.length && <section className={styles.warning} aria-label="Substitutions needing attention">
+        <h3>{substitutionProblems.length === 1 ? "One substitution needs attention" : `${substitutionProblems.length} substitutions need attention`}</h3>
+        <p>Your scores are kept. Finish recording each injury once here.</p>
+        {substitutionProblems.map(change => <SubstitutionRepair key={`${change.gameId}:${change.side}`} document={draft} change={change} eligibilityProblem={substitutionEligibilityProblem(change, substitutionPool(change), players)} options={substitutionPool(change)} players={players} disabled={!editable} onRepair={repairSubstitution} onShow={() => goToGame(change.gameId)} />)}
+      </section>}
+      {undoSubstitution && <p className={styles.notice}>Substitution updated. <button disabled={!editable} onClick={() => edit(undoSubstitution)}>Undo substitution update</button></p>}
+      <ScoreEditor document={draft} detail={detail} players={players} clubName={clubName} disabled={!editable} onChange={edit} divisionFilter={scoreDivision} onDivisionFilterChange={setScoreDivision} onScoreEntryEnd={finishScoreEntry} focusGame={focusGame} gameError={errorGame ? error : undefined} onSubstitution={document => { edit(document); setUndoSubstitution(draft); setStatus("Substitution applied to the remaining games. Save when ready."); }} />
       {editable && <div className={styles.bottomBar}><span>{dirty ? "Unsaved score changes" : "All draft changes saved"}</span><button ref={saveScores} className={styles.primary} disabled={!dirty || disabled} onClick={() => void change("save", { document: draft })}>Save all draft scores</button></div>}
       <PrintPacket document={batch.document} meet={detail.meet} seasonName={context.season.details.name} timezone={context.season.details.timezone} revision={batch.revision} players={players} clubName={clubName} />
     </>}

@@ -185,7 +185,8 @@ uses the same behavior with its 21-point target.
 The main score row has no status dropdown. **No score or injury** holds explicit
 forfeit, double-forfeit, weather-unplayed and injury-retirement outcomes. These
 choices are never overwritten by score entry; a retirement keeps its actual
-stopped score and declared winner. Actual play time remains a separate input.
+stopped score and declared winner. Played time is recorded from the device when
+the scores are entered; no per-game date/time input is required.
 
 Existing editable drafts with scored games still marked pending are normalized
 locally and must be saved as a new revision. Read-only and official documents
@@ -215,3 +216,21 @@ Equivalent timezone spellings of a timestamp are the same instant for immutable
 schedule and replay checks. A score save must never treat `Z` versus `+00:00`
 as an eligibility change; genuinely different cutoffs and historical scores
 remain protected.
+
+
+## One-time injury substitutions and draft repair
+
+On the replacement's first game, choose the injured player and an eligible
+replacement, then apply once. The client records `Injury` automatically, accepts
+an optional note, and carries the replacement through subsequent games for that
+club and skill level within the same eligibility cutoff. Earlier games, scores,
+starting pairs and separate replay cutoffs stay intact. Later injury replacements
+remain in force. Replacement choices respect pairing gender, locked rating,
+club pool, and other pairs in the current wave.
+
+Older drafts with one-game substitutions show a grouped repair card before score
+entry. Missing reasons and returning injured players can be fixed together; an
+ineligible original choice instead offers an eligible replacement beside the
+explanation. Repairs are draft edits with Undo and still require Save. They do
+not submit or approve a meet. Server game errors open and highlight the affected
+game, clearing any skill filter. The court schedule collapses once scoring starts.
