@@ -60,7 +60,6 @@ export function substituteForRemainingGames(document: CompetitionDocument, chang
   if (!actual.includes(change.outgoing) && !actual.includes(change.incoming) && !actual.includes(change.previousIncoming || "")) throw new Error("The playing lineup changed. Choose the injured player again.");
   if (actual.includes(change.outgoing) && actual.includes(change.incoming)) throw new Error("The replacement is already playing in this pair.");
   const laterChanges = reviewSubstitutions(document), replacements = new Map([[change.outgoing, change.incoming]]);
-  if (change.previousIncoming && change.previousIncoming !== change.incoming) replacements.set(change.previousIncoming, change.incoming);
   const edits = new Map<string, CompetitionGame>();
   const replacement = (id: string) => {
     const visited = new Set<string>();
@@ -74,9 +73,13 @@ export function substituteForRemainingGames(document: CompetitionDocument, chang
     // Preserve a subsequent injury replacement instead of bringing its injured
     // predecessor back when repairing an older, partially recorded change.
     for (const later of laterChanges.filter(item => item.gameId === row.game.id && item.side === side && item.gameId !== change.gameId)) {
-      if ([...replacements.values()].includes(later.outgoing)) { replacements.set(later.outgoing, later.incoming); reason = later.reason || "Injury"; }
+      if ([...replacements.values()].includes(later.outgoing) || later.outgoing === change.previousIncoming) {
+        replacements.set(later.outgoing === change.previousIncoming ? change.incoming : later.outgoing, later.incoming); reason = later.reason || "Injury";
+      }
     }
-    const before = gamePlayers(row, side), after = before.map(replacement);
+    const before = gamePlayers(row, side);
+    const correctsOriginal = row.pairing.kind === source.pairing.kind || row.pairing[`players_${side}`].includes(change.outgoing);
+    const after = before.map(id => replacement(correctsOriginal && id === change.previousIncoming ? change.incoming : id));
     if (new Set(after).size !== after.length) throw new Error("That replacement is already in a later pair. Choose another eligible player.");
     if (after.some((id, index) => id !== before[index]) || row.game.id === change.gameId) {
       edits.set(row.game.id, { ...row.game, [`players_${side}`]: after, injury_reason: row.game.injury_reason?.trim() || reason });

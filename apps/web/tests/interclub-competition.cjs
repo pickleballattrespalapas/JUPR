@@ -434,6 +434,10 @@ async function easySubstitutions() {
   assert.deepEqual(substitutions.substituteForRemainingGames(replay, review[0]).document.encounters[0], replay.encounters[0], 'A different replay cutoff has its own lineup');
   assert.equal(substitutions.gameFromError(legacy, "Skill level 3.5 · Rotation 1 · Court 1 · Women's doubles · Game 2: Record an injury reason."), 'w2');
   assert.throws(() => substitutions.substituteForRemainingGames(original, { gameId: 'w2', side: 'a', outgoing: 'entry-0', incoming: 'entry-1' }), /already playing/);
+  const wrongPair = copy(legacy);
+  wrongPair.encounters[0].pairings[1].players_b = ['sub-one', 'entry-3'];
+  const correctedPair = substitutions.substituteForRemainingGames(wrongPair, { ...review[0], incoming: 'sub-two', previousIncoming: 'sub-one' }).document;
+  assert.deepEqual(correctedPair.encounters[0].pairings[1], wrongPair.encounters[0].pairings[1], 'Correcting a mistaken substitute preserves their legitimate appearances in another pairing');
 
   const sub = { entry_id: 'sub-one', name: 'Available Substitute', eligibility_rating: 3.2, gender: 'female' };
   const scoped = { ...detail, eligible_players: { ...detail.eligible_players, alpha: [...detail.eligible_players.alpha, sub] } };
