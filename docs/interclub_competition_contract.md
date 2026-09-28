@@ -111,7 +111,9 @@ it is derived from the skill level. This game never affects individual ratings.
   enough courts for every division in that opponent round. Staggered scheduling
   splits each opponent round into ordered waves using the meet's available
   courts. Both playable doubles pairings in a matchup start together (two courts
-  for a full matchup); missing pairings consume no court. A wave starts after
+  for a full matchup); each pairing keeps that court for Games 1-3 against
+  the same opponents before leaving, including when the result is already 2-0.
+  Missing pairings consume no court. A wave starts after
   the preceding wave finishes its three-game pairings; no estimated timestamp
   is substituted for the actual game time. Three-club entries retain their byes.
   Matchup, pairing and game IDs are unchanged by scheduling mode.
@@ -120,7 +122,8 @@ The regular `/generate` request accepts `schedule_mode: "simultaneous" |
 "staggered"` (legacy callers default to simultaneous). **Run meet → Court
 schedule** defaults new UI draws to **Staggered — fit N courts**. The saved
 document records that mode; old documents default to simultaneous. The screen
-and paper packet show the same ordered wave/court assignments. Score edits
+and paper packet show the same ordered wave/court assignments, with an explicit
+Games column and a same-court three-game block instruction. Score edits
 cannot change the mode, waves or courts. Before play, refreshing approved
 lineups reallocates courts within those waves if a missing pairing becomes
 available. Weather replays retain the existing historical schedule.
@@ -164,3 +167,34 @@ is no random bracket, alphabetical advancement, or Cup credit for these games.
 Head-to-head compares standings points earned among statistically tied clubs.
 For the Cup it sums those regular points and final bonuses against tied clubs.
 This is an explicit operational interpretation of the agreed head-to-head rule.
+
+## Automatic score entry
+
+In **Run meet**, entering both valid final scores marks a doubles game completed
+automatically. Clearing either score returns it to incomplete. A score of zero
+is entered, not empty; win-by-two and no-cap rules still apply. Rotating singles
+uses the same behavior with its 21-point target.
+
+The main score row has no status dropdown. **No score or injury** holds explicit
+forfeit, double-forfeit, weather-unplayed and injury-retirement outcomes. These
+choices are never overwritten by score entry; a retirement keeps its actual
+stopped score and declared winner. Actual play time remains a separate input.
+
+Existing editable drafts with scored games still marked pending are normalized
+locally and must be saved as a new revision. Read-only and official documents
+are preserved. Submission review points to missing scores or outcomes and
+blocks submission until each game has a result; server validation remains
+authoritative for official results.
+
+## Download meet PDFs
+
+After generating pairings, **Run meet** offers **Download schedule PDF** for
+the compact court assignments and **Download full packet PDF** for the schedule,
+court instructions and one score sheet per club matchup. Both download directly
+without opening the print dialog. **Print meet packet** remains available.
+
+Exports use the saved document and revision. Save or discard score edits before
+downloading. The PDFs preserve court/wave order, recorded scores and outcomes,
+actual-player substitutions, eligibility deadlines and championship tiebreaks.
+The season timezone is used for dates and times; filenames include meet, date,
+scope and revision. Downloading never saves, submits or approves results.

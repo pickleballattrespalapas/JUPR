@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { CompetitionDocument, CompetitionPlayer, pairingLabels, phaseLabels, playerNames, scheduledEncounters, scheduleRoundLabel, singlesCourt } from "@/lib/interclubCompetition";
+import { CompetitionDocument, CompetitionPlayer, pairingLabels, phaseLabels, playerNames, regularCourtBlockInstructions, scheduledEncounters, scheduleRoundLabel, singlesCourt } from "@/lib/interclubCompetition";
 import { CourtAssignments } from "./CourtSchedule";
 import { InterclubMeet } from "@/lib/interclubRegistration";
 import styles from "./competition.module.css";
@@ -28,7 +28,8 @@ export function PrintPacketContent({ document, meet, seasonName, timezone, revis
       <h1>{seasonName}</h1><h2>{phaseLabels[document.phase]} · {when(meet.starts_at)}</h2>
       <p>Host: {clubName(meet.host_club_id)} · Times: {timezone} · Roster deadline: {when(meet.roster_deadline)}</p>
       <h3>Court assignments</h3>
-      {document.schedule_mode === "staggered" && <p><strong>Staggered starts:</strong> complete all three games in each pairing before moving to the next wave. Start each wave after the previous wave finishes; exact times depend on match length.</p>}
+      {document.phase === "regular" && <p><strong>{regularCourtBlockInstructions}</strong></p>}
+      {document.schedule_mode === "staggered" && <p><strong>Staggered starts:</strong> each wave is a full three-game block. Start the next wave after every pairing in the current wave finishes; exact times depend on match length.</p>}
       <CourtAssignments document={document} clubName={clubName} />
       <h3>At the courts</h3>
       <ul>
@@ -47,7 +48,7 @@ export function PrintPacketContent({ document, meet, seasonName, timezone, revis
       <h2>Skill {encounter.division}: {clubName(encounter.club_a)} vs {clubName(encounter.club_b)}</h2>
       <p>Side-out scoring to 11 · Win by two · No cap{document.phase === "regular" ? " · Play all three games" : " · One game per doubles pairing"}</p>
       {encounter.pairings.map(pairing => <section key={pairing.id} className={styles.printPairing}>
-        <h3>{pairingLabels[pairing.kind]} · Court {pairing.court || "____"}</h3>
+        <h3>{pairingLabels[pairing.kind]} · Court {pairing.court || "____"}{document.phase === "regular" ? " · Games 1-3 on this court" : ""}</h3>
         <p><strong>A · {clubName(encounter.club_a)}:</strong> {playerNames(pairing.players_a, players)}<br /><strong>B · {clubName(encounter.club_b)}:</strong> {playerNames(pairing.players_b, players)}</p>
         {pairing.eligibility_deadline && <p>Eligibility locked: {when(pairing.eligibility_deadline)}</p>}
         <table><thead><tr><th>Game</th><th>A score</th><th>B score</th><th>Time played</th><th>Complete / injury / forfeit / unplayed</th><th>Winner</th></tr></thead><tbody>

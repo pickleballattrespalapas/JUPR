@@ -21,7 +21,8 @@ let currentClub = 'alpha';
 const workflow = load('app/admin/interclub/InterclubWorkflow.tsx', { 'next/link': ({ children, ...props }) => React.createElement('a', props, children), './workflow.module.css': css });
 const registrationWindow = load('lib/interclubRegistrationWindow.ts');
 const windowHook = load('lib/useRegistrationWindow.ts', { './interclubRegistrationWindow': registrationWindow });
-const workspace = load(base + 'CompetitionWorkspace.tsx', { ...common, '@/lib/useRegistrationWindow': windowHook, '../InterclubWorkflow': workflow, 'next/link': ({ children, href }) => React.createElement('a', { href }, children), '@/lib/adminAuthClient': { getAdminApiBaseUrl: () => 'https://api.test' }, '@/lib/adminWorkspace': { readBrowserWorkspace: () => ({ clubId: currentClub }) }, '@/lib/useAdminSession': { useAdminSession: () => ({}) }, '@/lib/useAdminWorkspace': { useAdminWorkspace: () => ({ clubId: currentClub }) }, './ScoreEditor': ScoreEditor, './PrintPacket': PrintPacket, './Standings': Standings, './ScheduleMeet': () => null });
+let createPdf = async () => { throw new Error('PDF mock not set'); };
+const workspace = load(base + 'CompetitionWorkspace.tsx', { ...common, '@/lib/interclubMeetPdf': { buildInterclubMeetPdf: (...args) => createPdf(...args) }, '@/lib/useRegistrationWindow': windowHook, '../InterclubWorkflow': workflow, 'next/link': ({ children, href }) => React.createElement('a', { href }, children), '@/lib/adminAuthClient': { getAdminApiBaseUrl: () => 'https://api.test' }, '@/lib/adminWorkspace': { readBrowserWorkspace: () => ({ clubId: currentClub }) }, '@/lib/useAdminSession': { useAdminSession: () => ({}) }, '@/lib/useAdminWorkspace': { useAdminWorkspace: () => ({ clubId: currentClub }) }, './ScoreEditor': ScoreEditor, './PrintPacket': PrintPacket, './Standings': Standings, './ScheduleMeet': () => null });
 const nodeText = node => typeof node === 'string' ? node : node.children.map(nodeText).join('');
 const button = (tree, label) => tree.root.findAllByType('button').find(node => nodeText(node) === label);
 const text = tree => JSON.stringify(tree.toJSON());
@@ -109,10 +110,15 @@ async function staggeredSchedule() {
   doc.encounters.unshift(later); // Intentionally store the later wave first.
   const markup = renderToStaticMarkup(React.createElement(PrintPacket, { document: doc, meet, seasonName: 'Southern BCS', timezone: 'America/Mazatlan', revision: 4, players: types.competitionPlayers(detail), clubName }));
   assert.ok(markup.includes('Staggered starts') && markup.includes('>Wave</th>'));
+  assert.ok(markup.includes('finish all three games, even at 2-0, before leaving'));
+  assert.equal((markup.match(/<td>1-3<\/td>/g) || []).length, 4, 'Each court assignment reserves all three games in one wave');
+  assert.equal((markup.match(/Games 1-3 on this court/g) || []).length, 4, 'Each score sheet keeps the pairing on its assigned court');
   assert.ok(markup.indexOf('Wave 1') < markup.indexOf('Wave 2'), 'Printed score sheets follow playing order');
   const schedule = types.scheduledEncounters(doc);
   assert.deepEqual(schedule.map(e => e.rotation), [1, 2]);
   assert.equal(doc.encounters[0].rotation, 2, 'Sorting the displayed schedule does not mutate saved data');
+  const simultaneous = renderToStaticMarkup(React.createElement(common['./CourtSchedule'].default, { document, clubName }));
+  assert.ok(simultaneous.includes('finish all three games, even at 2-0, before leaving'), 'Simultaneous starts also reserve a full three-game court block');
 }
 
 async function seasonRegistrationGate() {
@@ -178,6 +184,118 @@ async function scoreEntry() {
   await act(async () => tree.unmount());
 }
 
+async function automaticScoreEntry() {
+  let next = copy(document), tree;
+  next.encounters[0].pairings[0].games[0].played_at = null;
+  const props = { detail, players: types.competitionPlayers(detail), clubName, disabled: false, onChange: value => { next = value; } };
+  const current = () => next.encounters[0].pairings[0].games[0];
+  const update = async (label, value) => act(async () => {
+    tree.root.findByProps({ 'aria-label': label }).props.onChange({ target: { value } });
+    tree.update(React.createElement(ScoreEditor, { ...props, document: next }));
+  });
+  await act(async () => { tree = create(React.createElement(ScoreEditor, { ...props, document: next })); });
+  await update('women game 1 club A score', '11');
+  assert.equal(current().status, 'pending', 'One score is not a complete result');
+  await update('women game 1 club B score', '0');
+  assert.equal(current().status, 'completed', '11-0 completes automatically without selecting a status');
+  assert.equal(current().played_at, null, 'Score entry never invents the actual play time');
+  assert.equal(types.gameCount(next).entered, 1);
+  const outcome = tree.root.findByProps({ 'aria-label': 'Women’s doubles game 1 status' });
+  assert.equal(outcome.props.value, 'automatic');
+  assert.equal(outcome.parent.parent.type, 'details', 'Status choices are outside the normal score row');
+  assert.equal(outcome.findAllByType('option').some(option => option.props.value === 'completed'), false, 'Completion never requires choosing a dropdown option');
+  await update('women game 1 club A score', '');
+  assert.equal(current().status, 'pending');
+  assert.equal(types.gameCount(next).entered, 0, 'Removing either score removes completion');
+  await update('women game 1 club A score', '10');
+  assert.equal(current().status, 'pending', '10-0 is not a final score');
+  assert.ok(text(tree).includes('A final score must reach 11'));
+  await update('women game 1 club B score', '12');
+  assert.equal(current().status, 'completed', '10-12 is a valid win-by-two result');
+  await update('women game 1 club B score', '13');
+  assert.equal(current().status, 'pending', '13-10 is past the first winning score');
+  await update('Women’s doubles game 1 status', 'retired');
+  await update('women game 1 club A score', '7');
+  await update('women game 1 club B score', '4');
+  await act(async () => {
+    tree.root.findAllByType('select').find(node => node.findAllByType('option').some(option => nodeText(option) === 'Choose winner')).props.onChange({ target: { value: 'b' } });
+    tree.update(React.createElement(ScoreEditor, { ...props, document: next }));
+  });
+  await update('women game 1 club A score', '8');
+  assert.equal(current().status, 'retired', 'An explicit injury outcome survives score changes');
+  assert.equal(current().winner, 'b', 'The injury winner is not inferred from the leading score');
+  await update('Women’s doubles game 1 status', 'forfeit');
+  assert.equal(current().a, null); assert.equal(current().b, null);
+  assert.equal(current().winner, null);
+  assert.equal(types.gameCount(next).entered, 0, 'A one-sided forfeit needs a winner');
+  await update('Women’s doubles game 1 status', 'double_forfeit');
+  assert.equal(types.gameCount(next).entered, 1);
+  await update('Women’s doubles game 1 status', 'automatic');
+  assert.equal(current().status, 'pending');
+  assert.equal(current().a, null, 'Switching back to scores never restores invented forfeit scores');
+  await act(async () => tree.unmount());
+
+  const championship = copy(document); championship.phase = 'final'; championship.format = 'mlp';
+  championship.encounters[0].tiebreak = { status: 'pending', a: null, b: null, order_a: [], order_b: [] };
+  next = championship;
+  await act(async () => { tree = create(React.createElement(ScoreEditor, { ...props, document: next })); });
+  await update('encounter-1 singles club A score', '21');
+  await update('encounter-1 singles club B score', '19');
+  assert.equal(next.encounters[0].tiebreak.status, 'completed', 'Singles completes automatically at its 21-point target');
+  await update('encounter-1 singles club B score', '20');
+  assert.equal(next.encounters[0].tiebreak.status, 'pending', 'Singles still requires a two-point margin');
+  await update('encounter-1 singles club A score', '22');
+  assert.equal(next.encounters[0].tiebreak.status, 'completed');
+  await update('encounter-1 singles club B score', '');
+  assert.equal(next.encounters[0].tiebreak.status, 'pending');
+  await act(async () => tree.unmount());
+}
+
+async function savedScoreCompletion() {
+  let saved = copy(detail), tree, requests = [];
+  for (const pairing of saved.batch.document.encounters[0].pairings) for (const game of pairing.games) {
+    game.a = 5; game.b = 11; // Reproduce the user's saved pending scores.
+  }
+  const original = JSON.stringify(saved.batch.document);
+  global.fetch = async (url, options) => {
+    if (options.method) {
+      const body = JSON.parse(options.body); requests.push({ url, body });
+      saved = { ...saved, batch: { ...saved.batch, revision: saved.batch.revision + 1,
+        ...(body.document ? { document: body.document } : { state: 'submitted' }) } };
+      return reply({ batch: saved.batch });
+    }
+    return reply(saved);
+  };
+  const props = { root: 'https://api.test/saved-scores', clubId: 'alpha', accessToken: 'token', phase: 'regular', context, clubName, onLock() {}, onSeasonChange() {} };
+  await act(async () => { tree = create(React.createElement(workspace.MeetOperations, props)); });
+  assert.equal(types.gameCount(tree.root.findByType(ScoreEditor).props.document).entered, 6);
+  assert.equal(JSON.stringify(saved.batch.document), original, 'Loading does not rewrite the saved revision');
+  assert.equal(button(tree, 'Save all draft scores').props.disabled, false);
+  assert.equal(button(tree, 'Review and submit meet').props.disabled, true, 'Inferred statuses must be saved before submitting');
+  await act(async () => { await button(tree, 'Save all draft scores').props.onClick(); });
+  assert.equal(requests[0].body.expected_revision, 4);
+  assert.ok(requests[0].body.document.encounters[0].pairings.every(pairing => pairing.games.every(game => game.status === 'completed' && game.a === 5 && game.b === 11)));
+  assert.equal(button(tree, 'Review and submit meet').props.disabled, false);
+  await act(async () => { button(tree, 'Review and submit meet').props.onClick(); });
+  await act(async () => { await button(tree, 'Submit all official scores').props.onClick(); });
+  assert.equal(requests.at(-1).body.expected_revision, 5, 'Submission still binds to the saved revision');
+  assert.ok(requests.at(-1).url.endsWith('/submit'));
+  await act(async () => tree.unmount());
+
+  for (const [state, canManage] of [['approved', true], ['submitted', true], ['draft', false]]) {
+    const locked = copy(detail); locked.batch.state = state; locked.can_manage = canManage;
+    locked.batch.document.encounters[0].pairings[0].games[0].a = 5;
+    locked.batch.document.encounters[0].pairings[0].games[0].b = 11;
+    global.fetch = async () => reply(locked);
+    await act(async () => { tree = create(React.createElement(workspace.MeetOperations, props)); });
+    assert.equal(tree.root.findByType(ScoreEditor).props.document.encounters[0].pairings[0].games[0].status, 'pending', 'Read-only and official documents retain their exact saved outcome');
+    await act(async () => tree.unmount());
+  }
+  for (const score of [[11,0],[11,9],[12,10],[102,100]]) assert.ok(types.isFinalScore(...score));
+  for (const score of [[11,null],[null,0],[10,0],[11,10],[14,8],[11,-1],[11,1.5],[Infinity,0]]) assert.equal(types.isFinalScore(...score), false);
+  for (const status of ['retired','forfeit','double_forfeit','unplayed']) assert.equal(types.automaticGameStatus({ ...game('special'), status, a: 11, b: 5 }).status, status, 'Explicit exceptional outcomes are never auto-completed');
+}
+
 async function playUpReplacementEligibility() {
   const low = { entry_id: 'play-up', name: 'Play Up Player', eligibility_rating: 2.9, rating: 4.8, division: '3.0', gender: 'female' };
   for (const division of ['3.0', '3.5', '4.0', '4.5', 'Open', '4.5/Open', 'oPeN']) {
@@ -230,7 +348,14 @@ async function revisionsAndStaleClub() {
   assert.equal(button(tree, 'Print meet packet').props.disabled, false);
   const lineupLink = tree.root.findByProps({ 'aria-label': 'Lineups' });
   assert.ok(lineupLink.props.href.includes('season=season-1') && lineupLink.props.href.includes('meet=meet-1'), 'Back to lineups preserves both season and meet');
-  assert.equal(button(tree, 'Review and submit meet').props.disabled, true, 'Incomplete meet cannot be submitted');
+  assert.equal(button(tree, 'Review and submit meet').props.disabled, false, 'Review identifies missing results before submission');
+  await act(async () => button(tree, 'Review and submit meet').props.onClick());
+  assert.equal(button(tree, 'Submit all official scores').props.disabled, true, 'Incomplete meet cannot be submitted');
+  assert.equal(tree.root.findAllByType('a').find(link => nodeText(link) === 'Go to the first incomplete game').props.href, '#interclub-game-w1');
+  await act(async () => tree.root.findByType(ScoreEditor).props.onDivisionFilterChange('4.0'));
+  await act(async () => tree.root.findAllByType('a').find(link => nodeText(link) === 'Go to the first incomplete game').props.onClick());
+  assert.equal(tree.root.findByType(ScoreEditor).props.divisionFilter, '', 'Submission review reveals incomplete games hidden by the skill filter');
+  await act(async () => button(tree, 'Keep reviewing').props.onClick());
   await act(async () => tree.root.findByType(ScoreEditor).props.onChange({ ...copy(document), weather: 'delay' }));
   assert.equal(button(tree, 'Print meet packet').props.disabled, true, 'Packet must reflect a saved revision');
   assert.equal(tree.root.findAllByType('a').filter(node => node.props.href.includes('/interclub/registrations')).length, 0, 'Dirty scores disable workflow links that would abandon the draft');
@@ -250,6 +375,39 @@ async function revisionsAndStaleClub() {
   assert.equal(requests.filter(request => request.options.method).length, 1, 'A stale tab cannot save into a previous club');
   assert.ok(text(tree).includes('selected club changed'));
   await act(async () => tree.unmount()); currentClub = 'alpha';
+}
+
+async function pdfDownloads() {
+  let saved = copy(detail), tree, calls = [], downloads = [], release;
+  global.fetch = async (url, options) => { assert.ok(!options.method, 'Export never mutates meet results'); return reply(saved); };
+  const props = { root: 'https://api.test/meet', clubId: 'alpha', accessToken: 'token', phase: 'regular', context, clubName, onLock() {}, onSeasonChange() {} };
+  createPdf = async (options, scope) => { calls.push({ options, scope }); return new Promise(resolve => { release = () => resolve({ filename: 'saved-r4.pdf', pdf: { save: async filename => downloads.push(filename), getNumberOfPages: () => 2 } }); }); };
+  await act(async () => { tree = create(React.createElement(workspace.MeetOperations, props)); });
+  const download = button(tree, 'Download schedule PDF');
+  await act(async () => { download.props.onClick(); download.props.onClick(); });
+  assert.equal(calls.length, 1, 'Repeated clicks produce one PDF');
+  assert.equal(calls[0].scope, 'schedule');
+  assert.equal(calls[0].options.revision, 4);
+  assert.deepEqual(calls[0].options.document, saved.batch.document, 'Download uses the saved document');
+  assert.equal(button(tree, 'Download full packet PDF').props.disabled, true);
+  await act(async () => release());
+  assert.deepEqual(downloads, ['saved-r4.pdf']);
+  assert.ok(text(tree).includes('Schedule PDF downloaded (2 pages).'));
+  await act(async () => tree.root.findByType(ScoreEditor).props.onChange({ ...copy(document), weather: 'delay' }));
+  assert.equal(button(tree, 'Download schedule PDF').props.disabled, true);
+  assert.equal(button(tree, 'Download full packet PDF').props.disabled, true);
+  await act(async () => tree.unmount());
+  await act(async () => { tree = create(React.createElement(workspace.MeetOperations, props)); });
+  createPdf = async () => { throw new Error('Unable to load PDF module'); };
+  await act(async () => button(tree, 'Download full packet PDF').props.onClick());
+  assert.ok(text(tree).includes('Could not create the PDF'));
+  assert.equal(button(tree, 'Download full packet PDF').props.disabled, false, 'Failed download can be retried');
+  createPdf = async (options, scope) => { calls.push({ options, scope }); return new Promise(resolve => { release = () => resolve({ filename: 'saved-r4.pdf', pdf: { save: async filename => downloads.push(filename), getNumberOfPages: () => 2 } }); }); };
+  await act(async () => button(tree, 'Download full packet PDF').props.onClick());
+  assert.equal(calls.at(-1).scope, 'packet');
+  await act(async () => tree.unmount());
+  await act(async () => release());
+  assert.equal(downloads.length, 1, 'Leaving a meet cancels its pending download');
 }
 
 async function approval() {
@@ -292,4 +450,4 @@ function writePrintReview() {
   fs.writeFileSync(output, '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Southern BCS paper packet review</title><style>' + stylesheet + screenPreview + '</style></head><body class="printBody"><div class="printPortal">' + render(document) + render(final) + '</div></body></html>');
   console.log('Print review fixture: ' + output);
 }
-(async () => { await scoreEntry(); await playUpReplacementEligibility(); printSafety(); await staggeredSchedule(); await revisionsAndStaleClub(); await approval(); await qualifyingRoundRobin(); await missingLineups(); await seasonRegistrationGate(); qualifyingDisplay(); writePrintReview(); console.log('PASS interclub competition: staggered generation and printed wave order, play-up replacement eligibility, registration phase locks and background draft preservation, paper packet safety, scoped lineups, non-play scoring, exact revisions, approval and ratings status, missing-lineup guidance, qualification and joint Cup'); })().catch(error => { console.error(error); process.exit(1); });
+(async () => { await scoreEntry(); await automaticScoreEntry(); await savedScoreCompletion(); await playUpReplacementEligibility(); printSafety(); await staggeredSchedule(); await revisionsAndStaleClub(); await pdfDownloads(); await approval(); await qualifyingRoundRobin(); await missingLineups(); await seasonRegistrationGate(); qualifyingDisplay(); writePrintReview(); console.log('PASS interclub competition: automatic score completion, saved pending-score recovery, zero scores, clearing, win-by-two, injury outcomes, singles, submission review, exact revisions, staging schedule and PDF controls'); })().catch(error => { console.error(error); process.exit(1); });
