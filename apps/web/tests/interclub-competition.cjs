@@ -445,7 +445,7 @@ async function easySubstitutions() {
   const props = { detail: scoped, players: types.competitionPlayers(scoped), clubName, disabled: false, onChange: value => { next = value; } };
   await act(async () => { tree = create(React.createElement(ScoreEditor, { ...props, document: next })); });
   const form = () => tree.root.findByProps({ id: 'interclub-game-w2' }).findByType(common['./InjurySubstitutionEditor'].default);
-  await act(async () => form().findAllByType('select').find(node => !node.props.hidden).props.onChange({ target: { value: 'a:entry-0' } }));
+  await act(async () => form().findByProps({ 'aria-label': 'Injured player' }).props.onChange({ target: { value: 'a:entry-0' } }));
   await act(async () => form().findAllByType('select').find(node => node.props.hidden).props.onChange({ target: { value: 'sub-one' } }));
   await act(async () => form().findAllByType('button').find(node => nodeText(node) === 'Apply substitution to remaining games').props.onClick());
   assert.deepEqual(next.encounters[1].pairings[0].games[2].players_a, ['sub-one', 'entry-1']);
