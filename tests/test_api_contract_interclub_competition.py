@@ -119,6 +119,67 @@ def test_future_scheduled_meet_keeps_device_entry_date_through_save_and_submit(s
     assert s['calls'][-1][1]['p_document'] is None  # Submit the exact saved date; never reschedule it.
 
 
+@pytest.mark.parametrize('stored,submitted', [
+    ('2099-01-09T18:00:00+00:00','2099-01-09T18:00:00+00:00'),
+    ('2099-01-09T18:00:00Z','2099-01-09T11:00:00-07:00'),
+    ('2099-01-09T11:00:00-07:00','2099-01-09T18:00:00Z'),
+])
+def test_equivalent_cutoff_formats_allow_open_tab_scores_and_substitutions(setup, stored, submitted):
+    client,s=setup
+    for e in s['saved']['document']['encounters']:
+        for p in e['pairings']: p['eligibility_deadline']=stored
+    before=deepcopy(s['saved'])
+    document=deepcopy(s['saved']['document'])
+    for e in document['encounters']:
+        for p in e['pairings']: p['eligibility_deadline']=submitted
+    pairing=document['encounters'][0]['pairings'][0]
+    replacement=[pairing['players_a'][0],str(uuid4())]
+    pairing['games'][1].update(status='completed',a=11,b=9,players_a=replacement,injury_reason='Ankle injury before game 2')
+    response=client.put(path(s),json=dict(expected_revision=1,document=document))
+    assert response.status_code==200, response.text
+    persisted=s['calls'][-1][1]['p_document']['encounters'][0]['pairings'][0]['games'][1]
+    assert persisted['players_a']==replacement and (persisted['a'],persisted['b'])==(11,9)
+    assert s['calls'][-1][1]['p_revision']==1
+    assert s['saved']==before  # Comparison must not mutate the source revision.
+
+
+def test_historical_replay_preserves_instant_equivalence_but_blocks_actual_edits(setup):
+    client,s=setup;complete(s)
+    old=s['saved']['document']['encounters'][0]['pairings'][0]
+    old['eligibility_deadline']='2099-01-08T18:00:00+00:00'
+    for g in old['games']: g['played_at']='2099-01-08T19:00:00+00:00'
+    before=deepcopy(s['saved'])
+    document=deepcopy(s['saved']['document'])
+    history=document['encounters'][0]['pairings'][0]
+    history['eligibility_deadline']='2099-01-08T11:00:00-07:00'
+    for g in history['games']: g['played_at']='2099-01-08T12:00:00-07:00'
+    assert client.put(path(s),json=dict(expected_revision=1,document=document)).status_code==200
+    assert s['saved']==before
+    for field,value in [('a',12),('played_at','2099-01-08T19:01:00Z'),('injury_reason','Changed history')]:
+        changed=deepcopy(document)
+        changed['encounters'][0]['pairings'][0]['games'][0][field]=value
+        if field=='a': changed['encounters'][0]['pairings'][0]['games'][0]['b']=10
+        s['calls'].clear()
+        response=client.put(path(s),json=dict(expected_revision=1,document=changed))
+        assert response.status_code==422 and 'remain official' in response.text
+        assert not s['calls']
+
+
+def test_game_validation_message_names_where_to_fix_without_changing_scores(setup):
+    client,s=setup
+    document=deepcopy(s['saved']['document']); document['schedule_mode']='staggered'
+    e=document['encounters'][0];e['rotation']=4
+    p=e['pairings'][1];p['court']=7
+    p['games'][2].update(status='retired',a=11,b=8,winner='a')
+    original=deepcopy(document)
+    response=client.put(path(s),json=dict(expected_revision=1,document=document))
+    assert response.status_code==422
+    message=response.json()['detail']
+    assert 'Skill level 3.5 · Wave 4 · Court 7 · Men\'s doubles · Game 3' in message
+    assert 'already finished the game' in message
+    assert document==original and not s['calls']
+
+
 def test_nonhost_participant_cannot_edit_other_meet(setup):
     client,s=setup;s['season']['organizer_club_id']='organizer'
     assert client.get(path(s)).status_code==200
