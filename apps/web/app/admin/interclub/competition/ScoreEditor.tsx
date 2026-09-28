@@ -2,15 +2,30 @@
 
 import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
 
-import { useState } from "react";
-import { CompetitionDocument, CompetitionEncounter, CompetitionGame, CompetitionPairing, CompetitionPlayer, GameStatus, MeetCompetition, activeSinglesPlayers, automaticGameStatus, fromLocalInput, gameStatusLabels, isFinalScore, matchesSkillLevel, pairingLabels, playerNames, scheduledEncounters, scheduleRoundLabel, singlesCourt, toLocalInput } from "@/lib/interclubCompetition";
+import { useRef, useState, type FocusEvent, type KeyboardEvent } from "react";
+import { CompetitionDocument, CompetitionEncounter, CompetitionGame, CompetitionPairing, CompetitionPlayer, GameStatus, MeetCompetition, activeSinglesPlayers, automaticGameStatus, gameStatusLabels, isFinalScore, matchesSkillLevel, pairingLabels, playerNames, scheduledEncounters, scheduleRoundLabel, singlesCourt } from "@/lib/interclubCompetition";
 import styles from "./competition.module.css";
 
-type Props = { document: CompetitionDocument; detail: MeetCompetition; players: Map<string, CompetitionPlayer>; clubName: (id: string) => string; disabled: boolean; onChange: (document: CompetitionDocument) => void; divisionFilter?: string; onDivisionFilterChange?: (division: string) => void };
+type Props = { document: CompetitionDocument; detail: MeetCompetition; players: Map<string, CompetitionPlayer>; clubName: (id: string) => string; disabled: boolean; onChange: (document: CompetitionDocument) => void; divisionFilter?: string; onDivisionFilterChange?: (division: string) => void; onScoreEntryEnd?: () => boolean };
 
-export default function ScoreEditor({ document, detail, players, clubName, disabled, onChange, divisionFilter, onDivisionFilterChange }: Props) {
+export default function ScoreEditor({ document, detail, players, clubName, disabled, onChange, divisionFilter, onDivisionFilterChange, onScoreEntryEnd }: Props) {
   const [localDivision, setLocalDivision] = useState("");
+  const scoreEntry = useRef<HTMLElement | null>(null);
   const division = divisionFilter ?? localDivision, setDivision = onDivisionFilterChange ?? setLocalDivision;
+  function navigateScores(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    if (event.key === "Escape") {
+      const options = event.currentTarget.closest("[data-score-game]")?.querySelector("details");
+      if (options) { event.preventDefault(); options.open = true; options.querySelector("summary")?.focus(); }
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const inputs = Array.from(scoreEntry.current?.querySelectorAll<HTMLInputElement>("input[data-interclub-score]") || []).filter(input => !input.matches(":disabled"));
+    const next = inputs[inputs.indexOf(event.currentTarget) + (event.shiftKey ? -1 : 1)];
+    if (next) { event.preventDefault(); next.focus(); }
+    else if (!event.shiftKey && onScoreEntryEnd?.()) event.preventDefault();
+  }
+  const scoreInput = { "data-interclub-score": true, inputMode: "numeric" as const, onKeyDown: navigateScores, onFocus: (event: FocusEvent<HTMLInputElement>) => event.currentTarget.select() };
   function changeEncounter(id: string, patch: Partial<CompetitionEncounter>) {
     onChange({ ...document, encounters: document.encounters.map(encounter => encounter.id === id ? { ...encounter, ...patch } : encounter) });
   }
@@ -32,11 +47,11 @@ export default function ScoreEditor({ document, detail, players, clubName, disab
   const canChangePartners = !disabled && document.encounters.every(encounter => encounter.pairings.every(pairing => pairing.games.every(game =>
     game.status === "pending" && game.a === null && game.b === null ||
     ["forfeit", "double_forfeit"].includes(game.status) && (!pairing.players_a.length || !pairing.players_b.length))));
-  return <section className={styles.section} aria-labelledby="score-entry-heading">
+  return <section ref={scoreEntry} className={styles.section} aria-labelledby="score-entry-heading">
     <div className={styles.toolbar}><div><h2 id="score-entry-heading">Enter the official score sheets</h2><p>Enter all results, save the draft, then submit the complete meet for organizer approval.</p></div>
       {divisions.length > 1 && <label>Show skill level<select value={division} onChange={event => setDivision(event.target.value)}><option value="">All skill levels</option>{divisions.map(value => <option key={value}>{value}</option>)}</select></label>}
     </div>
-    <div className={styles.notice}>Enter both final scores to mark a game completed automatically. All three games are played in regular-season pairings. Use “No score or injury” for forfeits, weather-unplayed games or an injury retirement. Only completed doubles games affect ratings.</div>
+    <div className={styles.notice}><strong>Score → Tab → score → Tab → next game.</strong> Both final scores mark a game completed automatically. Shift+Tab moves back; Esc reaches game options. Game dates are recorded automatically from your device when you enter scores.</div>
     <p>The starting players are already set from the approved meet rosters. For an injury replacement, use “Substitute a player” on each game the substitute plays.</p>
     {scheduledEncounters(document).filter(encounter => !division || encounter.division === division).map(encounter => <article key={encounter.id} className={styles.card}>
       <p className={styles.eyebrow}>Skill level {encounter.division} · {scheduleRoundLabel(document)} {encounter.rotation}</p>
@@ -51,14 +66,13 @@ export default function ScoreEditor({ document, detail, players, clubName, disab
           })}</div>
         </details>}
         <fieldset disabled={disabled} className={styles.gameFields}><legend className={styles.srOnly}>{pairingLabels[pairing.kind]} scores</legend>
-          {pairing.games.map((game, index) => <div key={game.id} id={`interclub-game-${game.id}`} tabIndex={-1} className={styles.game}>
+          {pairing.games.map((game, index) => <div key={game.id} id={`interclub-game-${game.id}`} data-score-game tabIndex={-1} className={styles.game}>
             {!!(game.players_a.length || game.players_b.length) && <p><strong>Players for Game {index + 1}:</strong> {playerNames(game.players_a.length ? game.players_a : pairing.players_a, players)} <strong>vs</strong> {playerNames(game.players_b.length ? game.players_b : pairing.players_b, players)}</p>}
             <div className={styles.gameRow}><strong>Game {index + 1}</strong>
-              <label>{clubName(encounter.club_a)}<input aria-label={`${pairing.id} game ${index + 1} club A score`} type="number" min={0} step={1} value={game.a ?? ""} disabled={["forfeit", "double_forfeit", "unplayed"].includes(game.status)} onChange={event => changeGame(encounter, pairing, game.id, { a: event.target.value === "" ? null : Number(event.target.value), ...(game.status === "completed" ? { winner: null } : {}) })} /></label>
-              <label>{clubName(encounter.club_b)}<input aria-label={`${pairing.id} game ${index + 1} club B score`} type="number" min={0} step={1} value={game.b ?? ""} disabled={["forfeit", "double_forfeit", "unplayed"].includes(game.status)} onChange={event => changeGame(encounter, pairing, game.id, { b: event.target.value === "" ? null : Number(event.target.value), ...(game.status === "completed" ? { winner: null } : {}) })} /></label>
+              <label>{clubName(encounter.club_a)}<input {...scoreInput} aria-label={`${pairing.id} game ${index + 1} club A score`} type="number" min={0} step={1} value={game.a ?? ""} disabled={["forfeit", "double_forfeit", "unplayed"].includes(game.status)} onChange={event => changeGame(encounter, pairing, game.id, { a: event.target.value === "" ? null : Number(event.target.value), ...(game.status === "completed" ? { winner: null } : {}) })} /></label>
+              <label>{clubName(encounter.club_b)}<input {...scoreInput} aria-label={`${pairing.id} game ${index + 1} club B score`} type="number" min={0} step={1} value={game.b ?? ""} disabled={["forfeit", "double_forfeit", "unplayed"].includes(game.status)} onChange={event => changeGame(encounter, pairing, game.id, { b: event.target.value === "" ? null : Number(event.target.value), ...(game.status === "completed" ? { winner: null } : {}) })} /></label>
               <span className={styles.muted}>{game.status === "completed" ? "Completed" : game.status === "pending" ? game.a === null && game.b === null ? "Awaiting scores" : "Score incomplete" : gameStatusLabels[game.status]}</span>
               {["retired", "forfeit"].includes(game.status) && <label>Game awarded to<select value={game.winner || ""} onChange={event => changeGame(encounter, pairing, game.id, { winner: event.target.value as "a" | "b" || null })}><option value="">Choose winner</option><option value="a">{clubName(encounter.club_a)}</option><option value="b">{clubName(encounter.club_b)}</option></select></label>}
-              {["completed", "retired"].includes(game.status) && <label>Actual time played (your device’s time)<input required type="datetime-local" value={toLocalInput(game.played_at)} onChange={event => changeGame(encounter, pairing, game.id, { played_at: fromLocalInput(event.target.value) })} /></label>}
             </div>
             {game.status === "pending" && game.a !== null && game.b !== null && <p className={styles.warning}>A final score must reach 11 and win by two. Beyond 11, the winning margin must be exactly two. If play stopped because of injury, select Injury retirement below.</p>}
             <details><summary>No score or injury</summary>
@@ -86,7 +100,7 @@ export default function ScoreEditor({ document, detail, players, clubName, disab
         <fieldset disabled={disabled} className={styles.gameFields}><legend className={styles.srOnly}>Rotating singles tiebreak</legend>
           <label className={styles.check}><input type="checkbox" checked={!!encounter.tiebreak} onChange={event => changeEncounter(encounter.id, { tiebreak: event.target.checked ? { status: "pending", a: null, b: null, order_a: activeSinglesPlayers(encounter, "a"), order_b: activeSinglesPlayers(encounter, "b") } : null })} />A singles tiebreak is required</label>
           {encounter.tiebreak && <><div className={styles.gameRow}>
-            {(["a", "b"] as const).map(side => <label key={side}>{clubName(encounter[`club_${side}`])}<input aria-label={`${encounter.id} singles club ${side.toUpperCase()} score`} type="number" min={0} step={1} value={encounter.tiebreak![side] ?? ""} onChange={event => {
+            {(["a", "b"] as const).map(side => <label key={side}>{clubName(encounter[`club_${side}`])}<input {...scoreInput} aria-label={`${encounter.id} singles club ${side.toUpperCase()} score`} type="number" min={0} step={1} value={encounter.tiebreak![side] ?? ""} onChange={event => {
               const tie = { ...encounter.tiebreak!, [side]: event.target.value === "" ? null : Number(event.target.value) };
               changeEncounter(encounter.id, { tiebreak: { ...tie, status: isFinalScore(tie.a, tie.b, 21) ? "completed" : "pending" } });
             }} /></label>)}

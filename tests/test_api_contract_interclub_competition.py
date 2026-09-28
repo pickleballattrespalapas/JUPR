@@ -97,6 +97,28 @@ def test_host_can_save_submit_but_cannot_approve_or_reopen(setup):
         assert client.post(path(s,'away')+'/'+action,json=body).status_code==403
 
 
+@pytest.mark.parametrize('entered_at', ['2026-09-28T10:45:00-07:00', '2026-09-28T23:58:00+13:00'])
+def test_future_scheduled_meet_keeps_device_entry_date_through_save_and_submit(setup, entered_at):
+    client,s=setup
+    # Early staging practice closes the roster cutoff before entering scores.
+    s['meet']['roster_deadline']='2026-09-01T00:00:00Z'
+    for e in s['saved']['document']['encounters']:
+        for p in e['pairings']:
+            p['eligibility_deadline']=s['meet']['roster_deadline']
+            for g in p['games']: g.update(played_at=None)
+    document=deepcopy(s['saved']['document'])
+    for e in document['encounters']:
+        for p in e['pairings']:
+            for g in p['games']: g.update(status='completed',a=11,b=9,played_at=entered_at)
+    response=client.put(path(s),json=dict(expected_revision=1,document=document))
+    assert response.status_code==200, response.text
+    stored=s['calls'][-1][1]['p_document']
+    assert all(g['played_at']==entered_at for e in stored['encounters'] for p in e['pairings'] for g in p['games'])
+    s['saved'].update(document=stored,revision=2)
+    assert client.post(path(s)+'/submit',json={'expected_revision':2}).status_code==200
+    assert s['calls'][-1][1]['p_document'] is None  # Submit the exact saved date; never reschedule it.
+
+
 def test_nonhost_participant_cannot_edit_other_meet(setup):
     client,s=setup;s['season']['organizer_club_id']='organizer'
     assert client.get(path(s)).status_code==200

@@ -40,11 +40,13 @@ const options = { document, meet: { id: document.meet_id, starts_at: '2026-12-17
   for (const encounter of document.encounters) assert.ok(full.includes(encounter.id), `Missing score sheet ${encounter.id}`);
   assert.ok(full.includes('José Reyes'), 'Accented player names remain readable');
   assert.ok(full.includes('Page 27 of 27'));
+  assert.ok(!full.includes('Time played'), 'Paper sheets require scores, not individual game times');
+  assert.ok(full.includes('Game dates are recorded automatically'));
   assert.equal(JSON.stringify(document), before, 'Exports do not change the saved draw');
 
   const incidents = structuredClone(document); incidents.encounters = [incidents.encounters[0]];
   const pairing = incidents.encounters[0].pairings[0]; pairing.court = null; pairing.players_b = [];
-  pairing.games[0] = game('injury', { status: 'retired', a: 7, b: 4, winner: 'b', players_a: ['p7','p1'], played_at: '2026-12-17T18:00:00Z', injury_reason: 'Replacement after injury - actual score retained.' });
+  pairing.games[0] = game('injury', { status: 'retired', a: 7, b: 4, winner: 'b', players_a: ['p7','p1'], played_at: '2026-09-28T18:00:00Z', injury_reason: 'Replacement after injury - actual score retained.' });
   pairing.games[1].status = 'forfeit'; pairing.games[1].winner = 'a';
   const incidentPdf = await buildInterclubMeetPdf({ ...options, document: incidents }, 'packet');
   const incidentText = content(incidentPdf.pdf);

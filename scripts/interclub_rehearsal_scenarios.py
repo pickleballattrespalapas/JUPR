@@ -314,6 +314,9 @@ def incidents(r):
     r.check(b["document"]["encounters"][0]["pairings"][0] == old,"completed weather replay keeps prior pairing and rates six games exactly once")
     ui_meet = new_meet(r,s)
     ui_batch = prepare(r,s,ui_meet,generate_pairings=False)
+    # Rehearse entering today's scores for a future scheduled meet. Eligibility
+    # remains frozen at the cutoff established by prepare().
+    r.db("PATCH","pcs_interclub_meets",{"starts_at":iso(now()+timedelta(days=60))},id="eq."+ui_meet["id"],season_id="eq."+s["id"])
     s["browser_meet"] = ui_meet["id"]
     s["browser_batch"] = ui_batch
     r.persist()

@@ -112,6 +112,7 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
   const token = useRef(accessToken); token.current = accessToken;
   const pending = useRef(false), controller = useRef<AbortController | null>(null);
   const resultsReview = useRef<HTMLDivElement | null>(null);
+  const saveScores = useRef<HTMLButtonElement | null>(null), reviewScores = useRef<HTMLButtonElement | null>(null);
   const followedNotification = useRef(false);
   const [pdfBusy, setPdfBusy] = useState<MeetPdfScope | null>(null);
   const pdfRequest = useRef<AbortController | null>(null);
@@ -159,6 +160,11 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
     } finally { pending.current = false; if (!request.signal.aborted) setBusy(false); }
   }
   function edit(document: CompetitionDocument) { setDraft(automaticDraftScores(document)); setReview(null); setStatus(""); }
+  function finishScoreEntry() {
+    const target = [saveScores.current, reviewScores.current].find(button => button && !button.disabled);
+    if (!target) return false;
+    target.focus(); return true;
+  }
   async function downloadPdf(scope: MeetPdfScope) {
     if (!detail?.batch || busy || dirty || blocked || pdfRequest.current) return;
     const request = new AbortController(); pdfRequest.current = request;
@@ -238,7 +244,7 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
         {dirty && <p className={styles.notice}>Save your changes before printing or switching meets. <button disabled={busy} onClick={() => { setDraft(batch.document); setReview(null); }}>Discard unsaved changes</button></p>}
         {batch.state === "approved" && <p className={batch.ratings_status === "failed" ? styles.error : styles.notice}><strong>Rating updates: {batch.ratings_status.replaceAll("_", " ")}</strong>{batch.ratings_error ? ` — ${batch.ratings_error}` : batch.ratings_status === "completed" ? ". Both league and represented-club updates are complete." : ". Standings approval does not mean all rating updates have completed."}</p>}
         <div className={styles.toolbar}>
-          {editable && <><button className={styles.primary} disabled={!dirty} onClick={() => void change("save", { document: draft })}>Save all draft scores</button><button disabled={dirty || !count?.total} onClick={() => setReview("submit")}>Review and submit meet</button></>}
+          {editable && <><button className={styles.primary} disabled={!dirty} onClick={() => void change("save", { document: draft })}>Save all draft scores</button><button ref={reviewScores} disabled={dirty || !count?.total} onClick={() => setReview("submit")}>Review and submit meet</button></>}
           {batch.state === "submitted" && detail.is_organizer && <button className={styles.primary} disabled={disabled} onClick={() => setReview("approve")}>Review official approval</button>}
           {batch.state === "approved" && detail.is_organizer && ["failed", "pending"].includes(batch.ratings_status) && <button disabled={disabled} onClick={() => void change("retry-ratings")}>Retry rating updates</button>}
           {draft.weather === "rescheduled" && editable && <button disabled={dirty || disabled} onClick={() => void change("refresh-lineups")}>Refresh eligible replay lineups</button>}
@@ -268,8 +274,8 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
           </fieldset>
         </form>}
       </details>
-      <ScoreEditor document={draft} detail={detail} players={players} clubName={clubName} disabled={!editable} onChange={edit} divisionFilter={scoreDivision} onDivisionFilterChange={setScoreDivision} />
-      {editable && <div className={styles.bottomBar}><span>{dirty ? "Unsaved score changes" : "All draft changes saved"}</span><button className={styles.primary} disabled={!dirty || disabled} onClick={() => void change("save", { document: draft })}>Save all draft scores</button></div>}
+      <ScoreEditor document={draft} detail={detail} players={players} clubName={clubName} disabled={!editable} onChange={edit} divisionFilter={scoreDivision} onDivisionFilterChange={setScoreDivision} onScoreEntryEnd={finishScoreEntry} />
+      {editable && <div className={styles.bottomBar}><span>{dirty ? "Unsaved score changes" : "All draft changes saved"}</span><button ref={saveScores} className={styles.primary} disabled={!dirty || disabled} onClick={() => void change("save", { document: draft })}>Save all draft scores</button></div>}
       <PrintPacket document={batch.document} meet={detail.meet} seasonName={context.season.details.name} timezone={context.season.details.timezone} revision={batch.revision} players={players} clubName={clubName} />
     </>}
   </section>;
