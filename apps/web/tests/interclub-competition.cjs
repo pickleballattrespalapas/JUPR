@@ -184,6 +184,56 @@ async function scoreEntry() {
   await act(async () => tree.unmount());
 }
 
+async function pairingControls() {
+  let next = copy(document), tree;
+  const props = { detail, players: types.competitionPlayers(detail), clubName, disabled: false, onChange: value => { next = value; } };
+  const summaries = () => tree.root.findAllByType('summary').map(nodeText);
+  await act(async () => { tree = create(React.createElement(ScoreEditor, { ...props, document: next })); });
+  assert.ok(!summaries().some(label => /starting pairing|mixed partners/.test(label)), 'Gender doubles keep the already selected pairs without a redundant lineup editor');
+  assert.equal(summaries().filter(label => label.startsWith('Substitute a player')).length, 6, 'Each game offers a clearly named injury substitution control');
+  next.format = 'mixed';
+  Object.assign(next.encounters[0].pairings[0], { kind: 'mixed_a', players_a: ['entry-0', 'entry-2'], players_b: ['entry-4', 'entry-6'] });
+  Object.assign(next.encounters[0].pairings[1], { kind: 'mixed_b', players_a: ['entry-1', 'entry-3'], players_b: ['entry-5', 'entry-7'] });
+  await act(async () => tree.update(React.createElement(ScoreEditor, { ...props, document: next })));
+  assert.equal(summaries().filter(label => label === 'Change mixed partners before play').length, 2, 'Mixed teams can still arrange the two partnerships');
+  for (const value of [0, 5]) {
+    next.encounters[0].pairings[0].games[0].a = value;
+    await act(async () => tree.update(React.createElement(ScoreEditor, { ...props, document: next })));
+    assert.ok(!summaries().includes('Change mixed partners before play'), 'Even a partial or zero score locks the starting partnerships');
+  }
+  next.encounters[0].pairings[0].games[0].a = null;
+  await act(async () => tree.update(React.createElement(ScoreEditor, { ...props, document: next, disabled: true })));
+  assert.ok(!summaries().includes('Change mixed partners before play'), 'Read-only results cannot rearrange partners');
+  await act(async () => tree.unmount());
+}
+
+async function preMeetRosterChange() {
+  const writes = [];
+  global.fetch = async (url, options) => {
+    if (options.method === 'POST') { writes.push({ url, body: JSON.parse(options.body) }); return reply({ batch: { ...copy(batch), revision: 5 } }); }
+    return reply(copy(detail));
+  };
+  let tree;
+  await act(async () => { tree = create(React.createElement(workspace.MeetOperations, { root: 'https://api.test/meet-1', clubId: 'alpha', accessToken: 'token', phase: 'regular', context, clubName, onLock() {}, onSeasonChange() {} })); });
+  const links = () => tree.root.findAllByType('a').filter(node => nodeText(node) === 'Change meet roster');
+  assert.equal(links().length, 1);
+  const target = new URL(links()[0].props.href, 'https://web.test');
+  assert.equal(target.searchParams.get('season'), 'season-1');
+  assert.equal(target.searchParams.get('meet'), 'meet-1');
+  assert.equal(target.searchParams.get('step'), 'lineups');
+  await act(async () => button(tree, 'Apply updated meet rosters').props.onClick());
+  assert.equal(writes[0].url, 'https://api.test/meet-1/refresh-lineups');
+  assert.equal(writes[0].body.expected_revision, 4, 'Applying roster changes keeps the existing revision guard');
+  await act(async () => tree.root.findByType(ScoreEditor).props.onChange({ ...copy(document), weather: 'delay' }));
+  assert.equal(links().length, 0, 'Unsaved work blocks the roster navigation link');
+  assert.equal(button(tree, 'Apply updated meet rosters').props.disabled, true, 'Unsaved scores cannot be overwritten by a roster refresh');
+  const started = copy(document);
+  started.encounters[0].pairings[0].games[0] = game('w1', 'completed');
+  await act(async () => tree.root.findByType(ScoreEditor).props.onChange(started));
+  assert.equal(button(tree, 'Apply updated meet rosters'), undefined, 'Once play is recorded, roster replacement gives way to per-game injury substitutions');
+  await act(async () => tree.unmount());
+}
+
 async function automaticScoreEntry() {
   let next = copy(document), tree;
   next.encounters[0].pairings[0].games[0].played_at = null;
@@ -312,14 +362,27 @@ async function playUpReplacementEligibility() {
   for (const division of ['', 'garbage', '3.1', '7.0', '4.5Open', ' Open ']) assert.equal(types.matchesSkillLevel(low, division), false, 'Unknown division labels do not silently become Open');
   const atLimit = { ...low, entry_id: 'at-limit', name: 'At Upper Limit', eligibility_rating: 4.0, division: '3.5' };
   const scoped = { ...detail, eligible_players: { ...detail.eligible_players, alpha: [...detail.eligible_players.alpha, low, atLimit] } };
-  let tree;
-  await act(async () => { tree = create(React.createElement(ScoreEditor, { detail: scoped, players: types.competitionPlayers(scoped), document, clubName, disabled: false, onChange() {} })); });
+  let next = copy(document), tree;
+  const props = { detail: scoped, players: types.competitionPlayers(scoped), clubName, disabled: false, onChange: value => { next = value; } };
+  await act(async () => { tree = create(React.createElement(ScoreEditor, { ...props, document: next })); });
   const selectors = tree.root.findAllByType('fieldset').filter(fieldset => fieldset.children.some(child => child.type === 'legend' && nodeText(child) === 'Alpha Club actual players')).flatMap(fieldset => fieldset.findAllByType('select'));
   assert.ok(selectors.length);
   for (const selector of selectors) {
     assert.ok(selector.findAllByType('option').some(option => option.props.value === low.entry_id), 'The injury replacement picker offers a lower-rated eligible player');
     assert.ok(!selector.findAllByType('option').some(option => option.props.value === atLimit.entry_id), 'The picker excludes a player at the division ceiling');
   }
+  const before = copy(next);
+  const secondGame = tree.root.findByProps({ id: 'interclub-game-w2' });
+  const replacements = secondGame.findAllByType('fieldset').find(fieldset => fieldset.children.some(child => child.type === 'legend' && nodeText(child) === 'Alpha Club actual players'));
+  await act(async () => replacements.findAllByType('select')[0].props.onChange({ target: { value: low.entry_id } }));
+  assert.deepEqual(next.encounters[0].pairings[0].games[1].players_a, [low.entry_id, 'entry-1'], 'A substitute can come from outside the four selected players');
+  assert.deepEqual(next.encounters[0].pairings[0].players_a, before.encounters[0].pairings[0].players_a, 'An injury substitution keeps the starting lineup intact');
+  assert.deepEqual(next.encounters[0].pairings[0].games[0], before.encounters[0].pairings[0].games[0], 'An injury substitution never rewrites an earlier game');
+  await act(async () => tree.update(React.createElement(ScoreEditor, { ...props, document: next })));
+  const updatedGame = tree.root.findByProps({ id: 'interclub-game-w2' });
+  assert.ok(updatedGame.findAllByType('p').some(node => nodeText(node).includes('Players for Game 2: Play Up Player')), 'The actual substituted lineup is visible beside its game');
+  await act(async () => updatedGame.findByType('textarea').props.onChange({ target: { value: 'Ankle injury; substitute entered before game 2.' } }));
+  assert.equal(next.encounters[0].pairings[0].games[1].injury_reason, 'Ankle injury; substitute entered before game 2.');
   await act(async () => tree.unmount());
 }
 
@@ -450,4 +513,4 @@ function writePrintReview() {
   fs.writeFileSync(output, '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Southern BCS paper packet review</title><style>' + stylesheet + screenPreview + '</style></head><body class="printBody"><div class="printPortal">' + render(document) + render(final) + '</div></body></html>');
   console.log('Print review fixture: ' + output);
 }
-(async () => { await scoreEntry(); await automaticScoreEntry(); await savedScoreCompletion(); await playUpReplacementEligibility(); printSafety(); await staggeredSchedule(); await revisionsAndStaleClub(); await pdfDownloads(); await approval(); await qualifyingRoundRobin(); await missingLineups(); await seasonRegistrationGate(); qualifyingDisplay(); writePrintReview(); console.log('PASS interclub competition: automatic score completion, saved pending-score recovery, zero scores, clearing, win-by-two, injury outcomes, singles, submission review, exact revisions, staging schedule and PDF controls'); })().catch(error => { console.error(error); process.exit(1); });
+(async () => { await scoreEntry(); await pairingControls(); await preMeetRosterChange(); await automaticScoreEntry(); await savedScoreCompletion(); await playUpReplacementEligibility(); printSafety(); await staggeredSchedule(); await revisionsAndStaleClub(); await pdfDownloads(); await approval(); await qualifyingRoundRobin(); await missingLineups(); await seasonRegistrationGate(); qualifyingDisplay(); writePrintReview(); console.log('PASS interclub competition: fixed gender pairings, pre-meet roster changes, per-game injury substitutions, automatic score completion, saved pending-score recovery, zero scores, clearing, win-by-two, injury outcomes, singles, submission review, exact revisions, staging schedule and PDF controls'); })().catch(error => { console.error(error); process.exit(1); });

@@ -29,18 +29,22 @@ export default function ScoreEditor({ document, detail, players, clubName, disab
     }) });
   }
   const divisions = Array.from(new Set(document.encounters.map(encounter => encounter.division)));
+  const canChangePartners = !disabled && document.encounters.every(encounter => encounter.pairings.every(pairing => pairing.games.every(game =>
+    game.status === "pending" && game.a === null && game.b === null ||
+    ["forfeit", "double_forfeit"].includes(game.status) && (!pairing.players_a.length || !pairing.players_b.length))));
   return <section className={styles.section} aria-labelledby="score-entry-heading">
     <div className={styles.toolbar}><div><h2 id="score-entry-heading">Enter the official score sheets</h2><p>Enter all results, save the draft, then submit the complete meet for organizer approval.</p></div>
       {divisions.length > 1 && <label>Show skill level<select value={division} onChange={event => setDivision(event.target.value)}><option value="">All skill levels</option>{divisions.map(value => <option key={value}>{value}</option>)}</select></label>}
     </div>
     <div className={styles.notice}>Enter both final scores to mark a game completed automatically. All three games are played in regular-season pairings. Use “No score or injury” for forfeits, weather-unplayed games or an injury retirement. Only completed doubles games affect ratings.</div>
+    <p>The starting players are already set from the approved meet rosters. For an injury replacement, use “Substitute a player” on each game the substitute plays.</p>
     {scheduledEncounters(document).filter(encounter => !division || encounter.division === division).map(encounter => <article key={encounter.id} className={styles.card}>
       <p className={styles.eyebrow}>Skill level {encounter.division} · {scheduleRoundLabel(document)} {encounter.rotation}</p>
       <h3>{clubName(encounter.club_a)} <span className={styles.muted}>vs</span> {clubName(encounter.club_b)}</h3>
       {encounter.pairings.map(pairing => <section key={pairing.id} className={styles.pairing} aria-label={`${pairingLabels[pairing.kind]} ${encounter.division}`}>
         <h4>{pairingLabels[pairing.kind]}{pairing.court ? ` · Court ${pairing.court}` : ""}</h4>
-        <p>{playerNames(pairing.players_a, players)} <strong>vs</strong> {playerNames(pairing.players_b, players)}</p>
-        {!disabled && !document.encounters.some(row => row.pairings.some(line => line.games.some(game => game.status !== "pending"))) && <details className={styles.lineup}><summary>Arrange the starting pairing</summary><p>Choose from the approved four-player team. Changes apply to this club’s pairing against every opponent at this meet. The complete lineup is checked when you save.</p>
+        <p><strong>Starting players:</strong> {playerNames(pairing.players_a, players)} <strong>vs</strong> {playerNames(pairing.players_b, players)}</p>
+        {canChangePartners && pairing.kind.startsWith("mixed") && <details className={styles.lineup}><summary>Change mixed partners before play</summary><p>The four team players are already selected. Use this only to change who partners with whom in Mixed A and Mixed B. Keep each player in one mixed pair. Changes apply against every opponent at this meet and are checked when you save.</p>
           <div className={styles.twoColumns}>{(["a", "b"] as const).map(side => {
             const roster = detail.teams.find(team => team.club_id === encounter[`club_${side}`] && team.division === encounter.division)?.roster || [];
             return <PlayerSelect key={side} label={clubName(encounter[`club_${side}`])} ids={pairing[`players_${side}`]} options={roster} disabled={disabled} onChange={ids => changeStartingPair(encounter, pairing, side, ids)} />;
@@ -48,6 +52,7 @@ export default function ScoreEditor({ document, detail, players, clubName, disab
         </details>}
         <fieldset disabled={disabled} className={styles.gameFields}><legend className={styles.srOnly}>{pairingLabels[pairing.kind]} scores</legend>
           {pairing.games.map((game, index) => <div key={game.id} id={`interclub-game-${game.id}`} tabIndex={-1} className={styles.game}>
+            {!!(game.players_a.length || game.players_b.length) && <p><strong>Players for Game {index + 1}:</strong> {playerNames(game.players_a.length ? game.players_a : pairing.players_a, players)} <strong>vs</strong> {playerNames(game.players_b.length ? game.players_b : pairing.players_b, players)}</p>}
             <div className={styles.gameRow}><strong>Game {index + 1}</strong>
               <label>{clubName(encounter.club_a)}<input aria-label={`${pairing.id} game ${index + 1} club A score`} type="number" min={0} step={1} value={game.a ?? ""} disabled={["forfeit", "double_forfeit", "unplayed"].includes(game.status)} onChange={event => changeGame(encounter, pairing, game.id, { a: event.target.value === "" ? null : Number(event.target.value), ...(game.status === "completed" ? { winner: null } : {}) })} /></label>
               <label>{clubName(encounter.club_b)}<input aria-label={`${pairing.id} game ${index + 1} club B score`} type="number" min={0} step={1} value={game.b ?? ""} disabled={["forfeit", "double_forfeit", "unplayed"].includes(game.status)} onChange={event => changeGame(encounter, pairing, game.id, { b: event.target.value === "" ? null : Number(event.target.value), ...(game.status === "completed" ? { winner: null } : {}) })} /></label>
@@ -63,14 +68,14 @@ export default function ScoreEditor({ document, detail, players, clubName, disab
               }}><option value="automatic">Use entered scores automatically</option>{(["retired", "forfeit", "double_forfeit", "unplayed"] as const).map(value => <option key={value} value={value}>{gameStatusLabels[value]}</option>)}</select></label>
               <p>Leave scores empty for an unplayed game. For an injury retirement, keep the stopped score and choose the winning club.</p>
             </details>
-            <details><summary>Time played and injury replacement</summary>
-              {!['completed', 'retired'].includes(game.status) && <p>Enter a final score or select Injury retirement to record the actual play time. Scheduled time is never used as a confirmed game time.</p>}
+            <details><summary>Substitute a player · Game {index + 1}</summary>
               <p>After play begins, a player may be replaced only because of injury, between games. A retirement concedes the interrupted game; an eligible replacement can play the next game.</p>
+              <p>Choose the actual players for this game from the club’s eligible season pool. Keep the injured player on the game they retired from. Record the substitute on each following game they play.</p>
               <div className={styles.twoColumns}>{(["a", "b"] as const).map(side => {
                 const options = (detail.eligible_players?.[encounter[`club_${side}`]] || detail.teams.find(team => team.club_id === encounter[`club_${side}`] && team.division === encounter.division)?.roster || []).filter(player => matchesSkillLevel(player, encounter.division));
                 return <PlayerSelect key={side} label={`${clubName(encounter[`club_${side}`])} actual players`} ids={game[`players_${side}`].length ? game[`players_${side}`] : pairing[`players_${side}`]} options={options} disabled={disabled} onChange={ids => changeGame(encounter, pairing, game.id, { [`players_${side}`]: ids })} />;
               })}</div>
-              <label>Injury reason<textarea rows={2} value={game.injury_reason || ""} onChange={event => changeGame(encounter, pairing, game.id, { injury_reason: event.target.value || null })} placeholder="Who was injured and when the replacement entered" /></label>
+              <label>Injury reason (required for a substitution)<textarea rows={2} value={game.injury_reason || ""} onChange={event => changeGame(encounter, pairing, game.id, { injury_reason: event.target.value || null })} placeholder="Who was injured and when the substitute entered" /></label>
             </details>
           </div>)}
         </fieldset>

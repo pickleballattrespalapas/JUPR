@@ -241,8 +241,15 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
           {editable && <><button className={styles.primary} disabled={!dirty} onClick={() => void change("save", { document: draft })}>Save all draft scores</button><button disabled={dirty || !count?.total} onClick={() => setReview("submit")}>Review and submit meet</button></>}
           {batch.state === "submitted" && detail.is_organizer && <button className={styles.primary} disabled={disabled} onClick={() => setReview("approve")}>Review official approval</button>}
           {batch.state === "approved" && detail.is_organizer && ["failed", "pending"].includes(batch.ratings_status) && <button disabled={disabled} onClick={() => void change("retry-ratings")}>Retry rating updates</button>}
-          {(draft.weather === "rescheduled" || canRefreshStartingLineups) && editable && <button disabled={dirty || disabled} onClick={() => void change("refresh-lineups")}>{draft.weather === "rescheduled" ? "Refresh eligible replay lineups" : "Refresh approved lineups"}</button>}
+          {draft.weather === "rescheduled" && editable && <button disabled={dirty || disabled} onClick={() => void change("refresh-lineups")}>Refresh eligible replay lineups</button>}
         </div>
+        {canRefreshStartingLineups && draft.weather !== "rescheduled" && editable && <div className={styles.notice}>
+          <p><strong>Need to replace a player before play begins?</strong> Change the meet roster, then return here and apply the updated rosters to the prepared pairings.</p>
+          <div className={styles.toolbar}>
+            {dirty ? <span aria-disabled="true">Change meet roster</span> : <Link className={styles.button} href={lineupHref}>Change meet roster</Link>}
+            <button disabled={dirty || disabled} onClick={() => void change("refresh-lineups")}>Apply updated meet rosters</button>
+          </div>
+        </div>}
         {review && <div className={styles.review} role="region" aria-label={review === "submit" ? "Confirm meet submission" : "Confirm official approval"}>
           <h3>{review === "submit" ? "Submit the complete meet?" : `Approve revision ${batch.revision}?`}</h3>
           <p>{review === "submit" ? "Check both clubs’ signed sheets, actual players, stopped injury scores and any weather decisions. This sends the whole saved meet to the organizer." : "This exact saved revision becomes official for standings and starts rating updates for completed doubles games. Retirements, unplayed forfeits and rotating singles do not change ratings."}</p>

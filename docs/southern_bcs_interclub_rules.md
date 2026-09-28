@@ -152,11 +152,23 @@ history of submitted lineups and exceptions must be retained. A newly entered
 late team uses the explicit organizer exception workflow, not a silent deadline
 bypass.
 
+In Run meet, **Change meet roster** opens the selected meet's lineups. After
+saving the roster there, **Apply updated meet rosters** updates the prepared
+pairings before play. Women's and men's partners are already fixed by the
+roster. **Change mixed partners before play** only rearranges the existing four
+players into the two mixed pairs; it does not add a substitute.
+
 After the meet begins, substitutions are allowed **only for injury, between
 games**. The replacement must be in the approved season pool, eligible for the
 skill level, and preserve the required team composition. No routine tactical
 changes are allowed after play starts. Never rewrite the players attached to
 games that have already been played.
+
+Use **Substitute a player** on each game the substitute actually plays. The
+picker uses the club's eligible season pool, including players outside the
+starting four. Retain the injured player on the interrupted game, record the
+injury reason, and enter the replacement on the following game. The game's
+actual players are shown separately from the starting pair.
 
 For rescheduled unfinished matchups, a club may select a **new eligible lineup**
 from its approved pool. Players who completed matchups on the original date stay
