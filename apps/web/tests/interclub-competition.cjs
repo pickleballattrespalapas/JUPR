@@ -470,8 +470,12 @@ async function easySubstitutions() {
   await act(async () => button(tree, 'Carry substitute forward').props.onClick());
   await act(async () => button(tree, 'Save all draft scores').props.onClick());
   assert.equal(writes[0].expected_revision, 4);
+  assert.equal(button(tree, 'Undo substitution update'), undefined, 'Undo expires when the server confirms a saved revision');
   assert.equal(substitutions.reviewSubstitutions(writes[0].document).some(c => c.missingReason || c.returningGames.length), false);
   await act(async () => tree.unmount());
+  const historical = { ...review[0], row: { ...review[0].row, pairing: { ...review[0].row.pairing, eligibility_deadline: '2000-01-01T00:00:00Z' } } };
+  assert.equal(substitutions.substitutionEligibilityProblem(historical, [{ ...sub, eligibility_rating: 4.8 }], types.competitionPlayers(scoped), meet.roster_deadline), '', 'A historical weather pairing keeps its original eligibility snapshot');
+  assert.notEqual(substitutions.substitutionEligibilityProblem(historical, [{ ...sub, eligibility_rating: 4.8 }], types.competitionPlayers(scoped), '2000-01-01T00:00:00+00:00'), '', 'Equivalent timestamp spellings still validate current eligibility');
   const eligible = { ...sub, entry_id: 'sub-two', name: 'Eligible Substitute' };
   saved = { ...copy(scoped), eligible_players: { ...scoped.eligible_players, alpha: [...players.slice(0,4), { ...sub, gender: 'male' }, eligible] }, batch: { ...copy(batch), document: legacy } };
   await act(async () => { tree = create(React.createElement(workspace.MeetOperations, { root: 'https://api.test/meet-1', clubId: 'alpha', accessToken: 'token', phase: 'regular', context, clubName, onLock() {}, onSeasonChange() {} })); });
