@@ -112,7 +112,10 @@ export function replacementOptions(document: CompetitionDocument, row: GameRow, 
     !gamePlayers(row, side).includes(player.entry_id));
 }
 
-export function substitutionEligibilityProblem(change: SubstitutionReview, options: CompetitionPlayer[], players: Map<string, CompetitionPlayer>): string {
+export function substitutionEligibilityProblem(change: SubstitutionReview, options: CompetitionPlayer[], players: Map<string, CompetitionPlayer>, currentDeadline?: string): string {
+  // Completed pairings from an earlier weather date retain their old snapshot.
+  // The current pool cannot re-judge or rewrite those historical substitutions.
+  if (change.row.pairing.eligibility_deadline && currentDeadline && Date.parse(change.row.pairing.eligibility_deadline) !== Date.parse(currentDeadline)) return "";
   const player = options.find(item => item.entry_id === change.incoming);
   if (!player || !matchesSkillLevel(player, change.row.encounter.division)) return "Choose a replacement from this club’s eligible pool for this skill level.";
   const expected = change.row.pairing.kind === "women" ? "f" : change.row.pairing.kind === "men" ? "m" : gender(players.get(change.outgoing)?.gender);

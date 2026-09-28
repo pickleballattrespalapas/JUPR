@@ -130,7 +130,7 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
   }, [dirty]);
   useEffect(() => {
     const request = new AbortController(); setLoading(true); setError(""); setBlocked(false);
-    void competitionRequest<MeetCompetition>(root, token.current, request.signal).then(result => { if (!request.signal.aborted) { setDetail(result); setDraft(result.batch ? result.can_manage && result.batch.state === "draft" ? automaticDraftScores(result.batch.document) : result.batch.document : null); } })
+    void competitionRequest<MeetCompetition>(root, token.current, request.signal).then(result => { if (!request.signal.aborted) { setDetail(result); setUndoSubstitution(null); setDraft(result.batch ? result.can_manage && result.batch.state === "draft" ? automaticDraftScores(result.batch.document) : result.batch.document : null); } })
       .catch(cause => { if (!request.signal.aborted) setError(message(cause)); }).finally(() => { if (!request.signal.aborted) setLoading(false); });
     return () => { request.abort(); controller.current?.abort(); };
   }, [root, refresh]);
@@ -154,7 +154,7 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
       received = true;
       if (request.signal.aborted) return false;
       if (!result.batch || result.batch.meet_id !== detail.meet.id || result.batch.phase !== phase) { setBlocked(true); throw new Error("Could not confirm the saved meet. Reload before making another change."); }
-      setDetail(old => old ? { ...old, batch: result.batch } : old); setDraft(detail.can_manage && result.batch.state === "draft" ? automaticDraftScores(result.batch.document) : result.batch.document); setReview(null);
+      setUndoSubstitution(null); setDetail(old => old ? { ...old, batch: result.batch } : old); setDraft(detail.can_manage && result.batch.state === "draft" ? automaticDraftScores(result.batch.document) : result.batch.document); setReview(null);
       setStatus(action === "save" ? "All draft scores saved. Submit when every score sheet is entered." : action === "generate" ? "Pairings prepared. Review the players and print the meet packet." : action === "submit" ? `Revision ${result.batch.revision} submitted for organizer approval.` : action === "approve" ? "Official scores approved. Check rating status below before treating updates as complete." : action === "retry-ratings" ? "Rating update status refreshed." : action === "reopen" ? "Correction draft opened. Save, submit and approve the corrected scores again." : action === "refresh-lineups" ? "Eligible lineups refreshed for the unfinished pairings." : "The unfinished pairings are ready for the rescheduled meet. Confirm the new eligible lineup before printing.");
       if (["approve", "retry-ratings", "reschedule", "refresh-lineups"].includes(action)) onSeasonChange();
       return true;
@@ -202,7 +202,7 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
   if (!detail) return <div className={styles.error}><p role="alert">{error || "This meet could not be loaded."}</p><button onClick={() => setRefresh(value => value + 1)}>Retry loading meet</button></div>;
   const players = competitionPlayers(detail), count = draft ? gameCount(draft) : null;
   const substitutionPool = (change: SubstitutionReview) => detail.eligible_players?.[change.row.encounter[`club_${change.side}`]] || detail.teams.find(team => team.club_id === change.row.encounter[`club_${change.side}`] && team.division === change.row.encounter.division)?.roster || [];
-  const substitutionProblems = draft && batch?.state === "draft" ? reviewSubstitutions(draft).filter(change => change.missingReason || change.returningGames.length || substitutionEligibilityProblem(change, substitutionPool(change), players)) : [];
+  const substitutionProblems = draft && batch?.state === "draft" ? reviewSubstitutions(draft).filter(change => change.missingReason || change.returningGames.length || substitutionEligibilityProblem(change, substitutionPool(change), players, detail.meet.roster_deadline)) : [];
   const errorGame = draft && gameFromError(draft, error);
   const firstMissingOutcome = draft?.encounters.flatMap(encounter => encounter.pairings.flatMap(pairing => pairing.games)).find(game => !gameHasOutcome(game));
   const canRefreshStartingLineups = phase === "regular" && new Date(detail.meet.starts_at).getTime() > Date.now() && !!draft?.encounters.every(encounter => encounter.pairings.every(pairing => pairing.games.every(game => game.status === "pending" && game.a === null && game.b === null || ["forfeit", "double_forfeit"].includes(game.status) && (!pairing.players_a.length || !pairing.players_b.length))));
@@ -295,7 +295,7 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
       {!!substitutionProblems.length && <section className={styles.warning} aria-label="Substitutions needing attention">
         <h3>{substitutionProblems.length === 1 ? "One substitution needs attention" : `${substitutionProblems.length} substitutions need attention`}</h3>
         <p>Your scores are kept. Finish recording each injury once here.</p>
-        {substitutionProblems.map(change => <SubstitutionRepair key={`${change.gameId}:${change.side}`} document={draft} change={change} eligibilityProblem={substitutionEligibilityProblem(change, substitutionPool(change), players)} options={substitutionPool(change)} players={players} disabled={!editable} onRepair={repairSubstitution} onShow={() => goToGame(change.gameId)} />)}
+        {substitutionProblems.map(change => <SubstitutionRepair key={`${change.gameId}:${change.side}`} document={draft} change={change} eligibilityProblem={substitutionEligibilityProblem(change, substitutionPool(change), players, detail.meet.roster_deadline)} options={substitutionPool(change)} players={players} disabled={!editable} onRepair={repairSubstitution} onShow={() => goToGame(change.gameId)} />)}
       </section>}
       {undoSubstitution && <p className={styles.notice}>Substitution updated. <button disabled={!editable} onClick={() => edit(undoSubstitution)}>Undo substitution update</button></p>}
       <ScoreEditor document={draft} detail={detail} players={players} clubName={clubName} disabled={!editable} onChange={edit} divisionFilter={scoreDivision} onDivisionFilterChange={setScoreDivision} onScoreEntryEnd={finishScoreEntry} focusGame={focusGame} gameError={errorGame ? error : undefined} onSubstitution={document => { edit(document); setUndoSubstitution(draft); setStatus("Substitution applied to the remaining games. Save when ready."); }} />
