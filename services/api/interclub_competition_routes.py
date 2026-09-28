@@ -252,7 +252,10 @@ def _fixed_schedule(previous, current, current_deadline):
     after = {(row["id"], row["division"], row["club_a"], row["club_b"], row["rotation"]) for row in current["encounters"]}
     if before != after or previous["format"] != current["format"] or previous.get("schedule_mode", "simultaneous") != current.get("schedule_mode", "simultaneous"):
         raise HTTPException(422, "Keep the generated schedule. Create a new draft schedule before entering results to change opponents.")
-    old_pairs, new_pairs = _pairings(previous), _pairings(current)
+    # Compare aware datetimes, not their JSON spellings (+00:00, Z, or a local
+    # offset). This also keeps unchanged historical replay games comparable.
+    old_pairs = _pairings(CompetitionDocument.model_validate(previous).model_dump())
+    new_pairs = _pairings(CompetitionDocument.model_validate(current).model_dump())
     if old_pairs.keys() != new_pairs.keys():
         raise HTTPException(422, "Keep every scheduled doubles pairing in this meet.")
     prepared = _prepared_for_lineup_changes(previous)
@@ -286,7 +289,7 @@ def _fixed_schedule(previous, current, current_deadline):
         if old.get("eligibility_deadline") != new.get("eligibility_deadline"):
             raise HTTPException(422, "A pairing's eligibility deadline is set by the meet or official reschedule.")
         deadline = old.get("eligibility_deadline")
-        if deadline and datetime.fromisoformat(deadline.replace("Z", "+00:00")) != datetime.fromisoformat(current_deadline.replace("Z", "+00:00")) and old != new:
+        if deadline and deadline != datetime.fromisoformat(current_deadline.replace("Z", "+00:00")) and old != new:
             raise HTTPException(422, "Completed pairings from before the reschedule remain official and cannot be edited in the replay.")
 
 

@@ -747,3 +747,23 @@ def test_double_forfeit_status_cannot_have_fake_scores_or_a_winner():
 
 def test_two_double_forfeited_pairings_award_no_standings_points():
     assert matchup_points(["double_forfeit", "double_forfeit"]) == (0, 0)
+
+
+def test_injury_error_locates_changed_game_and_explains_repair():
+    doc = complete_doc(regular())
+    pair = doc["encounters"][0]["pairings"][0]
+    pair["games"][1]["players_a"] = [pair["players_a"][0], "reserve"]
+    with pytest.raises(ValueError, match="Game 2.*injury reason.*Substitute a player"):
+        validate_document(doc, official=True)
+
+
+def test_returning_injured_player_error_locates_later_game_before_requesting_reason():
+    doc = complete_doc(regular())
+    pair = doc["encounters"][0]["pairings"][0]
+    pair["games"][1].update(players_a=[pair["players_a"][0], "reserve"], injury_reason="Ankle injury")
+    # Game 3 inherits the starting players, accidentally bringing the injured
+    # player back. Adding another injury reason cannot make that legal.
+    with pytest.raises(ValueError, match="Game 3.*cannot return.*Select the substitute"):
+        validate_document(doc, official=True)
+    pair["games"][2]["players_a"] = pair["games"][1]["players_a"][:]
+    validate_document(doc, official=True)

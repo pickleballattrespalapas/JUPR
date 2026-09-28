@@ -205,3 +205,13 @@ downloading. The PDFs preserve court/wave order, recorded scores and outcomes,
 actual-player substitutions, eligibility deadlines and championship tiebreaks.
 The season timezone is used for dates and times; filenames include meet, date,
 scope and revision. Downloading never saves, submits or approves results.
+
+
+Doubles-game validation errors identify the skill level, wave/rotation, court when
+assigned, doubles pairing and game number. Injury errors explain where to add
+the reason or retain the substitute; an injured player's return is reported
+before asking for an injury reason that cannot make that return valid.
+Equivalent timezone spellings of a timestamp are the same instant for immutable
+schedule and replay checks. A score save must never treat `Z` versus `+00:00`
+as an eligibility change; genuinely different cutoffs and historical scores
+remain protected.

@@ -258,29 +258,38 @@ def validate_document(document: dict | CompetitionDocument, official: bool = Fal
                 players = pairing[f"players_{side}"]
                 if players:
                     _distinct_players(players, 2, "The scheduled doubles lineup")
-            for game in pairing["games"]:
-                _validate_game(game, pairing, doc, official=official)
-                if not official or game["status"] not in PLAYED:
-                    continue
-                for side in ("a", "b"):
-                    club = encounter[f"club_{side}"]
-                    actual_players = set(_lineup(pairing, game, side))
-                    base_players = set(pairing[f"players_{side}"])
-                    key = (club, encounter["division"], pairing["kind"], _cutoff(pairing))
-                    previous = current_lineups.get(key, base_players)
-                    if actual_players != previous:
-                        if not (game.get("injury_reason") or "").strip():
-                            raise ValueError("Record an injury reason for every change to the playing lineup.")
-                        injury_key = (club, encounter["division"], _cutoff(pairing))
-                        if actual_players & removed_players[injury_key]:
-                            raise ValueError("An injured player who was replaced cannot return later in this meet.")
-                        removed_players[injury_key].update(previous - actual_players)
-                    current_lineups[key] = actual_players
-                    round_key = (encounter["rotation"], club, encounter["division"], _cutoff(pairing), pairing["kind"])
-                    for other_key, other_players in played_in_round.items():
-                        if other_key[:4] == round_key[:4] and other_key[4] != pairing["kind"] and doc["phase"] == "regular" and actual_players & other_players:
-                            raise ValueError("A player cannot play both regular pairings in the same club matchup.")
-                    played_in_round[round_key].update(actual_players)
+            for number, game in enumerate(pairing["games"], 1):
+                try:
+                    _validate_game(game, pairing, doc, official=official)
+                    if not official or game["status"] not in PLAYED:
+                        continue
+                    for side in ("a", "b"):
+                        club = encounter[f"club_{side}"]
+                        actual_players = set(_lineup(pairing, game, side))
+                        base_players = set(pairing[f"players_{side}"])
+                        key = (club, encounter["division"], pairing["kind"], _cutoff(pairing))
+                        previous = current_lineups.get(key, base_players)
+                        if actual_players != previous:
+                            injury_key = (club, encounter["division"], _cutoff(pairing))
+                            if actual_players & removed_players[injury_key]:
+                                raise ValueError("An injured player who was replaced cannot return later in this meet. Select the substitute for this game, or correct the earlier substitution.")
+                            if not (game.get("injury_reason") or "").strip():
+                                raise ValueError("Record an injury reason for every change to the playing lineup. Open Substitute a player for this game and describe the replacement.")
+                            removed_players[injury_key].update(previous - actual_players)
+                        current_lineups[key] = actual_players
+                        round_key = (encounter["rotation"], club, encounter["division"], _cutoff(pairing), pairing["kind"])
+                        for other_key, other_players in played_in_round.items():
+                            if other_key[:4] == round_key[:4] and other_key[4] != pairing["kind"] and doc["phase"] == "regular" and actual_players & other_players:
+                                raise ValueError("A player cannot play both regular pairings in the same club matchup.")
+                        played_in_round[round_key].update(actual_players)
+                except ValueError as exc:
+                    round_name = "Wave" if doc["schedule_mode"] == "staggered" else "Rotation"
+                    kind = {"women": "Women's doubles", "men": "Men's doubles", "mixed_a": "Mixed A", "mixed_b": "Mixed B"}[pairing["kind"]]
+                    location = [f"Skill level {encounter['division']}", f"{round_name} {encounter['rotation']}"]
+                    if pairing.get("court") is not None:
+                        location.append(f"Court {pairing['court']}")
+                    location.extend([kind, f"Game {number}"])
+                    raise ValueError(f"{' · '.join(location)}: {exc}") from exc
         tie = encounter.get("tiebreak")
         if doc["phase"] == "regular" and tie is not None:
             raise ValueError("Regular-season matchups do not use a singles tiebreak.")
