@@ -141,6 +141,9 @@ test("interclub paper packet, score entry, approval and public results", async (
   const appliedBatch = (await substitutionResponse.json()).batch;
   const appliedPair = appliedBatch.document.encounters[0].pairings.find((p: { id: string }) => p.id === injuredPair.id);
   expect(appliedPair.games[0]).toEqual(injuredPair.games[0]);
+  for (const other of injuredEncounter.pairings.filter((p: { id: string }) => p.id !== injuredPair.id)) {
+    expect(appliedBatch.document.encounters[0].pairings.find((p: { id: string }) => p.id === other.id)).toEqual(other);
+  }
   for (const game of appliedPair.games.slice(1)) {
     expect(game.players_a).toContain(substitute.entry_id);
     expect(game.players_a).not.toContain(injuredPair.players_a[0]);
