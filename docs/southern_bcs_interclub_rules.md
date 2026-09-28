@@ -192,6 +192,10 @@ applies to the actual entrants at that level. Label schedules by actual club
 names, not mandatory host participation.
 
 Each pairing plays three games to **11, side-out scoring, win by two, no cap**.
+Play Games 1-3 consecutively against the same opponents on the assigned court
+before leaving, even when one pair wins the first two games. A staggered wave
+reserves each court for that full three-game block; the next wave starts after
+all pairings in the current wave finish.
 A normal completed pairing is won by taking at least two of its three games.
 At gender meets each player stays in the men's or women's pairing; at mixed
 meets the two submitted mixed pairings are used. Preserve the original plan's

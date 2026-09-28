@@ -15,6 +15,8 @@ export function scheduleRoundLabel(document: CompetitionDocument): string {
   return document.schedule_mode === "staggered" ? "Wave" : "Rotation";
 }
 
+export const regularCourtBlockInstructions = "Each court assignment covers Games 1-3 against the same opponents. Stay on that court and finish all three games, even at 2-0, before leaving.";
+
 export function scheduledEncounters(document: CompetitionDocument): CompetitionEncounter[] {
   return [...document.encounters].sort((a, b) => a.rotation - b.rotation ||
     Math.min(...a.pairings.map(p => p.court ?? 101)) - Math.min(...b.pairings.map(p => p.court ?? 101)) ||
@@ -47,9 +49,31 @@ export function competitionPlayers(detail: MeetCompetition): Map<string, Competi
 export function playerNames(ids: string[], players: Map<string, CompetitionPlayer>): string {
   return ids.length ? ids.map(id => players.get(id)?.name || "Player unavailable").join(" / ") : "Pairing not fielded";
 }
+export function isFinalScore(a: number | null, b: number | null, target = 11): boolean {
+  if (a === null || b === null || !Number.isInteger(a) || !Number.isInteger(b) || a < 0 || b < 0) return false;
+  const high = Math.max(a, b), low = Math.min(a, b);
+  return high >= target && high - low >= 2 && (high === target || high - low === 2);
+}
+export function automaticGameStatus(game: CompetitionGame): CompetitionGame {
+  if (game.status !== "pending" && game.status !== "completed") return game;
+  const status = isFinalScore(game.a, game.b) ? "completed" : "pending";
+  return status === game.status ? game : { ...game, status, winner: null };
+}
+export function automaticDraftScores(document: CompetitionDocument): CompetitionDocument {
+  return { ...document, encounters: document.encounters.map(encounter => ({ ...encounter,
+    pairings: encounter.pairings.map(pairing => ({ ...pairing, games: pairing.games.map(automaticGameStatus) })),
+    tiebreak: encounter.tiebreak ? { ...encounter.tiebreak, status: isFinalScore(encounter.tiebreak.a, encounter.tiebreak.b, 21) ? "completed" : "pending" } : null,
+  })) };
+}
+export function gameHasOutcome(game: CompetitionGame): boolean {
+  if (game.status === "completed") return isFinalScore(game.a, game.b);
+  if (game.status === "retired") return game.a !== null && game.b !== null && !!game.winner;
+  if (game.status === "forfeit") return !!game.winner;
+  return game.status === "double_forfeit" || game.status === "unplayed";
+}
 export function gameCount(document: CompetitionDocument): { entered: number; total: number } {
   const games = document.encounters.flatMap(encounter => encounter.pairings.flatMap(pairing => pairing.games));
-  return { entered: games.filter(game => game.status !== "pending").length, total: games.length };
+  return { entered: games.filter(gameHasOutcome).length, total: games.length };
 }
 export function toLocalInput(iso: string | null): string {
   if (!iso) return "";

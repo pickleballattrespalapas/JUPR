@@ -7,7 +7,7 @@ import { readBrowserWorkspace } from "@/lib/adminWorkspace";
 import { useAdminSession } from "@/lib/useAdminSession";
 import { useAdminWorkspace } from "@/lib/useAdminWorkspace";
 import { RegistrationSeason } from "@/lib/interclubRegistration";
-import { CompetitionBatch, CompetitionContext, CompetitionDocument, CompetitionFormat, CompetitionPhase, CompetitionScheduleMode, MeetCompetition, competitionPath, competitionPlayers, competitionRequest, fromLocalInput, gameCount, phaseLabels } from "@/lib/interclubCompetition";
+import { CompetitionBatch, CompetitionContext, CompetitionDocument, CompetitionFormat, CompetitionPhase, CompetitionScheduleMode, MeetCompetition, automaticDraftScores, competitionPath, competitionPlayers, competitionRequest, fromLocalInput, gameCount, gameHasOutcome, phaseLabels } from "@/lib/interclubCompetition";
 import ScoreEditor from "./ScoreEditor";
 import PrintPacket from "./PrintPacket";
 import Standings from "./Standings";
@@ -16,6 +16,7 @@ import CourtSchedule from "./CourtSchedule";
 import styles from "./competition.module.css";
 import InterclubWorkflow, { workflowHref } from "../InterclubWorkflow";
 import { useRegistrationWindow } from "@/lib/useRegistrationWindow";
+import type { MeetPdfScope } from "@/lib/interclubMeetPdf";
 
 export default function CompetitionWorkspace({ initialSeasonId, initialMeetId }: { initialSeasonId: string; initialMeetId: string }) {
   const { session, accessToken, loading } = useAdminSession();
@@ -72,7 +73,7 @@ export function CompetitionHome({ clubId, accessToken, initialSeasonId, initialM
   const when = (iso: string) => new Date(iso).toLocaleString(undefined, { timeZone: data?.season.details.timezone, dateStyle: "medium", timeStyle: "short" });
   return <main className={styles.page}>
     <p>{locked ? <span aria-disabled="true">← Interclub leagues</span> : <Link href="/admin/interclub">← Interclub leagues</Link>}</p>
-    <header><p className={styles.eyebrow}>Paper courts · One official score submission</p><h1>Meet operations</h1><p>Prepare and print the pairings, run the meet on paper, then bring all official scores back here.</p></header>
+    <header><p className={styles.eyebrow}>Paper courts · One official score submission</p><h1>Meet operations</h1><p>Prepare the pairings, download a PDF to review or print, then bring all official scores back here.</p></header>
     <div className={styles.toolbar}><label>Season<select value={seasonId} disabled={locked || !seasons.length} onChange={event => { setSeasonId(event.target.value); setMeetId(""); }}>
       {!seasons.length && <option value="">No accepted seasons</option>}{seasons.map(season => <option key={season.id} value={season.id}>{season.details.name} · {season.details.start_date}</option>)}
     </select></label><button disabled={loading || locked} onClick={() => setRefresh(value => value + 1)}>Refresh season</button>
@@ -106,13 +107,17 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
   const divisions = [...context.season.details.divisions].sort((a, b) => Number.parseFloat(a) - Number.parseFloat(b) || a.localeCompare(b, undefined, { numeric: true }));
   const [format, setFormat] = useState<CompetitionFormat>(phase === "regular" ? "gender" : "mlp"), [division, setDivision] = useState(divisions[0] || ""), [clubA, setClubA] = useState(""), [clubB, setClubB] = useState("");
   const [scheduleMode, setScheduleMode] = useState<CompetitionScheduleMode>("staggered");
+  const [scoreDivision, setScoreDivision] = useState("");
   const [review, setReview] = useState<"submit" | "approve" | null>(null), [reason, setReason] = useState(""), [startsAt, setStartsAt] = useState(""), [deadline, setDeadline] = useState("");
   const token = useRef(accessToken); token.current = accessToken;
   const pending = useRef(false), controller = useRef<AbortController | null>(null);
   const resultsReview = useRef<HTMLDivElement | null>(null);
   const followedNotification = useRef(false);
+  const [pdfBusy, setPdfBusy] = useState<MeetPdfScope | null>(null);
+  const pdfRequest = useRef<AbortController | null>(null);
+  useEffect(() => () => pdfRequest.current?.abort(), []);
   const dirty = !!draft && JSON.stringify(draft) !== JSON.stringify(detail?.batch?.document);
-  useEffect(() => { onLock(dirty || busy); return () => onLock(false); }, [dirty, busy, onLock]);
+  useEffect(() => { onLock(dirty || busy || !!pdfBusy); return () => onLock(false); }, [dirty, busy, pdfBusy, onLock]);
   useEffect(() => {
     if (!dirty) return;
     const protect = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
@@ -120,7 +125,7 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
   }, [dirty]);
   useEffect(() => {
     const request = new AbortController(); setLoading(true); setError(""); setBlocked(false);
-    void competitionRequest<MeetCompetition>(root, token.current, request.signal).then(result => { if (!request.signal.aborted) { setDetail(result); setDraft(result.batch?.document || null); } })
+    void competitionRequest<MeetCompetition>(root, token.current, request.signal).then(result => { if (!request.signal.aborted) { setDetail(result); setDraft(result.batch ? result.can_manage && result.batch.state === "draft" ? automaticDraftScores(result.batch.document) : result.batch.document : null); } })
       .catch(cause => { if (!request.signal.aborted) setError(message(cause)); }).finally(() => { if (!request.signal.aborted) setLoading(false); });
     return () => { request.abort(); controller.current?.abort(); };
   }, [root, refresh]);
@@ -144,7 +149,7 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
       received = true;
       if (request.signal.aborted) return false;
       if (!result.batch || result.batch.meet_id !== detail.meet.id || result.batch.phase !== phase) { setBlocked(true); throw new Error("Could not confirm the saved meet. Reload before making another change."); }
-      setDetail(old => old ? { ...old, batch: result.batch } : old); setDraft(result.batch.document); setReview(null);
+      setDetail(old => old ? { ...old, batch: result.batch } : old); setDraft(detail.can_manage && result.batch.state === "draft" ? automaticDraftScores(result.batch.document) : result.batch.document); setReview(null);
       setStatus(action === "save" ? "All draft scores saved. Submit when every score sheet is entered." : action === "generate" ? "Pairings prepared. Review the players and print the meet packet." : action === "submit" ? `Revision ${result.batch.revision} submitted for organizer approval.` : action === "approve" ? "Official scores approved. Check rating status below before treating updates as complete." : action === "retry-ratings" ? "Rating update status refreshed." : action === "reopen" ? "Correction draft opened. Save, submit and approve the corrected scores again." : action === "refresh-lineups" ? "Eligible lineups refreshed for the unfinished pairings." : "The unfinished pairings are ready for the rescheduled meet. Confirm the new eligible lineup before printing.");
       if (["approve", "retry-ratings", "reschedule", "refresh-lineups"].includes(action)) onSeasonChange();
       return true;
@@ -153,11 +158,30 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
       return false;
     } finally { pending.current = false; if (!request.signal.aborted) setBusy(false); }
   }
-  function edit(document: CompetitionDocument) { setDraft(document); setReview(null); setStatus(""); }
-  const disabled = busy || blocked, batch = detail?.batch, editable = detail?.can_manage && batch?.state === "draft" && !disabled;
+  function edit(document: CompetitionDocument) { setDraft(automaticDraftScores(document)); setReview(null); setStatus(""); }
+  async function downloadPdf(scope: MeetPdfScope) {
+    if (!detail?.batch || busy || dirty || blocked || pdfRequest.current) return;
+    const request = new AbortController(); pdfRequest.current = request;
+    setPdfBusy(scope); setError("");
+    try {
+      const { buildInterclubMeetPdf } = await import("@/lib/interclubMeetPdf");
+      const result = await buildInterclubMeetPdf({ document: detail.batch.document, meet: detail.meet,
+        seasonName: context.season.details.name, timezone: context.season.details.timezone,
+        revision: detail.batch.revision, players: competitionPlayers(detail), clubName }, scope);
+      if (request.signal.aborted || readBrowserWorkspace()?.clubId !== clubId) return;
+      await result.pdf.save(result.filename, { returnPromise: true });
+      if (!request.signal.aborted) setStatus(`${scope === "schedule" ? "Schedule" : "Full packet"} PDF downloaded (${result.pdf.getNumberOfPages()} pages).`);
+    } catch {
+      if (!request.signal.aborted) setError("Could not create the PDF. Try downloading again.");
+    } finally {
+      if (!request.signal.aborted) { pdfRequest.current = null; setPdfBusy(null); }
+    }
+  }
+  const disabled = busy || blocked || !!pdfBusy, batch = detail?.batch, editable = detail?.can_manage && batch?.state === "draft" && !disabled;
   if (loading) return <p role="status">Loading this meet…</p>;
   if (!detail) return <div className={styles.error}><p role="alert">{error || "This meet could not be loaded."}</p><button onClick={() => setRefresh(value => value + 1)}>Retry loading meet</button></div>;
   const players = competitionPlayers(detail), count = draft ? gameCount(draft) : null;
+  const firstMissingOutcome = draft?.encounters.flatMap(encounter => encounter.pairings.flatMap(pairing => pairing.games)).find(game => !gameHasOutcome(game));
   const canRefreshStartingLineups = phase === "regular" && new Date(detail.meet.starts_at).getTime() > Date.now() && !!draft?.encounters.every(encounter => encounter.pairings.every(pairing => pairing.games.every(game => game.status === "pending" && game.a === null && game.b === null || ["forfeit", "double_forfeit"].includes(game.status) && (!pairing.players_a.length || !pairing.players_b.length))));
   const qualification = context.standings?.qualification?.[division] || context.qualifying?.[division];
   const qualifyingClubs = phase === "final" ? qualification?.qualifiers : phase === "qualifier" ? qualification?.playoff_required : null;
@@ -191,7 +215,7 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
           </>}
           <button type="submit" className={styles.primary} disabled={alreadyScheduled || !hasPlayableLineups}>Generate pairings</button>
         </div></fieldset>
-        {phase === "regular" && <p>{scheduleMode === "staggered" ? `Matchups start in waves using up to ${detail.meet.courts} courts. Each full matchup uses two courts for its doubles pairings. Review the court schedule below after generating, then print it with the score sheets.` : `Each opponent rotation runs all divisions together. Generation checks that the draw fits the meet’s ${detail.meet.courts} available courts.`}</p>}
+        {phase === "regular" && <p>{scheduleMode === "staggered" ? `Matchups start in waves using up to ${detail.meet.courts} courts. Each full matchup uses two courts; each doubles pairing stays on its court for all three games before leaving. Review the court schedule after generating, then download the PDF.` : `Each opponent rotation runs all divisions together. Each doubles pairing stays on its court for all three games before leaving. Generation checks that the draw fits the meet’s ${detail.meet.courts} available courts.`}</p>}
         {phase !== "regular" && <p>Each club fields two women and two men. The server checks current skill eligibility, prior regular-season appearances and championship qualification.</p>}
         {alreadyScheduled && <p>{phase === "qualifier" ? "This qualifying pair is already in the packet. Choose another pair." : `Skill level ${division} is already in this packet. Choose another skill level to add its matchup.`}</p>}
         {phase !== "regular" && candidates.length < 2 && <p className={styles.notice}>Two qualifying clubs need approved lineups for this meet and skill level. Check the standings below and prepare their meet rosters first.</p>}
@@ -204,12 +228,17 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
       {phase === "regular" && <CourtSchedule document={batch.document} clubName={clubName} />}
       <div id="meet-results-review" ref={resultsReview} tabIndex={-1} className={styles.card} style={{ scrollMarginTop: "1rem" }}>
         <div className={styles.toolbar}><div><p className={styles.eyebrow}>{phaseLabels[phase]} · Revision {batch.revision}</p><h2>{batch.state === "draft" ? "Meet score draft" : batch.state === "submitted" ? "Awaiting organizer approval" : "Official meet results"}</h2><p>{count?.entered} of {count?.total} game outcomes entered{dirty ? " · Unsaved changes" : " · Saved"}</p></div>
-          <button onClick={() => window.print()} disabled={busy || dirty}>Print meet packet</button>
+          <div className={styles.toolbar}>
+            <button onClick={() => void downloadPdf("schedule")} disabled={disabled || dirty}>{pdfBusy === "schedule" ? "Creating schedule PDF…" : "Download schedule PDF"}</button>
+            <button onClick={() => void downloadPdf("packet")} disabled={disabled || dirty}>{pdfBusy === "packet" ? "Creating full packet PDF…" : "Download full packet PDF"}</button>
+            <button onClick={() => window.print()} disabled={disabled || dirty}>Print meet packet</button>
+          </div>
         </div>
+        <p>Schedule PDF: court assignments only. Full packet PDF: schedule, instructions and a score sheet for every club matchup.</p>
         {dirty && <p className={styles.notice}>Save your changes before printing or switching meets. <button disabled={busy} onClick={() => { setDraft(batch.document); setReview(null); }}>Discard unsaved changes</button></p>}
         {batch.state === "approved" && <p className={batch.ratings_status === "failed" ? styles.error : styles.notice}><strong>Rating updates: {batch.ratings_status.replaceAll("_", " ")}</strong>{batch.ratings_error ? ` — ${batch.ratings_error}` : batch.ratings_status === "completed" ? ". Both league and represented-club updates are complete." : ". Standings approval does not mean all rating updates have completed."}</p>}
         <div className={styles.toolbar}>
-          {editable && <><button className={styles.primary} disabled={!dirty} onClick={() => void change("save", { document: draft })}>Save all draft scores</button><button disabled={dirty || !count?.total || count.entered !== count.total} onClick={() => setReview("submit")}>Review and submit meet</button></>}
+          {editable && <><button className={styles.primary} disabled={!dirty} onClick={() => void change("save", { document: draft })}>Save all draft scores</button><button disabled={dirty || !count?.total} onClick={() => setReview("submit")}>Review and submit meet</button></>}
           {batch.state === "submitted" && detail.is_organizer && <button className={styles.primary} disabled={disabled} onClick={() => setReview("approve")}>Review official approval</button>}
           {batch.state === "approved" && detail.is_organizer && ["failed", "pending"].includes(batch.ratings_status) && <button disabled={disabled} onClick={() => void change("retry-ratings")}>Retry rating updates</button>}
           {(draft.weather === "rescheduled" || canRefreshStartingLineups) && editable && <button disabled={dirty || disabled} onClick={() => void change("refresh-lineups")}>{draft.weather === "rescheduled" ? "Refresh eligible replay lineups" : "Refresh approved lineups"}</button>}
@@ -217,7 +246,8 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
         {review && <div className={styles.review} role="region" aria-label={review === "submit" ? "Confirm meet submission" : "Confirm official approval"}>
           <h3>{review === "submit" ? "Submit the complete meet?" : `Approve revision ${batch.revision}?`}</h3>
           <p>{review === "submit" ? "Check both clubs’ signed sheets, actual players, stopped injury scores and any weather decisions. This sends the whole saved meet to the organizer." : "This exact saved revision becomes official for standings and starts rating updates for completed doubles games. Retirements, unplayed forfeits and rotating singles do not change ratings."}</p>
-          <div className={styles.toolbar}><button className={styles.primary} disabled={disabled || dirty} onClick={() => void change(review)}>{review === "submit" ? "Submit all official scores" : "Approve this revision"}</button><button disabled={busy} onClick={() => setReview(null)}>Keep reviewing</button></div>
+          {review === "submit" && firstMissingOutcome && <p className={styles.warning} role="alert">{count!.total - count!.entered} games still need a result. Enter both final scores, or choose an outcome under “No score or injury.” <a href={`#interclub-game-${firstMissingOutcome.id}`} onClick={() => setScoreDivision("")}>Go to the first incomplete game</a></p>}
+          <div className={styles.toolbar}><button className={styles.primary} disabled={disabled || dirty || review === "submit" && !!firstMissingOutcome} onClick={() => void change(review)}>{review === "submit" ? "Submit all official scores" : "Approve this revision"}</button><button disabled={busy} onClick={() => setReview(null)}>Keep reviewing</button></div>
         </div>}
         {detail.is_organizer && batch.state !== "draft" && <details><summary>Correct submitted or official scores</summary><p>Corrections create a new draft and must be submitted and approved again. The earlier result remains in the audit history.</p><label>Reason for correction<textarea value={reason} onChange={event => setReason(event.target.value)} /></label><button disabled={disabled || !reason.trim()} onClick={() => void change("reopen", { reason: reason.trim() })}>Open correction draft</button></details>}
       </div>
@@ -231,7 +261,7 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
           </fieldset>
         </form>}
       </details>
-      <ScoreEditor document={draft} detail={detail} players={players} clubName={clubName} disabled={!editable} onChange={edit} />
+      <ScoreEditor document={draft} detail={detail} players={players} clubName={clubName} disabled={!editable} onChange={edit} divisionFilter={scoreDivision} onDivisionFilterChange={setScoreDivision} />
       {editable && <div className={styles.bottomBar}><span>{dirty ? "Unsaved score changes" : "All draft changes saved"}</span><button className={styles.primary} disabled={!dirty || disabled} onClick={() => void change("save", { document: draft })}>Save all draft scores</button></div>}
       <PrintPacket document={batch.document} meet={detail.meet} seasonName={context.season.details.name} timezone={context.season.details.timezone} revision={batch.revision} players={players} clubName={clubName} />
     </>}

@@ -58,26 +58,43 @@ test("interclub paper packet, score entry, approval and public results", async (
   expect(season.browser_batch.document.schedule_mode).toBe("staggered");
   await expect(page.getByRole("heading", { name: "Meet score draft", exact: true })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByRole("region", { name: "Court schedule", exact: true }).getByRole("columnheader", { name: "Wave", exact: true })).toBeVisible();
+  const courtSchedule = page.getByRole("region", { name: "Court schedule", exact: true });
+  await expect(courtSchedule.getByText(/finish all three games, even at 2-0, before leaving/)).toBeVisible();
+  await expect(courtSchedule.getByRole("cell", { name: "1-3", exact: true })).toHaveCount(
+    season.browser_batch.document.encounters.reduce((total: number, encounter: { pairings: unknown[] }) => total + encounter.pairings.length, 0));
   await page.screenshot({ path: join(reportDir, "interclub-staggered-schedule.png"), fullPage: true });
-  await expect(page.getByRole("button", { name: "Review and submit meet", exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "Review and submit meet", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Submit all official scores", exact: true })).toBeDisabled();
+  await expect(page.getByRole("link", { name: "Go to the first incomplete game", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Keep reviewing", exact: true }).click();
   await expect(page.getByRole("button", { name: "Print meet packet", exact: true })).toBeEnabled();
+  for (const scope of ["schedule", "full packet"]) {
+    const downloaded = page.waitForEvent("download");
+    await page.getByRole("button", { name: `Download ${scope} PDF`, exact: true }).click();
+    const download = await downloaded;
+    expect(download.suggestedFilename()).toMatch(/-(schedule|packet)-r1\.pdf$/);
+    const file = join(reportDir, `interclub-download-${scope.replace(" ", "-")}.pdf`);
+    await download.saveAs(file);
+    expect(readFileSync(file).subarray(0,5).toString()).toBe("%PDF-");
+  }
   await page.emulateMedia({ media: "print" });
   await page.pdf({ path: join(reportDir, "interclub-paper-packet.pdf"), format: "A4", printBackground: true });
   await page.emulateMedia({ media: "screen" });
-  const labels: Record<string,string> = { women: "Women’s doubles", men: "Men’s doubles" };
   const played = new Date(Date.now()-60_000).toISOString().slice(0,16);
   for (const encounter of season.browser_batch.document.encounters) {
     for (const pairing of encounter.pairings) {
       for (let i=0;i<pairing.games.length;i++) {
-        await page.getByLabel(`${labels[pairing.kind]} game ${i+1} status`, { exact: true }).selectOption("completed");
         await page.getByLabel(`${pairing.id} game ${i+1} club A score`, { exact: true }).fill("11");
         await page.getByLabel(`${pairing.id} game ${i+1} club B score`, { exact: true }).fill("9");
+        await expect(page.locator(`[id="interclub-game-${pairing.games[i].id}"]`).getByText("Completed", { exact: true })).toBeVisible();
       }
     }
   }
   for (const input of await page.getByLabel("Actual time played (your device’s time)", { exact: true }).all()) await input.fill(played);
   await expect(page.getByRole("combobox", { name: /^Season/ })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Print meet packet", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Download schedule PDF", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Download full packet PDF", exact: true })).toBeDisabled();
   const save = page.waitForResponse(r => r.url() === apiRoot && r.request().method() === "PUT");
   await page.getByRole("button", { name: "Save all draft scores", exact: true }).first().click();
   expect((await save).status()).toBe(200);
