@@ -54,14 +54,14 @@ export function isFinalScore(a: number | null, b: number | null, target = 11): b
   const high = Math.max(a, b), low = Math.min(a, b);
   return high >= target && high - low >= 2 && (high === target || high - low === 2);
 }
-export function automaticGameStatus(game: CompetitionGame): CompetitionGame {
-  if (game.status !== "pending" && game.status !== "completed") return game;
-  const status = isFinalScore(game.a, game.b) ? "completed" : "pending";
-  return status === game.status ? game : { ...game, status, winner: null };
+export function automaticGameStatus(game: CompetitionGame, enteredAt = new Date().toISOString()): CompetitionGame {
+  const status = game.status === "pending" || game.status === "completed" ? isFinalScore(game.a, game.b) ? "completed" : "pending" : game.status;
+  const played_at = !game.played_at && (status === "completed" || status === "retired") ? enteredAt : game.played_at;
+  return status === game.status && played_at === game.played_at ? game : { ...game, status, played_at, ...(status !== game.status ? { winner: null } : {}) };
 }
-export function automaticDraftScores(document: CompetitionDocument): CompetitionDocument {
+export function automaticDraftScores(document: CompetitionDocument, enteredAt = new Date().toISOString()): CompetitionDocument {
   return { ...document, encounters: document.encounters.map(encounter => ({ ...encounter,
-    pairings: encounter.pairings.map(pairing => ({ ...pairing, games: pairing.games.map(automaticGameStatus) })),
+    pairings: encounter.pairings.map(pairing => ({ ...pairing, games: pairing.games.map(game => automaticGameStatus(game, enteredAt)) })),
     tiebreak: encounter.tiebreak ? { ...encounter.tiebreak, status: isFinalScore(encounter.tiebreak.a, encounter.tiebreak.b, 21) ? "completed" : "pending" } : null,
   })) };
 }

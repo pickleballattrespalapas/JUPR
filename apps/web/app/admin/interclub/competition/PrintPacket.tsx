@@ -34,7 +34,7 @@ export function PrintPacketContent({ document, meet, seasonName, timezone, revis
       <h3>At the courts</h3>
       <ul>
         <li>{document.phase === "regular" ? "Play all three games in every doubles pairing. Each player plays 3, 6 or 9 games for a two-, three- or four-club field." : "Play women’s doubles, men’s doubles and both mixed doubles games. At 2–2, play the rotating singles tiebreak."}</li>
-        <li>Doubles use side-out scoring to 11, win by two, no cap. Record both scores and the time played.</li>
+        <li>Doubles use side-out scoring to 11, win by two, no cap. Record both scores. Game dates are recorded automatically when scores are entered.</li>
         <li>Both clubs check the players and scores, then sign this sheet. Return all sheets together to the meet organizer.</li>
         <li>Injury: concede only the interrupted game; record the actual stopped score and the winning club. An eligible substitute may enter between games only. Record their name and injury reason.</li>
         <li>{document.phase === "regular" ? "Missing pairing: mark its three games “forfeit.” Do not invent 11–0 scores. The other pairing still plays." : "Missing doubles pairing: mark its game “forfeit” and identify the winning club. Do not invent an 11–0 score. Continue the other doubles games."}</li>
@@ -51,9 +51,10 @@ export function PrintPacketContent({ document, meet, seasonName, timezone, revis
         <h3>{pairingLabels[pairing.kind]} · Court {pairing.court || "____"}{document.phase === "regular" ? " · Games 1-3 on this court" : ""}</h3>
         <p><strong>A · {clubName(encounter.club_a)}:</strong> {playerNames(pairing.players_a, players)}<br /><strong>B · {clubName(encounter.club_b)}:</strong> {playerNames(pairing.players_b, players)}</p>
         {pairing.eligibility_deadline && <p>Eligibility locked: {when(pairing.eligibility_deadline)}</p>}
-        <table><thead><tr><th>Game</th><th>A score</th><th>B score</th><th>Time played</th><th>Complete / injury / forfeit / unplayed</th><th>Winner</th></tr></thead><tbody>
-          {pairing.games.map((game, index) => <tr key={game.id}><td>{index + 1}</td><td>{game.a ?? ""}</td><td>{game.b ?? ""}</td><td>{["completed", "retired"].includes(game.status) && game.played_at ? when(game.played_at) : ""}</td><td>{{ pending: "", completed: "Completed", retired: "Injury", forfeit: "Forfeit", double_forfeit: "Both forfeit", unplayed: "Unplayed" }[game.status]}</td><td>{game.winner?.toUpperCase() || ""}</td></tr>)}
+        <table><thead><tr><th>Game</th><th>A score</th><th>B score</th><th>Complete / injury / forfeit / unplayed</th><th>Winner</th></tr></thead><tbody>
+          {pairing.games.map((game, index) => <tr key={game.id}><td>{index + 1}</td><td>{game.a ?? ""}</td><td>{game.b ?? ""}</td><td>{{ pending: "", completed: "Completed", retired: "Injury", forfeit: "Forfeit", double_forfeit: "Both forfeit", unplayed: "Unplayed" }[game.status]}</td><td>{game.winner?.toUpperCase() || ""}</td></tr>)}
         </tbody></table>
+        {pairing.games.filter(game => ["completed", "retired"].includes(game.status) && game.played_at && new Date(game.played_at).toLocaleDateString("en-US", { timeZone: timezone }) !== new Date(meet.starts_at).toLocaleDateString("en-US", { timeZone: timezone })).map(game => <p key={`date-${game.id}`}>Game {pairing.games.indexOf(game) + 1} recorded date: {when(game.played_at!)}</p>)}
         {pairing.games.filter(game => game.players_a.length || game.players_b.length || game.injury_reason).map((game) => <p key={game.id}>Game {pairing.games.indexOf(game) + 1} actual players — A: {playerNames(game.players_a.length ? game.players_a : pairing.players_a, players)}; B: {playerNames(game.players_b.length ? game.players_b : pairing.players_b, players)}.{game.injury_reason ? ` Injury note: ${game.injury_reason}` : ""}</p>)}
         <p>Injury / replacement player and game: _______________________________________________________</p>
       </section>)}

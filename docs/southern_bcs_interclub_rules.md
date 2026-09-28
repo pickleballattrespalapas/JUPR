@@ -232,8 +232,8 @@ Generate a printable package containing:
 - Eligible lineups and printable matchup sheets with space for all three game
   scores per pairing.
 - Injury, replacement, forfeit, delay, cancellation, and replay annotations.
-- The identities of players who actually played each game and its actual play
-  date, especially when a meet spans original and rescheduled dates.
+- The identities of players who actually played each game and any previously
+  recorded game dates, especially when a meet spans original and replay dates.
 - Space for both sides to verify scores, plus a consolidated meet results sheet.
 
 Enter or import the complete set of **official meet scores together afterward**.
@@ -468,9 +468,16 @@ regular-season standings pairings or earn bonuses twice.
   not rating approval.
 - League and club rating calculations are separate streams; do not copy league
   deltas blindly into club ratings or update unrelated clubs.
-- Preserve chronological actual play order, including local club games occurring
-  between interclub games and original/rescheduled meet dates. Upload time is
-  not the sporting event time.
+- Score entry uses the current date from the entry device automatically. Tab moves from one
+  team's score to the other, then to the next game; Shift+Tab moves back. The
+  final Tab reaches Save all draft scores. No individual date/time entry is
+  required. Esc reaches the current game's exception controls.
+- Preserve existing recorded dates and original/rescheduled meet history.
+  Newly scored games keep their first recorded entry timestamp for rating
+  chronology; corrections and later submission do not move that date. Games
+  with the same timestamp follow the saved schedule sequence. This entry date
+  is independent of the planned meet date. Before an early staging rehearsal,
+  close its roster cutoff and freeze eligibility so results can be approved.
 - Corrections automatically recalculate affected league and represented-club
   rating histories. Retain original/corrected result and approval audit records.
 - Approval, retry, replay, and repeated imports must not double-count a game.

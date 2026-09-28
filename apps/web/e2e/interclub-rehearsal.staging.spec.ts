@@ -48,7 +48,10 @@ test("interclub paper packet, score entry, approval and public results", async (
     url: origin, secure: true, sameSite: "Lax" }]);
   const route = `/admin/interclub/competition?season=${season.id}&meet=${season.browser_meet}`;
   const apiRoot = `${expectedApiOrigin}/admin/clubs/${club}/interclub/competition/${season.id}/meets/${season.browser_meet}/regular`;
+  const initialMeet = page.waitForResponse(r => r.url() === apiRoot && r.request().method() === "GET");
   await page.goto(route);
+  const scheduledMeetDate = (await (await initialMeet).json()).meet.starts_at;
+  expect(Date.parse(scheduledMeetDate)).toBeGreaterThan(Date.now());
   await expect(page.getByRole("combobox", { name: "Court schedule", exact: true })).toHaveValue("staggered", { timeout: 30_000 });
   const generation = page.waitForResponse(r => r.url() === apiRoot+"/generate" && r.request().method() === "POST");
   await page.getByRole("button", { name: "Generate pairings", exact: true }).click();
@@ -80,24 +83,38 @@ test("interclub paper packet, score entry, approval and public results", async (
   await page.emulateMedia({ media: "print" });
   await page.pdf({ path: join(reportDir, "interclub-paper-packet.pdf"), format: "A4", printBackground: true });
   await page.emulateMedia({ media: "screen" });
-  const played = new Date(Date.now()-60_000).toISOString().slice(0,16);
-  for (const encounter of season.browser_batch.document.encounters) {
-    for (const pairing of encounter.pairings) {
-      for (let i=0;i<pairing.games.length;i++) {
-        await page.getByLabel(`${pairing.id} game ${i+1} club A score`, { exact: true }).fill("11");
-        await page.getByLabel(`${pairing.id} game ${i+1} club B score`, { exact: true }).fill("9");
-        await expect(page.locator(`[id="interclub-game-${pairing.games[i].id}"]`).getByText("Completed", { exact: true })).toBeVisible();
-      }
-    }
+  const scoreInputs = page.locator("input[data-interclub-score]");
+  const scoreCount = await scoreInputs.count();
+  expect(scoreCount).toBe(12);
+  await expect(page.getByLabel("Actual time played (your device’s time)", { exact: true })).toHaveCount(0);
+  const entryStartedAt = await page.evaluate(() => Date.now());
+  await scoreInputs.first().click();
+  await page.keyboard.type("5");
+  await page.keyboard.press("Tab");
+  await expect(scoreInputs.nth(1)).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(scoreInputs.first()).toBeFocused();
+  for (let index = 0; index < scoreCount; index++) {
+    await expect(scoreInputs.nth(index)).toBeFocused();
+    await page.keyboard.type(index % 2 ? "9" : "11");
+    await expect(scoreInputs.nth(index)).toHaveValue(index % 2 ? "9" : "11");
+    await page.keyboard.press("Tab");
   }
-  for (const input of await page.getByLabel("Actual time played (your device’s time)", { exact: true }).all()) await input.fill(played);
+  await expect(page.getByRole("button", { name: "Save all draft scores", exact: true }).last()).toBeFocused();
+  await expect(page.locator("[data-score-game]").getByText("Completed", { exact: true })).toHaveCount(scoreCount / 2);
   await expect(page.getByRole("combobox", { name: /^Season/ })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Print meet packet", exact: true })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Download schedule PDF", exact: true })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Download full packet PDF", exact: true })).toBeDisabled();
   const save = page.waitForResponse(r => r.url() === apiRoot && r.request().method() === "PUT");
-  await page.getByRole("button", { name: "Save all draft scores", exact: true }).first().click();
-  expect((await save).status()).toBe(200);
+  await page.keyboard.press("Enter");
+  const savedScores = await save;
+  expect(savedScores.status()).toBe(200);
+  for (const encounter of (await savedScores.json()).batch.document.encounters) for (const pairing of encounter.pairings) for (const game of pairing.games) {
+    expect(Date.parse(game.played_at)).toBeGreaterThanOrEqual(entryStartedAt);
+    expect(Date.parse(game.played_at)).toBeLessThanOrEqual(await page.evaluate(() => Date.now()));
+    expect(Date.parse(game.played_at)).toBeLessThan(Date.parse(scheduledMeetDate));
+  }
   await expect(page.getByText("All draft changes saved", { exact: true })).toBeVisible();
   await page.reload();
   await expect(page.getByRole("button", { name: "Review and submit meet", exact: true })).toBeEnabled();

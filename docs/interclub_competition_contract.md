@@ -87,7 +87,13 @@ Operational default: the other pairing's winner earns 3 points and its loser 0;
 two double-forfeited pairings earn neither club a point.
 Empty per-game player arrays inherit that pairing's lineup. Changed actual
 players require an injury reason and must be eligible replacements verified by
-the API. Completed/retired games require an actual `played_at` timestamp.
+the API. The browser stamps completed/retired games with its current device
+time for `played_at` when no date was previously recorded. This is the score
+entry date, independent of the future or past scheduled meet date; operators
+do not enter individual game dates or times. Existing recorded dates
+and completed pairings retained from an earlier meet date remain unchanged.
+Unplayed outcomes receive no date. The exact saved revision is still required
+for submission and approval.
 
 An MLP tiebreak has `{status, a, b, order_a, order_b}`. A completed 2–2 encounter
 requires a completed tiebreak to 21, win by two, no cap. Each order lists its four
@@ -114,8 +120,9 @@ it is derived from the skill level. This game never affects individual ratings.
   for a full matchup); each pairing keeps that court for Games 1-3 against
   the same opponents before leaving, including when the result is already 2-0.
   Missing pairings consume no court. A wave starts after
-  the preceding wave finishes its three-game pairings; no estimated timestamp
-  is substituted for the actual game time. Three-club entries retain their byes.
+  the preceding wave finishes its three-game pairings. All newly scored games
+  use their device entry date; no estimated wave times are required.
+  Three-club entries retain their byes.
   Matchup, pairing and game IDs are unchanged by scheduling mode.
 
 The regular `/generate` request accepts `schedule_mode: "simultaneous" |
@@ -138,8 +145,8 @@ available. Weather replays retain the existing historical schedule.
   Persist the previous revision in the audit history.
 - `summarize_document(document)`: results per encounter and game/stat totals.
 - `rating_games(document)`: only fully completed doubles games, flattened with
-  source IDs, club/entry identities, score, actual play timestamp, and integer
-  `sequence`. Equal actual timestamps use schedule order (rotation, game number,
+  source IDs, club/entry identities, score, recorded entry timestamp, and integer
+  `sequence`. Equal timestamps use schedule order (rotation, game number,
   pairing order, matchup ID), never random game UUID order. Call only
   on the organizer-approved exact document revision.
 - `league_standings(documents, clubs=None)`: `{divisions: {division: [rows]},

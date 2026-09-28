@@ -246,9 +246,12 @@ async function automaticScoreEntry() {
   await act(async () => { tree = create(React.createElement(ScoreEditor, { ...props, document: next })); });
   await update('women game 1 club A score', '11');
   assert.equal(current().status, 'pending', 'One score is not a complete result');
+  const entryStartedAt = Date.now();
   await update('women game 1 club B score', '0');
   assert.equal(current().status, 'completed', '11-0 completes automatically without selecting a status');
-  assert.equal(current().played_at, null, 'Score entry never invents the actual play time');
+  const entryTime = current().played_at;
+  assert.ok(Date.parse(entryTime) >= entryStartedAt && Date.parse(entryTime) <= Date.now(), 'Completion records the current device time, independent of the future schedule');
+  assert.equal(tree.root.findAllByProps({ type: 'datetime-local' }).length, 0, 'No per-game date or time entry');
   assert.equal(types.gameCount(next).entered, 1);
   const outcome = tree.root.findByProps({ 'aria-label': 'Women’s doubles game 1 status' });
   assert.equal(outcome.props.value, 'automatic');
@@ -262,6 +265,7 @@ async function automaticScoreEntry() {
   assert.ok(text(tree).includes('A final score must reach 11'));
   await update('women game 1 club B score', '12');
   assert.equal(current().status, 'completed', '10-12 is a valid win-by-two result');
+  assert.equal(current().played_at, entryTime, 'Corrections preserve the first entry date');
   await update('women game 1 club B score', '13');
   assert.equal(current().status, 'pending', '13-10 is past the first winning score');
   await update('Women’s doubles game 1 status', 'retired');
@@ -304,8 +308,9 @@ async function automaticScoreEntry() {
 async function savedScoreCompletion() {
   let saved = copy(detail), tree, requests = [];
   for (const pairing of saved.batch.document.encounters[0].pairings) for (const game of pairing.games) {
-    game.a = 5; game.b = 11; // Reproduce the user's saved pending scores.
+    game.a = 5; game.b = 11; game.played_at = null; // Reproduce saved pending scores without a recorded date.
   }
+  const loadedAt = Date.now();
   const original = JSON.stringify(saved.batch.document);
   global.fetch = async (url, options) => {
     if (options.method) {
@@ -324,7 +329,7 @@ async function savedScoreCompletion() {
   assert.equal(button(tree, 'Review and submit meet').props.disabled, true, 'Inferred statuses must be saved before submitting');
   await act(async () => { await button(tree, 'Save all draft scores').props.onClick(); });
   assert.equal(requests[0].body.expected_revision, 4);
-  assert.ok(requests[0].body.document.encounters[0].pairings.every(pairing => pairing.games.every(game => game.status === 'completed' && game.a === 5 && game.b === 11)));
+  assert.ok(requests[0].body.document.encounters[0].pairings.every(pairing => pairing.games.every(game => game.status === 'completed' && game.a === 5 && game.b === 11 && Date.parse(game.played_at) >= loadedAt && Date.parse(game.played_at) <= Date.now())));
   assert.equal(button(tree, 'Review and submit meet').props.disabled, false);
   await act(async () => { button(tree, 'Review and submit meet').props.onClick(); });
   await act(async () => { await button(tree, 'Submit all official scores').props.onClick(); });
@@ -341,6 +346,12 @@ async function savedScoreCompletion() {
     assert.equal(tree.root.findByType(ScoreEditor).props.document.encounters[0].pairings[0].games[0].status, 'pending', 'Read-only and official documents retain their exact saved outcome');
     await act(async () => tree.unmount());
   }
+  const recorded = { ...game('recorded'), status: 'completed', a: 11, b: 9, played_at: '2026-09-28T10:45:00-07:00' };
+  assert.equal(types.automaticGameStatus(recorded, '2026-09-29T00:01:00Z').played_at, recorded.played_at, 'Later saves and day changes preserve already recorded dates');
+  for (const status of ['pending','forfeit','double_forfeit','unplayed']) {
+    assert.equal(types.automaticGameStatus({ ...game('unplayed'), status, a: null, b: null, played_at: null }).played_at, null, 'Unplayed outcomes have no entry timestamp');
+  }
+  assert.equal(types.automaticGameStatus({ ...game('injured'), status: 'retired', a: 4, b: 7, played_at: null }, recorded.played_at).played_at, recorded.played_at);
   for (const score of [[11,0],[11,9],[12,10],[102,100]]) assert.ok(types.isFinalScore(...score));
   for (const score of [[11,null],[null,0],[10,0],[11,10],[14,8],[11,-1],[11,1.5],[Infinity,0]]) assert.equal(types.isFinalScore(...score), false);
   for (const status of ['retired','forfeit','double_forfeit','unplayed']) assert.equal(types.automaticGameStatus({ ...game('special'), status, a: 11, b: 5 }).status, status, 'Explicit exceptional outcomes are never auto-completed');
@@ -390,7 +401,7 @@ function printSafety() {
   const markup = renderToStaticMarkup(React.createElement(PrintPacket, { document, meet, seasonName: 'Southern BCS', timezone: 'America/Mazatlan', revision: 4, players: types.competitionPlayers(detail), clubName }));
   assert.ok(markup.includes('&lt;script&gt;alert(1)&lt;/script&gt;'), 'Player labels are escaped in print HTML');
   assert.ok(!markup.includes('<script>'));
-  assert.ok(markup.includes('Court assignments') && markup.includes('Verified by club A') && markup.includes('Time played'));
+  assert.ok(markup.includes('Court assignments') && markup.includes('Verified by club A') && !markup.includes('Time played'));
   assert.ok(markup.includes('all three games') && markup.includes('injury / forfeit / unplayed'));
   assert.equal(types.gameCount(document).total, 6, 'Two club matchup has two three-game pairings, three games per player');
   const final = copy(document); final.phase = 'final'; final.encounters[0].division = '4.0';
