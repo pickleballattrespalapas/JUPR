@@ -13,6 +13,10 @@ const registration = load('lib/interclubRegistration.ts');
 const types = load('lib/interclubCompetition.ts', { './interclubRegistration': registration });
 const css = new Proxy({}, { get: (_, key) => key === '__esModule' ? false : key });
 const common = { '@/lib/interclubCompetition': types, './competition.module.css': css };
+const substitutions = load('lib/interclubSubstitutions.ts', { './interclubCompetition': types });
+common['@/lib/interclubSubstitutions'] = substitutions;
+common['./SubstitutionRepair'] = load(base + 'SubstitutionRepair.tsx', common);
+common['./InjurySubstitutionEditor'] = load(base + 'InjurySubstitutionEditor.tsx', common);
 common['./CourtSchedule'] = load(base + 'CourtSchedule.tsx', common);
 const ScoreEditor = load(base + 'ScoreEditor.tsx', common).default;
 const PrintPacket = load(base + 'PrintPacket.tsx', common).PrintPacketContent;
@@ -392,8 +396,91 @@ async function playUpReplacementEligibility() {
   await act(async () => tree.update(React.createElement(ScoreEditor, { ...props, document: next })));
   const updatedGame = tree.root.findByProps({ id: 'interclub-game-w2' });
   assert.ok(updatedGame.findAllByType('p').some(node => nodeText(node).includes('Players for Game 2: Play Up Player')), 'The actual substituted lineup is visible beside its game');
-  await act(async () => updatedGame.findByType('textarea').props.onChange({ target: { value: 'Ankle injury; substitute entered before game 2.' } }));
+  await act(async () => updatedGame.findAllByType('textarea').find(node => node.props.placeholder === 'Injury').props.onChange({ target: { value: 'Ankle injury; substitute entered before game 2.' } }));
   assert.equal(next.encounters[0].pairings[0].games[1].injury_reason, 'Ankle injury; substitute entered before game 2.');
+  await act(async () => tree.unmount());
+}
+
+
+async function easySubstitutions() {
+  const original = copy(document);
+  for (const row of substitutions.competitionGameRows(original)) Object.assign(row.game, { status: 'completed', a: 11, b: 5 });
+  const later = copy(original.encounters[0]); later.id = 'later'; later.rotation = 2; later.club_a = 'gamma'; later.club_b = 'alpha';
+  for (const p of later.pairings) { p.id += '-later'; p.players_b = p.players_a; p.players_a = p.players_a.map(id => id + '-gamma'); p.games.forEach(g => { g.id += '-later'; }); }
+  original.encounters.unshift(later);
+  const legacy = copy(original), source = legacy.encounters[1].pairings[0].games[1];
+  source.players_a = ['sub-one', 'entry-1'];
+  const review = substitutions.reviewSubstitutions(legacy);
+  assert.equal(review.length, 1, 'One incomplete substitution is grouped across opponents');
+  assert.equal(review[0].missingReason, true);
+  assert.deepEqual(review[0].returningGames, ['w3', 'w1-later', 'w2-later', 'w3-later']);
+  const fixed = substitutions.substituteForRemainingGames(legacy, review[0]);
+  assert.equal(fixed.changedGames, 5);
+  assert.equal(substitutions.reviewSubstitutions(fixed.document).some(c => c.missingReason || c.returningGames.length), false);
+  const rows = substitutions.competitionGameRows(fixed.document);
+  assert.deepEqual(rows.find(r => r.game.id === 'w1').game, substitutions.competitionGameRows(original).find(r => r.game.id === 'w1').game, 'Earlier scored game is unchanged');
+  for (const row of rows) {
+    const old = substitutions.competitionGameRows(original).find(r => r.game.id === row.game.id);
+    for (const key of ['a', 'b', 'status', 'winner', 'played_at']) assert.deepEqual(row.game[key], old.game[key], `Substitution preserves ${key}`);
+    assert.deepEqual(row.pairing.players_a, old.pairing.players_a, 'Starting pair remains intact');
+  }
+  assert.deepEqual(fixed.document.encounters[0].pairings[0].games[0].players_b, ['sub-one', 'entry-1'], 'Replacement follows the club when it switches sides');
+  assert.deepEqual(legacy.encounters[0].pairings[0].games[0].players_b, [], 'Repair does not mutate the source draft');
+  const chain = copy(legacy); Object.assign(chain.encounters[0].pairings[0].games[1], { players_b: ['sub-two', 'entry-1'], injury_reason: 'Second injury' });
+  const chained = substitutions.substituteForRemainingGames(chain, substitutions.reviewSubstitutions(chain)[0]).document;
+  assert.deepEqual(chained.encounters[0].pairings[0].games[1].players_b, ['sub-two', 'entry-1'], 'Later legitimate replacement stays in place');
+  assert.deepEqual(chained.encounters[0].pairings[0].games[2].players_b, ['sub-two', 'entry-1'], 'Repair respects later injury chains');
+  const replay = copy(legacy); replay.encounters[0].pairings.forEach(p => { p.eligibility_deadline = '2099-02-01T00:00:00Z'; });
+  assert.deepEqual(substitutions.substituteForRemainingGames(replay, review[0]).document.encounters[0], replay.encounters[0], 'A different replay cutoff has its own lineup');
+  assert.equal(substitutions.gameFromError(legacy, "Skill level 3.5 · Rotation 1 · Court 1 · Women's doubles · Game 2: Record an injury reason."), 'w2');
+  assert.throws(() => substitutions.substituteForRemainingGames(original, { gameId: 'w2', side: 'a', outgoing: 'entry-0', incoming: 'entry-1' }), /already playing/);
+
+  const sub = { entry_id: 'sub-one', name: 'Available Substitute', eligibility_rating: 3.2, gender: 'female' };
+  const scoped = { ...detail, eligible_players: { ...detail.eligible_players, alpha: [...detail.eligible_players.alpha, sub] } };
+  let next = copy(original), tree;
+  const props = { detail: scoped, players: types.competitionPlayers(scoped), clubName, disabled: false, onChange: value => { next = value; } };
+  await act(async () => { tree = create(React.createElement(ScoreEditor, { ...props, document: next })); });
+  const form = () => tree.root.findByProps({ id: 'interclub-game-w2' }).findByType(common['./InjurySubstitutionEditor'].default);
+  await act(async () => form().findAllByType('select').find(node => !node.props.hidden).props.onChange({ target: { value: 'a:entry-0' } }));
+  await act(async () => form().findAllByType('select').find(node => node.props.hidden).props.onChange({ target: { value: 'sub-one' } }));
+  await act(async () => form().findAllByType('button').find(node => nodeText(node) === 'Apply substitution to remaining games').props.onClick());
+  assert.deepEqual(next.encounters[1].pairings[0].games[2].players_a, ['sub-one', 'entry-1']);
+  assert.equal(next.encounters[1].pairings[0].games[1].injury_reason, 'Injury', 'No free-text explanation is required for a declared injury');
+  await act(async () => tree.unmount());
+
+  let saved = { ...copy(scoped), batch: { ...copy(batch), document: legacy } }, writes = [];
+  global.fetch = async (url, options) => {
+    if (options.method) { writes.push(JSON.parse(options.body)); saved.batch = { ...saved.batch, document: writes.at(-1).document, revision: saved.batch.revision + 1 }; return reply({ batch: saved.batch }); }
+    return reply(saved);
+  };
+  await act(async () => { tree = create(React.createElement(workspace.MeetOperations, { root: 'https://api.test/meet-1', clubId: 'alpha', accessToken: 'token', phase: 'regular', context, clubName, onLock() {}, onSeasonChange() {} })); });
+  assert.ok(text(tree).includes('One substitution needs attention'));
+  await act(async () => button(tree, 'Show this substitution').props.onClick());
+  assert.equal(tree.root.findByType(ScoreEditor).props.focusGame.id, 'w2');
+  assert.equal(tree.root.findByType(ScoreEditor).props.divisionFilter, '', 'Jump clears any skill-level filter');
+  await act(async () => button(tree, 'Carry substitute forward').props.onClick());
+  assert.ok(!text(tree).includes('One substitution needs attention'));
+  assert.equal(writes.length, 0, 'Repair stays a reviewable draft before saving');
+  await act(async () => button(tree, 'Undo substitution update').props.onClick());
+  assert.ok(text(tree).includes('One substitution needs attention'));
+  await act(async () => button(tree, 'Carry substitute forward').props.onClick());
+  await act(async () => button(tree, 'Save all draft scores').props.onClick());
+  assert.equal(writes[0].expected_revision, 4);
+  assert.equal(substitutions.reviewSubstitutions(writes[0].document).some(c => c.missingReason || c.returningGames.length), false);
+  await act(async () => tree.unmount());
+  const eligible = { ...sub, entry_id: 'sub-two', name: 'Eligible Substitute' };
+  saved = { ...copy(scoped), eligible_players: { ...scoped.eligible_players, alpha: [...players.slice(0,4), { ...sub, gender: 'male' }, eligible] }, batch: { ...copy(batch), document: legacy } };
+  await act(async () => { tree = create(React.createElement(workspace.MeetOperations, { root: 'https://api.test/meet-1', clubId: 'alpha', accessToken: 'token', phase: 'regular', context, clubName, onLock() {}, onSeasonChange() {} })); });
+  assert.ok(text(tree).includes('not eligible for women’s doubles'), 'An invalid old choice is explained before submission');
+  assert.equal(button(tree, 'Apply replacement to remaining games').props.disabled, true);
+  if (process.env.PCS_SUBSTITUTION_REVIEW_PATH) { const repairMarkup = renderToStaticMarkup(React.createElement(common['./SubstitutionRepair'].default, { ...tree.root.findByType(common['./SubstitutionRepair'].default).props })); fs.writeFileSync(process.env.PCS_SUBSTITUTION_REVIEW_PATH, '<!doctype html><html><head><meta charset="utf-8"><style>body{font:16px Arial;background:#f5f7fa;margin:40px;max-width:1060px;}'+fs.readFileSync(path.join(__dirname, '..', base, 'competition.module.css'),'utf8')+'</style></head><body class="page"><h1>Meet score draft</h1><p>144 of 144 game outcomes entered · Saved</p><section class="warning"><h3>One substitution needs attention</h3><p>Your scores are kept. Finish recording each injury once here.</p>'+repairMarkup+'</section></body></html>'); }
+  const repair = tree.root.findByType(common['./SubstitutionRepair'].default);
+  await act(async () => repair.findByType('select').props.onChange({ target: { value: 'sub-two' } }));
+  await act(async () => button(tree, 'Apply replacement to remaining games').props.onClick());
+  assert.ok(!text(tree).includes('One substitution needs attention'));
+  const repaired = tree.root.findByType(ScoreEditor).props.document;
+  assert.deepEqual(repaired.encounters[1].pairings[0].games[1].players_a, ['sub-two', 'entry-1'], 'Correction replaces the invalid original substitute');
+  assert.deepEqual(repaired.encounters[0].pairings[0].games[2].players_b, ['sub-two', 'entry-1'], 'Correction also carries the eligible replacement through later games');
   await act(async () => tree.unmount());
 }
 
@@ -524,4 +611,4 @@ function writePrintReview() {
   fs.writeFileSync(output, '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Southern BCS paper packet review</title><style>' + stylesheet + screenPreview + '</style></head><body class="printBody"><div class="printPortal">' + render(document) + render(final) + '</div></body></html>');
   console.log('Print review fixture: ' + output);
 }
-(async () => { await scoreEntry(); await pairingControls(); await preMeetRosterChange(); await automaticScoreEntry(); await savedScoreCompletion(); await playUpReplacementEligibility(); printSafety(); await staggeredSchedule(); await revisionsAndStaleClub(); await pdfDownloads(); await approval(); await qualifyingRoundRobin(); await missingLineups(); await seasonRegistrationGate(); qualifyingDisplay(); writePrintReview(); console.log('PASS interclub competition: fixed gender pairings, pre-meet roster changes, per-game injury substitutions, automatic score completion, saved pending-score recovery, zero scores, clearing, win-by-two, injury outcomes, singles, submission review, exact revisions, staging schedule and PDF controls'); })().catch(error => { console.error(error); process.exit(1); });
+(async () => { await scoreEntry(); await pairingControls(); await preMeetRosterChange(); await automaticScoreEntry(); await savedScoreCompletion(); await playUpReplacementEligibility(); await easySubstitutions(); printSafety(); await staggeredSchedule(); await revisionsAndStaleClub(); await pdfDownloads(); await approval(); await qualifyingRoundRobin(); await missingLineups(); await seasonRegistrationGate(); qualifyingDisplay(); writePrintReview(); console.log('PASS interclub competition: fixed gender pairings, pre-meet roster changes, per-game injury substitutions, automatic score completion, saved pending-score recovery, zero scores, clearing, win-by-two, injury outcomes, singles, submission review, exact revisions, staging schedule and PDF controls'); })().catch(error => { console.error(error); process.exit(1); });

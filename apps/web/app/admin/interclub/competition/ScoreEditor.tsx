@@ -2,16 +2,25 @@
 
 import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
 
-import { useRef, useState, type FocusEvent, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type FocusEvent, type KeyboardEvent } from "react";
 import { CompetitionDocument, CompetitionEncounter, CompetitionGame, CompetitionPairing, CompetitionPlayer, GameStatus, MeetCompetition, activeSinglesPlayers, automaticGameStatus, gameStatusLabels, isFinalScore, matchesSkillLevel, pairingLabels, playerNames, scheduledEncounters, scheduleRoundLabel, singlesCourt } from "@/lib/interclubCompetition";
 import styles from "./competition.module.css";
+import InjurySubstitutionEditor from "./InjurySubstitutionEditor";
 
-type Props = { document: CompetitionDocument; detail: MeetCompetition; players: Map<string, CompetitionPlayer>; clubName: (id: string) => string; disabled: boolean; onChange: (document: CompetitionDocument) => void; divisionFilter?: string; onDivisionFilterChange?: (division: string) => void; onScoreEntryEnd?: () => boolean };
+type Props = { document: CompetitionDocument; detail: MeetCompetition; players: Map<string, CompetitionPlayer>; clubName: (id: string) => string; disabled: boolean; onChange: (document: CompetitionDocument) => void; divisionFilter?: string; onDivisionFilterChange?: (division: string) => void; onScoreEntryEnd?: () => boolean; focusGame?: { id: string; substitution: boolean; sequence: number } | null; gameError?: string; onSubstitution?: (document: CompetitionDocument) => void };
 
-export default function ScoreEditor({ document, detail, players, clubName, disabled, onChange, divisionFilter, onDivisionFilterChange, onScoreEntryEnd }: Props) {
+export default function ScoreEditor({ document, detail, players, clubName, disabled, onChange, divisionFilter, onDivisionFilterChange, onScoreEntryEnd, focusGame, gameError, onSubstitution }: Props) {
   const [localDivision, setLocalDivision] = useState("");
   const scoreEntry = useRef<HTMLElement | null>(null);
   const division = divisionFilter ?? localDivision, setDivision = onDivisionFilterChange ?? setLocalDivision;
+  useEffect(() => {
+    if (!focusGame) return;
+    const game = scoreEntry.current?.ownerDocument.getElementById(`interclub-game-${focusGame.id}`);
+    if (!game) return;
+    const options = game.querySelector<HTMLDetailsElement>(focusGame.substitution ? "[data-substitution]" : "details");
+    if (options) options.open = true;
+    game.scrollIntoView({ block: "center" }); game.focus({ preventScroll: true });
+  }, [focusGame, division]);
   function navigateScores(event: KeyboardEvent<HTMLInputElement>) {
     if (event.altKey || event.ctrlKey || event.metaKey) return;
     if (event.key === "Escape") {
@@ -52,7 +61,7 @@ export default function ScoreEditor({ document, detail, players, clubName, disab
       {divisions.length > 1 && <label>Show skill level<select value={division} onChange={event => setDivision(event.target.value)}><option value="">All skill levels</option>{divisions.map(value => <option key={value}>{value}</option>)}</select></label>}
     </div>
     <div className={styles.notice}><strong>Score → Tab → score → Tab → next game.</strong> Both final scores mark a game completed automatically. Shift+Tab moves back; Esc reaches game options. Game dates are recorded automatically from your device when you enter scores.</div>
-    <p>The starting players are already set from the approved meet rosters. For an injury replacement, use “Substitute a player” on each game the substitute plays.</p>
+    <p>The players are already set. For an injury, choose “Substitute a player” on the replacement’s first game. The change carries through the remaining games automatically.</p>
     {scheduledEncounters(document).filter(encounter => !division || encounter.division === division).map(encounter => <article key={encounter.id} className={styles.card}>
       <p className={styles.eyebrow}>Skill level {encounter.division} · {scheduleRoundLabel(document)} {encounter.rotation}</p>
       <h3>{clubName(encounter.club_a)} <span className={styles.muted}>vs</span> {clubName(encounter.club_b)}</h3>
@@ -66,7 +75,8 @@ export default function ScoreEditor({ document, detail, players, clubName, disab
           })}</div>
         </details>}
         <fieldset disabled={disabled} className={styles.gameFields}><legend className={styles.srOnly}>{pairingLabels[pairing.kind]} scores</legend>
-          {pairing.games.map((game, index) => <div key={game.id} id={`interclub-game-${game.id}`} data-score-game tabIndex={-1} className={styles.game}>
+          {pairing.games.map((game, index) => <div key={game.id} id={`interclub-game-${game.id}`} data-score-game tabIndex={-1} className={`${styles.game}${focusGame?.id === game.id ? ` ${styles.highlightedGame}` : ""}`}>
+            {focusGame?.id === game.id && gameError && <p className={styles.error} role="alert">{gameError}</p>}
             {!!(game.players_a.length || game.players_b.length) && <p><strong>Players for Game {index + 1}:</strong> {playerNames(game.players_a.length ? game.players_a : pairing.players_a, players)} <strong>vs</strong> {playerNames(game.players_b.length ? game.players_b : pairing.players_b, players)}</p>}
             <div className={styles.gameRow}><strong>Game {index + 1}</strong>
               <label>{clubName(encounter.club_a)}<input {...scoreInput} aria-label={`${pairing.id} game ${index + 1} club A score`} type="number" min={0} step={1} value={game.a ?? ""} disabled={["forfeit", "double_forfeit", "unplayed"].includes(game.status)} onChange={event => changeGame(encounter, pairing, game.id, { a: event.target.value === "" ? null : Number(event.target.value), ...(game.status === "completed" ? { winner: null } : {}) })} /></label>
@@ -82,14 +92,16 @@ export default function ScoreEditor({ document, detail, players, clubName, disab
               }}><option value="automatic">Use entered scores automatically</option>{(["retired", "forfeit", "double_forfeit", "unplayed"] as const).map(value => <option key={value} value={value}>{gameStatusLabels[value]}</option>)}</select></label>
               <p>Leave scores empty for an unplayed game. For an injury retirement, keep the stopped score and choose the winning club.</p>
             </details>
-            <details><summary>Substitute a player · Game {index + 1}</summary>
-              <p>After play begins, a player may be replaced only because of injury, between games. A retirement concedes the interrupted game; an eligible replacement can play the next game.</p>
-              <p>Choose the actual players for this game from the club’s eligible season pool. Keep the injured player on the game they retired from. Record the substitute on each following game they play.</p>
+            <details data-substitution><summary>Substitute a player · Game {index + 1}</summary>
+              <InjurySubstitutionEditor document={document} row={{ encounter, pairing, game, number: index + 1 }} detail={detail} players={players} clubName={clubName} disabled={disabled} onChange={onSubstitution || onChange} />
+              <details><summary>Correct a previously entered lineup</summary>
+              <p>Use this only to fix a mistaken player entry on this game. For an injury replacement, use the controls above to update all remaining games together.</p>
               <div className={styles.twoColumns}>{(["a", "b"] as const).map(side => {
                 const options = (detail.eligible_players?.[encounter[`club_${side}`]] || detail.teams.find(team => team.club_id === encounter[`club_${side}`] && team.division === encounter.division)?.roster || []).filter(player => matchesSkillLevel(player, encounter.division));
                 return <PlayerSelect key={side} label={`${clubName(encounter[`club_${side}`])} actual players`} ids={game[`players_${side}`].length ? game[`players_${side}`] : pairing[`players_${side}`]} options={options} disabled={disabled} onChange={ids => changeGame(encounter, pairing, game.id, { [`players_${side}`]: ids })} />;
               })}</div>
-              <label>Injury reason (required for a substitution)<textarea rows={2} value={game.injury_reason || ""} onChange={event => changeGame(encounter, pairing, game.id, { injury_reason: event.target.value || null })} placeholder="Who was injured and when the substitute entered" /></label>
+              <label>Injury reason<textarea rows={2} value={game.injury_reason || ""} onChange={event => changeGame(encounter, pairing, game.id, { injury_reason: event.target.value || null })} placeholder="Injury" /></label>
+              </details>
             </details>
           </div>)}
         </fieldset>
