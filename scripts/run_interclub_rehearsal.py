@@ -362,10 +362,18 @@ class Rehearsal:
         """Move only this synthetic season's enrollment history before its rehearsed meet."""
         sid=season["id"]
         row=self.db("GET","pcs_interclub_seasons",select="details",id="eq."+sid)[0]
-        details={**row["details"],"start_date":(now()-timedelta(days=30)).date().isoformat()}
-        self.db("PATCH","pcs_interclub_seasons",{"details":details},id="eq."+sid)
-        self.db("PATCH","pcs_interclub_entries",{"entered_at":iso(now()-timedelta(days=29))},season_id="eq."+sid)
-        self.db("PATCH","pcs_interclub_pool_members",{"approved_at":iso(now()-timedelta(days=29))},season_id="eq."+sid)
+        clock=now()
+        details={**row["details"],"start_date":(clock-timedelta(days=30)).date().isoformat()}
+        if details != row["details"]:
+            self.db("PATCH","pcs_interclub_seasons",{"details":details},id="eq."+sid)
+        # Already-aged players predate every rehearsed meet. Updating them
+        # again runs entry/rating triggers for the entire pool and can time out
+        # after regular-season results exist. Only age newly added records.
+        history=iso(clock-timedelta(days=29))
+        recent="gt."+iso(clock-timedelta(days=28))
+        self.db("PATCH","pcs_interclub_entries",{"entered_at":history},season_id="eq."+sid,entered_at=recent)
+        self.db("PATCH","pcs_interclub_pool_members",{"approved_at":history},season_id="eq."+sid,
+                approval_status="eq.approved",approved_at=recent)
 
     def move_meet(self, season, meet, when, deadline=None):
         self.db("PATCH","pcs_interclub_meets",{"starts_at":iso(when),"roster_deadline":iso(deadline or when-timedelta(hours=1))},id="eq."+meet["id"],season_id="eq."+season["id"])
