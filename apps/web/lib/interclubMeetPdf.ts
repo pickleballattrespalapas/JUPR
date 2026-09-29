@@ -1,6 +1,6 @@
 import type { jsPDF } from "jspdf";
 import type { InterclubMeet } from "./interclubRegistration";
-import { CompetitionDocument, CompetitionPlayer, pairingLabels, phaseLabels, playerNames, regularCourtBlockInstructions, scheduledEncounters, scheduleRoundLabel, singlesCourt } from "./interclubCompetition";
+import { CompetitionDocument, CompetitionPlayer, championshipGameInstructions, pairingLabels, phaseLabels, playerNames, regularCourtBlockInstructions, scheduledEncounters, scheduleRoundLabel, singlesCourt } from "./interclubCompetition";
 
 export type MeetPdfScope = "schedule" | "packet";
 export type MeetPdfOptions = {
@@ -109,7 +109,7 @@ export async function buildInterclubMeetPdf(options: MeetPdfOptions, scope: Meet
   layout.page("Court schedule");
   layout.text(`Host: ${clubName(meet.host_club_id)} | Timezone: ${timezone}`, 9);
   layout.text(`Roster deadline: ${when(meet.roster_deadline)}`, 9);
-  if (document.phase === "regular") layout.text(regularCourtBlockInstructions, 9, true);
+  layout.text(document.phase === "regular" ? regularCourtBlockInstructions : championshipGameInstructions, 9, true);
   if (document.schedule_mode === "staggered") layout.text("Staggered starts: each wave is a full three-game block. Start the next wave after every pairing in the current wave finishes. Exact times depend on match length.", 9);
   const assignments = encounters.flatMap(encounter => encounter.pairings.map(pairing => ({ encounter, pairing })))
     .sort((a, b) => a.encounter.rotation - b.encounter.rotation || (a.pairing.court ?? 101) - (b.pairing.court ?? 101));
@@ -122,7 +122,7 @@ export async function buildInterclubMeetPdf(options: MeetPdfOptions, scope: Meet
     layout.page("At the courts");
     const regular = document.phase === "regular";
     for (const instruction of [
-      regular ? "Play all three games in every doubles pairing. Each player plays 3, 6 or 9 games for a two-, three- or four-club field." : "Play women's doubles, men's doubles and both mixed doubles games. At 2-2, play the rotating singles tiebreak.",
+      regular ? "Play all three games in every doubles pairing. Each player plays 3, 6 or 9 games for a two-, three- or four-club field." : championshipGameInstructions,
       "Doubles use side-out scoring to 11, win by two, no cap. Record both scores. Game dates are recorded automatically when scores are entered.",
       "Both clubs check the players and scores, then sign the sheet. Return all sheets together to the meet organizer.",
       "Injury: concede only the interrupted game; record the actual stopped score and winning club. An eligible substitute may enter between games only. Record their name and injury reason.",
@@ -134,7 +134,7 @@ export async function buildInterclubMeetPdf(options: MeetPdfOptions, scope: Meet
     for (const encounter of encounters) {
       layout.page(`${round} ${encounter.rotation} | Skill ${encounter.division} | Score sheet`);
       layout.text(`${clubName(encounter.club_a)} vs ${clubName(encounter.club_b)}`, 13, true);
-      layout.text(`Side-out to 11 | Win by two | No cap | ${regular ? "Play all three games" : "One game per doubles pairing"}`, 9);
+      layout.text(`Side-out to 11 | Win by two | No cap | ${regular ? "Play all three games" : "Game 4 only if needed"}`, 9);
       for (const pairing of encounter.pairings) {
         layout.text(`${pairingLabels[pairing.kind]} | Court ${pairing.court ?? "____"}${regular ? " | Games 1-3 on this court" : ""}`, 11, true);
         layout.text(`A - ${clubName(encounter.club_a)}: ${playerNames(pairing.players_a, players)}`, 9);
@@ -142,11 +142,11 @@ export async function buildInterclubMeetPdf(options: MeetPdfOptions, scope: Meet
         if (pairing.eligibility_deadline) layout.text(`Eligibility locked: ${when(pairing.eligibility_deadline)}`, 8);
         layout.table(["Game", "A", "B", "Outcome", "Winner"], pairing.games.map((game, index) => [
           String(index + 1), game.a == null ? "" : String(game.a), game.b == null ? "" : String(game.b),
-          { pending: "", completed: "Completed", retired: "Injury", forfeit: "Forfeit", double_forfeit: "Both forfeit", unplayed: "Unplayed" }[game.status], game.winner?.toUpperCase() || "",
+          { pending: "", completed: "Completed", retired: "Injury", forfeit: "Forfeit", double_forfeit: "Both forfeit", unplayed: "Unplayed", not_needed: "Not needed (3-0)" }[game.status], game.winner?.toUpperCase() || "",
         ]), [44, 48, 48, layout.width - 194, 54], 8.5);
         pairing.games.forEach((game, index) => {
           if (["completed", "retired"].includes(game.status) && game.played_at && new Date(game.played_at).toLocaleDateString("en-US", { timeZone: timezone }) !== new Date(meet.starts_at).toLocaleDateString("en-US", { timeZone: timezone })) layout.text(`Game ${index + 1} recorded date: ${when(game.played_at)}`, 9);
-          if (game.players_a.length || game.players_b.length || game.injury_reason) layout.text(`Game ${index + 1} actual players - A: ${playerNames(game.players_a.length ? game.players_a : pairing.players_a, players)}; B: ${playerNames(game.players_b.length ? game.players_b : pairing.players_b, players)}.${game.injury_reason ? ` Injury note: ${game.injury_reason}` : ""}`, 9);
+          if (game.status !== "not_needed" && (game.players_a.length || game.players_b.length || game.injury_reason)) layout.text(`Game ${index + 1} actual players - A: ${playerNames(game.players_a.length ? game.players_a : pairing.players_a, players)}; B: ${playerNames(game.players_b.length ? game.players_b : pairing.players_b, players)}.${game.injury_reason ? ` Injury note: ${game.injury_reason}` : ""}`, 9);
         });
         layout.text("Injury / replacement player and game: __________________________________", 9);
       }

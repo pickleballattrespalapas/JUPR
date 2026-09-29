@@ -17,7 +17,7 @@ from services.api.interclub_competition_models import CompetitionDocument
 
 KINDS = {"gender": ("women", "men"), "mixed": ("mixed_a", "mixed_b"),
          "mlp": ("women", "men", "mixed_a", "mixed_b")}
-TERMINAL = {"completed", "retired", "forfeit", "double_forfeit", "unplayed"}
+TERMINAL = {"completed", "retired", "forfeit", "double_forfeit", "unplayed", "not_needed"}
 DECIDED = {"completed", "retired", "forfeit", "double_forfeit"}
 PLAYED = {"completed", "retired"}
 
@@ -63,6 +63,39 @@ def _game_winner(game: dict) -> str | None:
     return None
 
 
+def championship_clincher(encounter: dict) -> str | None:
+    """The first three doubles games can decide an MLP matchup 3–0."""
+    first_three = [next((p for p in encounter["pairings"] if p["kind"] == kind), None)
+                   for kind in KINDS["mlp"][:3]]
+    if any(pairing is None or len(pairing["games"]) != 1 for pairing in first_three):
+        return None
+    winners = []
+    for pairing in first_three:
+        game = pairing["games"][0]
+        if game["status"] == "retired" and (game.get("a") is None or game.get("b") is None):
+            return None
+        try:
+            winners.append(_game_winner(game))
+        except ValueError:
+            return None  # Normal score validation provides the precise error.
+    return winners[0] if winners[0] in {"a", "b"} and len(set(winners)) == 1 else None
+
+
+def _complete_clinched_championship(encounter: dict, phase: str) -> None:
+    clincher = championship_clincher(encounter) if phase != "regular" else None
+    tie = encounter.get("tiebreak")
+    if clincher and tie and tie.get("a") is None and tie.get("b") is None:
+        encounter["tiebreak"] = None
+    for pairing in encounter["pairings"]:
+        for game in pairing["games"]:
+            if game["status"] == "not_needed" and (not clincher or pairing["kind"] != "mixed_b"):
+                raise ValueError("Only Game 4 can be not needed, after one club wins the first three championship games.")
+            # Preserve existing played results and explicit forfeits. Blank
+            # weather/double-forfeit workarounds were never valid MLP results.
+            if clincher and pairing["kind"] == "mixed_b" and game["status"] in {"pending", "double_forfeit", "unplayed"} and game.get("a") is None and game.get("b") is None:
+                game.update(status="not_needed", winner=None, played_at=None)
+
+
 def singles_court(division: str) -> str:
     """Court geometry is a skill-level rule, independent of player ratings."""
     try:
@@ -81,6 +114,8 @@ def singles_rotation(rallies_completed: int) -> int:
 
 def _validate_game(game: dict, pairing: dict, document: dict, *, official: bool) -> None:
     status, a, b = game["status"], game.get("a"), game.get("b")
+    if status == "not_needed" and (a is not None or b is not None or game.get("winner") is not None or game.get("played_at") is not None):
+        raise ValueError("A game that was not needed has no score, winner or play time.")
     if status in {"forfeit", "double_forfeit", "unplayed"} and (a is not None or b is not None):
         raise ValueError("Unplayed forfeits and weather-unplayed games have no numeric score.")
     if status in {"unplayed", "double_forfeit"} and game.get("winner") is not None:
@@ -128,7 +163,7 @@ def _pairing_result(pairing: dict) -> dict:
             return game.get("a") is not None and game.get("b") is not None and bool(game.get("winner"))
         if game["status"] == "forfeit":
             return bool(game.get("winner"))
-        return game["status"] in {"unplayed", "double_forfeit"}
+        return game["status"] in {"unplayed", "double_forfeit", "not_needed"}
 
     complete = all(ready(g) for g in pairing["games"])
     for game in pairing["games"]:
@@ -147,6 +182,8 @@ def _pairing_result(pairing: dict) -> dict:
     winner = ("a" if games_a > games_b else "b" if games_b > games_a else "draw") if complete else None
     if complete and all(game["status"] == "double_forfeit" for game in pairing["games"]):
         winner = "double_forfeit"
+    if complete and all(game["status"] == "not_needed" for game in pairing["games"]):
+        winner = None
     return {"id": pairing["id"], "kind": pairing["kind"], "winner": winner,
             "complete": complete, "games_a": games_a, "games_b": games_b,
             "losses_a": losses_a, "losses_b": losses_b,
@@ -227,6 +264,7 @@ def validate_document(document: dict | CompetitionDocument, official: bool = Fal
         if len(actual) != len(expected) or set(actual) != set(expected):
             raise ValueError(f"Each {doc['format']} matchup requires these pairings: {', '.join(expected)}.")
         encounter["pairings"].sort(key=lambda p: expected.index(p["kind"]))
+        _complete_clinched_championship(encounter, doc["phase"])
         for side in ("a", "b"):
             club_round = (encounter["rotation"], encounter["division"], encounter[f"club_{side}"])
             if club_round in club_rounds:
@@ -463,7 +501,7 @@ def prepare_reschedule(document: dict, *, played_at: str | None, eligibility_dea
 def summarize_document(document: dict) -> dict:
     doc = validate_document(document)
     results = [_encounter_result(e, doc["phase"]) for e in doc["encounters"]]
-    statuses: dict[str, int] = {status: 0 for status in ("pending", "completed", "retired", "forfeit", "double_forfeit", "unplayed")}
+    statuses: dict[str, int] = {status: 0 for status in ("pending", "completed", "retired", "forfeit", "double_forfeit", "unplayed", "not_needed")}
     for encounter in doc["encounters"]:
         for pairing in encounter["pairings"]:
             for game in pairing["games"]:

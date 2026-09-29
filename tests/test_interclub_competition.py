@@ -442,6 +442,89 @@ def test_mlp_is_four_single_games_and_not_two_three_game_pairings():
     assert summarize_document(validate_document(doc, official=True))["encounters"][0]["winner"] == "a"
 
 
+@pytest.mark.parametrize("phase", ["final", "qualifier"])
+@pytest.mark.parametrize("winner", ["a", "b"])
+@pytest.mark.parametrize("blank_status", ["pending", "double_forfeit", "unplayed"])
+def test_championship_clinched_in_three_skips_fourth_without_adding_results(phase, winner, blank_status):
+    doc = final(winners=(winner,) * 3, phase=phase)
+    fourth = doc["encounters"][0]["pairings"][3]["games"][0]
+    fourth["status"] = blank_status
+    doc["encounters"][0]["pairings"].reverse()  # Canonical game order, not storage order.
+    saved = validate_document(doc, official=True)
+    skipped = saved["encounters"][0]["pairings"][3]["games"][0]
+    assert (skipped["status"], skipped["a"], skipped["b"], skipped["winner"], skipped["played_at"]) == ("not_needed", None, None, None, None)
+    summary = summarize_document(saved)
+    result = summary["encounters"][0]
+    assert result["complete"] and result["winner"] == winner
+    assert (result[f"games_{winner}"], result[f"pairings_{winner}"]) == (3, 3)
+    assert result["pairings"][3]["winner"] is None
+    assert summary["games"]["not_needed"] == 1 and summary["games"]["pending"] == 0
+    assert len(rating_games(saved)) == 3
+    appearances = Counter(player for pair in result["pairings"] for side in ("a", "b") for player in pair[f"played_{side}"])
+    assert sum(appearances.values()) == 12
+    assert fourth["status"] == blank_status, "Validation must not mutate the submitted document"
+    if phase == "final":
+        cup = club_cup([saved])
+        leader = next(row for row in cup["standings"] if row["club_id"] == winner)
+        assert (leader["championship_points"], leader["games_won"], leader["pairings_won"], leader["point_differential"]) == (6, 3, 3, 12)
+
+
+def test_championship_two_one_still_requires_fourth_and_cannot_claim_not_needed():
+    doc = final(winners=("a", "b", "a"))
+    assert validate_document(doc)["encounters"][0]["pairings"][3]["games"][0]["status"] == "pending"
+    with pytest.raises(ValueError, match="whole meet"):
+        validate_document(doc, official=True)
+    doc["encounters"][0]["pairings"][3]["games"][0].update(status="not_needed", played_at=None)
+    with pytest.raises(ValueError, match="Only Game 4"):
+        validate_document(doc, official=True)
+    regular_doc = regular()
+    regular_doc["encounters"][0]["pairings"][0]["games"][0].update(status="not_needed", played_at=None)
+    with pytest.raises(ValueError, match="Only Game 4"):
+        validate_document(regular_doc)
+
+
+def test_skipped_championship_game_cannot_contain_a_score_or_winner_or_time():
+    doc = validate_document(final(winners=("a", "a", "a")))
+    for field, value in (("a", 0), ("b", 5), ("winner", "a"), ("played_at", PLAYED_AT)):
+        invalid = deepcopy(doc)
+        invalid["encounters"][0]["pairings"][3]["games"][0][field] = value
+        with pytest.raises(ValueError, match="no score, winner or play time"):
+            validate_document(invalid)
+    doc["encounters"][0]["pairings"][0]["games"][0].update(status="not_needed", a=None, b=None, played_at=None)
+    with pytest.raises(ValueError, match="Only Game 4"):
+        validate_document(doc)
+
+
+def test_championship_clinch_preserves_existing_fourth_result_and_clears_empty_singles():
+    for status in ("completed", "forfeit", "retired"):
+        doc = final()
+        fourth = doc["encounters"][0]["pairings"][3]["games"][0]
+        fourth["status"] = status
+        if status != "completed":
+            fourth["winner"] = "b"
+        if status == "forfeit":
+            fourth.update(a=None, b=None, played_at=None)
+        if status == "retired":
+            fourth.update(a=7, b=4)
+        assert validate_document(doc, official=True)["encounters"][0]["pairings"][3]["games"][0] == {**fourth, "winner": "b"}
+    doc = final(winners=("a", "a", "a"))
+    doc["encounters"][0]["tiebreak"] = {"status": "pending", "a": None, "b": None,
+        "order_a": [p["entry_id"] for p in entry("a")["roster"]],
+        "order_b": [p["entry_id"] for p in entry("b")["roster"]]}
+    assert validate_document(doc, official=True)["encounters"][0]["tiebreak"] is None
+
+
+@pytest.mark.parametrize("status", ["retired", "forfeit"])
+def test_awarded_championship_win_counts_toward_clinch(status):
+    doc = final(winners=("a", "a", "a"))
+    game = doc["encounters"][0]["pairings"][0]["games"][0]
+    game.update(status=status, a=7 if status == "retired" else None,
+                b=4 if status == "retired" else None, winner="a")
+    saved = validate_document(doc, official=True)
+    assert saved["encounters"][0]["pairings"][3]["games"][0]["status"] == "not_needed"
+    assert len(rating_games(saved)) == 2
+
+
 def test_mlp_two_two_requires_singles_and_singles_never_rated():
     doc = final(winners=("a", "b", "a", "b"))
     with pytest.raises(ValueError, match="rotating-singles"):

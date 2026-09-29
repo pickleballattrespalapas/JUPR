@@ -15,6 +15,7 @@ export function gameResultNote(game: ResultGame, names: Record<string, string>, 
   if (game.status === "forfeit") return `Forfeit — ${winner} wins`;
   if (game.status === "double_forfeit") return "Both clubs forfeited — a game loss for each club";
   if (game.status === "unplayed") return "Not played — weather";
+  if (game.status === "not_needed") return "Not needed — matchup decided 3–0";
   if (game.status === "pending") return "Result not entered";
   return "";
 }

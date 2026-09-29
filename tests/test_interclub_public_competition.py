@@ -46,6 +46,22 @@ def official_document():
     return document
 
 
+def test_three_zero_final_publishes_skipped_game_without_appearances_or_loss():
+    entries = [{"club_id": club, "division": "3.5", "roster": [
+        {"entry_id": f"{club}-{index}", "gender": "female" if index < 2 else "male"} for index in range(4)
+    ]} for club in ("alpha", "beta")]
+    document = engine.generate_championship("final", "3.5", *entries, played_at="2027-01-16T17:00:00Z")
+    for pairing in document["encounters"][0]["pairings"][:3]:
+        pairing["games"][0].update(status="completed", a=7, b=11)
+    document = engine.validate_document(document, official=True)
+    row = result_rows([document])[0]
+    assert row["outcome"]["winner"] == "b"
+    assert (row["outcome"]["games_a"], row["outcome"]["games_b"]) == (0, 3)
+    skipped = row["pairings"][3]["games"][0]
+    assert skipped == {"status": "not_needed", "a": None, "b": None, "winner": None, "players_a": [], "players_b": []}
+    assert sum(len(game["players_a"]) + len(game["players_b"]) for pair in row["pairings"] for game in pair["games"]) == 12
+
+
 def test_publication_uses_full_approved_pairings_and_strips_private_fields(monkeypatch):
     document = official_document()
     document["internal_email"] = "private@example.invalid"

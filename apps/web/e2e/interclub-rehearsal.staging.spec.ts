@@ -224,6 +224,64 @@ test("interclub paper packet, score entry, approval and public results", async (
   expect(await page.getByLabel("Host club", { exact: true }).locator("option").evaluateAll(options => options.map(option => (option as HTMLOptionElement).value).filter(Boolean).sort())).toEqual(qualifiedClubIds);
   await page.screenshot({ path: join(reportDir, "interclub-final-setup.png"), fullPage: true });
 
+  const finalRoot = `${expectedApiOrigin}/admin/clubs/${club}/interclub/competition/${official.id}/meets/${official.browser_final}/final`;
+  const finalRead = page.waitForResponse(r => r.url() === finalRoot && r.request().method() === "GET");
+  await page.goto(`/admin/interclub/competition?season=${official.id}&meet=${official.browser_final}`);
+  const finalDetail = await (await finalRead).json();
+  const sweep = finalDetail.batch.document.encounters[0];
+  expect(sweep.pairings[3].games[0].status).toBe("not_needed");
+  await page.locator("summary").filter({ hasText: /^Correct submitted or official scores$/ }).click();
+  await page.getByLabel("Reason for correction", { exact: true }).fill("Verify 3-0 championship score entry and correction");
+  await page.getByRole("button", { name: "Open correction draft", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Meet score draft", exact: true })).toBeVisible();
+  await expect(page.locator("[data-not-needed-game]")).toHaveCount(1);
+  const finalScore = (pair: number, side: string) => page.getByRole("spinbutton", { name: `${sweep.pairings[pair].id} game 1 club ${side} score`, exact: true });
+  await finalScore(0, "B").fill("13");
+  await expect(page.locator("[data-not-needed-game]")).toHaveCount(0);
+  await expect(finalScore(3, "A")).toBeVisible();
+  for (const pair of [0, 1, 2]) for (const side of ["A", "B"]) await finalScore(pair, side).clear();
+  await finalScore(0, "A").click();
+  for (const pair of [0, 1, 2]) {
+    await expect(finalScore(pair, "A")).toBeFocused();
+    await page.keyboard.type("11"); await page.keyboard.press("Tab");
+    await expect(finalScore(pair, "B")).toBeFocused();
+    await page.keyboard.type("5"); await page.keyboard.press("Tab");
+  }
+  await expect(page.locator("[data-not-needed-game]")).toHaveCount(1);
+  await expect(finalScore(3, "A")).toHaveCount(0);
+  const nextFinal = finalDetail.batch.document.encounters[1];
+  await expect(page.getByRole("spinbutton", { name: `${nextFinal.pairings[0].id} game 1 club A score`, exact: true })).toBeFocused();
+  await page.screenshot({ path: join(reportDir, "interclub-championship-clinch.png"), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: join(reportDir, "interclub-championship-clinch-mobile.png"), fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const finalSave = page.waitForResponse(r => r.url() === finalRoot && r.request().method() === "PUT");
+  await page.getByRole("button", { name: "Save all draft scores", exact: true }).last().click();
+  const savedFinal = await finalSave;
+  expect(savedFinal.status()).toBe(200);
+  const finalBatch = (await savedFinal.json()).batch;
+  expect(finalBatch.document.encounters[0].pairings[3].games[0].status).toBe("not_needed");
+  expect(finalBatch.document.encounters[0].tiebreak).toBeNull();
+  expect(finalBatch.document.encounters[1].tiebreak.status).toBe("completed");
+  await page.reload();
+  await expect(page.locator("[data-not-needed-game]")).toHaveCount(1);
+  await expect(page.getByText("11 of 11 game outcomes entered · Saved", { exact: true })).toBeVisible();
+  const finalPdf = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Download full packet PDF", exact: true }).click();
+  await (await finalPdf).saveAs(join(reportDir, "interclub-championship-clinch.pdf"));
+  await page.getByRole("button", { name: "Review and submit meet", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Submit all official scores", exact: true })).toBeEnabled();
+  await page.getByRole("button", { name: "Submit all official scores", exact: true }).click();
+  await page.getByRole("button", { name: "Review official approval", exact: true }).click();
+  const finalApproval = page.waitForResponse(r => r.url() === finalRoot+"/approve" && r.request().method() === "POST", { timeout: 90_000 });
+  await page.getByRole("button", { name: "Approve this revision", exact: true }).click();
+  const approvedFinal = await finalApproval;
+  expect(approvedFinal.status()).toBe(200);
+  expect((await approvedFinal.json()).ratings.status).toBe("completed");
+  await expect(page.getByRole("heading", { name: "Official meet results", exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Browse match results", exact: true }).getByText("Not needed — matchup decided 3–0", { exact: true })).toBeVisible();
+
   const lockedReads: string[] = [];
   page.on("request", request => {
     const path = new URL(request.url()).pathname;
@@ -532,6 +590,7 @@ test("interclub paper packet, score entry, approval and public results", async (
   const clubResults = published.document.competition_results!.filter(row => row.club_a === club || row.club_b === club);
   const expectedGames = clubResults.reduce((sum, row) => sum + row.pairings.reduce((n, pairing) => n + pairing.games.length, 0) + (row.tiebreak?.status === "completed" ? 1 : 0), 0);
   await expect(publicResults.locator("tr[data-result-game]")).toHaveCount(expectedGames);
+  await expect(publicResults.getByText("Not needed — matchup decided 3–0", { exact: true })).toBeVisible();
   await expect(publicResults.locator("details")).toHaveCount(0);
   await expect(publicResults.locator("tr[data-result-game] td:nth-child(3) strong")).toHaveText(Array(expectedGames).fill(selectedClubName));
   await publicPage.screenshot({ path: join(reportDir, "interclub-club-results-table.png"), fullPage: false });
@@ -593,5 +652,5 @@ test("interclub paper packet, score entry, approval and public results", async (
   await expect(publicPlayerRow.getByRole("cell", { name: "3.15", exact: true }).first()).toBeVisible();
   expect(errors).toEqual([]);
   writeFileSync(join(reportDir,"interclub-browser.json"),JSON.stringify({ status:"passed",candidate_sha:state.sha,
-    checks:["completed_season_championship_panel","qualified_final_setup","mobile_championship_panel","meet_setup_without_duration","shared_meet_signup","play_up_waitlist","concurrent_signup_capacity","rating_band_fifo","signup_retry_identity","withdrawal_promotes_actual_roster","mobile_signup","paper_packet_pdf","six_game_ui_entry","dirty_navigation_lock","draft_reload","whole_meet_submission","organizer_approval","both_rating_streams","registration_phase_route_lock","admin_inline_player_creation","upcoming_meet_edit","add_meet_after_registration","late_inline_player_creation_without_notes","late_player_request_and_approval","guided_meet_lineup","eligible_player_filter","gender_composition","lineup_draft_preserved_on_pool_visit","anonymous_public_cup","overall_first_results","cup_stat_columns","all_club_games_visible","club_score_orientation","meet_club_player_filters","mobile_result_layout","compact_admin_results","closed_signup_readonly","anonymous_inline_player_signup","persisted_inline_profile_ratings","no_browser_exceptions"] },null,2));
+    checks:["championship_three_zero_clinch","championship_correction_reopens_fourth","championship_tab_skips_fourth","championship_clinch_reload_and_approval","championship_clinch_pdf","completed_season_championship_panel","qualified_final_setup","mobile_championship_panel","meet_setup_without_duration","shared_meet_signup","play_up_waitlist","concurrent_signup_capacity","rating_band_fifo","signup_retry_identity","withdrawal_promotes_actual_roster","mobile_signup","paper_packet_pdf","six_game_ui_entry","dirty_navigation_lock","draft_reload","whole_meet_submission","organizer_approval","both_rating_streams","registration_phase_route_lock","admin_inline_player_creation","upcoming_meet_edit","add_meet_after_registration","late_inline_player_creation_without_notes","late_player_request_and_approval","guided_meet_lineup","eligible_player_filter","gender_composition","lineup_draft_preserved_on_pool_visit","anonymous_public_cup","overall_first_results","cup_stat_columns","all_club_games_visible","club_score_orientation","meet_club_player_filters","mobile_result_layout","compact_admin_results","closed_signup_readonly","anonymous_inline_player_signup","persisted_inline_profile_ratings","no_browser_exceptions"] },null,2));
 });

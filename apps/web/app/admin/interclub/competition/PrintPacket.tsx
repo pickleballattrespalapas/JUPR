@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { CompetitionDocument, CompetitionPlayer, pairingLabels, phaseLabels, playerNames, regularCourtBlockInstructions, scheduledEncounters, scheduleRoundLabel, singlesCourt } from "@/lib/interclubCompetition";
+import { CompetitionDocument, CompetitionPlayer, championshipGameInstructions, pairingLabels, phaseLabels, playerNames, regularCourtBlockInstructions, scheduledEncounters, scheduleRoundLabel, singlesCourt } from "@/lib/interclubCompetition";
 import { CourtAssignments } from "./CourtSchedule";
 import { InterclubMeet } from "@/lib/interclubRegistration";
 import styles from "./competition.module.css";
@@ -28,12 +28,12 @@ export function PrintPacketContent({ document, meet, seasonName, timezone, revis
       <h1>{seasonName}</h1><h2>{phaseLabels[document.phase]} · {when(meet.starts_at)}</h2>
       <p>Host: {clubName(meet.host_club_id)} · Times: {timezone} · Roster deadline: {when(meet.roster_deadline)}</p>
       <h3>Court assignments</h3>
-      {document.phase === "regular" && <p><strong>{regularCourtBlockInstructions}</strong></p>}
+      <p><strong>{document.phase === "regular" ? regularCourtBlockInstructions : championshipGameInstructions}</strong></p>
       {document.schedule_mode === "staggered" && <p><strong>Staggered starts:</strong> each wave is a full three-game block. Start the next wave after every pairing in the current wave finishes; exact times depend on match length.</p>}
       <CourtAssignments document={document} clubName={clubName} />
       <h3>At the courts</h3>
       <ul>
-        <li>{document.phase === "regular" ? "Play all three games in every doubles pairing. Each player plays 3, 6 or 9 games for a two-, three- or four-club field." : "Play women’s doubles, men’s doubles and both mixed doubles games. At 2–2, play the rotating singles tiebreak."}</li>
+        <li>{document.phase === "regular" ? "Play all three games in every doubles pairing. Each player plays 3, 6 or 9 games for a two-, three- or four-club field." : championshipGameInstructions}</li>
         <li>Doubles use side-out scoring to 11, win by two, no cap. Record both scores. Game dates are recorded automatically when scores are entered.</li>
         <li>Both clubs check the players and scores, then sign this sheet. Return all sheets together to the meet organizer.</li>
         <li>Injury: concede only the interrupted game; record the actual stopped score and the winning club. An eligible substitute may enter between games only. Record their name and injury reason.</li>
@@ -46,16 +46,16 @@ export function PrintPacketContent({ document, meet, seasonName, timezone, revis
     {scheduledEncounters(document).map(encounter => <section key={encounter.id} className={`${styles.printPage} ${document.phase !== "regular" ? styles.printMlp : ""}`}>
       <p>{seasonName} · {when(meet.starts_at)} · Revision {revision} · {scheduleRoundLabel(document)} {encounter.rotation}</p>
       <h2>Skill {encounter.division}: {clubName(encounter.club_a)} vs {clubName(encounter.club_b)}</h2>
-      <p>Side-out scoring to 11 · Win by two · No cap{document.phase === "regular" ? " · Play all three games" : " · One game per doubles pairing"}</p>
+      <p>Side-out scoring to 11 · Win by two · No cap{document.phase === "regular" ? " · Play all three games" : " · Game 4 only if needed"}</p>
       {encounter.pairings.map(pairing => <section key={pairing.id} className={styles.printPairing}>
         <h3>{pairingLabels[pairing.kind]} · Court {pairing.court || "____"}{document.phase === "regular" ? " · Games 1-3 on this court" : ""}</h3>
         <p><strong>A · {clubName(encounter.club_a)}:</strong> {playerNames(pairing.players_a, players)}<br /><strong>B · {clubName(encounter.club_b)}:</strong> {playerNames(pairing.players_b, players)}</p>
         {pairing.eligibility_deadline && <p>Eligibility locked: {when(pairing.eligibility_deadline)}</p>}
         <table><thead><tr><th>Game</th><th>A score</th><th>B score</th><th>Complete / injury / forfeit / unplayed</th><th>Winner</th></tr></thead><tbody>
-          {pairing.games.map((game, index) => <tr key={game.id}><td>{index + 1}</td><td>{game.a ?? ""}</td><td>{game.b ?? ""}</td><td>{{ pending: "", completed: "Completed", retired: "Injury", forfeit: "Forfeit", double_forfeit: "Both forfeit", unplayed: "Unplayed" }[game.status]}</td><td>{game.winner?.toUpperCase() || ""}</td></tr>)}
+          {pairing.games.map((game, index) => <tr key={game.id}><td>{index + 1}</td><td>{game.a ?? ""}</td><td>{game.b ?? ""}</td><td>{{ pending: "", completed: "Completed", retired: "Injury", forfeit: "Forfeit", double_forfeit: "Both forfeit", unplayed: "Unplayed", not_needed: "Not needed (3-0)" }[game.status]}</td><td>{game.winner?.toUpperCase() || ""}</td></tr>)}
         </tbody></table>
         {pairing.games.filter(game => ["completed", "retired"].includes(game.status) && game.played_at && new Date(game.played_at).toLocaleDateString("en-US", { timeZone: timezone }) !== new Date(meet.starts_at).toLocaleDateString("en-US", { timeZone: timezone })).map(game => <p key={`date-${game.id}`}>Game {pairing.games.indexOf(game) + 1} recorded date: {when(game.played_at!)}</p>)}
-        {pairing.games.filter(game => game.players_a.length || game.players_b.length || game.injury_reason).map((game) => <p key={game.id}>Game {pairing.games.indexOf(game) + 1} actual players — A: {playerNames(game.players_a.length ? game.players_a : pairing.players_a, players)}; B: {playerNames(game.players_b.length ? game.players_b : pairing.players_b, players)}.{game.injury_reason ? ` Injury note: ${game.injury_reason}` : ""}</p>)}
+        {pairing.games.filter(game => game.status !== "not_needed" && (game.players_a.length || game.players_b.length || game.injury_reason)).map((game) => <p key={game.id}>Game {pairing.games.indexOf(game) + 1} actual players — A: {playerNames(game.players_a.length ? game.players_a : pairing.players_a, players)}; B: {playerNames(game.players_b.length ? game.players_b : pairing.players_b, players)}.{game.injury_reason ? ` Injury note: ${game.injury_reason}` : ""}</p>)}
         <p>Injury / replacement player and game: _______________________________________________________</p>
       </section>)}
       {document.phase !== "regular" && <section className={styles.printPairing}>

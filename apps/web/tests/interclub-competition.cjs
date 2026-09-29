@@ -367,6 +367,74 @@ async function automaticScoreEntry() {
   await act(async () => tree.unmount());
 }
 
+async function championshipClinch() {
+  const championship = copy(document); championship.phase = 'final'; championship.format = 'mlp';
+  const encounter = championship.encounters[0];
+  encounter.pairings.forEach(pairing => { pairing.games = [game(pairing.id)]; });
+  encounter.pairings.push(
+    { id:'mixed-a',kind:'mixed_a',court:1,players_a:['entry-0','entry-2'],players_b:['entry-4','entry-6'],games:[game('mixed-a')] },
+    { id:'mixed-b',kind:'mixed_b',court:1,players_a:['entry-1','entry-3'],players_b:['entry-5','entry-7'],games:[game('mixed-b')] });
+  let next = championship, tree;
+  const props = { detail,players:types.competitionPlayers(detail),clubName,disabled:false,onChange:value => { next = value; } };
+  const update = async (label, value) => act(async () => {
+    tree.root.findByProps({ 'aria-label':label }).props.onChange({ target:{value} });
+    tree.update(React.createElement(ScoreEditor, { ...props,document:next }));
+  });
+  await act(async () => { tree = create(React.createElement(ScoreEditor, { ...props,document:next })); });
+  for (const pairing of encounter.pairings.slice(0,3)) {
+    await update(`${pairing.id} game 1 club A score`, '5');
+    await update(`${pairing.id} game 1 club B score`, '11');
+  }
+  assert.equal(types.championshipClincher(next.encounters[0]), 'b');
+  assert.equal(tree.root.findAllByProps({ 'data-interclub-score':true }).length, 6, 'Game 4 disappears from keyboard score entry at 0–3');
+  assert.equal(tree.root.findAllByProps({ 'data-not-needed-game':true }).length, 1);
+  assert.ok(!text(tree).includes('A singles tiebreak is required'));
+  assert.deepEqual(types.gameCount(next), { entered:3,total:3 });
+  assert.equal(next.encounters[0].pairings[3].games[0].played_at, null);
+  await update('women game 1 club A score', '13');
+  assert.equal(tree.root.findAllByProps({ 'data-interclub-score':true }).length, 8, 'A corrected first game reopens Game 4 at 1–2');
+  assert.deepEqual(types.gameCount(next), { entered:3,total:4 });
+  assert.equal(next.encounters[0].pairings[3].games[0].status, 'pending');
+  await update('women game 1 club A score', '5');
+  await update('men game 1 club B score', '');
+  assert.equal(next.encounters[0].pairings[3].games[0].status, 'pending', 'An incomplete earlier score also reopens Game 4');
+  await update('men game 1 club B score', '11');
+  const clinched = copy(next);
+  assert.deepEqual(types.automaticDraftScores(clinched), clinched, 'Reloading is stable');
+  const historical = copy(clinched); historical.encounters[0].pairings[3].games[0] = game('mixed-b','completed');
+  assert.equal(types.automaticDraftScores(historical).encounters[0].pairings[3].games[0].status, 'completed', 'Previously played fourth games remain recorded');
+  const injuryOnSkipped = copy(clinched);
+  injuryOnSkipped.encounters[0].pairings[3].games[0].players_a = ['substitute','entry-3'];
+  assert.equal(substitutions.reviewSubstitutions(injuryOnSkipped).length, 0, 'A skipped game does not require an injury explanation');
+  const markup = renderToStaticMarkup(React.createElement(PrintPacket, { document:clinched,meet,seasonName:'Southern BCS',timezone:'UTC',revision:1,players:props.players,clubName }));
+  assert.ok(markup.includes('Mixed B is not played') && markup.includes('Not needed (3-0)'));
+  await act(async () => tree.unmount());
+
+  // Loading the blank double-forfeit workaround shown in the report repairs
+  // the draft, but still requires saving the exact new revision before submit.
+  let saved = { ...copy(detail),batch:{ ...copy(batch),phase:'final',document:copy(clinched) } }, requests = [];
+  saved.batch.document.encounters[0].pairings[3].games[0].status = 'double_forfeit';
+  global.fetch = async (url, options = {}) => {
+    if (options.method) {
+      const body = JSON.parse(options.body); requests.push({url,body});
+      saved.batch = { ...saved.batch,revision:saved.batch.revision+1,...(body.document ? {document:body.document} : {state:'submitted'}) };
+      return reply({batch:saved.batch});
+    }
+    return reply(saved);
+  };
+  const operationProps = { root:'https://api.test/final',clubId:'alpha',accessToken:'token',phase:'final',context,clubName,onLock() {},onSeasonChange() {} };
+  await act(async () => { tree = create(React.createElement(workspace.MeetOperations, operationProps)); });
+  assert.equal(button(tree, 'Save all draft scores').props.disabled, false);
+  await act(async () => { await button(tree, 'Save all draft scores').props.onClick(); });
+  assert.equal(requests[0].body.document.encounters[0].pairings[3].games[0].status, 'not_needed');
+  await act(async () => { button(tree, 'Review and submit meet').props.onClick(); });
+  assert.equal(button(tree, 'Submit all official scores').props.disabled, false, 'A skipped fourth game never blocks whole-meet submission');
+  await act(async () => { await button(tree, 'Submit all official scores').props.onClick(); });
+  assert.ok(requests.at(-1).url.endsWith('/submit'));
+  assert.equal(requests.at(-1).body.expected_revision, 5);
+  await act(async () => tree.unmount());
+}
+
 async function savedScoreCompletion() {
   let saved = copy(detail), tree, requests = [];
   for (const pairing of saved.batch.document.encounters[0].pairings) for (const game of pairing.games) {
@@ -685,4 +753,4 @@ function writePrintReview() {
   fs.writeFileSync(output, '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Southern BCS paper packet review</title><style>' + stylesheet + screenPreview + '</style></head><body class="printBody"><div class="printPortal">' + render(document) + render(final) + '</div></body></html>');
   console.log('Print review fixture: ' + output);
 }
-(async () => { await scoreEntry(); await pairingControls(); await preMeetRosterChange(); await automaticScoreEntry(); await savedScoreCompletion(); await playUpReplacementEligibility(); await easySubstitutions(); printSafety(); await staggeredSchedule(); await revisionsAndStaleClub(); await pdfDownloads(); await approval(); await qualifyingRoundRobin(); await missingLineups(); await seasonRegistrationGate(); await championshipStage(); await finalPairings(); await qualifyingDisplay(); writePrintReview(); console.log('PASS interclub competition: fixed gender pairings, pre-meet roster changes, per-game injury substitutions, automatic score completion, saved pending-score recovery, zero scores, clearing, win-by-two, injury outcomes, singles, submission review, exact revisions, staging schedule and PDF controls'); })().catch(error => { console.error(error); process.exit(1); });
+(async () => { await scoreEntry(); await pairingControls(); await preMeetRosterChange(); await automaticScoreEntry(); await championshipClinch(); await savedScoreCompletion(); await playUpReplacementEligibility(); await easySubstitutions(); printSafety(); await staggeredSchedule(); await revisionsAndStaleClub(); await pdfDownloads(); await approval(); await qualifyingRoundRobin(); await missingLineups(); await seasonRegistrationGate(); await championshipStage(); await finalPairings(); await qualifyingDisplay(); writePrintReview(); console.log('PASS interclub competition: fixed gender pairings, pre-meet roster changes, per-game injury substitutions, automatic score completion, saved pending-score recovery, zero scores, clearing, win-by-two, injury outcomes, singles, submission review, exact revisions, staging schedule and PDF controls'); })().catch(error => { console.error(error); process.exit(1); });

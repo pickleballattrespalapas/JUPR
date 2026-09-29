@@ -3,7 +3,7 @@ import { apiError, type InterclubMeet, type RegistrationSeason } from "./intercl
 export type CompetitionPhase = "regular" | "final" | "qualifier";
 export type CompetitionFormat = "gender" | "mixed" | "mlp";
 export type CompetitionScheduleMode = "simultaneous" | "staggered";
-export type GameStatus = "pending" | "completed" | "retired" | "forfeit" | "double_forfeit" | "unplayed";
+export type GameStatus = "pending" | "completed" | "retired" | "forfeit" | "double_forfeit" | "unplayed" | "not_needed";
 export type CompetitionPlayer = { entry_id: string; name: string; gender?: string; rating?: number; eligibility_rating?: number; starting_rating?: number; division?: string; rating_locked?: boolean };
 export type CompetitionTeam = { id: string; club_id: string; division: string; revision: number; name: string; roster: CompetitionPlayer[] };
 export type CompetitionGame = { id: string; status: GameStatus; a: number | null; b: number | null; winner: "a" | "b" | null; players_a: string[]; players_b: string[]; played_at: string | null; injury_reason?: string | null };
@@ -16,6 +16,7 @@ export function scheduleRoundLabel(document: CompetitionDocument): string {
 }
 
 export const regularCourtBlockInstructions = "Each court assignment covers Games 1-3 against the same opponents. Stay on that court and finish all three games, even at 2-0, before leaving.";
+export const championshipGameInstructions = "Play women’s doubles, men’s doubles, then Mixed A. At 3–0, the matchup is decided and Mixed B is not played. Otherwise, play Mixed B. At 2–2, play the rotating singles tiebreak.";
 
 export function scheduledEncounters(document: CompetitionDocument): CompetitionEncounter[] {
   return [...document.encounters].sort((a, b) => a.rotation - b.rotation ||
@@ -32,7 +33,7 @@ export type MeetCompetition = { meet: CompetitionMeet; batch: CompetitionBatch |
 
 export const pairingLabels: Record<CompetitionPairing["kind"], string> = { women: "Women’s doubles", men: "Men’s doubles", mixed_a: "Mixed doubles A", mixed_b: "Mixed doubles B" };
 export const phaseLabels: Record<CompetitionPhase, string> = { regular: "Regular season", final: "Championship final", qualifier: "Qualifying playoff" };
-export const gameStatusLabels: Record<GameStatus, string> = { pending: "Not entered", completed: "Completed game", retired: "Injury retirement", forfeit: "Unplayed forfeit", double_forfeit: "Both clubs unable to field this game", unplayed: "Weather: not played" };
+export const gameStatusLabels: Record<GameStatus, string> = { pending: "Not entered", completed: "Completed game", retired: "Injury retirement", forfeit: "Unplayed forfeit", double_forfeit: "Both clubs unable to field this game", unplayed: "Weather: not played", not_needed: "Not needed — matchup decided 3–0" };
 
 export function regularSeasonComplete(context: CompetitionContext): boolean {
   // Other clubs receive only their own meets, so cannot infer season completion.
@@ -72,20 +73,37 @@ export function automaticGameStatus(game: CompetitionGame, enteredAt = new Date(
   const played_at = !game.played_at && (status === "completed" || status === "retired") ? enteredAt : game.played_at;
   return status === game.status && played_at === game.played_at ? game : { ...game, status, played_at, ...(status !== game.status ? { winner: null } : {}) };
 }
+export function championshipClincher(encounter: CompetitionEncounter): "a" | "b" | null {
+  const winners = (["women", "men", "mixed_a"] as const).map(kind => {
+    const pairing = encounter.pairings.find(pairing => pairing.kind === kind);
+    const game = pairing?.games.length === 1 ? pairing.games[0] : null;
+    if (!game || !gameHasOutcome(game)) return null;
+    return game.status === "completed" ? game.a! > game.b! ? "a" : "b" : ["retired", "forfeit"].includes(game.status) ? game.winner : null;
+  });
+  return winners[0] && winners.every(winner => winner === winners[0]) ? winners[0] : null;
+}
 export function automaticDraftScores(document: CompetitionDocument, enteredAt = new Date().toISOString()): CompetitionDocument {
-  return { ...document, encounters: document.encounters.map(encounter => ({ ...encounter,
-    pairings: encounter.pairings.map(pairing => ({ ...pairing, games: pairing.games.map(game => automaticGameStatus(game, enteredAt)) })),
-    tiebreak: encounter.tiebreak ? { ...encounter.tiebreak, status: isFinalScore(encounter.tiebreak.a, encounter.tiebreak.b, 21) ? "completed" : "pending" } : null,
-  })) };
+  return { ...document, encounters: document.encounters.map(encounter => {
+    const scored = { ...encounter, pairings: encounter.pairings.map(pairing => ({ ...pairing, games: pairing.games.map(game => automaticGameStatus(game, enteredAt)) })) };
+    const clincher = document.phase !== "regular" ? championshipClincher(scored) : null;
+    return { ...scored, pairings: scored.pairings.map(pairing => ({ ...pairing, games: pairing.games.map(game => {
+      if (document.phase === "regular" || pairing.kind !== "mixed_b") return game;
+      if (clincher && ["pending", "double_forfeit", "unplayed", "not_needed"].includes(game.status) && game.a === null && game.b === null) return { ...game, status: "not_needed" as const, winner: null, played_at: null };
+      if (!clincher && game.status === "not_needed") return automaticGameStatus({ ...game, status: "pending" }, enteredAt);
+      return game;
+    }) })),
+    tiebreak: encounter.tiebreak && !(clincher && encounter.tiebreak.a === null && encounter.tiebreak.b === null)
+      ? { ...encounter.tiebreak, status: isFinalScore(encounter.tiebreak.a, encounter.tiebreak.b, 21) ? "completed" as const : "pending" as const } : null };
+  }) };
 }
 export function gameHasOutcome(game: CompetitionGame): boolean {
   if (game.status === "completed") return isFinalScore(game.a, game.b);
   if (game.status === "retired") return game.a !== null && game.b !== null && !!game.winner;
   if (game.status === "forfeit") return !!game.winner;
-  return game.status === "double_forfeit" || game.status === "unplayed";
+  return game.status === "double_forfeit" || game.status === "unplayed" || game.status === "not_needed";
 }
 export function gameCount(document: CompetitionDocument): { entered: number; total: number } {
-  const games = document.encounters.flatMap(encounter => encounter.pairings.flatMap(pairing => pairing.games));
+  const games = document.encounters.flatMap(encounter => encounter.pairings.flatMap(pairing => pairing.games)).filter(game => game.status !== "not_needed");
   return { entered: games.filter(gameHasOutcome).length, total: games.length };
 }
 export function toLocalInput(iso: string | null): string {

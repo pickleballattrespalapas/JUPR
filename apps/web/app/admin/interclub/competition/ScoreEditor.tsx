@@ -3,7 +3,7 @@
 import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
 
 import { useEffect, useRef, useState, type FocusEvent, type KeyboardEvent } from "react";
-import { CompetitionDocument, CompetitionEncounter, CompetitionGame, CompetitionPairing, CompetitionPlayer, GameStatus, MeetCompetition, activeSinglesPlayers, automaticGameStatus, gameStatusLabels, isFinalScore, matchesSkillLevel, pairingLabels, playerNames, scheduledEncounters, scheduleRoundLabel, singlesCourt } from "@/lib/interclubCompetition";
+import { CompetitionDocument, CompetitionEncounter, CompetitionGame, CompetitionPairing, CompetitionPlayer, GameStatus, MeetCompetition, activeSinglesPlayers, automaticDraftScores, automaticGameStatus, championshipClincher, gameStatusLabels, isFinalScore, matchesSkillLevel, pairingLabels, playerNames, scheduledEncounters, scheduleRoundLabel, singlesCourt } from "@/lib/interclubCompetition";
 import styles from "./competition.module.css";
 import InjurySubstitutionEditor from "./InjurySubstitutionEditor";
 
@@ -36,7 +36,7 @@ export default function ScoreEditor({ document, detail, players, clubName, disab
   }
   const scoreInput = { "data-interclub-score": true, inputMode: "numeric" as const, onKeyDown: navigateScores, onFocus: (event: FocusEvent<HTMLInputElement>) => event.currentTarget.select() };
   function changeEncounter(id: string, patch: Partial<CompetitionEncounter>) {
-    onChange({ ...document, encounters: document.encounters.map(encounter => encounter.id === id ? { ...encounter, ...patch } : encounter) });
+    onChange(automaticDraftScores({ ...document, encounters: document.encounters.map(encounter => encounter.id === id ? { ...encounter, ...patch } : encounter) }));
   }
   function changePairing(encounter: CompetitionEncounter, id: string, patch: Partial<CompetitionPairing>) {
     changeEncounter(encounter.id, { pairings: encounter.pairings.map(pairing => pairing.id === id ? { ...pairing, ...patch } : pairing) });
@@ -62,6 +62,7 @@ export default function ScoreEditor({ document, detail, players, clubName, disab
     </div>
     <div className={styles.notice}><strong>Score → Tab → score → Tab → next game.</strong> Both final scores mark a game completed automatically. Shift+Tab moves back; Esc reaches game options. Game dates are recorded automatically from your device when you enter scores.</div>
     <p>The players are already set. For an injury, choose “Substitute a player” on the replacement’s first game. The change carries through the remaining games automatically.</p>
+    {document.phase !== "regular" && <p>First club to win three games wins the matchup. At 3–0, Game 4 is marked not needed automatically. At 2–2, play rotating singles.</p>}
     {scheduledEncounters(document).filter(encounter => !division || encounter.division === division).map(encounter => <article key={encounter.id} className={styles.card}>
       <p className={styles.eyebrow}>Skill level {encounter.division} · {scheduleRoundLabel(document)} {encounter.rotation}</p>
       <h3>{clubName(encounter.club_a)} <span className={styles.muted}>vs</span> {clubName(encounter.club_b)}</h3>
@@ -75,7 +76,9 @@ export default function ScoreEditor({ document, detail, players, clubName, disab
           })}</div>
         </details>}
         <fieldset disabled={disabled} className={styles.gameFields}><legend className={styles.srOnly}>{pairingLabels[pairing.kind]} scores</legend>
-          {pairing.games.map((game, index) => <div key={game.id} id={`interclub-game-${game.id}`} data-score-game tabIndex={-1} className={`${styles.game}${focusGame?.id === game.id ? ` ${styles.highlightedGame}` : ""}`}>
+          {pairing.games.map((game, index) => game.status === "not_needed" ? <div key={game.id} id={`interclub-game-${game.id}`} data-not-needed-game className={styles.notice}>
+            <strong>Game 4 · Not needed — matchup decided 3–0</strong><p>No score or outcome is required. Correcting an earlier score will reopen this game if needed.</p>
+          </div> : <div key={game.id} id={`interclub-game-${game.id}`} data-score-game tabIndex={-1} className={`${styles.game}${focusGame?.id === game.id ? ` ${styles.highlightedGame}` : ""}`}>
             {focusGame?.id === game.id && gameError && <p className={styles.error} role="alert">{gameError}</p>}
             {!!(game.players_a.length || game.players_b.length) && <p><strong>Players for Game {index + 1}:</strong> {playerNames(game.players_a.length ? game.players_a : pairing.players_a, players)} <strong>vs</strong> {playerNames(game.players_b.length ? game.players_b : pairing.players_b, players)}</p>}
             <div className={styles.gameRow}><strong>Game {index + 1}</strong>
@@ -89,7 +92,7 @@ export default function ScoreEditor({ document, detail, players, clubName, disab
               <label>Game outcome<select aria-label={`${pairingLabels[pairing.kind]} game ${index + 1} status`} value={["pending", "completed"].includes(game.status) ? "automatic" : game.status} onChange={event => {
                 const status: GameStatus = event.target.value === "automatic" ? "pending" : event.target.value as GameStatus;
                 changeGame(encounter, pairing, game.id, { status, winner: null, ...(["forfeit", "double_forfeit", "unplayed"].includes(status) ? { a: null, b: null, played_at: null } : {}) });
-              }}><option value="automatic">Use entered scores automatically</option>{(["retired", "forfeit", "double_forfeit", "unplayed"] as const).map(value => <option key={value} value={value}>{gameStatusLabels[value]}</option>)}</select></label>
+              }}><option value="automatic">Use entered scores automatically</option>{(["retired", "forfeit", "double_forfeit", "unplayed"] as const).filter(value => document.phase === "regular" || !["double_forfeit", "unplayed"].includes(value)).map(value => <option key={value} value={value}>{gameStatusLabels[value]}</option>)}</select></label>
               <p>Leave scores empty for an unplayed game. For an injury retirement, keep the stopped score and choose the winning club.</p>
             </details>
             <details data-substitution><summary>Substitute a player · Game {index + 1}</summary>
@@ -106,7 +109,7 @@ export default function ScoreEditor({ document, detail, players, clubName, disab
           </div>)}
         </fieldset>
       </section>)}
-      {document.phase !== "regular" && <section className={styles.pairing}>
+      {document.phase !== "regular" && (!championshipClincher(encounter) || encounter.tiebreak) && <section className={styles.pairing}>
         <h4>Rotating singles — only at 2–2</h4>
         <p>{singlesCourt(encounter.division)} singles. Rally scoring to 21, win by two, no cap. Both teams rotate after every four rallies, repeating their fixed order. This game never affects individual ratings.</p>
         <fieldset disabled={disabled} className={styles.gameFields}><legend className={styles.srOnly}>Rotating singles tiebreak</legend>

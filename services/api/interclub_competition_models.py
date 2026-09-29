@@ -12,7 +12,7 @@ class CompetitionGame(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     id: str = Field(min_length=1, max_length=120)
-    status: Literal["pending", "completed", "retired", "forfeit", "double_forfeit", "unplayed"] = "pending"
+    status: Literal["pending", "completed", "retired", "forfeit", "double_forfeit", "unplayed", "not_needed"] = "pending"
     a: int | None = Field(default=None, ge=0, strict=True)
     b: int | None = Field(default=None, ge=0, strict=True)
     winner: Literal["a", "b"] | None = None
