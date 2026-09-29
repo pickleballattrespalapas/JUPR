@@ -26,22 +26,26 @@ export type PublicLeagueDocument = {
   results: Encounter[];
   scoring_version?: 1;
   competition_results?: CompetitionResult[];
+  players?: ResultPlayer[];
 };
+export type ResultPlayer = { id: string; name: string; club_id: string };
+export type ResultGame = { status: string; a: number | null; b: number | null; winner: "a" | "b" | null; players_a?: string[]; players_b?: string[] };
 export type CompetitionResult = {
   id: string; meet_id: string; phase: "regular" | "final" | "qualifier";
   weather: string; division: string; club_a: string; club_b: string;
-  pairings: { kind: string; games: { status: string; a: number | null; b: number | null; winner: "a" | "b" | null }[] }[];
-  tiebreak: { status: string; a: number | null; b: number | null } | null;
+  pairings: { kind: string; games: ResultGame[] }[];
+  tiebreak: { status: string; a: number | null; b: number | null; players_a?: string[]; players_b?: string[] } | null;
+  outcome?: { winner: string | null; points_a: number; points_b: number; pairings_a: number; pairings_b: number; games_a: number; games_b: number };
 };
 export type StandingRow = {
   club_id: string;
-  name: string;
-  played: number;
-  wins: number;
-  losses: number;
+  name?: string;
+  played?: number;
+  wins?: number;
+  losses?: number;
   games_won: number;
-  games_lost: number;
-  point_difference: number;
+  games_lost?: number;
+  point_difference?: number;
   points?: number; pairings_won?: number; point_differential?: number;
   meets_played?: number; position?: number; tied?: boolean;
 };

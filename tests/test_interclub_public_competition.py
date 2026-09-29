@@ -7,6 +7,28 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from services.api import interclub_public_routes as publication
 from jupr_app.domain import interclub_competition as engine
+from services.api.interclub_result_views import result_rows, result_player_catalog
+
+
+class Query:
+    def __init__(self, rows): self.rows = deepcopy(rows)
+    def select(self, *args, **kwargs): return self
+    def eq(self, key, value):
+        self.rows = [row for row in self.rows if key not in row or row[key] == value]
+        return self
+    def in_(self, key, values):
+        self.rows = [row for row in self.rows if row.get(key) in values]
+        return self
+    def limit(self, *args): return self
+    def execute(self): return SimpleNamespace(data=deepcopy(self.rows))
+
+
+def result_db(batches=None):
+    entries = [{"id": f"{club}-{i}", "club_id": club, "player_id": offset+i, "email": "private@example.invalid"}
+               for club, offset in (("alpha", 0), ("beta", 4)) for i in range(4)]
+    players = [{"id": i, "club_id": "alpha" if i < 4 else "beta", "name": f"Player {i}", "email": "private@example.invalid"} for i in range(8)]
+    tables = {"pcs_interclub_entries": entries, "players": players, "pcs_interclub_competition_batches": batches or []}
+    return SimpleNamespace(table=lambda name: Query(tables[name]))
 
 
 def official_document():
@@ -34,7 +56,7 @@ def test_publication_uses_full_approved_pairings_and_strips_private_fields(monke
     season = {"id": "season", "details": {"name": "Southern BCS", "start_date": "2027-01-01", "end_date": "2027-03-31", "timezone": "America/Mazatlan", "divisions": ["3.5"]}}
     clubs = [{"id": "alpha", "name": "Alpha"}, {"id": "beta", "name": "Beta"}]
     meets = [{"id": "meet", "host_club_id": "alpha", "club_ids": ["alpha", "beta"]}]
-    snapshot = publication.competition_publication(None, season, clubs, meets)
+    snapshot = publication.competition_publication(result_db(), season, clubs, meets)
     response = publication.publication_response(snapshot)
     assert snapshot["scoring_version"] == 1
     assert snapshot["results"] == []  # Never infer legacy one-pairing results.
@@ -45,7 +67,9 @@ def test_publication_uses_full_approved_pairings_and_strips_private_fields(monke
     assert {row["club_id"] for row in response["standings"][0]["rows"]} == {"alpha", "beta"}
     assert {row["club_id"] for row in response["club_cup"]["standings"]} == {"alpha", "beta"}
     assert "private@example.invalid" not in str(response)
-    assert "alpha-0" not in str(response) and "players_a" not in str(response)
+    assert "alpha-0" in str(response) and "players_a" in str(response)
+    assert {p["name"] for p in snapshot["players"]} == {f"Player {i}" for i in range(8)}
+    assert "player_id" not in str(response) and "pool_member_id" not in str(response)
     assert "injury_reason" not in str(response) and "ratings_error" not in str(response)
     canonical["encounters"][0]["pairings"][0]["games"][0]["a"] = 99
     assert snapshot["competition_results"][0]["pairings"][0]["games"][0]["a"] == 11
@@ -60,13 +84,6 @@ def publication_client(monkeypatch):
     approved = {"id": str(uuid4()), "approved_revision": 4, "approved_document": official_document()}
     state = {"batches": [approved], "publication": {"revision": 1, "draft": {"results": []}, "published": None}, "calls": [], "error": None}
 
-    class Query:
-        def __init__(self, rows): self.rows = rows
-        def select(self, *args, **kwargs): return self
-        def eq(self, *args): return self
-        def limit(self, *args): return self
-        def execute(self): return SimpleNamespace(data=deepcopy(self.rows))
-
     def rpc(name, args):
         state["calls"].append((name, args))
         def execute():
@@ -75,7 +92,8 @@ def publication_client(monkeypatch):
             return SimpleNamespace(data={"revision": 2, "draft": {"results": []}, "published": args.get("p_document")})
         return SimpleNamespace(execute=execute)
 
-    db = SimpleNamespace(table=lambda name: Query(state["batches"] if name == "pcs_interclub_competition_batches" else [state["publication"]]), rpc=rpc)
+    catalog = result_db()
+    db = SimpleNamespace(table=lambda name: Query(state["batches"] if name == "pcs_interclub_competition_batches" else [state["publication"]]) if name in {"pcs_interclub_competition_batches", "pcs_interclub_publications"} else catalog.table(name), rpc=rpc)
     monkeypatch.setattr(publication, "season_context", lambda db, sid: (season, clubs, meets))
     monkeypatch.setattr(publication, "site_administrator", lambda *args: SimpleNamespace(user_id=str(uuid4()), email="organizer@example.invalid"))
     app = FastAPI(); publication.install_interclub_public_routes(app, get_supabase_client=lambda: db)
@@ -127,3 +145,44 @@ def test_change_between_api_read_and_database_commit_fails_closed(publication_cl
     response = client.post(path + "/publish", json={"revision": 1, "preview_fingerprint": preview["preview_fingerprint"]})
     assert response.status_code == 409
     assert "private database detail" not in response.text
+
+
+def test_player_projection_tracks_actual_games_and_excludes_private_and_unplayed_data():
+    document = official_document()
+    pairing = document["encounters"][0]["pairings"][0]
+    pairing["games"][1].update(players_a=["replacement", "alpha-1"], injury_reason="Private medical note")
+    pairing["games"][2].update(players_a=["replacement", "alpha-1"])
+    rows = result_rows([document])
+    assert rows[0]["pairings"][0]["games"][0]["players_a"] == ["alpha-0", "alpha-1"]
+    assert rows[0]["pairings"][0]["games"][1]["players_a"] == ["replacement", "alpha-1"]
+    assert rows[0]["outcome"]["points_a"] == 3
+    assert "injury_reason" not in str(rows) and "Private medical" not in str(rows)
+    document["weather"] = "finalized_partial"
+    pairing["games"][2].update(status="unplayed", a=None, b=None, winner=None)
+    assert result_rows([document])[0]["pairings"][0]["games"][2]["players_a"] == []
+
+
+def test_older_publication_gains_filters_without_publishing_new_meets_or_writes():
+    document = official_document()
+    extra = deepcopy(document); extra["meet_id"] = "unpublished-meet"
+    batches = [{"approved_document": doc, "approved_at": "2027-01-16T18:00:00Z"} for doc in (document, extra)]
+    original = {"scoring_version": 1, "competition_results": result_rows([document], participants=False), "club_cup": {"preserved": True}}
+    result = publication.published_result_details(result_db(batches), "season", original, "2027-01-16T19:00:00+00:00")
+    assert len(result["players"]) == 8
+    assert len(result["competition_results"]) == 1
+    assert result["club_cup"] == original["club_cup"]
+    assert "players" not in original and "players_a" not in str(original)
+    assert "unpublished-meet" not in str(result)
+
+
+@pytest.mark.parametrize("change", ["newer_approval", "score_changed", "missing_approval"])
+def test_older_publication_never_receives_newer_or_unverified_player_results(change):
+    document = official_document()
+    original = {"scoring_version": 1, "competition_results": result_rows([document], participants=False)}
+    stamp = "2027-01-16T18:00:00Z"
+    if change == "newer_approval": stamp = "2027-01-16T20:00:00Z"
+    if change == "missing_approval": stamp = None
+    if change == "score_changed": document["encounters"][0]["pairings"][0]["games"][0]["b"] = 3
+    result = publication.published_result_details(result_db([{"approved_document": document, "approved_at": stamp}]), "season", original, "2027-01-16T19:00:00Z")
+    assert result["competition_results"] == original["competition_results"]
+    assert result["players"] == []

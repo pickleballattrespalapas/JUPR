@@ -12,7 +12,8 @@ function load(file, mocks = {}) {
 const registration = load('lib/interclubRegistration.ts');
 const types = load('lib/interclubCompetition.ts', { './interclubRegistration': registration });
 const css = new Proxy({}, { get: (_, key) => key === '__esModule' ? false : key });
-const common = { '@/lib/interclubCompetition': types, './competition.module.css': css };
+const resultModules = require('./helpers/interclub-results-modules.cjs');
+const common = { '@/lib/interclubCompetition': types, './competition.module.css': css, '@/components/PublicInterclubCompetition': resultModules('components/PublicInterclubCompetition.tsx'), '@/lib/interclubResultViews': resultModules('lib/interclubResultViews.ts') };
 const substitutions = load('lib/interclubSubstitutions.ts', { './interclubCompetition': types });
 common['@/lib/interclubSubstitutions'] = substitutions;
 common['./SubstitutionRepair'] = load(base + 'SubstitutionRepair.tsx', common);
@@ -347,7 +348,12 @@ async function savedScoreCompletion() {
     locked.batch.document.encounters[0].pairings[0].games[0].b = 11;
     global.fetch = async () => reply(locked);
     await act(async () => { tree = create(React.createElement(workspace.MeetOperations, props)); });
-    assert.equal(tree.root.findByType(ScoreEditor).props.document.encounters[0].pairings[0].games[0].status, 'pending', 'Read-only and official documents retain their exact saved outcome');
+    if (state === 'draft') assert.equal(tree.root.findByType(ScoreEditor).props.document.encounters[0].pairings[0].games[0].status, 'pending');
+    else {
+      assert.equal(tree.root.findAllByType(ScoreEditor).length, 0, 'Completed review replaces disabled score entry');
+      const Results = common['@/components/PublicInterclubCompetition'].CompetitionResults;
+      assert.equal(tree.root.findByType(Results).props.results[0].pairings[0].games[0].status, 'pending', 'Read-only results preserve the exact saved outcome');
+    }
     await act(async () => tree.unmount());
   }
   const recorded = { ...game('recorded'), status: 'completed', a: 11, b: 9, played_at: '2026-09-28T10:45:00-07:00' };
@@ -598,11 +604,14 @@ async function approval() {
   await act(async () => tree.unmount());
 }
 
-function qualifyingDisplay() {
+async function qualifyingDisplay() {
   const data = { ...context, standings: { divisions: { '3.5': [{ club_id: 'alpha', points: 3, pairings_won: 2, games_won: 4, point_differential: 8, meets_played: 1, position: 2, tied: true }] }, qualification: { '3.5': { qualifiers: [], playoff_required: ['alpha', 'beta'], status: 'playoff_required' } } }, club_cup: { standings: [], status: 'complete', champions: ['alpha', 'beta'] } };
   const markup = renderToStaticMarkup(React.createElement(Standings, { data, clubName }));
-  assert.ok(markup.includes('Qualifying playoff needed') && markup.includes('no club advances on alphabetical order'));
   assert.ok(markup.includes('Joint Club Cup champions'));
+  let tree; await act(async () => { tree = create(React.createElement(Standings, { data, clubName })); });
+  await act(async () => tree.root.findByProps({ 'aria-label': 'Standings' }).props.onChange({ target: { value: '3.5' } }));
+  assert.ok(text(tree).includes('Qualifying playoff needed') && text(tree).includes('no club advances on alphabetical order'));
+  await act(async () => tree.unmount());
 }
 function writePrintReview() {
   const output = process.env.PCS_PRINT_REVIEW_PATH;
@@ -619,4 +628,4 @@ function writePrintReview() {
   fs.writeFileSync(output, '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Southern BCS paper packet review</title><style>' + stylesheet + screenPreview + '</style></head><body class="printBody"><div class="printPortal">' + render(document) + render(final) + '</div></body></html>');
   console.log('Print review fixture: ' + output);
 }
-(async () => { await scoreEntry(); await pairingControls(); await preMeetRosterChange(); await automaticScoreEntry(); await savedScoreCompletion(); await playUpReplacementEligibility(); await easySubstitutions(); printSafety(); await staggeredSchedule(); await revisionsAndStaleClub(); await pdfDownloads(); await approval(); await qualifyingRoundRobin(); await missingLineups(); await seasonRegistrationGate(); qualifyingDisplay(); writePrintReview(); console.log('PASS interclub competition: fixed gender pairings, pre-meet roster changes, per-game injury substitutions, automatic score completion, saved pending-score recovery, zero scores, clearing, win-by-two, injury outcomes, singles, submission review, exact revisions, staging schedule and PDF controls'); })().catch(error => { console.error(error); process.exit(1); });
+(async () => { await scoreEntry(); await pairingControls(); await preMeetRosterChange(); await automaticScoreEntry(); await savedScoreCompletion(); await playUpReplacementEligibility(); await easySubstitutions(); printSafety(); await staggeredSchedule(); await revisionsAndStaleClub(); await pdfDownloads(); await approval(); await qualifyingRoundRobin(); await missingLineups(); await seasonRegistrationGate(); await qualifyingDisplay(); writePrintReview(); console.log('PASS interclub competition: fixed gender pairings, pre-meet roster changes, per-game injury substitutions, automatic score completion, saved pending-score recovery, zero scores, clearing, win-by-two, injury outcomes, singles, submission review, exact revisions, staging schedule and PDF controls'); })().catch(error => { console.error(error); process.exit(1); });

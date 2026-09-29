@@ -181,6 +181,12 @@ test("interclub paper packet, score entry, approval and public results", async (
   expect((await result.json()).ratings.status).toBe("completed");
   await expect(page.getByRole("heading", { name: "Official meet results", exact: true })).toBeVisible();
   await expect(page.getByText("Rating updates: completed", { exact: true })).toBeVisible();
+  await expect(page.locator("input[data-interclub-score]")).toHaveCount(0);
+  const reviewedResults = page.getByRole("region", { name: "Browse match results", exact: true });
+  await expect(reviewedResults).toBeVisible();
+  await expect(reviewedResults.getByRole("combobox", { name: "Filter results by club", exact: true })).toBeVisible();
+  await reviewedResults.locator("summary").first().click();
+  await expect(reviewedResults.getByRole("table", { name: "Women’s doubles scores", exact: true }).first()).toBeVisible();
   await page.screenshot({ path: join(reportDir,"interclub-approved-meet.png"), fullPage: true });
 
   const lockedReads: string[] = [];
@@ -465,8 +471,35 @@ test("interclub paper packet, score entry, approval and public results", async (
   publicPage.on("pageerror", error => errors.push(error.message));
   await publicPage.goto(`/interclub/${official.id}`);
   await expect(publicPage.getByRole("heading",{ name: `Rehearsal ${state.run} full-season`, exact:true })).toBeVisible();
-  await expect(publicPage.getByText("Club Cup", { exact: false }).first()).toBeVisible();
+  await expect(publicPage.getByRole("heading", { name: "Overall Club Cup", exact: true })).toBeVisible();
   await expect(publicPage.getByText("Private revised note", { exact: false })).toHaveCount(0);
+  await expect(publicPage.getByRole("tab", { name: "Overall standings", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(publicPage.getByRole("table", { name: "Club Cup standings", exact: true })).toBeVisible();
+  await expect(publicPage.getByRole("heading", { name: "Meet schedule", exact: true })).not.toBeVisible();
+  await expect(publicPage.getByRole("region", { name: "Browse match results", exact: true })).not.toBeVisible();
+  await publicPage.screenshot({ path: join(reportDir, "interclub-overall-results.png"), fullPage: true });
+  await publicPage.getByRole("tab", { name: "Results", exact: true }).click();
+  const publicResults = publicPage.getByRole("region", { name: "Browse match results", exact: true });
+  await expect(publicResults).toBeVisible();
+  const clubFilter = publicResults.getByRole("combobox", { name: "Filter results by club", exact: true });
+  await clubFilter.selectOption(club);
+  const meetFilter = publicResults.getByRole("combobox", { name: "Filter results by meet", exact: true });
+  await meetFilter.selectOption({ index: 1 });
+  const playerFilter = publicResults.getByRole("combobox", { name: "Filter results by player", exact: true });
+  await expect(playerFilter).toBeEnabled();
+  await playerFilter.click();
+  const selectedPlayer = publicResults.getByRole("listbox", { name: "Matching players", exact: true }).getByRole("option").filter({ hasNotText: /^All players$/ }).first();
+  const selectedName = (await selectedPlayer.innerText()).split(" · ")[0];
+  await selectedPlayer.click();
+  await expect(publicResults.getByRole("status").first()).toContainText(`involving ${selectedName}`);
+  await expect(publicResults.locator("details[open]").first()).toBeVisible();
+  await publicPage.setViewportSize({ width: 390, height: 844 });
+  await publicPage.screenshot({ path: join(reportDir, "interclub-player-results-mobile.png"), fullPage: true });
+  expect(await publicPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await publicResults.getByRole("button", { name: "Clear filters", exact: true }).click();
+  await publicPage.getByRole("tab", { name: "Schedule", exact: true }).click();
+  await expect(publicPage.getByRole("heading", { name: "Meet schedule", exact: true })).toBeVisible();
+  await expect(publicResults).not.toBeVisible();
   await publicPage.goto(`/interclub/signup/${official.signup[club].share_id}`);
   await expect(publicPage.getByRole("heading", { name: "Season registration has closed.", exact: true })).toBeVisible();
   await expect(publicPage.getByRole("button", { name: "Join the season player pool", exact: true, includeHidden: true })).toHaveCount(0);
@@ -502,5 +535,5 @@ test("interclub paper packet, score entry, approval and public results", async (
   await expect(publicPlayerRow.getByRole("cell", { name: "3.15", exact: true }).first()).toBeVisible();
   expect(errors).toEqual([]);
   writeFileSync(join(reportDir,"interclub-browser.json"),JSON.stringify({ status:"passed",candidate_sha:state.sha,
-    checks:["shared_meet_signup","play_up_waitlist","concurrent_signup_capacity","rating_band_fifo","signup_retry_identity","withdrawal_promotes_actual_roster","mobile_signup","paper_packet_pdf","six_game_ui_entry","dirty_navigation_lock","draft_reload","whole_meet_submission","organizer_approval","both_rating_streams","registration_phase_route_lock","admin_inline_player_creation","upcoming_meet_edit","add_meet_after_registration","late_inline_player_creation_without_notes","late_player_request_and_approval","guided_meet_lineup","eligible_player_filter","gender_composition","lineup_draft_preserved_on_pool_visit","anonymous_public_cup","closed_signup_readonly","anonymous_inline_player_signup","persisted_inline_profile_ratings","no_browser_exceptions"] },null,2));
+    checks:["shared_meet_signup","play_up_waitlist","concurrent_signup_capacity","rating_band_fifo","signup_retry_identity","withdrawal_promotes_actual_roster","mobile_signup","paper_packet_pdf","six_game_ui_entry","dirty_navigation_lock","draft_reload","whole_meet_submission","organizer_approval","both_rating_streams","registration_phase_route_lock","admin_inline_player_creation","upcoming_meet_edit","add_meet_after_registration","late_inline_player_creation_without_notes","late_player_request_and_approval","guided_meet_lineup","eligible_player_filter","gender_composition","lineup_draft_preserved_on_pool_visit","anonymous_public_cup","overall_first_results","meet_club_player_filters","mobile_result_layout","compact_admin_results","closed_signup_readonly","anonymous_inline_player_signup","persisted_inline_profile_ratings","no_browser_exceptions"] },null,2));
 });

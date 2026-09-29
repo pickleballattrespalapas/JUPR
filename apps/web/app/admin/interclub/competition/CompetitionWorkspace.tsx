@@ -9,6 +9,8 @@ import { useAdminWorkspace } from "@/lib/useAdminWorkspace";
 import { RegistrationSeason } from "@/lib/interclubRegistration";
 import { CompetitionBatch, CompetitionContext, CompetitionDocument, CompetitionFormat, CompetitionPhase, CompetitionScheduleMode, MeetCompetition, automaticDraftScores, competitionPath, competitionPlayers, competitionRequest, fromLocalInput, gameCount, gameHasOutcome, phaseLabels } from "@/lib/interclubCompetition";
 import ScoreEditor from "./ScoreEditor";
+import { CompetitionResults } from "@/components/PublicInterclubCompetition";
+import { documentResults, documentResultPlayers } from "@/lib/interclubResultViews";
 import SubstitutionRepair from "./SubstitutionRepair";
 import PrintPacket from "./PrintPacket";
 import Standings from "./Standings";
@@ -97,8 +99,8 @@ export function CompetitionHome({ clubId, accessToken, initialSeasonId, initialM
       </div>
       {!data.meets.length && <><InterclubWorkflow seasonId={seasonId} current="run" meetPlanningOpen={meetPlanningOpen} /><p>The organizer needs to schedule a meet before score sheets can be prepared.</p></>}
       {data.is_organizer && <ScheduleMeet root={competitionPath(api!, clubId, seasonId)} clubId={clubId} accessToken={accessToken} context={data} disabled={locked} onScheduled={meet => { setMeetId(meet.id); setRefresh(value => value + 1); }} />}
-      {meetId && <MeetOperations key={`${clubId}:${seasonId}:${meetId}:${phase}:${refresh}`} root={`${competitionPath(api!, clubId, seasonId)}/meets/${encodeURIComponent(meetId)}/${phase}`} clubId={clubId} accessToken={accessToken} phase={phase} context={data} clubName={clubName} onLock={setLocked} onSeasonChange={() => { setLocked(false); setRefresh(value => value + 1); }} />}
       <Standings data={data} clubName={clubName} />
+      {meetId && <MeetOperations key={`${clubId}:${seasonId}:${meetId}:${phase}:${refresh}`} root={`${competitionPath(api!, clubId, seasonId)}/meets/${encodeURIComponent(meetId)}/${phase}`} clubId={clubId} accessToken={accessToken} phase={phase} context={data} clubName={clubName} onLock={setLocked} onSeasonChange={() => { setLocked(false); setRefresh(value => value + 1); }} />}
     </>}
   </main>;
 }
@@ -282,7 +284,7 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
         </div>}
         {detail.is_organizer && batch.state !== "draft" && <details><summary>Correct submitted or official scores</summary><p>Corrections create a new draft and must be submitted and approved again. The earlier result remains in the audit history.</p><label>Reason for correction<textarea value={reason} onChange={event => setReason(event.target.value)} /></label><button disabled={disabled || !reason.trim()} onClick={() => void change("reopen", { reason: reason.trim() })}>Open correction draft</button></details>}
       </div>
-      <details className={styles.card}><summary>Weather delay, cancellation or reschedule</summary>
+      {batch.state === "draft" && <details className={styles.card}><summary>Weather delay, cancellation or reschedule</summary>
         <p>{phase === "regular" ? "A temporary delay resumes from the stopped score. On a new date, replay every unfinished three-game pairing from the beginning; completed pairings stand. If no reschedule is possible, completed games decide the pairing, 1–1 is a draw, and a wholly unplayed matchup gives one standings point to each club." : "A temporary delay resumes from the stopped score. The organizer arranges completion of the full MLP matchup so the final or qualifying place has an on-court winner."}</p>
         <label>Weather decision<select disabled={!editable} value={draft.weather} onChange={event => edit({ ...draft, weather: event.target.value as CompetitionDocument["weather"] })}><option value="normal">No weather change</option><option value="delay">Temporary delay — resume where stopped</option>{draft.weather === "rescheduled" && <option value="rescheduled">Rescheduled — unfinished pairings replayed</option>}{phase === "regular" && <option value="finalized_partial">No reschedule — finalize available results</option>}</select></label>
         {phase === "regular" && detail.is_organizer && batch.state === "draft" && <form onSubmit={event => { event.preventDefault(); void change("reschedule", { starts_at: fromLocalInput(startsAt), roster_deadline: fromLocalInput(deadline), reason: reason.trim() }); }}>
@@ -291,14 +293,14 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
             <label>Reschedule reason<textarea required value={reason} onChange={event => setReason(event.target.value)} /></label><button type="submit" disabled={!startsAt || !deadline || !reason.trim()}>Reschedule unfinished pairings</button>
           </fieldset>
         </form>}
-      </details>
+      </details>}
       {!!substitutionProblems.length && <section className={styles.warning} aria-label="Substitutions needing attention">
         <h3>{substitutionProblems.length === 1 ? "One substitution needs attention" : `${substitutionProblems.length} substitutions need attention`}</h3>
         <p>Your scores are kept. Finish recording each injury once here.</p>
         {substitutionProblems.map(change => <SubstitutionRepair key={`${change.gameId}:${change.side}`} document={draft} change={change} eligibilityProblem={substitutionEligibilityProblem(change, substitutionPool(change), players, detail.meet.roster_deadline)} options={substitutionPool(change)} players={players} disabled={!editable} onRepair={repairSubstitution} onShow={() => goToGame(change.gameId)} />)}
       </section>}
       {undoSubstitution && <p className={styles.notice}>Substitution updated. <button disabled={!editable} onClick={() => edit(undoSubstitution)}>Undo substitution update</button></p>}
-      <ScoreEditor document={draft} detail={detail} players={players} clubName={clubName} disabled={!editable} onChange={edit} divisionFilter={scoreDivision} onDivisionFilterChange={setScoreDivision} onScoreEntryEnd={finishScoreEntry} focusGame={focusGame} gameError={errorGame ? error : undefined} onSubstitution={document => { edit(document); setUndoSubstitution(draft); setStatus("Substitution applied to the remaining games. Save when ready."); }} />
+      {batch.state !== "draft" ? <CompetitionResults results={documentResults(draft)} names={Object.fromEntries(draft.encounters.flatMap(row => [row.club_a, row.club_b]).map(id => [id, clubName(id)]))} players={documentResultPlayers(draft, players)} singleMeet /> : <ScoreEditor document={draft} detail={detail} players={players} clubName={clubName} disabled={!editable} onChange={edit} divisionFilter={scoreDivision} onDivisionFilterChange={setScoreDivision} onScoreEntryEnd={finishScoreEntry} focusGame={focusGame} gameError={errorGame ? error : undefined} onSubstitution={document => { edit(document); setUndoSubstitution(draft); setStatus("Substitution applied to the remaining games. Save when ready."); }} />}
       {editable && <div className={styles.bottomBar}><span>{dirty ? "Unsaved score changes" : "All draft changes saved"}</span><button ref={saveScores} className={styles.primary} disabled={!dirty || disabled} onClick={() => void change("save", { document: draft })}>Save all draft scores</button></div>}
       <PrintPacket document={batch.document} meet={detail.meet} seasonName={context.season.details.name} timezone={context.season.details.timezone} revision={batch.revision} players={players} clubName={clubName} />
     </>}

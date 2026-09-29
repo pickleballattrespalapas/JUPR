@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from copy import deepcopy
+from datetime import datetime
 import hashlib
 import json
 from uuid import UUID
@@ -11,6 +13,7 @@ from services.api.club_site_models import StrictModel, SiteAction
 from services.api.club_site_routes import published_site, site_administrator, site_rpc
 from services.api.interclub_competition_routes import approved_documents
 from jupr_app.domain import interclub_competition as competition
+from services.api.interclub_result_views import result_rows, result_player_catalog
 
 
 class GameScore(StrictModel):
@@ -107,26 +110,13 @@ def competition_publication(db, season, clubs, meets, *, documents=None):
         documents = approved_documents(db, season["id"])
     tables = competition.league_standings(documents, clubs=clubs)
     cup = competition.club_cup(documents, clubs=clubs)
-    summaries = []
-    for document in documents:
-        for encounter in document["encounters"]:
-            summaries.append({
-                "id": encounter["id"], "meet_id": document["meet_id"],
-                "phase": document["phase"], "weather": document["weather"],
-                "division": encounter["division"],
-                "club_a": encounter["club_a"], "club_b": encounter["club_b"],
-                "pairings": [{"kind": pairing["kind"], "games": [
-                    {key: game.get(key) for key in ("status", "a", "b", "winner")}
-                    for game in pairing["games"]
-                ]} for pairing in encounter["pairings"]],
-                "tiebreak": ({key: encounter["tiebreak"].get(key) for key in ("status", "a", "b")}
-                             if encounter.get("tiebreak") else None),
-            })
+    summaries = result_rows(documents)
     doc = public_document(season, clubs, meets, {"results": []})
     doc.update({"scoring_version": 1, "competition_results": summaries,
                 "competition_standings": [{"division": division, "rows": tables["divisions"].get(division, [])}
                                           for division in doc["divisions"]],
-                "club_cup": cup, "qualification": tables["qualification"]})
+                "club_cup": cup, "qualification": tables["qualification"],
+                "players": result_player_catalog(db, season["id"], summaries)})
     return doc
 
 
@@ -156,6 +146,34 @@ def publication_response(document):
     return {"document": document, "standings": league_standings(document)}
 
 
+def published_result_details(db, season_id, document, published_at):
+    """Enrich older snapshots only from the unchanged approval they published.
+
+    No database writes, no additional meets, and no newer corrections leak into
+    the public snapshot. Older unmatched snapshots still render their scores.
+    """
+    if document.get("scoring_version") != 1 or "players" in document or not published_at:
+        return document
+    cutoff = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+    batches = db.table("pcs_interclub_competition_batches").select("approved_document,approved_at").eq("season_id", str(season_id)).execute().data or []
+    published = document.get("competition_results", [])
+    replacements = {}
+    for batch in batches:
+        approved, stamp = batch.get("approved_document"), batch.get("approved_at")
+        if not approved or not stamp or datetime.fromisoformat(stamp.replace("Z", "+00:00")) > cutoff:
+            continue
+        prior = [row for row in published if (row["meet_id"], row["phase"]) == (approved["meet_id"], approved["phase"])]
+        old_rows = result_rows([approved], participants=False)
+        if sorted(prior, key=lambda row: row["id"]) != sorted(old_rows, key=lambda row: row["id"]):
+            continue
+        for row in result_rows([approved]):
+            replacements[(row["meet_id"], row["phase"], row["id"])] = row
+    result = deepcopy(document)
+    result["competition_results"] = [replacements.get((row["meet_id"], row["phase"], row["id"]), row) for row in published]
+    result["players"] = result_player_catalog(db, season_id, result["competition_results"])
+    return result
+
+
 def install_interclub_public_routes(app, *, get_supabase_client):
     @app.get("/public/clubs/{slug}/interclub")
     def club_leagues(slug: str, response: Response):
@@ -171,9 +189,10 @@ def install_interclub_public_routes(app, *, get_supabase_client):
     def league(season_id: UUID, response: Response):
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Robots-Tag"] = "noindex, nofollow"
-        rows = get_supabase_client().table("pcs_interclub_publications").select("season_id,published,published_at").eq("season_id", str(season_id)).limit(1).execute().data or []
+        db = get_supabase_client()
+        rows = db.table("pcs_interclub_publications").select("season_id,published,published_at").eq("season_id", str(season_id)).limit(1).execute().data or []
         if not rows or not rows[0].get("published"): raise HTTPException(404, "League website is not published.")
-        doc = rows[0]["published"]
+        doc = published_result_details(db, season_id, rows[0]["published"], rows[0]["published_at"])
         return {"id": str(season_id), **publication_response(doc), "published_at": rows[0]["published_at"]}
 
     def organizer(club_id, season_id, authorization):
