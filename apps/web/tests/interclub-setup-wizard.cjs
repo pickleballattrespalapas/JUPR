@@ -75,6 +75,7 @@ async function completeJourney() {
   assert.equal(stored.draft.meets[0].starts_at, null, 'Unfinished meet can be resumed');
   await act(async () => tree.unmount()); props = { ...props, initialSeason: stored };
   await act(async () => { tree = create(React.createElement(Wizard, props)); });
+  assert.equal(tree.root.findAllByProps({ 'aria-label': 'Meet 1 duration' }).length, 0);
   await fill(tree, 'Meet 1 host', 'alpha');
   assert.equal(tree.root.findByProps({ 'aria-label': 'Meet 1: Tres Palapas' }).props.disabled, true);
   await act(async () => tree.root.findByProps({ 'aria-label': 'Meet 1: Visiting Club' }).props.onChange());
@@ -272,6 +273,7 @@ function playUpRules() {
   assert.equal(helpers.divisionEligibilityLabel('garbage'), 'Rating eligibility unavailable');
   const draft = helpers.newSeason().draft;
   draft.registration_rules = { '3.5': { min_rating: 3.5, max_rating: 3.999, women_required: 2 } };
+  assert.equal(helpers.normalizeDraft({ ...draft, meets: [{ duration_minutes: null }] }).meets[0].duration_minutes, 180);
   assert.equal(helpers.normalizeDraft(draft).registration_rules['3.5'].min_rating, null, 'Reloading old drafts removes their superseded lower bound');
 }
 function timezoneChecks() {

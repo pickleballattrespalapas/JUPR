@@ -108,7 +108,7 @@ export default function PublicInterclubLeague({
                   .join(" · ")}
               </p>
               <small>
-                {meet.courts} courts · {meet.duration_minutes} minutes
+                {meet.courts} courts
               </small>
             </article>
           ))}

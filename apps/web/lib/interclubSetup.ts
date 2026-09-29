@@ -23,6 +23,7 @@ export const newSeason = (): PlanningSeason => ({ id: crypto.randomUUID(), revis
 } });
 export function normalizeDraft(draft: PlanningDraft): PlanningDraft {
   return { ...draft, start_date: draft.start_date || null, end_date: draft.end_date || null,
+    meets: draft.meets.map(meet => ({ ...meet, duration_minutes: meet.duration_minutes ?? 180 })),
     setup_step: draft.setup_step || 0, registration_rules: Object.fromEntries(draft.divisions.map(d => [d, emptyRule(d)])) };
 }
 

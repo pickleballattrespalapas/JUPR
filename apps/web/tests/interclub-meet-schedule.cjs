@@ -33,6 +33,7 @@ async function createAndTimezone() {
   const props = { ...base, onScheduled: value => { saved = value; } };
   await act(async () => { tree = create(React.createElement(Form, props)); });
   assert.equal(input(tree, 'Competition').props.value, 'regular');
+  assert.equal(tree.root.findAllByProps({ 'aria-label': 'Duration (minutes)' }).length, 0);
   await set(tree, 'Host club', 'alpha');
   await act(async () => input(tree, 'Beta Club').props.onChange({ target: { checked: true } }));
   await set(tree, 'Meet date and time', '2099-02-10T09:30');
@@ -137,4 +138,30 @@ async function visibleSeasonBounds() {
   assert.equal(requests.length, 1, 'Valid local dates remain allowed even when the UTC date is the next day');
   await act(async () => tree.unmount());
 }
-(async () => { await createAndTimezone(); await ordinaryEditAndLockedFields(); await authorityAndUncertainSave(); await schedulePanelGate(); await visibleSeasonBounds(); console.log('PASS interclub meet schedule: commissioner/registration/played locks, regular meet creation, season timezone, visible season bounds, idempotency, ordinary date changes, protected cutoffs/courts, conflict recovery, and schedule navigation'); })().catch(error => { console.error(error); process.exitCode = 1; });
+async function championshipSetup() {
+  const qualification = { '3.5': { qualifiers: ['beta', 'alpha'], playoff_required: [], eligible: ['alpha', 'beta'], status: 'ready' },
+    '4.0': { qualifiers: ['beta'], playoff_required: ['alpha', 'gamma'], eligible: ['alpha', 'beta', 'gamma'], status: 'playoff_required' } };
+  const scoped = { ...context, season: { ...season, details: { ...season.details, divisions: ['3.5', '4.0'] } }, clubs: [...context.clubs, { id: 'gamma', name: 'Gamma Club' }], standings: { qualification } };
+  let tree, saved; const requests = [];
+  global.fetch = async (url, options) => { requests.push(JSON.parse(options.body)); return reply({ meet: { ...meet, ...JSON.parse(options.body) } }); };
+  await act(async () => { tree = create(React.createElement(Form, { ...base, context: scoped, fixedPhase: 'final', onScheduled: value => { saved = value; } })); });
+  assert.ok(text(tree).includes('Beta Club vs Alpha Club'));
+  assert.ok(text(tree).includes('Awaiting qualifying playoff'));
+  assert.equal(tree.root.findAllByProps({ type: 'checkbox' }).length, 0, 'Qualified participants are included without manual checkboxes');
+  assert.deepEqual(input(tree, 'Host club').findAllByType('option').map(node => node.props.value), ['', 'alpha', 'beta']);
+  await set(tree, 'Host club', 'beta'); await set(tree, 'Meet date and time', '2099-02-10T10:00'); await submit(tree);
+  assert.equal(requests[0].competition_phase, 'final'); assert.deepEqual(requests[0].club_ids, ['beta', 'alpha']);
+  assert.equal(saved.competition_phase, 'final'); await act(async () => tree.unmount());
+  const unresolved = { ...scoped, standings: { qualification: { '3.5': { ...qualification['4.0'], qualifiers: [] }, '4.0': qualification['4.0'] } } };
+  await act(async () => { tree = create(React.createElement(Form, { ...base, context: unresolved, fixedPhase: 'final', onScheduled() {} })); });
+  assert.equal(button(tree, 'Add meet').props.disabled, true, 'An unresolved qualifying tie cannot silently schedule a final');
+  await act(async () => tree.unmount());
+  await act(async () => { tree = create(React.createElement(Form, { ...base, context: scoped, fixedPhase: 'qualifier', onScheduled() {} })); });
+  await set(tree, 'Host club', 'gamma'); await set(tree, 'Meet date and time', '2099-02-11T10:00'); await submit(tree);
+  assert.deepEqual(requests[1].club_ids, ['alpha', 'gamma']); await act(async () => tree.unmount());
+  await act(async () => { tree = create(React.createElement(Form, { ...base, meet: { ...meet, duration_minutes: 90 }, onScheduled() {} })); });
+  assert.equal(tree.root.findAllByProps({ 'aria-label': 'Duration (minutes)' }).length, 0);
+  await submit(tree); assert.equal(requests[2].duration_minutes, 90, 'Editing an existing meet preserves its stored scheduling window');
+  await act(async () => tree.unmount());
+}
+(async () => { await createAndTimezone(); await ordinaryEditAndLockedFields(); await authorityAndUncertainSave(); await schedulePanelGate(); await visibleSeasonBounds(); await championshipSetup(); console.log('PASS interclub meet schedule: commissioner/registration/played locks, regular meet creation, season timezone, visible season bounds, idempotency, ordinary date changes, protected cutoffs/courts, conflict recovery, and schedule navigation'); })().catch(error => { console.error(error); process.exitCode = 1; });

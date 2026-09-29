@@ -7,7 +7,7 @@ import { readBrowserWorkspace } from "@/lib/adminWorkspace";
 import { useAdminSession } from "@/lib/useAdminSession";
 import { useAdminWorkspace } from "@/lib/useAdminWorkspace";
 import { RegistrationSeason } from "@/lib/interclubRegistration";
-import { CompetitionBatch, CompetitionContext, CompetitionDocument, CompetitionFormat, CompetitionPhase, CompetitionScheduleMode, MeetCompetition, automaticDraftScores, competitionPath, competitionPlayers, competitionRequest, fromLocalInput, gameCount, gameHasOutcome, phaseLabels } from "@/lib/interclubCompetition";
+import { CompetitionBatch, CompetitionContext, CompetitionDocument, CompetitionFormat, CompetitionPhase, CompetitionScheduleMode, MeetCompetition, automaticDraftScores, competitionPath, competitionPlayers, competitionRequest, fromLocalInput, gameCount, gameHasOutcome, phaseLabels, regularSeasonComplete } from "@/lib/interclubCompetition";
 import ScoreEditor from "./ScoreEditor";
 import { CompetitionResults } from "@/components/PublicInterclubCompetition";
 import { documentResults, documentResultPlayers } from "@/lib/interclubResultViews";
@@ -15,6 +15,7 @@ import SubstitutionRepair from "./SubstitutionRepair";
 import PrintPacket from "./PrintPacket";
 import Standings from "./Standings";
 import ScheduleMeet from "./ScheduleMeet";
+import ChampionshipSetup from "./ChampionshipSetup";
 import CourtSchedule from "./CourtSchedule";
 import styles from "./competition.module.css";
 import InterclubWorkflow, { workflowHref } from "../InterclubWorkflow";
@@ -36,6 +37,7 @@ export function CompetitionHome({ clubId, accessToken, initialSeasonId, initialM
   const [seasons, setSeasons] = useState<RegistrationSeason[]>([]), [seasonId, setSeasonId] = useState(initialSeasonId);
   const [data, setData] = useState<CompetitionContext | null>(null), [error, setError] = useState(""), [refresh, setRefresh] = useState(0), [loading, setLoading] = useState(true);
   const [meetId, setMeetId] = useState(initialMeetId), [locked, setLocked] = useState(false);
+  const [view, setView] = useState<"championships" | "meet" | null>(initialMeetId ? "meet" : null);
   const token = useRef(accessToken); token.current = accessToken;
   const registrationCheck = useRef<AbortController | null>(null);
   const { meetPlanningOpen } = useRegistrationWindow(data?.season.registration, () => void recheckRegistration());
@@ -73,12 +75,16 @@ export function CompetitionHome({ clubId, accessToken, initialSeasonId, initialM
     return () => controller.abort();
   }, [api, clubId, seasonId, refresh]);
   const phase: CompetitionPhase = data?.meets.find(meet => meet.id === meetId)?.competition_phase || "regular";
+  const regularComplete = !!data && regularSeasonComplete(data);
+  const showChampionships = regularComplete && view !== "meet" && !locked;
+  const reviewRegular = regularComplete && phase === "regular" && !showChampionships;
+  const selectMeet = (id: string) => { setMeetId(id); setView("meet"); };
   const clubName = (id: string) => data?.clubs.find(club => club.id === id)?.name || "Club";
   const when = (iso: string) => new Date(iso).toLocaleString(undefined, { timeZone: data?.season.details.timezone, dateStyle: "medium", timeStyle: "short" });
   return <main className={styles.page}>
     <p>{locked ? <span aria-disabled="true">← Interclub leagues</span> : <Link href="/admin/interclub">← Interclub leagues</Link>}</p>
-    <header><p className={styles.eyebrow}>Paper courts · One official score submission</p><h1>Meet operations</h1><p>Prepare the pairings, download a PDF to review or print, then bring all official scores back here.</p></header>
-    <div className={styles.toolbar}><label>Season<select value={seasonId} disabled={locked || !seasons.length} onChange={event => { setSeasonId(event.target.value); setMeetId(""); }}>
+    <header><p className={styles.eyebrow}>{regularComplete ? "Regular season complete" : "Paper courts · One official score submission"}</p><h1>{showChampionships ? "Championships" : reviewRegular ? "Regular-season results" : "Meet operations"}</h1><p>{showChampionships ? "Review the qualified clubs and prepare the season finals." : reviewRegular ? "Review approved meets and final regular-season standings." : "Prepare the pairings, download a PDF to review or print, then bring all official scores back here."}</p></header>
+    <div className={styles.toolbar}><label>Season<select value={seasonId} disabled={locked || !seasons.length} onChange={event => { setSeasonId(event.target.value); setMeetId(""); setView(null); }}>
       {!seasons.length && <option value="">No accepted seasons</option>}{seasons.map(season => <option key={season.id} value={season.id}>{season.details.name} · {season.details.start_date}</option>)}
     </select></label><button disabled={loading || locked} onClick={() => setRefresh(value => value + 1)}>Refresh season</button>
     </div>
@@ -94,13 +100,16 @@ export function CompetitionHome({ clubId, accessToken, initialSeasonId, initialM
       </section>
     </>}
     {data && meetPlanningOpen && <>
-      <div className={styles.toolbar}><label>Meet<select value={meetId} disabled={locked} onChange={event => setMeetId(event.target.value)}>{data.meets.map(meet => <option key={meet.id} value={meet.id}>{when(meet.starts_at)} · {clubName(meet.host_club_id)}{meet.competition_phase && meet.competition_phase !== "regular" ? ` · ${phaseLabels[meet.competition_phase]}` : ""}</option>)}</select></label>
+      {regularComplete && <nav className={styles.toolbar} aria-label="Season stage"><button className={showChampionships ? styles.primary : undefined} disabled={locked} aria-pressed={showChampionships} onClick={() => setView("championships")}>Championships</button><button disabled={locked} aria-pressed={reviewRegular} onClick={() => selectMeet(data.meets.find(meet => !meet.competition_phase || meet.competition_phase === "regular")!.id)}>Regular-season results</button></nav>}
+      {showChampionships ? <ChampionshipSetup context={data} root={competitionPath(api!, clubId, seasonId)} clubId={clubId} accessToken={accessToken} onSelectMeet={selectMeet} onScheduled={meet => { selectMeet(meet.id); setRefresh(value => value + 1); }} /> : <>
+      <div className={styles.toolbar}><label>Meet<select value={meetId} disabled={locked} onChange={event => selectMeet(event.target.value)}>{data.meets.map(meet => <option key={meet.id} value={meet.id}>{when(meet.starts_at)} · {clubName(meet.host_club_id)}{meet.competition_phase && meet.competition_phase !== "regular" ? ` · ${phaseLabels[meet.competition_phase]}` : ""}</option>)}</select></label>
         <label>Competition<select value={phase} disabled aria-label="Scheduled competition format">{Object.entries(phaseLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
       </div>
       {!data.meets.length && <><InterclubWorkflow seasonId={seasonId} current="run" meetPlanningOpen={meetPlanningOpen} /><p>The organizer needs to schedule a meet before score sheets can be prepared.</p></>}
-      {data.is_organizer && <ScheduleMeet root={competitionPath(api!, clubId, seasonId)} clubId={clubId} accessToken={accessToken} context={data} disabled={locked} onScheduled={meet => { setMeetId(meet.id); setRefresh(value => value + 1); }} />}
+      {data.is_organizer && <ScheduleMeet root={competitionPath(api!, clubId, seasonId)} clubId={clubId} accessToken={accessToken} context={data} disabled={locked} onScheduled={meet => { selectMeet(meet.id); setRefresh(value => value + 1); }} />}
+      </>}
       <Standings data={data} clubName={clubName} />
-      {meetId && <MeetOperations key={`${clubId}:${seasonId}:${meetId}:${phase}:${refresh}`} root={`${competitionPath(api!, clubId, seasonId)}/meets/${encodeURIComponent(meetId)}/${phase}`} clubId={clubId} accessToken={accessToken} phase={phase} context={data} clubName={clubName} onLock={setLocked} onSeasonChange={() => { setLocked(false); setRefresh(value => value + 1); }} />}
+      {!showChampionships && meetId && <MeetOperations key={`${clubId}:${seasonId}:${meetId}:${phase}:${refresh}`} root={`${competitionPath(api!, clubId, seasonId)}/meets/${encodeURIComponent(meetId)}/${phase}`} clubId={clubId} accessToken={accessToken} phase={phase} context={data} clubName={clubName} onLock={setLocked} onSeasonChange={() => { setLocked(false); setRefresh(value => value + 1); }} />}
     </>}
   </main>;
 }
@@ -210,13 +219,14 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
   const canRefreshStartingLineups = phase === "regular" && new Date(detail.meet.starts_at).getTime() > Date.now() && !!draft?.encounters.every(encounter => encounter.pairings.every(pairing => pairing.games.every(game => game.status === "pending" && game.a === null && game.b === null || ["forfeit", "double_forfeit"].includes(game.status) && (!pairing.players_a.length || !pairing.players_b.length))));
   const qualification = context.standings?.qualification?.[division] || context.qualifying?.[division];
   const qualifyingClubs = phase === "final" ? qualification?.qualifiers : phase === "qualifier" ? qualification?.playoff_required : null;
+  const finalClubs = qualification?.status === "ready" && qualification.qualifiers.length === 2 ? qualification.qualifiers : [];
   const candidates = Array.from(new Set(detail.teams.filter(team => team.division === division && (!qualifyingClubs || qualifyingClubs.includes(team.club_id))).map(team => team.club_id)));
   const alreadyScheduled = phase !== "regular" && !!batch?.document.encounters.some(encounter =>
     encounter.division === division && (phase === "final" ||
       [encounter.club_a, encounter.club_b].includes(clubA) && [encounter.club_a, encounter.club_b].includes(clubB)));
   const hasPlayableLineups = phase === "regular"
     ? divisions.some(level => new Set(detail.teams.filter(team => team.division === level).map(team => team.club_id)).size >= 2)
-    : candidates.length >= 2;
+    : phase === "final" ? finalClubs.length === 2 && finalClubs.every(id => candidates.includes(id)) : candidates.length >= 2;
   const lineupHref = workflowHref("lineups", context.season.id, detail.meet.id);
   return <section className={styles.section}>
     <InterclubWorkflow seasonId={context.season.id} meetId={detail.meet.id} meetPlanningOpen={true}
@@ -227,16 +237,18 @@ export function MeetOperations({ root, clubId, accessToken, phase, context, club
     {detail.lineups_hidden && <p className={styles.notice}>Opposing lineups become available at the roster deadline. You can still manage your club’s roster.</p>}
     {blocked && <div className={styles.notice}><p>Reload the latest saved meet before continuing. Your last change may already have been saved.</p><button disabled={busy} onClick={() => { setReview(null); setRefresh(value => value + 1); }}>Reload saved meet</button></div>}
     {(!batch || phase !== "regular" && batch.state === "draft" && draft?.encounters.every(encounter => encounter.pairings.every(pairing => pairing.games.every(game => game.status === "pending")))) && <div className={styles.card}><h2>{batch ? "Add another skill-level matchup" : `Prepare ${phaseLabels[phase].toLowerCase()} pairings`}</h2>
-      <p>The schedule uses the approved meet rosters. Clubs may enter different skill levels at each meet. Each skill level needs two to four clubs.</p>
-      {detail.can_manage && (phase === "regular" || detail.is_organizer) ? <form onSubmit={event => { event.preventDefault(); void change("generate", { format, ...(phase !== "regular" ? { division, club_a: clubA, club_b: clubB } : { schedule_mode: scheduleMode }) }); }}>
+      <p>{phase === "regular" ? "The schedule uses the approved meet rosters. Clubs may enter different skill levels at each meet. Each skill level needs two to four clubs." : "Choose a skill level to prepare its matchup from approved meet lineups. Add all skill levels before entering scores."}</p>
+      {detail.can_manage && (phase === "regular" || detail.is_organizer) ? <form onSubmit={event => { event.preventDefault(); if (alreadyScheduled || !hasPlayableLineups) return; void change("generate", { format, ...(phase !== "regular" ? { division, club_a: phase === "final" ? finalClubs[0] : clubA, club_b: phase === "final" ? finalClubs[1] : clubB } : { schedule_mode: scheduleMode }) }); }}>
         <fieldset className={styles.gameFields} disabled={disabled || dirty}><div className={styles.toolbar}>
           {phase === "regular" ? <><label>Meet format<select aria-label="Meet format" value={format} onChange={event => setFormat(event.target.value as CompetitionFormat)}><option value="gender">Women’s and men’s doubles</option><option value="mixed">Two mixed doubles pairings</option></select></label>
             <label>Court schedule<select aria-label="Court schedule" value={scheduleMode} onChange={event => { setScheduleMode(event.target.value as CompetitionScheduleMode); setError(""); }}>
               <option value="staggered">Staggered — fit {detail.meet.courts} courts</option><option value="simultaneous">All divisions at once</option>
             </select></label></> : <>
             <label>Skill level<select value={division} onChange={event => { setDivision(event.target.value); setClubA(""); setClubB(""); }}>{divisions.map(value => <option key={value}>{value}</option>)}</select></label>
-            <label>Club A<select required value={clubA} onChange={event => setClubA(event.target.value)}><option value="">Choose club</option>{candidates.filter(id => id !== clubB).map(id => <option key={id} value={id}>{clubName(id)}</option>)}</select></label>
-            <label>Club B<select required value={clubB} onChange={event => setClubB(event.target.value)}><option value="">Choose club</option>{candidates.filter(id => id !== clubA).map(id => <option key={id} value={id}>{clubName(id)}</option>)}</select></label>
+            {phase === "final" ? <p><strong>{finalClubs.length === 2 ? finalClubs.map(clubName).join(" vs ") : "Finalists awaiting qualifying results"}</strong><br />Qualified from season results</p> : <>
+              <label>Club A<select required value={clubA} onChange={event => setClubA(event.target.value)}><option value="">Choose club</option>{candidates.filter(id => id !== clubB).map(id => <option key={id} value={id}>{clubName(id)}</option>)}</select></label>
+              <label>Club B<select required value={clubB} onChange={event => setClubB(event.target.value)}><option value="">Choose club</option>{candidates.filter(id => id !== clubA).map(id => <option key={id} value={id}>{clubName(id)}</option>)}</select></label>
+            </>}
           </>}
           <button type="submit" className={styles.primary} disabled={alreadyScheduled || !hasPlayableLineups}>Generate pairings</button>
         </div></fieldset>
