@@ -85,7 +85,7 @@ export function CompetitionResults({ results, names, meets = [], timezone = "Ame
     const left = orderedMeets.findIndex(meet => meet.id === a), right = orderedMeets.findIndex(meet => meet.id === b);
     return right - left || a.localeCompare(b);
   });
-  const gameCount = filtered.reduce((sum, row) => sum + row.pairings.reduce((n, pairing) => n + pairing.games.filter(game => !player || resultPlayers(game).includes(player)).length, 0), 0);
+  const gameCount = filtered.reduce((sum, row) => sum + row.pairings.reduce((n, pairing) => n + pairing.games.filter(game => game.status !== "not_needed" && (!player || resultPlayers(game).includes(player))).length, 0), 0);
   const tiebreakCount = filtered.filter(row => row.tiebreak?.status === "completed" && (!player || resultPlayers(row.tiebreak).includes(player))).length;
   const reset = () => { setMeet(""); setClub(""); setDivision(""); setPlayer(""); };
   const fieldChanged = (change: () => void) => { change(); setPlayer(""); };

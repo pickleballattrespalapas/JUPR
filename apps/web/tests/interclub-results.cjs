@@ -71,6 +71,15 @@ async function main() {
   assert.ok(text(tree.root).includes('4 doubles games · 1 tiebreak'));
   assert.equal(views.hasResultPlayer({ ...special,pairings:[],tiebreak:{...special.tiebreak,status:'pending'} }, 'sub'), false);
   await act(async () => tree.unmount());
+  const clinched = { ...encounter('clinched','m1','3.5','a','b'), phase:'final', pairings: ['women','men','mixed_a','mixed_b'].map((kind,index) => ({ kind, games: [index < 3 ? games[0] : { status:'not_needed',a:null,b:null,winner:null,players_a:[],players_b:[] }] })) };
+  await act(async () => { tree = create(React.createElement(CompetitionResults, { results:[clinched],names:{a:'Alpha',b:'Beta'},players:league.document.players,initialClub:'b' })); });
+  assert.ok(text(tree.root).includes('3 doubles games'));
+  const skipped = tree.root.findAllByProps({ 'data-result-game':'' })[3];
+  assert.ok(text(tree.root).includes('Not needed — matchup decided 3–0'));
+  assert.ok(!/Win|Loss|Draw|Result not entered/.test(text(skipped)), 'Skipped game has neither a result nor a missing-score warning');
+  assert.equal(views.resultGameWinner(clinched.pairings[3].games[0]), null);
+  assert.equal(views.hasResultPlayer({ ...clinched, pairings:[clinched.pairings[3]] }, 'original'), false);
+  await act(async () => tree.unmount());
   console.log('Interclub Cup statistics, direct game tables, club orientation, filters, injury appearances and exceptional results passed');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

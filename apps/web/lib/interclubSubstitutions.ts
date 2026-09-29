@@ -29,7 +29,7 @@ export function reviewSubstitutions(document: CompetitionDocument): Substitution
   const current = new Map<string, string[]>(), removed = new Map<string, Map<string, SubstitutionReview>>();
   const changes: SubstitutionReview[] = [];
   for (const row of competitionGameRows(document)) {
-    if (["forfeit", "double_forfeit", "unplayed"].includes(row.game.status)) continue;
+    if (["forfeit", "double_forfeit", "unplayed", "not_needed"].includes(row.game.status)) continue;
     for (const side of ["a", "b"] as const) {
       const key = scope(row, side), lineupKey = `${key}:${row.pairing.kind}`;
       const actual = gamePlayers(row, side), previous = current.get(lineupKey) || row.pairing[`players_${side}`];
@@ -69,7 +69,7 @@ export function substituteForRemainingGames(document: CompetitionDocument, chang
   let reason = note.trim() || "Injury";
   for (const row of rows.slice(start)) {
     const side = row.encounter.club_a === source.encounter[`club_${change.side}`] ? "a" : row.encounter.club_b === source.encounter[`club_${change.side}`] ? "b" : null;
-    if (!side || scope(row, side) !== sourceScope || ["forfeit", "double_forfeit", "unplayed"].includes(row.game.status)) continue;
+    if (!side || scope(row, side) !== sourceScope || ["forfeit", "double_forfeit", "unplayed", "not_needed"].includes(row.game.status)) continue;
     // Preserve a subsequent injury replacement instead of bringing its injured
     // predecessor back when repairing an older, partially recorded change.
     for (const later of laterChanges.filter(item => item.gameId === row.game.id && item.side === side && item.gameId !== change.gameId)) {

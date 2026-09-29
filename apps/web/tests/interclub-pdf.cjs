@@ -59,5 +59,12 @@ const options = { document, meet: { id: document.meet_id, starts_at: '2026-12-17
   assert.ok(finalText.includes('Skinny rotating singles') && finalText.includes('A: 23 B: 21'), 'Completed championship tiebreak is preserved');
   assert.ok(!finalText.includes('Staggered starts'));
   assert.ok(!finalText.includes('Games 1-3'), 'Championship pairings remain one game each');
+  const clinched = structuredClone(final);
+  clinched.encounters[0].tiebreak = null;
+  clinched.encounters[0].pairings.push({ ...structuredClone(clinched.encounters[0].pairings[0]),id:'skipped',kind:'mixed_b',games:[game('skipped',{status:'not_needed'})] });
+  const clinchedText = content((await buildInterclubMeetPdf({ ...options,document:clinched }, 'packet')).pdf);
+  assert.ok(clinchedText.includes('Mixed B is not played') && clinchedText.includes('Not needed \\(3-0\\)'), 'Championship paper instructions and skipped score row explain the 3–0 clinch');
+  const clinchedSchedule = content((await buildInterclubMeetPdf({ ...options,document:clinched }, 'schedule')).pdf);
+  assert.ok(clinchedSchedule.includes('matchup is decided'), 'The short schedule PDF also explains when to stop play');
   console.log('PASS interclub PDF: compact and full files, every score sheet, saved revision, accented names, injury substitutions, non-play results, timezone and championship tiebreak');
 })().catch(error => { console.error(error); process.exit(1); });

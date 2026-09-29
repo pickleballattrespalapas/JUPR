@@ -236,14 +236,27 @@ def full_season(r):
     for division in s["divisions"]:
         fb = r.generated(s,final,phase="final",division=division,pair=s["clubs"][:2],format="mlp",revision=fb["revision"] if fb else 0)
     fd = r.complete(fb["document"],datetime.fromisoformat(final["starts_at"]),final_tie=True)
+    sweep = fd["encounters"][0]
+    sweep["pairings"][2]["games"][0].update(a=11, b=5, winner="a")
+    sweep["pairings"][3]["games"][0].update(status="double_forfeit", a=None, b=None, winner=None, played_at=None)
+    sweep["tiebreak"] = None
     fb = r.approve(s,final,r.save(s,final,fb,fd))
-    rating_evidence(r,s,fb,12)
+    skipped = fb["document"]["encounters"][0]["pairings"][3]["games"][0]
+    r.check(skipped["status"] == "not_needed" and skipped["a"] is None and skipped["b"] is None and skipped["played_at"] is None,
+            "3-0 final saves, submits and approves with Game 4 automatically not needed")
+    rating_evidence(r,s,fb,11)
     cup = workspace(r,s)["club_cup"]
     r.check(cup["status"] == "complete" and cup["champions"] == [s["clubs"][0]], "three MLP finals settle the Club Cup")
     top = cup["standings"][0]
     r.check(top["regular_points"] == 18 and top["championship_points"] == 18 and top["points"] == 36, "Cup adds regular points and six championship points per skill level")
-    publication(r,s)
+    published = publication(r,s)
+    sweep_result = next(row for row in published["document"]["competition_results"] if row["id"] == sweep["id"])
+    skipped_public = sweep_result["pairings"][3]["games"][0]
+    r.check(sweep_result["outcome"]["games_a"] == 3 and sweep_result["outcome"]["games_b"] == 0
+            and skipped_public["status"] == "not_needed" and not skipped_public["players_a"] and not skipped_public["players_b"],
+            "published 3-0 final gives skipped Game 4 no win, loss or player appearance")
     s["browser_meet"] = m["id"]
+    s["browser_final"] = final["id"]
     r.persist()
     return s
 
