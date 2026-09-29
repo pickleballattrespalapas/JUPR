@@ -1,3 +1,7 @@
+"use client";
+
+import { useId, useState } from "react";
+import resultsStyles from "./InterclubResults.module.css";
 import type { PublicLeague } from "@/lib/interclubPublic";
 import { meetTime } from "@/lib/interclubPublic";
 import styles from "./ClubWebsite.module.css";
@@ -7,6 +11,9 @@ export default function PublicInterclubLeague({
 }: {
   league: PublicLeague;
 }) {
+  const [view, setView] = useState("standings"), [resultClub, setResultClub] = useState("");
+  const panelId = useId();
+  const tabs = [{ id: "standings", label: "Overall standings" }, { id: "results", label: "Results" }, { id: "schedule", label: "Schedule" }];
   const doc = league.document,
     names = Object.fromEntries(doc.clubs.map((c) => [c.id, c.name]));
   return (
@@ -17,20 +24,14 @@ export default function PublicInterclubLeague({
         {doc.start_date} – {doc.end_date} · {doc.clubs.length} participating
         clubs
       </p>
-      <nav className={styles.actions} aria-label="League sections">
-        <a className={styles.button} href="#standings">
-          Standings
-        </a>
-        <a className={styles.button} href="#schedule">
-          Schedule
-        </a>
-        <a className={styles.button} href="#results">
-          Results
-        </a>
-      </nav>
-      <section id="standings">
-        <h2>Standings</h2>
-        {doc.scoring_version === 1 ? <CompetitionStandings league={league} /> : <>
+      <div className={resultsStyles.tabs} role="tablist" aria-label="League sections">
+        {tabs.map((tab, index) => <button key={tab.id} id={`${panelId}-${tab.id}-tab`} type="button" role="tab" aria-selected={view === tab.id} aria-controls={`${panelId}-${tab.id}`} tabIndex={view === tab.id ? 0 : -1} className={resultsStyles.tab} onClick={() => setView(tab.id)} onKeyDown={event => {
+          const next = event.key === "ArrowRight" ? (index + 1) % tabs.length : event.key === "ArrowLeft" ? (index + tabs.length - 1) % tabs.length : event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : -1;
+          if (next >= 0) { event.preventDefault(); setView(tabs[next].id); document.getElementById(`${panelId}-${tabs[next].id}-tab`)?.focus(); }
+        }}>{tab.label}</button>)}
+      </div>
+      <section id={`${panelId}-standings`} role="tabpanel" aria-labelledby={`${panelId}-standings-tab`} hidden={view !== "standings"}>
+        {doc.scoring_version === 1 ? <CompetitionStandings league={league} onClubSelect={club => { setResultClub(club); setView("results"); }} /> : <>
         <p>
           Ranked by encounter wins, then game difference and point difference.
           Clubs with equal totals are tied.
@@ -73,7 +74,7 @@ export default function PublicInterclubLeague({
                       <td>{row.games_won}</td>
                       <td>{row.games_lost}</td>
                       <td>
-                        {row.point_difference > 0 ? "+" : ""}
+                        {(row.point_difference || 0) > 0 ? "+" : ""}
                         {row.point_difference}
                       </td>
                     </tr>
@@ -85,7 +86,7 @@ export default function PublicInterclubLeague({
         ))}
         </>}
       </section>
-      <section id="schedule">
+      <section id={`${panelId}-schedule`} role="tabpanel" aria-labelledby={`${panelId}-schedule-tab`} hidden={view !== "schedule"}>
         <h2>Meet schedule</h2>
         <p>
           All times use {doc.timezone}. Clubs choose players separately for each
@@ -114,9 +115,9 @@ export default function PublicInterclubLeague({
         </div>
         {!doc.meets.length && <p>Meet dates will be announced here.</p>}
       </section>
-      <section id="results">
+      <section id={`${panelId}-results`} role="tabpanel" aria-labelledby={`${panelId}-results-tab`} hidden={view !== "results"}>
         <h2>Results</h2>
-        {doc.scoring_version === 1 ? <CompetitionResults results={doc.competition_results || []} names={names} /> : !doc.results.length ? (
+        {doc.scoring_version === 1 ? <CompetitionResults key={resultClub} results={doc.competition_results || []} names={names} meets={doc.meets} timezone={doc.timezone} players={doc.players} initialClub={resultClub} /> : !doc.results.length ? (
           <p>Results will appear after the organizer publishes them.</p>
         ) : (
           <div className={styles.grid}>

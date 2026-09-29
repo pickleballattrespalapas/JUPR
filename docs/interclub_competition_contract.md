@@ -234,3 +234,26 @@ ineligible original choice instead offers an eligible replacement beside the
 explanation. Repairs are draft edits with Undo and still require Save. They do
 not submit or approve a meet. Server game errors open and highlight the affected
 game, clearing any skill filter. The court schedule collapses once scoring starts.
+
+
+## Results browsing
+
+The public league opens on the Overall Club Cup only. Real tabs switch between
+standings, results and the schedule. The standings selector shows one skill level
+at a time; a club name opens its results. Results can be combined by meet, club,
+skill level and player, with compact matchups expanding to individual game scores.
+Player suggestions use actual game appearances, including injury substitutions;
+rotating-singles appearances remain separate from rated doubles games.
+
+Submitted and approved meets use the same compact result browser in admin.
+Drafts retain keyboard score entry, and corrections still require reopening,
+saving, submitting and approving an exact revision. Season standings are collapsed
+until requested. These display changes do not change scoring, ratings or dates.
+
+Publication whitelists participant entry IDs, names and represented clubs, plus
+per-game appearance IDs. It excludes contacts, local player IDs, medical notes,
+eligibility and audit metadata. New snapshots freeze this projection at publication.
+Older snapshots may gain participant details on read only when the whole meet's
+score projection exactly matches an approval dated no later than publication.
+Newer corrections, additional unpublished meets and unmatched snapshots are never
+silently published. This compatibility read performs no database writes.

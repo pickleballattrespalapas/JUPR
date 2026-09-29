@@ -49,7 +49,7 @@ async function main() {
   await act(async () => button(tree, 'Publish league').props.onClick());
   assert.equal(posts.length, 2, 'A stale club tab cannot publish');
   await act(async () => tree.unmount());
-  const Results = load('components/PublicInterclubCompetition.tsx', { './ClubWebsite.module.css': css }).CompetitionResults;
+  const Results = require('./helpers/interclub-results-modules.cjs')('components/PublicInterclubCompetition.tsx').CompetitionResults;
   const markup = renderToStaticMarkup(React.createElement(Results, { names: { a: 'Alpha', b: 'Beta' }, results: [{ id: 'game', meet_id: 'meet', phase: 'regular', division: '3.5', club_a: 'a', club_b: 'b', weather: 'normal', pairings: [{ kind: 'women', games: [{ status: 'retired', a: 9, b: 4, winner: 'b' }] }] }] }));
   assert.ok(markup.includes('9–4') && markup.includes('Beta awarded the game'), 'Retirement shows actual score and conceded-game winner');
   console.log('Interclub publication review, conflict, stale-club and retirement display checks passed');
