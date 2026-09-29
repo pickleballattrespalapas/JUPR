@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { MeetSignupBoard, PrivateMeetSignup } from "../lib/interclubMeetSignup";
 import type { PoolMember } from "../lib/interclubPlayerPool";
+import type { PublicLeague } from "../lib/interclubPublic";
 import { bootstrapStagingContext, expectedApiOrigin } from "./support/staging";
 
 function expectLinkedPoolMember(members: PoolMember[], name: string, rating: number, gender: string) {
@@ -185,8 +186,9 @@ test("interclub paper packet, score entry, approval and public results", async (
   const reviewedResults = page.getByRole("region", { name: "Browse match results", exact: true });
   await expect(reviewedResults).toBeVisible();
   await expect(reviewedResults.getByRole("combobox", { name: "Filter results by club", exact: true })).toBeVisible();
-  await reviewedResults.locator("summary").first().click();
-  await expect(reviewedResults.getByRole("table", { name: "Women’s doubles scores", exact: true }).first()).toBeVisible();
+  await expect(reviewedResults.getByRole("table", { name: "Game results", exact: true })).toBeVisible();
+  await expect(reviewedResults.locator("tr[data-result-game]")).toHaveCount(scoreCount / 2);
+  await expect(reviewedResults.locator("details")).toHaveCount(0);
   await page.screenshot({ path: join(reportDir,"interclub-approved-meet.png"), fullPage: true });
 
   const lockedReads: string[] = [];
@@ -474,7 +476,16 @@ test("interclub paper packet, score entry, approval and public results", async (
   await expect(publicPage.getByRole("heading", { name: "Overall Club Cup", exact: true })).toBeVisible();
   await expect(publicPage.getByText("Private revised note", { exact: false })).toHaveCount(0);
   await expect(publicPage.getByRole("tab", { name: "Overall standings", exact: true })).toHaveAttribute("aria-selected", "true");
-  await expect(publicPage.getByRole("table", { name: "Club Cup standings", exact: true })).toBeVisible();
+  const cupTable = publicPage.getByRole("table", { name: "Club Cup standings", exact: true });
+  await expect(cupTable).toBeVisible();
+  await expect(cupTable.getByRole("columnheader")).toHaveText(["Place", "Club", "Points", "Meets", "Pairings won", "Games won", "Point difference"]);
+  const publishedResponse = await publicPage.request.get(`${expectedApiOrigin}/public/interclub/${official.id}`);
+  expect(publishedResponse.status()).toBe(200);
+  const published: PublicLeague = await publishedResponse.json();
+  const selectedClubName = published.document.clubs.find(row => row.id === club)!.name;
+  const cupStats = published.club_cup!.standings.find(row => row.club_id === club)!;
+  const cupRow = cupTable.getByRole("row").filter({ has: publicPage.getByRole("button", { name: `View results for ${selectedClubName}`, exact: true }) });
+  await expect(cupRow.getByRole("cell")).toHaveText([`${cupStats.tied ? "T" : ""}${cupStats.position}`, String(cupStats.points), String(cupStats.meets_played), String(cupStats.pairings_won), String(cupStats.games_won), `${(cupStats.point_differential || 0) > 0 ? "+" : ""}${cupStats.point_differential}`]);
   await expect(publicPage.getByRole("heading", { name: "Meet schedule", exact: true })).not.toBeVisible();
   await expect(publicPage.getByRole("region", { name: "Browse match results", exact: true })).not.toBeVisible();
   await publicPage.screenshot({ path: join(reportDir, "interclub-overall-results.png"), fullPage: true });
@@ -483,6 +494,12 @@ test("interclub paper packet, score entry, approval and public results", async (
   await expect(publicResults).toBeVisible();
   const clubFilter = publicResults.getByRole("combobox", { name: "Filter results by club", exact: true });
   await clubFilter.selectOption(club);
+  const clubResults = published.document.competition_results!.filter(row => row.club_a === club || row.club_b === club);
+  const expectedGames = clubResults.reduce((sum, row) => sum + row.pairings.reduce((n, pairing) => n + pairing.games.length, 0) + (row.tiebreak?.status === "completed" ? 1 : 0), 0);
+  await expect(publicResults.locator("tr[data-result-game]")).toHaveCount(expectedGames);
+  await expect(publicResults.locator("details")).toHaveCount(0);
+  await expect(publicResults.locator("tr[data-result-game] td:nth-child(3) strong")).toHaveText(Array(expectedGames).fill(selectedClubName));
+  await publicPage.screenshot({ path: join(reportDir, "interclub-club-results-table.png"), fullPage: false });
   const meetFilter = publicResults.getByRole("combobox", { name: "Filter results by meet", exact: true });
   await meetFilter.selectOption({ index: 1 });
   const playerFilter = publicResults.getByRole("combobox", { name: "Filter results by player", exact: true });
@@ -492,10 +509,16 @@ test("interclub paper packet, score entry, approval and public results", async (
   const selectedName = (await selectedPlayer.innerText()).split(" · ")[0];
   await selectedPlayer.click();
   await expect(publicResults.getByRole("status").first()).toContainText(`involving ${selectedName}`);
-  await expect(publicResults.locator("details[open]").first()).toBeVisible();
+  const filteredGame = publicResults.locator("tr[data-result-game]").first();
+  await expect(filteredGame).toBeVisible();
+  await expect(filteredGame).toContainText(selectedName);
   await publicPage.setViewportSize({ width: 390, height: 844 });
   await publicPage.screenshot({ path: join(reportDir, "interclub-player-results-mobile.png"), fullPage: true });
   expect(await publicPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  const scoreBounds = await filteredGame.locator("td").nth(2).boundingBox();
+  expect(scoreBounds).not.toBeNull();
+  expect(scoreBounds!.x).toBeGreaterThanOrEqual(0);
+  expect(scoreBounds!.x + scoreBounds!.width).toBeLessThanOrEqual(390);
   await publicResults.getByRole("button", { name: "Clear filters", exact: true }).click();
   await publicPage.getByRole("tab", { name: "Schedule", exact: true }).click();
   await expect(publicPage.getByRole("heading", { name: "Meet schedule", exact: true })).toBeVisible();
@@ -535,5 +558,5 @@ test("interclub paper packet, score entry, approval and public results", async (
   await expect(publicPlayerRow.getByRole("cell", { name: "3.15", exact: true }).first()).toBeVisible();
   expect(errors).toEqual([]);
   writeFileSync(join(reportDir,"interclub-browser.json"),JSON.stringify({ status:"passed",candidate_sha:state.sha,
-    checks:["shared_meet_signup","play_up_waitlist","concurrent_signup_capacity","rating_band_fifo","signup_retry_identity","withdrawal_promotes_actual_roster","mobile_signup","paper_packet_pdf","six_game_ui_entry","dirty_navigation_lock","draft_reload","whole_meet_submission","organizer_approval","both_rating_streams","registration_phase_route_lock","admin_inline_player_creation","upcoming_meet_edit","add_meet_after_registration","late_inline_player_creation_without_notes","late_player_request_and_approval","guided_meet_lineup","eligible_player_filter","gender_composition","lineup_draft_preserved_on_pool_visit","anonymous_public_cup","overall_first_results","meet_club_player_filters","mobile_result_layout","compact_admin_results","closed_signup_readonly","anonymous_inline_player_signup","persisted_inline_profile_ratings","no_browser_exceptions"] },null,2));
+    checks:["shared_meet_signup","play_up_waitlist","concurrent_signup_capacity","rating_band_fifo","signup_retry_identity","withdrawal_promotes_actual_roster","mobile_signup","paper_packet_pdf","six_game_ui_entry","dirty_navigation_lock","draft_reload","whole_meet_submission","organizer_approval","both_rating_streams","registration_phase_route_lock","admin_inline_player_creation","upcoming_meet_edit","add_meet_after_registration","late_inline_player_creation_without_notes","late_player_request_and_approval","guided_meet_lineup","eligible_player_filter","gender_composition","lineup_draft_preserved_on_pool_visit","anonymous_public_cup","overall_first_results","cup_stat_columns","all_club_games_visible","club_score_orientation","meet_club_player_filters","mobile_result_layout","compact_admin_results","closed_signup_readonly","anonymous_inline_player_signup","persisted_inline_profile_ratings","no_browser_exceptions"] },null,2));
 });

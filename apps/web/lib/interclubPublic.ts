@@ -47,10 +47,11 @@ export type StandingRow = {
   games_lost?: number;
   point_difference?: number;
   points?: number; pairings_won?: number; point_differential?: number;
+  regular_points?: number; championship_points?: number;
   meets_played?: number; position?: number; tied?: boolean;
 };
 export type ClubCup = {
-  standings: { club_id: string; name?: string; position?: number; points: number; regular_points: number; championship_points: number; tied?: boolean }[];
+  standings: (StandingRow & { points: number; regular_points: number; championship_points: number })[];
   champions: string[]; status: string;
 };
 export type PublicLeague = {

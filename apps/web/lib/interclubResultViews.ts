@@ -4,7 +4,7 @@ import type { CompetitionResult, ResultGame, ResultPlayer } from "./interclubPub
 export const resultPairingNames: Record<string, string> = { women: "Women’s doubles", men: "Men’s doubles", mixed_a: "Mixed doubles A", mixed_b: "Mixed doubles B" };
 export const sortSkillLevels = (values: string[]) => [...values].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 export const resultPlayers = (game: { players_a?: string[]; players_b?: string[] }) => [...(game.players_a || []), ...(game.players_b || [])];
-export const hasResultPlayer = (row: CompetitionResult, player: string) => !player || row.pairings.some(pairing => pairing.games.some(game => resultPlayers(game).includes(player))) || !!row.tiebreak && resultPlayers(row.tiebreak).includes(player);
+export const hasResultPlayer = (row: CompetitionResult, player: string) => !player || row.pairings.some(pairing => pairing.games.some(game => resultPlayers(game).includes(player))) || row.tiebreak?.status === "completed" && resultPlayers(row.tiebreak).includes(player);
 export function resultGameWinner(game: ResultGame): "a" | "b" | null {
   if (game.status === "completed" && game.a !== null && game.b !== null) return game.a > game.b ? "a" : game.b > game.a ? "b" : null;
   return game.status === "forfeit" || game.status === "retired" ? game.winner : null;
