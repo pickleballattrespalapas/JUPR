@@ -191,6 +191,39 @@ test("interclub paper packet, score entry, approval and public results", async (
   await expect(reviewedResults.locator("details")).toHaveCount(0);
   await page.screenshot({ path: join(reportDir,"interclub-approved-meet.png"), fullPage: true });
 
+  const championshipContext = page.waitForResponse(r => new URL(r.url()).pathname === `/admin/clubs/${club}/interclub/competition/${official.id}` && r.request().method() === "GET");
+  await page.goto(`/admin/interclub/competition?season=${official.id}`);
+  const completedSeason = await (await championshipContext).json();
+  await expect(page.getByRole("heading", { name: "Championships", exact: true })).toBeVisible();
+  const championshipPanel = page.getByRole("region", { name: "Championship results", exact: true });
+  await expect(championshipPanel).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "Meet", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Meet score draft", exact: true })).toHaveCount(0);
+  for (const division of completedSeason.season.details.divisions) {
+    const qualified = championshipPanel.getByRole("article", { name: `${division} championship qualification`, exact: true });
+    await expect(qualified).toBeVisible();
+    for (const id of completedSeason.standings.qualification[division].qualifiers) {
+      await expect(qualified.getByRole("heading")).toContainText(completedSeason.clubs.find((candidate: { id: string }) => candidate.id === id).name);
+    }
+    await expect(qualified.getByText("Final results approved", { exact: true })).toBeVisible();
+  }
+  await page.screenshot({ path: join(reportDir, "interclub-championship-panel.png"), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: join(reportDir, "interclub-championship-mobile.png"), fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.getByRole("button", { name: "Regular-season results", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Official meet results", exact: true })).toBeVisible();
+  await page.locator("summary").filter({ hasText: /^Add meet$/ }).click();
+  await page.getByLabel("Competition", { exact: true }).selectOption("final");
+  const qualifiedSetup = page.getByRole("region", { name: "Qualified clubs", exact: true });
+  await expect(qualifiedSetup.getByRole("heading", { name: "Finalists from season results", exact: true })).toBeVisible();
+  await expect(page.getByLabel("Duration (minutes)", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("checkbox")).toHaveCount(0);
+  const qualifiedClubIds = [...new Set(Object.values(completedSeason.standings.qualification).flatMap((q: any) => q.qualifiers))].sort();
+  expect(await page.getByLabel("Host club", { exact: true }).locator("option").evaluateAll(options => options.map(option => (option as HTMLOptionElement).value).filter(Boolean).sort())).toEqual(qualifiedClubIds);
+  await page.screenshot({ path: join(reportDir, "interclub-final-setup.png"), fullPage: true });
+
   const lockedReads: string[] = [];
   page.on("request", request => {
     const path = new URL(request.url()).pathname;
@@ -246,6 +279,7 @@ test("interclub paper packet, score entry, approval and public results", async (
   await expect(schedule.getByRole("button", { name: "Add meet", exact: true })).toBeEnabled();
   await expect(schedule.getByRole("row")).toHaveCount(3);
   await schedule.getByRole("button", { name: /^Edit date for/ }).first().click();
+  await expect(schedule.getByLabel("Duration (minutes)", { exact: true })).toHaveCount(0);
   const localDate = (date: Date) => new Intl.DateTimeFormat("sv-SE", { timeZone: "America/Mazatlan", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
     .format(date).replace(" ", "T");
   await schedule.getByLabel("Meet date and time", { exact: true }).fill(localDate(new Date(Date.parse(adjustments.meets[0].starts_at)+86_400_000)));
@@ -255,6 +289,7 @@ test("interclub paper packet, score entry, approval and public results", async (
   await expect(schedule.getByRole("status").filter({ hasText: "Meet schedule saved." })).toBeVisible();
   await schedule.getByRole("button", { name: "Add meet", exact: true }).click();
   await expect(schedule.getByLabel("Competition", { exact: true })).toHaveValue("regular");
+  await expect(schedule.getByLabel("Duration (minutes)", { exact: true })).toHaveCount(0);
   await expect(schedule.getByText(/Season dates:/)).toBeVisible();
   await schedule.getByLabel("Host club", { exact: true }).selectOption(club);
   for (const checkbox of await schedule.getByRole("checkbox").all()) {
@@ -558,5 +593,5 @@ test("interclub paper packet, score entry, approval and public results", async (
   await expect(publicPlayerRow.getByRole("cell", { name: "3.15", exact: true }).first()).toBeVisible();
   expect(errors).toEqual([]);
   writeFileSync(join(reportDir,"interclub-browser.json"),JSON.stringify({ status:"passed",candidate_sha:state.sha,
-    checks:["shared_meet_signup","play_up_waitlist","concurrent_signup_capacity","rating_band_fifo","signup_retry_identity","withdrawal_promotes_actual_roster","mobile_signup","paper_packet_pdf","six_game_ui_entry","dirty_navigation_lock","draft_reload","whole_meet_submission","organizer_approval","both_rating_streams","registration_phase_route_lock","admin_inline_player_creation","upcoming_meet_edit","add_meet_after_registration","late_inline_player_creation_without_notes","late_player_request_and_approval","guided_meet_lineup","eligible_player_filter","gender_composition","lineup_draft_preserved_on_pool_visit","anonymous_public_cup","overall_first_results","cup_stat_columns","all_club_games_visible","club_score_orientation","meet_club_player_filters","mobile_result_layout","compact_admin_results","closed_signup_readonly","anonymous_inline_player_signup","persisted_inline_profile_ratings","no_browser_exceptions"] },null,2));
+    checks:["completed_season_championship_panel","qualified_final_setup","mobile_championship_panel","meet_setup_without_duration","shared_meet_signup","play_up_waitlist","concurrent_signup_capacity","rating_band_fifo","signup_retry_identity","withdrawal_promotes_actual_roster","mobile_signup","paper_packet_pdf","six_game_ui_entry","dirty_navigation_lock","draft_reload","whole_meet_submission","organizer_approval","both_rating_streams","registration_phase_route_lock","admin_inline_player_creation","upcoming_meet_edit","add_meet_after_registration","late_inline_player_creation_without_notes","late_player_request_and_approval","guided_meet_lineup","eligible_player_filter","gender_composition","lineup_draft_preserved_on_pool_visit","anonymous_public_cup","overall_first_results","cup_stat_columns","all_club_games_visible","club_score_orientation","meet_club_player_filters","mobile_result_layout","compact_admin_results","closed_signup_readonly","anonymous_inline_player_signup","persisted_inline_profile_ratings","no_browser_exceptions"] },null,2));
 });

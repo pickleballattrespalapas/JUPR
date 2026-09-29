@@ -43,6 +43,12 @@
 .gameRow label { flex: 1; min-width: 120px; }
 .gameRow input[type=number] { max-width: 140px; }
 .twoColumns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin: 1rem 0; }
+.finalists { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 1rem; margin: 1.5rem 0; }
+.finalist { min-width: 0; border: 1px solid #cbded4; border-radius: .75rem; background: #f5faf7; padding: 1.2rem; }
+.finalist h3 { font-size: 1.1rem; line-height: 1.5; overflow-wrap: anywhere; }
+.finalist p { margin: .4rem 0; }
+.championshipMeet { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; border-top: 1px solid #dbe4ef; padding: 1rem 0; }
+.championshipMeet p, .championshipMeet .toolbar { margin: .4rem 0; }
 .players { min-width: 0; border: 1px solid #d9e3ed; border-radius: .5rem; padding: .75rem; }
 .players label + label { margin-top: .65rem; }
 .lineup { background: #f1f6ff; padding: .3rem 1rem .8rem; border-radius: .5rem; }

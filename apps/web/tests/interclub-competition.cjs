@@ -24,10 +24,11 @@ const PrintPacket = load(base + 'PrintPacket.tsx', common).PrintPacketContent;
 const Standings = load(base + 'Standings.tsx', common).default;
 let currentClub = 'alpha';
 const workflow = load('app/admin/interclub/InterclubWorkflow.tsx', { 'next/link': ({ children, ...props }) => React.createElement('a', props, children), './workflow.module.css': css });
+const ChampionshipSetup = load(base + 'ChampionshipSetup.tsx', { ...common, '../InterclubWorkflow': workflow, 'next/link': ({ children, ...props }) => React.createElement('a', props, children), './ScheduleMeet': () => null }).default;
 const registrationWindow = load('lib/interclubRegistrationWindow.ts');
 const windowHook = load('lib/useRegistrationWindow.ts', { './interclubRegistrationWindow': registrationWindow });
 let createPdf = async () => { throw new Error('PDF mock not set'); };
-const workspace = load(base + 'CompetitionWorkspace.tsx', { ...common, '@/lib/interclubMeetPdf': { buildInterclubMeetPdf: (...args) => createPdf(...args) }, '@/lib/useRegistrationWindow': windowHook, '../InterclubWorkflow': workflow, 'next/link': ({ children, href }) => React.createElement('a', { href }, children), '@/lib/adminAuthClient': { getAdminApiBaseUrl: () => 'https://api.test' }, '@/lib/adminWorkspace': { readBrowserWorkspace: () => ({ clubId: currentClub }) }, '@/lib/useAdminSession': { useAdminSession: () => ({}) }, '@/lib/useAdminWorkspace': { useAdminWorkspace: () => ({ clubId: currentClub }) }, './ScoreEditor': ScoreEditor, './PrintPacket': PrintPacket, './Standings': Standings, './ScheduleMeet': () => null });
+const workspace = load(base + 'CompetitionWorkspace.tsx', { ...common, '@/lib/interclubMeetPdf': { buildInterclubMeetPdf: (...args) => createPdf(...args) }, '@/lib/useRegistrationWindow': windowHook, '../InterclubWorkflow': workflow, 'next/link': ({ children, href }) => React.createElement('a', { href }, children), '@/lib/adminAuthClient': { getAdminApiBaseUrl: () => 'https://api.test' }, '@/lib/adminWorkspace': { readBrowserWorkspace: () => ({ clubId: currentClub }) }, '@/lib/useAdminSession': { useAdminSession: () => ({}) }, '@/lib/useAdminWorkspace': { useAdminWorkspace: () => ({ clubId: currentClub }) }, './ScoreEditor': ScoreEditor, './PrintPacket': PrintPacket, './Standings': Standings, './ScheduleMeet': () => null, './ChampionshipSetup': ChampionshipSetup });
 const nodeText = node => typeof node === 'string' ? node : node.children.map(nodeText).join('');
 const button = (tree, label) => tree.root.findAllByType('button').find(node => nodeText(node) === label);
 const text = tree => JSON.stringify(tree.toJSON());
@@ -164,6 +165,62 @@ async function seasonRegistrationGate() {
     assert.equal(reads.filter(url => url.includes('/meets/')).length, meetReads, 'Background phase checks do not remount the current meet');
     await act(async () => tree.unmount());
   } finally { global.window = originalWindow; }
+}
+
+async function championshipStage() {
+  const approved = { ...batch, state: 'approved', ratings_status: 'completed' };
+  const scoped = { ...context, is_organizer: true, clubs: [{ id: 'alpha', name: 'Alpha Club' }, { id: 'beta', name: 'Beta Club' }], meets: [meet], batches: [approved],
+    standings: { divisions: {}, qualification: { '3.5': { qualifiers: ['alpha', 'beta'], playoff_required: [], eligible: ['alpha', 'beta'], status: 'ready' } } } };
+  assert.equal(types.regularSeasonComplete(scoped), true, 'Approval completes practice meets even when their scheduled date is in the future');
+  assert.equal(types.regularSeasonComplete({ ...scoped, meets: [...scoped.meets, { ...meet, id: 'unplayed' }] }), false);
+  assert.equal(types.regularSeasonComplete({ ...scoped, batches: [batch] }), false, 'An open correction returns the season to operations');
+  assert.equal(types.regularSeasonComplete({ ...scoped, is_organizer: false }), false, 'A club cannot infer all-season completion from its own meets');
+  const requests = [];
+  global.fetch = async url => { requests.push(url); return reply(url.endsWith('/competition') ? { seasons: [context.season] } : url.includes('/meets/') ? { ...detail, batch: approved } : scoped); };
+  let tree;
+  await act(async () => { tree = create(React.createElement(workspace.CompetitionHome, { clubId: 'alpha', accessToken: 'token', initialSeasonId: 'season-1', initialMeetId: '' })); });
+  assert.equal(nodeText(tree.root.findAllByType('h1')[0]), 'Championships');
+  assert.ok(text(tree).includes('Alpha Club vs Beta Club'));
+  assert.ok(button(tree, 'Schedule championship meet'));
+  assert.equal(requests.filter(url => url.includes('/meets/')).length, 0, 'Completed seasons open the championship panel without fetching an old scoring screen');
+  await act(async () => button(tree, 'Regular-season results').props.onClick());
+  assert.equal(nodeText(tree.root.findAllByType('h1')[0]), 'Regular-season results');
+  assert.ok(text(tree).includes('Official meet results'));
+  await act(async () => button(tree, 'Championships').props.onClick());
+  assert.equal(tree.root.findAllByType(workspace.MeetOperations).length, 0);
+  await act(async () => tree.unmount());
+  await act(async () => { tree = create(React.createElement(workspace.CompetitionHome, { clubId: 'alpha', accessToken: 'token', initialSeasonId: 'season-1', initialMeetId: 'meet-1' })); });
+  assert.ok(text(tree).includes('Official meet results'), 'Existing links still open the requested results');
+  await act(async () => tree.unmount());
+  const tied = { ...scoped, standings: { divisions: {}, qualification: { '3.5': { qualifiers: [], playoff_required: ['alpha', 'beta'], eligible: ['alpha', 'beta'], status: 'playoff_required' } } } };
+  await act(async () => { tree = create(React.createElement(ChampionshipSetup, { context: tied, root: '/test', clubId: 'alpha', accessToken: 'token', onScheduled() {}, onSelectMeet() {} })); });
+  assert.ok(text(tree).includes('Qualifying playoff needed'));
+  assert.ok(button(tree, 'Schedule qualifying playoff')); assert.equal(button(tree, 'Schedule championship meet'), undefined);
+  await act(async () => tree.unmount());
+}
+
+async function finalPairings() {
+  const scoped = { ...context, standings: { divisions: {}, qualification: { '3.5': { qualifiers: ['beta', 'alpha'], playoff_required: [], eligible: ['alpha', 'beta'], status: 'ready' } } } };
+  const finalDetail = { ...detail, meet: { ...meet, competition_phase: 'final' }, batch: null };
+  const writes = [];
+  global.fetch = async (url, options = {}) => {
+    if (options.method === 'POST') { writes.push(JSON.parse(options.body)); return reply({ batch: { ...batch, phase: 'final', document: { ...document, phase: 'final' } } }); }
+    return reply(finalDetail);
+  };
+  let tree;
+  const props = { root: 'https://api.test/final', clubId: 'alpha', accessToken: 'token', phase: 'final', context: scoped, clubName, onLock() {}, onSeasonChange() {} };
+  await act(async () => { tree = create(React.createElement(workspace.MeetOperations, props)); });
+  assert.ok(text(tree).includes('Beta Club vs Alpha Club'));
+  assert.equal(tree.root.findAllByType('select').filter(node => node.props.required).length, 0, 'Qualified final clubs do not need another manual selection');
+  await act(async () => tree.root.findByType('form').props.onSubmit({ preventDefault() {} }));
+  assert.equal(writes[0].club_a, 'beta'); assert.equal(writes[0].club_b, 'alpha'); assert.equal(writes[0].division, '3.5');
+  assert.equal(button(tree, 'Generate pairings').props.disabled, true, 'A prepared final cannot be added twice');
+  await act(async () => tree.unmount());
+  await act(async () => { tree = create(React.createElement(workspace.MeetOperations, { ...props, context: { ...scoped, standings: { divisions: {}, qualification: { '3.5': { qualifiers: ['alpha'], playoff_required: ['beta', 'gamma'], status: 'playoff_required' } } } } })); });
+  assert.equal(button(tree, 'Generate pairings').props.disabled, true);
+  await act(async () => tree.root.findByType('form').props.onSubmit({ preventDefault() {} }));
+  assert.equal(writes.length, 1, 'A qualifying tie blocks final generation even if the form is submitted directly');
+  await act(async () => tree.unmount());
 }
 
 async function scoreEntry() {
@@ -628,4 +685,4 @@ function writePrintReview() {
   fs.writeFileSync(output, '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Southern BCS paper packet review</title><style>' + stylesheet + screenPreview + '</style></head><body class="printBody"><div class="printPortal">' + render(document) + render(final) + '</div></body></html>');
   console.log('Print review fixture: ' + output);
 }
-(async () => { await scoreEntry(); await pairingControls(); await preMeetRosterChange(); await automaticScoreEntry(); await savedScoreCompletion(); await playUpReplacementEligibility(); await easySubstitutions(); printSafety(); await staggeredSchedule(); await revisionsAndStaleClub(); await pdfDownloads(); await approval(); await qualifyingRoundRobin(); await missingLineups(); await seasonRegistrationGate(); await qualifyingDisplay(); writePrintReview(); console.log('PASS interclub competition: fixed gender pairings, pre-meet roster changes, per-game injury substitutions, automatic score completion, saved pending-score recovery, zero scores, clearing, win-by-two, injury outcomes, singles, submission review, exact revisions, staging schedule and PDF controls'); })().catch(error => { console.error(error); process.exit(1); });
+(async () => { await scoreEntry(); await pairingControls(); await preMeetRosterChange(); await automaticScoreEntry(); await savedScoreCompletion(); await playUpReplacementEligibility(); await easySubstitutions(); printSafety(); await staggeredSchedule(); await revisionsAndStaleClub(); await pdfDownloads(); await approval(); await qualifyingRoundRobin(); await missingLineups(); await seasonRegistrationGate(); await championshipStage(); await finalPairings(); await qualifyingDisplay(); writePrintReview(); console.log('PASS interclub competition: fixed gender pairings, pre-meet roster changes, per-game injury substitutions, automatic score completion, saved pending-score recovery, zero scores, clearing, win-by-two, injury outcomes, singles, submission review, exact revisions, staging schedule and PDF controls'); })().catch(error => { console.error(error); process.exit(1); });

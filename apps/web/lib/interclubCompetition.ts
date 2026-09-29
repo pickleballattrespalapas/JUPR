@@ -34,6 +34,19 @@ export const pairingLabels: Record<CompetitionPairing["kind"], string> = { women
 export const phaseLabels: Record<CompetitionPhase, string> = { regular: "Regular season", final: "Championship final", qualifier: "Qualifying playoff" };
 export const gameStatusLabels: Record<GameStatus, string> = { pending: "Not entered", completed: "Completed game", retired: "Injury retirement", forfeit: "Unplayed forfeit", double_forfeit: "Both clubs unable to field this game", unplayed: "Weather: not played" };
 
+export function regularSeasonComplete(context: CompetitionContext): boolean {
+  // Other clubs receive only their own meets, so cannot infer season completion.
+  if (!context.is_organizer) return false;
+  const meets = context.meets.filter(meet => !meet.competition_phase || meet.competition_phase === "regular");
+  return meets.length > 0 && meets.every(meet => context.batches.some(batch => batch.meet_id === meet.id && batch.phase === "regular" && batch.state === "approved"));
+}
+
+export function championshipQualifications(context: CompetitionContext): (Qualification & { division: string })[] {
+  return [...context.season.details.divisions].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).map(division => ({
+    division, ...(context.standings?.qualification?.[division] || context.qualifying?.[division] || { qualifiers: [], playoff_required: [], eligible: [], status: "insufficient_entries" as const }),
+  }));
+}
+
 export function competitionPath(api: string, clubId: string, seasonId: string): string {
   return `${api}/admin/clubs/${encodeURIComponent(clubId)}/interclub/competition/${encodeURIComponent(seasonId)}`;
 }
