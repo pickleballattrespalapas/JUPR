@@ -322,7 +322,7 @@ test("dedicated QA admin switches three clubs and previews website controls", as
                 await expect(page.getByRole("link", { name: "Go to season player pool", exact: true })).toHaveAttribute("href", `/admin/interclub/registrations?season=${encodeURIComponent(season.id)}&step=pool`);
                 await expectMeetStepsLocked(page);
                 await expectNoMeetControls(page);
-                await expect(page.getByRole("heading", { name: "Standings & Club Cup", exact: true, includeHidden: true })).toHaveCount(0);
+                await expect(page.locator("summary").filter({ hasText: /^Season standings & Club Cup$/ })).toHaveCount(0);
                 await expect(page.getByRole("combobox", { name: "Scheduled competition format", exact: true, includeHidden: true })).toHaveCount(0);
                 await expect(page.getByRole("button", { name: "Print meet packet", exact: true, includeHidden: true })).toHaveCount(0);
                 await expect(page.getByRole("button", { name: "Generate pairings", exact: true, includeHidden: true })).toHaveCount(0);
@@ -330,7 +330,15 @@ test("dedicated QA admin switches three clubs and previews website controls", as
                 expect(operationalReads.slice(competitionReadsStart), "Direct competition navigation must read only season context while meet planning is locked").toEqual([]);
                 return;
               }
-              await expect(page.getByRole("heading", { name: "Standings & Club Cup", exact: true })).toBeVisible();
+              const standingsToggle = page.locator("summary").filter({ hasText: /^Season standings & Club Cup$/ });
+              const seasonStandings = page.getByRole("region", { name: "Season standings", exact: true, includeHidden: true });
+              await expect(standingsToggle).toBeVisible();
+              await expect(seasonStandings).toBeHidden();
+              await standingsToggle.click();
+              await expect(seasonStandings.getByRole("heading", { name: "Overall Club Cup", exact: true })).toBeVisible();
+              await expect(seasonStandings.getByRole("table", { name: "Club Cup standings", exact: true })).toBeVisible();
+              await standingsToggle.click();
+              await expect(seasonStandings).toBeHidden();
 
               for (const scheduled of competition.meets) {
                 const phase = scheduled.competition_phase || "regular";
