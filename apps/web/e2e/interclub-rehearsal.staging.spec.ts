@@ -200,7 +200,7 @@ test("interclub paper packet, score entry, approval and public results", async (
   expect(signupResponse.status()).toBe(200);
   expect((await signupResponse.json()).season.id).toBe(signup.id);
   await expect(page.getByRole("heading", { name: "Meet planning opens after registration closes", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Standings & Club Cup", exact: true, includeHidden: true })).toHaveCount(0);
+  await expect(page.locator("summary").filter({ hasText: /^Season standings & Club Cup$/ })).toHaveCount(0);
   await expect(page.getByRole("combobox", { name: "Meet", exact: true, includeHidden: true })).toHaveCount(0);
   await page.getByRole("link", { name: "Go to season player pool", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Season registration", exact: true })).toBeVisible();
