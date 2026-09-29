@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useId, useState } from "react";
-import type { CompetitionResult, PublicLeague, PublicMeet, ResultPlayer } from "@/lib/interclubPublic";
+import type { CompetitionResult, PublicLeague, PublicMeet, ResultGame, ResultPlayer } from "@/lib/interclubPublic";
 import { gameResultNote, hasResultPlayer, resultGameWinner, resultPairingNames, resultPlayers, sortSkillLevels } from "@/lib/interclubResultViews";
 import SearchablePlayerSelect from "./SearchablePlayerSelect";
 import styles from "./InterclubResults.module.css";
@@ -12,6 +12,7 @@ export function CompetitionStandings({ league, onClubSelect }: { league: PublicL
   const group = league.standings.find(group => group.division === division);
   const qualification = league.qualification?.[division];
   const cup = league.club_cup;
+  const rows = division ? group?.rows || [] : cup?.standings || [];
   const options = sortSkillLevels([...new Set([...league.document.divisions, ...league.standings.map(group => group.division)])]);
   const label = division ? `${division} standings` : "Club Cup standings";
   const clubLabel = (id: string, fallback?: string) => onClubSelect ? <button type="button" className={styles.clubButton} onClick={() => onClubSelect(id)} aria-label={`View results for ${names[id] || fallback || id}`}>{names[id] || fallback || id}</button> : names[id] || fallback || id;
@@ -20,8 +21,12 @@ export function CompetitionStandings({ league, onClubSelect }: { league: PublicL
       <label className={styles.field}>Standings<select aria-label="Standings" value={division} onChange={event => setDivision(event.target.value)}><option value="">Overall Club Cup</option>{options.map(value => <option key={value} value={value}>{value} skill level</option>)}</select></label>
     </div>
     <div className={styles.scroll} role="region" aria-label={label} tabIndex={0}><table className={styles.table} aria-label={label}>
-      <thead><tr><th scope="col">Place</th><th scope="col">Club</th>{division ? <><th scope="col">Points</th><th scope="col">Meets</th><th scope="col">Pairings won</th><th scope="col">Games won</th><th scope="col">Point difference</th></> : <th scope="col">Total points</th>}</tr></thead>
-      <tbody>{division ? (group?.rows || []).map((row, index) => <tr key={row.club_id}><td>{row.tied ? "T" : ""}{row.position || index + 1}</td><th scope="row">{clubLabel(row.club_id, row.name)}</th><td className={styles.points}>{row.points ?? 0}</td><td>{row.meets_played ?? 0}</td><td>{row.pairings_won ?? 0}</td><td>{row.games_won}</td><td>{(row.point_differential ?? 0) > 0 ? "+" : ""}{row.point_differential ?? 0}</td></tr>) : (cup?.standings || []).map((row, index) => <tr key={row.club_id}><td>{row.tied ? "T" : ""}{row.position || index + 1}</td><th scope="row">{clubLabel(row.club_id, row.name)}<small className={styles.breakdown}>{row.regular_points} regular season · {row.championship_points} finals bonus</small></th><td className={styles.points}>{row.points}</td></tr>)}</tbody>
+      <thead><tr><th scope="col">Place</th><th scope="col">Club</th><th scope="col">Points</th><th scope="col">Meets</th><th scope="col">Pairings won</th><th scope="col">Games won</th><th scope="col">Point difference</th></tr></thead>
+      <tbody>{rows.map((row, index) => <tr key={row.club_id}>
+        <td>{row.tied ? "T" : ""}{row.position || index + 1}</td>
+        <th scope="row">{clubLabel(row.club_id, row.name)}{!division && <small className={styles.breakdown}>{row.regular_points ?? 0} regular season · {row.championship_points ?? 0} finals bonus</small>}</th>
+        <td className={styles.points}>{row.points ?? 0}</td><td>{row.meets_played ?? 0}</td><td>{row.pairings_won ?? 0}</td><td>{row.games_won ?? 0}</td><td>{(row.point_differential ?? 0) > 0 ? "+" : ""}{row.point_differential ?? 0}</td>
+      </tr>)}</tbody>
     </table></div>
     {!(division ? group?.rows.length : cup?.standings.length) && <p className={styles.empty}>No official results yet.</p>}
     {!division && (cup?.status === "complete" && cup.champions.length ? <p><strong>{cup.champions.length > 1 ? "Joint Club Cup champions" : "Club Cup champion"}:</strong> {cup.champions.map(id => names[id] || id).join(" · ")}</p> : <p className={styles.meta}>Standings are provisional. Each skill-level final adds 6 points for the winner and 3 for the runner-up.</p>)}
@@ -36,6 +41,32 @@ function meetLabel(meet: PublicMeet | undefined, index: number, zone: string, na
   if (!meet) return "Meet results";
   const date = new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZone: zone }).format(new Date(meet.starts_at));
   return `Meet ${index + 1} · ${date}${meet.host_club_id && names[meet.host_club_id] ? ` · ${names[meet.host_club_id]}` : ""}`;
+}
+
+function MatchResultRows({ row, names, catalog, club, player }: {
+  row: CompetitionResult; names: Record<string, string>; catalog: Record<string, ResultPlayer>; club: string; player: string;
+}) {
+  const left = club === row.club_b ? "b" : "a", right = left === "a" ? "b" : "a";
+  const clubName = (side: "a" | "b") => names[row[`club_${side}`]] || row[`club_${side}`];
+  const games: { game: ResultGame; kind: string; number: number | null }[] = row.pairings.flatMap(pairing => pairing.games.map((game, index) => ({ game, kind: pairing.kind, number: index + 1 })));
+  if (row.tiebreak?.status === "completed") games.push({ game: { ...row.tiebreak, winner: null }, kind: "singles", number: null });
+  return <tbody className={styles.resultGroup}>
+    {games.filter(({ game }) => !player || resultPlayers(game).includes(player)).map(({ game, kind, number }) => {
+      const winner = resultGameWinner(game);
+      const note = gameResultNote(game, names, row);
+      return <Fragment key={`${kind}:${number}`}>
+        <tr data-result-game="">
+          <td>{row.division}{row.phase !== "regular" && <small className={styles.resultDetail}>{row.phase === "final" ? "Championship final" : "Qualifying playoff"}</small>}</td>
+          <th scope="row">{resultPairingNames[kind] || "Rotating singles"}<small className={styles.resultDetail}>{number ? `Game ${number}` : "Tiebreak · unrated"}</small></th>
+          <td><strong>{clubName(left)}</strong><small className={styles.resultDetail}>{(game[`players_${left}`] || []).map(id => catalog[id]?.name || "Player").join(" / ")}</small></td>
+          <td className={styles.scoreCell}><span className={styles.score}><strong className={winner === left ? styles.winner : undefined}>{game[left] ?? "—"}</strong><span>–</span><strong className={winner === right ? styles.winner : undefined}>{game[right] ?? "—"}</strong></span>{club && winner && <small className={winner === left ? styles.winner : styles.loss}>{winner === left ? "Win" : "Loss"}</small>}</td>
+          <td><strong>{clubName(right)}</strong><small className={styles.resultDetail}>{(game[`players_${right}`] || []).map(id => catalog[id]?.name || "Player").join(" / ")}</small></td>
+        </tr>
+        {note && <tr><td colSpan={5} className={styles.note}>{game[left] !== null && game[right] !== null ? `${game[left]}–${game[right]} · ` : ""}{note}</td></tr>}
+      </Fragment>;
+    })}
+    {row.weather === "finalized_partial" && <tr><td colSpan={5} className={styles.note}>Finalized using available results; no further play could be scheduled.</td></tr>}
+  </tbody>;
 }
 
 export function CompetitionResults({ results, names, meets = [], timezone = "America/Mazatlan", players = [], initialClub = "", singleMeet = false }: {
@@ -55,9 +86,9 @@ export function CompetitionResults({ results, names, meets = [], timezone = "Ame
     return right - left || a.localeCompare(b);
   });
   const gameCount = filtered.reduce((sum, row) => sum + row.pairings.reduce((n, pairing) => n + pairing.games.filter(game => !player || resultPlayers(game).includes(player)).length, 0), 0);
+  const tiebreakCount = filtered.filter(row => row.tiebreak?.status === "completed" && (!player || resultPlayers(row.tiebreak).includes(player))).length;
   const reset = () => { setMeet(""); setClub(""); setDivision(""); setPlayer(""); };
   const fieldChanged = (change: () => void) => { change(); setPlayer(""); };
-  const participantNames = (ids: string[] | undefined) => (ids || []).map(id => catalog[id]?.name || "Player").join(" / ");
   if (!results.length) return <p className={styles.empty}>Results will appear after the organizer approves and publishes them.</p>;
   return <section className={styles.workspace} aria-label="Browse match results">
     <div className={`${styles.filters} ${singleMeet ? styles.meetFilters : ""}`}>
@@ -66,32 +97,17 @@ export function CompetitionResults({ results, names, meets = [], timezone = "Ame
       <label className={styles.field}>Skill level<select aria-label="Filter results by skill level" value={division} onChange={event => fieldChanged(() => setDivision(event.target.value))}><option value="">All skill levels</option>{sortSkillLevels([...new Set(results.map(row => row.division))]).map(value => <option key={value} value={value}>{value}</option>)}</select></label>
       <label className={styles.field} htmlFor={playerInputId}>Player<SearchablePlayerSelect id={playerInputId} aria-label="Filter results by player" disabled={!players.length} value={player} onValueChange={setPlayer}><option value="">All players</option>{playerOptions.map(row => <option key={row.id} value={row.id}>{row.name} · {names[row.club_id] || row.club_id}</option>)}</SearchablePlayerSelect></label>
     </div>
-    <div className={styles.count}><p className={styles.meta} role="status">{filtered.length} {filtered.length === 1 ? "matchup" : "matchups"} · {gameCount} doubles {gameCount === 1 ? "game" : "games"}{player ? ` involving ${catalog[player]?.name || "this player"}` : ""}</p>{(meet || club || division || player) && <button type="button" className={styles.reset} onClick={reset}>Clear filters</button>}</div>
+    <div className={styles.count}><p className={styles.meta} role="status">{filtered.length} {filtered.length === 1 ? "matchup" : "matchups"} · {gameCount} doubles {gameCount === 1 ? "game" : "games"}{tiebreakCount ? ` · ${tiebreakCount} ${tiebreakCount === 1 ? "tiebreak" : "tiebreaks"}` : ""}{player ? ` involving ${catalog[player]?.name || "this player"}` : ""}</p>{(meet || club || division || player) && <button type="button" className={styles.reset} onClick={reset}>Clear filters</button>}</div>
     {!players.length && <p className={styles.meta}>Player details are not available for these results yet.</p>}
     {!filtered.length && <p className={styles.empty}>No results match these filters. Try another selection or clear the filters.</p>}
     {visibleMeetIds.map(meetId => <section key={meetId} aria-label={meetNames[meetId] || "Meet results"}>
       {!singleMeet && <h3 className={styles.meetHeading}>{meetNames[meetId] || "Meet results"}</h3>}
-      <div className={styles.matches}>{filtered.filter(row => row.meet_id === meetId).sort((a, b) => a.division.localeCompare(b.division, undefined, { numeric: true }) || (names[a.club_a] || a.club_a).localeCompare(names[b.club_a] || b.club_a) || a.id.localeCompare(b.id)).map(row => {
-        const games = row.pairings.flatMap(pairing => pairing.games);
-        const winsA = games.filter(game => resultGameWinner(game) === "a").length, winsB = games.filter(game => resultGameWinner(game) === "b").length;
-        const outcome = row.outcome;
-        const tieVisible = row.tiebreak?.status === "completed" && (!player || resultPlayers(row.tiebreak).includes(player));
-        return <details key={`${row.meet_id}:${row.phase}:${row.id}`} className={styles.match} open={player ? true : undefined}>
-          <summary aria-label={`${row.division} · ${names[row.club_a] || row.club_a} vs ${names[row.club_b] || row.club_b}`}><span><span className={styles.meta}>{row.division} · {row.phase === "final" ? "Championship final" : row.phase === "qualifier" ? "Qualifying playoff" : "Regular season"}</span><span className={styles.matchTitle}>{names[row.club_a] || row.club_a} <span className={styles.meta}>vs</span> {names[row.club_b] || row.club_b}</span><span className={styles.scoreLine}>{outcome ? `${outcome.pairings_a}–${outcome.pairings_b} pairings · ` : ""}{winsA}–{winsB} games{outcome && row.phase === "regular" ? ` · ${outcome.points_a}–${outcome.points_b} standings points` : ""}{outcome?.winner === "draw" ? " · Draw" : ""}{outcome?.winner === "double_forfeit" ? " · Both clubs forfeited" : ""}</span></span></summary>
-          <div className={styles.details}>
-            {row.weather === "finalized_partial" && <p className={styles.meta}>Finalized using available results; no further play could be scheduled.</p>}
-            {row.pairings.map(pairing => {
-              const visibleGames = pairing.games.map((game, index) => ({ game, index })).filter(({ game }) => !player || resultPlayers(game).includes(player));
-              if (!visibleGames.length) return null;
-              return <section key={pairing.kind}><h4>{resultPairingNames[pairing.kind] || pairing.kind}</h4><table className={styles.gameTable} aria-label={`${resultPairingNames[pairing.kind] || pairing.kind} scores`}>
-                <thead><tr><th scope="col">Game</th><th scope="col">{names[row.club_a] || row.club_a}</th><th scope="col">{names[row.club_b] || row.club_b}</th></tr></thead>
-                <tbody>{visibleGames.map(({ game, index }) => <Fragment key={index}><tr><th scope="row">{index + 1}</th>{(["a", "b"] as const).map(side => <td key={side} className={resultGameWinner(game) === side ? styles.winner : undefined}><strong>{game[side] ?? "—"}</strong><small>{participantNames(game[`players_${side}`])}</small></td>)}</tr>{gameResultNote(game, names, row) && <tr><td colSpan={3} className={styles.note}>{game.a !== null && game.b !== null ? `${game.a}–${game.b} · ` : ""}{gameResultNote(game, names, row)}</td></tr>}</Fragment>)}</tbody>
-              </table></section>;
-            })}
-            {tieVisible && row.tiebreak && <p><strong>Rotating singles:</strong> {row.tiebreak.a}–{row.tiebreak.b}.<br />{participantNames(row.tiebreak.players_a)} vs {participantNames(row.tiebreak.players_b)}<br /><span className={styles.meta}>This tiebreak does not affect individual ratings.</span></p>}
-          </div>
-        </details>;
-      })}</div>
+      <div className={styles.scroll} role="region" aria-label={`Game results · ${meetNames[meetId] || "Meet results"}`} tabIndex={0}>
+        <table className={`${styles.table} ${styles.resultsTable}`} aria-label="Game results">
+          <thead><tr><th scope="col">Level</th><th scope="col">Match</th><th scope="col">Club / players</th><th scope="col">Score</th><th scope="col">Opponent / players</th></tr></thead>
+          {filtered.filter(row => row.meet_id === meetId).sort((a, b) => a.division.localeCompare(b.division, undefined, { numeric: true }) || (names[a.club_a] || a.club_a).localeCompare(names[b.club_a] || b.club_a) || a.id.localeCompare(b.id)).map(row => <MatchResultRows key={`${row.phase}:${row.id}`} row={row} names={names} catalog={catalog} club={club} player={player} />)}
+        </table>
+      </div>
     </section>)}
   </section>;
 }
