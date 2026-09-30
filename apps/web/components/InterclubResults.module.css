@@ -17,6 +17,9 @@
 .clubButton:hover, .reset:hover { text-decoration: underline; }
 .scroll { max-width: 100%; overflow-x: auto; border: 1px solid #dbe4ef; border-radius: 12px; }
 .table { width: 100%; border-collapse: collapse; text-align: left; font-variant-numeric: tabular-nums; }
+.standingsTable { min-width: 760px; }
+.standingsTable tbody th { min-width: 180px; max-width: 300px; overflow-wrap: normal; }
+.scrollHint { display: none; }
 .table th, .table td { padding: .85rem .8rem; border-bottom: 1px solid #e2e8f0; vertical-align: middle; }
 .table thead th { background: #f1f5f9; font-size: .85rem; color: #475569; font-weight: 650; white-space: nowrap; }
 .table td:not(:first-child), .table thead th:not(:first-child):not(:nth-child(2)) { text-align: right; }
@@ -42,6 +45,7 @@
 .meetHeading { margin: 1.5rem 0 .65rem; font-size: 1rem; }
 @media (max-width: 700px) { .filters { grid-template-columns: repeat(2, minmax(0, 1fr)); } .tab { padding: .75rem .65rem; } .table th, .table td { padding: .7rem .5rem; } .heading { align-items: stretch; } .heading > label { width: 100%; } }
 @media (max-width: 700px) {
+  .scrollHint { display: block; color: #52617a; font-size: .85rem; margin: 0 0 .5rem; }
   .resultsTable, .resultsTable tbody { display: block; min-width: 0; width: 100%; }
   .resultsTable thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   .resultsTable tr { display: grid; grid-template-columns: minmax(0, 1fr) 4rem minmax(0, 1fr); border-bottom: 1px solid #e2e8f0; padding: .35rem; }
