@@ -20,7 +20,8 @@ export function CompetitionStandings({ league, onClubSelect }: { league: PublicL
     <div className={styles.heading}><div><h2>{division ? `${division} skill level` : "Overall Club Cup"}</h2><p className={styles.meta}>{division ? "3 points for a matchup win · 1 each for a split" : "Season points across all skill levels"}</p></div>
       <label className={styles.field}>Standings<select aria-label="Standings" value={division} onChange={event => setDivision(event.target.value)}><option value="">Overall Club Cup</option>{options.map(value => <option key={value} value={value}>{value} skill level</option>)}</select></label>
     </div>
-    <div className={styles.scroll} role="region" aria-label={label} tabIndex={0}><table className={styles.table} aria-label={label}>
+    <p className={styles.scrollHint}>Swipe the table to see all standings.</p>
+    <div className={styles.scroll} role="region" aria-label={label} tabIndex={0}><table className={`${styles.table} ${styles.standingsTable}`} aria-label={label}>
       <thead><tr><th scope="col">Place</th><th scope="col">Club</th><th scope="col">Points</th><th scope="col">Meets</th><th scope="col">Pairings won</th><th scope="col">Games won</th><th scope="col">Point difference</th></tr></thead>
       <tbody>{rows.map((row, index) => <tr key={row.club_id}>
         <td>{row.tied ? "T" : ""}{row.position || index + 1}</td>

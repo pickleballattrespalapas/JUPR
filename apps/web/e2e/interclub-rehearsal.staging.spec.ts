@@ -647,6 +647,11 @@ test("interclub paper packet, score entry, approval and public results", async (
   await recipientList.getByRole("combobox", { name: "Filter player awards by club", exact: true }).selectOption(club);
   const awardedPlayers = new Set(reviewedAwards.awards.filter((award: any) => award.club_id === club && award.recipient_type === "player").map((award: any) => award.entry_id));
   await expect(recipientList.getByRole("listitem")).toHaveCount(awardedPlayers.size);
+  const finalStandings = publicPage.getByRole("table", { name: "Club Cup standings", exact: true });
+  const clubNameBounds = await finalStandings.getByRole("rowheader").first().boundingBox();
+  expect(clubNameBounds!.width).toBeGreaterThanOrEqual(180);
+  expect(await finalStandings.evaluate(table => table.scrollWidth)).toBeGreaterThan(390);
+  await expect(publicPage.getByText("Swipe the table to see all standings.", { exact: true })).toBeVisible();
   expect(await publicPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await publicPage.screenshot({ path: join(reportDir, "interclub-final-results-mobile.png"), fullPage: true });
   await publicPage.setViewportSize({ width: 1280, height: 900 });
