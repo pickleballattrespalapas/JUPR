@@ -83,8 +83,9 @@ def _honors(db, club_id, kind, source_id, source):
     result = build_public_tournament_results(db, club_id=club_id, tournament_id=source_id)
     honors = []
     for index, draw in enumerate(result.get("draws", [])):
-        for podium in draw.get("podium", []):
-            honors.append({"id": f"standard:{index}:{podium.get('team_id')}:{podium['placement']}",
+        # Public podiums omit team IDs, and recipients may share a placement.
+        for podium_index, podium in enumerate(draw.get("podium", [])):
+            honors.append({"id": f"standard:{index}:{podium_index}",
                            "title": draw.get("division_name") or draw.get("name") or "Tournament podium",
                            "recipient": podium["team_name"], "placement": podium["placement"]})
     draws = _rows(db.table("tournament_event_draws").select("id,name").eq("tournament_id", source_id).eq("draw_kind", "TEAM_PARENT").eq("status", "published").order("id"))
