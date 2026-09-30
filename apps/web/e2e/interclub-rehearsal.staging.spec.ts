@@ -665,9 +665,18 @@ test("interclub paper packet, score entry, approval and public results", async (
   await publicPage.screenshot({ path: join(reportDir, "interclub-club-trophy-case.png"), fullPage: true });
   await publicPage.goto(`/clubs/${club}/players/${official.browser_award_player}?section=trophies`);
   await expect(publicPage.getByRole("heading", { name: "Trophy case", exact: true })).toBeVisible();
-  await expect(publicPage.locator('[data-testid="player-trophy"]').filter({ hasText: "Interclub Season Participant" })).toHaveCount(1);
-  await expect(publicPage.locator('[data-testid="player-trophy"]').filter({ hasText: "Interclub Club Cup Champion" })).toHaveCount(1);
+  await expect(publicPage.locator('[data-testid="player-trophy"]').filter({ hasText: "Season Participant" })).toHaveCount(1);
+  await expect(publicPage.locator('[data-testid="player-trophy"]').filter({ hasText: "League Champion" })).toHaveCount(1);
   await publicPage.screenshot({ path: join(reportDir, "interclub-player-trophy-case.png"), fullPage: true });
+  await publicPage.goto(`/clubs/${club}/players/${official.browser_award_player}?section=badges`);
+  for (const badge of ["Win Matchup", "Sweep Matchup", "Undefeated Day"]) {
+    const card = publicPage.locator('[data-testid="player-badge"]').filter({ hasText: badge });
+    await expect(card).toHaveCount(1);
+    await card.getByText("Earned achievements", { exact: true }).click();
+    await expect(card.getByRole("link", { name: "View results", exact: true }).first()).toBeVisible();
+  }
+  await publicPage.screenshot({ path: join(reportDir, "interclub-player-badges.png"), fullPage: true });
+  await publicPage.goto(`/clubs/${club}/players/${official.browser_award_player}?section=trophies`);
   await publicPage.getByRole("link", { name: "View final season results", exact: true }).first().click();
   await expect(publicPage.getByRole("heading", { name: "Final season results", exact: true })).toBeVisible();
   await publicPage.getByRole("link", { name: "View all match results", exact: true }).click();
@@ -707,7 +716,7 @@ test("interclub paper packet, score entry, approval and public results", async (
   await expect(publicPlayerRow.getByRole("cell", { name: "3.15", exact: true }).first()).toBeVisible();
   expect(errors).toEqual([]);
   writeFileSync(join(reportDir,"interclub-season-awards-browser.json"),JSON.stringify({status:"passed",candidate_sha:state.sha,
-    checks:["season_awards_review_and_publish","season_awards_reload","public_final_results","mobile_final_results","club_trophy_case","player_interclub_trophies","final_match_results_link"]},null,2));
+    checks:["season_awards_review_and_publish","season_awards_reload","public_final_results","mobile_final_results","club_trophy_case","player_interclub_trophies","player_interclub_badges","final_match_results_link"]},null,2));
   writeFileSync(join(reportDir,"interclub-browser.json"),JSON.stringify({ status:"passed",candidate_sha:state.sha,
     checks:["championship_three_zero_clinch","championship_correction_reopens_fourth","championship_tab_skips_fourth","championship_clinch_reload_and_approval","championship_clinch_pdf","completed_season_championship_panel","qualified_final_setup","mobile_championship_panel","meet_setup_without_duration","shared_meet_signup","play_up_waitlist","concurrent_signup_capacity","rating_band_fifo","signup_retry_identity","withdrawal_promotes_actual_roster","mobile_signup","paper_packet_pdf","six_game_ui_entry","dirty_navigation_lock","draft_reload","whole_meet_submission","organizer_approval","both_rating_streams","registration_phase_route_lock","admin_inline_player_creation","upcoming_meet_edit","add_meet_after_registration","late_inline_player_creation_without_notes","late_player_request_and_approval","guided_meet_lineup","eligible_player_filter","gender_composition","lineup_draft_preserved_on_pool_visit","anonymous_public_cup","overall_first_results","cup_stat_columns","all_club_games_visible","club_score_orientation","meet_club_player_filters","mobile_result_layout","compact_admin_results","closed_signup_readonly","anonymous_inline_player_signup","persisted_inline_profile_ratings","no_browser_exceptions"] },null,2));
 });

@@ -18,15 +18,21 @@ const league = { id:'season',document:{ name:'Coastal season',clubs:[{id:'a',nam
 async function main() {
   assert.equal(recipientGroups(awards).length, 2, 'Distinct players with the same name stay separate');
   assert.equal(recipientGroups(awards)[0].titles.length, 2, 'A player’s season honors share one card');
+  assert.equal(recipientGroups([award('w1','a','p1','matchup_win'),award('w2','a','p1','matchup_win')])[0].titles.length, 1);
+  assert.ok(recipientGroups([award('w1','a','p1','matchup_win'),award('w2','a','p1','matchup_win')])[0].titles[0].endsWith('× 2'));
   let tree; await act(async () => { tree = create(React.createElement(FinalResults,{league,awards})); });
   assert.ok(text(tree.root).includes('Won 3–0') && text(tree.root).includes('Runner-up: Beta'));
   assert.ok(tree.root.findAllByType('a').some(node => node.props.href === '/interclub/season?view=results'));
   assert.ok(tree.root.findAllByType('a').some(node => node.props.href === '/clubs/alpha/trophies'));
   const players = tree.root.findByProps({'aria-label':'Player awards'});
   assert.equal(players.findAllByType('li').length, 2);
-  await act(async () => players.findByType('select').props.onChange({target:{value:'b'}}));
+  await act(async () => players.findByProps({'aria-label':'Filter player awards by club'}).props.onChange({target:{value:'b'}}));
   assert.equal(players.findAllByType('li').length, 1);
   assert.ok(!text(players.findByType('ul')).includes('Interclub Champion'));
+  await act(async () => players.findByProps({'aria-label':'Filter player awards by award'}).props.onChange({target:{value:'division_champion'}}));
+  assert.ok(text(players).includes('No player awards to show.'));
+  await act(async () => players.findByProps({'aria-label':'Filter player awards by club'}).props.onChange({target:{value:'a'}}));
+  assert.equal(players.findAllByType('li').length, 1);
   await act(async () => tree.unmount());
   const tied = structuredClone(league);
   tied.final_results.champions=['a','b']; tied.final_results.divisions[0].tiebreak={winner_score:21,runner_up_score:19};
@@ -38,11 +44,11 @@ async function main() {
   assert.ok(text(tree.root).includes('Final results are not ready yet'));
   assert.equal(tree.root.findAllByProps({'aria-label':'Skill-level champions'}).length, 0);
   await act(async () => tree.unmount());
-  await act(async () => { tree = create(React.createElement(TrophyCase,{clubName:'Alpha',trophies:[award('4','a',null,'participation'),award('5','a',null,'division_champion')]})); });
+  await act(async () => { tree = create(React.createElement(TrophyCase,{clubName:'Alpha',trophies:[award('4','a',null,'club_cup_champion'),award('5','a',null,'division_champion')]})); });
   assert.equal(tree.root.findAllByProps({'data-club-trophy':''}).length, 2);
   await act(async () => tree.root.findByType('select').props.onChange({target:{value:'division_champion'}}));
   assert.equal(tree.root.findAllByProps({'data-club-trophy':''}).length, 1);
-  await act(async () => tree.root.findByType('select').props.onChange({target:{value:'club_cup_champion'}}));
+  await act(async () => tree.root.findByType('select').props.onChange({target:{value:'not-awarded'}}));
   assert.ok(text(tree.root).includes('No trophies in this category yet.'));
   await act(async () => tree.unmount());
   console.log('Interclub final results, champion summaries, player grouping, club filtering and trophy links passed');

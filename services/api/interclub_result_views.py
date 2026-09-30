@@ -17,6 +17,7 @@ def result_rows(documents, *, participants=True):
                 for game in pairing["games"]:
                     public_game = {key: game.get(key) for key in ("status", "a", "b", "winner")}
                     if participants:
+                        public_game["played_at"] = game.get("played_at")
                         for side in ("a", "b"):
                             # A lineup on an unplayed game is not an appearance.
                             public_game[f"players_{side}"] = list(game.get(f"players_{side}") or pairing.get(f"players_{side}", [])) if game["status"] in {"completed", "retired"} else []
@@ -28,6 +29,7 @@ def result_rows(documents, *, participants=True):
                 row["outcome"] = {key: outcomes[encounter["id"]][key] for key in
                                   ("winner", "points_a", "points_b", "pairings_a", "pairings_b", "games_a", "games_b")}
                 if tie:
+                    row["tiebreak"]["played_at"] = tie.get("played_at")
                     for side in ("a", "b"):
                         row["tiebreak"][f"players_{side}"] = list(tie.get(f"order_{side}", [])) if tie["status"] == "completed" else []
             rows.append(row)

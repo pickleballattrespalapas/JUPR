@@ -205,7 +205,7 @@ export type PublicBadgeAward = {
   requirements?: string | null;
   count: number;
   last_earned_at?: string | null;
-  achievements?: { id: string; earned_at?: string | null; detail?: string | null }[];
+  achievements?: { id: string; earned_at?: string | null; detail?: string | null; results_href?: string }[];
 };
 
 export type PublicTrophy = {

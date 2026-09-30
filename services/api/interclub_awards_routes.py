@@ -7,8 +7,8 @@ from uuid import UUID
 from fastapi import HTTPException, Response
 from pydantic import Field
 
-from jupr_app.domain.interclub_awards import season_awards
-from jupr_app.services.interclub_awards_service import public_interclub_trophies
+from jupr_app.domain.interclub_awards import PERFORMANCE_BADGES, performance_awards, season_awards
+from jupr_app.services.interclub_awards_service import public_interclub_honors, public_interclub_trophies
 from services.api.auth import auth_header
 from services.api.club_site_models import StrictModel
 from services.api.club_site_routes import published_site, site_administrator, site_rpc
@@ -35,13 +35,18 @@ def award_preview(db, season, clubs, meets):
         awards = season_awards(season["id"], document)
     except ValueError as exc:
         problems.append(str(exc)); awards = []
+    try:
+        achievements = [row for row in performance_awards(season["id"], document) if row["award_key"] in PERFORMANCE_BADGES]
+    except ValueError as exc:
+        problems.append(str(exc)); achievements = []
     sets = db.table("pcs_interclub_award_sets").select("revision,preview_fingerprint,issued_at").eq("season_id", season["id"]).limit(1).execute().data or []
     publications = db.table("pcs_interclub_publications").select("revision,published").eq("season_id", season["id"]).limit(1).execute().data or []
     current = sets[0] if sets else None
     fingerprint = hashlib.sha256(json.dumps({"source": source_fingerprint, "awards": awards}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     publication = publications[0] if publications else None
     return {"season_id": season["id"], "preview": {"id": season["id"], **publication_response(document)},
-            "awards": awards, "problems": problems, "ready": not problems,
+            "awards": awards, "achievements": achievements,
+            "problems": problems, "ready": not problems,
             "revision": current["revision"] if current else 0,
             "publication_revision": publication["revision"] if publication else 0,
             "issued_at": current["issued_at"] if current else None,
@@ -87,7 +92,7 @@ def install_interclub_awards_routes(app, *, get_supabase_client):
     def awards(season_id: UUID, response: Response):
         response.headers["Cache-Control"] = "no-store"
         db = get_supabase_client()
-        publications = db.table("pcs_interclub_publications").select("published").eq("season_id", str(season_id)).limit(1).execute().data or []
+        publications = db.table("pcs_interclub_publications").select("season_id,published,published_at").eq("season_id", str(season_id)).limit(1).execute().data or []
         if not publications or not publications[0].get("published"):
             raise HTTPException(404, "League website is not published.")
-        return {"trophies": public_interclub_trophies(db, season_id=str(season_id))}
+        return {"trophies": public_interclub_honors(db, season_id=str(season_id), publication=publications[0])}
