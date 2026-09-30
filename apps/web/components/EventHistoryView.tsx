@@ -1,6 +1,33 @@
 import Link from "next/link";
-import type { EventHistory } from "@/lib/eventSeasons";
+import type { EventHistory, EventSeason } from "@/lib/eventSeasons";
 import styles from "./EventHistory.module.css";
+
+function placeLabel(place: number) {
+  const lastTwo = place % 100;
+  const suffix = lastTwo >= 11 && lastTwo <= 13 ? "th" : ["th", "st", "nd", "rd"][place % 10] || "th";
+  return `${place}${suffix} place`;
+}
+
+function HonorsByPlace({ honors, admin }: { honors: EventSeason["honors"]; admin: boolean }) {
+  const places = Array.from(new Set(honors.map(honor => honor.placement))).sort((a, b) => a - b);
+  const Heading = admin ? "h4" : "h3";
+
+  return <div className={styles.placementGroups}>
+    {places.map(place => <section key={place} aria-label={placeLabel(place)}>
+      <Heading className={styles.placementHeading}>
+        <span className={styles.medal} aria-hidden="true">{place === 1 ? "🏆" : place === 2 ? "🥈" : place === 3 ? "🥉" : "🏅"}</span>
+        {placeLabel(place)}
+      </Heading>
+      <ul className={styles.honors}>
+        {honors.filter(honor => honor.placement === place).map(honor => <li key={honor.id}>
+          <div><strong>{honor.recipient}</strong><span>{honor.title}</span>
+            {honor.record && <small>{honor.record}</small>}
+          </div>
+        </li>)}
+      </ul>
+    </section>)}
+  </div>;
+}
 
 export default function EventHistoryView({ history, admin = false }: { history: EventHistory; admin?: boolean }) {
   const seasons = admin ? history.seasons : history.seasons
@@ -20,14 +47,7 @@ export default function EventHistoryView({ history, admin = false }: { history: 
           {season.admin_href && <Link href={season.admin_href}>{season.status === "Draft" ? "Continue setup" : "Open event"} →</Link>}
         </div></> : <h2>{season.name}{season.label && !season.name.toLowerCase().includes(season.label.toLowerCase()) ? ` — ${season.label}` : ""}</h2>}
       </header>
-      {!!season.honors.length && <ul className={styles.honors}>
-        {season.honors.map(honor => <li key={honor.id}>
-          <span className={styles.medal} aria-hidden="true">{honor.placement === 1 ? "🏆" : "🏅"}</span>
-          <div><strong>{honor.recipient}</strong><span>{honor.title}{honor.placement > 1 ? ` · ${honor.placement === 2 ? "Runner-up" : `Place ${honor.placement}`}` : ""}</span>
-            {honor.record && <small>{honor.record}</small>}
-          </div>
-        </li>)}
-      </ul>}
+      {!!season.honors.length && <HonorsByPlace honors={season.honors} admin={admin} />}
       {admin && !season.honors.length && <p className={styles.muted}>{season.complete ? "No published awards for this season yet. The saved results remain available above." : "Champions and awards will appear when this season is finished and its honors are published."}</p>}
     </article>)}
     {!seasons.length && <p className={styles.muted}>{admin ? "No published seasons yet." : "No published awards yet."}</p>}
