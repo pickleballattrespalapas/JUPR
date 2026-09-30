@@ -22,7 +22,6 @@ export function SeasonAwardRecipients({ awards, names }: { awards: AwardRecipien
 export default function InterclubFinalResults({ league, awards }: { league: PublicLeague; awards?: AwardRecipient[] }) {
   const final = league.final_results;
   const names = Object.fromEntries(league.document.clubs.map(club => [club.id, club.name]));
-  const players = Object.fromEntries((league.document.players || []).map(player => [player.id, player.name]));
   if (!final?.complete) return <section className={styles.section}><h2>Final results are not ready yet</h2><p>The season’s final results appear after all scheduled meets and championships have been approved and published.</p>{league.id && <Link href={`/interclub/${league.id}`}>View current standings and match results →</Link>}</section>;
   return <section className={styles.section} aria-label="Final season results">
     <div className={styles.hero}><p className={styles.eyebrow}>Season complete · {league.document.name}</p><p aria-hidden="true" className={styles.medal}>🏆</p>
@@ -33,7 +32,6 @@ export default function InterclubFinalResults({ league, awards }: { league: Publ
       <p className={styles.eyebrow}>{result.division} championship</p><h3>🏆 {names[result.winner] || result.winner}</h3>
       <p>{result.tiebreak ? `Won the singles tiebreak ${result.tiebreak.winner_score}–${result.tiebreak.runner_up_score} after a ${result.games_won}–${result.games_lost} split` : `Won ${result.games_won}–${result.games_lost}`}</p>
       <p className={styles.muted}>Runner-up: {names[result.runner_up] || result.runner_up}</p>
-      <p>{result.players.map(id => players[id] || "Player").join(" · ")}</p>
     </article>)}</div></section>
     <CompetitionStandings league={league} />
     {awards && awards.length > 0 ? <SeasonAwardRecipients awards={awards} names={names} /> : <p className={styles.notice}>Player trophies appear here once the organizer awards the season honors.</p>}
