@@ -2,6 +2,7 @@ import { Display } from "@/components/ClubDisplay";
 import PublicTournamentSponsors from "@/components/PublicTournamentSponsors";
 import Link from "@/components/PublicClubLink";
 import PublicTournamentNav from "@/components/PublicTournamentNav";
+import styles from "./TournamentResults.module.css";
 import {
   getPublicTournamentResults,
   getPublicTournamentResultsIndex,
@@ -15,6 +16,7 @@ type Props = {
     draw?: string;
     tournament_id?: string;
     view?: string;
+    tab?: string;
   };
 };
 
@@ -31,6 +33,8 @@ const stateColors: Record<string, { color: string; background: string }> = {
   READY: { color: "#1d4ed8", background: "#dbeafe" },
   SCHEDULED: { color: "#475569", background: "#f1f5f9" }
 };
+
+const medalLabels: Record<number, string> = { 1: "Gold", 2: "Silver", 3: "Bronze" };
 
 function drawStateLabel(state: string): string {
   const labels: Record<string, string> = {
@@ -388,6 +392,32 @@ function DrawResults({ draw }: { draw: PublicTournamentDrawResult }) {
   );
 }
 
+function CompletedDrawCard({ draw, href }: { draw: PublicTournamentDrawResult; href: string }) {
+  const podium = [...draw.podium].sort((left, right) => (left.placement ?? 99) - (right.placement ?? 99));
+  const division = drawDivisionLabel(draw);
+  return (
+    <Link href={href} prefetch={false} className={styles.completedCard} aria-label={`View full results for ${draw.name}`}>
+      <div>
+        {division && division !== draw.name ? <p className={styles.division}>{division}</p> : null}
+        <h3 className={styles.drawTitle}>{draw.name}</h3>
+      </div>
+      {podium.length ? (
+        <ol className={styles.podium} aria-label={`${draw.name} podium`}>
+          {podium.map((entry) => (
+            <li key={`${entry.placement}:${entry.team_name}`} className={styles.podiumRow}>
+              <span className={styles.medal} data-placement={entry.placement}>
+                {entry.medal || medalLabels[entry.placement ?? 0] || `Place ${entry.placement ?? "—"}`}
+              </span>
+              <span>{entry.team_name}</span>
+            </li>
+          ))}
+        </ol>
+      ) : <p className={styles.emptyPodium}>Podium to be confirmed.</p>}
+      <span className={styles.resultsLink}>View full results <span aria-hidden="true">→</span></span>
+    </Link>
+  );
+}
+
 export default async function TournamentResultsPage({ params, searchParams }: Props) {
   const tournamentId = String(searchParams?.tournament_id || "").trim();
   const view = searchParams?.view === "past" ? "past" : "current";
@@ -451,6 +481,17 @@ export default async function TournamentResultsPage({ params, searchParams }: Pr
     || null;
   const completedDraws = data.draws.filter((draw) => draw.state === "COMPLETE");
   const upcomingDraws = data.draws.filter((draw) => draw.state === "SCHEDULED");
+  const selectedCompletedDraw = completedDraws.find((draw) => draw.public_draw_key === selectedDrawKey) || null;
+  const resultsTab = selectedCompletedDraw || searchParams?.tab === "completed"
+    || (!searchParams?.tab && !currentDraws.length && !upcomingDraws.length && completedDraws.length)
+    ? "completed"
+    : "live";
+  const resultsHref = (tab: "live" | "completed", publicDrawKey?: string) => {
+    const query = new URLSearchParams({ tournament_id: data.tournament.id, tab });
+    if (publicDrawKey) query.set("draw", publicDrawKey);
+    if (view === "past") query.set("view", "past");
+    return `/clubs/${params.clubSlug}/tournament-results?${query.toString()}`;
+  };
   const drawHref = (publicDrawKey: string) => {
     const query = new URLSearchParams({
       tournament_id: data.tournament.id,
@@ -475,7 +516,15 @@ export default async function TournamentResultsPage({ params, searchParams }: Pr
         registrationSlug={registrationSlug}
         active="results"
       />
-      {currentDraws.length ? (
+      <nav aria-label="Result views" className={styles.tabs}>
+        <Link href={resultsHref("live")} prefetch={false} scroll={false} className={styles.tab} aria-current={resultsTab === "live" ? "page" : undefined}>
+          Live &amp; upcoming <span className={styles.count}>{currentDraws.length + upcomingDraws.length}</span>
+        </Link>
+        <Link href={resultsHref("completed")} prefetch={false} scroll={false} className={styles.tab} aria-current={resultsTab === "completed" ? "page" : undefined}>
+          Completed <span className={styles.count}>{completedDraws.length}</span>
+        </Link>
+      </nav>
+      {resultsTab === "live" && currentDraws.length ? (
         <section aria-labelledby="current-draws-title" style={{ marginBottom: "1.25rem" }}>
           <h2 id="current-draws-title" style={{ marginBottom: "0.25rem" }}>Current draws</h2>
           <p style={{ color: "#475569", marginTop: 0 }}>Choose a draw to see its live standings, scores, and bracket.</p>
@@ -523,17 +572,34 @@ export default async function TournamentResultsPage({ params, searchParams }: Pr
           {selectedCurrentDraw ? <DrawResults draw={selectedCurrentDraw} /> : null}
         </section>
       ) : null}
-      {completedDraws.length ? (
+      {resultsTab === "completed" ? (
         <section aria-labelledby="completed-draws-title">
-          <h2 id="completed-draws-title">Completed draws</h2>
-          {completedDraws.map((draw) => <DrawResults key={draw.public_draw_key} draw={draw} />)}
+          {selectedCompletedDraw ? (
+            <>
+              <h2 id="completed-draws-title" className={styles.srOnly}>Completed draw results</h2>
+              <p><Link href={resultsHref("completed")} className={styles.backLink}>← Completed draws</Link></p>
+              <DrawResults draw={selectedCompletedDraw} />
+            </>
+          ) : (
+            <>
+              <h2 id="completed-draws-title">Completed draws</h2>
+              {completedDraws.length ? (
+                <div className={styles.completedGrid}>
+                  {completedDraws.map((draw) => <CompletedDrawCard key={draw.public_draw_key} draw={draw} href={resultsHref("completed", draw.public_draw_key)} />)}
+                </div>
+              ) : <p className={styles.emptyPodium}>No completed draws yet. Finished draws and their podiums will appear here.</p>}
+            </>
+          )}
         </section>
       ) : null}
-      {upcomingDraws.length ? (
+      {resultsTab === "live" && upcomingDraws.length ? (
         <section aria-labelledby="upcoming-draws-title">
           <h2 id="upcoming-draws-title">Upcoming draws</h2>
           {upcomingDraws.map((draw) => <DrawResults key={draw.public_draw_key} draw={draw} />)}
         </section>
+      ) : null}
+      {resultsTab === "live" && completedDraws.length > 0 && !currentDraws.length && !upcomingDraws.length ? (
+        <p>All draws are complete. <Link href={resultsHref("completed")}>See completed draws and podiums.</Link></p>
       ) : null}
       {!data.draws.length ? <article style={cardStyle}><h2 style={{ marginTop: 0 }}>No results yet</h2><p style={{ color: "#475569", marginBottom: 0 }}>Singles and doubles results will appear after organizers publish them.</p></article> : null}
       <p><Link href={`/clubs/${params.clubSlug}/tournament-team-results`}>Four-player team results</Link></p>
