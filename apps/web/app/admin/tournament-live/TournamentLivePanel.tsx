@@ -1235,6 +1235,7 @@ export default function TournamentLivePanel({
     ?? totalGames;
   const duplicatePublications = counts?.duplicate_publications ?? counts?.duplicate_official_links ?? 0;
   const uncertainOperations = counts?.uncertain_operations ?? counts?.recovery_required_operations ?? 0;
+  const operationsEvidenceAvailable = lifecycle?.evidence?.operations_available === true;
   const podiumEntryCount = counts?.podium_entries ?? (lifecycle?.draws || []).reduce((total, draw) => total + draw.podium.length, 0);
   const selectedLifecycleDraw = lifecycle?.draws.find((draw) => draw.draw_id === selectedDrawId);
   const selectedDrawCounts = selectedLifecycleDraw?.counts || drawLifecycleById.get(selectedDrawId)?.counts;
@@ -1556,7 +1557,7 @@ export default function TournamentLivePanel({
           ["Podiums", lifecycle?.draws.length && lifecycle.draws.every((draw) => Boolean(draw.review_evidence && (draw.review_evidence.current ?? draw.review_evidence.reviewed))) ? "Complete" : "Blocked", `${podiumEntryCount} entries; explicit review required`],
           ["Awards", counts?.expected_awards === counts?.verified_awards && !counts?.unexpected_awards ? "Complete" : "Blocked", `${counts?.verified_awards || 0} of ${counts?.expected_awards || 0} verified`],
           ["Official matches", counts?.published_games === ratingPublishEligibleGames && !duplicatePublications ? "Complete" : "Blocked", `${counts?.published_games || 0} of ${ratingPublishEligibleGames} played games linked; ${duplicatePublications} duplicate`],
-          ["Replay / audit evidence", !counts?.active_operations && !uncertainOperations ? "Complete" : "Blocked", `${counts?.active_operations || 0} active; ${uncertainOperations} uncertain`],
+          ["Replay / audit evidence", !operationsEvidenceAvailable ? "Unavailable" : !counts?.active_operations && !uncertainOperations ? "Complete" : "Blocked", operationsEvidenceAvailable ? `${counts?.active_operations || 0} active; ${uncertainOperations} uncertain` : "Audit evidence could not be loaded. Reload before completing the tournament."],
           ["Communications", "Needs review", "Confirm participant result communication before archive."],
           ["Payments, extras, and fulfillment", "Needs review", "Offline payment and fulfillment exceptions require operator review."],
           ["Completion readiness", completionReadiness?.ready || tournamentStatus === "COMPLETED" || tournamentStatus === "ARCHIVED" ? "Complete" : "Blocked", completionReadiness?.ready ? "All server-enforced completion prerequisites passed." : `${lifecycleBlockerMessages(completionReadiness).length} blocker(s)`]

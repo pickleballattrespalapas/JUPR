@@ -199,6 +199,30 @@ class _ShortRangePageSupabase(FakeSupabase):
         return super().table(name)
 
 
+class _OperationRangePageQuery(_ShortRangePageQuery):
+    def order(self, key, desc=False):
+        if key != "operation_key":
+            raise RuntimeError(f"tournament_admin_operations has no column {key}")
+        return super().order(key, desc=desc)
+
+
+class _OperationRangePageSupabase(FakeSupabase):
+    def __init__(self, tables):
+        super().__init__(tables)
+        self.operation_range_calls: list[tuple[int, int]] = []
+
+    def table(self, name):
+        if name == "tournament_admin_operations":
+            return _OperationRangePageQuery(
+                self.tables,
+                name,
+                operations=self.operations,
+                page_cap=1,
+                range_calls=self.operation_range_calls,
+            )
+        return super().table(name)
+
+
 def _official_match_for_game(
     tables: dict[str, list[dict]],
     game: dict,
@@ -290,6 +314,44 @@ def _publish_draw_with_immutable_evidence(
         for projection in plan["match_payload_projections"]
     )
     return plan
+
+
+@pytest.mark.parametrize("status", ["completed", "recovery_required"])
+def test_closeout_reads_operation_keys_across_capped_pages(monkeypatch, status) -> None:
+    tables, supabase = _ready_tables(monkeypatch)
+    _publish_draw_with_immutable_evidence(tables, supabase, "draw-1")
+    # Real operation rows have no `id`. Put an unsettled operation after the
+    # completed publication so losing a short final page would allow closeout.
+    tables["tournament_admin_operations"].append(
+        {
+            "operation_key": "z" * 64,
+            "club_id": "club",
+            "surface": "tournament_live",
+            "action": "tournament_day_live_score_and_release",
+            "entity_type": "tournament_registration_day",
+            "entity_id": "tour-1:day-1",
+            "lock_scope": "tournament:tour-1:day:day-1",
+            "status": status,
+        }
+    )
+    capped = _OperationRangePageSupabase(tables)
+
+    lifecycle = build_admin_tournament_lifecycle(
+        capped,
+        club_id="club",
+        tournament_id="tour-1",
+    )
+
+    assert [start for start, _ in capped.operation_range_calls] == [0, 1, 2]
+    assert lifecycle["evidence"]["operations_available"] is True
+    assert lifecycle["draws"][0]["publication_evidence"]["complete"] is True
+    assert lifecycle["counts"]["active_operations"] == int(status == "recovery_required")
+    assert lifecycle["domain_readiness"]["completion"]["ready"] is (status == "completed")
+    codes = {
+        row["code"] for row in lifecycle["domain_readiness"]["completion"]["blockers"]
+    }
+    assert "OPERATION_EVIDENCE_UNAVAILABLE" not in codes
+    assert ("ACTIVE_OR_UNCERTAIN_OPERATIONS" in codes) is (status == "recovery_required")
 
 
 def test_lifecycle_reports_authoritative_open_game_and_exact_blockers(monkeypatch) -> None:

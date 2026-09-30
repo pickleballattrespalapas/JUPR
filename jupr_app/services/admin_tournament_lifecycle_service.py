@@ -81,6 +81,7 @@ def _read_rows(
     *,
     filters: tuple[tuple[str, Any], ...],
     in_filters: tuple[tuple[str, tuple[Any, ...]], ...] = (),
+    identity_column: str = "id",
     limit: int = 5000,
 ) -> tuple[list[dict[str, Any]], bool, str | None]:
     try:
@@ -98,7 +99,7 @@ def _read_rows(
             for key, values in in_filters:
                 query = query.in_(str(key), list(values))
             if hasattr(query, "order"):
-                query = query.order("id", desc=False)
+                query = query.order(identity_column, desc=False)
             supports_range = hasattr(query, "range")
             if supports_range:
                 query = query.range(offset, offset + page_size - 1)
@@ -125,7 +126,7 @@ def _read_rows(
             if page_fingerprint in seen_page_fingerprints:
                 raise RuntimeError(f"{table_name} lifecycle pagination repeated a page")
             seen_page_fingerprints.add(page_fingerprint)
-            page_row_ids = [str(row.get("id") or "") for row in page]
+            page_row_ids = [str(row.get(identity_column) or "") for row in page]
             if any(not row_id for row_id in page_row_ids) or any(
                 row_id in seen_row_ids for row_id in page_row_ids
             ):
@@ -1362,6 +1363,7 @@ def build_admin_tournament_lifecycle(
         supabase,
         "tournament_admin_operations",
         filters=(("club_id", str(club_id)),),
+        identity_column="operation_key",
     )
     if warning:
         warnings.append(warning)
