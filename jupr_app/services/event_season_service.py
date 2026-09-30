@@ -61,7 +61,11 @@ def _honors(db, club_id, kind, source_id, source):
                 for row in public_interclub_trophies(db, season_id=source_id)
                 if row["recipient_type"] == "club" and row["award_key"] in {"club_cup_champion", "division_champion"}]
     if kind == "league":
-        sets = db.table("league_award_result_sets").select("workflow_revision,result_fingerprint,finalized_at").eq("club_id", club_id).eq("league_name", source_id).limit(1).execute().data or []
+        # Every saved workflow step has its own result set. Read the latest
+        # revision so an earlier preview cannot hide or replace published awards.
+        sets = (db.table("league_award_result_sets").select("workflow_revision,result_fingerprint,finalized_at")
+                .eq("club_id", club_id).eq("league_name", source_id)
+                .order("workflow_revision", desc=True).limit(1).execute().data or [])
         if not sets or not sets[0].get("finalized_at"):
             return []
         ledger = sets[0]
@@ -92,12 +96,25 @@ def _honors(db, club_id, kind, source_id, source):
     return honors
 
 
+def _history_is_public(kind, source, honors):
+    # Archiving removes a league from public results discovery, but its finalized,
+    # public award records remain part of the series' permanent history.
+    return bool(source.get("public") or (
+        kind == "league" and source.get("complete")
+        and str(source["event"].get("status", "")).strip().lower() == "archived"
+        and honors
+    ))
+
+
 def event_history(db, *, club_id, kind, source_id, slug="", admin=False):
     if admin and not slug and kind != "interclub":
         clubs = db.table("clubs").select("slug").eq("id", club_id).limit(1).execute().data or []
         slug = clubs[0]["slug"] if clubs else ""
     source = load_source(db, club_id, kind, source_id)
-    if not source or (not admin and not source.get("public")):
+    if not source:
+        raise LookupError("This event history is not available.")
+    current_honors = _honors(db, club_id, kind, source_id, source)
+    if not admin and not _history_is_public(kind, source, current_honors):
         raise LookupError("This event history is not available.")
     current = source_summary(kind, source_id, source, slug)
     membership = db.table("pcs_event_editions").select("*").eq("club_id", club_id).eq("event_kind", kind).eq("source_id", source_id).limit(1).execute().data or []
@@ -110,11 +127,14 @@ def event_history(db, *, club_id, kind, source_id, slug="", admin=False):
     seasons = []
     for edition in editions:
         item = source if edition["source_id"] == source_id else load_source(db, club_id, kind, edition["source_id"])
-        if not item or (not admin and not item.get("public")):
+        if not item:
+            continue
+        honors = current_honors if edition["source_id"] == source_id else _honors(db, club_id, kind, edition["source_id"], item)
+        if not admin and not _history_is_public(kind, item, honors):
             continue
         season = {**source_summary(kind, edition["source_id"], item, slug), "label": edition["label"],
                   "position": edition["position"], "selected": edition["source_id"] == source_id,
-                  "honors": _honors(db, club_id, kind, edition["source_id"], item)}
+                  "honors": honors}
         if not admin:
             season.pop("admin_href"); season.pop("fingerprint")
         seasons.append(season)

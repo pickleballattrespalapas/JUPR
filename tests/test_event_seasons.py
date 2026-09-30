@@ -94,6 +94,79 @@ def test_public_history_hides_drafts_and_private_seasons(monkeypatch):
     with pytest.raises(LookupError): event_history(db, club_id="other", kind="league", source_id="2026")
 
 
+@pytest.fixture
+def league_award_history(monkeypatch):
+    import jupr_app.services.event_season_service as service
+
+    sources = {sid: {"event": {"league_name": sid, "league_type": "Individual", "status": status},
+                     "fingerprint": "a" * 32, "complete": status == "archived", "public": status == "active"}
+               for sid, status in [("private", "archived"), ("2026", "archived"), ("2027", "active")]}
+    scope = {"club_id": "club", "league_name": "2026"}
+    tables = {
+        "pcs_event_editions": [{"series_id": "series", "club_id": "club", "event_kind": "league",
+                                "source_id": sid, "label": sid, "position": position}
+                               for position, sid in enumerate(sources)],
+        "pcs_event_series": [{"id": "series", "club_id": "club", "name": "Club ladder"}],
+        "leagues_metadata": [],
+        # Storage order must not decide which workflow revision is published.
+        "league_award_result_sets": [{**scope, "workflow_revision": revision, "result_fingerprint": str(revision),
+                                      "finalized_at": "2026-09-30" if revision >= 4 else None}
+                                     for revision in [3, 2, 1, 5, 4]],
+        "league_award_result_records": [{**scope, "id": str(revision), "workflow_revision": revision,
+                                         "result_fingerprint": str(revision), "public_visible": True,
+                                         "award_key": "most_wins:1", "category_label": "Most Wins",
+                                         "recipient_name": "Avery Ace", "placement": 1, "metric_display": "17 wins"}
+                                        for revision in range(1, 6)],
+    }
+    published = tables["league_award_result_records"][-1]
+    tables["league_award_result_records"] += [
+        {**published, "id": "private-record", "public_visible": False},
+        {**published, "id": "wrong-fingerprint", "result_fingerprint": "stale"},
+        {**published, "id": "other-club", "club_id": "other"},
+        {**published, "id": "other-league", "league_name": "other"},
+    ]
+    tables["league_award_result_sets"].append({**tables["league_award_result_sets"][3], "club_id": "other", "workflow_revision": 99})
+    monkeypatch.setattr(service, "load_source", lambda db, club_id, kind, sid: sources.get(sid) if club_id == "club" else None)
+    return SimpleNamespace(table=lambda name: Query(tables[name])), tables, sources
+
+
+@pytest.mark.parametrize("admin", [False, True])
+@pytest.mark.parametrize("selected", ["2026", "2027"])
+@pytest.mark.parametrize("league_type", ["Individual", "Team"])
+def test_finalized_awards_survive_archival_in_both_season_histories(league_award_history, admin, selected, league_type):
+    db, _tables, sources = league_award_history
+    sources["2026"]["event"]["league_type"] = league_type
+    history = event_history(db, club_id="club", kind="league", source_id=selected, slug="club", admin=admin)
+    old = next(season for season in history["seasons"] if season["source_id"] == "2026")
+    assert old["honors"] == [{"id": "5", "title": "Most Wins", "recipient": "Avery Ace", "placement": 1, "record": "17 wins"}]
+    assert old["results_href"] is None  # Archival does not reopen the public results routes.
+    assert old["selected"] == (selected == "2026")
+    assert next(season for season in history["seasons"] if season["source_id"] == "2027")["honors"] == []
+    if not admin:
+        assert [season["source_id"] for season in history["seasons"]] == ["2027", "2026"]
+        assert "admin_href" not in old and "fingerprint" not in old
+
+
+@pytest.mark.parametrize("unpublished", ["preview", "private_records", "no_records", "draft"])
+def test_history_does_not_publish_unfinished_or_private_awards(league_award_history, unpublished):
+    db, tables, sources = league_award_history
+    if unpublished == "preview":
+        tables["league_award_result_sets"][3]["finalized_at"] = None
+    elif unpublished == "private_records":
+        for record in tables["league_award_result_records"]:
+            record["public_visible"] = False
+    elif unpublished == "no_records":
+        tables["league_award_result_records"] = []
+    else:
+        sources["2026"].update(complete=False)
+        sources["2026"]["event"]["status"] = "draft"
+    with pytest.raises(LookupError):
+        event_history(db, club_id="club", kind="league", source_id="2026", slug="club")
+    history = event_history(db, club_id="club", kind="league", source_id="2027", slug="club")
+    assert [season["source_id"] for season in history["seasons"]] == ["2027"]
+    assert history["seasons"][0]["honors"] == []
+
+
 def test_api_rollover_uses_scoped_source_and_a_reviewed_atomic_rpc(monkeypatch):
     calls = []
     source = {"event": {"league_name": "2026", "league_type": "Individual", "schedule_config": {}}, "fingerprint": "a"*32}
