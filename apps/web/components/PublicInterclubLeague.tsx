@@ -7,16 +7,20 @@ import type { PublicLeague } from "@/lib/interclubPublic";
 import { meetTime } from "@/lib/interclubPublic";
 import styles from "./ClubWebsite.module.css";
 import { CompetitionStandings, CompetitionResults } from "./PublicInterclubCompetition";
+import EventHistoryView from "./EventHistoryView";
+import type { EventHistory } from "@/lib/eventSeasons";
 export default function PublicInterclubLeague({
   league,
   initialView = "standings",
+  history,
 }: {
   league: PublicLeague;
-  initialView?: "standings" | "results";
+  initialView?: "standings" | "results" | "history";
+  history?: EventHistory | null;
 }) {
   const [view, setView] = useState<string>(initialView), [resultClub, setResultClub] = useState("");
   const panelId = useId();
-  const tabs = [{ id: "standings", label: "Overall standings" }, { id: "results", label: "Results" }, { id: "schedule", label: "Schedule" }];
+  const tabs = [{ id: "standings", label: "Overall standings" }, { id: "results", label: "Results" }, { id: "schedule", label: "Schedule" }, { id: "history", label: "History" }];
   const doc = league.document,
     names = Object.fromEntries(doc.clubs.map((c) => [c.id, c.name]));
   return (
@@ -34,6 +38,9 @@ export default function PublicInterclubLeague({
           if (next >= 0) { event.preventDefault(); setView(tabs[next].id); document.getElementById(`${panelId}-${tabs[next].id}-tab`)?.focus(); }
         }}>{tab.label}</button>)}
       </div>
+      <section id={`${panelId}-history`} role="tabpanel" aria-labelledby={`${panelId}-history-tab`} hidden={view !== "history"}>
+        {history ? <EventHistoryView history={history} /> : <p>History is temporarily unavailable. Refresh this page to try again.</p>}
+      </section>
       <section id={`${panelId}-standings`} role="tabpanel" aria-labelledby={`${panelId}-standings-tab`} hidden={view !== "standings"}>
         {doc.scoring_version === 1 ? <CompetitionStandings league={league} onClubSelect={club => { setResultClub(club); setView("results"); }} /> : <>
         <p>

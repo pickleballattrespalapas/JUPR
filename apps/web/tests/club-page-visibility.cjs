@@ -15,6 +15,7 @@ const initial = {
 };
 let site = { club_id: "alpha", slug: "alpha", club_active: true, revision: 1,
   draft: structuredClone(initial), published: structuredClone(initial), published_at: "2026-09-16" };
+let publicTrophies = [], trophyRequests = [], trophiesUnavailable = false;
 const mocks = {
   "next/link": ({ children, ...props }) => React.createElement("a", props, children),
   "next/navigation": { usePathname: () => pathname, notFound: () => { throw Error("NOT_FOUND"); } },
@@ -22,6 +23,11 @@ const mocks = {
   "@/lib/clubSiteServer": {
     getPublicSite: async slug => slug === "alpha" ? { slug, document: structuredClone(site.published) } : null,
     getClubDirectory: async () => ({ clubs: [{ slug: "alpha" }], total: 1, limit: 100 }),
+    publicSiteFetch: async path => {
+      trophyRequests.push(path);
+      if (trophiesUnavailable) throw new Error("Trophy service unavailable");
+      return { trophies: publicTrophies };
+    },
   },
   "@/lib/useAdminWorkspace": { useAdminWorkspace: () => ({ clubId: "alpha" }) },
   "@/lib/useAdminSession": { useAdminSession: () => ({ loading: false, accessToken: "fixture-token",
@@ -99,6 +105,39 @@ global.fetch = async (url, options = {}) => {
   const withBlocks = { ...doc, pages: [{ ...doc.pages[0], blocks: [block, { ...block, id: "button", kind: "button", text: "Hidden target", url: "/clubs/alpha/players" }] }] };
   assert.doesNotMatch(html(Content, { document: withBlocks, slug: "alpha" }), /Hidden target|href="\/clubs\/alpha\/players"/);
   assert.doesNotMatch(html(Content, { document: { ...initial, page_visibility: Object.fromEntries(CLUB_LINKS.map(([, key]) => [key, "private"])) }, slug: "alpha" }), /Around the club/);
+
+  const Home = load("app/clubs/[clubSlug]/page.tsx").default;
+  const homeHtml = async () => renderToStaticMarkup(await Home({ params: { clubSlug: "alpha" } }));
+  const trophy = (id, kind, extra = {}) => ({ id, award_key: kind, recipient_type: "club", division: "3.5",
+    title: `Coastal ${kind}`, season_name: "Coastal 2026", earned_at: "2026-09-30T18:00:00Z",
+    results_href: "/interclub/coastal/final-results", ...extra });
+  publicTrophies = [
+    trophy("old", "division_champion", { season_name: "Older season", earned_at: "2025-09-30T18:00:00Z" }),
+    trophy("division", "division_champion"), trophy("cup", "club_cup_champion"),
+    trophy("division2", "division_champion", { division: "4.0" }),
+    trophy("player", "club_cup_champion", { recipient_type: "player", season_name: "Player-only honor" }),
+    trophy("participation", "participation", { season_name: "Participation only" }),
+    trophy("retired", "club_cup_champion", { season_name: "Replaced champions", earned_at: "2026-10-01T18:00:00Z", is_current_champion: false }),
+  ];
+  const home = await homeHtml();
+  assert.deepEqual(trophyRequests, ["/public/clubs/alpha/trophies"]);
+  assert.equal((home.match(/data-home-championship=/g) || []).length, 3);
+  assert.match(home, /League Champion.*3\.5 Division Champion.*4\.0 Division Champion/);
+  assert.match(home, /href="\/interclub\/coastal\/final-results"/);
+  assert.match(home, /View trophy case \(4\)/);
+  assert.doesNotMatch(home, /Older season|Player-only honor|Participation only|Replaced champions/);
+  site.published.page_visibility = { trophies: "private" };
+  assert.doesNotMatch(await homeHtml(), /Club championships|data-home-championship=|View trophy case/);
+  assert.equal(trophyRequests.length, 1, "Hidden club trophies are not fetched for the homepage");
+  assert.doesNotMatch(html(Content, { document: site.published, slug: "alpha", trophies: publicTrophies }), /Club championships/);
+  site.published = structuredClone(initial);
+  trophiesUnavailable = true;
+  const unavailable = await homeHtml();
+  assert.match(unavailable, /Welcome/);
+  assert.doesNotMatch(unavailable, /Club championships/);
+  trophiesUnavailable = false;
+  publicTrophies = [];
+  assert.doesNotMatch(await homeHtml(), /Club championships/);
 
   const { default: Link, ClubPageNavigationProvider: Provider } = load("components/PublicClubLink.tsx");
   const links = () => h(Provider, { slug: "alpha", settings: doc },

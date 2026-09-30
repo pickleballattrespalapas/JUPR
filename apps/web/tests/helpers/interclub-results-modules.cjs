@@ -13,6 +13,7 @@ function load(file) {
     if (name === '@/lib/interclubAwards') return load('lib/interclubAwards.ts');
     if (name === './PublicClubLink' || name === 'next/link') return { __esModule: true, default: ({children, ...props}) => require('react').createElement('a', props, children) };
     if (name === './PublicInterclubCompetition') return load('components/PublicInterclubCompetition.tsx');
+    if (name === './EventHistoryView') return load('components/EventHistoryView.tsx');
     if (name === './SearchablePlayerSelect') return playerSearch('@/components/SearchablePlayerSelect');
     return require(name);
   }, module, module.exports);

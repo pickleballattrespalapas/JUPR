@@ -1,0 +1,19 @@
+.history { display: grid; gap: 1.2rem; }
+.history h2, .history h3 { margin: 0 0 0.5rem; }
+.muted { color: #526176; line-height: 1.5; }
+.season { background: white; border: 1px solid #dce3eb; border-radius: 16px; padding: clamp(1rem, 3vw, 1.5rem); min-width: 0; }
+.seasonHeader { display: flex; justify-content: space-between; align-items: start; gap: 1rem; flex-wrap: wrap; }
+.seasonHeader h3 { overflow-wrap: anywhere; }
+.eyebrow { margin-top: 0; color: #785510; font-size: 0.8rem; font-weight: 750; }
+.actions { display: flex; flex-wrap: wrap; gap: 0.8rem; align-items: center; }
+.actions a { display: inline-flex; align-items: center; min-height: 44px; }
+.honors { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 0.8rem; padding: 0; list-style: none; }
+.honors li { display: flex; align-items: center; gap: 0.8rem; padding: 1rem; border: 1px solid #e9d7aa; border-radius: 12px; background: #fffdf7; min-width: 0; overflow-wrap: anywhere; }
+.honors span:not(.medal), .honors small { display: block; margin-top: 0.25rem; color: #665638; font-size: 0.85rem; }
+.medal { font-size: 1.8rem; }
+.form { display: grid; gap: 1rem; max-width: 760px; }
+.form label { display: grid; gap: 0.35rem; font-weight: 650; }
+.form input, .form select { width: 100%; padding: 0.65rem; border: 1px solid #94a3b8; border-radius: 8px; font: inherit; box-sizing: border-box; min-width: 0; }
+.dates { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); gap: 1rem; }
+.notice { padding: 1rem; border-radius: 12px; background: #eff6ff; border: 1px solid #bfdbfe; }
+.error { color: #9a3412; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 12px; padding: 1rem; }

@@ -40,6 +40,7 @@ export default function InterclubWorkflow({ seasonId, meetId, current, disabled 
             } : undefined}>{contents}</Link>}
       </li>;
     })}</ol>
+    {!disabled && <p><Link href={`/admin/event-history?${new URLSearchParams({ kind: "interclub", event: seasonId })}`}>History & seasons</Link></p>}
     {disabled && <p role="status">Save or discard your score changes before leaving this meet.</p>}
   </nav>;
 }

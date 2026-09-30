@@ -53,7 +53,7 @@ function AwardReview({ clubId, seasonId, accessToken }: { clubId: string; season
   }
 
   return <section className={styles.section}>
-    <p><Link href={`/admin/interclub/competition?season=${encodeURIComponent(seasonId)}`}>← Championship results</Link></p>
+    <div className={styles.actions}><Link href={`/admin/interclub/competition?season=${encodeURIComponent(seasonId)}`}>← Championship results</Link><Link href={`/admin/event-history?${new URLSearchParams({ kind: "interclub", event: seasonId })}`}>History & seasons →</Link></div>
     <div><h1>Season awards</h1><p className={styles.muted}>Review the final results and recipients, then publish the season honors to player profiles and club trophy cases.</p></div>
     {error && <p className={styles.error} role="alert">{error}</p>}
     {message && <p className={styles.notice} role="status">{message}</p>}

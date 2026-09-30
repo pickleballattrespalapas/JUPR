@@ -9,6 +9,7 @@ from pydantic import Field
 
 from jupr_app.domain.interclub_awards import PERFORMANCE_BADGES, performance_awards, season_awards
 from jupr_app.services.interclub_awards_service import public_interclub_honors, public_interclub_trophies
+from jupr_app.services.event_season_service import current_club_championships
 from services.api.auth import auth_header
 from services.api.club_site_models import StrictModel
 from services.api.club_site_routes import published_site, site_administrator, site_rpc
@@ -86,7 +87,7 @@ def install_interclub_awards_routes(app, *, get_supabase_client):
     def club_trophies(slug: str, response: Response):
         response.headers["Cache-Control"] = "no-store"
         db = get_supabase_client(); site = published_site(db, slug)
-        return {"club_name": site["document"]["name"], "trophies": public_interclub_trophies(db, club_id=site["club_id"])}
+        return {"club_name": site["document"]["name"], "trophies": current_club_championships(db, public_interclub_trophies(db, club_id=site["club_id"]))}
 
     @app.get("/public/interclub/{season_id}/awards")
     def awards(season_id: UUID, response: Response):

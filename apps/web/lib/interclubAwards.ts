@@ -9,6 +9,7 @@ export type SeasonTrophy = {
   division: string; title: string; recipient_type: "club" | "player"; recipient_name: string;
   season_name: string; earned_at: string; results_href: string;
   recipient_key: string;
+  is_current_champion?: boolean;
 };
 export type AwardRecipient = Pick<SeasonTrophy, "id" | "club_id" | "award_key" | "division" | "title" | "recipient_type" | "recipient_name"> & { recipient_key?: string; entry_id?: string | null };
 export type SeasonAwardPreview = {
