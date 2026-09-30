@@ -19,6 +19,7 @@ export default function ChampionshipSetup({ context, root, clubId, accessToken, 
     <p className={styles.eyebrow}>Regular season complete</p>
     <h2 id="championship-setup-heading">{context.club_cup.status === "complete" ? "Championship results" : "Set up championships"}</h2>
     <p>All regular-season meets have approved results. Finalists below come from those results and any completed qualifying playoffs.</p>
+    {context.club_cup.status === "complete" && context.is_organizer && <div className={styles.toolbar}><Link className={styles.primary} href={`/admin/interclub/awards?season=${encodeURIComponent(context.season.id)}`}>Review season awards & final results →</Link></div>}
     <div className={styles.finalists}>{qualifications.map(qualification => {
       const final = context.batches.find(batch => batch.phase === "final" && batch.document.encounters.some(encounter => encounter.division === qualification.division));
       return <article key={qualification.division} className={styles.finalist} aria-label={`${qualification.division} championship qualification`}>

@@ -1476,6 +1476,9 @@ install_club_site_routes(app, get_supabase_client=get_supabase_client)
 from services.api.interclub_public_routes import install_interclub_public_routes
 install_interclub_public_routes(app, get_supabase_client=get_supabase_client)
 
+from services.api.interclub_awards_routes import install_interclub_awards_routes
+install_interclub_awards_routes(app, get_supabase_client=get_supabase_client)
+
 from services.api.interclub_player_pool_routes import install_interclub_player_pool_routes
 install_interclub_player_pool_routes(app, get_supabase_client=get_supabase_client)
 

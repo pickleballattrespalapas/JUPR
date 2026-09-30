@@ -475,7 +475,8 @@ def cleanup(directory):
     for club in state["clubs"]:
         if not club.startswith("qa-ic-"+state["run"]+"-"):raise RuntimeError("Cleanup club boundary failed")
         try:
-            r.db("PATCH","clubs",{"is_active":False,"status":"draft"},id="eq."+club)
+            r.db("PATCH","pcs_club_sites",{"published":None,"published_at":None},club_id="eq."+club)
+            r.db("PATCH","clubs",{"is_active":False,"status":"draft","public_site_status":"draft"},id="eq."+club)
             r.db("PATCH","admin_role_assignments",{"revoked_at":iso(now())},club_id="eq."+club)
         except Exception as exc:errors.append(r.redact(exc))
     for user in state["users"]:

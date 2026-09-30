@@ -69,7 +69,7 @@ global.fetch = async (url, options = {}) => {
 
 (async () => {
   const { CLUB_LINKS, clubPageSection, publicClubPage, publicClubLinks } = load("lib/clubSite.ts");
-  assert.equal(publicClubLinks(initial).length, 10, "Existing documents retain their public sections");
+  assert.equal(publicClubLinks(initial).length, 11, "Existing documents retain their public sections and gain the club trophy case");
   const doc = { ...initial, page_visibility: { players: "private", tournaments: "private", matches: "private", leagues: "private", play: "private" } };
   for (const [route, section] of [
     ["players/12?source=results", "players"], ["matches/20", "matches"],

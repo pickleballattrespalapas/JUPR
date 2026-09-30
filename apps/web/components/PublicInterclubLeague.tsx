@@ -1,6 +1,7 @@
 "use client";
 
 import { useId, useState } from "react";
+import Link from "next/link";
 import resultsStyles from "./InterclubResults.module.css";
 import type { PublicLeague } from "@/lib/interclubPublic";
 import { meetTime } from "@/lib/interclubPublic";
@@ -8,10 +9,12 @@ import styles from "./ClubWebsite.module.css";
 import { CompetitionStandings, CompetitionResults } from "./PublicInterclubCompetition";
 export default function PublicInterclubLeague({
   league,
+  initialView = "standings",
 }: {
   league: PublicLeague;
+  initialView?: "standings" | "results";
 }) {
-  const [view, setView] = useState("standings"), [resultClub, setResultClub] = useState("");
+  const [view, setView] = useState<string>(initialView), [resultClub, setResultClub] = useState("");
   const panelId = useId();
   const tabs = [{ id: "standings", label: "Overall standings" }, { id: "results", label: "Results" }, { id: "schedule", label: "Schedule" }];
   const doc = league.document,
@@ -24,6 +27,7 @@ export default function PublicInterclubLeague({
         {doc.start_date} – {doc.end_date} · {doc.clubs.length} participating
         clubs
       </p>
+      {league.final_results?.complete && league.id && <p className={styles.notice}><strong>Season complete.</strong> <Link href={`/interclub/${league.id}/final-results`}>View final results, champions, and trophies →</Link></p>}
       <div className={resultsStyles.tabs} role="tablist" aria-label="League sections">
         {tabs.map((tab, index) => <button key={tab.id} id={`${panelId}-${tab.id}-tab`} type="button" role="tab" aria-selected={view === tab.id} aria-controls={`${panelId}-${tab.id}`} tabIndex={view === tab.id ? 0 : -1} className={resultsStyles.tab} onClick={() => setView(tab.id)} onKeyDown={event => {
           const next = event.key === "ArrowRight" ? (index + 1) % tabs.length : event.key === "ArrowLeft" ? (index + tabs.length - 1) % tabs.length : event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : -1;

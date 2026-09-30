@@ -206,6 +206,7 @@ export const CLUB_LINKS = [
   ["Match Explorer", "match-explorer"],
   ["Weekly recap", "weekly-recap"],
   ["Badges & trophies", "badge-codex"],
+  ["Club trophy case", "trophies"],
   ["Interclub leagues", "interclub"],
 ] as const;
 
@@ -224,6 +225,7 @@ export const PAGE_SCOPE_LABELS: Record<ClubPageKey, string> = {
   "match-explorer": "Match Explorer",
   "weekly-recap": "Weekly recap",
   "badge-codex": "Badges and trophies catalogue",
+  trophies: "Club trophy case and season honors",
   interclub: "This club’s interclub league list",
 };
 export function publicClubLinks(doc: PageNavigationSettings) {

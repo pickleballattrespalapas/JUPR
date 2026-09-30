@@ -14,6 +14,7 @@ from services.api.club_site_routes import published_site, site_administrator, si
 from services.api.interclub_competition_routes import approved_documents
 from jupr_app.domain import interclub_competition as competition
 from services.api.interclub_result_views import result_rows, result_player_catalog
+from jupr_app.domain.interclub_awards import final_results
 
 
 class GameScore(StrictModel):
@@ -56,8 +57,8 @@ def season_context(db, season_id):
     season = seasons[0]
     participants = db.table("pcs_interclub_participations").select("club_id,status").eq("season_id", season_id).execute().data or []
     ids = [p["club_id"] for p in participants if p["status"] == "accepted"]
-    clubs = db.table("clubs").select("id,name").in_("id", ids).execute().data if ids else []
-    meets = db.table("pcs_interclub_meets").select("id,host_club_id,club_ids,starts_at,duration_minutes,courts,revision").eq("season_id", season_id).order("starts_at").execute().data or []
+    clubs = db.table("clubs").select("id,name,slug").in_("id", ids).execute().data if ids else []
+    meets = db.table("pcs_interclub_meets").select("id,host_club_id,club_ids,starts_at,duration_minutes,courts,revision,competition_phase").eq("season_id", season_id).order("starts_at").execute().data or []
     return season, clubs or [], meets
 
 
@@ -117,6 +118,8 @@ def competition_publication(db, season, clubs, meets, *, documents=None):
                                           for division in doc["divisions"]],
                 "club_cup": cup, "qualification": tables["qualification"],
                 "players": result_player_catalog(db, season["id"], summaries)})
+    finished = {document["meet_id"] for document in documents if document.get("weather") != "rescheduled"}
+    doc["season_complete"] = bool(meets) and all(meet["id"] in finished for meet in meets) and cup["status"] == "complete"
     return doc
 
 
@@ -129,7 +132,7 @@ def reviewed_publication(db, season, clubs, meets):
     sources = {
         "approved": sorted([{"id": row["id"], "revision": row["approved_revision"]} for row in official], key=lambda row: row["id"]),
         "season": season["details"],
-        "clubs": sorted(clubs, key=lambda row: row["id"]),
+        "clubs": sorted([{key: club[key] for key in ("id", "name")} for club in clubs], key=lambda row: row["id"]),
         "meets": sorted([{"id": meet["id"], "revision": meet["revision"]} for meet in meets], key=lambda row: row["id"]),
     }
     document = competition_publication(db, season, clubs, meets, documents=[row["approved_document"] for row in official])
@@ -140,7 +143,7 @@ def reviewed_publication(db, season, clubs, meets):
 def publication_response(document):
     if document.get("scoring_version") == 1:
         return {"document": document, "standings": document["competition_standings"],
-                "club_cup": document["club_cup"], "qualification": document["qualification"]}
+                "club_cup": document["club_cup"], "qualification": document["qualification"], "final_results": final_results(document)}
     # Retain old published snapshots for reference. Their one-pairing results
     # cannot be inferred into the Southern BCS two-pairing scoring model.
     return {"document": document, "standings": league_standings(document)}

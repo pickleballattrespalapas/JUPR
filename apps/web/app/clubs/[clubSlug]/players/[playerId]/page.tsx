@@ -235,7 +235,7 @@ export default async function PlayerProfilePage({ params, searchParams }: Player
           </article>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: "0.75rem" }}>
             <article style={cardStyle}><strong>League positions</strong><p style={{ color: "#475569" }}>Award standings, league rating, record, and qualification status for each league.</p><Link href={pageHref({ clubSlug, playerId, section: "positions" })}>Open league positions</Link></article>
-            <article style={cardStyle}><strong>Trophy case</strong><p style={{ color: "#475569" }}>End-of-league awards and tournament podium honors only.</p><Link href={pageHref({ clubSlug, playerId, section: "trophies" })}>Open trophy case</Link></article>
+            <article style={cardStyle}><strong>Trophy case</strong><p style={{ color: "#475569" }}>League, interclub season, and tournament honors.</p><Link href={pageHref({ clubSlug, playerId, section: "trophies" })}>Open trophy case</Link></article>
             <article style={cardStyle}><strong>Badge cabinet</strong><p style={{ color: "#475569" }}>Achievements for participation, improvement, partnerships, and match results.</p><Link href={pageHref({ clubSlug, playerId, section: "badges" })}>Open badge cabinet</Link></article>
           </div>
         </section>
@@ -310,8 +310,8 @@ export default async function PlayerProfilePage({ params, searchParams }: Player
         <section id="trophies" data-testid="player-trophies" style={{ display: "grid", gap: "1rem", marginBottom: "1rem" }}>
           <article style={cardStyle}>
             <h2 style={{ marginTop: 0 }}>Trophy case</h2>
-            <p style={{ color: "#475569" }}>Major honors only: end-of-league awards and tournament podiums. Progression and repeatable achievements live in the Badge Cabinet.</p>
-            {awards.trophies.length === 0 ? <p style={{ color: "#475569" }}>No end-of-league awards or tournament podium honors yet.</p> : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.75rem" }}>{awards.trophies.map((trophy, index) => <div key={`${trophy.badge_id}-${trophy.earned_at ?? index}`} data-testid="player-trophy" style={{ border: "1px solid #f59e0b", borderRadius: "12px", padding: "0.85rem", background: "#fffbeb" }}><strong>🏆 {trophy.title}</strong><p style={{ margin: "0.35rem 0" }}>{trophy.placement ? `Place #${trophy.placement}` : "Major award"}{trophy.context_label ? ` · ${trophy.context_label}` : ""}</p><small>{formatDate(trophy.earned_at)}</small></div>)}</div>}
+            <p style={{ color: "#475569" }}>League, interclub season, and tournament honors. Progression and repeatable achievements live in the Badge Cabinet.</p>
+            {awards.trophies.length === 0 ? <p style={{ color: "#475569" }}>No season or tournament honors yet.</p> : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.75rem" }}>{awards.trophies.map((trophy, index) => <div key={`${trophy.badge_id}-${trophy.earned_at ?? index}`} data-testid="player-trophy" style={{ border: "1px solid #f59e0b", borderRadius: "12px", padding: "0.85rem", background: "#fffbeb" }}><strong>{trophy.award_key === "participation" ? "🏅" : "🏆"} {trophy.title}</strong><p style={{ margin: "0.35rem 0" }}>{trophy.award_key === "participation" ? "Season participation" : trophy.placement ? `Place #${trophy.placement}` : "Major award"}{trophy.context_label ? ` · ${trophy.context_label}` : ""}</p><small>{formatDate(trophy.earned_at)}</small>{trophy.results_href ? <p style={{ marginBottom: 0 }}><Link href={trophy.results_href}>View final season results</Link></p> : null}</div>)}</div>}
           </article>
         </section>
       ) : null}</Display>

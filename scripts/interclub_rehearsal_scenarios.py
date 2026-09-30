@@ -214,6 +214,10 @@ def full_season(r):
     source_after = r.db("GET","pcs_interclub_rating_sources",batch_id="eq."+b["id"])[0]
     r.check(source_before["generation_id"] == source_after["generation_id"], "rating retry does not duplicate a completed generation")
     public = publication(r,s)
+    awardroot = f"/admin/clubs/{s['clubs'][0]}/interclub/{s['id']}/awards"
+    unfinished = r.api("GET", awardroot)
+    r.check(not unfinished["ready"] and unfinished["problems"], "season awards wait for every championship")
+    r.api("POST", awardroot, {key: unfinished[key] for key in ("revision", "publication_revision", "preview_fingerprint")}, expected=(409,))
     encoded = json.dumps(public)
     r.check(all(secret not in encoded for secret in ["Private revised note","@example.invalid","token_nonce","injury_reason"]), "publication excludes private contact and injury information")
     pubroot = f"/admin/clubs/{s['clubs'][0]}/interclub/{s['id']}/publication"
@@ -255,6 +259,47 @@ def full_season(r):
     r.check(sweep_result["outcome"]["games_a"] == 3 and sweep_result["outcome"]["games_b"] == 0
             and skipped_public["status"] == "not_needed" and not skipped_public["players_a"] and not skipped_public["players_b"],
             "published 3-0 final gives skipped Game 4 no win, loss or player appearance")
+    r.phase("reviewed season trophies and final results")
+    preview = r.api("GET", awardroot)
+    r.check(preview["ready"] and preview["preview"]["final_results"]["complete"]
+            and len(preview["preview"]["final_results"]["divisions"]) == 3,
+            "finished season previews all champions and exact trophy recipients")
+    body = {key: preview[key] for key in ("revision", "publication_revision", "preview_fingerprint")}
+    r.api("POST", awardroot, body, actor=1, expected=(403,))
+    r.api("GET", awardroot, actor=2, expected=(403,))
+    r.api("POST", awardroot, {**body, "preview_fingerprint": "0"*64}, expected=(409,))
+    r.api("POST", awardroot, {**body, "publication_revision": body["publication_revision"]+1}, expected=(409,))
+    issued = r.api("POST", awardroot, body)
+    replay = r.api("POST", awardroot, body)
+    r.check(issued["revision"] == replay["revision"] and replay["unchanged"], "repeat award submission is idempotent")
+    public_awards = r.api("GET", "/public/interclub/"+s["id"]+"/awards", actor=None)["trophies"]
+    r.check(len(public_awards) == len(preview["awards"]) and len({a["id"] for a in public_awards}) == len(public_awards)
+            and all("player_id" not in a and "entry_id" not in a and "email" not in a for a in public_awards),
+            "public season honors contain every recipient without private profile identifiers")
+    r.check(r.api("GET", awardroot)["current"], "awarded honors match the reviewed final results")
+    # A private correction retains the public honors; publishing its approval
+    # hides those older honors until the new award review commits atomically.
+    finalroot = r.competition(s["clubs"][0], s["id"], final["id"], "final")
+    reopened = r.api("POST", finalroot+"/reopen", {"expected_revision": fb["revision"], "reason": "Trophy correction rehearsal"})["batch"]
+    r.check(r.api("GET", "/public/interclub/"+s["id"]+"/awards", actor=None)["trophies"] == public_awards,
+            "private score correction leaves the published trophies intact")
+    correction = deepcopy(reopened["document"])
+    correction["encounters"][0]["pairings"][0]["games"][0]["b"] = 4
+    fb = r.approve(s, final, r.save(s, final, reopened, correction))
+    publication(r, s)
+    r.check(not r.api("GET", "/public/interclub/"+s["id"]+"/awards", actor=None)["trophies"],
+            "changed public results hide stale honors pending organizer review")
+    # These run-specific club sites are unlisted and hidden again in cleanup.
+    for club in s["clubs"]:
+        r.db("PATCH", "clubs", {"is_active": True}, id="eq."+club)
+        sitepath = f"/admin/clubs/{club}/site"
+        site = r.api("GET", sitepath)
+        document = {**site["draft"], "visibility": "unlisted"}
+        saved = r.api("PUT", sitepath, {"revision": site["revision"], "document": document})
+        r.api("POST", sitepath+"/publish", {"revision": saved["revision"]})
+    winner = s["clubs"][0]
+    participant = next(a for a in preview["awards"] if a["recipient_type"] == "player" and a["club_id"] == winner)
+    s["browser_award_player"] = r.db("GET", "pcs_interclub_entries", select="player_id", id="eq."+participant["entry_id"])[0]["player_id"]
     s["browser_meet"] = m["id"]
     s["browser_final"] = final["id"]
     r.persist()

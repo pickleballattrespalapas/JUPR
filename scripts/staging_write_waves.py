@@ -292,6 +292,7 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/admin/clubs/{club_id}/site/{action}"),
         ("PUT", "/admin/clubs/{club_id}/interclub/{season_id}/publication"),
         ("POST", "/admin/clubs/{club_id}/interclub/{season_id}/publication/{action}"),
+        ("POST", "/admin/clubs/{club_id}/interclub/{season_id}/awards"),
         ("POST", "/admin/clubs/{club_id}/interclub/registrations/{season_id}/pool/approvals"),
         ("POST", "/admin/clubs/{club_id}/interclub/competition/{season_id}/meets"),
         ("PUT", "/admin/clubs/{club_id}/interclub/competition/{season_id}/meets/{meet_id}/schedule"),

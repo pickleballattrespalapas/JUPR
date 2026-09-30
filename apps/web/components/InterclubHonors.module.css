@@ -1,0 +1,26 @@
+.section { display: grid; gap: 1.25rem; margin: 1.5rem 0; }
+.hero { padding: clamp(1.25rem, 4vw, 2.5rem); border: 1px solid #e7c56c; border-radius: 18px; background: linear-gradient(125deg, #fffbeb, #fff 78%); }
+.eyebrow { color: #7c580b; font-size: .78rem; font-weight: 800; text-transform: uppercase; letter-spacing: .09em; margin: 0 0 .65rem; }
+.hero h2 { font-size: clamp(1.7rem, 4vw, 2.6rem); line-height: 1.15; margin: 0 0 .7rem; }
+.hero p:last-child { margin-bottom: 0; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 265px), 1fr)); gap: 1rem; }
+.card { padding: 1.25rem; border: 1px solid #dfd4b9; background: #fffdf8; border-radius: 14px; }
+.card h3 { margin: .4rem 0 .65rem; font-size: 1.2rem; }
+.card p { margin: .55rem 0; }
+.medal { font-size: 1.8rem; }
+.muted { color: #526079; line-height: 1.5; }
+.actions { display: flex; gap: .75rem; flex-wrap: wrap; align-items: center; }
+.actions a, .actions button { padding: .65rem .95rem; border: 1px solid #b9c9df; border-radius: 9px; background: white; color: #174696; font-weight: 700; }
+.actions .primary { background: #1d4ed8; color: white; border-color: #1d4ed8; }
+.actions button:disabled { opacity: .55; cursor: not-allowed; }
+.notice { padding: 1rem; border: 1px solid #b9c9df; border-radius: 10px; background: #eff6ff; }
+.error { padding: 1rem; background: #fff1f2; border: 1px solid #fda4af; border-radius: 10px; color: #9f1239; }
+.filters { display: flex; flex-wrap: wrap; gap: 1rem; }
+.filters label { display: grid; gap: .4rem; font-weight: 700; min-width: min(100%, 220px); }
+.filters select { padding: .6rem; border: 1px solid #b9c9df; border-radius: 8px; background: white; max-width: 100%; }
+.recipients { padding: 0; list-style: none; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: .8rem; }
+.recipients li { border: 1px solid #dce3ed; border-radius: 10px; padding: .9rem; }
+.recipients small { display: block; margin-top: .35rem; color: #526079; }
+.review { display: flex; align-items: flex-start; gap: .65rem; padding: 1rem 0; }
+.review input { margin-top: .3rem; }
+@media (max-width: 600px) { .actions > * { text-align: center; } .filters label { width: 100%; } }
