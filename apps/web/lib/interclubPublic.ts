@@ -21,7 +21,7 @@ export type PublicLeagueDocument = {
   end_date: string;
   timezone: string;
   divisions: string[];
-  clubs: { id: string; name: string }[];
+  clubs: { id: string; name: string; slug?: string }[];
   meets: PublicMeet[];
   results: Encounter[];
   scoring_version?: 1;
@@ -60,6 +60,9 @@ export type PublicLeague = {
   standings: { division: string; rows: StandingRow[] }[];
   published_at?: string;
   club_cup?: ClubCup;
+  final_results?: { complete: boolean; champions: string[]; players: number; clubs: number; meets: number;
+    divisions: { division: string; meet_id: string; winner: string; runner_up: string; games_won: number; games_lost: number;
+      players: string[]; tiebreak: { winner_score: number; runner_up_score: number } | null }[] };
   qualification?: Record<string, { qualifiers: string[]; playoff_required: string[] | boolean; eligible: string[]; status: string }>;
 };
 export function meetTime(value: string, zone: string) {

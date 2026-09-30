@@ -8,8 +8,10 @@ export const metadata = {
 };
 export default async function LeaguePage({
   params,
+  searchParams,
 }: {
   params: { seasonId: string };
+  searchParams: { view?: string };
 }) {
   if (!/^[0-9a-f-]{36}$/i.test(params.seasonId)) notFound();
   const league = await publicSiteFetch<PublicLeague>(
@@ -21,7 +23,7 @@ export default async function LeaguePage({
       <p>
         <Link href="/clubs">Find a club</Link>
       </p>
-      <PublicInterclubLeague league={league} />
+      <PublicInterclubLeague league={league} initialView={searchParams.view === "results" ? "results" : "standings"} />
     </>
   );
 }
