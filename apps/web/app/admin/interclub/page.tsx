@@ -10,21 +10,22 @@ import InterclubSetupWizard from "./InterclubSetupWizard";
 import styles from "./setup.module.css";
 import { registrationMeetPlanning } from "@/lib/interclubRegistrationWindow";
 
-export default function InterclubPage() {
+export default function InterclubPage({ searchParams }: { searchParams?: { season?: string } }) {
   const { session, accessToken, loading } = useAdminSession();
   const { clubId } = useAdminWorkspace();
   const canManage = session?.capabilities?.assignments.some(a => a.club_id === clubId && ["administrator", "club_owner", "super_admin"].includes(a.role));
   if (loading) return <p>Checking club access…</p>;
   if (!canManage) return <p>Sign in as a club administrator to set up an interclub season. <Link href="/admin/login">Sign in</Link></p>;
-  return <InterclubHome key={`${clubId}:${session?.user?.id || session?.user?.email}`} clubId={clubId} accessToken={accessToken} />;
+  return <InterclubHome key={`${clubId}:${session?.user?.id || session?.user?.email}`} clubId={clubId} accessToken={accessToken} initialSeasonId={searchParams?.season || ""} />;
 }
 
-function InterclubHome({ clubId, accessToken }: { clubId: string; accessToken: string }) {
+function InterclubHome({ clubId, accessToken, initialSeasonId }: { clubId: string; accessToken: string; initialSeasonId: string }) {
   const api = getAdminPlayerEditorApiBaseUrl();
   const [choices, setChoices] = useState<ClubChoice[]>([]), [seasons, setSeasons] = useState<PlanningSeason[]>([]);
   const [registrations, setRegistrations] = useState<RegistrationSeason[]>([]), [active, setActive] = useState<PlanningSeason | null>(null);
   const [loaded, setLoaded] = useState(false), [error, setError] = useState(""), [reload, setReload] = useState(0);
   const token = useRef(accessToken); token.current = accessToken;
+  const openedFromLink = useRef(false);
   useEffect(() => {
     const controller = new AbortController(); setLoaded(false); setError("");
     if (!api) { setError("Interclub setup is unavailable."); return; }
@@ -39,10 +40,14 @@ function InterclubHome({ clubId, accessToken }: { clubId: string; accessToken: s
       return all;
     }
     Promise.all([get("/setup"), get("/registrations"), clubs()]).then(([drafts, open, all]) => {
-      if (!controller.signal.aborted) { setSeasons(drafts.seasons.map((s: PlanningSeason) => ({ ...s, draft: normalizeDraft(s.draft) }))); setRegistrations(open.seasons); setChoices(all); setLoaded(true); }
+      if (!controller.signal.aborted) {
+        const normalized = drafts.seasons.map((s: PlanningSeason) => ({ ...s, draft: normalizeDraft(s.draft) }));
+        setSeasons(normalized); setRegistrations(open.seasons); setChoices(all); setLoaded(true);
+        if (initialSeasonId && !openedFromLink.current) { setActive(normalized.find((s: PlanningSeason) => s.id === initialSeasonId) || null); openedFromLink.current = true; }
+      }
     }).catch(e => { if (!controller.signal.aborted) setError(e.message); });
     return () => controller.abort();
-  }, [api, clubId, reload]);
+  }, [api, clubId, reload, initialSeasonId]);
   const club = choices.find(c => c.id === clubId) || { id: clubId, name: "Your club", slug: "" };
   const drafts = seasons.filter(s => !registrations.some(r => r.id === s.id));
   const invitations = registrations.filter(s => s.organizer_club_id !== clubId && s.participation?.status === "invited");

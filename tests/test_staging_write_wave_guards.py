@@ -138,6 +138,16 @@ def test_every_unsafe_fastapi_route_has_an_exact_nonstale_wave_classification() 
     assert actual_overlaps == expected_overlaps
 
 
+@pytest.mark.parametrize("action", ["start", "link"])
+def test_event_season_routes_use_exact_admin_history_write_controls(action: str) -> None:
+    path = f"/admin/clubs/fixture/event-seasons/{action}"
+    assert wave_allows_request("open", "POST", path)
+    assert wave_allows_request("admin-tools", "POST", path)
+    assert not wave_allows_request(NO_WRITE_WAVE, "POST", path)
+    assert not wave_allows_request("public-intake-auth", "POST", path)
+    assert not wave_allows_request("admin-tools", "POST", path + "/extra")
+
+
 def test_get_health_routes_do_not_call_mutating_completion_claim_rpc() -> None:
     source = (ROOT / "services" / "api" / "main.py").read_text(encoding="utf-8")
     health_live_source = source.split('def health_live_sessions()', 1)[1].split(

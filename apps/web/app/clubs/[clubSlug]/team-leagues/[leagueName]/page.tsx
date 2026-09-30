@@ -2,6 +2,7 @@ import Link from "@/components/PublicClubLink";
 import { LeagueAwardRaceGrid } from "@/components/LeagueAwardRace";
 import { getPublicTeamLeague, teamLeagueApiBaseUrl } from "@/lib/teamLeagueApi";
 import TeamLeagueRegistrationForm from "./TeamLeagueRegistrationForm";
+import PublicLeagueNav from "@/components/PublicLeagueNav";
 
 type Props = { params: { clubSlug: string; leagueName: string } };
 const card = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white", minWidth: 0 };
@@ -35,6 +36,7 @@ export default async function TeamLeagueDetailPage({ params }: Props) {
           {data.league.playoff_format === "none" ? "Round robin season" : "Round robin plus playoffs"}
         </p>
       </header>
+      <PublicLeagueNav clubSlug={params.clubSlug} leagueName={leagueName} active="home" team />
       <article style={card}>
         <TeamLeagueRegistrationForm apiBase={teamLeagueApiBaseUrl()} clubSlug={params.clubSlug} leagueName={leagueName} detail={data} />
       </article>
