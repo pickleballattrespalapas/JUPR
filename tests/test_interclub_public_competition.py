@@ -58,7 +58,7 @@ def test_three_zero_final_publishes_skipped_game_without_appearances_or_loss():
     assert row["outcome"]["winner"] == "b"
     assert (row["outcome"]["games_a"], row["outcome"]["games_b"]) == (0, 3)
     skipped = row["pairings"][3]["games"][0]
-    assert skipped == {"status": "not_needed", "a": None, "b": None, "winner": None, "players_a": [], "players_b": []}
+    assert skipped == {"status": "not_needed", "a": None, "b": None, "winner": None, "players_a": [], "players_b": [], "played_at": None}
     assert sum(len(game["players_a"]) + len(game["players_b"]) for pair in row["pairings"] for game in pair["games"]) == 12
 
 

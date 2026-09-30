@@ -62,8 +62,9 @@ function AwardReview({ clubId, seasonId, accessToken }: { clubId: string; season
     {data && <>
       {data.problems.length > 0 && <div className={styles.notice}><h2>Finish the season first</h2><ul>{data.problems.map(problem => <li key={problem}>{problem}</li>)}</ul></div>}
       {data.current && <p className={styles.notice}>Season trophies awarded. These honors match the current final results.</p>}
-      <p className={styles.muted}>Participation recognizes players who played a game. Division trophies recognize the winning final’s players. Club Cup trophies recognize the champion club’s season contributors. A score correction can be reviewed here to update the awards.</p>
-      <InterclubFinalResults league={data.preview} awards={data.awards} />
+      <p className={styles.muted}>Season Participant recognizes anyone who played in a meet. Division Champion recognizes every player who played in that division for the winning club during the season. League Champion recognizes every season participant for the Club Cup winner.</p>
+      <p className={styles.muted}>Win Matchup: win at least 2 of 3 games. Sweep Matchup: play and win all 3. Undefeated Day: win every game played in that meet. These badges appear with published results and count each player’s actual games, including substitutions. A sweep earns both matchup badges. Forfeits and unplayed games do not count as appearances.</p>
+      <InterclubFinalResults league={data.preview} awards={[...data.awards, ...(data.achievements || [])]} />
       {data.ready && <section aria-label="Award season trophies" className={styles.card}>
         <h2>{data.current ? "Season honors published" : data.revision ? "Update season trophies" : "Award season trophies"}</h2>
         <p>{data.awards.filter(row => row.recipient_type === "player").length} player trophies · {data.awards.filter(row => row.recipient_type === "club").length} club trophies</p>

@@ -214,6 +214,10 @@ def full_season(r):
     source_after = r.db("GET","pcs_interclub_rating_sources",batch_id="eq."+b["id"])[0]
     r.check(source_before["generation_id"] == source_after["generation_id"], "rating retry does not duplicate a completed generation")
     public = publication(r,s)
+    early_honors = r.api("GET", "/public/interclub/"+s["id"]+"/awards", actor=None)["trophies"]
+    r.check({a["award_key"] for a in early_honors} == {"participation", "matchup_win", "matchup_sweep", "undefeated_meet"}
+            and all(a["recipient_type"] == "player" for a in early_honors),
+            "published regular meets award participation and all three performance badges before season close")
     awardroot = f"/admin/clubs/{s['clubs'][0]}/interclub/{s['id']}/awards"
     unfinished = r.api("GET", awardroot)
     r.check(not unfinished["ready"] and unfinished["problems"], "season awards wait for every championship")
@@ -273,7 +277,8 @@ def full_season(r):
     replay = r.api("POST", awardroot, body)
     r.check(issued["revision"] == replay["revision"] and replay["unchanged"], "repeat award submission is idempotent")
     public_awards = r.api("GET", "/public/interclub/"+s["id"]+"/awards", actor=None)["trophies"]
-    r.check(len(public_awards) == len(preview["awards"]) and len({a["id"] for a in public_awards}) == len(public_awards)
+    r.check({a["id"] for a in public_awards} == {a["id"] for a in preview["awards"] + preview["achievements"]}
+            and len({a["id"] for a in public_awards}) == len(public_awards)
             and all("player_id" not in a and "entry_id" not in a and "email" not in a for a in public_awards),
             "public season honors contain every recipient without private profile identifiers")
     r.check(r.api("GET", awardroot)["current"], "awarded honors match the reviewed final results")
@@ -287,8 +292,10 @@ def full_season(r):
     correction["encounters"][0]["pairings"][0]["games"][0]["b"] = 4
     fb = r.approve(s, final, r.save(s, final, reopened, correction))
     publication(r, s)
-    r.check(not r.api("GET", "/public/interclub/"+s["id"]+"/awards", actor=None)["trophies"],
-            "changed public results hide stale honors pending organizer review")
+    corrected_honors = r.api("GET", "/public/interclub/"+s["id"]+"/awards", actor=None)["trophies"]
+    r.check(corrected_honors and all(a["award_key"] in {"participation", "matchup_win", "matchup_sweep", "undefeated_meet"}
+                                   for a in corrected_honors),
+            "changed public results reconcile performance badges and hide stale championship honors pending review")
     # These run-specific club sites are unlisted and hidden again in cleanup.
     for club in s["clubs"]:
         r.db("PATCH", "clubs", {"is_active": True}, id="eq."+club)

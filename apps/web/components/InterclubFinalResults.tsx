@@ -3,15 +3,17 @@ import Link from "next/link";
 import { useState } from "react";
 import type { PublicLeague } from "@/lib/interclubPublic";
 import type { AwardRecipient } from "@/lib/interclubAwards";
-import { recipientGroups } from "@/lib/interclubAwards";
+import { interclubAwardLabels, recipientGroups } from "@/lib/interclubAwards";
 import { CompetitionStandings } from "./PublicInterclubCompetition";
 import styles from "./InterclubHonors.module.css";
 
 export function SeasonAwardRecipients({ awards, names }: { awards: AwardRecipient[]; names: Record<string, string> }) {
   const [club, setClub] = useState("");
-  const recipients = recipientGroups(awards).filter(row => !club || row.club_id === club);
+  const [kind, setKind] = useState("");
+  const recipients = recipientGroups(awards.filter(row => !kind || row.award_key === kind)).filter(row => !club || row.club_id === club);
   return <section aria-label="Player awards"><h2>Player awards</h2>
-    <div className={styles.filters}><label>Club<select aria-label="Filter player awards by club" value={club} onChange={event => setClub(event.target.value)}><option value="">All clubs</option>{Object.entries(names).map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label></div>
+    <div className={styles.filters}><label>Club<select aria-label="Filter player awards by club" value={club} onChange={event => setClub(event.target.value)}><option value="">All clubs</option>{Object.entries(names).map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label>
+      <label>Award<select aria-label="Filter player awards by award" value={kind} onChange={event => setKind(event.target.value)}><option value="">All awards and badges</option>{Object.entries(interclubAwardLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label></div>
     <ul className={styles.recipients}>{recipients.map(row => <li key={row.id}><strong>{row.name}</strong><small>{names[row.club_id]}</small>{row.titles.map(title => <p key={title}>{title}</p>)}</li>)}</ul>
     {!recipients.length && <p>No player awards to show.</p>}
   </section>;

@@ -9,8 +9,8 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from jupr_app.domain.interclub_awards import final_results, season_awards
-from jupr_app.services.interclub_awards_service import public_interclub_trophies, player_interclub_trophies
+from jupr_app.domain.interclub_awards import final_results, performance_awards, season_awards
+from jupr_app.services.interclub_awards_service import public_interclub_trophies, player_interclub_trophies, player_interclub_awards, public_interclub_honors
 from services.api import interclub_awards_routes as routes
 
 
@@ -47,7 +47,9 @@ def test_actual_players_receive_participation_and_winning_final_or_cup_honors():
     assert recipients(awards, "participation") == {"original", "sub", "partner", "opponent", "other"}
     assert recipients(awards, "division_champion") == {"opponent", "other"}
     assert recipients(awards, "club_cup_champion") == {"original", "sub", "partner"}
-    assert recipients(awards, "participation", "club") == {"alpha", "beta"}
+    assert not recipients(awards, "participation", "club")
+    assert next(a["title"] for a in awards if a["award_key"] == "division_champion") == "Coastal season 3.5 Division Champion"
+    assert next(a["title"] for a in awards if a["award_key"] == "club_cup_champion") == "Coastal season League Champion"
     assert recipients(awards, "division_champion", "club") == {"beta"}
     assert recipients(awards, "club_cup_champion", "club") == {"alpha"}
     final = final_results(doc)
@@ -88,7 +90,7 @@ def test_correction_replaces_winners_preserves_participation_identity_and_reject
     before = season_awards("season", doc)
     doc["competition_results"][-1]["outcome"].update(winner="a", games_a=3, games_b=0)
     after = season_awards("season", doc)
-    assert recipients(after, "division_champion") == {"sub", "partner"}
+    assert recipients(after, "division_champion") == {"original", "sub", "partner"}
     assert {a["id"] for a in before if a["award_key"] == "participation"} == {a["id"] for a in after if a["award_key"] == "participation"}
     doc["players"][0]["club_id"] = "beta"
     with pytest.raises(ValueError, match="season player record"):
@@ -99,6 +101,7 @@ class Query:
     def __init__(self, rows): self.rows = deepcopy(rows); self.bounds = None
     def select(self, *args, **kwargs): return self
     def eq(self, key, value): self.rows = [r for r in self.rows if r.get(key) == value]; return self
+    def in_(self, key, values): self.rows = [r for r in self.rows if r.get(key) in values]; return self
     def order(self, *args, **kwargs): return self
     def limit(self, value): self.rows = self.rows[:value]; return self
     def range(self, start, end): self.bounds = (start, end); return self
@@ -166,11 +169,113 @@ def test_public_projection_is_club_and_player_scoped_private_fields_removed_and_
     rows = [{"id": str(i), "season_id": "season", "club_id": "alpha", "entry_id": str(i), "player_id": 1,
              "award_key": "participation", "division": "", "title": "Participant", "recipient_type": "player", "recipient_name": "Player",
              "season_name": "Season", "earned_at": "2026-09-30T00:00:00Z", "email": "private@example.invalid"} for i in range(1001)]
-    rows += [{**rows[0], "id": "other", "club_id": "beta"}, {**rows[0], "id": "club", "entry_id": None, "player_id": None, "recipient_type": "club"}]
-    db = SimpleNamespace(table=lambda name: Query(rows))
+    rows += [{**rows[0], "id": "other", "club_id": "beta"}, {**rows[0], "id": "club", "entry_id": None, "player_id": None, "recipient_type": "club", "award_key": "club_cup_champion"}]
+    db = SimpleNamespace(table=lambda name: Query(rows if name == "pcs_public_interclub_awards" else []))
     own = public_interclub_trophies(db, club_id="alpha", player_id=1)
     assert len(own) == 1001
     assert all("player_id" not in row and "email" not in row and "entry_id" not in row for row in own)
     assert own[0]["results_href"] == "/interclub/season/final-results"
     assert [row["id"] for row in public_interclub_trophies(db, club_id="alpha")] == ["club"]
     assert player_interclub_trophies(db, club_id="alpha", player_id=1)[0]["placement"] is None
+
+
+def regular_season():
+    doc = finished_season()
+    doc["season_complete"] = False
+    doc["club_cup"]["status"] = "provisional"
+    doc["competition_results"] = [doc["competition_results"][0]]
+    result = doc["competition_results"][0]
+    result["id"] = "alpha-beta"
+    pair = result["pairings"][0]
+    pair["kind"] = "women"
+    pair["games"] = [{"status": "completed", "a": 11, "b": 7, "players_a": ["original", "partner"],
+                      "players_b": ["opponent", "other"], "played_at": "2026-09-30T15:00:00Z"} for _ in range(3)]
+    return doc
+
+
+def test_two_one_win_sweep_and_undefeated_are_distinct_and_repeatable():
+    doc = regular_season()
+    doc["competition_results"][0]["pairings"][0]["games"][2].update(a=7, b=11)
+    awards = performance_awards("season", doc)
+    assert recipients(awards, "matchup_win") == {"original", "partner"}
+    assert not recipients(awards, "matchup_sweep") and not recipients(awards, "undefeated_meet")
+    doc["competition_results"][0]["pairings"][0]["games"][2].update(a=11, b=7)
+    second = deepcopy(doc["competition_results"][0]); second["meet_id"] = "second"
+    doc["competition_results"].append(second)
+    awards = performance_awards("season", doc)
+    for kind in ("matchup_win", "matchup_sweep", "undefeated_meet"):
+        assert recipients(awards, kind) == {"original", "partner"}
+        assert len([a for a in awards if a["award_key"] == kind]) == 4
+    assert len({a["id"] for a in awards}) == len(awards)
+    doc["competition_results"].reverse()
+    assert performance_awards("season", doc) == awards
+    assert not {a["id"] for a in performance_awards("another-season", doc)} & {a["id"] for a in awards}
+
+
+def test_substitutes_earn_only_their_actual_wins_and_retirement_uses_official_winner():
+    doc = regular_season()
+    games = doc["competition_results"][0]["pairings"][0]["games"]
+    for game in games[1:]: game["players_a"] = ["sub", "partner"]
+    awards = performance_awards("season", doc)
+    assert recipients(awards, "matchup_win") == {"sub", "partner"}
+    assert recipients(awards, "matchup_sweep") == {"partner"}
+    assert recipients(awards, "undefeated_meet") == {"original", "sub", "partner"}
+    games[0].update(status="retired", a=8, b=2, winner="b")
+    awards = performance_awards("season", doc)
+    assert recipients(awards, "matchup_win") == {"sub", "partner"}
+    assert not recipients(awards, "matchup_sweep")
+    assert recipients(awards, "undefeated_meet") == {"sub"}
+
+
+@pytest.mark.parametrize("status", ["forfeit", "double_forfeit", "unplayed", "not_needed", "pending"])
+def test_unplayed_lineups_cannot_earn_achievements(status):
+    doc = regular_season()
+    for game in doc["competition_results"][0]["pairings"][0]["games"]: game.update(status=status, winner="a")
+    assert performance_awards("season", doc) == []
+
+
+def test_undefeated_meet_includes_other_pairings_divisions_and_singles():
+    doc = regular_season()
+    other = deepcopy(doc["competition_results"][0]); other.update(id="other-division", division="4.0", phase="final")
+    other["pairings"] = [{"kind": "mixed_1", "games": [other["pairings"][0]["games"][0]]}]
+    other["tiebreak"] = {"status": "completed", "a": 19, "b": 21, "players_a": ["original"], "players_b": ["opponent"]}
+    doc["competition_results"].append(other)
+    awards = performance_awards("season", doc)
+    assert recipients(awards, "undefeated_meet") == {"partner"}
+    assert len([a for a in awards if a["award_key"] == "matchup_win"]) == 2
+
+
+def test_division_champions_include_regular_players_only_in_divisions_they_played():
+    doc = finished_season()
+    doc["competition_results"][-1]["outcome"]["winner"] = "a"
+    original = doc["competition_results"][0]
+    original["pairings"][0]["games"][0]["players_a"] = ["partner"]
+    higher = deepcopy(original); higher["division"] = "4.0"
+    higher["pairings"][0]["games"][0]["players_a"] = ["original"]
+    doc["competition_results"].append(higher)
+    awards = season_awards("season", doc)
+    assert recipients(awards, "division_champion") == {"partner", "sub"}
+    assert "original" in recipients(awards, "club_cup_champion")
+
+
+def test_published_achievements_reconcile_without_waiting_for_season_close_and_stay_player_scoped():
+    doc = regular_season()
+    tables = {"pcs_public_interclub_awards": [], "pcs_interclub_entries": [
+        {"id": "original", "season_id": "season", "club_id": "alpha", "player_id": 1},
+        {"id": "opponent", "season_id": "season", "club_id": "beta", "player_id": 1}],
+        "pcs_interclub_publications": [{"season_id": "season", "published": doc, "published_at": "2026-09-30T16:00:00Z"}]}
+    db = SimpleNamespace(table=lambda name: Query(tables[name]))
+    public = public_interclub_honors(db, club_id="alpha", player_id=1)
+    assert {a["award_key"] for a in public} == {"participation", "matchup_win", "matchup_sweep", "undefeated_meet"}
+    assert all(a["recipient_key"] == "original" and a["earned_at"] == "2026-09-30T15:00:00Z" for a in public)
+    assert all("player_id" not in a and "entry_id" not in a for a in public)
+    profile = player_interclub_awards(db, club_id="alpha", player_id=1)
+    assert len(profile["badges"]) == 3 and len(profile["trophies"]) == 1
+    assert profile["badges"][0]["count"] == 1 and profile["badges"][0]["achievements"][0]["results_href"].endswith("?view=results")
+    tables["pcs_interclub_publications"][0]["published"] = deepcopy(doc)
+    games = tables["pcs_interclub_publications"][0]["published"]["competition_results"][0]["pairings"][0]["games"]
+    for game in games: game.update(a=5, b=11)
+    assert not player_interclub_awards(db, club_id="alpha", player_id=1)["badges"]
+    assert len(player_interclub_awards(db, club_id="beta", player_id=1)["badges"]) == 3
+    tables["pcs_interclub_publications"][0]["published"] = None
+    assert player_interclub_awards(db, club_id="alpha", player_id=1) == {"badges": [], "trophies": []}
