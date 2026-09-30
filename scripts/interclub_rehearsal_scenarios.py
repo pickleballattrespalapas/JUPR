@@ -298,6 +298,11 @@ def full_season(r):
         saved = r.api("PUT", sitepath, {"revision": site["revision"], "document": document})
         r.api("POST", sitepath+"/publish", {"revision": saved["revision"]})
     winner = s["clubs"][0]
+    r.check(not r.api("GET", f"/public/clubs/{winner}/trophies", actor=None)["trophies"],
+            "club trophy case also hides honors awaiting a corrected-results review")
+    directory = r.api("GET", "/public/clubs?q="+r.state["run"], actor=None)
+    r.check(not any(club["slug"] in s["clubs"] for club in directory["clubs"]),
+            "published rehearsal club sites remain unlisted in the public directory")
     participant = next(a for a in preview["awards"] if a["recipient_type"] == "player" and a["club_id"] == winner)
     s["browser_award_player"] = r.db("GET", "pcs_interclub_entries", select="player_id", id="eq."+participant["entry_id"])[0]["player_id"]
     s["browser_meet"] = m["id"]
