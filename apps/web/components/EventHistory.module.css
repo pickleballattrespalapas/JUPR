@@ -2,8 +2,11 @@
 .history h2, .history h3 { margin: 0 0 0.5rem; }
 .muted { color: #526176; line-height: 1.5; }
 .season { background: white; border: 1px solid #dce3eb; border-radius: 16px; padding: clamp(1rem, 3vw, 1.5rem); min-width: 0; }
+.awardSeason { min-width: 0; }
+.awardSeason + .awardSeason { border-top: 1px solid #dce3eb; padding-top: 1.2rem; }
+.awardSeason .honors { margin: 0.5rem 0 0; }
 .seasonHeader { display: flex; justify-content: space-between; align-items: start; gap: 1rem; flex-wrap: wrap; }
-.seasonHeader h3 { overflow-wrap: anywhere; }
+.seasonHeader h2, .seasonHeader h3 { overflow-wrap: anywhere; }
 .eyebrow { margin-top: 0; color: #785510; font-size: 0.8rem; font-weight: 750; }
 .actions { display: flex; flex-wrap: wrap; gap: 0.8rem; align-items: center; }
 .actions a { display: inline-flex; align-items: center; min-height: 44px; }
