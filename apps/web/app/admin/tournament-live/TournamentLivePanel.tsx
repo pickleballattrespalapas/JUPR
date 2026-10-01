@@ -1245,6 +1245,12 @@ export default function TournamentLivePanel({
   const selectedRatingPublishEligibleGames = selectedDrawCounts?.rating_publish_eligible_games
     ?? snapshot?.publication_rating_game_ids?.length
     ?? selectedTotalGames;
+  const selectedPublicationComplete = Boolean(
+    selectedLifecycleDraw?.readiness?.official_publish?.complete
+      && selectedLifecycleDraw.states.official_publish === "complete"
+      && selectedTotalGames > 0
+      && selectedOpenGames === 0
+  );
   const currentPodiumReview = Boolean(
     selectedLifecycleDraw?.review_evidence
       && (selectedLifecycleDraw.review_evidence.current ?? selectedLifecycleDraw.review_evidence.reviewed)
@@ -1544,10 +1550,37 @@ export default function TournamentLivePanel({
         <><article className={styles.card}><div className={styles.headingRow}><div><h2>Review results</h2><p className={styles.muted}>Human-readable division and draw state, standings, podium readiness, corrections, and exceptions.</p></div><Link href={tournamentRouteHref("/admin/tournaments/publish/import-results", routeContext)} className={styles.secondaryLink}>Import results</Link></div><div className={styles.drawCards}>{(lifecycle?.draws || []).map((draw) => <section key={draw.draw_id} className={styles.commandCard}><div className={styles.headingRow}><h3>{draw.name}</h3><span className={draw.readiness.official_publish.ready ? styles.successChip : styles.recoveryChip}>{draw.readiness.official_publish.ready ? "Ready" : "Blocked"}</span></div><p>{draw.counts.finalized_games || 0} of {draw.counts.games || 0} scores complete · {(draw.counts.open_games || 0)} missing</p><h4>Standings</h4>{draw.standings.length ? <ol>{draw.standings.slice(0, 8).map((row, index) => <li key={String(row.team_id || index)}>{teamLabel(teamsById.get(String(row.team_id || "")), snapshot)} · {shortValue(row.wins)} wins</li>)}</ol> : <p className={styles.muted}>Standings are not available yet.</p>}<h4>Podium readiness</h4><LifecycleBlockers readiness={draw.readiness.official_publish} /></section>)}</div>{!(lifecycle?.draws || []).length ? <p className={styles.muted}>Reload authoritative lifecycle state to review divisions.</p> : null}</article><article className={styles.card}><h2>Selected draw results</h2>{gameCards(sortedGames, false)}</article></>
       ) : null}
 
-      {snapshot && view === "publish-overview" ? <div className={styles.moduleGrid}>{[["Review results", "/admin/tournaments/ops/results", `${finalizedGames} of ${totalGames} scores complete.`], ["Import results", "/admin/tournaments/publish/import-results", "Separate DUPR CSV preview and guarded import workspace."], ["Publish divisions", "/admin/tournaments/ops/publish", officialReadiness?.ready ? "Tournament prerequisites are complete." : "Publishing is blocked by tournament prerequisites."], ["Tournament closeout", "/admin/tournaments/publish/closeout", completionAtomicAvailable || tournamentStatus === "COMPLETED" ? "Review the final server-enforced completion and archive controls." : "Completion remains blocked until every closeout prerequisite passes."]].map(([title, path, detail]) => <Link key={path} href={tournamentRouteHref(path, routeContext)} className={styles.moduleCard}><h2>{title}</h2><p>{detail}</p></Link>)}</div> : null}
+      {snapshot && view === "publish-overview" ? <div className={styles.moduleGrid}>{[["Review results", "/admin/tournaments/ops/results", `${finalizedGames} of ${totalGames} scores complete.`], ["Import results", "/admin/tournaments/publish/import-results", "Separate DUPR CSV preview and guarded import workspace."], ["Publish divisions", "/admin/tournaments/ops/publish", officialReadiness?.complete ? "Publication is complete. Review divisions or continue to closeout." : officialReadiness?.ready ? "Tournament prerequisites are complete." : "Publishing is blocked by tournament prerequisites."], ["Tournament closeout", "/admin/tournaments/publish/closeout", completionAtomicAvailable || tournamentStatus === "COMPLETED" ? "Review the final server-enforced completion and archive controls." : "Completion remains blocked until every closeout prerequisite passes."]].map(([title, path, detail]) => <Link key={path} href={tournamentRouteHref(path, routeContext)} className={styles.moduleCard}><h2>{title}</h2><p>{detail}</p></Link>)}</div> : null}
 
       {snapshot && view === "publish" ? (
-        <article className={styles.card}><h2>Publish divisions</h2><div className={styles.readinessColumns}><section className={styles.commandCard}><h3>Tournament readiness</h3><LifecycleBlockers readiness={officialReadiness} /></section><section className={styles.commandCard}><h3>Runtime capability</h3><p><span className={runtimeCanPublish ? styles.successChip : styles.recoveryChip}>{runtimeCanPublish ? "Available" : "Unavailable"}</span></p><p className={styles.muted}>The dedicated official-publish permission, service role, operation store, and audit store must all be available. Environment permission never means this tournament is ready.</p></section></div><h3>{selectedLifecycleDraw?.name || "Selected draw"}</h3><p>{selectedFinalizedGames} of {selectedTotalGames} games finalized · {selectedOpenGames} open · {selectedDrawCounts?.published_games || 0} of {selectedRatingPublishEligibleGames} played games published</p><div className={styles.dangerCard}><h3>Official rated matches</h3><LifecycleBlockers readiness={officialReadiness} /><CommandBlockers readiness={publishReadiness} /><label htmlFor="winner-bonus">Playoff winner bonus Elo<input id="winner-bonus" value={publishBonusElo} onChange={(event) => setPublishBonusElo(event.target.value)} type="number" min={0} max={40} step={1} className={styles.input} disabled={!publishActuallyReady || !runtimeCanPublish} /></label><ConfirmAction triggerLabel="Publish official matches" title="Publish all played games as official rated matches?" description={`This terminal write publishes the exact reviewed, rating-eligible played games and applies a ${publishBonusElo || "0"}-Elo playoff-winner bonus. Forfeits, no-shows, and retirements remain visible tournament results but are never rated.`} confirmLabel="Yes, publish official matches" confirmationText={publishReadiness.confirmation || CONFIRMATIONS.publish_official_matches} tone="danger" disabled={!publishActuallyReady || !runtimeCanPublish} busy={busy} onConfirm={(text) => submitCommand("publish_official_matches", text, { playoff_winner_bonus_elo: Number(publishBonusElo) })} /></div></article>
+        <article className={styles.card}>
+          <h2>Publish divisions</h2>
+          <h3>{selectedLifecycleDraw?.name || "Selected draw"}</h3>
+          <p>{selectedFinalizedGames} of {selectedTotalGames} matchups finalized · {selectedOpenGames} open · {selectedDrawCounts?.published_games || 0} of {selectedRatingPublishEligibleGames} played games published</p>
+          {selectedRatingPublishEligibleGames !== selectedTotalGames ? <p className={styles.muted}>Only played games go to Match Log. Each played game in a best-of-three matchup is counted separately.</p> : null}
+          {selectedPublicationComplete ? (
+            <section className={styles.commandCard} aria-label="Publication complete">
+              <h3><span className={styles.successChip}>{selectedRatingPublishEligibleGames ? "Published to Match Log" : "No rated games to publish"}</span></h3>
+              <p>{selectedRatingPublishEligibleGames ? `All ${selectedRatingPublishEligibleGames} played games have verified official Match Log records. Publication is complete for this draw.` : "This draw is complete with no rating-eligible played games."}</p>
+              <p>Choose another draw above to continue publishing, or review tournament closeout.</p>
+              <Link href={tournamentRouteHref("/admin/tournaments/publish/closeout", routeContext)} className={styles.secondaryButton}>Review tournament closeout</Link>
+            </section>
+          ) : (
+            <>
+              <div className={styles.readinessColumns}>
+                <section className={styles.commandCard}><h3>Tournament readiness</h3><LifecycleBlockers readiness={officialReadiness} /></section>
+                <section className={styles.commandCard}><h3>Runtime capability</h3><p><span className={runtimeCanPublish ? styles.successChip : styles.recoveryChip}>{runtimeCanPublish ? "Available" : "Unavailable"}</span></p><p className={styles.muted}>The dedicated official-publish permission, service role, operation store, and audit store must all be available. Environment permission never means this tournament is ready.</p></section>
+              </div>
+              <div className={styles.dangerCard}>
+                <h3>Official rated matches</h3>
+                <LifecycleBlockers readiness={officialReadiness} />
+                <CommandBlockers readiness={publishReadiness} />
+                <label htmlFor="winner-bonus">Playoff winner bonus Elo<input id="winner-bonus" value={publishBonusElo} onChange={(event) => setPublishBonusElo(event.target.value)} type="number" min={0} max={40} step={1} className={styles.input} disabled={!publishActuallyReady || !runtimeCanPublish} /></label>
+                <ConfirmAction triggerLabel="Publish official matches" title="Publish all played games as official rated matches?" description={`This terminal write publishes the exact reviewed, rating-eligible played games and applies a ${publishBonusElo || "0"}-Elo playoff-winner bonus. Forfeits, no-shows, and retirements remain visible tournament results but are never rated.`} confirmLabel="Yes, publish official matches" confirmationText={publishReadiness.confirmation || CONFIRMATIONS.publish_official_matches} tone="danger" disabled={!publishActuallyReady || !runtimeCanPublish} busy={busy} onConfirm={(text) => submitCommand("publish_official_matches", text, { playoff_winner_bonus_elo: Number(publishBonusElo) })} />
+              </div>
+            </>
+          )}
+        </article>
       ) : null}
 
       {snapshot && view === "closeout" ? (
