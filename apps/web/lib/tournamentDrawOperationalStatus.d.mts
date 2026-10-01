@@ -8,6 +8,7 @@ type DrawLifecycleStatusSource = {
     finalized_games?: number;
     open_games?: number;
     published_games?: number;
+    rating_publish_eligible_games?: number;
     duplicate_publications?: number;
     duplicate_official_links?: number;
     mismatched_official_matches?: number;
