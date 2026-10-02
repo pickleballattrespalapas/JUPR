@@ -1,0 +1,73 @@
+.championships {
+  min-width: 0;
+}
+.championships h2 {
+  margin: 0 0 0.85rem;
+  font-size: 1.15rem;
+  letter-spacing: -0.02em;
+}
+.tournamentHighlights {
+  margin: 1.5rem 0 2rem;
+}
+.goldCards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 270px), 1fr));
+  gap: 0.75rem;
+}
+.card {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.8rem;
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid #e9d7aa;
+  border-radius: 16px;
+  background: #fffdf7;
+  color: #422f11;
+  text-decoration: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.card:hover {
+  border-color: #a87912;
+  box-shadow: 0 3px 12px #78591414;
+}
+.card:focus-visible {
+  outline: 3px solid #1d4ed8;
+  outline-offset: 3px;
+}
+.trophy {
+  flex: 0 0 auto;
+  font-size: 2rem;
+  line-height: 1;
+}
+.details {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.season {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 650;
+  color: #75520e;
+}
+.card h3 {
+  margin: 0.35rem 0;
+  font-size: 1.05rem;
+  line-height: 1.25;
+}
+.division,
+.winners,
+.resultLink {
+  display: block;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+.winners {
+  margin-top: 0.35rem;
+  color: #6b5d44;
+}
+.resultLink {
+  margin-top: 0.6rem;
+  font-weight: 700;
+  color: #785510;
+}

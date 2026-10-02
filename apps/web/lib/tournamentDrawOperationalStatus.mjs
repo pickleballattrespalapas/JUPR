@@ -29,6 +29,8 @@ export function drawOperationalStatus(draw, lifecycleDraw) {
   const finalizedGames = Number(lifecycleDraw.counts.finalized_games);
   const openGames = Number(lifecycleDraw.counts.open_games);
   const publishedGames = Number(lifecycleDraw.counts.published_games || 0);
+  // Competition matchups and publishable games differ for series and non-played results.
+  const ratingPublishEligibleGames = Number(lifecycleDraw.counts.rating_publish_eligible_games ?? games);
   const duplicatePublications = Number(
     lifecycleDraw.counts.duplicate_publications
       || lifecycleDraw.counts.duplicate_official_links
@@ -40,21 +42,22 @@ export function drawOperationalStatus(draw, lifecycleDraw) {
   );
   const liveOperations = String(lifecycleDraw.states.live_operations || "");
   const officialPublish = String(lifecycleDraw.states.official_publish || "");
-  const validCounts = [games, finalizedGames, openGames, publishedGames].every(
+  const validCounts = [games, finalizedGames, openGames, publishedGames, ratingPublishEligibleGames].every(
     (value) => Number.isInteger(value) && value >= 0
   )
     && finalizedGames + openGames === games
-    && publishedGames <= finalizedGames;
+    && publishedGames <= ratingPublishEligibleGames;
   if (!validCounts) return "Status unavailable";
 
   const publicationNeedsRecovery = duplicatePublications > 0
     || mismatchedOfficialMatches > 0
     || missingPublicationEvidence > 0
-    || (publishedGames > 0 && publishedGames < games);
+    || (publishedGames > 0 && publishedGames < ratingPublishEligibleGames);
   if (publicationNeedsRecovery) {
-    return `Publish recovery needed · ${publishedGames} of ${games} official`;
+    return `Publish recovery needed · ${publishedGames} of ${ratingPublishEligibleGames} official`;
   }
-  if (officialPublish === "complete" && games > 0 && publishedGames === games) {
+  if (officialPublish === "complete" && games > 0 && openGames === 0 && publishedGames === ratingPublishEligibleGames) {
+    if (ratingPublishEligibleGames === 0) return "Complete · no rated games";
     const matchWord = publishedGames === 1 ? "match" : "matches";
     return `Published · ${publishedGames} official ${matchWord}`;
   }

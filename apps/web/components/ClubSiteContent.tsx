@@ -11,14 +11,18 @@ import {
   type SiteDocument,
 } from "@/lib/clubSite";
 import styles from "./ClubWebsite.module.css";
+import TournamentGoldHighlights from "./TournamentGoldHighlights";
+import type { TournamentGoldHighlight } from "@/lib/tournamentHighlights";
 export default function ClubSiteContent({
   document: doc,
   slug,
   pageSlug = "home",
+  tournamentHighlights = [],
 }: {
   document: SiteDocument;
   slug: string;
   pageSlug?: string;
+  tournamentHighlights?: TournamentGoldHighlight[];
 }) {
   const page = doc.pages.find((p) => p.slug === pageSlug);
   const links = publicClubLinks(doc);
@@ -44,6 +48,9 @@ export default function ClubSiteContent({
         </section>
       ) : (
         <h1>{page.title}</h1>
+      )}
+      {pageSlug === "home" && doc.page_visibility?.tournaments !== "private" && (
+        <TournamentGoldHighlights highlights={tournamentHighlights} />
       )}
       <div className={styles.blocks}>
         {page.blocks.map((block) => (
