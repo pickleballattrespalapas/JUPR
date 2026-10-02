@@ -201,6 +201,14 @@ def install_interclub_registration_routes(app, *, get_supabase_client):
         db, _ = administrator(club_id, authorization)
         season, own = access(db, club_id, season_id)
         organizer = season["organizer_club_id"] == club_id
+        # Match History's published completion rule, even when a test season
+        # finishes before its scheduled dates. Never infer completion from dates
+        # or expose the private publication draft to a participating club.
+        publications = (db.table("pcs_interclub_publications")
+                        .select("published->season_complete,published->club_cup->status")
+                        .eq("season_id", str(season_id)).limit(1).execute().data or [])
+        published = publications[0] if publications else {}
+        season_complete = published.get("season_complete") is True and published.get("status") == "complete"
         participations = db.table("pcs_interclub_participations").select(PARTICIPATION_FIELDS).eq("season_id", str(season_id)).execute().data or [] if organizer else ([own] if own else [])
         clubs = db.table("clubs").select("id,name,slug").in_("id", list(set(season["details"]["club_ids"] + [season["organizer_club_id"]]))).execute().data or []
         if not registration_state(season)["meet_planning_open"]:
@@ -208,7 +216,7 @@ def install_interclub_registration_routes(app, *, get_supabase_client):
             if not organizer:
                 calendar = calendar.contains("club_ids", json.dumps([club_id]))
             schedule = calendar.order("starts_at").order("id").limit(100).execute().data or []
-            return {"season": registration_season(season), "meets": [], "is_organizer": organizer, "own_participation": own,
+            return {"season": registration_season(season), "season_complete": season_complete, "meets": [], "is_organizer": organizer, "own_participation": own,
                     "participations": participations, "clubs": clubs, "teams": [], "next_team_offset": None,
                     "meet_schedule": schedule, "first_meet_at": schedule[0]["starts_at"] if schedule else None}
         query = db.table("pcs_interclub_current_rosters").select(TEAM_FIELDS).eq("season_id", str(season_id)).is_("meet_id", "null")
@@ -221,7 +229,7 @@ def install_interclub_registration_routes(app, *, get_supabase_client):
             # as a PostgreSQL array literal, which is invalid for this column.
             meet_query = meet_query.contains("club_ids", json.dumps([club_id]))
         meets = meet_query.order("starts_at").order("id").limit(100).execute().data or []
-        return {"season": registration_season(season), "meets": meets, "is_organizer": organizer, "own_participation": own, "participations": participations, "clubs": clubs,
+        return {"season": registration_season(season), "season_complete": season_complete, "meets": meets, "is_organizer": organizer, "own_participation": own, "participations": participations, "clubs": clubs,
                 "meet_schedule": [{key: meet[key] for key in ("id", "starts_at", "host_club_id", "club_ids")} for meet in meets],
                 "first_meet_at": meets[0]["starts_at"] if meets else None,
                 "teams": [safe_roster(row, own_club=row["club_id"] == club_id) for row in teams[:100]],

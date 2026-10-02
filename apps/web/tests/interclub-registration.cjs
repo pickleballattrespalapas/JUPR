@@ -341,6 +341,52 @@ function phaseWorkspace(commissioner = false) {
   }).default;
 }
 
+async function completedSeasonWorkspace() {
+  for (const commissioner of [true, false]) {
+    const clubId = commissioner ? 'alpha' : 'beta', requests = [];
+    const ownMeet = { ...meet, club_ids: ['alpha', 'beta'] };
+    let completed = true;
+    global.fetch = async (url, options) => {
+      requests.push({ url, options });
+      if (url.endsWith('/registrations')) return reply({ seasons: [season] });
+      if (url.includes('/meets/')) return reply({ meet: ownMeet, teams: [], next_team_offset: null });
+      return reply({ season, season_complete: completed, meets: [ownMeet, secondMeet], is_organizer: commissioner,
+        own_participation: { season_id: sid, club_id: clubId, status: 'accepted', revision: 2 },
+        participations: [], clubs: ['alpha', 'beta'].map(id => ({ id, name: id, slug: id })), teams: [], next_team_offset: null });
+    };
+    const Page = phaseWorkspace(commissioner);
+    let tree;
+    await act(async () => { tree = create(React.createElement(Page, { initialSeasonId: sid, initialMeetId: mid, initialStep: 'availability' })); });
+    assert.ok(textContent(tree).includes('Season complete'), 'Completion wins over future scheduled dates and an old signup link');
+    assert.ok(!textContent(tree).includes('Your next meet'));
+    assert.ok(!textContent(tree).includes('Next: open meet signup'));
+    assert.equal(tree.root.findAllByProps({ 'aria-label': 'League workflow' }).length, 0);
+    assert.equal(tree.root.findAllByProps({ id: 'season-player-pool' }).length, 0);
+    assert.equal(tree.root.findAllByProps({ id: 'meet-rosters' }).length, 0);
+    assert.equal(tree.root.findAll(n => n.props['data-schedule-root'] || n.props['data-eligibility-root']).length, 0);
+    const link = label => tree.root.findAllByType('a').find(a => a.children.includes(label));
+    assert.equal(link('Final results & awards').props.href, `/interclub/${sid}/final-results`);
+    assert.ok(link('Review meets & scores').props.href.includes(`season=${sid}`));
+    if (commissioner) {
+      assert.equal(link('Review season awards').props.href, `/admin/interclub/awards?season=${sid}`);
+      assert.equal(link('History & start a new season').props.href, `/admin/event-history?kind=interclub&event=${sid}`);
+    } else {
+      assert.equal(link('Review season awards'), undefined);
+      assert.equal(link('History & start a new season'), undefined);
+      assert.equal(link('Season history').props.href, `/interclub/${sid}?view=history`);
+    }
+    assert.ok(requests.every(request => !request.options.method), 'Opening the completed panel is read-only');
+    assert.ok(!requests.some(request => request.url.includes('/meets/')), 'Completed workspaces do not load signup or lineup editors');
+    await act(async () => tree.unmount());
+    completed = false;
+    await act(async () => { tree = create(React.createElement(Page, { initialSeasonId: sid })); });
+    assert.equal(tree.root.findAllByProps({ id: 'season-complete-title' }).length, 0);
+    assert.ok(textContent(tree).includes('Your next meet'), 'Active seasons retain meet preparation');
+    assert.equal(tree.root.findAllByProps({ 'aria-label': 'League workflow' }).length, 1);
+    await act(async () => tree.unmount());
+  }
+}
+
 async function registrationPhaseLocks() {
   const windows = [undefined,
     { opens_at: null, closes_at: null, revision: 0, status: 'unconfigured', can_register: false, meet_planning_open: false },
@@ -547,7 +593,7 @@ async function loadFailuresCanBeRetried() {
   const content = () => JSON.stringify(tree.toJSON());
   await act(async () => { tree = create(React.createElement(Page, { initialSeasonId: sid })); });
   assert.ok(content().includes('Loading club invitations…'));
-  assert.equal(button(tree, 'Refresh invitations').props.disabled, true);
+  assert.equal(button(tree, 'Refresh seasons').props.disabled, true);
   await act(async () => requests.at(-1).reject(new TypeError('Load failed')));
   assert.ok(content().includes('Unable to load club invitations. Try again.'));
   assert.ok(!content().includes('Loading club invitations…'));
@@ -650,5 +696,5 @@ async function guidedLineupChoices() {
   await act(async () => tree.unmount());
 }
 
-(async () => { await clubsAndRosters(); await invitationResponses(); await deepLinkContext(); await registrationPhaseLocks(); await commissionerWindowEditor(); await savedClosedWindowLoadsMeets(); await serverConfirmedWindowBoundary(); await phaseRefreshCannotUndoAcceptance(); await updatedPlayersAndSchedulePreserveLineupDraft(); await loadFailuresCanBeRetried(); await guidedLineupChoices(); console.log('Interclub registration: invitation outcomes, commissioner window dates, phase gates and server-confirmed boundaries, meet-specific lineups, scoped players, stale saves, deep-link context, stage draft preservation, load failures, retries and guided eligible-player selection passed.'); })()
+(async () => { await clubsAndRosters(); await invitationResponses(); await deepLinkContext(); await completedSeasonWorkspace(); await registrationPhaseLocks(); await commissionerWindowEditor(); await savedClosedWindowLoadsMeets(); await serverConfirmedWindowBoundary(); await phaseRefreshCannotUndoAcceptance(); await updatedPlayersAndSchedulePreserveLineupDraft(); await loadFailuresCanBeRetried(); await guidedLineupChoices(); console.log('Interclub registration: completed-season navigation, invitation outcomes, commissioner window dates, phase gates and server-confirmed boundaries, meet-specific lineups, scoped players, stale saves, deep-link context, stage draft preservation, load failures, retries and guided eligible-player selection passed.'); })()
   .catch(e => { console.error(e); process.exitCode = 1; });

@@ -52,13 +52,13 @@ function ClubRegistrations({ clubId, accessToken, initialSeasonId, initialMeetId
   return <section className={styles.page}>
     <p className={styles.back}><Link href="/admin/interclub">← Interclub leagues</Link></p>
     <h1>League workspace</h1>
-    <p>Approve your season player pool, then share a meet signup link. Eligible signups fill each meet’s lineup and substitute pool.</p>
+    <p>Manage your season’s players and meets, or review its final results and awards.</p>
     <div className={styles.toolbar}>
       <label>Season <select value={selected} onChange={e => setSelected(e.target.value)} disabled={!loaded}>
         {!seasons.length && <option value="">{loading ? "Loading invitations…" : loaded ? "No open invitations" : "Choose a season"}</option>}
         {seasons.map(s => <option key={s.id} value={s.id}>{s.details.name} · {s.details.start_date}{s.organizer_club_id === clubId ? " · Organizer" : ""}</option>)}
       </select></label>
-      <button disabled={loading} onClick={() => setReload(n => n + 1)}>{error ? "Retry loading invitations" : "Refresh invitations"}</button>
+      <button disabled={loading} onClick={() => setReload(n => n + 1)}>{error ? "Retry loading invitations" : "Refresh seasons"}</button>
     </div>
     {error && <p role="alert">{error}</p>}
     {loading && <p role="status">Loading club invitations…</p>}
@@ -199,8 +199,22 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId, initialMeetId,
       <header className={styles.seasonHeader}>
         <h2>{data.season.details.name}</h2>
         <p>{date(data.season.details.start_date)} – {date(data.season.details.end_date)} · Organized by {clubName(data.season.organizer_club_id)}</p>
-        {data.is_organizer && <p><a href="#meet-schedule">Manage meet dates</a></p>}
+        {data.is_organizer && !data.season_complete && <p><a href="#meet-schedule">Manage meet dates</a></p>}
       </header>
+      {data.season_complete ? <section className={`${styles.card} ${styles.success}`} aria-labelledby="season-complete-title">
+        <h3 id="season-complete-title">Season complete</h3>
+        <p>This season’s final results are published. View the standings and honors below.</p>
+        <div className={styles.toolbar}>
+          <Link className={`${styles.button} ${styles.primary}`} href={`/interclub/${encodeURIComponent(seasonId)}/final-results`}>Final results & awards</Link>
+          {data.is_organizer && <>
+            <Link className={styles.button} href={`/admin/interclub/awards?season=${encodeURIComponent(seasonId)}`}>Review season awards</Link>
+            <Link className={styles.button} href={`/admin/event-history?${new URLSearchParams({ kind: "interclub", event: seasonId })}`}>History & start a new season</Link>
+          </>}
+          {!data.is_organizer && <Link className={styles.button} href={`/interclub/${encodeURIComponent(seasonId)}?view=history`}>Season history</Link>}
+        </div>
+        {data.is_organizer && <p className={styles.muted}>Start the next season from History. This season’s results and trophies stay saved.</p>}
+        <p><Link href={workflowHref("approve", seasonId)}>Review meets & scores</Link></p>
+      </section> : <>
       {status === "invited" && <section className={`${styles.card} ${styles.invitation}`} aria-labelledby="invitation-title">
         <p className={styles.eyebrow}>Invitation to your club</p>
         <h3 id="invitation-title" ref={invitationHeading} tabIndex={-1} style={{ scrollMarginTop: "1rem" }}>{clubName(clubId)} is invited</h3>
@@ -285,6 +299,7 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId, initialMeetId,
           {["declined", "cancelled"].includes(p.status) && <button disabled={disabled} onClick={() => void change(`/participations/${encodeURIComponent(p.club_id)}`, "POST", { action: "reinvite", expected_revision: p.revision }, "Club invited again.")}>Invite again</button>}
         </td></tr>)}
       </tbody></table></div></section>}
+      </>}
       {!blocked && <div className={styles.toolbar}><button disabled={busy || loading} onClick={() => { setMessage(""); setReload(n => n + 1); }}>Reload season</button></div>}
     </>}
   </>;
