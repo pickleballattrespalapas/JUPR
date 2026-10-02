@@ -729,6 +729,11 @@ test("interclub paper packet, score entry, approval and public results", async (
   await expect(page.getByRole("link", { name: "Final results & awards", exact: true })).toHaveAttribute("href", `/interclub/${official.id}/final-results`);
   await expect(page.getByRole("link", { name: "Review season awards", exact: true })).toHaveAttribute("href", `/admin/interclub/awards?season=${official.id}`);
   await page.screenshot({ path: join(reportDir, "interclub-completed-season-workspace.png"), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByRole("link", { name: "History & start a new season", exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  await page.screenshot({ path: join(reportDir, "interclub-completed-season-workspace-mobile.png"), fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 900 });
   await page.getByRole("link", { name: "History & start a new season", exact: true }).click();
   await expect(page.getByRole("heading", { name: "History & seasons", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Start new season", exact: true }).click();

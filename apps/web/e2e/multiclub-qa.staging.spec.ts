@@ -179,13 +179,27 @@ test("dedicated QA admin switches three clubs and previews website controls", as
         // Older responses without registration metadata must remain locked.
         const meetPlanningOpen = details.season.registration?.status === "closed" && details.season.registration?.meet_planning_open === true;
         await expect(page.getByRole("heading", { name: season.details.name, exact: true })).toBeVisible();
-        await expect(page.getByRole("heading", { name: "Season registration", exact: true })).toBeVisible();
+        await expect(page.getByRole("heading", { name: details.season_complete ? "Season complete" : "Season registration", exact: true })).toBeVisible();
         await expect(page.getByText("Loading season…", { exact: true })).toHaveCount(0);
         const organizer = season.organizer_club_id === club.id;
         expect(details.is_organizer).toBe(organizer);
         expect(details.meets.map((m: { club_ids: string[] }) => organizer || m.club_ids.includes(club.id)).every(Boolean)).toBe(true);
         if (!organizer) expect(details.participations.every((p: { club_id: string }) => p.club_id === club.id)).toBe(true);
-        if (details.own_participation?.status === "invited") {
+        if (details.season_complete) {
+          await expect(page.getByRole("region", { name: "Your next meet", exact: true })).toHaveCount(0);
+          await expect(page.getByRole("navigation", { name: "League workflow", exact: true })).toHaveCount(0);
+          await expect(page.getByRole("link", { name: "Final results & awards", exact: true })).toHaveAttribute("href", `/interclub/${season.id}/final-results`);
+          if (organizer) {
+            await expect(page.getByRole("link", { name: "Review season awards", exact: true })).toHaveAttribute("href", `/admin/interclub/awards?season=${season.id}`);
+            await expect(page.getByRole("link", { name: "History & start a new season", exact: true })).toHaveAttribute("href", `/admin/event-history?kind=interclub&event=${season.id}`);
+          } else {
+            await expect(page.getByRole("link", { name: "Review season awards", exact: true })).toHaveCount(0);
+            await expect(page.getByRole("link", { name: "History & start a new season", exact: true })).toHaveCount(0);
+            await expect(page.getByRole("link", { name: "Season history", exact: true })).toHaveAttribute("href", `/interclub/${season.id}?view=history`);
+          }
+          expect(operationalReads.slice(registrationReadsStart), "Completed seasons must not load signup or lineup editors").toEqual([]);
+        }
+        if (!details.season_complete && details.own_participation?.status === "invited") {
           const accept = page.getByRole("button", { name: "Accept invitation", exact: true });
           await expect(accept).toBeEnabled();
           await expect(accept).toBeInViewport();
@@ -194,7 +208,7 @@ test("dedicated QA admin switches three clubs and previews website controls", as
           await expect(page.getByRole("heading", { name: `${club.name} is invited`, exact: true })).toBeVisible();
         }
         const joined = details.own_participation?.status === "accepted";
-        if (joined) {
+        if (joined && !details.season_complete) {
           await expect(page.getByRole("heading", { name: `${club.name} has joined`, exact: true })).toBeVisible();
           await expect(page.getByRole("region", { name: "Season player pool", exact: true })).toBeVisible();
           await expect(page.getByRole("navigation", { name: "League workflow", exact: true }).getByRole("link", { name: "Player pool", exact: true })).toHaveAttribute("aria-current", "step");
@@ -252,12 +266,12 @@ test("dedicated QA admin switches three clubs and previews website controls", as
           }
         }
         if (!organizer && !joined) await expect(page.getByRole("combobox", { name: "Meet", exact: true })).toHaveCount(0);
-        if (!meetPlanningOpen) {
+        if (!details.season_complete && !meetPlanningOpen) {
           if (organizer || joined) await expectMeetStepsLocked(page);
           await expectNoMeetControls(page);
           expect(operationalReads.slice(registrationReadsStart), "Registration must not fetch meet details or availability before meet planning opens").toEqual([]);
         }
-        if (meetPlanningOpen && details.meets.length && (organizer || joined)) {
+        if (!details.season_complete && meetPlanningOpen && details.meets.length && (organizer || joined)) {
           const workflow = page.getByRole("navigation", { name: "League workflow", exact: true });
           const lineups = workflow.getByRole("link", { name: "Lineups", exact: true });
           await lineups.click();
