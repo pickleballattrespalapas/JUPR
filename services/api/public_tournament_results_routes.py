@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import HTTPException, Query
+from fastapi import HTTPException, Query, Response
 
 from jupr_app.services.public_tournament_results_service import (
     build_public_tournament_index,
     build_public_tournament_results,
 )
+from jupr_app.services.public_tournament_highlights_service import public_tournament_gold_highlights
+from services.api.club_site_routes import published_site
 
 
 def _handle_public_results_error(exc: Exception) -> None:
@@ -26,6 +28,19 @@ def install_public_tournament_results_routes(
     public_club_payload,
 ) -> None:
     """Install patron-safe standard tournament discovery and results routes."""
+
+    @app.get("/public/clubs/{slug}/tournament-highlights")
+    def tournament_highlights(slug: str, response: Response) -> dict[str, Any]:
+        response.headers["Cache-Control"] = "no-store"
+        db = get_supabase_client()
+        site = published_site(db, slug)
+        if site["document"].get("page_visibility", {}).get("tournaments") == "private":
+            return {"highlights": []}
+        try:
+            highlights = public_tournament_gold_highlights(db, club_id=site["club_id"], slug=site["slug"])
+        except Exception as exc:
+            raise HTTPException(503, "Tournament highlights are temporarily unavailable.") from exc
+        return {"highlights": highlights}
 
     @app.get("/clubs/{club_slug}/tournaments")
     def tournament_index(

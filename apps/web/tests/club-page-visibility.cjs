@@ -16,14 +16,20 @@ const initial = {
 let site = { club_id: "alpha", slug: "alpha", club_active: true, revision: 1,
   draft: structuredClone(initial), published: structuredClone(initial), published_at: "2026-09-16" };
 let publicTrophies = [], trophyRequests = [], trophiesUnavailable = false;
+let publicGold = [], goldRequests = [], goldUnavailable = false;
 const mocks = {
-  "next/link": ({ children, ...props }) => React.createElement("a", props, children),
+  "next/link": ({ children, prefetch, ...props }) => React.createElement("a", props, children),
   "next/navigation": { usePathname: () => pathname, notFound: () => { throw Error("NOT_FOUND"); } },
   "next/headers": { headers: () => new Headers({ "x-pcs-club-path": pathname }) },
   "@/lib/clubSiteServer": {
     getPublicSite: async slug => slug === "alpha" ? { slug, document: structuredClone(site.published) } : null,
     getClubDirectory: async () => ({ clubs: [{ slug: "alpha" }], total: 1, limit: 100 }),
     publicSiteFetch: async path => {
+      if (path.endsWith("/tournament-highlights")) {
+        goldRequests.push(path);
+        if (goldUnavailable) throw new Error("Tournament highlights unavailable");
+        return { highlights: publicGold };
+      }
       trophyRequests.push(path);
       if (trophiesUnavailable) throw new Error("Trophy service unavailable");
       return { trophies: publicTrophies };
@@ -138,6 +144,36 @@ global.fetch = async (url, options = {}) => {
   trophiesUnavailable = false;
   publicTrophies = [];
   assert.doesNotMatch(await homeHtml(), /Club championships/);
+
+  publicGold = Array.from({ length: 5 }, (_, index) => ({
+    id: `gold-${index}`, tournament_name: "Summer Classic", division: `Division ${index + 1}`,
+    recipient: index === 0 ? "Alex Ace / Blair Backhand" : `Winner ${index + 1}`,
+    players: index === 4 ? ["Casey Counter", "Drew Dink", "Elliot", "Fran"] : [],
+    completed_at: "2026-10-02T12:00:00Z", expires_at: "2026-11-02T12:00:00Z",
+    results_href: `/clubs/alpha/tournament-results?tournament_id=summer&view=past&tab=completed&draw=${index}`,
+  }));
+  const goldHome = await homeHtml();
+  assert.equal((goldHome.match(/data-home-tournament-gold=/g) || []).length, 5, "Every winning division is shown");
+  assert.match(goldHome, /Tournament gold medalists.*Alex Ace \/ Blair Backhand/);
+  assert.match(goldHome, /Casey Counter · Drew Dink · Elliot · Fran/);
+  assert.match(goldHome, /view=past&amp;tab=completed&amp;draw=4/);
+  assert.doesNotMatch(html(Content, { document: initial, slug: "alpha", pageSlug: "visiting", tournamentHighlights: publicGold }), /Tournament gold medalists/);
+  site.published.page_visibility = { tournaments: "private" };
+  const requestedGold = goldRequests.length;
+  assert.doesNotMatch(await homeHtml(), /Tournament gold medalists/);
+  assert.equal(goldRequests.length, requestedGold, "Hidden tournament highlights are not fetched");
+  assert.doesNotMatch(html(Content, { document: site.published, slug: "alpha", tournamentHighlights: publicGold }), /data-home-tournament-gold/);
+  site.published = structuredClone(initial);
+  publicTrophies = [trophy("cup", "club_cup_champion")];
+  goldUnavailable = true;
+  assert.match(await homeHtml(), /Club championships/);
+  assert.doesNotMatch(await homeHtml(), /Tournament gold medalists/);
+  goldUnavailable = false;
+  trophiesUnavailable = true;
+  assert.match(await homeHtml(), /Tournament gold medalists/);
+  trophiesUnavailable = false;
+  publicTrophies = []; publicGold = [];
+  assert.doesNotMatch(await homeHtml(), /Tournament gold medalists|data-home-tournament-gold/);
 
   const { default: Link, ClubPageNavigationProvider: Provider } = load("components/PublicClubLink.tsx");
   const links = () => h(Provider, { slug: "alpha", settings: doc },
