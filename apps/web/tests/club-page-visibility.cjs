@@ -15,14 +15,21 @@ const initial = {
 };
 let site = { club_id: "alpha", slug: "alpha", club_active: true, revision: 1,
   draft: structuredClone(initial), published: structuredClone(initial), published_at: "2026-09-16" };
+let publicGold = [], goldRequests = [], goldUnavailable = false;
 const mocks = {
   "@/components/interaction": { InteractionProvider: ({ children }) => children },
-  "next/link": ({ children, ...props }) => React.createElement("a", props, children),
+  "next/link": ({ children, prefetch, ...props }) => React.createElement("a", props, children),
   "next/navigation": { usePathname: () => pathname, notFound: () => { throw Error("NOT_FOUND"); } },
   "next/headers": { headers: () => new Headers({ "x-pcs-club-path": pathname }) },
   "@/lib/clubSiteServer": {
     getPublicSite: async slug => ["alpha", "tres-palapas"].includes(slug) ? { slug, document: structuredClone(site.published) } : null,
     getClubDirectory: async () => ({ clubs: [{ slug: "alpha" }], total: 1, limit: 100 }),
+    publicSiteFetch: async path => {
+      assert.ok(path.endsWith("/tournament-highlights"));
+      goldRequests.push(path);
+      if (goldUnavailable) throw new Error("Tournament highlights unavailable");
+      return { highlights: publicGold };
+    },
   },
   "@/lib/useAdminWorkspace": { useAdminWorkspace: () => ({ clubId: "alpha" }) },
   "@/lib/useAdminSession": { useAdminSession: () => ({ loading: false, accessToken: "fixture-token",
@@ -101,6 +108,35 @@ global.fetch = async (url, options = {}) => {
   const withBlocks = { ...doc, pages: [{ ...doc.pages[0], blocks: [block, { ...block, id: "button", kind: "button", text: "Hidden target", url: "/clubs/alpha/players" }] }] };
   assert.doesNotMatch(html(Content, { document: withBlocks, slug: "alpha" }), /Hidden target|href="\/clubs\/alpha\/players"/);
   assert.doesNotMatch(html(Content, { document: { ...initial, page_visibility: Object.fromEntries(CLUB_LINKS.map(([, key]) => [key, "private"])) }, slug: "alpha" }), /Around the club/);
+
+  site.published = structuredClone(initial);
+  const Home = load("app/clubs/[clubSlug]/page.tsx").default;
+  const homeHtml = async () => renderToStaticMarkup(await Home({ params: { clubSlug: "alpha" } }));
+  publicGold = Array.from({ length: 5 }, (_, index) => ({
+    id: `gold-${index}`, tournament_name: "Summer Classic", division: `Division ${index + 1}`,
+    recipient: index === 0 ? "Alex Ace / Blair Backhand" : `Winner ${index + 1}`,
+    players: index === 4 ? ["Casey Counter", "Drew Dink", "Elliot", "Fran"] : [],
+    completed_at: "2026-10-02T12:00:00Z", expires_at: "2026-11-02T12:00:00Z",
+    results_href: `/clubs/alpha/tournament-results?tournament_id=summer&view=past&tab=completed&draw=${index}`,
+  }));
+  const goldHome = await homeHtml();
+  assert.equal((goldHome.match(/data-home-tournament-gold=/g) || []).length, 5, "Every winning division is shown");
+  assert.match(goldHome, /Tournament gold medalists.*Alex Ace \/ Blair Backhand/);
+  assert.match(goldHome, /Casey Counter · Drew Dink · Elliot · Fran/);
+  assert.match(goldHome, /tab=completed&amp;draw=0/);
+  assert.doesNotMatch(html(Content, { document: initial, slug: "alpha", pageSlug: "visiting", tournamentHighlights: publicGold }), /Tournament gold medalists/);
+  const requestsBeforePrivate = goldRequests.length;
+  site.published.page_visibility = { tournaments: "private" };
+  assert.doesNotMatch(await homeHtml(), /Tournament gold medalists/);
+  assert.equal(goldRequests.length, requestsBeforePrivate, "Private tournament results are not fetched");
+  assert.doesNotMatch(html(Content, { document: site.published, slug: "alpha", tournamentHighlights: publicGold }), /data-home-tournament-gold/);
+  site.published = structuredClone(initial);
+  goldUnavailable = true;
+  assert.match(await homeHtml(), /Welcome/);
+  assert.doesNotMatch(await homeHtml(), /Tournament gold medalists/);
+  goldUnavailable = false;
+  publicGold = [];
+  assert.doesNotMatch(await homeHtml(), /Tournament gold medalists|data-home-tournament-gold/);
 
   const { default: Link, ClubPageNavigationProvider: Provider } = load("components/PublicClubLink.tsx");
   const links = () => h(Provider, { slug: "alpha", settings: doc },

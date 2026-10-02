@@ -47,6 +47,30 @@ assert.equal(
   drawOperationalStatus(draft, lifecycle({ games: 21, finalized: 21, open: 0, published: 21, live: "complete", official: "complete" })),
   "Published · 21 official matches"
 );
+// Best-of-three matchups publish their individual games, not their series parent.
+for (const [games, eligible] of [[27, 30], [25, 29]]) {
+  assert.equal(
+    drawOperationalStatus(draft, lifecycle({ games, finalized: games, open: 0, published: eligible, rating_publish_eligible_games: eligible, live: "complete", official: "complete" })),
+    `Published · ${eligible} official matches`
+  );
+  assert.equal(
+    drawOperationalStatus(draft, lifecycle({ games, finalized: games, open: 0, published: games, rating_publish_eligible_games: eligible, live: "complete" })),
+    `Publish recovery needed · ${games} of ${eligible} official`
+  );
+}
+// Non-played outcomes count toward draw completion but must never be rated.
+assert.equal(
+  drawOperationalStatus(draft, lifecycle({ games: 10, finalized: 10, open: 0, published: 9, rating_publish_eligible_games: 9, live: "complete", official: "complete" })),
+  "Published · 9 official matches"
+);
+assert.equal(
+  drawOperationalStatus(draft, lifecycle({ games: 1, finalized: 1, open: 0, rating_publish_eligible_games: 0, live: "complete", official: "complete" })),
+  "Complete · no rated games"
+);
+assert.equal(
+  drawOperationalStatus(draft, lifecycle({ games: 27, finalized: 27, open: 0, published: 31, rating_publish_eligible_games: 30, live: "complete", official: "complete" })),
+  "Status unavailable"
+);
 assert.equal(
   drawOperationalStatus(draft, lifecycle({ games: 21, finalized: 21, open: 0, published: 1, live: "complete" })),
   "Publish recovery needed · 1 of 21 official"
