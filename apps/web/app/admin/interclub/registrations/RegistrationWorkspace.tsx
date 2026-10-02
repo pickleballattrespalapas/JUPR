@@ -54,7 +54,7 @@ function ClubRegistrations({ clubId, accessToken, initialSeasonId, initialMeetId
     <h1>League workspace</h1>
     <p>Manage your season’s players and meets, or review its final results and awards.</p>
     <div className={styles.toolbar}>
-      <label>Season <select value={selected} onChange={e => setSelected(e.target.value)} disabled={!loaded}>
+      <label className={styles.seasonPicker}>Season <select value={selected} onChange={e => setSelected(e.target.value)} disabled={!loaded}>
         {!seasons.length && <option value="">{loading ? "Loading invitations…" : loaded ? "No open invitations" : "Choose a season"}</option>}
         {seasons.map(s => <option key={s.id} value={s.id}>{s.details.name} · {s.details.start_date}{s.organizer_club_id === clubId ? " · Organizer" : ""}</option>)}
       </select></label>
