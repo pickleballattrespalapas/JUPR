@@ -10,6 +10,8 @@
 .page button:disabled { opacity: .6; cursor: default; }
 .page input, .page select, .page textarea { padding: 8px; border: 1px solid #94a3b8; border-radius: 6px; max-width: 100%; }
 .toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 18px 0; }
+.seasonPicker { display: grid; gap: 6px; min-width: 0; max-width: 100%; }
+.seasonPicker select { min-width: 0; width: 100%; }
 .card { margin: 20px 0; padding: 20px; border: 1px solid #cbd5e1; border-radius: 12px; background: #fff; }
 .form { display: grid; gap: 16px; }
 .form label { display: grid; gap: 6px; }
