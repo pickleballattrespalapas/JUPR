@@ -29,7 +29,11 @@ class Query:
     def range(self, start, end): self.bounds = (start, end+1); return self
     def execute(self):
         rows = [r for r in self.rows if all(check(r) for check in self.filters)][self.bounds[0]:self.bounds[1]]
-        return SimpleNamespace(data=[dict(r) if self.columns == "*" else {k: r.get(k) for k in self.columns.split(",")} for r in rows])
+        def field(row, path):
+            for key in path.split("->"):
+                row = row.get(key) if isinstance(row, dict) else None
+            return row
+        return SimpleNamespace(data=[dict(r) if self.columns == "*" else {k.split("->")[-1]: field(r, k) for k in self.columns.split(",")} for r in rows])
 
 
 @pytest.fixture
@@ -45,7 +49,7 @@ def setup(monkeypatch):
     version = dict(team_id=tid,revision=1,name="Beta Blue",status="needs_exception",issues=[dict(code="rating_above_maximum",message="Player exceeds limit",private="secret")],late_change=False,
                    roster=[dict(entry_id=str(uuid4()),player_id=str(i),name=f"Player {i}",starting_rating=3.6,gender="female",email="private@example.test",phone="secret") for i in range(1,5)])
     team = dict(id=tid,season_id=sid,meet_id=mid,club_id="beta",division="3.5",withdrawn=False,**version)
-    tables = {"admin_role_assignments":[assignment],"pcs_interclub_seasons":[season],"pcs_interclub_participations":[participation],
+    tables = {"admin_role_assignments":[assignment],"pcs_interclub_seasons":[season],"pcs_interclub_participations":[participation],"pcs_interclub_publications":[],
               "pcs_interclub_meet_workspaces":[meet],"pcs_interclub_current_rosters":[team],"pcs_interclub_teams":[team],"pcs_interclub_roster_versions":[version],
               "clubs":[dict(id=c,name=c.title(),slug=c) for c in ("alpha","beta","gamma")],
               "players":[dict(id=i,club_id="beta",name=f"Player {i}",rating=1600,gender="female",active=True,email="private@example.test") for i in range(1,5)] + [dict(id=99,club_id="gamma",name="Private other club player",active=True,rating=1800)],
@@ -130,6 +134,35 @@ def test_club_list_only_unions_owned_and_invited_seasons(setup):
     assert len(c.get("/admin/clubs/alpha/interclub/registrations").json()["seasons"])==1
     s["assignment"]["club_id"]="beta"
     assert len(c.get("/admin/clubs/beta/interclub/registrations").json()["seasons"])==1
+
+
+@pytest.mark.parametrize("club", ["alpha", "beta"])
+@pytest.mark.parametrize("phase", ["open", "closed"])
+@pytest.mark.parametrize("published,expected", [
+    (None, False), ({}, False),
+    ({"season_complete": False, "club_cup": {"status": "complete"}}, False),
+    ({"season_complete": True, "club_cup": {"status": "pending"}}, False),
+    ({"season_complete": True, "club_cup": {"status": "complete"}}, True),
+])
+def test_workspace_completion_uses_only_this_seasons_published_results(setup, club, phase, published, expected):
+    c, s = setup
+    s["assignment"]["club_id"] = club
+    set_registration_phase(s["season"], phase)
+    s["tables"]["pcs_interclub_publications"] = [
+        {"season_id": str(uuid4()), "published": {"season_complete": True, "club_cup": {"status": "complete"}}},
+        {"season_id": s["season"]["id"], "published": published,
+         "draft": {"season_complete": True, "club_cup": {"status": "complete"}, "private_notes": "private draft"}},
+    ]
+    response = c.get(base(s, club))
+    assert response.status_code == 200
+    assert response.json()["season_complete"] is expected
+    assert "private draft" not in response.text and "published" not in response.json()
+    assert not s["calls"], "Opening a finished season must not change its results or start another season."
+
+
+def test_workspace_without_a_publication_stays_active(setup):
+    c, s = setup
+    assert c.get(base(s)).json()["season_complete"] is False
 
 
 def test_open_uses_exact_saved_revision_and_verified_organizer(setup):

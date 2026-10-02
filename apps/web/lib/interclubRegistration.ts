@@ -13,7 +13,7 @@ export type InterclubTeam = RosterVersion & { id: string; season_id: string; mee
 export type InterclubMeet = { id: string; season_id: string; plan_index: number; host_club_id: string; club_ids: string[];
   starts_at: string; duration_minutes: number; courts: number; roster_deadline: string; revision: number; roster_open: boolean; deadline_editable: boolean; competition_phase?: "regular" | "final" | "qualifier" };
 export type MeetRegistrationDetail = { meet: InterclubMeet; teams: InterclubTeam[]; next_team_offset: number | null };
-export type RegistrationDetail = { meets: InterclubMeet[]; meet_schedule?: Pick<InterclubMeet, "id" | "starts_at" | "host_club_id" | "club_ids">[]; first_meet_at?: string | null; season: RegistrationSeason; is_organizer: boolean; own_participation: Participation | null;
+export type RegistrationDetail = { season_complete?: boolean; meets: InterclubMeet[]; meet_schedule?: Pick<InterclubMeet, "id" | "starts_at" | "host_club_id" | "club_ids">[]; first_meet_at?: string | null; season: RegistrationSeason; is_organizer: boolean; own_participation: Participation | null;
   participations: Participation[]; clubs: { id: string; name: string; slug: string }[]; teams: InterclubTeam[]; next_team_offset: number | null };
 export const rosterStatus: Record<string, string> = { eligible: "Eligible", needs_exception: "Needs organizer exception", exception_approved: "Exception approved", exception_denied: "Exception declined", withdrawn: "Withdrawn" };
 export type LineupPlayerChoice = { id: string; name: string; starting_rating: number | null; eligibility_rating?: number | null; gender?: string; rating_locked?: boolean; rating_deadline?: string };
