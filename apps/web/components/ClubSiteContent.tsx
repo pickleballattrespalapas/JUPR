@@ -2,7 +2,9 @@
 /* eslint-disable @next/next/no-img-element */
 import Link from "next/link";
 import ClubChampionshipHighlights from "./ClubChampionshipHighlights";
+import TournamentGoldHighlights from "./TournamentGoldHighlights";
 import type { SeasonTrophy } from "@/lib/interclubAwards";
+import type { TournamentGoldHighlight } from "@/lib/tournamentHighlights";
 import {
   publicClubLinks,
   canLinkClubPage,
@@ -18,11 +20,13 @@ export default function ClubSiteContent({
   slug,
   pageSlug = "home",
   trophies = [],
+  tournamentHighlights = [],
 }: {
   document: SiteDocument;
   slug: string;
   pageSlug?: string;
   trophies?: SeasonTrophy[];
+  tournamentHighlights?: TournamentGoldHighlight[];
 }) {
   const page = doc.pages.find((p) => p.slug === pageSlug);
   const links = publicClubLinks(doc);
@@ -58,6 +62,9 @@ export default function ClubSiteContent({
         </section>
       ) : (
         <h1>{page.title}</h1>
+      )}
+      {pageSlug === "home" && doc.page_visibility?.tournaments !== "private" && (
+        <TournamentGoldHighlights highlights={tournamentHighlights} />
       )}
       <div className={styles.blocks}>
         {page.blocks.map((block) => (

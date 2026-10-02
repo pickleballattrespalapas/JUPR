@@ -40,6 +40,7 @@ jobs:
             tests/test_leaderboard_seasons.py \
             tests/test_overall_leaderboard_metrics.py \
             tests/test_public_leaderboard_projection.py \
+            tests/test_public_tournament_highlights.py \
             tests/test_web_leaderboard_parity_contract.py \
             tests/test_interclub_*.py \
             tests/test_admin_tournament_broadcast_service.py \
