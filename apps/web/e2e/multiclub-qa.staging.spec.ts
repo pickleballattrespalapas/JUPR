@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Response } from "@playwright/test";
 import { bootstrapStagingContext, expectedApiOrigin, expectedAuthOrigin } from "./support/staging";
+import { verifyInactivePlayerVisibility } from "./support/player-activity";
 
 const clubs = [
   { id: "cabo-test-club", name: "Cabo Test Club" },
@@ -442,4 +443,11 @@ test("dedicated QA admin switches three clubs and previews website controls", as
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
   expect([200, 204]).toContain((await signedOut).status());
   await expect.poll(() => page.evaluate(() => localStorage.getItem("jupr_admin_session_v1") === null)).toBe(true);
+});
+
+
+test("inactive player keeps their profile and stays off the leaderboard", async ({ page, context }) => {
+  test.setTimeout(60_000);
+  await bootstrapStagingContext(context);
+  await verifyInactivePlayerVisibility(page);
 });
