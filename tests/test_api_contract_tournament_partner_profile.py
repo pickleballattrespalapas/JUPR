@@ -24,7 +24,7 @@ def test_partner_lookup_before_demographics_and_with_existing_registration(integ
     assert all(not value for key, value in storage.items() if key not in before)
 
 
-def test_partner_lookup_supports_partial_names_and_stays_active_and_club_scoped(integrity_client):
+def test_partner_lookup_includes_inactive_players_and_stays_bounded_and_club_scoped(integrity_client):
     api, storage = integrity_client
     base = {"club_id": "club-1", "name": "Same Name", "rating": 1600, "active": True}
     storage["players"] = [
@@ -34,11 +34,61 @@ def test_partner_lookup_supports_partial_names_and_stays_active_and_club_scoped(
     ]
     response = api.post(ENDPOINT, json={"registration_slug": "tres-open", "name": "Same Name"})
     assert response.status_code == 200
-    assert [row["id"] for row in response.json()["profile_candidates"]] == ["40", "41", "42"]
+    assert [row["id"] for row in response.json()["profile_candidates"]] == ["31", "40", "41"]
     response = api.post(ENDPOINT, json={"registration_slug": "tres-open", "name": "Same"})
     assert response.status_code == 200
     assert response.json()["profile_match_kind"] == "name_partial"
-    assert [row["id"] for row in response.json()["profile_candidates"]] == ["40", "41", "42", "43", "44"]
+    assert [row["id"] for row in response.json()["profile_candidates"]] == ["31", "40", "41", "42", "43", "44"]
+
+
+@pytest.mark.parametrize("active", [True, False])
+@pytest.mark.parametrize("name,email,kind", [
+    ("Returning Player", None, "name_exact"),
+    ("Returning", None, "name_partial"),
+    ("Player", "returning@example.test", "email_exact"),
+])
+def test_inactive_partner_lookup_preserves_rating_privacy_and_activity(integrity_client, active, name, email, kind):
+    api, storage = integrity_client
+    storage["players"] = [{
+        "id": 200, "club_id": "club-1", "name": "Returning Player",
+        "active": active, "inactive_at": "2026-01-27T20:35:42+00:00",
+        "last_game_at": "2025-12-24T04:18:00+00:00", "rating": 2046.3415,
+        "email": "returning@example.test", "phone": "private", "age": 50,
+        "gender": "Women", "dupr_id": "DUPR-200",
+    }]
+    before = deepcopy(storage)
+    response = api.post(ENDPOINT, json={"registration_slug": "tres-open", "name": name, "email": email})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["profile_match_kind"] == kind
+    assert data["profile_candidates"] == [{
+        "id": "200", "display_name": "Returning Player", "dupr_id": "DUPR-200",
+        "doubles_skill": pytest.approx(2046.3415 / 400), "singles_skill": None,
+    }]
+    assert data["profile_policy"]["public_submission_links_player"] is False
+    assert all(storage[key] == value for key, value in before.items())
+    assert all(not value for key, value in storage.items() if key not in before)
+
+
+@pytest.mark.parametrize("active", [True, False])
+@pytest.mark.parametrize("query", [
+    {"name": "Retired Player"},
+    {"name": "Retired"},
+    {"name": "Retired Player", "email": "retired@example.test"},
+])
+def test_merged_partner_profiles_are_not_discovered_by_alias_or_email(integrity_client, active, query):
+    api, storage = integrity_client
+    storage["players"] = [{
+        "id": 30, "club_id": "club-1", "rating": 1600, "active": active,
+        "inactive_at": "2026-01-27T20:35:42+00:00",
+        "name": "Retired Player (MERGED into Canonical Player #31)",
+        "display_name": "Retired Player", "first_name": "Retired", "last_name": "Player",
+        "email": "retired@example.test",
+    }]
+    response = api.post(ENDPOINT, json={"registration_slug": "tres-open", **query})
+    assert response.status_code == 200
+    assert response.json()["profile_candidates"] == []
+    assert response.json()["profile_match_kind"] == "none"
 
 
 @pytest.mark.parametrize("query", ["Va", "verdu", "Vale Ver", "VERDUGO val", "valeria verdugo"])
@@ -71,9 +121,10 @@ def test_partner_search_is_bounded_ranked_and_finds_profiles_beyond_first_page(i
         assert response.json()["profile_candidates"] == []
 
 
-def test_registrant_preflight_also_suggests_partial_names(integrity_client):
+@pytest.mark.parametrize("active", [True, False])
+def test_registrant_preflight_also_suggests_inactive_players(integrity_client, active):
     api, storage = integrity_client
-    storage["players"][0]["name"] = "Valeria Verdugo"
+    storage["players"][0].update({"name": "Valeria Verdugo", "active": active, "inactive_at": "2026-01-27"})
     response = api.post("/clubs/tres-palapas/tournament-registration/profile-resolution", json={
         "registration_slug": "tres-open", "first_name": "Vale", "last_name": "Verdugo",
         "email": "new@example.test", "age": 40, "gender": "Women",
@@ -81,6 +132,7 @@ def test_registrant_preflight_also_suggests_partial_names(integrity_client):
     assert response.status_code == 200
     assert response.json()["profile_match_kind"] == "name_partial"
     assert response.json()["profile_candidates"][0]["display_name"] == "Valeria Verdugo"
+    assert response.json()["profile_candidates"][0]["doubles_skill"] == 4.0
 
 
 @pytest.mark.parametrize("patch", [{"name": " "}, {"email": "Baumann"}, {"website": "bot.example"}])
