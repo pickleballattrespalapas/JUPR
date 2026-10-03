@@ -205,6 +205,16 @@ def _player_full_name(row: dict[str, Any]) -> str:
     )
 
 
+def _player_is_registration_candidate(row: dict[str, Any]) -> bool:
+    # Inactivity records recent play, not whether an existing player can return
+    # for a tournament. Merge operations retain their source row with this name
+    # marker; never offer that retired identity, even through an alias or email.
+    return not any(
+        "(merged into " in str(row.get(field) or "").casefold()
+        for field in ("name", "display_name")
+    )
+
+
 def _profile_candidates(
     supabase: Any,
     *,
@@ -246,9 +256,9 @@ def _profile_candidates(
             )
     except Exception:
         rows = []
-    active_rows = [row for row in rows if _player_is_active(row)]
+    candidate_rows = [row for row in rows if _player_is_registration_candidate(row)]
     clean_email = _clean_email(email)
-    email_matches = [row for row in active_rows if clean_email and _clean_email(row.get("email")) == clean_email]
+    email_matches = [row for row in candidate_rows if clean_email and _clean_email(row.get("email")) == clean_email]
     if email_matches:
         match_kind = "email_exact"
         matches = email_matches
@@ -262,7 +272,7 @@ def _profile_candidates(
         )
         matches = [
             row
-            for row in active_rows
+            for row in candidate_rows
             if requested_name and _normalized_name(_player_full_name(row)) == requested_name
         ]
         match_kind = "name_exact" if matches else "none"
@@ -274,12 +284,12 @@ def _profile_candidates(
                     _normalized_name(row.get("name")),
                 } - {""}
 
-            matches = [row for row in active_rows if requested_name and requested_name in names(row)]
+            matches = [row for row in candidate_rows if requested_name and requested_name in names(row)]
             match_kind = "name_exact" if matches else "none"
             if not matches and len(requested_name.replace(" ", "")) >= 2:
                 terms = requested_name.split()
                 matches = [
-                    row for row in active_rows
+                    row for row in candidate_rows
                     if any(all(term in name for term in terms) for name in names(row))
                 ]
                 match_kind = "name_partial" if matches else "none"
