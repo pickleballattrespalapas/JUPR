@@ -49,9 +49,11 @@ test("interclub paper packet, score entry, approval and public results", async (
     url: origin, secure: true, sameSite: "Lax" }]);
   await page.goto(`/admin/interclub/season?season=${signup.id}`);
   await expect(page.getByRole("heading", { name: "Register the season’s players", exact: true })).toBeVisible();
+  await expect(page.locator('li[aria-current="step"]')).toContainText("Register clubs & players");
   await expect(page.getByRole("link", { name: "Open registration & player pool →", exact: true })).toHaveAttribute("href", `/admin/interclub/registrations?season=${signup.id}`);
   await page.goto(`/admin/interclub/season?season=${season.id}`);
   await expect(page.getByRole("heading", { name: "Run the regular season", exact: true })).toBeVisible();
+  await expect(page.locator('li[aria-current="step"]')).toContainText("Play regular meets");
   const route = `/admin/interclub/competition?season=${season.id}&meet=${season.browser_meet}`;
   const apiRoot = `${expectedApiOrigin}/admin/clubs/${club}/interclub/competition/${season.id}/meets/${season.browser_meet}/regular`;
   const initialMeet = page.waitForResponse(r => r.url() === apiRoot && r.request().method() === "GET");

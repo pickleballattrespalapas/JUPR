@@ -162,16 +162,24 @@ test("dedicated QA admin switches three clubs and previews website controls", as
       expect(seasons.length, "The isolation season must be available").toBeGreaterThan(0);
       for (const season of seasons) {
         await page.goto("/admin/interclub");
-        const invitationLink = page.locator(`a[href="/admin/interclub/registrations?season=${season.id}"]`);
+        const usesGuide = season.organizer_club_id === club.id || season.participation?.status === "accepted";
+        const invitationLink = page.locator(`a[href="/admin/interclub/${usesGuide ? "season" : "registrations"}?season=${season.id}"]`);
         await expect(invitationLink).toBeVisible();
         if (season.organizer_club_id !== club.id && season.participation?.status === "invited") {
           await expect(page.getByRole("heading", { name: "Invitations to your club", exact: true })).toBeVisible();
           await expect(invitationLink).toHaveText("Review invitation");
         }
+        if (usesGuide) {
+          await expect(invitationLink).toHaveText("Open season guide");
+          await invitationLink.click();
+          await expect(page.getByRole("heading", { name: "The life of this season", exact: true })).toBeVisible();
+          await expect(page.getByRole("heading", { name: season.details.name, exact: true })).toBeVisible();
+        }
         const seasonPath = `/admin/clubs/${club.id}/interclub/registrations/${season.id}`;
         const registrationReadsStart = operationalReads.length;
         const seasonResponse = page.waitForResponse(r => new URL(r.url()).pathname === seasonPath && r.request().method() === "GET");
-        await invitationLink.click();
+        if (usesGuide) await page.getByRole("link", { name: "Registration & player pool →", exact: true }).click();
+        else await invitationLink.click();
         const response = await seasonResponse;
         expect(response.status(), `${club.name}: ${season.details.name} season request`).toBe(200);
         const details = await response.json();
