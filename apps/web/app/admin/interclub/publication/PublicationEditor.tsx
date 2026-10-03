@@ -174,6 +174,7 @@ function Editor({
       <p>
         <Link href="/admin/interclub">← Interclub seasons</Link>
       </p>
+      <p><Link href={`/admin/interclub/season?season=${encodeURIComponent(season)}`}>← Season guide · See the next step</Link></p>
       <h1>{data.season.details.name} · Public website</h1>
       <p>
         Preview and publish the whole league’s schedule, standings and results.

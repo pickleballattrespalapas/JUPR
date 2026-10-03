@@ -54,6 +54,7 @@ function AwardReview({ clubId, seasonId, accessToken }: { clubId: string; season
 
   return <section className={styles.section}>
     <div className={styles.actions}><Link href={`/admin/interclub/competition?season=${encodeURIComponent(seasonId)}`}>← Championship results</Link><Link href={`/admin/event-history?${new URLSearchParams({ kind: "interclub", event: seasonId })}`}>History & seasons →</Link></div>
+    <p><Link href={`/admin/interclub/season?season=${encodeURIComponent(seasonId)}`}>← Season guide</Link> · Step 5 of 6: Publish results & awards</p>
     <div><h1>Season awards</h1><p className={styles.muted}>Review the final results and recipients, then publish the season honors to player profiles and club trophy cases.</p></div>
     {error && <p className={styles.error} role="alert">{error}</p>}
     {message && <p className={styles.notice} role="status">{message}</p>}
@@ -61,7 +62,7 @@ function AwardReview({ clubId, seasonId, accessToken }: { clubId: string; season
     {!data && !error && <p>Loading season awards…</p>}
     {data && <>
       {data.problems.length > 0 && <div className={styles.notice}><h2>Finish the season first</h2><ul>{data.problems.map(problem => <li key={problem}>{problem}</li>)}</ul></div>}
-      {data.current && <p className={styles.notice}>Season trophies awarded. These honors match the current final results.</p>}
+      {data.current && <div className={styles.notice}><h2>Season finished</h2><p>Season trophies awarded. These honors match the current final results.</p><p>Next, create a linked season draft. This season’s results and trophies stay in History.</p><Link href={`/admin/interclub/season?season=${encodeURIComponent(seasonId)}`}>Continue to the next season →</Link></div>}
       <p className={styles.muted}>Season Participant recognizes anyone who played in a meet. Division Champion recognizes every player who played in that division for the winning club during the season. League Champion recognizes every season participant for the Club Cup winner.</p>
       <p className={styles.muted}>Win Matchup: win at least 2 of 3 games. Sweep Matchup: play and win all 3. Undefeated Day: win every game played in that meet. These badges appear with published results and count each player’s actual games, including substitutions. A sweep earns both matchup badges. Forfeits and unplayed games do not count as appearances.</p>
       <InterclubFinalResults league={data.preview} awards={[...data.awards, ...(data.achievements || [])]} />

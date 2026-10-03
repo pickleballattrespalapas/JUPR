@@ -77,6 +77,7 @@ function Manager({ clubId, kind, sourceId, accessToken }: { clubId: string; kind
   return <section className={styles.history}>
     {data && <p><Link href={data.current.admin_href}>← {data.current.name}</Link></p>}
     <h1>History & seasons</h1>
+    {kind === "interclub" && <div className={styles.notice}><strong>Step 6 of 6: Keep the history, start the next season</strong><p>First, finish publishing this season’s results and trophies. Then choose “Start new season” below to create a linked draft with new dates. You will review the clubs, divisions, and meet schedule in that draft before opening invitations.</p><p><Link href={`/admin/interclub/awards?season=${encodeURIComponent(sourceId)}`}>Review this season’s results & awards</Link> · <Link href={`/admin/interclub/season?season=${encodeURIComponent(sourceId)}`}>Return to season guide</Link></p></div>}
     {error && <p className={styles.error} role="alert">{error}</p>}
     {message && <p className={styles.notice} role="status">{message}</p>}
     {created && <div className={styles.notice} role="status"><strong>{created.name} is ready to set up.</strong><p><Link href={created.admin_href}>Continue new {edition} setup →</Link></p></div>}
@@ -90,9 +91,10 @@ function Manager({ clubId, kind, sourceId, accessToken }: { clubId: string; kind
       {data.reason && <p className={styles.muted}>{data.reason}</p>}
       {mode && <form className={`${styles.season} ${styles.form}`} onSubmit={event => { event.preventDefault(); requestId.current = crypto.randomUUID(); setReview(true); }}>
         <h2>{mode === "start" ? `New ${edition}` : `Link a past ${edition}`}</h2>
+        <p className={styles.muted}>{mode === "link" ? "Choose an already completed event to add to this event’s history." : review ? "Step 2 of 2: Confirm the details below, then create the draft. You can edit the draft’s setup afterward." : "Step 1 of 2: Name the next season and set its dates. This creates a new draft linked to the season you just finished."}</p>
         {!data.series_id && <>
-          <label>Recurring event name<input required maxLength={180} value={seriesName} disabled={review || busy} onChange={event => setSeriesName(event.target.value)} placeholder="Southern BCS" /></label>
-          <label>This {edition}’s label<input required maxLength={120} value={currentLabel} disabled={review || busy} onChange={event => setCurrentLabel(event.target.value)} placeholder="2026 or Fall 2026" /></label>
+          <label>Recurring event name (used across all seasons)<input required maxLength={180} value={seriesName} disabled={review || busy} onChange={event => setSeriesName(event.target.value)} placeholder="Southern BCS" /></label>
+          <label>Completed {edition} label<input required maxLength={120} value={currentLabel} disabled={review || busy} onChange={event => setCurrentLabel(event.target.value)} placeholder="2026 or Fall 2026" /></label>
         </>}
         {mode === "link" && <>
           <label>Past event<select required value={past} disabled={review || busy} onChange={event => setPast(event.target.value)}><option value="">Choose a completed event</option>{data.past_candidates.map(item => <option key={item.source_id} value={item.source_id}>{item.name}</option>)}</select></label>
@@ -102,7 +104,7 @@ function Manager({ clubId, kind, sourceId, accessToken }: { clubId: string; kind
         </>}
         <label>{mode === "start" ? `New ${edition} label` : `Past ${edition} label`}<input required maxLength={120} value={label} disabled={review || busy} onChange={event => setLabel(event.target.value)} placeholder="2027 or Spring 2027" /></label>
         {mode === "start" && <>
-          <label>New event name<input required maxLength={120} value={name} disabled={review || busy} onChange={event => setName(event.target.value)} /></label>
+          <label>New {edition} name<input required maxLength={120} value={name} disabled={review || busy} onChange={event => setName(event.target.value)} /></label>
           <div className={styles.dates}><label>Start date<input required type="date" value={start} disabled={review || busy} onChange={event => setStart(event.target.value)} /></label><label>End date<input required type="date" min={start || undefined} value={end} disabled={review || busy} onChange={event => setEnd(event.target.value)} /></label></div>
           <p className={styles.notice}>{kind === "interclub" ? "Carries forward the participating clubs, divisions and eligibility rules. Meet dates and player signups start fresh." : kind === "league" ? "Carries forward the format, rules, court settings and awards configuration. Rosters and match results start fresh." : "Carries forward the divisions, formats, venue and policies. Tournament days move to the new dates; entries, payments, sponsors, draws and scores start fresh."} The new {edition} opens as a draft for you to review.</p>
         </>}

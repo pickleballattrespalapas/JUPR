@@ -21,7 +21,7 @@ def load_source(db, club_id, kind, source_id):
 
 def admin_event_href(kind, source_id, *, draft=False):
     if kind == "interclub":
-        return "/admin/interclub?" + urlencode({"season": source_id}) if draft else "/admin/interclub/competition?" + urlencode({"season": source_id})
+        return "/admin/interclub?" + urlencode({"season": source_id}) if draft else "/admin/interclub/season?" + urlencode({"season": source_id})
     if kind == "league":
         return "/admin/league-manager/league?" + urlencode({"league": source_id, "league_name": source_id})
     return "/admin/tournaments/setup?" + urlencode({"tournament": source_id}) if draft else "/admin/tournaments/tournament?" + urlencode({"tournament": source_id})

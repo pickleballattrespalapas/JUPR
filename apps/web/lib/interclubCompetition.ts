@@ -23,7 +23,7 @@ export function scheduledEncounters(document: CompetitionDocument): CompetitionE
     Math.min(...a.pairings.map(p => p.court ?? 101)) - Math.min(...b.pairings.map(p => p.court ?? 101)) ||
     a.division.localeCompare(b.division, undefined, { numeric: true }) || a.id.localeCompare(b.id));
 }
-export type CompetitionBatch = { meet_id: string; phase: CompetitionPhase; revision: number; state: "draft" | "submitted" | "approved"; document: CompetitionDocument; roster_sources: { team_id: string; revision: number }[]; ratings_status: "not_requested" | "pending" | "failed" | "completed"; ratings_error?: string | null; updated_at?: string };
+export type CompetitionBatch = { approved_revision?: number | null; meet_id: string; phase: CompetitionPhase; revision: number; state: "draft" | "submitted" | "approved"; document: CompetitionDocument; roster_sources: { team_id: string; revision: number }[]; ratings_status: "not_requested" | "pending" | "failed" | "completed"; ratings_error?: string | null; updated_at?: string };
 export type StandingRow = { club_id: string; division?: string; points: number; pairings_won: number; games_won: number; point_differential: number; meets_played?: number; regular_points?: number; championship_points?: number; qualified?: boolean; position?: number; tied?: boolean };
 export type StandingsGroup = { division: string; standings: StandingRow[]; qualifying_playoff_required?: boolean; tied_clubs?: string[] };
 export type Qualification = { qualifiers: string[]; playoff_required: string[]; eligible: string[]; status: "ready" | "playoff_required" | "insufficient_entries" };
