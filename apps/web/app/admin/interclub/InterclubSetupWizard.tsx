@@ -12,9 +12,9 @@ class SetupRequestError extends Error {
 }
 export function SetupNextSteps() {
   return <ol className={styles.nextSteps}>
-    <li><strong>1. Clubs respond</strong><span>Each club’s administrator accepts the season invitation in PCS.</span></li>
-    <li><strong>2. Choose a meet</strong><span>Set its roster deadline and see which clubs are attending.</span></li>
-    <li><strong>3. Clubs choose players</strong><span>Each club submits four available players per team for that meet.</span></li>
+    <li><strong>1. Register clubs and players</strong><span>Clubs accept their invitations. Set the season registration dates and build each club’s player pool.</span></li>
+    <li><strong>2. Run meets and championships</strong><span>After registration closes, choose lineups, enter scores, and approve each meet. Season results determine championship qualification.</span></li>
+    <li><strong>3. Finish and continue</strong><span>Publish final results and award trophies, then create a linked new season. The season guide walks you through each stage.</span></li>
   </ol>;
 }
 
@@ -182,18 +182,18 @@ export default function InterclubSetupWizard({ api, club, accessToken, initialSe
 
   if (opened) return <section className={styles.panel}>
     <p className={styles.eyebrow}>Season setup complete</p><h2>{opened.details.name}</h2>
-    <div className={styles.success}><strong>Club invitations are open.</strong><p>Continue in the season workspace to see responses and prepare each meet.</p></div>
+    <div className={styles.success}><strong>Season setup is saved.</strong><p>Open the season guide to see the current stage and your next task, from registration through final results and the next season.</p></div>
     <SetupNextSteps />
     <button disabled={busy || invitationsLoading} onClick={() => setInvitationReload(n => n + 1)}>Refresh club account invitations</button>
     {invitationError && <p role="alert">{invitationError}</p>}
     {errors.map(error => <p role="alert" key={error}>{error}</p>)}
     {message && <p role="status">{message}</p>}
     <ClubInvitationPanel allowCreate={false} disabled={disabled || invitationsLoading || Boolean(invitationError)} atClubLimit invitations={clubInvitations} onInvite={inviteClub} onUpdate={updateClubInvitation} />
-    <div className={styles.toolbar}><Link className={`${styles.button} ${styles.primary}`} href={`/admin/interclub/registrations?season=${opened.id}`}>Manage this season</Link><button onClick={onClose}>Back to interclub leagues</button></div>
+    <div className={styles.toolbar}><Link className={`${styles.button} ${styles.primary}`} href={`/admin/interclub/season?season=${opened.id}`}>Open season guide</Link><button onClick={onClose}>Back to interclub leagues</button></div>
   </section>;
 
   return <section aria-label="Interclub setup wizard">
-    <header className={styles.header}><div><p className={styles.eyebrow}>Organized by {club.name}</p><h1>{draft.name || "Set up an interclub season"}</h1><p className={styles.muted}>Five steps to invite clubs and prepare your meets.</p></div>
+    <header className={styles.header}><div><p className={styles.eyebrow}>Organized by {club.name}</p><h1>{draft.name || "Set up an interclub season"}</h1><p className={styles.muted}><strong>Season step 1 of 6: Setup.</strong> Complete the five setup sections below, then open invitations. The season guide will take you through registration, meets, championships, awards, and the next season.</p></div>
       <div><button disabled={disabled} onClick={() => void run(async controller => { if (await persist(controller, step)) onClose(); })}>{busy ? "Saving…" : "Save and exit"}</button><p className={styles.saved} role="status">{dirty ? "Unsaved changes" : "Progress saved"}</p></div>
     </header>
     <nav aria-label="Setup steps"><ol className={styles.steps}>{setupSteps.map((label, index) => <li key={label}><button type="button" disabled={disabled || index > Math.max(step, furthestStep)} aria-current={index === step ? "step" : undefined} onClick={() => goTo(index)}><span className={styles.stepNumber}>{index + 1}</span>{label}</button></li>)}</ol></nav>

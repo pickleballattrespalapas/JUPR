@@ -28,6 +28,7 @@ export default function InterclubWorkflow({ seasonId, meetId, current, disabled 
   hints?: Partial<Record<LeagueStep, string>>;
 }) {
   return <nav className={styles.workflow} aria-label="League workflow">
+    <h3>Meet workflow</h3><p>Use these steps for each meet. {!disabled && <Link href={`/admin/interclub/season?season=${encodeURIComponent(seasonId)}`}>Return to the season guide →</Link>}</p>
     <ol>{steps.map((step, index) => {
       const blocked = disabled || unavailable.includes(step.id) || (step.id !== "pool" && (!meetId || !meetPlanningOpen));
       const contents = <><span className={styles.number} aria-hidden="true">{index + 1}</span><span><strong>{step.label}</strong><small>{step.id !== "pool" && !meetPlanningOpen ? "After season registration" : hints?.[step.id] || step.hint}</small></span></>;

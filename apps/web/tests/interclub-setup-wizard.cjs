@@ -97,8 +97,8 @@ async function completeJourney() {
   const writes = requests.filter(r => r.options.method === 'POST'); assert.equal(writes.length, 1);
   assert.deepEqual(JSON.parse(writes[0].options.body), { expected_revision: stored.revision, rules: stored.draft.registration_rules });
   await act(async () => finish(reply({ season: { id: sid, organizer_club_id: 'alpha', details: stored.draft, rules: stored.draft.registration_rules } })));
-  assert.ok(text(tree).includes('Club invitations are open.'));
-  assert.ok(tree.root.findAllByType('a').some(a => a.props.href === `/admin/interclub/registrations?season=${sid}`));
+  assert.ok(text(tree).includes('Season setup is saved.'));
+  assert.ok(tree.root.findAllByType('a').some(a => a.props.href === `/admin/interclub/season?season=${sid}`));
   assert.equal(tree.root.findAllByType('input').length, 0);
   await act(async () => tree.unmount());
 }
@@ -127,7 +127,7 @@ async function conflictsAndContext() {
   global.fetch = async url => url.endsWith('/club-invitations') ? reply({ invitations: [], clubs: [] }) : reply({ season: { id: sid, details: { name: 'Opened season' } } });
   await act(async () => { tree = create(React.createElement(Wizard, props)); });
   assert.equal(tree.root.findAllByType('input').length, 0, 'Opened season cannot be edited as a draft');
-  assert.ok(text(tree).includes('Manage this season'));
+  assert.ok(text(tree).includes('Open season guide'));
   await act(async () => tree.unmount());
 }
 
@@ -244,8 +244,8 @@ async function invitationDashboard() {
   assert.ok(nodeText(card('Invited season')).includes('Tres Palapas'), 'Invitation identifies its organizer');
   assert.deepEqual(links('Invited season').map(nodeText), ['Review invitation']);
   assert.equal(links('Invited season')[0].props.href, '/admin/interclub/registrations?season=invite');
-  assert.deepEqual(links('Joined season').map(nodeText), ['Open league workspace', 'Meet schedules, score sheets & results']);
-  assert.ok(links('Organized season').some(a => nodeText(a) === 'Open league workspace'));
+  assert.deepEqual(links('Joined season').map(nodeText), ['Open season guide', 'Meet schedules, score sheets & results']);
+  assert.ok(links('Organized season').some(a => nodeText(a) === 'Open season guide'));
   assert.ok(links('Organized season').some(a => a.props.href.includes('/publication?')));
   assert.ok(!links('Organized season').some(a => a.props.href.includes('/competition?')), 'Meet operations are not offered before the commissioner registration period has closed');
   for (const name of ['Declined season', 'Cancelled season']) assert.deepEqual(links(name).map(nodeText), ['View invitation']);

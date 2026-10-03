@@ -197,6 +197,7 @@ function SeasonRegistration({ api, clubId, accessToken, seasonId, initialMeetId,
     {loading && <p role="status">Loading season…</p>}
     {data && <>
       <header className={styles.seasonHeader}>
+        <p><Link href={`/admin/interclub/season?season=${encodeURIComponent(seasonId)}`}>← Season guide · See the next step</Link></p>
         <h2>{data.season.details.name}</h2>
         <p>{date(data.season.details.start_date)} – {date(data.season.details.end_date)} · Organized by {clubName(data.season.organizer_club_id)}</p>
         {data.is_organizer && !data.season_complete && <p><a href="#meet-schedule">Manage meet dates</a></p>}
