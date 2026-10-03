@@ -188,17 +188,31 @@ def test_player_cabinet_keeps_distinct_ids_for_repeated_partner_achievements():
     ]
 
 
-def test_public_directory_defaults_active_and_supports_inactive_search_and_paging():
-    active = build_public_player_directory(FakeSupabase(), club_id="club-1", limit=2)
+def test_public_directory_includes_inactive_profiles_even_for_legacy_status_filters():
+    for status in (None, "all", "active", "inactive"):
+        kwargs = {"status": status} if status else {}
+        directory = build_public_player_directory(FakeSupabase(), club_id="club-1", limit=2, **kwargs)
+        assert directory["filters"] == {"search": "", "status": "all", "sort": "rating"}
+        assert directory["summary"] == {"public_players": 5, "active_players": 4, "inactive_players": 1, "filtered_players": 5}
+        assert len(directory["players"]) == 2
+        assert directory["pagination"]["has_more"] is True
 
-    assert active["filters"] == {"search": "", "status": "active", "sort": "rating"}
-    assert active["summary"] == {"public_players": 5, "active_players": 4, "inactive_players": 1, "filtered_players": 4}
-    assert len(active["players"]) == 2
-    assert active["pagination"]["has_more"] is True
-    assert all(row["is_active"] for row in active["players"])
+        inactive = build_public_player_directory(FakeSupabase(), club_id="club-1", search="izzy", **kwargs)
+        assert [row["name"] for row in inactive["players"]] == ["Inactive Izzy"]
+        assert inactive["players"][0]["is_active"] is False
 
-    inactive = build_public_player_directory(FakeSupabase(), club_id="club-1", search="izzy", status="inactive")
-    assert [row["name"] for row in inactive["players"]] == ["Inactive Izzy"]
+
+def test_player_directory_excludes_merged_identities_without_changing_activity():
+    import copy
+    supabase = FakeSupabase()
+    supabase.rows_by_table["players"].append({
+        "id": 99, "club_id": "club-1", "name": "Old Name (MERGED into Alex #1)", "active": False,
+    })
+    before = copy.deepcopy(supabase.rows_by_table)
+    directory = build_public_player_directory(supabase, club_id="club-1", limit=100)
+    assert len(directory["players"]) == 5
+    assert 99 not in [row["id"] for row in directory["players"]]
+    assert supabase.rows_by_table == before
 
 
 def test_public_player_profile_includes_leagues_and_recent_matches():

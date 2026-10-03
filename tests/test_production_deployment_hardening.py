@@ -383,12 +383,14 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         ROOT / "supabase/migrations",
     )
 
-    assert len(versions) == 131
+    assert len(versions) == 132
+    assert "20261109004101" in versions
+    assert "player_activity_leaderboard_visibility" in contract["required_ledger_names"]
     assert "20260923003009" in versions
     assert "tournament_gender_eligibility_reviews" in contract["required_ledger_names"]
     assert {"complete_registration_cancellation", "registration_cancellation_audit_policies"}.issubset(contract["required_ledger_names"])
     assert "20260909203736" in versions
-    assert versions[-38:] == (
+    assert versions[-39:] == (
         "20261030010000",
         "20261101000000",
         "20261102000000",
@@ -427,12 +429,13 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         "20261109003000",
         "20261109004000",
         "20261109004100",
+        "20261109004101",
     )
-    assert len(names) == 131
+    assert len(names) == 132
     assert all("XX" not in version for version in versions)
-    assert len(contract["required_ledger_names"]) == 118
+    assert len(contract["required_ledger_names"]) == 119
     assert "partner_email_invitations" in contract["required_ledger_names"]
-    assert len(contract["deployment_order"]) == 118
+    assert len(contract["deployment_order"]) == 119
     assert set(contract["deployment_order"]) == set(
         contract["required_ledger_names"]
     )
@@ -866,7 +869,7 @@ def test_preflight_accepts_only_matching_protected_project_and_config() -> None:
     )
 
     assert errors == []
-    assert migrations[-1] == "20261109004100"
+    assert migrations[-1] == "20261109004101"
 
     wrong_project_errors, _ = verifier.preflight_errors(
         _production_env(

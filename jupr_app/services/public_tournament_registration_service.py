@@ -10,6 +10,7 @@ from datetime import date, datetime
 from typing import Any
 from urllib.parse import urlencode
 
+from jupr_app.domain.player_visibility import is_merged_player
 from jupr_app.services.tournament_email_sponsor_service import load_tournament_email_sponsors
 from jupr_app.config import get_env_or_default
 from jupr_app.domain.tournament_age_policy import evaluate_age_eligibility, normalize_age_policy
@@ -133,14 +134,6 @@ def _safe_rows(response: Any) -> list[dict[str, Any]]:
         return []
 
 
-def _player_is_active(row: dict[str, Any]) -> bool:
-    if row.get("inactive_at") not in (None, ""):
-        return False
-    if "active" in row and not _safe_bool(row.get("active")):
-        return False
-    return True
-
-
 def _canonical_registration_skill(
     rating_value: Any,
     legacy_skill_value: Any,
@@ -205,6 +198,13 @@ def _player_full_name(row: dict[str, Any]) -> str:
     )
 
 
+def _player_is_registration_candidate(row: dict[str, Any]) -> bool:
+    # Inactivity records recent play, not whether an existing player can return
+    # for a tournament. Merge operations retain their source row with this name
+    # marker; never offer that retired identity, even through an alias or email.
+    return not is_merged_player(row)
+
+
 def _profile_candidates(
     supabase: Any,
     *,
@@ -246,9 +246,9 @@ def _profile_candidates(
             )
     except Exception:
         rows = []
-    active_rows = [row for row in rows if _player_is_active(row)]
+    candidate_rows = [row for row in rows if _player_is_registration_candidate(row)]
     clean_email = _clean_email(email)
-    email_matches = [row for row in active_rows if clean_email and _clean_email(row.get("email")) == clean_email]
+    email_matches = [row for row in candidate_rows if clean_email and _clean_email(row.get("email")) == clean_email]
     if email_matches:
         match_kind = "email_exact"
         matches = email_matches
@@ -262,7 +262,7 @@ def _profile_candidates(
         )
         matches = [
             row
-            for row in active_rows
+            for row in candidate_rows
             if requested_name and _normalized_name(_player_full_name(row)) == requested_name
         ]
         match_kind = "name_exact" if matches else "none"
@@ -274,12 +274,12 @@ def _profile_candidates(
                     _normalized_name(row.get("name")),
                 } - {""}
 
-            matches = [row for row in active_rows if requested_name and requested_name in names(row)]
+            matches = [row for row in candidate_rows if requested_name and requested_name in names(row)]
             match_kind = "name_exact" if matches else "none"
             if not matches and len(requested_name.replace(" ", "")) >= 2:
                 terms = requested_name.split()
                 matches = [
-                    row for row in active_rows
+                    row for row in candidate_rows
                     if any(all(term in name for term in terms) for name in names(row))
                 ]
                 match_kind = "name_partial" if matches else "none"
@@ -315,7 +315,7 @@ def _list_public_registration_players(supabase: Any, *, club_id: str) -> list[di
         )
     except Exception:
         rows = []
-    players = [_public_registration_player(row) for row in rows if _player_is_active(row)]
+    players = [_public_registration_player(row) for row in rows if _player_is_registration_candidate(row)]
     players.sort(key=lambda row: (str(row.get("display_name") or "").lower(), str(row.get("id") or "")))
     return players
 
@@ -325,8 +325,10 @@ def _get_club_player(
     *,
     club_id: str,
     player_id: Any,
-    require_active: bool,
+    require_active: bool = False,
 ) -> dict[str, Any] | None:
+    # Retain the legacy argument for edit-service callers. Activity only affects
+    # leaderboards; club scope and merge state determine identity availability.
     clean_id = _clean_text(player_id, limit=160)
     if not clean_id:
         return None
@@ -344,8 +346,8 @@ def _get_club_player(
     player = rows[0] if rows else None
     if not player:
         raise ValueError("The selected JUPR player profile was not found in this club.")
-    if require_active and not _player_is_active(player):
-        raise ValueError("The selected JUPR player profile is not active in this club.")
+    if is_merged_player(player):
+        raise ValueError("The selected JUPR player profile was merged. Choose the remaining profile.")
     return player
 
 
@@ -1090,7 +1092,11 @@ def build_tournament_registration_player_profile(
     registration: dict[str, Any],
     require_active_link: bool = False,
 ) -> dict[str, Any]:
-    """Build the canonical eligibility profile for an existing registration."""
+    """Build the canonical eligibility profile for an existing registration.
+
+    ``require_active_link`` is retained for older callers; leaderboard visibility
+    never determines whether a linked player can register.
+    """
 
     player_id = registration.get("player_id")
     linked_player = (
@@ -1098,7 +1104,6 @@ def build_tournament_registration_player_profile(
             supabase,
             club_id=str(club_id),
             player_id=player_id,
-            require_active=require_active_link,
         )
         if player_id not in (None, "")
         else None
@@ -1149,7 +1154,6 @@ def _registered_partner_profile(
             supabase,
             club_id=str(club_id),
             player_id=partner_player_id,
-            require_active=False,
         )
         if linked:
             doubles_skill, singles_skill = _canonical_player_skills(linked)
@@ -1402,7 +1406,6 @@ def build_validated_public_registration_save_payload(
         supabase,
         club_id=str(club_id),
         player_id=player_id,
-        require_active=not bool(locked),
     ) if player_id not in (None, "") else None
     doubles_skill = _validated_rating(payload.get("doubles_skill"), label="Doubles skill")
     singles_skill = _validated_rating(payload.get("singles_skill"), label="Singles skill")

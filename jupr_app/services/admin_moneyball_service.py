@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
+from jupr_app.domain.player_visibility import is_merged_player
 from jupr_app.domain.schedule import get_match_schedule
 from jupr_app.services import ServiceContext, submit_match_batch
 from jupr_app.services.admin_live_ladder_operation_service import (
@@ -79,7 +80,7 @@ def _players(supabase: Any, *, club_id: str) -> list[dict[str, Any]]:
     result = []
     for row in rows:
         pid = _safe_int(row.get("id"))
-        if pid is None:
+        if pid is None or is_merged_player(row):
             continue
         result.append({"id": pid, "name": _clean_text(row.get("name"), limit=160) or f"Player {pid}", "rating": _safe_float(row.get("rating"), 1200.0), "is_active": bool(row.get("active", row.get("is_active", True)))})
     return result

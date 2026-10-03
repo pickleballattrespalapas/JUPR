@@ -331,9 +331,9 @@ export default function GeneratorRosterSetup({
     setDirectoryError(null);
     setDirectoryPlayers([]);
     void fetchAllPublicPlayers<DirectoryPlayer>(
-      apiUrl(apiBase, `/clubs/${encodeURIComponent(publicClubSlug)}/players?status=active&sort=name`), controller.signal
+      apiUrl(apiBase, `/clubs/${encodeURIComponent(publicClubSlug)}/players?status=all&sort=name`), controller.signal
     ).then(players => {
-      if (!controller.signal.aborted) setDirectoryPlayers(players.filter(player => player.is_active !== false));
+      if (!controller.signal.aborted) setDirectoryPlayers(players);
     }).catch(() => {
       if (!controller.signal.aborted) setDirectoryError("Player search isn’t available right now. You can still type names below.");
     });

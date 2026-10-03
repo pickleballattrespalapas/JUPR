@@ -654,12 +654,12 @@ export async function getClubPlayerOptions(
   clubSlug: string,
   filters: { status?: "active" | "inactive" | "all"; noStore?: boolean } = {}
 ): Promise<ApiResult<PlayersResponse>> {
-  const first = await getClubPlayers(clubSlug, { ...filters, limit: 1000, sort: "name" });
+  const first = await getClubPlayers(clubSlug, { ...filters, status: "all", limit: 1000, sort: "name" });
   if (!first.data || first.error) return first;
   const players = [...first.data.players];
   let hasMore = first.data.pagination?.has_more;
   while (hasMore) {
-    const next = await getClubPlayers(clubSlug, { ...filters, limit: 1000, offset: players.length, sort: "name" });
+    const next = await getClubPlayers(clubSlug, { ...filters, status: "all", limit: 1000, offset: players.length, sort: "name" });
     if (!next.data || next.error) return { data: null, error: next.error || PUBLIC_LOAD_ERROR };
     if (!next.data.players.length) break;
     players.push(...next.data.players);

@@ -10,7 +10,6 @@ type PlayersPageProps = {
 };
 
 type SortKey = "rating" | "singles" | "matches" | "name" | "win_pct" | "recent";
-type StatusKey = "active" | "inactive" | "all";
 
 const thStyle = { textAlign: "left" as const, borderBottom: "1px solid #cbd5e1", padding: "0.6rem", whiteSpace: "nowrap" as const, color: "#475569", fontSize: "0.82rem" };
 const tdStyle = { borderBottom: "1px solid #e2e8f0", padding: "0.6rem", whiteSpace: "nowrap" as const };
@@ -28,11 +27,6 @@ function normalizeSort(value: string | null): SortKey {
   return "rating";
 }
 
-function normalizeStatus(value: string | null): StatusKey {
-  if (value === "inactive" || value === "all") return value;
-  return "active";
-}
-
 function positiveInt(value: string | null, fallback: number): number {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
@@ -41,7 +35,6 @@ function positiveInt(value: string | null, fallback: number): number {
 function pageHref({
   clubSlug,
   q,
-  status,
   sort,
   player,
   page,
@@ -49,7 +42,6 @@ function pageHref({
 }: {
   clubSlug: string;
   q?: string | null;
-  status?: StatusKey | null;
   sort?: SortKey | null;
   player?: string | number | null;
   page?: number | null;
@@ -57,7 +49,6 @@ function pageHref({
 }): string {
   const params = new URLSearchParams();
   if (q) params.set("q", q);
-  if (status && status !== "active") params.set("status", status);
   if (sort && sort !== "rating") params.set("sort", sort);
   if (player != null && String(player)) params.set("player", String(player));
   if (page && page > 1) params.set("page", String(page));
@@ -97,14 +88,13 @@ function dateLabel(value?: string | null): string {
 export default async function ClubPlayersPage({ params, searchParams }: PlayersPageProps) {
   const { clubSlug } = params;
   const q = (firstParam(searchParams, "q") ?? "").trim().slice(0, 80);
-  const status = normalizeStatus(firstParam(searchParams, "status"));
   const sort = normalizeSort(firstParam(searchParams, "sort"));
   const selectedPlayer = firstParam(searchParams, "player");
   const page = positiveInt(firstParam(searchParams, "page"), 1);
   const requestedPerPage = positiveInt(firstParam(searchParams, "per_page"), 50);
   const perPage = [25, 50, 100].includes(requestedPerPage) ? requestedPerPage : 50;
   const offset = (page - 1) * perPage;
-  const { data, error } = await getClubPlayers(clubSlug, { q, status, sort, limit: perPage, offset });
+  const { data, error } = await getClubPlayers(clubSlug, { q, status: "all", sort, limit: perPage, offset });
   const clubName = data?.club?.name ?? clubSlug;
   const players = data?.players ?? [];
   const summary = data?.summary;
@@ -116,7 +106,7 @@ export default async function ClubPlayersPage({ params, searchParams }: PlayersP
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>Player profiles</p>
       <h1 style={{ marginTop: 0 }}>{clubName} players</h1>
       <p style={{ color: "#334155", maxWidth: "780px" }}>
-        Find a player, then explore doubles and singles ratings, match history, awards, frequent partners, and opponents. Active players are shown by default.
+        Find a player, then explore doubles and singles ratings, match history, awards, frequent partners, and opponents. All player profiles remain available here.
       </p>
 
       {error ? (
@@ -136,34 +126,19 @@ export default async function ClubPlayersPage({ params, searchParams }: PlayersP
 
           <form method="get" action={`/clubs/${clubSlug}/players`} data-testid="players-search-form" style={{ ...cardStyle, marginBottom: "1rem", display: "grid", gridTemplateColumns: "minmax(220px, 1fr) auto", gap: "0.65rem", alignItems: "end" }}>
             <label htmlFor="players-search"><strong>Find player</strong><br />
-              <PublicPlayerSearch id="players-search" clubSlug={clubSlug} defaultValue={q} filters={{ status, sort: "name" }} />
+              <PublicPlayerSearch id="players-search" clubSlug={clubSlug} defaultValue={q} filters={{ status: "all", sort: "name" }} />
             </label>
-            <input type="hidden" name="status" value={status} />
             <input type="hidden" name="sort" value={sort} />
             <input type="hidden" name="per_page" value={perPage} />
             <button type="submit" style={{ padding: "0.65rem 1rem", border: "1px solid #0f172a", borderRadius: "999px", background: "#0f172a", color: "white", fontWeight: 800 }}>Search</button>
           </form>
-
-          <div data-testid="players-status-tabs" style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.65rem" }}>
-            {(["active", "inactive", "all"] as StatusKey[]).map((item) => (
-              <Link
-                key={item}
-                data-testid={`players-status-${item}`}
-                aria-current={item === status ? "page" : undefined}
-                href={pageHref({ clubSlug, q, status: item, sort, perPage })}
-                style={{ ...pillStyle, background: item === status ? "#dbeafe" : "white", fontWeight: item === status ? 800 : 600 }}
-              >
-                {item === "active" ? "Active" : item === "inactive" ? "Inactive" : "All statuses"}
-              </Link>
-            ))}
-          </div>
 
           <div data-testid="players-sort-tabs" style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
             {(["rating", "singles", "matches", "win_pct", "recent", "name"] as SortKey[]).map((item) => (
               <Link
                 key={item}
                 aria-current={item === sort ? "page" : undefined}
-                href={pageHref({ clubSlug, q, status, sort: item, perPage })}
+                href={pageHref({ clubSlug, q, sort: item, perPage })}
                 style={{ ...pillStyle, background: item === sort ? "#dcfce7" : "white", fontWeight: item === sort ? 800 : 600 }}
               >
                 Sort: {item === "win_pct" ? "Win %" : item === "recent" ? "Recent" : item === "singles" ? "Singles" : item[0].toUpperCase() + item.slice(1)}
@@ -174,8 +149,8 @@ export default async function ClubPlayersPage({ params, searchParams }: PlayersP
           {players.length === 0 ? (
             <article data-testid="players-filter-empty-state" style={cardStyle}>
               <h2 style={{ marginTop: 0 }}>No players match this view</h2>
-              <p>Try a different player name or status.</p>
-              <Link href={pageHref({ clubSlug, status: "active", sort: "rating" })}>Reset to active players</Link>
+              <p>Try a different player name.</p>
+              <Link href={pageHref({ clubSlug, sort: "rating" })}>Show all players</Link>
             </article>
           ) : (
             <div style={{ overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: "12px", background: "white" }}>
@@ -201,7 +176,7 @@ export default async function ClubPlayersPage({ params, searchParams }: PlayersP
                           <Link href={profileHref}>profile</Link><span style={{ color: "#64748b" }}> · </span>
                           <Link href={`/clubs/${clubSlug}/leaderboards?player=${encodeURIComponent(String(player.id))}#leaderboard-player-${encodeURIComponent(String(player.id))}`}>leaderboard</Link><span style={{ color: "#64748b" }}> · </span>
                           <Link href={`/clubs/${clubSlug}/verified-updates?player_id=${encodeURIComponent(String(player.id))}`}>email updates</Link><span style={{ color: "#64748b" }}> · </span>
-                          <Link aria-label={`Share ${player.name}`} href={`${pageHref({ clubSlug, q, status, sort, player: player.id, page, perPage })}#${playerAnchor(player.id)}`}>share</Link>
+                          <Link aria-label={`Share ${player.name}`} href={`${pageHref({ clubSlug, q, sort, player: player.id, page, perPage })}#${playerAnchor(player.id)}`}>share</Link>
                         </td>
                       </tr>
                     );
@@ -213,9 +188,9 @@ export default async function ClubPlayersPage({ params, searchParams }: PlayersP
 
           {pageCount > 1 ? (
             <nav data-testid="players-pagination" aria-label="Player directory pages" style={{ display: "flex", gap: "0.75rem", alignItems: "center", marginTop: "1rem" }}>
-              {page > 1 ? <Link href={pageHref({ clubSlug, q, status, sort, page: page - 1, perPage })}>Previous</Link> : <span style={{ color: "#94a3b8" }}>Previous</span>}
+              {page > 1 ? <Link href={pageHref({ clubSlug, q, sort, page: page - 1, perPage })}>Previous</Link> : <span style={{ color: "#94a3b8" }}>Previous</span>}
               <span>Page {Math.min(page, pageCount)} of {pageCount}</span>
-              {pagination?.has_more ? <Link href={pageHref({ clubSlug, q, status, sort, page: page + 1, perPage })}>Next</Link> : <span style={{ color: "#94a3b8" }}>Next</span>}
+              {pagination?.has_more ? <Link href={pageHref({ clubSlug, q, sort, page: page + 1, perPage })}>Next</Link> : <span style={{ color: "#94a3b8" }}>Next</span>}
             </nav>
           ) : null}
         </>

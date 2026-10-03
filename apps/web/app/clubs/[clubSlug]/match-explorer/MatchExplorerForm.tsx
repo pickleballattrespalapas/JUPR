@@ -221,9 +221,9 @@ function RatingImpactChart({ preview }: { preview: MatchExplorerPreview }) {
 }
 
 export default function MatchExplorerForm({ apiBase, clubSlug, players, contexts, initialSelection }: MatchExplorerFormProps) {
-  const activePlayers = useMemo(() => players.filter((player) => player.is_active !== false), [players]);
-  const activePlayerIds = useMemo(() => new Set(activePlayers.map((player) => String(player.id))), [activePlayers]);
-  const initial = useMemo(() => activePlayers.slice(0, 4).map((player) => String(player.id)), [activePlayers]);
+  const availablePlayers = players;
+  const activePlayerIds = useMemo(() => new Set(availablePlayers.map((player) => String(player.id))), [availablePlayers]);
+  const initial = useMemo(() => availablePlayers.slice(0, 4).map((player) => String(player.id)), [availablePlayers]);
   const initialContextCandidate = String(initialSelection?.context ?? "").trim();
   const initialContext = contexts.includes(initialContextCandidate) ? initialContextCandidate : contexts[0] ?? "OVERALL";
   const initialMe = initialPlayerId(activePlayerIds, initialSelection?.me, initial[0] ?? "");
@@ -247,7 +247,7 @@ export default function MatchExplorerForm({ apiBase, clubSlug, players, contexts
   const selectedPlayers = useMemo(() => [me, partner, opp1, opp2], [me, partner, opp1, opp2]);
   const hasValidSelection = selectedPlayers.every((value) => Boolean(value)) && new Set(selectedPlayers).size === 4;
 
-  const options = activePlayers.map((player) => (
+  const options = availablePlayers.map((player) => (
     <option key={String(player.id)} value={String(player.id)}>{player.name}</option>
   ));
 
@@ -394,7 +394,7 @@ export default function MatchExplorerForm({ apiBase, clubSlug, players, contexts
         </div>
 
         <p style={{ color: "#475569", margin: 0 }}>
-          Current selection: {playerName(activePlayers, me) || "—"} / {playerName(activePlayers, partner) || "—"} vs {playerName(activePlayers, opp1) || "—"} / {playerName(activePlayers, opp2) || "—"}
+          Current selection: {playerName(availablePlayers, me) || "—"} / {playerName(availablePlayers, partner) || "—"} vs {playerName(availablePlayers, opp1) || "—"} / {playerName(availablePlayers, opp2) || "—"}
         </p>
         <div aria-live="polite">
           {message ? <p data-testid="match-explorer-validation" style={{ color: "#b91c1c" }}>{message}</p> : null}

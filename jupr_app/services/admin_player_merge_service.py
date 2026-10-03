@@ -7,6 +7,7 @@ from typing import Any
 import os
 from uuid import UUID, uuid4
 
+from jupr_app.domain.player_visibility import is_merged_player
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.services.admin_player_editor_service import is_admin_player_editor_enabled, is_admin_player_merge_enabled
 
@@ -297,10 +298,8 @@ def build_admin_player_merge_preview(supabase: Any, *, club_id: str, source_play
         target_social_ids=target_social_ids,
     )
     can_merge = (
-        source.get("active") is not False
-        and not source.get("inactive_at")
-        and target.get("active") is not False
-        and not target.get("inactive_at")
+        not is_merged_player(source)
+        and not is_merged_player(target)
         and not collision_match_ids
         and not official_tournament_match_ids
     )
@@ -411,8 +410,8 @@ def _raise_rpc_failure(payload: dict[str, Any]) -> None:
     messages = {
         "SOURCE_PLAYER_NOT_FOUND": "source player not found",
         "TARGET_PLAYER_NOT_FOUND": "target player not found",
-        "SOURCE_PLAYER_INACTIVE": "source player is inactive",
-        "TARGET_PLAYER_INACTIVE": "target player is inactive",
+        "SOURCE_PLAYER_MERGED": "source player was already merged",
+        "TARGET_PLAYER_MERGED": "target player was already merged",
         "PLAYER_MERGE_MATCH_COLLISION": "source and target already appear in the same match",
         "PLAYER_MERGE_REPLAY_IN_PROGRESS": "player merge is blocked while a club replay job is pending or running",
         "PLAYER_MERGE_OPERATION_NOT_FOUND": "player merge operation not found",
