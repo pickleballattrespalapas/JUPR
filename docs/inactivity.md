@@ -1,13 +1,14 @@
 # Player Inactivity (14-day global rule)
 
 ## Overview
-Players are marked **inactive** if they have not logged any recorded match in **14 days** across all leagues. Inactive players are hidden by default across leaderboards, standings, and ladders. A player with no recorded games uses `created_at` as the baseline for inactivity.
+Players are marked **inactive** if they have not logged any recorded match in **14 days** across all leagues. Inactive players are hidden by default only on overall and league leaderboards (including printable rankings). They remain searchable in the Players directory and available for registration, roster selection, check-in, live play, match history, and awards. Ladder membership, league membership, withdrawals, and merged profiles have their own separate rules. A player with no recorded games uses `created_at` as the baseline for inactivity.
 
 ## Data model
 The `players` table stores:
 
 - `last_game_at`: the most recent match timestamp across all leagues.
-- `inactive_at`: set when a player crosses the 14-day inactivity threshold. A player is active if `inactive_at IS NULL`.
+- `active`: manual leaderboard visibility flag.
+- `inactive_at`: set when a player crosses the 14-day inactivity threshold. A player is visible on active leaderboards when `inactive_at IS NULL` and `active` is not false.
 
 ## Daily job
 The migration installs a daily `pg_cron` job:

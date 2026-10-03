@@ -69,7 +69,7 @@ function Harness({ multiple = false, disabled = false }) {
   const { getClubPlayerOptions } = load('@/lib/api');
   const serverCalls = [];
   global.fetch = async url => { serverCalls.push(url); return { ok: true, json: async () => ({ club: { id: 'a' }, players: [{ id: serverCalls.length }], pagination: { has_more: serverCalls.length === 1 } }) }; };
-  const roster = await getClubPlayerOptions('a', { status: 'all', noStore: true });
-  assert.equal(roster.data.players.length, 2); assert.match(serverCalls[0], /limit=1000/); assert.match(serverCalls[1], /offset=1/);
+  const roster = await getClubPlayerOptions('a', { status: 'active', noStore: true });
+  assert.equal(roster.data.players.length, 2); assert.ok(serverCalls.every(url => /status=all/.test(url)), "Roster options include inactive profiles even for a legacy active caller"); assert.match(serverCalls[0], /limit=1000/); assert.match(serverCalls[1], /offset=1/);
   console.log('PASS player search: partial/accented names, duplicate IDs, explicit choices, keyboard, disabled and multiple selections, action reset, form IDs, stale requests, club scope, failures and pagination.');
 })().catch(error => { console.error(error); process.exit(1); });

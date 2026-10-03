@@ -676,7 +676,7 @@ def test_substitutes_follow_the_saved_setup_and_cannot_be_on_another_team() -> N
             allow_substitutes=True,
             **normalized,
         )
-    with pytest.raises(ValueError, match="active club player"):
+    with pytest.raises(ValueError, match="current club profile"):
         _validate_fixture_players(
             players={key: value for key, value in active_players.items() if key != 7},
             teams=teams,

@@ -10,6 +10,7 @@ import uuid
 import streamlit as st
 
 from jupr_app.services.tournament_email_sponsor_service import load_tournament_email_sponsors
+from jupr_app.domain.player_visibility import is_merged_player
 from jupr_app.domain.tournament_registration_compiler import validate_selection_against_skill
 from jupr_app.domain.notifications.smtp_mailer import get_smtp_config_status
 from jupr_app.domain.notifications.tournament_registration_edit_email import send_tournament_registration_edit_email
@@ -257,20 +258,20 @@ def _division_help(event: dict[str, Any]) -> str:
     return " • ".join(part for part in details if part)
 
 
-def _active_players_from_ctx(ctx) -> list[dict[str, Any]]:
-    df_players_active = getattr(ctx, "df_players_active", None)
-    if df_players_active is None:
+def _available_players_from_ctx(ctx) -> list[dict[str, Any]]:
+    df_players_all = getattr(ctx, "df_players_all", None)
+    if df_players_all is None:
         return []
     try:
-        if bool(getattr(df_players_active, "empty", True)):
+        if bool(getattr(df_players_all, "empty", True)):
             return []
-        return [dict(row) for row in df_players_active.to_dict(orient="records")]
+        return [dict(row) for row in df_players_all.to_dict(orient="records") if not is_merged_player(row)]
     except Exception:
         return []
 
 
-def _load_active_players(supabase, *, club_id: str, ctx) -> list[dict[str, Any]]:
-    rows = _active_players_from_ctx(ctx)
+def _load_available_players(supabase, *, club_id: str, ctx) -> list[dict[str, Any]]:
+    rows = _available_players_from_ctx(ctx)
     if rows:
         return rows
     try:
@@ -281,11 +282,8 @@ def _load_active_players(supabase, *, club_id: str, ctx) -> list[dict[str, Any]]
             .order("name")
             .limit(2000)
         )
-        try:
-            resp = base_query.is_("inactive_at", None).execute()
-        except Exception:
-            resp = base_query.eq("active", True).execute()
-        return [dict(row) for row in (resp.data or [])]
+        resp = base_query.execute()
+        return [dict(row) for row in (resp.data or []) if not is_merged_player(row)]
     except Exception:
         return []
 
@@ -529,7 +527,7 @@ def _can_advance_profile_step(*, profile_mode: str, selection_source: str, candi
 
 
 def _resolve_existing_profile_for_next(
-    active_players: list[dict[str, Any]],
+    available_players: list[dict[str, Any]],
     *,
     profile_mode: str,
     selection_source: str,
@@ -540,10 +538,10 @@ def _resolve_existing_profile_for_next(
 ) -> tuple[dict[str, Any] | None, str, str, bool, bool]:
     selected_player_id = _safe_text(selected_player_id)
     candidate_player_id = _safe_text(candidate_player_id)
-    selected_existing_player = _find_player_by_id(active_players, selected_player_id)
+    selected_existing_player = _find_player_by_id(available_players, selected_player_id)
 
     if _safe_text(profile_mode) == "existing" and _safe_text(selection_source) == "search":
-        search_selected_player = _find_player_by_id(active_players, candidate_player_id)
+        search_selected_player = _find_player_by_id(available_players, candidate_player_id)
         if search_selected_player:
             selected_existing_player = search_selected_player
             selected_player_id = str(search_selected_player.get("id"))
@@ -1525,7 +1523,7 @@ def render(ctx):
     step2 = wizard.get("step2") or {}
     step3 = wizard.get("step3") or {}
     step4 = wizard.get("step4") or {}
-    active_players = _load_active_players(supabase, club_id=club_id, ctx=ctx)
+    available_players = _load_available_players(supabase, club_id=club_id, ctx=ctx)
 
     edit_mode = bool(wizard.get("edit_mode"))
     if edit_mode:
@@ -1622,7 +1620,7 @@ def render(ctx):
 
     step1 = wizard.get("step1") or {}
     likely_matches, _match_type = _likely_active_player_matches(
-        active_players,
+        available_players,
         first_name=_safe_text(step1.get("first_name")),
         last_name=_safe_text(step1.get("last_name")),
         email=_safe_text(step1.get("email")),
@@ -1633,7 +1631,7 @@ def render(ctx):
         st.caption("If you already have a JUPR profile, we’ll use it for rating and history. If not, no problem — you can still register.")
         step2_state = dict(step2)
         selected_player_id = _safe_text(step2_state.get("selected_player_id"))
-        selected_existing_player = _find_player_by_id(active_players, selected_player_id)
+        selected_existing_player = _find_player_by_id(available_players, selected_player_id)
         candidate_player_id = _safe_text(step2_state.get("candidate_player_id"))
         candidate_confirmed = bool(step2_state.get("candidate_confirmed"))
         rejected_likely = bool(step2_state.get("rejected_likely"))
@@ -1670,7 +1668,7 @@ def render(ctx):
                     key=f"wizard_likely_profile_pick_{tournament.get('id')}",
                 )
                 selection_source = "likely"
-            candidate_player = _find_player_by_id(active_players, candidate_player_id)
+            candidate_player = _find_player_by_id(available_players, candidate_player_id)
             if candidate_player:
                 profile_mode = "existing"
                 st.info("We found a possible JUPR profile.")
@@ -1786,7 +1784,7 @@ def render(ctx):
                 normalized_query = _normalize_name_for_match(search_query)
                 search_results: list[dict[str, Any]] = []
                 if len(normalized_query) >= 2:
-                    for row in active_players:
+                    for row in available_players:
                         full_name = _normalize_name_for_match(_player_full_name(row))
                         if normalized_query in full_name:
                             search_results.append(row)
@@ -1851,7 +1849,7 @@ def render(ctx):
                     candidate_confirmed,
                     rejected_likely,
                 ) = _resolve_existing_profile_for_next(
-                    active_players,
+                    available_players,
                     profile_mode=profile_mode,
                     selection_source=selection_source,
                     selected_player_id=selected_player_id,
@@ -1910,7 +1908,7 @@ def render(ctx):
     using_existing_player = _safe_text(step2.get("profile_mode")) == "existing"
     selected_existing_player = None
     if using_existing_player:
-        selected_existing_player = _find_player_by_id(active_players, step2.get("selected_player_id"))
+        selected_existing_player = _find_player_by_id(available_players, step2.get("selected_player_id"))
     if using_existing_player and selected_existing_player:
         canonical_overall_rating = _player_current_overall_jupr(selected_existing_player)
         canonical_singles_rating = _player_current_singles_jupr(selected_existing_player)
@@ -2093,7 +2091,7 @@ def render(ctx):
                 if existing_target_name:
                     st.success(f"Selected partner request target: {existing_target_name}")
                 search_query = st.text_input("Search JUPR/player profiles", value=_safe_text(existing.get("profile_search_query")), key=f"wizard_partner_search_{event_id}")
-                matches = [row for row in active_players if _partner_search_matches(row, search_query)][:8]
+                matches = [row for row in available_players if _partner_search_matches(row, search_query)][:8]
                 confirmed_selection_ids = _selection_ids_in_confirmed_teams(partner_registration_state, event_id)
                 for player in matches:
                     pid = _safe_text(player.get("id"))

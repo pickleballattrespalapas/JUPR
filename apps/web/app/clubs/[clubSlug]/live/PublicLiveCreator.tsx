@@ -84,7 +84,7 @@ export default function PublicLiveCreator({ apiBase, clubSlug, players = [] }: P
   const participantCount = participantNames.length;
   const participantNameSet = useMemo(() => new Set(participantNames.map((name) => name.toLowerCase())), [participantNames]);
   const playerOptions = useMemo(
-    () => [...players].filter((player) => player.is_active !== false).sort((a, b) => a.name.localeCompare(b.name)),
+    () => [...players].sort((a, b) => a.name.localeCompare(b.name)),
     [players]
   );
   const filteredPlayerOptions = useMemo(() => {

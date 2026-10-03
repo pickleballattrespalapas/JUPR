@@ -4,6 +4,7 @@ import json
 import os
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
+from jupr_app.domain.player_visibility import is_merged_player
 from jupr_app.services.staging_write_guard import (
     staging_league_manager_writes_enabled,
     staging_write_wave_allows,
@@ -352,7 +353,7 @@ def _league_roster(supabase: Any, *, club_id: str, league_name: str, standings: 
     roster: list[dict[str, Any]] = []
     for player in _fetch_player_rows(supabase, club_id=str(club_id)):
         pid = _safe_int(player.get("id"))
-        if pid is None:
+        if pid is None or is_merged_player(player):
             continue
         league_row = standing_by_player.get(int(pid))
         rating = _safe_float((league_row or {}).get("rating"))

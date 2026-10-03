@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from tests.conftest import require_api_dependency
 from tests.test_admin_match_log_service import FakeSupabase
 
@@ -203,7 +205,7 @@ def test_admin_player_merge_preview_blocks_immutable_tournament_projection(monke
     assert "authoritative tournament participant" in payload["warnings"][0]
 
 
-def test_admin_player_merge_preview_treats_inactive_at_as_inactive(monkeypatch):
+def test_admin_player_merge_preview_allows_inactive_profiles(monkeypatch):
     tables = merge_tables()
     tables["players"][0]["inactive_at"] = "2026-07-01T00:00:00+00:00"
     supabase = FakeSupabase(tables)
@@ -216,7 +218,7 @@ def test_admin_player_merge_preview_treats_inactive_at_as_inactive(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert response.json()["can_merge"] is False
+    assert response.json()["can_merge"] is True
 
 
 def test_admin_player_merge_compensation_route_contract(monkeypatch):
@@ -297,3 +299,17 @@ def test_admin_player_merge_operation_id_is_idempotent(monkeypatch):
     assert response.status_code == 200
     assert response.json()["idempotent_replay"] is True
     assert response.json()["operation_id"] == operation_id
+
+
+@pytest.mark.parametrize("index", [0, 1])
+def test_admin_player_merge_preview_blocks_already_merged_identities(monkeypatch, index):
+    tables = merge_tables()
+    tables["players"][index]["name"] += " (MERGED into Remaining Player #99)"
+    _install_env(monkeypatch, FakeSupabase(tables))
+    response = TestClient(app).post(
+        "/admin/clubs/club/players/editor/merge/preview",
+        headers={"Authorization": "Bearer local"},
+        json={"source_player_id": 1, "target_player_id": 2},
+    )
+    assert response.status_code == 200
+    assert response.json()["can_merge"] is False

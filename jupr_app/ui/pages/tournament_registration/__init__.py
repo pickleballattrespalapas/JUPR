@@ -422,8 +422,7 @@ def _hide_public_partner_board_opt_in_checkbox():
 def render(ctx) -> None:
     admin_mode = bool(getattr(ctx, "admin_logged_in", False)) and not bool(getattr(ctx, "public_mode", False))
     if admin_mode:
-        from jupr_app.services.tournament_email_sponsor_service import load_tournament_email_sponsors
-from jupr_app.ui.pages import tournament_registration_admin_streamlined
+        from jupr_app.ui.pages import tournament_registration_admin_streamlined
 
         tournament_registration_admin_streamlined.render(ctx)
         return

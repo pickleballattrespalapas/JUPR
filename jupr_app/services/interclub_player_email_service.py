@@ -14,6 +14,7 @@ from typing import Any
 from uuid import UUID, uuid5
 from zoneinfo import ZoneInfo
 
+from jupr_app.domain.player_visibility import is_merged_player
 from jupr_app.config import EMAIL_MODE_DRY_RUN, EMAIL_MODE_LIVE, EMAIL_MODE_STAGING_REDIRECT, get_email_mode, get_env_or_default
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
 from jupr_app.domain.notifications.player_profile_update_repo import (
@@ -121,7 +122,7 @@ def build_audience(db, *, club_id: str, season_id: str, kind: str, meet_id: str 
                 by_player.setdefault(str(contact["player_id"]), []).append({"id": contact["id"], "email": address})
         players = _all(lambda: db.table("players").select("id,name,active,inactive_at").eq("club_id", club_id).order("id"))
         for player in players:
-            if player.get("active") is False or player.get("inactive_at"):
+            if is_merged_player(player):
                 continue
             matches = by_player.get(str(player["id"]), [])
             addresses = {r["email"] for r in matches}
