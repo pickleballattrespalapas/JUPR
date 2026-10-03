@@ -83,7 +83,7 @@ def test_players_routes_have_loading_errors_and_route_specific_browser_evidence(
     assert "players-route-error-state" in directory_error
     assert "player-profile-loading-state" in profile_loading
     assert "player-profile-route-error-state" in profile_error
-    assert "status=active" in e2e
+    assert "verifyInactivePlayerVisibility(page)" in e2e
     assert "players-search-form" in e2e
     assert 'getByRole("combobox", { name: "Find player" })' in e2e
     assert 'getByRole("textbox", { name: "Find player" })' not in e2e
