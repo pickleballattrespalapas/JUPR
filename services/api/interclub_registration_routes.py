@@ -8,6 +8,7 @@ from fastapi import HTTPException, Query
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, PositiveInt, ValidationError, model_validator
 
 from jupr_app.domain.admin.staff_policy import ADMIN_ROLES
+from jupr_app.domain.player_visibility import is_merged_player
 from services.api.admin_auth_routes import require_admin_assignments
 from services.api.auth import auth_header
 from services.api.interclub_models import DivisionRule, SeasonDraft, canonical_southern_bcs_rules
@@ -288,7 +289,7 @@ def install_interclub_registration_routes(app, *, get_supabase_client):
     def player_choices(db, club_id, season_id, own, q, offset, meet=None):
         if not own or own["status"] != "accepted":
             raise HTTPException(403, "Accept your club's season invitation before choosing players.")
-        query = db.table("players").select("id,name,rating,gender").eq("club_id", club_id).eq("active", True)
+        query = db.table("players").select("id,name,rating,gender").eq("club_id", club_id)
         meet_ratings = {}
         if meet is not None:
             members = db.table("pcs_interclub_pool_members").select("player_id").eq("season_id", str(season_id)).eq("club_id", club_id).eq("status", "active").eq("approval_status", "approved").execute().data or []
@@ -307,7 +308,7 @@ def install_interclub_registration_routes(app, *, get_supabase_client):
         rows = query.order("name").order("id").range(offset, offset+100).execute().data or []
         entries = db.table("pcs_interclub_entries").select("player_id,starting_rating").eq("season_id", str(season_id)).eq("club_id", club_id).in_("player_id", [r["id"] for r in rows[:100]]).execute().data if rows else []
         seeds = {str(e["player_id"]): e["starting_rating"] for e in entries or []}
-        return {"players": [{"id": str(row["id"]), "name": row["name"], "starting_rating": seeds.get(str(row["id"]), float(row["rating"])/400 if row.get("rating") is not None else None), **({key: meet_ratings[str(row["id"])].get(key) for key in ("entry_id", "eligibility_rating", "rating_deadline", "rating_locked", "gender")} if meet is not None else {})} for row in rows[:100]],
+        return {"players": [{"id": str(row["id"]), "name": row["name"], "starting_rating": seeds.get(str(row["id"]), float(row["rating"])/400 if row.get("rating") is not None else None), **({key: meet_ratings[str(row["id"])].get(key) for key in ("entry_id", "eligibility_rating", "rating_deadline", "rating_locked", "gender")} if meet is not None else {})} for row in rows[:100] if not is_merged_player(row)],
                 "next_offset": offset+100 if len(rows)>100 else None}
 
     @app.put("/admin/clubs/{club_id}/interclub/registrations/{season_id}/teams/{team_id}")

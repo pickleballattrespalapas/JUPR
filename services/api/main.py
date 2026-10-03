@@ -1133,7 +1133,7 @@ def get_club_leaderboard_compat(
 def get_club_players(
     club_slug: str,
     q: str | None = Query(default=None, max_length=80),
-    status: str = Query(default="active", max_length=16),
+    status: str = Query(default="all", max_length=16),
     sort: str = Query(default="rating", max_length=16),
     limit: int = Query(default=100, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),

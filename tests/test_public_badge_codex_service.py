@@ -175,9 +175,9 @@ def test_public_badge_codex_uses_authoritative_timing_buckets() -> None:
     assert set(payload["filters"]["scopes"]) >= {"lifetime", "season"}
 
 
-def test_inactive_or_missing_players_are_not_projected_as_public_earners() -> None:
+def test_inactive_players_keep_their_earned_badges() -> None:
     supabase = fake_supabase()
-    supabase._tables["players"].append({"id": 4, "club_id": "club", "name": "Private Pat", "active": False})
+    supabase._tables["players"].append({"id": 4, "club_id": "club", "name": "Returning Pat", "active": False})
     supabase._tables["player_badges"].append(
         {"club_id": "club", "player_id": 4, "badge_id": "participant", "earned_at": "2026-02-01T00:00:00Z"}
     )
@@ -190,6 +190,6 @@ def test_inactive_or_missing_players_are_not_projected_as_public_earners() -> No
         if badge["badge_id"] == "participant"
     )
 
-    assert participant["earners_count"] == 2
-    assert "Private Pat" not in str(payload)
+    assert participant["earners_count"] == 3
+    assert "Returning Pat" in str(payload)
     assert "Player 4" not in str(payload)

@@ -5,17 +5,14 @@ test.beforeEach(async ({ context }) => {
   await bootstrapStagingContext(context);
 });
 
-test("player directory defaults active and keeps search plus stable links deterministic", async ({ page }) => {
+test("player directory includes all profiles and keeps search plus stable links deterministic", async ({ page }) => {
   await page.goto(`/clubs/${clubSlug}/players`, { waitUntil: "domcontentloaded" });
 
-  await expect(page.getByTestId("players-status-active")).toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("players-status-active")).toHaveCount(0);
   const search = page.getByRole("combobox", { name: "Find player" });
   await expect(search).toBeVisible();
   const rows = page.getByTestId("players-row");
-  expect(await rows.count(), "staging should contain an active public player fixture").toBeGreaterThan(0);
-  for (let index = 0; index < await rows.count(); index += 1) {
-    await expect(rows.nth(index)).toHaveAttribute("data-status", "active");
-  }
+  expect(await rows.count(), "staging should contain a public player fixture").toBeGreaterThan(0);
 
   const firstName = (await rows.first().locator("td").first().innerText()).trim();
   await search.fill(firstName);
@@ -56,7 +53,7 @@ test("player profile keeps positions, trophies, badges, relationships, and histo
 
   await page.getByTestId("player-section-trophies").click();
   await expect(page.getByTestId("player-trophies")).toBeVisible();
-  await expect(page.getByTestId("player-trophies")).toContainText(/major honors|tournament podium/i);
+  await expect(page.getByTestId("player-trophies")).toContainText(/major honors|tournament honors/i);
 
   await page.getByTestId("player-section-badges").click();
   await expect(page.getByTestId("player-badges")).toBeVisible();
@@ -96,4 +93,15 @@ test("player directory and profile expose explicit empty and error states withou
 
   await page.goto(`/clubs/${clubSlug}/players/__jupr_missing_player_8b7e42__`, { waitUntil: "domcontentloaded" });
   await expect(page.getByTestId("player-profile-error-state")).toContainText("We couldn’t load this player profile");
+});
+
+
+test("inactive player search and profiles remain available with a legacy active filter", async ({ page }) => {
+  // Existing isolated staging fixture; this check never changes player activity.
+  await page.goto(`/clubs/tres-palapas/players?q=${encodeURIComponent("League Live E2E P1 fa43f59-32868369678-1")}&status=active`, { waitUntil: "domcontentloaded" });
+  const row = page.getByTestId("players-row").filter({ hasText: "League Live E2E P1 fa43f59-32868369678-1" });
+  await expect(row).toHaveCount(1);
+  await expect(row).toHaveAttribute("data-status", "inactive");
+  await row.getByRole("link", { name: /Open .* profile/ }).click();
+  await expect(page.getByTestId("player-profile")).toBeVisible();
 });

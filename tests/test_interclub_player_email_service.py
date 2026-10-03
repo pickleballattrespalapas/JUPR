@@ -95,11 +95,11 @@ def send(db, key, index=0):
     return service.send_recipient(db, club_id="club", season_id=SEASON, user=USER, operation_key=key, recipient_index=index)
 
 
-def test_audience_is_own_active_players_with_usable_contacts_only(fixture):
+def test_audience_includes_inactive_players_but_still_requires_usable_opted_in_contacts(fixture):
     fixture.tables["players"].extend([{"id": 4, "club_id": "club", "name": "No email", "active": True}, {"id": 5, "club_id": "club", "name": "Inactive", "active": False}])
     fixture.tables["player_profile_update_subscriptions"][1]["request_status"] = "unsubscribed"
     result = service.build_audience(fixture, club_id="club", season_id=SEASON, kind="season")
-    assert {r["id"] for r in result["candidates"]} == {"1", "2", "4"}
+    assert {r["id"] for r in result["candidates"]} == {"1", "2", "4", "5"}
     assert [r["id"] for r in result["candidates"] if r["available"]] == ["1"]
     assert "foreign@example.invalid" not in str(result)
     assert result["send_available"] is True  # dry-run does not require SMTP

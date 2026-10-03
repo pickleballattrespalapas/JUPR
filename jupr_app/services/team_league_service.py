@@ -11,6 +11,7 @@ from typing import Any, Mapping, Sequence
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from jupr_app.domain.player_visibility import is_merged_player
 from jupr_app.data.load import load_data
 from jupr_app.domain.league_analytics import compute_team_league_standings
 from jupr_app.domain.team_league_roster import (
@@ -709,8 +710,7 @@ def get_public_team_league(
             }
             for row in all_player_rows
             if _int(row.get("id")) is not None
-            and bool(row.get("active", True))
-            and not row.get("inactive_at")
+            and not is_merged_player(row)
         ],
     }
 
@@ -1064,7 +1064,7 @@ def get_admin_team_league(
         for row in _fetch_rows(
             supabase, "players", filters={"club_id": str(club_id)}, order="name"
         )
-        if _int(row.get("id")) is not None
+        if _int(row.get("id")) is not None and not is_merged_player(row)
     ]
     pending_operations = [
         {
@@ -1236,10 +1236,10 @@ def create_admin_team_league_team(
     player_by_id = {int(row["id"]): row for row in detail["players"]}
     selected_ids = [captain_id] + ([primary_id] if primary_id is not None else [])
     if any(
-        player_id not in player_by_id or not player_by_id[player_id].get("active")
+        player_id not in player_by_id
         for player_id in selected_ids
     ):
-        raise ValueError("Choose active club players for the forming team.")
+        raise ValueError("Choose club players for the forming team.")
     candidates = [
         {
             "player_id": captain_id,
@@ -1329,7 +1329,7 @@ def admin_team_league_roster_action(
     )
     clean_player_id = _int(player_id)
     if clean_player_id is None:
-        raise ValueError("Choose an active club player.")
+        raise ValueError("Choose a club player.")
     detail = get_admin_team_league(
         supabase, club_id=str(club_id), league_name=league_name
     )
@@ -1337,8 +1337,8 @@ def admin_team_league_roster_action(
         (row for row in detail["players"] if int(row["id"]) == clean_player_id),
         None,
     )
-    if not player or not player.get("active"):
-        raise ValueError("Choose an active club player.")
+    if not player:
+        raise ValueError("Choose a club player.")
 
     clean_team_id = str(team_id or "").strip() or None
     clean_role = _text(member_role, 20).lower()
@@ -1889,7 +1889,7 @@ def commit_admin_team_league_schedule(
     )
 
 
-def _active_player_rows(
+def _available_player_rows(
     supabase: Any, *, club_id: str
 ) -> dict[int, dict[str, Any]]:
     return {
@@ -1898,8 +1898,7 @@ def _active_player_rows(
             supabase, "players", filters={"club_id": str(club_id)}, order="name"
         )
         if _int(row.get("id")) is not None
-        and bool(row.get("active", True))
-        and not row.get("inactive_at")
+        and not is_merged_player(row)
     }
 
 
@@ -1919,9 +1918,9 @@ def _validate_fixture_players(
     side_a = [int(value) for value in team_a_player_ids]
     side_b = [int(value) for value in team_b_player_ids]
     if len(side_a) != 2 or len(side_b) != 2 or len(set(side_a + side_b)) != 4:
-        raise ValueError("Each side needs two distinct active players.")
+        raise ValueError("Each side needs two distinct players.")
     if any(player_id not in players for player_id in side_a + side_b):
-        raise ValueError("Every participant must be an active club player.")
+        raise ValueError("Every participant must have a current club profile.")
     by_id = {str(team.get("id")): team for team in teams}
     team_a = by_id.get(str(fixture.get("team_a_id")))
     team_b = by_id.get(str(fixture.get("team_b_id")))
@@ -2142,7 +2141,7 @@ def score_admin_team_league_fixture(
         if str(winner_team_id) != expected_winner:
             raise ValueError("The selected winner does not match the score.")
         substitutions = _validate_fixture_players(
-            players=_active_player_rows(supabase, club_id=str(club_id)),
+            players=_available_player_rows(supabase, club_id=str(club_id)),
             teams=detail["teams"],
             fixture=fixture,
             team_a_player_ids=[int(value) for value in clean_a if value is not None],

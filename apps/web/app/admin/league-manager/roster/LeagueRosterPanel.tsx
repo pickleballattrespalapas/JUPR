@@ -174,8 +174,8 @@ export default function LeagueRosterPanel({ apiBase, clubId, status, initialLeag
     const rating = Number(row.overall_rating);
     return Number.isFinite(rating) && rating >= 400 && rating <= 2800;
   };
-  const rowSelectable = (row: AdminLeagueManagerRosterRow) => row.player_active !== false
-    && (action === "activate" ? !row.in_league && hasUsableOverallRating(row) : row.in_league);
+  const rowSelectable = (row: AdminLeagueManagerRosterRow) =>
+    action === "activate" ? !row.in_league && hasUsableOverallRating(row) : row.in_league;
   const visibleSelectable = visibleRows.filter(rowSelectable).map((row) => row.player_id);
   const allVisibleSelected = Boolean(visibleSelectable.length && visibleSelectable.every((id) => selectedIds.includes(id)));
   const rosterMutable = detail?.capabilities?.roster_mutable !== false;
@@ -203,7 +203,7 @@ export default function LeagueRosterPanel({ apiBase, clubId, status, initialLeag
           {!rosterMutable ? <p style={{ color: "#92400e" }}>This roster is available for review only while the league is {detail.league.status}.</p> : null}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
             <label><strong>Search players</strong><br /><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name or player ID" style={inputStyle} /></label>
-            <label><strong>Show</strong><br /><select value={filter} onChange={(event) => changeFilter(event.target.value as RosterFilter)} style={inputStyle}><option value="not_in_league">Eligible to add</option><option value="in_league">Current members</option><option value="all">All club players</option><option value="inactive">Inactive club players</option></select></label>
+            <label><strong>Show</strong><br /><select value={filter} onChange={(event) => changeFilter(event.target.value as RosterFilter)} style={inputStyle}><option value="not_in_league">Eligible to add</option><option value="in_league">Current members</option><option value="all">All club players</option><option value="inactive">Hidden from leaderboards</option></select></label>
             {rosterMutable ? <label><strong>Action</strong><br /><select value={action} onChange={(event) => resetOperation(event.target.value as "activate" | "deactivate")} style={inputStyle}><option value="activate">Add players</option><option value="deactivate">Remove players</option></select></label> : null}
           </div>
 
@@ -219,7 +219,7 @@ export default function LeagueRosterPanel({ apiBase, clubId, status, initialLeag
               <thead><tr>{rosterMutable ? <th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Select</th> : null}<th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Player</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Membership</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Overall / league JUPR</th><th style={{ textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #cbd5e1" }}>Record</th></tr></thead>
               <tbody>{visibleRows.map((row: AdminLeagueManagerRosterRow) => {
                 const selected = selectedIds.includes(row.player_id);
-                return <tr key={row.player_id}>{rosterMutable ? <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}><input aria-label={`Select ${row.player_name}`} type="checkbox" checked={selected} disabled={!rowSelectable(row)} onChange={(event) => { setSelectedIds((current) => event.target.checked ? [...current, row.player_id] : current.filter((id) => id !== row.player_id)); setIdempotencyKey(operationKey()); }} /></td> : null}<td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{row.player_name}<br /><small>#{row.player_id}{row.player_active === false ? " · inactive" : !hasUsableOverallRating(row) ? " · set Overall JUPR first" : ""}</small></td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{row.in_league ? "In league" : "Not in league"}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{row.overall_rating_jupr == null ? "—" : Number(row.overall_rating_jupr).toFixed(2)} / {row.rating_jupr == null ? "—" : Number(row.rating_jupr).toFixed(2)}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{row.wins ?? 0}-{row.losses ?? 0}</td></tr>;
+                return <tr key={row.player_id}>{rosterMutable ? <td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}><input aria-label={`Select ${row.player_name}`} type="checkbox" checked={selected} disabled={!rowSelectable(row)} onChange={(event) => { setSelectedIds((current) => event.target.checked ? [...current, row.player_id] : current.filter((id) => id !== row.player_id)); setIdempotencyKey(operationKey()); }} /></td> : null}<td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{row.player_name}<br /><small>#{row.player_id}{row.player_active === false ? " · hidden from leaderboards" : !hasUsableOverallRating(row) ? " · set Overall JUPR first" : ""}</small></td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{row.in_league ? "In league" : "Not in league"}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{row.overall_rating_jupr == null ? "—" : Number(row.overall_rating_jupr).toFixed(2)} / {row.rating_jupr == null ? "—" : Number(row.rating_jupr).toFixed(2)}</td><td style={{ padding: "0.5rem", borderBottom: "1px solid #e2e8f0" }}>{row.wins ?? 0}-{row.losses ?? 0}</td></tr>;
               })}</tbody>
             </table>
           </div>

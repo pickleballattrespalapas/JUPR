@@ -7,14 +7,14 @@ API = Path("apps/web/lib/api.ts")
 E2E = Path("apps/web/e2e/players.staging.spec.ts")
 
 
-def test_directory_has_visible_search_active_default_privacy_states_and_stable_links():
+def test_directory_has_visible_search_all_profiles_privacy_states_and_stable_links():
     source = DIRECTORY.read_text(encoding="utf-8")
 
-    assert 'return "active";' in source
+    assert 'status: "all"' in source
     assert "<PublicPlayerSearch" in source
     assert 'name="q"' in Path("apps/web/components/PublicPlayerSearch.tsx").read_text(encoding="utf-8")
     assert 'data-testid="players-search-form"' in source
-    assert "players-status-${item}" in source
+    assert "players-status-${item}" not in source
     assert 'data-testid="players-row"' in source
     assert 'data-testid="players-filter-empty-state"' in source
     assert 'data-testid="players-error-state"' in source
@@ -58,7 +58,7 @@ def test_profile_renders_every_parity_projection_and_format_label():
     assert "coordinates.filter(({ point }) => point.match_format === definition.format)" in source
     assert "Leaderboard snapshot" not in source
     assert "Badge codex" not in source
-    assert "Major honors only" in source
+    assert "League, interclub season, and tournament honors" in source
     assert "{error}" not in source
 
 
@@ -83,9 +83,9 @@ def test_players_routes_have_loading_errors_and_route_specific_browser_evidence(
     assert "players-route-error-state" in directory_error
     assert "player-profile-loading-state" in profile_loading
     assert "player-profile-route-error-state" in profile_error
-    assert "players-status-active" in e2e
+    assert "status=active" in e2e
     assert "players-search-form" in e2e
-    assert 'getByRole("searchbox", { name: "Find player" })' in e2e
+    assert 'getByRole("combobox", { name: "Find player" })' in e2e
     assert 'getByRole("textbox", { name: "Find player" })' not in e2e
     assert "player-public-identity" in e2e
     assert "player-history-all" in e2e

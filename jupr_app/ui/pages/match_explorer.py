@@ -12,7 +12,7 @@ from jupr_app.ui.layout import page_shell
 
 def render(ctx):
     df_players_all = ctx.df_players_all
-    df_players = ctx.df_players_active
+    df_players = ctx.df_players_all
     df_leagues = ctx.df_leagues
     df_meta = ctx.df_meta
     id_to_name = ctx.id_to_name

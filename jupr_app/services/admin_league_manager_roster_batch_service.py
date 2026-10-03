@@ -112,9 +112,9 @@ def update_admin_league_manager_roster_batch(
             ) from exc
         if "PLAYER_NOT_FOUND" in detail:
             raise ValueError("Every selected player must belong to this club.") from exc
-        if "PLAYER_INACTIVE" in detail:
+        if "PLAYER_MERGED" in detail:
             raise ValueError(
-                "Inactive club players cannot be added to a league."
+                "Choose the remaining player profile after a merge."
             ) from exc
         if "ALREADY_ACTIVE" in detail:
             raise ValueError(
