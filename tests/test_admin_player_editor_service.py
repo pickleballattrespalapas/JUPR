@@ -18,6 +18,18 @@ from jupr_app.services.admin_player_editor_service import (
 from jupr_app.services.admin_player_league_rating_service import update_admin_player_editor_league_rating
 
 
+def test_player_editor_list_excludes_retired_merge_sources(monkeypatch):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR", "1")
+    storage = fake_storage()
+    storage["players"].append({
+        **storage["players"][0], "id": 99,
+        "name": "Old Alex (MERGED into Alex #1)", "active": False,
+    })
+    result = list_admin_player_editor_players(FakeSupabase(storage), club_id="club")
+    assert 99 not in [row["id"] for row in result["players"]]
+    assert 1 in [row["id"] for row in result["players"]]
+
+
 class FakeQuery:
     def __init__(self, storage, table_name):
         self.storage = storage

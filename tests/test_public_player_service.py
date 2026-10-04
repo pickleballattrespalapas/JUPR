@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from jupr_app.services.public_player_service import (
     build_public_player_directory,
     get_public_match_detail,
@@ -149,6 +151,9 @@ class FakeSupabase:
             ],
         }
 
+        for player in self.rows_by_table["players"]:
+            player["last_game_at"] = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+
     def table(self, table_name):
         return FakeQuery(str(table_name), self.rows_by_table)
 
@@ -213,6 +218,7 @@ def test_player_directory_excludes_merged_identities_without_changing_activity()
     assert len(directory["players"]) == 5
     assert 99 not in [row["id"] for row in directory["players"]]
     assert supabase.rows_by_table == before
+    assert get_public_player_profile(supabase, club_id="club-1", player_id=99) is None
 
 
 def test_public_player_profile_includes_leagues_and_recent_matches():
