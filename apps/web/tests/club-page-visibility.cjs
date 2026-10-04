@@ -25,6 +25,7 @@ const mocks = {
     getPublicSite: async slug => ["alpha", "tres-palapas"].includes(slug) ? { slug, document: structuredClone(site.published) } : null,
     getClubDirectory: async () => ({ clubs: [{ slug: "alpha" }], total: 1, limit: 100 }),
     publicSiteFetch: async path => {
+      if (path.endsWith("/trophies")) return { trophies: [] };
       assert.ok(path.endsWith("/tournament-highlights"));
       goldRequests.push(path);
       if (goldUnavailable) throw new Error("Tournament highlights unavailable");
@@ -77,7 +78,7 @@ global.fetch = async (url, options = {}) => {
 
 (async () => {
   const { CLUB_LINKS, clubPageSection, publicClubPage, publicClubLinks } = load("lib/clubSite.ts");
-  assert.equal(publicClubLinks(initial).length, 9, "Existing documents retain their public sections");
+  assert.equal(publicClubLinks(initial).length, 11, "Existing documents retain their public sections");
   const doc = { ...initial, page_visibility: { players: "private", tournaments: "private", matches: "private", leagues: "private", play: "private" } };
   for (const [route, section] of [
     ["players/12?source=results", "players"], ["matches/20", "matches"],

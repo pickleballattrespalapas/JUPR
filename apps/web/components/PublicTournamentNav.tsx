@@ -7,7 +7,8 @@ export type PublicTournamentModule =
   | "edit-registration"
   | "roster"
   | "partner-board"
-  | "results";
+  | "results"
+  | "history";
 
 type Props = {
   clubSlug: string;
@@ -34,7 +35,8 @@ function normalizedModule(value: string): PublicTournamentModule {
     value === "edit-registration" ||
     value === "roster" ||
     value === "partner-board" ||
-    value === "results"
+    value === "results" ||
+    value === "history"
   ) {
     return value;
   }
@@ -54,11 +56,12 @@ export function publicTournamentHref(
     "edit-registration": `${base}/tournament-registration/manage`,
     roster: `${base}/tournament-roster`,
     "partner-board": `${base}/tournament-partner-board`,
-    results: `${base}/tournament-results`
+    results: `${base}/tournament-results`,
+    history: `${base}/tournament-history`
   };
   const selectedModule = normalizedModule(module);
-  if (selectedModule === "results" && tournamentId) {
-    return `${paths.results}?tournament_id=${encodeURIComponent(tournamentId)}`;
+  if ((selectedModule === "results" || selectedModule === "history") && tournamentId) {
+    return `${paths[selectedModule]}?tournament_id=${encodeURIComponent(tournamentId)}`;
   }
   return `${paths[selectedModule]}${tournamentQuery(
     tournamentId,
@@ -78,7 +81,8 @@ export default function PublicTournamentNav({
     ["edit-registration", "Edit my registration"],
     ["roster", "Roster"],
     ["partner-board", "Players Needing Partners"],
-    ["results", "Live & Results"]
+    ["results", "Live & Results"],
+    ["history", "History"]
   ];
 
   return (

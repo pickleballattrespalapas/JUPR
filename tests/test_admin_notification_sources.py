@@ -109,7 +109,7 @@ def reports(payload):
 
 def test_empty_sources_have_exact_zero_and_no_operator_or_other_club_leak(db):
     result = collect(db)
-    assert len(result["categories"]) == 10
+    assert len(result["categories"]) == 14
     assert all(source["status"] == "ready" and source["total_count"] == 0 for source in result["sources"])
     for assignments in ([{"club_id": "club-a", "role": "operator", "scopes": [{"kind": "club"}]}],
                         [{"club_id": "club-b", "role": "super_admin"}],
@@ -147,11 +147,12 @@ def test_old_pending_work_is_kept_and_activities_use_explicit_timestamp(db):
         {"club_id": club, "id": id, "season_id": "season/a", "name": "Alice", "created_at": stamp, "updated_at": STAMP}
         for id, club, stamp in (("recent", "club-a", STAMP), ("old", "club-a", old), ("other", "club-b", STAMP))]
     result = collect(db)
-    assert {item["source_id"] for item in result["items"]} == {"draft"}
+    assert {item["source_id"] for item in result["items"]} == {"draft", "recent"}
     draft = next(item for item in result["items"] if item["category"] == "weekly_recaps")
     assert draft["occurred_at"] == old
     assert parse_qs(urlsplit(draft["href"]).query) == {"week_start": ["2025-01-01"]}
-    assert not any(q.table.startswith("pcs_interclub") for q in db.queries)
+    pool = next(item for item in result["items"] if item["category"] == "interclub_signups")
+    assert parse_qs(urlsplit(pool["href"]).query) == {"season": ["season/a"], "step": ["pool"]}
     assert "hidden" not in json.dumps(result)
 
 
@@ -167,8 +168,13 @@ def test_interclub_approvals_filter_by_organizer_and_closed_registration(db):
          "pool_settings": {"participation": {"season": {"organizer_club_id": club}}}}
         for id, club in (("late", "club-a"), ("wrong", "club-b"))]
     result = collect(db)
-    assert result["items"] == []
-    assert not any(key.startswith("interclub") for key in reports(result))
+    assert {item["source_id"] for item in result["items"]} == {"mine", "late"}
+    assert reports(result)["interclub_signups"]["total_count"] == 0
+    by_category = {item["category"]: urlsplit(item["href"]) for item in result["items"]}
+    assert parse_qs(by_category["interclub_results"].query) == {"season": ["season"], "meet": ["meet"]}
+    assert by_category["interclub_results"].fragment == "meet-results-review"
+    assert parse_qs(by_category["interclub_eligibility"].query) == {"season": ["season"], "step": ["pool"], "member": ["late"]}
+    assert by_category["interclub_eligibility"].fragment == "season-eligibility-approvals"
 
 
 def test_action_links_identify_the_specific_request_and_review_controls(db):
@@ -194,6 +200,9 @@ def test_action_links_identify_the_specific_request_and_review_controls(db):
     assert links["social_submissions"].path == "/admin/tools"
     assert links["social_submissions"].fragment == "social-submissions"
     assert parse_qs(links["social_submissions"].query) == {"submission": ["social /&?"]}
+    assert links["interclub_invitations"].path == "/admin/interclub/registrations"
+    assert links["interclub_invitations"].fragment == "invitation-title"
+    assert parse_qs(links["interclub_invitations"].query) == {"season": ["invitation /&?"]}
 
 
 def test_tournament_sources_use_safe_rpc_original_timestamps_and_surviving_destination(db):

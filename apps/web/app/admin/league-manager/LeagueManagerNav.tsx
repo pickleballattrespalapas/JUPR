@@ -58,6 +58,7 @@ export default function LeagueManagerNav({
       { href: leagueHref("/admin/league-manager/roster", context), label: "Roster" },
       { href: leagueHref("/admin/league-manager/live", context), label: "Live rounds" },
       { href: leagueHref("/admin/league-manager/awards", context), label: "Awards" },
+      { href: `/admin/event-history?${new URLSearchParams({ kind: "league", event: leagueName })}`, label: "History" },
       { href: leagueHref("/admin/league-manager/print", context), label: "League night printout" }
     );
     if (isTeamLeagueType(leagueType)) {

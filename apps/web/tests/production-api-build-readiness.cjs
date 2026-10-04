@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const { operationsReady, waitForProductionApi, REQUIRED_FLAGS } = require("../scripts/wait-for-production-api.cjs");
-const ready = { ok: true, club_website_settings_available: true, environment: "production", fly_app_name: "juprleagues-api",
+const ready = { ok: true, club_website_settings_available: true,
+    interclub_seasons_available: true, environment: "production", fly_app_name: "juprleagues-api",
   supabase_project_ref: "dnoockbwfenunhcibwfn", production_business_write_policy: "enabled",
   staging_write_wave: "none", feature_flags: Object.fromEntries(REQUIRED_FLAGS.map((flag) => [flag, true])) };
 

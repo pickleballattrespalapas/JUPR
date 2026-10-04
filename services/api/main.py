@@ -841,6 +841,7 @@ def health() -> dict[str, Any]:
             {
                 "environment": environment,
                 "club_website_settings_available": True,
+                "interclub_seasons_available": True,
                 "git_commit_sha": (
                     os.getenv("JUPR_IMAGE_BUILD_GIT_SHA", "").strip().lower()
                     or os.getenv("JUPR_DEPLOYMENT_GIT_SHA", "").strip().lower()
@@ -1489,3 +1490,33 @@ install_club_site_routes(app, get_supabase_client=get_supabase_client)
 from services.api.club_leaderboard_settings_routes import install_club_leaderboard_settings_routes
 install_club_leaderboard_settings_routes(app, get_supabase_client=get_supabase_client)
 install_staff_access(app, get_supabase_client=get_supabase_client)
+
+from services.api.interclub_setup_routes import install_interclub_setup_routes
+install_interclub_setup_routes(app, get_supabase_client=get_supabase_client)
+
+from services.api.club_join_invitation_routes import install_club_join_invitation_routes
+install_club_join_invitation_routes(app, get_supabase_client=get_supabase_client)
+
+from services.api.interclub_registration_routes import install_interclub_registration_routes
+install_interclub_registration_routes(app, get_supabase_client=get_supabase_client)
+
+from services.api.interclub_competition_routes import install_interclub_competition_routes
+install_interclub_competition_routes(app, get_supabase_client=get_supabase_client)
+
+from services.api.interclub_public_routes import install_interclub_public_routes
+install_interclub_public_routes(app, get_supabase_client=get_supabase_client)
+
+from services.api.interclub_awards_routes import install_interclub_awards_routes
+install_interclub_awards_routes(app, get_supabase_client=get_supabase_client)
+
+from services.api.event_season_routes import install_event_season_routes
+install_event_season_routes(app, get_supabase_client=get_supabase_client)
+
+from services.api.interclub_player_pool_routes import install_interclub_player_pool_routes
+install_interclub_player_pool_routes(app, get_supabase_client=get_supabase_client)
+
+from services.api.interclub_meet_signup_routes import install_interclub_meet_signup_routes
+install_interclub_meet_signup_routes(app, get_supabase_client=get_supabase_client)
+
+from services.api.interclub_player_email_routes import install_interclub_player_email_routes
+install_interclub_player_email_routes(app, get_supabase_client=get_supabase_client)
