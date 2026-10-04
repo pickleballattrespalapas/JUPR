@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from jupr_app.data.paged_reads import read_all_rows
 from jupr_app.domain.player_search import matches_player_search
+from jupr_app.domain.player_visibility import is_merged_player
+from jupr_app.domain.player_activity import is_player_leaderboard_active
 from jupr_app.domain.gamification.presentation import badge_category
 from jupr_app.domain.leaderboard_metrics import (
     EXTENDED_CARD_KEYS,
@@ -46,9 +48,9 @@ PUBLIC_LEADERBOARD_FIELDS = {
 
 PLAYER_SELECT = (
     "id,club_id,name,rating,starting_rating,wins,losses,matches_played,"
-    "active,inactive_at"
+    "active,inactive_at,last_game_at"
 )
-PLAYER_SELECT_FALLBACK = "id,club_id,name,rating,wins,losses,matches_played,active,inactive_at"
+PLAYER_SELECT_FALLBACK = "id,club_id,name,rating,wins,losses,matches_played,active,inactive_at,last_game_at"
 LEAGUE_RATING_SELECT = (
     "club_id,league_name,player_id,rating,starting_rating,wins,losses,"
     "matches_played,is_active"
@@ -289,18 +291,14 @@ def _plain_text(value: Any) -> str | None:
 
 
 def _player_is_active(row: dict[str, Any]) -> bool:
-    if row.get("inactive_at"):
-        return False
-    if row.get("active") is False or row.get("is_active") is False:
-        return False
-    return True
+    return is_player_leaderboard_active(row)
 
 
 def _fetch_players(supabase: Any, club_id: str) -> list[dict[str, Any]]:
     return _query_rows(
         supabase,
         "players",
-        (PLAYER_SELECT, PLAYER_SELECT_FALLBACK, "id,club_id,name,rating,active"),
+        (PLAYER_SELECT, PLAYER_SELECT_FALLBACK, "id,club_id,name,rating,active,last_game_at"),
         club_id=club_id,
         required=True,
     )
@@ -411,10 +409,12 @@ def _overall_rows(players: list[dict[str, Any]], *, club_id: str) -> list[dict[s
     rows: list[dict[str, Any]] = []
     for row in players:
         player_id = row.get("id")
-        if player_id is None:
+        if player_id is None or is_merged_player(row):
             continue
         wins = _safe_int(row.get("wins"), 0) or 0
         losses = _safe_int(row.get("losses"), 0) or 0
+        if (_safe_int(row.get("matches_played"), wins + losses) or 0) <= 0:
+            continue
         rows.append(
             {
                 "club_id": str(row.get("club_id") or club_id),
@@ -448,9 +448,13 @@ def _league_rows(
         player_id = row.get("player_id")
         if player_id is None:
             continue
-        player = players_by_id.get(str(player_id), {})
+        player = players_by_id.get(str(player_id))
+        if player is None or is_merged_player(player) or is_merged_player(row):
+            continue
         wins = _safe_int(row.get("wins"), 0) or 0
         losses = _safe_int(row.get("losses"), 0) or 0
+        if (_safe_int(row.get("matches_played"), wins + losses) or 0) <= 0:
+            continue
         rows.append(
             {
                 "club_id": str(row.get("club_id") or club_id),
@@ -753,9 +757,13 @@ def build_public_leaderboard(
 def _normalize_rows(rows: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = []
     for row in rows or []:
+        if is_merged_player(row):
+            continue
         clean = {key: row.get(key) for key in PUBLIC_LEADERBOARD_FIELDS if key in row}
         clean.setdefault("rating_jupr", clean.get("rating"))
         clean.setdefault("matches_played", (clean.get("wins") or 0) + (clean.get("losses") or 0))
+        if (_safe_int(clean.get("matches_played"), 0) or 0) <= 0:
+            continue
         if clean.get("rank") is None and clean.get("rank_position") is not None:
             clean["rank"] = clean.get("rank_position")
         normalized.append(clean)

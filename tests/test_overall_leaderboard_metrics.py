@@ -181,8 +181,10 @@ def team_setup():
     config["card_options"] = {"biggest_upset": {"minimum": 0, "depth": 3}}
     # Include all four club profiles so either side can appear as a team.
     sb.store["players"].append({"id": 4, "club_id": "club-1", "name": "Devin Drive",
-                                "rating": 1400, "active": True})
+                                "rating": 1400, "active": True, "matches_played": 4,
+                                "last_game_at": sb.store["players"][0]["last_game_at"]})
     sb.store["players"][2]["active"] = True
+    sb.store["players"][2]["last_game_at"] = sb.store["players"][0]["last_game_at"]
     return sb, config
 
 
