@@ -1,21 +1,19 @@
 import { expect, test } from "@playwright/test";
+import { verifyInactivePlayerVisibility } from "./support/player-activity";
 import { bootstrapStagingContext, clubSlug } from "./support/staging";
 
 test.beforeEach(async ({ context }) => {
   await bootstrapStagingContext(context);
 });
 
-test("player directory defaults active and keeps search plus stable links deterministic", async ({ page }) => {
+test("player directory includes all profiles and keeps search plus stable links deterministic", async ({ page }) => {
   await page.goto(`/clubs/${clubSlug}/players`, { waitUntil: "domcontentloaded" });
 
-  await expect(page.getByTestId("players-status-active")).toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("players-status-active")).toHaveCount(0);
   const search = page.getByRole("combobox", { name: "Find player" });
   await expect(search).toBeVisible();
   const rows = page.getByTestId("players-row");
-  expect(await rows.count(), "staging should contain an active public player fixture").toBeGreaterThan(0);
-  for (let index = 0; index < await rows.count(); index += 1) {
-    await expect(rows.nth(index)).toHaveAttribute("data-status", "active");
-  }
+  expect(await rows.count(), "staging should contain a public player fixture").toBeGreaterThan(0);
 
   const firstName = (await rows.first().locator("td").first().innerText()).trim();
   await search.fill(firstName);
@@ -31,6 +29,7 @@ test("player directory defaults active and keeps search plus stable links determ
   await page.getByRole("link", { name: `Open ${firstName} profile` }).click();
   await expect(page.getByTestId("player-profile")).toBeVisible();
   await expect(page.getByTestId("player-public-identity")).toContainText(/approved public name/i);
+  await verifyInactivePlayerVisibility(page);
 });
 
 test("player profile keeps positions, trophies, badges, relationships, and history in player scope", async ({ page }) => {
@@ -56,7 +55,7 @@ test("player profile keeps positions, trophies, badges, relationships, and histo
 
   await page.getByTestId("player-section-trophies").click();
   await expect(page.getByTestId("player-trophies")).toBeVisible();
-  await expect(page.getByTestId("player-trophies")).toContainText(/major honors|tournament podium/i);
+  await expect(page.getByTestId("player-trophies")).toContainText(/major honors|tournament honors/i);
 
   await page.getByTestId("player-section-badges").click();
   await expect(page.getByTestId("player-badges")).toBeVisible();

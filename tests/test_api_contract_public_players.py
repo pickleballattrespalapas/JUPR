@@ -45,7 +45,7 @@ def test_player_directory_contract_forwards_active_search_sort_and_paging(client
     assert payload["filters"]["status"] == "active"
 
 
-def test_player_directory_defaults_to_active(client, monkeypatch):
+def test_player_directory_defaults_to_all(client, monkeypatch):
     captured = {}
 
     def fake_directory(_supabase, **kwargs):
@@ -56,7 +56,7 @@ def test_player_directory_defaults_to_active(client, monkeypatch):
     response = client.get("/clubs/tres-palapas/players")
 
     assert response.status_code == 200
-    assert captured["status"] == "active"
+    assert captured["status"] == "all"
     assert captured["sort"] == "rating"
     assert captured["limit"] == 100
     assert captured["offset"] == 0

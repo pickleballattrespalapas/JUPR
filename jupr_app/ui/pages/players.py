@@ -1387,15 +1387,6 @@ def render(ctx):
         return
 
     players_df = df_players_all.copy()
-    if "inactive_at" in players_df.columns:
-        players_df = players_df[players_df["inactive_at"].isna()].copy()
-    elif "active" in players_df.columns:
-        players_df = players_df[players_df["active"] == True].copy()
-
-    if players_df.empty:
-        st.info("No active players.")
-        return
-
     players_df["id"] = players_df["id"].astype(int)
 
     pid_q = qp_get("pid", "").strip()

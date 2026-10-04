@@ -230,3 +230,19 @@ def test_core_server_projection_failure_is_not_misreported_as_empty():
         assert "players" in str(exc)
     else:
         raise AssertionError("Expected a server projection failure")
+
+
+def test_inactivity_hides_only_leaderboards_and_does_not_hide_directory_identity():
+    from copy import deepcopy
+    from jupr_app.services.public_player_service import build_public_player_directory
+    for activity in ({"active": False}, {"active": True, "inactive_at": "2026-01-01T00:00:00Z"}):
+        supabase = _fixture()
+        supabase.store["players"][0].update(activity)
+        before = deepcopy(supabase.store)
+        for league in ("OVERALL", "Pro"):
+            board = build_public_leaderboard(supabase, club_id="club-1", league_name=league)
+            assert 1 not in [row["player_id"] for row in board["leaderboard"]]
+        directory = build_public_player_directory(supabase, club_id="club-1", search="Avery", status="active")
+        assert [row["id"] for row in directory["players"]] == [1]
+        assert directory["players"][0]["is_active"] is False
+        assert supabase.store == before

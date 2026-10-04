@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from jupr_app.domain.player_visibility import is_merged_player
 from jupr_app.data.paged_reads import read_all_rows
 from jupr_app.domain.player_search import matches_player_search
 from jupr_app.domain.gamification.presentation import badge_category, badge_requirement, category_sort_key
@@ -22,7 +23,6 @@ PLAYER_BADGE_SELECT = "id,club_id,player_id,badge_id,earned_at,context_type,cont
 PLAYER_BADGE_FALLBACK_SELECT = "club_id,player_id,badge_id,earned_at,context_type,context_id,value_num,value_json"
 BADGE_SELECT = "badge_id,name,category,prestige,rarity,tier,icon_key,lore,hint,scope,state,is_active"
 
-DIRECTORY_STATUSES = {"active", "inactive", "all"}
 DIRECTORY_SORTS = {"rating", "singles", "matches", "name", "win_pct", "recent"}
 PUBLIC_PROFILE_HISTORY_LIMIT = 500
 PUBLIC_PROFILE_RECENT_LIMIT = 12
@@ -832,7 +832,7 @@ def get_public_players(
     *,
     club_id: str,
     search: str | None = None,
-    status: str = "active",
+    status: str = "all",
     sort: str = "rating",
     limit: int = 500,
     offset: int = 0,
@@ -878,16 +878,16 @@ def build_public_player_directory(
     *,
     club_id: str,
     search: str | None = None,
-    status: str = "active",
+    status: str = "all",
     sort: str = "rating",
     limit: int = 100,
     offset: int = 0,
 ) -> dict[str, Any]:
     cid = str(club_id).strip()
-    all_rows = [_player_base(row) for row in _fetch_players(supabase, cid)]
-    clean_status = str(status or "active").strip().casefold()
-    if clean_status not in DIRECTORY_STATUSES:
-        clean_status = "active"
+    all_rows = [_player_base(row) for row in _fetch_players(supabase, cid) if not is_merged_player(row)]
+    # Keep the legacy status parameter for old links and API clients. Activity
+    # filters apply only to leaderboards, never to player discovery.
+    clean_status = "all"
     clean_sort = str(sort or "rating").strip().casefold()
     if clean_sort not in DIRECTORY_SORTS:
         clean_sort = "rating"
@@ -896,10 +896,6 @@ def build_public_player_directory(
     rows = list(all_rows)
     if query:
         rows = [row for row in rows if matches_player_search(row.get("name"), query)]
-    if clean_status == "active":
-        rows = [row for row in rows if row.get("is_active") is not False]
-    elif clean_status == "inactive":
-        rows = [row for row in rows if row.get("is_active") is False]
     rows = _sort_directory_players(rows, clean_sort)
     safe_limit = max(1, min(int(limit or 100), 1000))
     safe_offset = max(0, int(offset or 0))

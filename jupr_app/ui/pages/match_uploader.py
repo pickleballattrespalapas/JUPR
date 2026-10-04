@@ -39,7 +39,7 @@ def render(ctx):
         return
 
     # --- Resolve ctx fields we actually need ---
-    df_players = getattr(ctx, "df_players_active", None)
+    df_players = getattr(ctx, "df_players_all", None)
     if df_players is None:
         df_players = getattr(ctx, "df_players", None)
 

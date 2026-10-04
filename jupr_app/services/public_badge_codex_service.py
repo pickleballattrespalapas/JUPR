@@ -6,6 +6,7 @@ from datetime import date, datetime
 from functools import lru_cache
 from typing import Any
 
+from jupr_app.domain.player_visibility import is_merged_player
 from jupr_app.domain.gamification.badge_catalog import BADGE_DEFINITIONS
 from jupr_app.domain.gamification.badge_schema import load_badge_definitions
 from jupr_app.domain.gamification.requirements import load_requirements_map
@@ -213,7 +214,7 @@ def _fetch_player_names(supabase: Any, *, club_id: str) -> dict[int, str]:
     rows = read_all_rows(lambda: supabase.table("players").select(PLAYER_SELECT).eq("club_id", str(club_id)))
     names: dict[int, str] = {}
     for row in rows:
-        if row.get("active") is False or row.get("inactive_at"):
+        if is_merged_player(row):
             continue
         pid = _safe_int(row.get("id"))
         name = str(row.get("name") or "").strip()

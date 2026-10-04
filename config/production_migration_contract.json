@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile": "tres-club-team-leagues-2026-09-24",
-  "repository_migration_content_sha256": "cd74c965f223a6bf1f9c7ef98e0ff9d0b560f00ad931d8eb90eca1f6b44e17bd",
+  "repository_migration_content_sha256": "b56e2429c765ae23c231c177be83cd2f7d0e2fea2b427e78b9c8b6a03689a95e",
   "allow_additional_ledger_names": true,
   "allowed_duplicate_ledger_names": [
     "tournament_admin_operations"
@@ -124,7 +124,8 @@
     "club_leaderboard_settings",
     "club_website_settings",
     "club_team_league_admin_rosters",
-    "team_league_match_exclusion_compatibility"
+    "team_league_match_exclusion_compatibility",
+    "player_activity_leaderboard_visibility"
   ],
   "required_ledger_names": [
     "add_admin_activity_log",
@@ -184,6 +185,7 @@
     "match_exclusion_nonretryable_conflicts",
     "match_log_club_recovery_mutex",
     "partner_email_invitations",
+    "player_activity_leaderboard_visibility",
     "program_badge_expansion",
     "program_badge_reconciliation_actor",
     "program_badge_round_robin_state",
