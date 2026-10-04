@@ -1,6 +1,10 @@
 /* Images may be uploaded or hosted by clubs; render only validated sources. */
 /* eslint-disable @next/next/no-img-element */
 import Link from "next/link";
+import ClubChampionshipHighlights from "./ClubChampionshipHighlights";
+import TournamentGoldHighlights from "./TournamentGoldHighlights";
+import type { SeasonTrophy } from "@/lib/interclubAwards";
+import type { TournamentGoldHighlight } from "@/lib/tournamentHighlights";
 import {
   publicClubLinks,
   canLinkClubPage,
@@ -11,21 +15,26 @@ import {
   type SiteDocument,
 } from "@/lib/clubSite";
 import styles from "./ClubWebsite.module.css";
-import TournamentGoldHighlights from "./TournamentGoldHighlights";
-import type { TournamentGoldHighlight } from "@/lib/tournamentHighlights";
 export default function ClubSiteContent({
   document: doc,
   slug,
   pageSlug = "home",
+  trophies = [],
   tournamentHighlights = [],
 }: {
   document: SiteDocument;
   slug: string;
   pageSlug?: string;
+  trophies?: SeasonTrophy[];
   tournamentHighlights?: TournamentGoldHighlight[];
 }) {
   const page = doc.pages.find((p) => p.slug === pageSlug);
   const links = publicClubLinks(doc);
+  const championships = doc.page_visibility?.trophies === "private" ? [] : trophies
+    .filter((trophy) => trophy.recipient_type === "club" && trophy.is_current_champion !== false &&
+      (trophy.award_key === "club_cup_champion" || trophy.award_key === "division_champion"))
+    .sort((a, b) => b.earned_at.localeCompare(a.earned_at) ||
+      a.award_key.localeCompare(b.award_key) || a.division.localeCompare(b.division) || a.id.localeCompare(b.id));
   if (!page) return <p>This page is unavailable.</p>;
   return (
     <div>
@@ -38,13 +47,18 @@ export default function ClubSiteContent({
             {doc.location || "Welcome to our club"}
           </p>
           <h1>{doc.name}</h1>
-          {doc.description && <p>{doc.description}</p>}
-          {doc.visitor_info && (
-            <>
-              <h2>Planning a visit?</h2>
-              <p>{doc.visitor_info}</p>
-            </>
-          )}
+          <div className={championships.length ? styles.heroWithChampionships : undefined}>
+            <div className={styles.introduction}>
+              {doc.description && <p>{doc.description}</p>}
+              {doc.visitor_info && (
+                <>
+                  <h2>Planning a visit?</h2>
+                  <p>{doc.visitor_info}</p>
+                </>
+              )}
+            </div>
+            {championships.length > 0 && <ClubChampionshipHighlights trophies={championships} slug={slug} />}
+          </div>
         </section>
       ) : (
         <h1>{page.title}</h1>

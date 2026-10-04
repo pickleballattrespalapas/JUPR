@@ -1,0 +1,28 @@
+.page { max-width: 1120px; margin: 0 auto; padding: 24px 16px 64px; color: #172b43; }
+.page * { box-sizing: border-box; }
+.page h1 { font-size: clamp(1.7rem, 4vw, 2.4rem); margin: 8px 0; overflow-wrap: anywhere; }
+.page h2 { font-size: 1.4rem; margin: 8px 0 14px; }
+.page h3 { font-size: 1.1rem; margin: 8px 0; }
+.page p, .page li { line-height: 1.6; }
+.page a { color: #1d4ed8; text-underline-offset: 3px; }
+.page section { margin-top: 28px; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 16px; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+.toolbar button { background: white; border: 1px solid #b8c6d6; border-radius: 8px; padding: 10px 14px; cursor: pointer; }
+.eyebrow { font-size: .8rem; font-weight: 700; letter-spacing: .045em; color: #526174; margin: 0; }
+.next { padding: 26px; border: 1px solid #9bb9ea; border-left: 5px solid #2563eb; border-radius: 12px; background: #f0f6ff; }
+.next ol { padding-left: 22px; margin: 18px 0 24px; }
+.next li + li { margin-top: 6px; }
+.page .primary { display: inline-flex; padding: 12px 18px; background: #1747ad; color: white; border-radius: 8px; text-decoration: none; font-weight: 700; }
+.stages { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); list-style: none; padding: 0; gap: 14px; }
+.card, .current { border: 1px solid #d3dce8; border-radius: 10px; padding: 20px; background: white; min-width: 0; }
+.current { border: 2px solid #2563eb; background: #f0f6ff; padding: 19px; }
+.stages p { margin-bottom: 10px; }
+.stages a { display: inline-block; }
+.meets { list-style: none; padding: 0; border-top: 1px solid #d3dce8; }
+.meets li { display: flex; gap: 20px; justify-content: space-between; align-items: center; border-bottom: 1px solid #d3dce8; padding: 18px 0; }
+.meets p { margin: 3px 0; color: #526174; }
+.meets a { flex-shrink: 0; }
+.error { padding: 16px; background: #fff1f2; color: #991b1b; border: 1px solid #fca5a5; border-radius: 8px; }
+.page a:focus-visible, .page button:focus-visible { outline: 3px solid #2563eb; outline-offset: 4px; }
+@media (max-width: 800px) { .stages { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 520px) { .page { padding: 16px 10px 40px; } .stages { grid-template-columns: 1fr; } .next { padding: 20px 16px; } .meets li { display: block; } .meets a { display: inline-block; margin-top: 8px; } }

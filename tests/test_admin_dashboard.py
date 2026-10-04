@@ -149,6 +149,13 @@ def test_queue_filters_count_only_outstanding_actions(db):
     assert queues["social_submissions"]["href"] == "/admin/tools#social-submissions"
 
 
+def test_invitations_are_only_for_selected_club_and_another_organizer(db):
+    def invitation(status, *, club="club-a", organizer="club-b"):
+        return {"club_id": club, "status": status, "pcs_interclub_seasons": {"organizer_club_id": organizer}}
+
+    db.rows["pcs_interclub_participations"] = [invitation("invited"), invitation("invited", organizer="club-a"),
+        invitation("accepted"), invitation("declined"), invitation("cancelled"), invitation("invited", club="club-c")]
+    assert by_key(dashboard(db))["interclub_invitations"]["count"] == 1
 
 
 def meet_result(id, *, state="submitted", organizer="club-a", updated_at="2026-09-21", closes_at="2000-01-01T00:00:00+00:00", **fields):
@@ -162,14 +169,60 @@ def pool_member(id, *, status="active", approval="pending", late=True, organizer
             "pool_settings": {"participation": {"season": {"organizer_club_id": organizer}}}, **fields}
 
 
+def test_organizer_meet_review_counts_all_pending_and_links_oldest_meet(db):
+    db.rows["pcs_interclub_competition_batches"] = [meet_result("new"),
+        meet_result("old", updated_at="2026-09-19", season_id="season/a?&", meet_id="meet /?#"),
+        meet_result("draft", state="draft"), meet_result("done", state="approved"),
+        meet_result("other", organizer="club-b"), meet_result("unconfigured", closes_at=None),
+        meet_result("registration-open-or-scheduled", closes_at="9999-01-01T00:00:00+00:00")]
+    queue = by_key(dashboard(db))["interclub_results"]
+    assert queue["count"] == 2
+    assert "Review next" in queue["description"]
+    url = urlsplit(queue["href"])
+    assert url.path == "/admin/interclub/competition"
+    assert parse_qs(url.query) == {"season": ["season/a?&"], "meet": ["meet /?#"]}
+    assert url.fragment == ""
+    assert "season%2Fa%3F%26" in queue["href"]
 
 
+def test_organizer_pool_review_excludes_non_actionable_rows_but_includes_unlinked_late_players(db):
+    db.rows["pcs_interclub_pool_members"] = [pool_member("new"),
+        pool_member("old", created_at="2026-09-19", player_id=None, season_id="season /?&"),
+        pool_member("withdrawn", status="withdrawn"), pool_member("approved", approval="approved"),
+        pool_member("rejected", approval="rejected"), pool_member("early", late=False),
+        pool_member("other", organizer="club-b")]
+    queue = by_key(dashboard(db))["interclub_eligibility"]
+    assert queue["count"] == 2
+    assert "Review next" in queue["description"]
+    url = urlsplit(queue["href"])
+    assert url.path == "/admin/interclub/registrations"
+    assert parse_qs(url.query) == {"season": ["season /?&"], "step": ["pool"]}
+    assert url.fragment == "season-eligibility-approvals"
 
 
+def test_single_next_item_does_not_limit_exact_organizer_queue_count(db):
+    db.rows["pcs_interclub_competition_batches"] = [meet_result(f"result-{index:04d}") for index in range(1532)]
+    queue = by_key(dashboard(db))["interclub_results"]
+    assert queue["count"] == 1532
+    assert "season=season-result-0000" in queue["href"]
 
 
+@pytest.mark.parametrize("table,key", [("pcs_interclub_competition_batches", "interclub_results"), ("pcs_interclub_pool_members", "interclub_eligibility")])
+@pytest.mark.parametrize("failure", ["fail_tables", "missing_counts"])
+def test_organizer_queue_errors_are_independent_and_not_zero(db, table, key, failure):
+    getattr(db, failure).add(table)
+    queues = by_key(dashboard(db))
+    assert queues[key]["status"] == "unavailable"
+    assert queues[key]["count"] is None
+    assert queues["generator_submissions"]["status"] == "ready"
+    assert queues["generator_submissions"]["count"] == 0
 
 
+def test_missing_next_meet_identity_is_unavailable_instead_of_linking_the_wrong_meet(db):
+    db.rows["pcs_interclub_competition_batches"] = [meet_result("bad", meet_id=None)]
+    queue = by_key(dashboard(db))["interclub_results"]
+    assert queue["status"] == "unavailable"
+    assert queue["count"] is None
 
 
 def test_counts_are_exact_beyond_any_list_page_limit(db):
@@ -208,8 +261,8 @@ def test_disabled_features_are_not_queried(db, monkeypatch):
     for flag in FLAGS:
         monkeypatch.setenv(flag, "false")
     queues = by_key(dashboard(db))
-    assert set(queues) == {"generator_submissions"}
-    assert {q.table_name for q in db.queries} == {"live_sessions"}
+    assert set(queues) == {"generator_submissions", "interclub_invitations", "interclub_results", "interclub_eligibility"}
+    assert {q.table_name for q in db.queries} == {"live_sessions", "pcs_interclub_participations", "pcs_interclub_competition_batches", "pcs_interclub_pool_members"}
 
 
 def route_client(db, monkeypatch, assignment=None):
@@ -296,6 +349,9 @@ def test_installed_postgrest_client_uses_exact_content_range_for_head_and_one_ro
     generator = next(request for request in requests if request.url.path.endswith("/live_sessions"))
     assert generator.url.params["state->generator_submission->>status"] == "in.(pending,processing)"
     assert generator.url.params["state->>mode"] == "in.(public_play_generator,admin_play_generator)"
+    invitation = next(request for request in requests if request.url.path.endswith("/pcs_interclub_participations"))
+    assert invitation.url.params["select"] == "season_id,pcs_interclub_seasons!inner(id)"
+    assert invitation.url.params["pcs_interclub_seasons.organizer_club_id"] == "neq.club-a"
     verified = next(request for request in requests if request.url.path.endswith("/player_profile_update_subscriptions"))
     assert verified.url.params["request_status"] == "eq.pending_admin_review"
 
@@ -304,9 +360,3 @@ def test_dashboard_is_registered_in_application():
     from services.api.main import app
 
     assert any(route.path == "/admin/clubs/{club_id}/dashboard" for route in app.routes)
-
-
-def test_deferred_interclub_sources_are_not_queried(db):
-    result = dashboard(db)
-    assert not any(q.table_name.startswith("pcs_interclub") for q in db.queries)
-    assert not any(q["key"].startswith("interclub") for q in result["queues"])

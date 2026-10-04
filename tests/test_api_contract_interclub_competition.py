@@ -1,0 +1,658 @@
+"""Permission, revision and immutable-score identity contracts for meet operations."""
+from copy import deepcopy
+from types import SimpleNamespace
+from uuid import uuid4
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from services.api import admin_auth_routes, interclub_competition_routes as routes
+from jupr_app.domain import interclub_competition as engine
+from tests.interclub_registration_fixtures import set_registration_phase
+
+
+class Query:
+    def __init__(self, rows): self.rows, self.filters, self.columns = rows, [], '*'
+    def select(self, fields): self.columns=fields; return self
+    def eq(self, key, value): self.filters.append(lambda row: row.get(key)==value); return self
+    def in_(self, key, values): self.filters.append(lambda row: row.get(key) in values); return self
+    def execute(self):
+        return SimpleNamespace(data=[dict(r) if self.columns=='*' else {k:r.get(k) for k in self.columns.split(',')} for r in self.rows if all(f(r) for f in self.filters)])
+
+
+@pytest.fixture
+def setup(monkeypatch):
+    sid, mid, uid = map(str,[uuid4(),uuid4(),uuid4()])
+    user=SimpleNamespace(user_id=uid,email='qa@example.invalid')
+    assignment=dict(club_id='home',email=user.email,user_id=uid,role='administrator')
+    season=dict(id=sid,organizer_club_id='home',details=dict(name='BCS QA',club_ids=['home','away'],divisions=['3.5'],start_date='2099-01-01',end_date='2099-12-31',timezone='America/Mazatlan'),rules={})
+    set_registration_phase(season, "closed")
+    meet=dict(id=mid,season_id=sid,plan_index=0,host_club_id='away',club_ids=['home','away'],starts_at='2099-01-10T18:00:00Z',roster_deadline='2099-01-09T18:00:00Z',revision=1,courts=2,duration_minutes=180,schedule_editable=True,schedule_locked_reason=None,schedule_deadline_editable=True,courts_editable=True)
+    teams=[]
+    for club in ['home','away']:
+        teams.append(dict(id=str(uuid4()),season_id=sid,meet_id=mid,club_id=club,division='3.5',name=club,revision=1,withdrawn=False,status='eligible',issues=[],
+                          roster=[dict(entry_id=str(uuid4()),name=f'{club} Player {i}',starting_rating=3.6,gender='female' if i<2 else 'male',player_id=i,email='private@example.invalid') for i in range(4)]))
+    document=engine.generate_round_robin(mid,teams,format='gender',played_at=meet['starts_at'],courts=2)
+    for encounter in document['encounters']:
+        for pairing in encounter['pairings']: pairing['eligibility_deadline']=meet['roster_deadline']
+    document=engine.validate_document(document)
+    saved=dict(id=str(uuid4()),season_id=sid,meet_id=mid,phase='regular',revision=1,state='draft',document=document,roster_sources=routes._sources(teams),ratings_status='not_requested',approved_document=None,approved_revision=None)
+    tables={'admin_role_assignments':[assignment],'pcs_interclub_seasons':[season], 'pcs_interclub_meet_workspaces':[meet],
+            'pcs_interclub_participations':[dict(season_id=sid,club_id=c,status='accepted') for c in ['home','away']],
+            'pcs_interclub_meet_eligibility_snapshots':[], 'pcs_interclub_pool_members':[], 'pcs_interclub_entries':[], 'pcs_interclub_current_rosters':teams,'pcs_interclub_competition_batches':[saved], 'clubs':[dict(id=c,name=c.title(),slug=c) for c in ['home','away','unrelated']]}
+    state=dict(season=season,meet=meet,user=user,assignment=assignment,teams=teams,saved=saved,tables=tables,calls=[],reads=[],error='')
+    def table(name): state['reads'].append(name); return Query(tables[name])
+    def rpc(name, params):
+        state['calls'].append((name,params))
+        def execute():
+            if state['error']:
+                error=RuntimeError('private SQL failure');error.code=state['error'];raise error
+            if name=='pcs_update_interclub_meet_schedule':
+                return SimpleNamespace(data={'meet':{**meet,'revision':meet['revision']+1},'availability_reset_count':2,'rosters_refreshed':1,'publication_review_required':True})
+            if name=='pcs_interclub_pool_player_details':
+                return SimpleNamespace(data=deepcopy(state.get('rating_details',{}).get(params['p_club_id'],[])))
+            return SimpleNamespace(data=deepcopy(saved))
+        return SimpleNamespace(execute=execute)
+    monkeypatch.setattr(admin_auth_routes,'authenticate_bearer',lambda _:user)
+    state['db']=SimpleNamespace(table=table,rpc=rpc)
+    app=FastAPI();routes.install_interclub_competition_routes(app,get_supabase_client=lambda:state['db'])
+    return TestClient(app),state
+
+
+def base(s,club='home'):
+    return f"/admin/clubs/{club}/interclub/competition/{s['season']['id']}"
+
+
+def path(s,club='home'):
+    return base(s,club)+f"/meets/{s['meet']['id']}/regular"
+
+
+def complete(s):
+    for e in s['saved']['document']['encounters']:
+        for p in e['pairings']:
+            for g in p['games']: g.update(status='completed',a=11,b=7,winner='a')
+
+
+def test_read_is_scoped_and_does_not_disclose_contacts_or_local_player_ids(setup):
+    client,s=setup
+    r=client.get(path(s));assert r.status_code==200
+    assert 'private@example' not in r.text and 'player_id' not in r.text
+    r=client.get(base(s));assert r.status_code==200
+    assert 'unrelated' not in r.text
+    s['assignment']['club_id']='unrelated'
+    assert client.get(base(s,'unrelated')).status_code==404
+    assert not s['calls']
+
+
+def test_host_can_save_submit_but_cannot_approve_or_reopen(setup):
+    client,s=setup;s['assignment']['club_id']='away'
+    r=client.put(path(s,'away'),json=dict(expected_revision=1,document=s['saved']['document']))
+    assert r.status_code==200
+    assert s['calls'][-1][1]['p_actor_id']==s['user'].user_id
+    assert s['calls'][-1][1]['p_club_id']=='away'
+    complete(s)
+    assert client.post(path(s,'away')+'/submit',json={'expected_revision':1}).status_code==200
+    for action,body in [('approve',{'expected_revision':1}),('reopen',{'expected_revision':1,'reason':'Correct score'})]:
+        assert client.post(path(s,'away')+'/'+action,json=body).status_code==403
+
+
+@pytest.mark.parametrize('entered_at', ['2026-09-28T10:45:00-07:00', '2026-09-28T23:58:00+13:00'])
+def test_future_scheduled_meet_keeps_device_entry_date_through_save_and_submit(setup, entered_at):
+    client,s=setup
+    # Early staging practice closes the roster cutoff before entering scores.
+    s['meet']['roster_deadline']='2026-09-01T00:00:00Z'
+    for e in s['saved']['document']['encounters']:
+        for p in e['pairings']:
+            p['eligibility_deadline']=s['meet']['roster_deadline']
+            for g in p['games']: g.update(played_at=None)
+    document=deepcopy(s['saved']['document'])
+    for e in document['encounters']:
+        for p in e['pairings']:
+            for g in p['games']: g.update(status='completed',a=11,b=9,played_at=entered_at)
+    response=client.put(path(s),json=dict(expected_revision=1,document=document))
+    assert response.status_code==200, response.text
+    stored=s['calls'][-1][1]['p_document']
+    assert all(g['played_at']==entered_at for e in stored['encounters'] for p in e['pairings'] for g in p['games'])
+    s['saved'].update(document=stored,revision=2)
+    assert client.post(path(s)+'/submit',json={'expected_revision':2}).status_code==200
+    assert s['calls'][-1][1]['p_document'] is None  # Submit the exact saved date; never reschedule it.
+
+
+@pytest.mark.parametrize('stored,submitted', [
+    ('2099-01-09T18:00:00+00:00','2099-01-09T18:00:00+00:00'),
+    ('2099-01-09T18:00:00Z','2099-01-09T11:00:00-07:00'),
+    ('2099-01-09T11:00:00-07:00','2099-01-09T18:00:00Z'),
+])
+def test_equivalent_cutoff_formats_allow_open_tab_scores_and_substitutions(setup, stored, submitted):
+    client,s=setup
+    for e in s['saved']['document']['encounters']:
+        for p in e['pairings']: p['eligibility_deadline']=stored
+    before=deepcopy(s['saved'])
+    document=deepcopy(s['saved']['document'])
+    for e in document['encounters']:
+        for p in e['pairings']: p['eligibility_deadline']=submitted
+    pairing=document['encounters'][0]['pairings'][0]
+    replacement=[pairing['players_a'][0],str(uuid4())]
+    pairing['games'][1].update(status='completed',a=11,b=9,players_a=replacement,injury_reason='Ankle injury before game 2')
+    response=client.put(path(s),json=dict(expected_revision=1,document=document))
+    assert response.status_code==200, response.text
+    persisted=s['calls'][-1][1]['p_document']['encounters'][0]['pairings'][0]['games'][1]
+    assert persisted['players_a']==replacement and (persisted['a'],persisted['b'])==(11,9)
+    assert s['calls'][-1][1]['p_revision']==1
+    assert s['saved']==before  # Comparison must not mutate the source revision.
+
+
+def test_historical_replay_preserves_instant_equivalence_but_blocks_actual_edits(setup):
+    client,s=setup;complete(s)
+    old=s['saved']['document']['encounters'][0]['pairings'][0]
+    old['eligibility_deadline']='2099-01-08T18:00:00+00:00'
+    for g in old['games']: g['played_at']='2099-01-08T19:00:00+00:00'
+    before=deepcopy(s['saved'])
+    document=deepcopy(s['saved']['document'])
+    history=document['encounters'][0]['pairings'][0]
+    history['eligibility_deadline']='2099-01-08T11:00:00-07:00'
+    for g in history['games']: g['played_at']='2099-01-08T12:00:00-07:00'
+    assert client.put(path(s),json=dict(expected_revision=1,document=document)).status_code==200
+    assert s['saved']==before
+    for field,value in [('a',12),('played_at','2099-01-08T19:01:00Z'),('injury_reason','Changed history')]:
+        changed=deepcopy(document)
+        changed['encounters'][0]['pairings'][0]['games'][0][field]=value
+        if field=='a': changed['encounters'][0]['pairings'][0]['games'][0]['b']=10
+        s['calls'].clear()
+        response=client.put(path(s),json=dict(expected_revision=1,document=changed))
+        assert response.status_code==422 and 'remain official' in response.text
+        assert not s['calls']
+
+
+def test_game_validation_message_names_where_to_fix_without_changing_scores(setup):
+    client,s=setup
+    document=deepcopy(s['saved']['document']); document['schedule_mode']='staggered'
+    e=document['encounters'][0];e['rotation']=4
+    p=e['pairings'][1];p['court']=7
+    p['games'][2].update(status='retired',a=11,b=8,winner='a')
+    original=deepcopy(document)
+    response=client.put(path(s),json=dict(expected_revision=1,document=document))
+    assert response.status_code==422
+    message=response.json()['detail']
+    assert 'Skill level 3.5 · Wave 4 · Court 7 · Men\'s doubles · Game 3' in message
+    assert 'already finished the game' in message
+    assert document==original and not s['calls']
+
+
+def test_nonhost_participant_cannot_edit_other_meet(setup):
+    client,s=setup;s['season']['organizer_club_id']='organizer'
+    assert client.get(path(s)).status_code==200
+    assert client.put(path(s),json=dict(expected_revision=1,document=s['saved']['document'])).status_code==403
+
+
+@pytest.mark.parametrize('scope,expected', [([{'kind':'club'}],200),([{'kind':'program_type','program_type':'leagues'}],200),([{'kind':'resource','program_type':'leagues','resource_id':'another'}],403),([],403)])
+def test_operator_needs_relevant_host_assignment(setup,scope,expected):
+    client,s=setup;s['assignment'].update(club_id='away',role='operator',scopes=scope)
+    assert client.put(path(s,'away'),json=dict(expected_revision=1,document=s['saved']['document'])).status_code==expected
+    assert client.post(path(s,'away')+'/approve',json={'expected_revision':1}).status_code==403
+
+
+@pytest.mark.parametrize('change',[dict(revoked_at='2020-01-01'),dict(expires_at='2020-01-01T00:00:00Z'),dict(user_id='other')])
+def test_stale_or_other_identity_assignments_rejected(setup,change):
+    client,s=setup;s['assignment'].update(change)
+    assert client.get(path(s)).status_code==403
+    assert not s['calls']
+
+
+def test_every_game_must_be_disposed_before_submit(setup):
+    client,s=setup
+    assert client.post(path(s)+'/submit',json={'expected_revision':1}).status_code==422
+    assert not s['calls']
+    complete(s)
+    assert client.post(path(s)+'/submit',json={'expected_revision':1}).status_code==200
+    assert s['calls'][-1][1]['p_document'] is None # SQL uses its own canonical revision
+
+
+@pytest.mark.parametrize('mutation', ['meet','phase','opponent','game_id','pairing_id','deadline','encounter_delete','reschedule'])
+def test_client_cannot_replace_schedule_or_deadline(setup,mutation):
+    client,s=setup;document=deepcopy(s['saved']['document']);e=document['encounters'][0];p=e['pairings'][0]
+    if mutation=='meet':document['meet_id']=str(uuid4())
+    if mutation=='phase':document['phase']='final'
+    if mutation=='opponent':e['club_b']='unrelated'
+    if mutation=='game_id':p['games'][0]['id']='invented'
+    if mutation=='pairing_id':p['id']='invented'
+    if mutation=='deadline':p['eligibility_deadline']='2098-01-01T00:00:00Z'
+    if mutation=='encounter_delete':document['encounters']=[]
+    if mutation=='reschedule':document['weather']='rescheduled'
+    assert client.put(path(s),json=dict(expected_revision=1,document=document)).status_code==422
+    assert not s['calls']
+
+
+def test_old_revision_does_not_write(setup):
+    client,s=setup
+    assert client.put(path(s),json=dict(expected_revision=0,document=s['saved']['document'])).status_code==409
+    assert not s['calls']
+
+
+def test_generation_preserves_source_roster_revisions_and_no_contacts(setup):
+    client,s=setup
+    r=client.post(path(s)+'/generate',json=dict(expected_revision=1,format='gender'))
+    assert r.status_code==200
+    params=s['calls'][-1][1]
+    assert params['p_roster_sources']==routes._sources(s['teams'])
+    assert 'player_id' not in str(params['p_document']) and 'private@example' not in str(params)
+
+
+def test_staggered_generation_saves_court_limited_waves_and_refresh_keeps_them(setup):
+    client,s=setup
+    other=deepcopy(s['teams'])
+    for team in other:
+        team.update(id=str(uuid4()),division='4.0')
+        for player in team['roster']: player['entry_id']=str(uuid4())
+    s['teams'].extend(other)
+    assert client.post(path(s)+'/generate',json=dict(expected_revision=1,format='gender')).status_code==422
+    assert not s['calls']
+    r=client.post(path(s)+'/generate',json=dict(expected_revision=1,format='gender',schedule_mode='staggered'))
+    assert r.status_code==200
+    doc=s['calls'][-1][1]['p_document']
+    assert doc['schedule_mode']=='staggered'
+    assert {e['rotation'] for e in doc['encounters']}=={1,2}
+    assert all(p['court'] in (1,2) for e in doc['encounters'] for p in e['pairings'])
+    s['saved']['document']=doc
+    assert client.post(path(s)+'/refresh-lineups',json=dict(expected_revision=1)).status_code==200
+    refreshed=s['calls'][-1][1]['p_document']
+    assert refreshed['schedule_mode']=='staggered'
+    assert [(e['id'],e['rotation'],[p['court'] for p in e['pairings']]) for e in refreshed['encounters']]==[
+        (e['id'],e['rotation'],[p['court'] for p in e['pairings']]) for e in doc['encounters']]
+
+
+@pytest.mark.parametrize('change',['mode','wave','court'])
+def test_score_saves_cannot_change_generated_schedule(setup,change):
+    client,s=setup
+    doc=deepcopy(s['saved']['document'])
+    if change=='mode': doc['schedule_mode']='staggered'
+    elif change=='wave': doc['encounters'][0]['rotation']=2
+    else: doc['encounters'][0]['pairings'][0]['court']=3
+    assert client.put(path(s),json=dict(expected_revision=1,document=doc)).status_code==422
+    assert not s['calls']
+
+
+def test_scores_prevent_silent_regeneration(setup):
+    client,s=setup;complete(s)
+    assert client.post(path(s)+'/generate',json=dict(expected_revision=1,format='mixed')).status_code==409
+    assert not s['calls']
+
+
+def test_public_reads_preserve_prior_approved_version_during_correction(setup):
+    _,s=setup;complete(s)
+    official=deepcopy(s['saved']['document']);s['saved'].update(approved_document=official,approved_revision=3,state='draft')
+    s['saved']['document']['encounters'][0]['pairings'][0]['games'][0]['a']=12
+    assert routes.approved_documents(s['db'],s['season']['id'])==[official]
+
+
+@pytest.mark.parametrize('code,status',[('42501',403),('40001',409),('PT409',409),('22023',422),('PT423',423),('P0002',404),('23505',409),('other',503)])
+def test_rpc_errors_are_safe_and_actionable(setup,code,status):
+    client,s=setup;s['error']=code
+    r=client.put(path(s),json=dict(expected_revision=1,document=s['saved']['document']))
+    assert r.status_code==status and 'private SQL' not in r.text
+
+
+def test_finals_cannot_be_selected_before_qualification(setup):
+    client,s=setup
+    url=path(s).removesuffix('regular')+'final/generate'
+    assert client.post(url,json=dict(expected_revision=0,format='mlp',division='3.5',club_a='home',club_b='away')).status_code==422
+    assert not s['calls']
+
+
+def test_fifth_approved_pool_player_is_available_without_private_contact_details(setup):
+    client,s=setup
+    s['meet']['roster_deadline']='2020-01-01T00:00:00Z'
+    entry_id=str(uuid4());member_id=str(uuid4())
+    s['tables']['pcs_interclub_entries']=[dict(id=entry_id,club_id='home',season_id=s['season']['id'],player_id=50,pool_member_id=member_id,starting_rating=3.6)]
+    s['tables']['pcs_interclub_meet_eligibility_snapshots']=[dict(meet_id=s['meet']['id'],entry_id=entry_id,club_id='home',rating=3.7,gender='female',deadline=s['meet']['roster_deadline'])]
+    s['tables']['players']=[dict(id=50,club_id='home',name='Approved substitute',gender='male',email='private@example.invalid')]
+    r=client.get(path(s));assert r.status_code==200
+    choices=r.json()['eligible_players']['home']
+    assert choices[0]['name']=='Approved substitute' and choices[0]['eligibility_rating']==3.7
+    assert choices[0]['gender']=='female' and choices[0]['rating_locked'] is True
+    assert 'player_id' not in r.text and 'private@example' not in r.text
+    assert [name for name,_ in s['calls']]==['pcs_lock_interclub_meet_eligibility']
+
+
+def add_pool_choice(s, club, player_id, *, approval='approved', status='active'):
+    entry_id,member_id=str(uuid4()),str(uuid4())
+    s['tables']['pcs_interclub_entries'].append(dict(id=entry_id,club_id=club,season_id=s['season']['id'],player_id=player_id,pool_member_id=member_id,starting_rating=3.6))
+    s['tables']['pcs_interclub_pool_members'].append(dict(id=member_id,club_id=club,season_id=s['season']['id'],player_id=player_id,name=f'Pool {player_id}',approval_status=approval,status=status))
+    s['tables'].setdefault('players',[]).append(dict(id=player_id,club_id=club,name=f'Pool {player_id}',gender='female',email='private-pool@example.invalid'))
+    return entry_id
+
+
+def test_92_unfrozen_players_use_four_club_rating_calls_with_distinct_ratings(setup):
+    client,s=setup
+    clubs=['home','away','third','fourth'];s['meet']['club_ids']=clubs
+    s['tables']['pcs_interclub_participations']=[dict(season_id=s['season']['id'],club_id=c,status='accepted') for c in clubs]
+    s['rating_details']={club:[] for club in clubs};expected={};expected_ids={club:[] for club in clubs}
+    for index in range(92):
+        club=clubs[index%4];player_id=1000+index
+        entry=add_pool_choice(s,club,player_id)
+        rating=2.51+index/100
+        expected[entry]=rating;expected_ids[club].append(player_id)
+        # Mix ID representations and reverse rows to require identity mapping.
+        s['rating_details'][club].insert(0,dict(player_id=str(player_id) if index%2 else player_id,league_rating=rating,eligible_divisions=['3.0']))
+    add_pool_choice(s,'home',2001,approval='pending')
+    add_pool_choice(s,'home',2002,status='withdrawn')
+    add_pool_choice(s,'unrelated',2003)
+    response=client.get(path(s));assert response.status_code==200,response.text
+    choices=[row for rows in response.json()['eligible_players'].values() for row in rows]
+    assert len(choices)==92
+    assert {row['entry_id']:row['eligibility_rating'] for row in choices}==expected
+    assert all(row['rating_locked'] is False for row in choices)
+    assert len(s['calls'])==4
+    assert all(name=='pcs_interclub_pool_player_details' for name,_ in s['calls'])
+    for _,params in s['calls']:
+        assert params['p_season_id']==s['season']['id']
+        assert params['p_player_ids']==expected_ids[params['p_club_id']]
+    assert 'player_id' not in response.text and 'private-pool@example' not in response.text
+    assert 'pcs_interclub_meet_eligibility_snapshots' not in s['reads']
+
+
+def test_unfrozen_rating_batch_keeps_private_club_scope_and_omits_missing_ratings(setup):
+    client,s=setup;s['season']['organizer_club_id']='organizer'
+    valid=add_pool_choice(s,'home',50)
+    add_pool_choice(s,'home',51);add_pool_choice(s,'home',52);add_pool_choice(s,'away',53)
+    s['rating_details']={'home':[dict(player_id=50,league_rating=3.71),dict(player_id=51,league_rating=None)],
+                         'away':[dict(player_id=53,league_rating=4.2)]}
+    response=client.get(path(s));assert response.status_code==200,response.text
+    assert response.json()['lineups_hidden'] is True
+    choices=response.json()['eligible_players']
+    assert set(choices)=={'home'}
+    assert [(row['entry_id'],row['eligibility_rating']) for row in choices['home']]==[(valid,3.71)]
+    assert s['calls']==[('pcs_interclub_pool_player_details',dict(p_season_id=s['season']['id'],p_club_id='home',p_player_ids=[50,51,52]))]
+    assert 'private-pool@example' not in response.text and 'player_id' not in response.text
+
+
+def test_prepared_mixed_pairs_can_be_rearranged_but_not_replaced_with_nonroster_player(setup):
+    client,s=setup
+    document=engine.generate_round_robin(s['meet']['id'],s['teams'],format='mixed')
+    for e in document['encounters']:
+        for p in e['pairings']:p['eligibility_deadline']=s['meet']['roster_deadline']
+    document=engine.validate_document(document);s['saved']['document']=deepcopy(document)
+    p1,p2=document['encounters'][0]['pairings']
+    p1['players_a'][1],p2['players_a'][1]=p2['players_a'][1],p1['players_a'][1]
+    assert client.put(path(s),json=dict(expected_revision=1,document=document)).status_code==200
+    p1['players_a'][1]=str(uuid4())
+    assert client.put(path(s),json=dict(expected_revision=1,document=document)).status_code==422
+
+
+def test_prepared_pairing_is_immutable_after_score_entry(setup):
+    client,s=setup;complete(s)
+    document=deepcopy(s['saved']['document']);p1,p2=document['encounters'][0]['pairings']
+    p1['players_a'][0],p2['players_a'][0]=p2['players_a'][0],p1['players_a'][0]
+    assert client.put(path(s),json=dict(expected_revision=1,document=document)).status_code==422
+
+
+def test_scoped_operator_gets_only_relevant_competition_seasons(setup):
+    client,s=setup;s['assignment'].update(club_id='away',role='operator',scopes=[{'kind':'resource','program_type':'leagues','resource_id':s['meet']['id']}])
+    assert len(client.get('/admin/clubs/away/interclub/competition').json()['seasons'])==1
+    s['assignment']['scopes'][0]['resource_id']='other'
+    assert client.get('/admin/clubs/away/interclub/competition').json()['seasons']==[]
+
+
+def test_meet_creation_requires_organizer_and_accepted_clubs(setup):
+    client,s=setup
+    payload=dict(host_club_id='away',club_ids=['home','away'],starts_at='2099-03-01T18:00:00Z',roster_deadline='2099-02-27T18:00:00Z',courts=2,duration_minutes=180,competition_phase='final')
+    assert client.post(base(s)+'/meets',json=payload).status_code==200
+    assert s['calls'][-1][0]=='pcs_create_interclub_competition_meet'
+    payload['club_ids']=['home','unrelated']
+    assert client.post(base(s)+'/meets',json=payload).status_code==422
+    s['assignment']['club_id']='away';payload['club_ids']=['home','away']
+    assert client.post(base(s,'away')+'/meets',json=payload).status_code==403
+
+
+def schedule_payload(s, **changes):
+    return dict(expected_revision=s['meet']['revision'],starts_at='2099-01-08T18:00:00Z',
+                roster_deadline='2099-01-07T18:00:00Z',courts=2,duration_minutes=180,**changes)
+
+
+def schedule_path(s, club='home'):
+    return base(s,club)+f"/meets/{s['meet']['id']}/schedule"
+
+
+def test_schedule_static_route_preserves_provisional_rosters_and_passes_revision(setup):
+    client,s=setup
+    response=client.put(schedule_path(s),json=schedule_payload(s))
+    assert response.status_code==200, response.text
+    assert response.json()['availability_reset_count']==2
+    assert response.json()['rosters_refreshed']==1
+    assert response.json()['publication_review_required'] is True
+    name,payload=s['calls'][-1]
+    assert name=='pcs_update_interclub_meet_schedule'
+    assert payload==dict(p_actor_id=s['user'].user_id,p_actor_email=s['user'].email,p_club_id='home',
+                        p_season_id=s['season']['id'],p_meet_id=s['meet']['id'],p_revision=1,
+                        p_starts_at='2099-01-08T18:00:00+00:00',p_deadline='2099-01-07T18:00:00+00:00',p_duration=180,p_courts=2)
+
+
+@pytest.mark.parametrize('phase',['unconfigured','scheduled','open'])
+def test_schedule_edit_waits_for_closed_registration(setup,phase):
+    client,s=setup;set_registration_phase(s['season'],phase)
+    assert client.put(schedule_path(s),json=schedule_payload(s)).status_code==423
+    assert not s['calls']
+
+
+def test_schedule_edit_is_commissioner_only_not_host_operator(setup):
+    client,s=setup;s['assignment']['club_id']='away'
+    assert client.put(schedule_path(s,'away'),json=schedule_payload(s)).status_code==403
+    s['assignment'].update(club_id='home',role='operator',scopes=[{'kind':'club'}])
+    assert client.put(schedule_path(s),json=schedule_payload(s)).status_code==403
+    assert not s['calls']
+
+
+@pytest.mark.parametrize('change',[
+    {'expected_revision':0},{'host_club_id':'home'}, {'starts_at':'2000-01-01T00:00:00Z'},
+    {'starts_at':'2099-01-06T18:00:00Z'},{'starts_at':'2100-01-01T07:00:00Z'},
+    {'starts_at':'2100-01-01T06:00:00Z','duration_minutes':180},
+])
+def test_schedule_rejects_stale_identity_changes_invalid_or_out_of_season_dates(setup,change):
+    client,s=setup;payload={**schedule_payload(s),**change}
+    assert client.put(schedule_path(s),json=payload).status_code in (409,422)
+    assert not s['calls']
+
+
+def test_schedule_retains_frozen_cutoff_and_generated_courts(setup):
+    client,s=setup;s['meet'].update(schedule_deadline_editable=False,courts_editable=False,roster_deadline='2000-01-01T00:00:00Z')
+    payload={**schedule_payload(s),'roster_deadline':s['meet']['roster_deadline']}
+    assert client.put(schedule_path(s),json=payload).status_code==200
+    s['calls'].clear()
+    assert client.put(schedule_path(s),json={**payload,'roster_deadline':'2099-01-07T18:00:00Z'}).status_code==409
+    assert client.put(schedule_path(s),json={**payload,'courts':3}).status_code==409
+    assert not s['calls']
+
+
+def test_schedule_locked_reason_and_context_are_visible(setup):
+    client,s=setup;s['meet'].update(schedule_editable=False,schedule_locked_reason='Scores already entered. Use the weather replay workflow.')
+    response=client.put(schedule_path(s),json=schedule_payload(s))
+    assert response.status_code==409 and 'weather replay' in response.text
+    visible=client.get(base(s)).json()['meets'][0]
+    assert visible['schedule_editable'] is False and visible['schedule_deadline_editable'] is True
+    assert not s['calls']
+
+
+def test_meet_create_passes_request_identity_and_enforces_timezone_bounds(setup):
+    client,s=setup
+    payload=dict(request_id=str(uuid4()),host_club_id='away',club_ids=['home','away'],starts_at='2099-03-01T18:00:00Z',roster_deadline='2099-02-27T18:00:00Z',courts=2,duration_minutes=180,competition_phase='regular')
+    response=client.post(base(s)+'/meets',json=payload)
+    assert response.status_code==200 and response.json()['publication_review_required'] is True
+    assert s['calls'][-1][1]['p_meet']['request_id']==payload['request_id']
+    s['calls'].clear()
+    assert client.post(base(s)+'/meets',json={**payload,'starts_at':'2100-01-01T06:00:00Z'}).status_code==422
+    assert not s['calls']
+
+
+def test_wrong_meet_competition_phase_is_rejected(setup):
+    client,s=setup;s['meet']['competition_phase']='final'
+    assert client.get(path(s)).status_code==422
+    assert client.post(path(s)+'/generate',json=dict(expected_revision=1,format='gender')).status_code==422
+
+
+def test_replay_keeps_complete_pairings_and_resets_unfinished_pairing(setup):
+    client,s=setup;complete(s)
+    e=s['saved']['document']['encounters'][0];e['pairings'][1]['games'][2].update(status='pending',a=None,b=None,winner=None)
+    original=deepcopy(e['pairings'][0])
+    r=client.post(path(s)+'/reschedule',json=dict(expected_revision=1,reason='Weather cancellation',starts_at='2099-02-01T18:00:00Z',roster_deadline='2099-01-30T18:00:00Z'))
+    assert r.status_code==200
+    replay=s['calls'][-1][1]['p_document'];pairs=replay['encounters'][0]['pairings']
+    assert pairs[0]==original
+    assert all(g['status']=='pending' and g['a'] is None and g['played_at'] is None for g in pairs[1]['games'])
+    assert pairs[1]['eligibility_deadline']=='2099-01-30T18:00:00Z'
+
+
+def test_historical_entry_names_are_display_only_not_eligible_choices(setup):
+    client,s=setup;player=s['teams'][0]['roster'][0]
+    s['tables']['pcs_interclub_entries']=[dict(id=player['entry_id'],club_id='home',season_id=s['season']['id'],player_id=50,pool_member_id=str(uuid4()),starting_rating=3.6)]
+    s['tables']['players']=[dict(id=50,club_id='home',name='Prior completed lineup',gender='female',email='private@example.invalid')]
+    r=client.get(path(s));assert r.status_code==200
+    assert r.json()['display_players']==[dict(entry_id=player['entry_id'],club_id='home',name='Prior completed lineup',gender='female')]
+    assert not r.json()['eligible_players']
+    assert 'private@example' not in r.text
+
+
+def test_nonplaying_accepted_host_can_run_championship_meet(setup):
+    client,s=setup;s['assignment']['club_id']='away';s['meet']['club_ids']=['home','third']
+    assert client.get(path(s,'away')).status_code==200
+    assert len(client.get(base(s,'away')).json()['meets'])==1
+
+
+def test_organizer_operator_scope_can_access_meet_without_organizer_playing(setup):
+    client,s=setup;s['assignment'].update(role='operator',scopes=[{'kind':'resource','program_type':'leagues','resource_id':s['meet']['id']}]);s['meet']['club_ids']=['away','third']
+    assert client.get(path(s)).status_code==200
+    assert len(client.get(base(s)).json()['meets'])==1
+    assert not client.get(base(s)).json()['is_organizer']
+
+
+def test_final_generation_binds_exact_approved_standings_revisions(setup,monkeypatch):
+    client,s=setup;s['meet']['competition_phase']='final'
+    s['saved']['approved_document']=deepcopy(s['saved']['document']);s['saved']['approved_revision']=4
+    monkeypatch.setattr(engine,'league_standings',lambda *_args,**_kwargs:{'qualification':{'3.5':{'status':'ready','qualifiers':['home','away'],'playoff_required':[]}}})
+    url=path(s).removesuffix('regular')+'final/generate'
+    r=client.post(url,json=dict(expected_revision=0,format='mlp',division='3.5',club_a='home',club_b='away'))
+    assert r.status_code==200
+    args=s['calls'][-1][1]
+    assert args['p_qualification_sources']==[dict(id=s['saved']['id'],revision=4)]
+    assert args['p_document']['phase']=='final' and len(args['p_document']['encounters'][0]['pairings'])==4
+    assert all(g['played_at'] is None for p in args['p_document']['encounters'][0]['pairings'] for g in p['games'])
+
+
+def test_club_must_remain_qualified_when_submitting_final(setup,monkeypatch):
+    client,s=setup;s['meet']['competition_phase']='final';s['saved']['phase']='final'
+    s['saved']['document']=engine.generate_championship(s['meet']['id'],'3.5',s['teams'][0],s['teams'][1],played_at='2026-01-01T18:00:00Z')
+    complete(s)
+    monkeypatch.setattr(engine,'league_standings',lambda *_args,**_kwargs:{'qualification':{'3.5':{'status':'playoff_required','qualifiers':['home'],'playoff_required':['away','third']}}})
+    url=path(s).removesuffix('regular')+'final/submit'
+    assert client.post(url,json={'expected_revision':1}).status_code==409
+    assert not s['calls']
+
+
+def test_opposing_lineups_stay_blind_to_participants_until_deadline(setup):
+    client,s=setup;s['season']['organizer_club_id']='organizer'
+    r=client.get(path(s));assert r.status_code==200
+    detail=r.json()
+    assert detail['lineups_hidden'] and detail['batch'] is None
+    assert [t['club_id'] for t in detail['teams']]==['home']
+    assert not detail['display_players']
+    assert not client.get(base(s)).json()['batches']
+    s['meet']['roster_deadline']='2020-01-01T00:00:00Z'
+    detail=client.get(path(s)).json()
+    assert not detail['lineups_hidden'] and detail['batch'] is not None
+    assert {t['club_id'] for t in detail['teams']}=={'home','away'}
+
+
+def test_two_player_roster_generates_only_missing_pair_forfeits_without_fake_players(setup):
+    client,s=setup;s['teams'][0]['roster']=s['teams'][0]['roster'][:2]
+    r=client.post(path(s)+'/generate',json=dict(expected_revision=1,format='gender'))
+    assert r.status_code==200
+    document=s['calls'][-1][1]['p_document'];encounter=document['encounters'][0]
+    home_side='a' if encounter['club_a']=='home' else 'b'
+    present=next(p for p in encounter['pairings'] if p['kind']=='women')
+    absent=next(p for p in encounter['pairings'] if p['kind']=='men')
+    assert len(present['players_'+home_side])==2 and not absent['players_'+home_side]
+    assert all(g['status']=='pending' for g in present['games'])
+    assert all(g['status']=='forfeit' and g['winner']!=home_side and g['a'] is None and g['b'] is None for g in absent['games'])
+    assert not any('player_id' in p for team in document['encounters'] for p in team['pairings'])
+
+
+def test_automatic_missing_pair_forfeit_does_not_freeze_preplay_arrangement(setup):
+    client,s=setup;s['teams'][0]['roster']=s['teams'][0]['roster'][::2] # one woman and one man
+    document=engine.generate_round_robin(s['meet']['id'],s['teams'],format='mixed')
+    for e in document['encounters']:
+        for p in e['pairings']:p['eligibility_deadline']=s['meet']['roster_deadline']
+    s['saved']['document']=engine.validate_document(document);document=deepcopy(s['saved']['document'])
+    encounter=document['encounters'][0];full_side='a' if encounter['club_a']=='away' else 'b'
+    p1,p2=encounter['pairings'];key='players_'+full_side
+    p1[key][1],p2[key][1]=p2[key][1],p1[key][1]
+    assert client.put(path(s),json=dict(expected_revision=1,document=document)).status_code==200
+
+
+def test_both_missing_same_pair_generates_explicit_double_forfeit(setup):
+    client,s=setup
+    for team in s['teams']:team['roster']=team['roster'][:2]
+    r=client.post(path(s)+'/generate',json=dict(expected_revision=1,format='gender'))
+    assert r.status_code==200
+    pairings=s['calls'][-1][1]['p_document']['encounters'][0]['pairings']
+    absent=next(p for p in pairings if p['kind']=='men')
+    assert not absent['players_a'] and not absent['players_b']
+    assert all(g['status']=='double_forfeit' and g['a'] is None and g['b'] is None and g['winner'] is None for g in absent['games'])
+
+
+def test_partial_team_can_refresh_to_full_lineup_before_play_without_new_game_ids(setup):
+    client,s=setup;full_roster=deepcopy(s['teams'][0]['roster']);s['teams'][0]['roster']=full_roster[:2]
+    document=engine.generate_round_robin(s['meet']['id'],s['teams'],format='gender')
+    for e in document['encounters']:
+        for p in e['pairings']:p['eligibility_deadline']=s['meet']['roster_deadline']
+    s['saved']['document']=engine.validate_document(document)
+    ids=[g['id'] for e in document['encounters'] for p in e['pairings'] for g in p['games']]
+    s['teams'][0].update(roster=full_roster,revision=2)
+    r=client.post(path(s)+'/refresh-lineups',json={'expected_revision':1})
+    assert r.status_code==200
+    args=s['calls'][-1][1];refreshed=args['p_document']
+    assert all(g['status']=='pending' for e in refreshed['encounters'] for p in e['pairings'] for g in p['games'])
+    assert [g['id'] for e in refreshed['encounters'] for p in e['pairings'] for g in p['games']]==ids
+    assert dict(team_id=s['teams'][0]['id'],revision=2) in args['p_roster_sources']
+
+
+def test_lineup_refresh_does_not_clear_an_explicit_forfeit_from_full_rosters(setup):
+    client,s=setup
+    for game in s['saved']['document']['encounters'][0]['pairings'][0]['games']:
+        game.update(status='forfeit',winner='a',a=None,b=None)
+    assert client.post(path(s)+'/refresh-lineups',json={'expected_revision':1}).status_code==422
+    assert not s['calls']
+
+
+def test_lineup_refresh_cannot_change_starting_team_after_meet_start(setup):
+    client,s=setup;s['meet']['starts_at']='2020-01-01T18:00:00Z'
+    assert client.post(path(s)+'/refresh-lineups',json={'expected_revision':1}).status_code==422
+    assert not s['calls']
+
+
+@pytest.mark.parametrize('phase', ['unconfigured', 'scheduled', 'open'])
+def test_direct_competition_routes_cannot_bypass_shared_registration_window(setup, phase):
+    client, state = setup
+    set_registration_phase(state['season'], phase)
+    workspace = client.get(base(state))
+    assert workspace.status_code == 200
+    assert workspace.json()['season']['registration']['status'] == phase
+    assert workspace.json()['meets'] == [] and workspace.json()['batches'] == []
+    assert client.get(path(state)).status_code == 423
+    payload = dict(host_club_id='away', club_ids=['home', 'away'], starts_at='2099-03-01T18:00:00Z',
+                   roster_deadline='2099-02-27T18:00:00Z', courts=2, duration_minutes=180, competition_phase='final')
+    assert client.post(base(state) + '/meets', json=payload).status_code == 423
+    assert client.put(path(state), json=dict(expected_revision=1, document=state['saved']['document'])).status_code == 423
+    actions = {
+        'generate': dict(expected_revision=1, format='gender'),
+        'refresh-lineups': dict(expected_revision=1),
+        'submit': dict(expected_revision=1),
+        'approve': dict(expected_revision=1),
+        'retry-ratings': dict(expected_revision=1),
+        'reopen': dict(expected_revision=1, reason='Correct score'),
+        'reschedule': dict(expected_revision=1, reason='Weather reschedule', starts_at='2099-03-01T18:00:00Z',
+                           roster_deadline='2099-02-27T18:00:00Z'),
+    }
+    for action, body in actions.items():
+        response = client.post(path(state) + '/' + action, json=body)
+        assert response.status_code == 423, (action, response.text)
+    assert not state['calls']

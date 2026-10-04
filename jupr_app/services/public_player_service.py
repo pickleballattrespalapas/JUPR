@@ -512,6 +512,10 @@ def _public_awards(supabase: Any, *, club_id: str, player_id: int | str) -> dict
                 }
             )
 
+    from jupr_app.services.interclub_awards_service import player_interclub_awards
+    interclub = player_interclub_awards(supabase, club_id=club_id, player_id=player_id)
+    trophies.extend(interclub["trophies"])
+    badges.extend(interclub["badges"])
     badges.sort(key=lambda item: (category_sort_key(item["category"]), str(item.get("name") or "").casefold()))
     trophies.sort(key=lambda item: str(item.get("earned_at") or ""), reverse=True)
     return {
