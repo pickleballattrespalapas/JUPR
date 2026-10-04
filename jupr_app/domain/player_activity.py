@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Iterable
+from typing import Any, Iterable, Mapping
 
 import pandas as pd
+
+from jupr_app.domain.player_visibility import is_merged_player
 
 INACTIVITY_DAYS = 14
 INACTIVITY_THRESHOLD = timedelta(days=INACTIVITY_DAYS)
@@ -36,34 +38,62 @@ def max_activity_time(current, candidate) -> datetime | None:
 
 def should_mark_inactive(
     last_game_at,
-    created_at,
+    created_at=None,
     *,
     now_utc: datetime | None = None,
     threshold: timedelta = INACTIVITY_THRESHOLD,
 ) -> bool:
-    """Use created_at when the player has never logged a recorded game."""
+    """Only a recorded game within the activity window establishes activity.
+
+    Keep created_at in the signature for older callers; creating an account or
+    registering for an event never establishes leaderboard activity.
+    """
     now = now_utc or datetime.now(timezone.utc)
-    baseline = coerce_utc_datetime(last_game_at) or coerce_utc_datetime(created_at)
+    baseline = coerce_utc_datetime(last_game_at)
     if baseline is None:
-        return False
-    return (now - baseline) >= threshold
+        return True
+    return baseline > now or (now - baseline) >= threshold
+
+
+def is_player_leaderboard_active(
+    row: Mapping[str, Any], *, now_utc: datetime | None = None,
+) -> bool:
+    """Apply game recency as well as explicit exclusions at read time."""
+    return (
+        not is_merged_player(row)
+        and row.get("active") is not False
+        and row.get("is_active") is not False
+        and not row.get("inactive_at")
+        and not should_mark_inactive(row.get("last_game_at"), now_utc=now_utc)
+    )
 
 
 def add_activity_columns(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return df
     data = df.copy()
-    if "inactive_at" in data.columns:
-        inactive_at = pd.to_datetime(data["inactive_at"], utc=True, errors="coerce")
-        data["active"] = inactive_at.isna()
+    if "last_game_at" in data.columns:
+        now = datetime.now(timezone.utc)
+        data["active"] = [
+            is_player_leaderboard_active(row, now_utc=now)
+            for row in data.astype(object).where(pd.notna(data), None).to_dict("records")
+        ]
     return data
 
 
-def build_player_activity_update(existing_last_game_at, match_time) -> dict:
+def build_player_activity_update(
+    existing_last_game_at, match_time, *, now_utc: datetime | None = None,
+) -> dict:
     latest = max_activity_time(existing_last_game_at, match_time)
     if latest is None:
         return {}
-    return {"last_game_at": latest.isoformat(), "inactive_at": None, "active": True}
+    now = now_utc or datetime.now(timezone.utc)
+    inactive = should_mark_inactive(latest, now_utc=now)
+    return {
+        "last_game_at": latest.isoformat(),
+        "inactive_at": now.isoformat() if inactive else None,
+        "active": not inactive,
+    }
 
 
 def recompute_last_game_at_for_players(
@@ -99,5 +129,8 @@ def recompute_last_game_at_for_players(
                 latest = df["date_dt"].max()
                 if pd.isna(latest):
                     latest = None
-        payload = {"last_game_at": latest.isoformat()} if latest is not None else {"last_game_at": None}
+        now = datetime.now(timezone.utc)
+        payload = build_player_activity_update(None, latest, now_utc=now) if latest is not None else {
+            "last_game_at": None, "inactive_at": now.isoformat(), "active": False,
+        }
         supabase.table("players").update(payload).eq("club_id", str(club_id)).eq("id", pid).execute()

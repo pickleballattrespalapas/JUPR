@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from jupr_app.domain.player_visibility import is_merged_player
+from jupr_app.domain.player_activity import is_player_leaderboard_active
 from jupr_app.data.paged_reads import read_all_rows
 from jupr_app.domain.player_search import matches_player_search
 from jupr_app.domain.gamification.presentation import badge_category, badge_requirement, category_sort_key
@@ -114,11 +115,7 @@ def _json_object(value: Any) -> dict[str, Any]:
 
 
 def _is_active_player(row: dict[str, Any]) -> bool:
-    if row.get("inactive_at"):
-        return False
-    if "active" in row and row.get("active") is False:
-        return False
-    return True
+    return is_player_leaderboard_active(row)
 
 
 def _player_base(row: dict[str, Any]) -> dict[str, Any]:
@@ -928,7 +925,7 @@ def get_public_player_profile(
 ) -> dict[str, Any] | None:
     cid = str(club_id).strip()
     row = _fetch_player(supabase, cid, player_id)
-    if not row:
+    if not row or is_merged_player(row):
         return None
     player = _player_base(row)
     public_league_names = _public_league_names(supabase, cid)

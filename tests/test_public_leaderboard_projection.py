@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from jupr_app.services.leaderboard_service import LeaderboardDataUnavailable, build_public_leaderboard
 
 
@@ -59,6 +61,7 @@ def _fixture():
                     "losses": 1,
                     "matches_played": 10,
                     "active": True,
+                    "last_game_at": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
                     "email": "private@example.com",
                 },
                 {
@@ -71,6 +74,7 @@ def _fixture():
                     "losses": 5,
                     "matches_played": 10,
                     "active": True,
+                    "last_game_at": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
                 },
                 {
                     "id": 3,
@@ -82,6 +86,7 @@ def _fixture():
                     "losses": 2,
                     "matches_played": 3,
                     "active": False,
+                    "last_game_at": (datetime.now(timezone.utc) - timedelta(days=30)).isoformat(),
                     "phone": "+1-private",
                 },
                 {"id": 99, "club_id": "other-club", "name": "Wrong Club", "rating": 2200, "active": True},
@@ -246,3 +251,45 @@ def test_inactivity_hides_only_leaderboards_and_does_not_hide_directory_identity
         assert [row["id"] for row in directory["players"]] == [1]
         assert directory["players"][0]["is_active"] is False
         assert supabase.store == before
+
+
+def test_merged_and_never_played_profiles_are_absent_from_every_leaderboard_view():
+    from copy import deepcopy
+    from jupr_app.services.public_player_service import build_public_player_directory
+
+    sb = _fixture()
+    now = datetime.now(timezone.utc)
+    sb.store["players"].extend([
+        {"id": 4, "club_id": "club-1", "name": "Joseph (MERGED into Avery #1)",
+         "rating": 2400, "active": True, "matches_played": 8, "last_game_at": now.isoformat()},
+        {"id": 5, "club_id": "club-1", "name": "New Signup", "rating": 2300,
+         "active": True, "inactive_at": None, "matches_played": 0,
+         "last_game_at": None, "created_at": now.isoformat()},
+    ])
+    sb.store["league_ratings"].extend([
+        {"club_id": "club-1", "league_name": "Pro", "player_id": 4, "rating": 2400, "matches_played": 8, "is_active": True},
+        {"club_id": "club-1", "league_name": "Pro", "player_id": 5, "rating": 2300, "matches_played": 0, "is_active": True},
+    ])
+    before = deepcopy(sb.store)
+    for league in ("OVERALL", "Pro"):
+        for status in ("active", "inactive", "all"):
+            for pid in (4, 5):
+                payload = build_public_leaderboard(sb, club_id="club-1", league_name=league, status=status, player_id=pid)
+                assert {row["player_id"] for row in payload["leaderboard"]}.isdisjoint({4, 5})
+                assert payload["snapshot"] is None
+                assert payload["summary"]["ranked_players"] == 3
+                assert all(row["player_id"] not in {4, 5} for rows in payload["highlights"].values() for row in rows)
+    directory = build_public_player_directory(sb, club_id="club-1", search="New Signup")
+    assert [row["id"] for row in directory["players"]] == [5]
+    assert directory["players"][0]["is_active"] is False
+    assert sb.store == before
+
+
+def test_stale_saved_active_flag_does_not_override_recorded_game_cutoff():
+    sb = _fixture()
+    sb.store["players"][0]["last_game_at"] = (datetime.now(timezone.utc) - timedelta(days=15)).isoformat()
+    for league in ("OVERALL", "Pro"):
+        active = build_public_leaderboard(sb, club_id="club-1", league_name=league)
+        assert 1 not in [row["player_id"] for row in active["leaderboard"]]
+        inactive = build_public_leaderboard(sb, club_id="club-1", league_name=league, status="inactive")
+        assert 1 in [row["player_id"] for row in inactive["leaderboard"]]
