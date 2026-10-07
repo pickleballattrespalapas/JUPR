@@ -1,6 +1,7 @@
 "use client";
 
 import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
+import GeneratorLateArrivals from "@/components/GeneratorLateArrivals";
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -24,6 +25,7 @@ type Participant = {
   active_from_round?: number;
   inactive_from_round?: number | null;
   inactive_rounds?: number[];
+  substitutes_for?: string;
 };
 
 type MatchRow = {
@@ -63,6 +65,7 @@ type GeneratorEvent = {
   status: string;
   currentRoundNumber: number;
   totalRounds: number;
+  courtCount?: number;
   participants: Participant[];
   rounds: RoundRow[];
   rosterRevisions?: Array<Record<string, unknown>>;
@@ -373,7 +376,7 @@ export default function GeneratorRoundRunner({
     return payload as T;
   }
 
-  function applySession(next: GeneratorSession): void {
+  function applySession(next: GeneratorSession, preserveDraftScores = false): void {
     setSession(next);
     const nextScores: Record<string, string> = {};
     const requestedRound = next.event.rounds.find((row) => row.number === roundNumber);
@@ -381,7 +384,15 @@ export default function GeneratorRoundRunner({
       nextScores[scoreKey(match.id, "a")] = match.scoreA == null ? "" : String(match.scoreA);
       nextScores[scoreKey(match.id, "b")] = match.scoreB == null ? "" : String(match.scoreB);
     }
-    setScores(nextScores);
+    setScores(current => {
+      const merged = { ...nextScores };
+      if (preserveDraftScores && requestedRound?.status === "active") {
+        for (const key of Object.keys(merged)) {
+          if (merged[key] === "" && current[key] !== undefined) merged[key] = current[key];
+        }
+      }
+      return merged;
+    });
     const ordered = [...next.event.participants]
       .sort(
         (left, right) =>
@@ -463,7 +474,7 @@ export default function GeneratorRoundRunner({
     .map((id) => participants.get(id)?.name || id)
     .join(", ");
 
-  async function runMutation(path: string, body: Record<string, unknown>): Promise<GeneratorSession> {
+  async function runMutation(path: string, body: Record<string, unknown>, preserveDraftScores = false): Promise<GeneratorSession> {
     const payload = await requestJson<MutationResponse>(path, {
       method: "POST",
       body: JSON.stringify({
@@ -473,7 +484,7 @@ export default function GeneratorRoundRunner({
       })
     });
     if (!payload.session) throw new Error("The operation completed without a refreshed session.");
-    applySession(payload.session);
+    applySession(payload.session, preserveDraftScores);
     return payload.session;
   }
 
@@ -684,10 +695,6 @@ export default function GeneratorRoundRunner({
 
   async function saveRosterChange(): Promise<void> {
     if (!session) return;
-    if (anyDraftScore) {
-      setMessage("Save or clear the current score entries before changing the roster.");
-      return;
-    }
     setBusy(true);
     setMessage(null);
     try {
@@ -717,20 +724,17 @@ export default function GeneratorRoundRunner({
         `/admin/clubs/${encodeURIComponent(clubId)}/play-generators/sessions/${encodeURIComponent(
           sessionKey
         )}/roster`,
-        body
+        body,
+        true
       );
       setSelectedParticipant("");
       setFirstSwapParticipant("");
       setSecondSwapParticipant("");
       setNewPlayerName("");
       setNewPlayerId("");
-      setMessage(
-        rosterAction === "substitute"
-          ? "Substitution saved. Completed rounds remain unchanged."
-          : rosterAction === "swap"
-            ? "Player positions swapped. Completed rounds remain unchanged; future matchups were regenerated when applicable."
-          : "Roster updated. Future matchups were regenerated when applicable."
-      );
+      setMessage(roundNumber < next.event.totalRounds
+        ? `Players updated for Round ${roundNumber + 1}. Current games and score entries stay in place.`
+        : "This is the final round. Added arrivals can play together on a spare court below.");
       const current = next.current_round_number || roundNumber;
       if (current !== roundNumber) {
         router.push(roundPath(generatorKind, sessionKey, current));
@@ -739,6 +743,23 @@ export default function GeneratorRoundRunner({
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to update the roster.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function startArrivalGame(participantIds: string[], court: number): Promise<void> {
+    setBusy(true);
+    setMessage(null);
+    try {
+      await runMutation(
+        `/admin/clubs/${encodeURIComponent(clubId)}/play-generators/sessions/${encodeURIComponent(sessionKey)}/roster`,
+        { action: "seat_arrivals", participant_ids: participantIds, court_number: court },
+        true
+      );
+      setMessage(`Late arrivals are playing on Court ${court}. All existing games and score entries stay in place.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to add the late-arrival game.");
     } finally {
       setBusy(false);
     }
@@ -1026,8 +1047,12 @@ export default function GeneratorRoundRunner({
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>Adaptive roster</h2>
           <p style={{ color: "#475569" }}>
-            Completed rounds never change. If this round has no saved scores, roster changes can regenerate it.
-            Otherwise, changes take effect in the next round.
+            {roundNumber < event.totalRounds
+              ? "Changes apply from the next round. Current games, byes and scores stay in place."
+              : "This is the final round. Current games, byes and scores stay in place."}
+            {generatorKind === "round_robin" && ["singles", "doubles"].includes(event.playFormat)
+              ? " Add late arrivals here; if enough arrive for a game, you can put them together on a spare court below."
+              : " Added players join from the next round."}
           </p>
           <div
             style={{
@@ -1159,7 +1184,7 @@ export default function GeneratorRoundRunner({
                   style={inputStyle}
                 >
                   <option value="rest">Rest of session</option>
-                  <option value="round">One round only</option>
+                  <option value="round">Next round only</option>
                 </select>
               </label>
             ) : null}
@@ -1218,8 +1243,20 @@ export default function GeneratorRoundRunner({
             }
             style={{ ...primaryButton, marginTop: "0.8rem" }}
           >
-            {rosterAction === "swap" ? "Swap player positions" : "Apply roster change"}
+            {rosterAction === "add" ? (roundNumber < event.totalRounds ? "Add player for next round" : "Add late arrival") : "Apply change for next round"}
           </button>
+          <GeneratorLateArrivals
+            participants={event.participants}
+            roundNumber={roundNumber}
+            totalRounds={event.totalRounds}
+            generatorKind={generatorKind}
+            playFormat={event.playFormat}
+            roundStatus={round.status}
+            courtCount={event.courtCount}
+            usedCourts={matches.map(match => Number(match.court || 0))}
+            busy={busy}
+            onStart={startArrivalGame}
+          />
         </article>
       ) : null}
 

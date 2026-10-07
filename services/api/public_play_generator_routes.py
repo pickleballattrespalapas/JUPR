@@ -69,12 +69,14 @@ class PublicGeneratorSkipRequest(PublicGeneratorMutationRequest):
 
 
 class PublicGeneratorRosterRequest(PublicGeneratorMutationRequest):
-    action: str = Field(pattern=r"^(add|remove|substitute|reorder)$")
+    action: str = Field(pattern=r"^(add|remove|substitute|reorder|seat_arrivals)$")
     participant_id: str | None = Field(default=None, max_length=160)
     name: str | None = Field(default=None, max_length=160)
     player_id: int | None = None
     substitute_scope: str = Field(default="rest", pattern=r"^(round|rest)$")
     roster_order: list[str] = Field(default_factory=list, max_length=40)
+    participant_ids: list[str] = Field(default_factory=list, max_length=4)
+    court_number: int | None = Field(default=None, ge=1, le=20)
 
 
 def _model_payload(model: BaseModel) -> dict[str, Any]:
@@ -363,6 +365,8 @@ def install_public_play_generator_routes(
                 player_id=payload.player_id,
                 substitute_scope=payload.substitute_scope,
                 roster_order=payload.roster_order,
+                participant_ids=payload.participant_ids,
+                court_number=payload.court_number,
                 edit_token=payload.edit_token,
                 expected_version=payload.expected_version,
                 idempotency_key=payload.idempotency_key,
