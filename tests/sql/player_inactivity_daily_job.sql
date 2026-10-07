@@ -40,9 +40,9 @@ BEGIN
     SELECT 1 FROM public.players
      WHERE club_id = fixture_club
        AND (inactive_at IS NOT NULL) IS DISTINCT FROM
-           (id IN (base_id - 1, base_id - 3, base_id - 4, base_id - 6))
+           (id IN (base_id - 1, base_id - 3, base_id - 4, base_id - 5, base_id - 6, base_id - 8))
   ) THEN
-    RAISE EXCEPTION '14-day boundary, creation fallback, or recent-player classification failed';
+    RAISE EXCEPTION '14-day boundary, never-played exclusion, or recent-player classification failed';
   END IF;
   IF (SELECT inactive_at FROM public.players WHERE id = base_id - 6)
       IS DISTINCT FROM now() - interval '30 days' THEN

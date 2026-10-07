@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.domain.player_visibility import is_merged_player
+
 import os
 from datetime import datetime, timezone
 from typing import Any
@@ -138,7 +140,7 @@ def _fetch_players(supabase: Any, *, club_id: str) -> list[dict[str, Any]]:
             .order("id", desc=False)
         )
         rows = _safe_rows(query.range(offset, offset + 499).execute())
-        players.extend(_player_payload(row) for row in rows if _safe_int(row.get("id")) is not None)
+        players.extend(_player_payload(row) for row in rows if _safe_int(row.get("id")) is not None and not is_merged_player(row))
         if not rows:
             return players
         offset += len(rows)
