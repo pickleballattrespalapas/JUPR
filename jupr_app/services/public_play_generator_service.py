@@ -890,6 +890,8 @@ def mutate_public_play_generator_roster(
     player_id: int | None,
     substitute_scope: str,
     roster_order: list[str] | None,
+    participant_ids: list[str] | None = None,
+    court_number: int | None = None,
     edit_token: str,
     expected_version: int,
     idempotency_key: str,
@@ -909,6 +911,8 @@ def mutate_public_play_generator_roster(
         "linked_player": player_id is not None,
         "substitute_scope": substitute_scope,
         "roster_count": len(roster_order or []),
+        "participant_ids": list(participant_ids or []),
+        "court_number": court_number,
     }
     return _run_mutation(
         supabase,
@@ -929,6 +933,8 @@ def mutate_public_play_generator_roster(
                 player_id=player_id,
                 substitute_scope=substitute_scope,
                 roster_order=roster_order,
+                participant_ids=participant_ids,
+                court_number=court_number,
             ),
             {},
         ),

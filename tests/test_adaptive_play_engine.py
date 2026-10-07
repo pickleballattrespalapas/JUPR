@@ -176,7 +176,7 @@ def test_adaptive_add_remove_and_substitute_preserve_completed_rounds():
     assert "New Player" in [
         row["name"]
         for row in event["participants"]
-        if row["id"] in active_participant_ids(event, 2)
+        if row["id"] in active_participant_ids(event, 3)
     ]
 
     event = mutate_generator_roster(
@@ -187,11 +187,11 @@ def test_adaptive_add_remove_and_substitute_preserve_completed_rounds():
         substitute_scope="round",
     )
     participants = {row["name"]: row for row in event["participants"]}
-    assert 2 in participants["A"]["inactive_rounds"]
-    assert participants["One-round Substitute"]["inactive_from_round"] == 3
+    assert 3 in participants["A"]["inactive_rounds"]
+    assert participants["One-round Substitute"]["inactive_from_round"] == 4
 
     event = mutate_generator_roster(event, action="remove", participant_id="p-2")
-    assert "p-2" not in active_participant_ids(event, 2)
+    assert "p-2" not in active_participant_ids(event, 3)
 
 
 def test_ladder_next_round_is_generated_only_after_results_and_uses_movement():
