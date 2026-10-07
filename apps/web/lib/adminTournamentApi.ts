@@ -47,6 +47,11 @@ export type AdminTournament = {
 };
 
 export type AdminTournamentRegistration = {
+  linked_profile_skills?: {
+    player_id: string | number;
+    doubles_skill: number | null;
+    singles_skill: number | null;
+  } | null;
   id: string;
   player_id?: string | number | null;
   first_name?: string | null;

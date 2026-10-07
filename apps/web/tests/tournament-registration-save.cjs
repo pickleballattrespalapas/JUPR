@@ -106,6 +106,8 @@ async function main() {
   const requests = [];
   let rejection = { status: 400, detail: "Another registration already uses that email." };
   const registration = { id: "reg-fixture", display_name: "Fixture Player", email: "fixture@example.com", gender: "Male", age: 38, doubles_skill: 4.2, singles_skill: 4.2, registration_status: "pending", payment_status: "unpaid", updated_at: "2026-09-07T00:00:00Z" };
+  registration.player_id = 200;
+  registration.linked_profile_skills = { player_id: 200, doubles_skill: 5.11585375, singles_skill: null };
   const event = (id, patch = {}) => ({ id, label: id, event_family_label: id, registration_day_id: "day-1", event_type: "SINGLES", gender_restriction: "MEN", skill_mode: "OPEN", status: "open", enabled: true, ...patch });
   const eventOptions = [
     event("singles", { event_family_label: "Men's Singles" }),
@@ -144,6 +146,14 @@ async function main() {
   try {
     await act(async () => { renderer = create(React.createElement(Panel, { apiBase: "http://fixture.local", clubId: "fixture", status: { enabled: true }, tournamentId: "t-fixture", tournamentName: "Fixture", registrationId: registration.id, drawId: "" })); });
     const field = name => renderer.root.findAllByType("label").find(node => content(node).startsWith(name));
+    assert.equal(field("Doubles skill").findByType("input").props.value, "5.11585375");
+    assert.equal(field("Doubles skill").findByType("input").props.readOnly, true);
+    assert.equal(field("Doubles skill").findByType("input").props.step, "any");
+    assert.equal(field("Singles skill").findByType("input").props.readOnly, false);
+    assert.equal(field("Singles skill").findByType("input").props.value, "4.2");
+    assert.match(content(renderer.root), /This value is self-rated/);
+    await act(async () => field("Doubles skill").findByType("input").props.onChange({target: {value: "2"}}));
+    assert.equal(field("Doubles skill").findByType("input").props.value, "5.11585375");
     assert.equal(field("Registration status").findByType("select").props.value, "confirmed");
     assert.equal(field("Gender").findByType("select").props.value, "Men");
     assert.match(content(renderer.root), /Needs admin approval/);

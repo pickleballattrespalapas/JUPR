@@ -27,6 +27,8 @@ from jupr_app.domain.tournament_admin_operations import stable_tournament_admin_
 from jupr_app.domain.tournament_gender_review import REVIEW_TABLE, gender_review_snapshots, load_gender_reviews
 from jupr_app.domain.tournament_partner_service import admin_replace_partner_link
 from jupr_app.services.public_tournament_registration_service import (
+    _canonical_player_skills,
+    _get_club_player,
     build_tournament_registration_player_profile,
     validate_and_clean_tournament_selection,
 )
@@ -288,7 +290,11 @@ def _display_name(row: dict[str, Any]) -> str:
     return name or _clean_text(row.get("email"), limit=160) or "Unnamed registrant"
 
 
-def _registration_payload(row: dict[str, Any], *, selection_count: int = 0) -> dict[str, Any]:
+def _registration_payload(
+    row: dict[str, Any], *, selection_count: int = 0,
+    linked_player: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    doubles, singles = _canonical_player_skills(linked_player) if linked_player else (None, None)
     return {
         "id": _clean_text(row.get("id"), limit=120),
         "player_id": row.get("player_id"),
@@ -303,6 +309,10 @@ def _registration_payload(row: dict[str, Any], *, selection_count: int = 0) -> d
         "dupr_id": _clean_text(row.get("dupr_id"), limit=120),
         "doubles_skill": _safe_float(row.get("doubles_skill")),
         "singles_skill": _safe_float(row.get("singles_skill")),
+        "linked_profile_skills": (
+            {"player_id": linked_player["id"], "doubles_skill": doubles, "singles_skill": singles}
+            if linked_player else None
+        ),
         "registration_status": _registration_status(row),
         "payment_status": _clean_text(row.get("payment_status") or "unpaid", limit=40),
         "notes": _clean_text(row.get("notes"), limit=2000),
@@ -768,7 +778,21 @@ def get_admin_tournament_detail(supabase: Any, *, club_id: str, tournament_id: s
         registration_id = _clean_text(row.get("registration_id"), limit=120)
         if registration_id:
             selections_by_registration[registration_id] = selections_by_registration.get(registration_id, 0) + 1
-    registrations = [_registration_payload(row, selection_count=selections_by_registration.get(_clean_text(row.get("id"), limit=120), 0)) for row in registrations_raw]
+    # Keep the saved registration snapshot distinct from the current profile.
+    # Batch by bounded IDs so opening an editor does not issue a query per player.
+    from jupr_app.domain.player_visibility import is_merged_player
+
+    player_ids = sorted({_safe_int(row.get("player_id")) for row in registrations_raw} - {None})
+    linked_players: dict[int, dict[str, Any]] = {}
+    for offset in range(0, len(player_ids), 100):
+        rows = _query_rows(supabase.table("players")
+            .select("id,club_id,name,rating,singles_rating,singles_matches_played")
+            .eq("club_id", str(club_id)).in_("id", player_ids[offset:offset + 100]))
+        linked_players.update({_safe_int(row["id"]): row for row in rows if not is_merged_player(row)})
+    registrations = [_registration_payload(
+        row, selection_count=selections_by_registration.get(_clean_text(row.get("id"), limit=120), 0),
+        linked_player=linked_players.get(_safe_int(row.get("player_id"))),
+    ) for row in registrations_raw]
     partner_relationships = _partner_relationships_for_tournament(
         supabase,
         tournament_id=clean_id,
@@ -1206,6 +1230,16 @@ def update_admin_tournament_registration(
                 minimum=1,
                 maximum=7,
             )
+    # Profile ratings are authoritative when identity/skills are saved. Keep
+    # status-only/payment-only operations independent of profile availability.
+    if {"player_id", "doubles_skill", "singles_skill"}.intersection(patch):
+        effective_player_id = update_payload.get("player_id", before.get("player_id"))
+        if effective_player_id is not None:
+            linked_player = _get_club_player(supabase, club_id=str(club_id), player_id=effective_player_id)
+            doubles, singles = _canonical_player_skills(linked_player)
+            for field, canonical in (("doubles_skill", doubles), ("singles_skill", singles)):
+                if canonical is not None:
+                    update_payload[field] = canonical
     if "wants_partner_board_contact" in patch:
         update_payload["wants_partner_board_contact"] = _safe_bool(patch.get("wants_partner_board_contact"))
     if "registration_status" in patch:
