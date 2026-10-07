@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from copy import deepcopy
 
 from jupr_app.services.admin_play_generator_service import (
     advance_play_generator_session,
@@ -94,6 +95,28 @@ class FakeSupabase:
 
     def table(self, name):
         return FakeQuery(self.storage, name)
+
+
+def test_admin_eight_plus_four_preserves_active_games_and_persists_spare_court():
+    supabase = FakeSupabase()
+    actor = dict(actor_email="admin@example.test", actor_role="admin", source="test")
+    session = create_play_generator_session(supabase, club_id="club", generator_kind="round_robin",
+        play_format="doubles", title="Late arrivals", participant_names=[f"Player {i}" for i in range(8)],
+        player_ids=[], total_rounds=3, court_count=2, preview_fingerprint=None, **actor)["session"]
+    first = deepcopy(session["event"]["rounds"][0])
+    common = dict(club_id="club", session_key=session["session_key"], participant_id=None,
+                  player_id=None, substitute_scope="rest", roster_order=[], **actor)
+    for i in range(4):
+        session = mutate_play_generator_roster(supabase, **common, action="add", name=f"Arrival {i}",
+            expected_version=session["version"])["session"]
+        assert session["event"]["rounds"][0] == first
+    session = mutate_play_generator_roster(supabase, **common, action="seat_arrivals", name=None,
+        participant_ids=[f"p-new-{i}" for i in range(1, 5)], court_number=3,
+        expected_version=session["version"])["session"]
+    stored = get_play_generator_session(supabase, club_id="club", session_key=session["session_key"])["session"]
+    assert stored["event"]["rounds"][0]["matches"][:2] == first["matches"]
+    assert len(stored["event"]["rounds"][0]["matches"]) == 3
+    assert stored["event"]["courtCount"] == 3
 
 
 def _matches(round_row):

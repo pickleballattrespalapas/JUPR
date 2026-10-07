@@ -1557,11 +1557,73 @@ def _next_participant_id(event: dict[str, Any]) -> str:
 def _effective_roster_round(event: dict[str, Any]) -> int:
     if str(event.get("status")) == "preview":
         return 1
+    # Displaying an active round sends players onto court. Missing scores do
+    # not mean those games have not started (including unscored sessions).
+    return int(event.get("currentRoundNumber") or 1) + 1
+
+
+def _seat_generator_arrivals(
+    event: dict[str, Any], participant_ids: list[str], court_number: int | None
+) -> None:
     current = int(event.get("currentRoundNumber") or 1)
+    play_format = normalize_play_format(event.get("playFormat"))
+    if event.get("generatorKind") != "round_robin" or play_format not in {"singles", "doubles"}:
+        raise ValueError("A late-arrival game requires a singles or doubles Round-Robin.")
     row = _get_round(event, current)
-    if str(row.get("status")) in {"saved", "played", "skipped"} or _round_has_any_scores(row):
-        return current + 1
-    return current
+    if event.get("status") != "active" or row.get("status") != "active":
+        raise ValueError("A late-arrival game can only be added to the active round before it is finished.")
+    required = 2 if play_format == "singles" else 4
+    ids = [str(pid) for pid in participant_ids]
+    if len(ids) != required or len(set(ids)) != required:
+        raise ValueError(f"Choose exactly {required} different late arrivals.")
+    participants = _participant_map(event)
+    existing = _round_matches(row)
+    on_court = {
+        str(pid)
+        for match in existing
+        for pid in (match.get("sideA") or match.get("teamA") or [])
+        + (match.get("sideB") or match.get("teamB") or [])
+    }
+    for pid in ids:
+        player = participants.get(pid)
+        if (
+            not player
+            or int(player.get("active_from_round") or 1) != current + 1
+            or player.get("substitutes_for")
+            or not _participant_active_in_round(player, current + 1)
+            or pid in on_court
+        ):
+            raise ValueError("Choose only late arrivals waiting for the next round.")
+    court = int(court_number or 0)
+    if court < 1 or court > 20:
+        raise ValueError("Choose an available court between 1 and 20.")
+    if any(int(match.get("court") or 0) == court for match in existing):
+        raise ValueError("That court already has a game. Choose a spare court.")
+    generate = _singles_round if play_format == "singles" else _doubles_round
+    matches, _byes, _warnings = generate(
+        active_ids=ids,
+        court_count=1,
+        history=history_before_round(event, current),
+        roster_pos={pid: int(participants[pid].get("roster_order") or 0) for pid in ids},
+        round_number=current,
+        court_offset=court - 1,
+    )
+    # Append only: IDs, teams, court assignments, byes and scores of every
+    # existing game remain untouched.
+    row.setdefault("matches", []).extend(matches)
+    row["formatCounts"] = {
+        fmt: sum(generator_match_play_format(match, play_format) == fmt for match in row["matches"])
+        for fmt in ("singles", "doubles")
+    }
+    for pid in ids:
+        participants[pid]["active_from_round"] = current
+    if int(event.get("courtCount") or 0) > 0:
+        event["courtCount"] = max(int(event["courtCount"]), court)
+    event.setdefault("rosterRevisions", []).append({
+        "action": "seat_arrivals", "effectiveRound": current,
+        "participantIds": ids, "court": court, "at": _now_iso(),
+    })
+    _regenerate_round_robin_from(event, current + 1)
 
 def _regenerate_round_robin_from(event: dict[str, Any], start_round: int) -> None:
     preserved = [
@@ -1596,9 +1658,16 @@ def mutate_generator_roster(
     player_id: int | None = None,
     substitute_scope: str = "rest",
     roster_order: list[str] | None = None,
+    participant_ids: list[str] | None = None,
+    court_number: int | None = None,
 ) -> dict[str, Any]:
     next_event = copy.deepcopy(event)
+    if str(next_event.get("status")) not in {"preview", "active"}:
+        raise ValueError("Players can only be changed in a preview or active session.")
     clean_action = str(action or "").strip().lower()
+    if clean_action == "seat_arrivals":
+        _seat_generator_arrivals(next_event, participant_ids or [], court_number)
+        return next_event
     effective = _effective_roster_round(next_event)
     participants = _participant_map(next_event)
 
@@ -1610,6 +1679,8 @@ def mutate_generator_roster(
         for idx, pid in enumerate(order, 1):
             participants[pid]["roster_order"] = idx
     elif clean_action == "add":
+        if len(next_event.get("participants") or []) >= 40:
+            raise ValueError("Generators support at most 40 players.")
         clean_name = _clean_name(name)
         if not clean_name:
             raise ValueError("Player name is required.")
@@ -1641,7 +1712,7 @@ def mutate_generator_roster(
         new_id = _next_participant_id(next_event)
         scope = str(substitute_scope or "rest").lower()
         if scope not in {"round", "rest"}:
-            raise ValueError("Apply the substitution to this round or the rest of the session.")
+            raise ValueError("Apply the substitution to the next round or the rest of the session.")
         if scope == "round":
             participants[pid].setdefault("inactive_rounds", []).append(effective)
             inactive_from = effective + 1
