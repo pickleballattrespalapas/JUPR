@@ -124,6 +124,7 @@ function apiUrl(apiBase: string, path: string): string {
 function registrationEdit(
   row: AdminTournamentRegistration | null
 ): RegistrationEdit {
+  const profileSkills = row?.linked_profile_skills;
   const storedStatus = row?.registration_status?.trim().toLowerCase() || "confirmed";
   return {
     firstName: row?.first_name || "",
@@ -136,8 +137,8 @@ function registrationEdit(
     age: row?.age == null ? "" : String(row.age),
     ageBracket: row?.age_bracket || "",
     duprId: row?.dupr_id || "",
-    doublesSkill: row?.doubles_skill == null ? "" : String(row.doubles_skill),
-    singlesSkill: row?.singles_skill == null ? "" : String(row.singles_skill),
+    doublesSkill: profileSkills?.doubles_skill != null ? String(profileSkills.doubles_skill) : row?.doubles_skill == null ? "" : String(row.doubles_skill),
+    singlesSkill: profileSkills?.singles_skill != null ? String(profileSkills.singles_skill) : row?.singles_skill == null ? "" : String(row.singles_skill),
     wantsPartnerBoardContact: Boolean(row?.wants_partner_board_contact),
     registrationStatus: storedStatus === "pending" ? "confirmed" : storedStatus,
     paymentStatus: row?.payment_status || "unpaid",
@@ -309,6 +310,10 @@ export default function TournamentRegistrantEditPanel({
 
   const registration =
     detail?.registrations.find((row) => row.id === registrationId) || null;
+  const linkedSkills = registration?.linked_profile_skills;
+  const sameLinkedPlayer = Boolean(linkedSkills && String(linkedSkills.player_id) === registrationDraft.playerId);
+  const doublesSkillReadOnly = sameLinkedPlayer && linkedSkills?.doubles_skill != null;
+  const singlesSkillReadOnly = sameLinkedPlayer && linkedSkills?.singles_skill != null;
   const selections = (detail?.selections || []).filter(
     (row) => row.registration_id === registrationId
   );
@@ -1031,13 +1036,13 @@ export default function TournamentRegistrantEditPanel({
               <label><strong>Display name</strong><br /><input value={registrationDraft.displayName} onChange={(event) => setRegistrationDraft((current) => ({ ...current, displayName: event.target.value }))} style={inputStyle} /></label>
               <label><strong>Email</strong><br /><input type="email" value={registrationDraft.email} onChange={(event) => setRegistrationDraft((current) => ({ ...current, email: event.target.value }))} style={inputStyle} /></label>
               <label><strong>Phone</strong><br /><input type="tel" value={registrationDraft.phone} onChange={(event) => setRegistrationDraft((current) => ({ ...current, phone: event.target.value }))} style={inputStyle} /></label>
-              <label><strong>Linked player ID</strong><br /><input type="number" min="1" value={registrationDraft.playerId} onChange={(event) => setRegistrationDraft((current) => ({ ...current, playerId: event.target.value }))} style={inputStyle} /><small>Clear to unlink this tournament registration from a player profile.</small></label>
+              <label><strong>Linked player ID</strong><br /><input type="number" min="1" value={registrationDraft.playerId} onChange={(event) => setRegistrationDraft((current) => ({ ...current, playerId: event.target.value }))} style={inputStyle} /><small>Clear to unlink this tournament registration from a player profile. Changing the linked player refreshes profile ratings when you save.</small></label>
               <label><strong>Gender</strong><br /><select value={registrationDraft.gender} onChange={(event) => setRegistrationDraft((current) => ({ ...current, gender: event.target.value }))} style={inputStyle}><option value="">Not specified</option>{registrationGenderOptions(registrationDraft.gender).map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
               <label><strong>Age</strong><br /><input type="number" min="5" max="120" value={registrationDraft.age} onChange={(event) => setRegistrationDraft((current) => ({ ...current, age: event.target.value }))} style={inputStyle} /></label>
               <label><strong>Age bracket note</strong><br /><input value={registrationDraft.ageBracket} onChange={(event) => setRegistrationDraft((current) => ({ ...current, ageBracket: event.target.value }))} style={inputStyle} /></label>
               <label><strong>DUPR ID</strong><br /><input value={registrationDraft.duprId} onChange={(event) => setRegistrationDraft((current) => ({ ...current, duprId: event.target.value }))} style={inputStyle} /></label>
-              <label><strong>Doubles skill</strong><br /><input type="number" min="1" max="7" step="0.01" value={registrationDraft.doublesSkill} onChange={(event) => setRegistrationDraft((current) => ({ ...current, doublesSkill: event.target.value }))} style={inputStyle} /></label>
-              <label><strong>Singles skill</strong><br /><input type="number" min="1" max="7" step="0.01" value={registrationDraft.singlesSkill} onChange={(event) => setRegistrationDraft((current) => ({ ...current, singlesSkill: event.target.value }))} style={inputStyle} /></label>
+              <label><strong>Doubles skill</strong><br /><input aria-label="Doubles skill" type="number" min="1" max="7" step="any" readOnly={doublesSkillReadOnly} value={registrationDraft.doublesSkill} onChange={(event) => { if (!doublesSkillReadOnly) setRegistrationDraft((current) => ({ ...current, doublesSkill: event.target.value })); }} style={inputStyle} />{doublesSkillReadOnly && <small>Current linked-profile rating; saved with this registration.</small>}</label>
+              <label><strong>Singles skill</strong><br /><input aria-label="Singles skill" type="number" min="1" max="7" step="any" readOnly={singlesSkillReadOnly} value={registrationDraft.singlesSkill} onChange={(event) => { if (!singlesSkillReadOnly) setRegistrationDraft((current) => ({ ...current, singlesSkill: event.target.value })); }} style={inputStyle} />{singlesSkillReadOnly ? <small>Current linked-profile rating; saved with this registration.</small> : sameLinkedPlayer ? <small>No recorded singles rating. This value is self-rated.</small> : null}</label>
             </div>
             <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.9rem" }}>
               <input type="checkbox" checked={registrationDraft.wantsPartnerBoardContact} onChange={(event) => setRegistrationDraft((current) => ({ ...current, wantsPartnerBoardContact: event.target.checked }))} />
