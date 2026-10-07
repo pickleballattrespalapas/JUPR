@@ -687,6 +687,8 @@ def mutate_play_generator_roster(
     player_id: int | None,
     substitute_scope: str,
     roster_order: list[str] | None,
+    participant_ids: list[str] | None = None,
+    court_number: int | None = None,
     expected_version: str,
     actor_email: str,
     actor_role: str,
@@ -708,6 +710,8 @@ def mutate_play_generator_roster(
         player_id=player_id,
         substitute_scope=substitute_scope,
         roster_order=roster_order,
+        participant_ids=participant_ids,
+        court_number=court_number,
     )
     updated = _persist_event(
         supabase,

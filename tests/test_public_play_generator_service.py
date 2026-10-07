@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from copy import deepcopy
 
 import pytest
 
@@ -72,6 +73,44 @@ def key(label): return f"public-generator-{label}-00000001"
 
 def matches(round_row):
     return list(round_row.get("matches") or []) or [match for court in round_row.get("courts") or [] for match in court.get("matches") or []]
+
+
+def test_public_eight_plus_four_preserves_round_and_persists_optional_extra_game():
+    supabase = FakeSupabase()
+    created = create_public_play_generator_session(
+        supabase, club_id="club", generator_kind="round_robin", play_format="doubles",
+        title="Late arrivals", participant_names=[f"Player {i}" for i in range(8)],
+        participant_player_ids={}, total_rounds=3, court_count=2, preview_fingerprint=None,
+        idempotency_key=key("late-create"), requester_hash=requester(), token_secret=token_secret(),
+    )
+    session = created["session"]
+    first = deepcopy(session["event"]["rounds"][0])
+    common = dict(club_id="club", session_key=session["session_key"],
+                  participant_id=None, player_id=None, substitute_scope="rest", roster_order=[],
+                  edit_token=created["edit_token"], requester_hash=requester())
+    for i in range(4):
+        session = mutate_public_play_generator_roster(supabase, **common,
+            action="add", name=f"Arrival {i}", expected_version=session["version"],
+            idempotency_key=key(f"late-add-{i}"))["session"]
+        assert session["event"]["rounds"][0] == first
+    seat = dict(action="seat_arrivals", name=None, court_number=3,
+                participant_ids=[f"p-new-{i}" for i in range(1, 5)],
+                expected_version=session["version"], idempotency_key=key("late-seat"))
+    added = mutate_public_play_generator_roster(supabase, **common, **seat)["session"]
+    replay = mutate_public_play_generator_roster(supabase, **common, **seat)["session"]
+    assert replay["version"] == added["version"]
+    stored = get_public_play_generator_session(supabase, club_id="club", session_key=session["session_key"])["session"]
+    assert stored["event"]["rounds"][0]["matches"][:2] == first["matches"]
+    assert len(stored["event"]["rounds"][0]["matches"]) == 3
+    assert stored["event"]["courtCount"] == 3
+    saved = save_public_play_generator_round(supabase, club_id="club", session_key=session["session_key"],
+        round_number=1, scores=[{"match_id": m["id"], "score_a": 11, "score_b": 7} for m in matches(stored["event"]["rounds"][0])],
+        edit_token=created["edit_token"], expected_version=stored["version"], idempotency_key=key("late-score"), requester_hash=requester())["session"]
+    advanced = advance_public_play_generator_session(supabase, club_id="club", session_key=session["session_key"],
+        edit_token=created["edit_token"], expected_version=saved["version"], idempotency_key=key("late-advance"), requester_hash=requester())["session"]
+    assert advanced["current_round_number"] == 2
+    assert len(advanced["event"]["rounds"][1]["matches"]) == 3
+    assert not advanced["event"]["rounds"][1]["byeParticipantIds"]
 
 
 def test_public_round_robin_preview_create_score_skip_and_roster():
