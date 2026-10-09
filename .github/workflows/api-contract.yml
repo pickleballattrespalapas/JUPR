@@ -67,6 +67,7 @@ jobs:
             tests/test_generator_bye_fairness.py \
             tests/test_generator_round_controls.py \
             tests/test_generator_round_controls_service.py \
+            tests/test_generator_playoffs.py \
             tests/test_adaptive_play_engine.py \
             tests/test_public_play_generator_service.py \
             tests/test_admin_play_generator_service.py \
