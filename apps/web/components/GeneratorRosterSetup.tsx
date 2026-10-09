@@ -482,7 +482,7 @@ export default function GeneratorRosterSetup({
             background: "#eff6ff"
           }}
         >
-          <strong>Automatic setup</strong>
+          <strong>{generatorKind === "round_robin" ? "Starting schedule" : "Automatic setup"}</strong>
           <p style={{ margin: "0.3rem 0 0", color: "#334155" }}>
             {playFormat === "doubles_singles" ? (
               <>
@@ -496,6 +496,7 @@ export default function GeneratorRosterSetup({
           </p>
           <small style={{ color: "#475569" }}>
             {explanation(generatorKind, playFormat, setup.courtCount, setup.totalRounds)}
+            {generatorKind === "round_robin" ? " You can keep adding rounds during play." : ""}
           </small>
         </div>
       </div>

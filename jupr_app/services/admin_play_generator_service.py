@@ -11,6 +11,7 @@ from jupr_app.data.load import load_data
 from jupr_app.domain.adaptive_play_engine import (
     advance_generator_event,
     create_generator_preview,
+    complete_generator_event,
     generator_event_standings,
     generator_match_play_format,
     mark_generator_round_played,
@@ -19,6 +20,7 @@ from jupr_app.domain.adaptive_play_engine import (
     save_generator_round,
     schedule_export_rows,
     skip_generator_round,
+    reopen_generator_round,
     start_generator_event,
 )
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
@@ -511,6 +513,8 @@ def _persist_event(
         patch["status"] = status
     if status == "completed":
         patch["completed_at"] = now
+    elif status == "active":
+        patch["completed_at"] = None
     return _update_live_row(
         supabase,
         club_id=str(before.get("club_id") or ""),
@@ -576,8 +580,9 @@ def mark_play_generator_round_played(
         _event_from_state(_state(before)),
         round_number=int(round_number),
     )
-    event = advance_generator_event(event)
-    row_status = "completed" if str(event.get("status") or "") == "completed" else None
+    if int(event.get("currentRoundNumber") or 1) == int(round_number):
+        event = advance_generator_event(event)
+    row_status = str(event.get("status") or "active")
     updated = _persist_event(
         supabase,
         before=before,
@@ -639,6 +644,44 @@ def skip_play_generator_round(
     return {"ok": True, "mode": "play_generator_round_skip", "session": session}
 
 
+def reopen_play_generator_round(
+    supabase: Any,
+    *,
+    club_id: str,
+    session_key: str,
+    round_number: int,
+    expected_version: str,
+    actor_email: str,
+    actor_role: str,
+    source: str,
+) -> dict[str, Any]:
+    before = _live_row(supabase, club_id=str(club_id), session_key=str(session_key))
+    event = reopen_generator_round(
+        _event_from_state(_state(before)),
+        round_number=int(round_number),
+    )
+    updated = _persist_event(
+        supabase,
+        before=before,
+        event=event,
+        expected_version=expected_version,
+        status="active",
+    )
+    session = _session_payload(updated)
+    _audit(
+        supabase,
+        club_id=club_id,
+        actor_email=actor_email,
+        actor_role=actor_role,
+        action_type="reopen_play_generator_round",
+        entity_id=session_key,
+        before_json={"session": _session_payload(before)},
+        after_json={"session": session, "round_number": int(round_number)},
+        source=source,
+    )
+    return {"ok": True, "mode": "play_generator_round_reopen", "session": session}
+
+
 def advance_play_generator_session(
     supabase: Any,
     *,
@@ -651,7 +694,7 @@ def advance_play_generator_session(
 ) -> dict[str, Any]:
     before = _live_row(supabase, club_id=str(club_id), session_key=str(session_key))
     event = advance_generator_event(_event_from_state(_state(before)))
-    row_status = "completed" if str(event.get("status")) == "completed" else None
+    row_status = str(event.get("status") or "active")
     updated = _persist_event(
         supabase,
         before=before,
@@ -744,15 +787,7 @@ def complete_play_generator_session(
 ) -> dict[str, Any]:
     before = _live_row(supabase, club_id=str(club_id), session_key=str(session_key))
     event = _event_from_state(_state(before))
-    current = int(event.get("currentRoundNumber") or 1)
-    current_row = next(
-        (row for row in event.get("rounds") or [] if int(row.get("number") or 0) == current),
-        None,
-    )
-    if current_row and str(current_row.get("status")) not in {"saved", "played", "skipped"}:
-        raise ValueError("Save scores, mark the round played, or skip it before completing the session.")
-    event["status"] = "completed"
-    event["completedAt"] = _now_iso()
+    event = complete_generator_event(event)
     updated = _persist_event(
         supabase,
         before=before,
