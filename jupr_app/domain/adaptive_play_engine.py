@@ -1106,7 +1106,7 @@ def create_generator_preview(
     play_format: str,
     title: str,
     participant_names: list[str],
-    player_ids: list[int] | None = None,
+    player_ids: list[int | None] | None = None,
     total_rounds: int = 3,
     court_count: int = 0,
     doubles_court_count: int = 0,
@@ -1154,7 +1154,7 @@ def create_generator_preview(
         raise ValueError(f"{format_label} requires at least {minimum} players.")
     if len(unique_names) > 40:
         raise ValueError("Generators support at most 40 players.")
-    ids = [int(x) for x in (player_ids or [])]
+    ids = [int(x) if x is not None else None for x in (player_ids or [])]
     if ids and len(ids) != len(unique_names):
         raise ValueError("Choose every player from the club list again.")
     participants = []
@@ -1168,7 +1168,7 @@ def create_generator_preview(
             "inactive_from_round": None,
             "inactive_rounds": [],
         }
-        if ids:
+        if ids and ids[idx-1] is not None:
             row["player_id"] = ids[idx-1]
         participants.append(row)
     mixed_doubles = max(0, min(int(doubles_court_count or 0), 20))

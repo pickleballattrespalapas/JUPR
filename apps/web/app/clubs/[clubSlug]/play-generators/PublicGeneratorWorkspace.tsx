@@ -371,6 +371,10 @@ export default function GeneratorWorkspace({
       ) {
         throw new ApiRequestError("This play tool is temporarily unavailable.", response.status);
       }
+      // The API reserves 400 string details for user-correctable validation.
+      if (response.status === 400 && typeof payload?.detail === "string" && payload.detail.trim()) {
+        throw new ApiRequestError(payload.detail, response.status);
+      }
       throw new ApiRequestError("We couldn't complete that request. Please try again.", response.status);
     }
     return payload as T;

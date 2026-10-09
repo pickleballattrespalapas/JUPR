@@ -239,7 +239,7 @@ def _player_ids_for_names(
     club_id: str,
     names: list[str],
     requested: dict[str, int] | None,
-) -> list[int]:
+) -> list[int | None]:
     requested_by_name = {
         _clean(name).casefold(): int(player_id)
         for name, player_id in (requested or {}).items()
@@ -247,21 +247,25 @@ def _player_ids_for_names(
     }
     if not requested_by_name:
         return []
-    if any(name.casefold() not in requested_by_name for name in names):
-        raise PublicPlayGeneratorError("Choose every player from the club list, or enter every name manually.")
-    ids = [requested_by_name[name.casefold()] for name in names]
+    # Keep one slot per name so manual entries never shift another player's link.
+    ids = [requested_by_name.get(name.casefold()) for name in names]
+    linked_ids = sorted({player_id for player_id in ids if player_id is not None})
+    if not linked_ids:
+        return []
     try:
         rows = _safe_rows(
             supabase.table("players")
             .select("id,name,club_id,active,inactive_at")
             .eq("club_id", str(club_id))
-            .in_("id", sorted(set(ids)))
+            .in_("id", linked_ids)
             .execute()
         )
     except Exception as exc:
         raise RuntimeError("We couldn’t check the players. Please try again.") from exc
     by_id = {int(row["id"]): row for row in rows if row.get("id") is not None}
     for name, player_id in zip(names, ids):
+        if player_id is None:
+            continue
         row = by_id.get(int(player_id))
         if row is None or _clean(row.get("name")).casefold() != name.casefold():
             raise PublicPlayGeneratorError(f"Choose {name} from the player list again.")
