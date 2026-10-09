@@ -484,7 +484,10 @@ export default function GeneratorWorkspace({
       participant_names: participantNames,
       participant_player_ids: participantPlayerIds,
       total_rounds: automaticSetup.totalRounds,
-      court_count: automaticSetup.courtCount,
+      // Zero lets the engine recalculate courts as late arrivals join later rounds.
+      court_count: generatorKind === "round_robin" && playFormat !== "doubles_singles"
+        ? 0
+        : automaticSetup.courtCount,
       doubles_court_count: automaticSetup.doublesCourtCount,
       singles_court_count: automaticSetup.singlesCourtCount
     };
