@@ -9,6 +9,7 @@ from jupr_app.services.public_play_generator_service import (
     advance_public_play_generator_session,
     create_public_play_generator_session,
     get_public_play_generator_session,
+    mark_public_play_generator_round_played,
     mutate_public_play_generator_roster,
     preview_public_play_generator,
     save_public_play_generator_round,
@@ -169,6 +170,61 @@ def test_public_eight_plus_four_preserves_round_and_persists_optional_extra_game
     assert advanced["current_round_number"] == 2
     assert len(advanced["event"]["rounds"][1]["matches"]) == 3
     assert not advanced["event"]["rounds"][1]["byeParticipantIds"]
+
+
+@pytest.mark.parametrize("initial_count,arrivals", [(6, 2), (8, 4)])
+@pytest.mark.parametrize("scoring_mode", ["scored", "unscored"])
+def test_automatic_courts_expand_and_mix_late_arrivals_after_round_is_finished(initial_count, arrivals, scoring_mode):
+    db = FakeSupabase()
+    created = create_public_play_generator_session(
+        db, club_id="club", generator_kind="round_robin", play_format="doubles",
+        title="Automatic courts", participant_names=[f"Player {i}" for i in range(initial_count)],
+        participant_player_ids={}, total_rounds=3, court_count=0, scoring_mode=scoring_mode,
+        preview_fingerprint=None, idempotency_key=key("auto-create"),
+        requester_hash=requester(), token_secret=token_secret(),
+    )
+    session = created["session"]
+    first = deepcopy(session["event"]["rounds"][0])
+    common = dict(club_id="club", session_key=session["session_key"],
+                  edit_token=created["edit_token"], requester_hash=requester())
+    for i in range(arrivals):
+        session = mutate_public_play_generator_roster(
+            db, **common, action="add", name=f"Arrival {i}", participant_id=None,
+            player_id=None, substitute_scope="rest", roster_order=[],
+            expected_version=session["version"], idempotency_key=key(f"auto-add-{i}"),
+        )["session"]
+        assert session["event"]["rounds"][0] == first, "Players already on court must stay put"
+
+    if scoring_mode == "scored":
+        session = save_public_play_generator_round(
+            db, **common, round_number=1, expected_version=session["version"],
+            scores=[{"match_id": m["id"], "score_a": 11, "score_b": 7} for m in matches(first)],
+            idempotency_key=key("auto-score"),
+        )["session"]
+        session = advance_public_play_generator_session(
+            db, **common, expected_version=session["version"], idempotency_key=key("auto-advance"),
+        )["session"]
+    else:
+        session = mark_public_play_generator_round_played(
+            db, **common, round_number=1, expected_version=session["version"], idempotency_key=key("auto-played"),
+        )["session"]
+    reloaded = get_public_play_generator_session(db, club_id="club", session_key=session["session_key"])["session"]
+    assert reloaded["current_round_number"] == 2
+    second = reloaded["event"]["rounds"][1]
+    assert len(matches(second)) == (initial_count + arrivals) // 4
+    assert not second["byeParticipantIds"]
+    all_ids = {p["id"] for p in reloaded["event"]["participants"]}
+    scheduled = [pid for m in matches(second) for pid in m["sideA"] + m["sideB"]]
+    assert len(scheduled) == len(set(scheduled)) == len(all_ids)
+    assert set(scheduled) == all_ids
+    for old_match in matches(first):
+        old_group = set(old_match["sideA"] + old_match["sideB"])
+        for new_match in matches(second):
+            assert len(old_group.intersection(new_match["sideA"] + new_match["sideB"])) <= 2
+    old_partners = {frozenset(m[side]) for m in matches(first) for side in ("sideA", "sideB")}
+    new_partners = {frozenset(m[side]) for m in matches(second) for side in ("sideA", "sideB")}
+    assert not old_partners.intersection(new_partners)
+    assert all(len(matches(r)) == (initial_count + arrivals) // 4 for r in reloaded["event"]["rounds"][1:])
 
 
 def test_public_round_robin_preview_create_score_skip_and_roster():
