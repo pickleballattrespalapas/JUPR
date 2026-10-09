@@ -33,6 +33,7 @@ export default function GeneratorLateArrivals({ participants, roundNumber, total
     (player.inactive_from_round == null || player.inactive_from_round > roundNumber + 1) &&
     !player.inactive_rounds?.includes(roundNumber + 1)
   );
+  const hasNextRound = generatorKind === "round_robin" || roundNumber < totalRounds;
   const required = playFormat === "singles" ? 2 : 4;
   const selected = (selection ?? arrivals.slice(0, required).map(player => player.id))
     .filter(id => arrivals.some(player => player.id === id));
@@ -46,13 +47,13 @@ export default function GeneratorLateArrivals({ participants, roundNumber, total
   return (
     <section aria-label="Late arrivals" style={{ marginTop: "1rem", padding: "1rem", borderRadius: 10, background: "#eff6ff" }}>
       <h3 style={{ marginTop: 0 }}>
-        {roundNumber < totalRounds ? `Joining Round ${roundNumber + 1}` : "Waiting late arrivals"}
+        {hasNextRound ? `Joining Round ${roundNumber + 1}` : "Waiting late arrivals"}
       </h3>
       <p>{arrivals.map(player => player.name).join(", ")}</p>
       {canStart ? (
         <>
           <p>Have a spare court? These arrivals can play together now, leaving every game already on court in place.
-            {roundNumber < totalRounds ? " They will mix in with everyone from the next round." : " This is the final round."}</p>
+            {hasNextRound ? " They will mix in with everyone from the next round." : " This is the final round."}</p>
           <fieldset disabled={busy} style={{ border: 0, padding: 0, margin: "0 0 1rem" }}>
             <legend>Choose {required} late arrivals</legend>
             {arrivals.map(player => (
@@ -78,7 +79,7 @@ export default function GeneratorLateArrivals({ participants, roundNumber, total
           </button>
         </>
       ) : (
-        <p>{roundNumber < totalRounds ? "Current games stay as they are." : "There are no more scheduled rounds."}
+        <p>{hasNextRound ? "Current games stay as they are." : "There are no more scheduled rounds."}
           {generatorKind === "round_robin" && ["singles", "doubles"].includes(playFormat) && roundStatus === "active" && arrivals.length < required
             ? ` Add ${required - arrivals.length} more late ${required - arrivals.length === 1 ? "arrival" : "arrivals"} to offer a separate game on a spare court.` : ""}</p>
       )}

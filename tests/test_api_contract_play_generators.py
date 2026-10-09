@@ -89,6 +89,7 @@ def test_generator_backend_routes_and_adaptive_engine_are_installed() -> None:
     assert "/play-generators/sessions" in routes
     assert "/rounds/{round_number}/scores" in routes
     assert "/rounds/{round_number}/skip" in routes
+    assert "/rounds/{round_number}/reopen" in routes
     assert "/sessions/{session_key}/roster" in routes
     assert "/sessions/{session_key}/advance" in routes
     assert "/sessions/{session_key}/publish" in routes
@@ -127,6 +128,7 @@ def test_every_play_generator_unsafe_route_is_classified_for_staging() -> None:
         '("POST", "/admin/clubs/{club_id}/play-generators/sessions")',
         '("PATCH", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/rounds/{round_number}/scores")',
         '("POST", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/rounds/{round_number}/skip")',
+        '("POST", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/rounds/{round_number}/reopen")',
         '("POST", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/advance")',
         '("POST", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/roster")',
         '("POST", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/complete")',

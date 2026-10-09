@@ -7,6 +7,7 @@ import pytest
 
 from jupr_app.domain.adaptive_play_engine import (
     advance_generator_event,
+    complete_generator_event,
     create_generator_preview,
     generator_event_standings,
     generator_match_play_format,
@@ -184,6 +185,9 @@ def test_mixed_scored_and_unscored_lifecycles_follow_existing_round_robin_rules(
     scored = advance_generator_event(scored)
     scored = _score_round(scored, 2)
     scored = advance_generator_event(scored)
+    assert scored["currentRoundNumber"] == 3
+    assert scored["status"] == "active"
+    scored = complete_generator_event(scored)
     assert scored["status"] == "completed"
 
     unscored = start_generator_event(
@@ -201,6 +205,9 @@ def test_mixed_scored_and_unscored_lifecycles_follow_existing_round_robin_rules(
     assert unscored["currentRoundNumber"] == 2
     unscored = mark_generator_round_played(unscored, round_number=2)
     unscored = advance_generator_event(unscored)
+    assert unscored["currentRoundNumber"] == 3
+    assert unscored["status"] == "active"
+    unscored = complete_generator_event(unscored)
     assert unscored["status"] == "completed"
     assert generator_event_standings(unscored) == []
 

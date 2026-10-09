@@ -145,11 +145,13 @@ def test_multiple_arrival_groups_preserve_earlier_games_and_partial_scores():
         mutate_generator_roster(event, action="seat_arrivals", participant_ids=[f"p-new-{i}" for i in range(1, 5)], court_number=5)
 
 
-def test_singles_arrivals_and_final_round_can_use_spare_court():
+def test_singles_arrivals_and_last_planned_round_can_use_spare_court():
     event = add_arrivals(session(fmt="singles", count=4, rounds=1), 2)
     event = mutate_generator_roster(event, action="seat_arrivals", participant_ids=["p-new-1", "p-new-2"], court_number=3)
     assert len(event["rounds"][0]["matches"]) == 3
     event = advance_generator_event(score(event))
-    assert event["status"] == "completed"
-    with pytest.raises(ValueError, match="preview or active"):
-        mutate_generator_roster(event, action="add", name="Too late")
+    assert event["status"] == "active"
+    assert event["currentRoundNumber"] == 2
+    assert len(event["rounds"]) == event["totalRounds"] == 2
+    event = mutate_generator_roster(event, action="add", name="Next arrival")
+    assert event["participants"][-1]["active_from_round"] == 3
