@@ -65,7 +65,7 @@ async function standingsRequest(admin, fail = false) {
     "@/components/PlayGeneratorStandingsTable": { __esModule: true, default: () => h("table"), standingsSortLabel: () => "Total wins" }
   };
   const Component = load(admin ? "app/admin/play-generators/GeneratorStandings.tsx" : "app/clubs/[clubSlug]/play-generators/PublicGeneratorStandings.tsx", mocks).default;
-  let session = { session_key: "session", title: "RR", status: "active", version: admin ? "2026-10-09T02:00:00Z" : 4,
+  let session = { session_key: "session", title: "RR", status: "active", version: admin ? "2026-10-09T02:00:00+00:00" : 4,
     generator_kind: "round_robin", play_format: "doubles", scoring_mode: "scored", current_round_number: 3,
     total_rounds: 5, event: { rounds: [{ number: 3, status: "saved" }] }, playoff_options: options, standings: [] };
   const requests = [];
@@ -88,7 +88,10 @@ async function standingsRequest(admin, fail = false) {
   await act(async () => button(tree, "Start playoff").props.onClick());
   assert.equal(requests[0].body.playoff_format, "top_eight");
   assert.equal(requests[0].body.expected_version, session.version);
-  assert.equal(requests[0].body.idempotency_key, `generator-playoff:session:${session.version}:top_eight`);
+  assert.equal(requests[0].body.idempotency_key, admin
+    ? "generator-playoff:session:2026-10-09T02:00:00_00:00:top_eight"
+    : "generator-playoff:session:4:top_eight");
+  assert.match(requests[0].body.idempotency_key, /^[A-Za-z0-9._:-]{8,160}$/);
   if (admin) assert.equal(requests[0].init.headers.Authorization, "Bearer admin-token");
   else assert.equal(requests[0].body.edit_token, "organizer-token");
   if (fail) {

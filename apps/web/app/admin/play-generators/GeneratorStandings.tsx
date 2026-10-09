@@ -122,7 +122,7 @@ export default function AdminGeneratorStandings({ apiBase, clubId, sessionKey }:
         apiUrl(apiBase, `/admin/clubs/${encodeURIComponent(clubId)}/play-generators/sessions/${encodeURIComponent(sessionKey)}/playoff`),
         { method: "POST", headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" }, body: JSON.stringify({
           expected_version: session.version, playoff_format: format,
-          idempotency_key: `generator-playoff:${sessionKey}:${session.version}:${format}`,
+          idempotency_key: `generator-playoff:${sessionKey}:${session.version.replace(/[^A-Za-z0-9._:-]/g, "_")}:${format}`,
         }) }
       );
       const payload = await response.json().catch(() => null);
