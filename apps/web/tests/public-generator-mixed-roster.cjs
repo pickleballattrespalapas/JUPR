@@ -5,6 +5,8 @@ const root = path.resolve(__dirname, ".."), cache = new Map();
 const routes = [], router = { push(url) { routes.push(url); }, refresh() {} };
 const stubs = {
   "@/components/PublicClubLink": ({ children }) => React.createElement("a", null, children),
+  "next/link": ({ children }) => React.createElement("a", null, children),
+  "@/lib/useAdminSession": { useAdminSession: () => ({ accessToken: "test-admin" }) },
   "next/navigation": { useRouter: () => router }
 };
 function load(name, parent = root) {
@@ -48,7 +50,7 @@ const reply = (body, status = 200) => ({ ok: status < 400, status, json: async (
     assert.deepEqual(body.participant_names, names);
     assert.deepEqual(body.participant_player_ids, linked);
     assert.equal(body.total_rounds, 5);
-    assert.equal(body.court_count, 1);
+    assert.equal(body.court_count, 0, "Automatic courts must stay automatic when the roster grows");
     if (url.endsWith("/preview")) return failure || reply({ ok: true, preview });
     assert.equal(body.preview_fingerprint, preview.previewFingerprint);
     return reply({ session: { session_key: "mixed-roster", current_round_number: 1 }, edit_token: "organizer-token" });
@@ -85,4 +87,33 @@ const reply = (body, status = 200) => ({ ok: status < 400, status, json: async (
   assert.equal(storage.get("public-generator-edit:club:mixed-roster"), "organizer-token");
   await act(async () => tree.unmount());
   console.log("PASS public mixed roster: club search + manual names, actionable validation, private server errors, preview and start.");
+
+  // Exercise actual preview/start requests in both workspaces. Mixed-format and
+  // ladder allocations remain explicit; ordinary Round-Robins stay automatic.
+  for (const file of ["@/app/clubs/[clubSlug]/play-generators/PublicGeneratorWorkspace", "@/app/admin/play-generators/GeneratorWorkspace"]) {
+    const Setup = load(file).default;
+    for (const [kind, format, count, courts] of [["round_robin", "doubles", 6, 0], ["round_robin", "singles", 4, 0], ["round_robin", "doubles_singles", 6, 2], ["ladder", "doubles", 5, 1]]) {
+      storage.clear();
+      const bodies = [];
+      global.fetch = async (_url, options = {}) => {
+        if (!options.body) return reply({ sessions: [], players: [] });
+        const body = JSON.parse(options.body);
+        bodies.push(body);
+        return _url.endsWith("/preview")
+          ? reply({ preview: { ...preview, generatorKind: kind, playFormat: format, participants: [], rounds: [] } })
+          : reply({ session: { session_key: "auto-courts", current_round_number: 1 }, edit_token: "test-organizer" });
+      };
+      await act(async () => { tree = create(React.createElement(Setup, { apiBase: "https://api.test", clubId: "club", generatorKind: kind, status: { enabled: true, writes_enabled: true } })); });
+      const labelSelect = label => tree.root.findAllByType("label").find(node => text(node).startsWith(label)).findByType("select");
+      await act(async () => labelSelect("Play format").props.onChange({ target: { value: format } }));
+      await act(async () => labelSelect("Number of players").props.onChange({ target: { value: String(count) } }));
+      await act(async () => tree.root.findByType("textarea").props.onChange({ target: { value: Array.from({ length: count }, (_, i) => `Player ${i + 1}`).join("\n") } }));
+      await act(async () => button(tree, "Preview matchups").props.onClick());
+      await act(async () => button(tree, "Start unrated session").props.onClick());
+      assert.equal(bodies.length, 2, `${file}: preview and start both reach the API`);
+      for (const body of bodies) assert.equal(body.court_count, courts, `${file}: ${kind}/${format} court allocation`);
+      await act(async () => tree.unmount());
+    }
+  }
+  console.log("PASS public/admin preview and start: automatic Round-Robin courts, explicit ladder and mixed-format courts.");
 })().catch(error => { console.error(error); process.exit(1); });
