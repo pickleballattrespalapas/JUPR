@@ -25,6 +25,7 @@ const mocks = {
   "next/navigation": { useRouter: () => router },
   "@/lib/useAdminSession": { useAdminSession: () => ({ accessToken: "admin-token" }) },
   "@/components/GeneratorSubmission": submission,
+  "@/components/GeneratorPlayoff": load("components/GeneratorPlayoff.tsx", { "@/components/PublicClubLink": Link }),
   "@/components/PlayGeneratorStandingsTable": {
     __esModule: true,
     default: () => React.createElement("table", { "aria-label": "Standings" }),

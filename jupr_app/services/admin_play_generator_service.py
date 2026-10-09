@@ -10,6 +10,7 @@ from typing import Any
 from uuid import uuid4
 
 from jupr_app.data.load import load_data
+from jupr_app.domain.generator_playoffs import generator_playoff_options, start_generator_playoff
 from jupr_app.domain.adaptive_play_engine import (
     advance_generator_event,
     create_generator_preview,
@@ -146,6 +147,7 @@ def _session_payload(row: dict[str, Any]) -> dict[str, Any]:
         "scoring_mode": str(event.get("scoringMode") or "scored") if event else "scored",
         "standings_sort": str(event.get("standingsSort") or "wins") if event else "wins",
         "standings": generator_event_standings(event) if event else [],
+        "playoff_options": generator_playoff_options(event) if event else None,
         "official_publish": _as_dict(state.get("official_publish")),
         "rating_mode": str(event.get("ratingMode") or "rated"),
         "submission": {
@@ -717,6 +719,24 @@ def advance_play_generator_session(
         source=source,
     )
     return {"ok": True, "mode": "play_generator_advance", "session": session}
+
+
+def start_play_generator_playoff(
+    supabase: Any, *, club_id: str, session_key: str, playoff_format: str,
+    expected_version: str, actor_email: str, actor_role: str, source: str,
+) -> dict[str, Any]:
+    before = _live_row(supabase, club_id=str(club_id), session_key=str(session_key))
+    official = _state(before).get("official_publish") or {}
+    if official.get("published_at") or official.get("published_match_ids"):
+        raise ValueError("Published results cannot be changed.")
+    event = start_generator_playoff(_event_from_state(_state(before)), playoff_format=playoff_format)
+    updated = _persist_event(supabase, before=before, event=event,
+                             expected_version=expected_version, status="active")
+    session = _session_payload(updated)
+    _audit(supabase, club_id=club_id, actor_email=actor_email, actor_role=actor_role,
+           action_type="start_play_generator_playoff", entity_id=session_key,
+           before_json={"session": _session_payload(before)}, after_json={"session": session}, source=source)
+    return {"ok": True, "mode": "play_generator_playoff", "session": session}
 
 
 def mutate_play_generator_roster(
