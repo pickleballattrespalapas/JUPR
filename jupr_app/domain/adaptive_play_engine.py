@@ -1292,6 +1292,8 @@ def save_generator_round(
     if normalize_scoring_mode(next_event.get("scoringMode")) != "scored":
         raise ValueError("This unscored Round-Robin uses Round Played instead of score entry.")
     row = _get_round(next_event, round_number)
+    if next_event.get("playoff") and int(round_number) != int(next_event.get("currentRoundNumber") or 1):
+        raise ValueError("Only the current playoff round can be scored.")
     if str(row.get("status")) not in {"active", "preview"}:
         raise ValueError("Only an active round can be scored.")
     by_id = {str(match.get("id")): match for match in _round_matches(row)}
@@ -1357,6 +1359,8 @@ def mark_generator_round_played(event: dict[str, Any], *, round_number: int) -> 
 def skip_generator_round(event: dict[str, Any], *, round_number: int, reason: str = "") -> dict[str, Any]:
     next_event = copy.deepcopy(event)
     row = _get_round(next_event, round_number)
+    if row.get("stage") == "playoff":
+        raise ValueError("Playoff games need a winning score and cannot be skipped.")
     if str(row.get("status")) not in {"active", "preview"}:
         raise ValueError("Only an active round can be skipped.")
     if _round_has_any_scores(row):
@@ -1370,6 +1374,8 @@ def skip_generator_round(event: dict[str, Any], *, round_number: int, reason: st
 def reopen_generator_round(event: dict[str, Any], *, round_number: int) -> dict[str, Any]:
     """Unlock a skipped round without changing games already sent onto court."""
     next_event = copy.deepcopy(event)
+    if next_event.get("playoff"):
+        raise ValueError("Round-robin results are fixed once the playoff starts.")
     if str(next_event.get("generatorKind") or "") != "round_robin":
         raise ValueError("Reopening skipped rounds is available only for Round-Robin Generator sessions.")
     if str(next_event.get("status")) not in {"active", "completed"}:
@@ -1390,6 +1396,11 @@ def reopen_generator_round(event: dict[str, Any], *, round_number: int) -> dict[
 def complete_generator_event(event: dict[str, Any]) -> dict[str, Any]:
     """Finish explicitly, leaving any unplayed future schedule recoverable."""
     next_event = copy.deepcopy(event)
+    if next_event.get("playoff") and any(
+        r.get("stage") == "playoff" and r.get("status") != "saved"
+        for r in next_event.get("rounds", [])
+    ):
+        raise ValueError("Save every playoff game before completing the session.")
     if str(next_event.get("status")) not in {"active", "completed"}:
         raise ValueError("Only a started session can be completed.")
     current = int(next_event.get("currentRoundNumber") or 1)
@@ -1462,6 +1473,8 @@ def generator_event_standings(event: dict[str, Any]) -> list[dict[str, Any]]:
     """
     if normalize_scoring_mode(event.get("scoringMode")) == "unscored":
         return []
+    if event.get("playoff"):
+        return copy.deepcopy(event["playoff"]["seedStandings"])
     if event.get("type") == "round_robin" and event.get("status") == "completed":
         from jupr_app.domain.live_beta_engine import round_robin_standings
         final_event = {**event, "rounds": [r for r in event.get("rounds", []) if r.get("status") == "saved"]}
@@ -1596,12 +1609,16 @@ def advance_generator_event(event: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("Save or skip the current round before continuing. Unscored Round-Robins may mark it played.")
     total = int(next_event.get("totalRounds") or 1)
     kind = str(next_event.get("generatorKind") or "round_robin")
-    if kind == "ladder" and current >= total:
+    if (kind == "ladder" or next_event.get("playoff")) and current >= total:
         next_event["status"] = "completed"
         next_event["completedAt"] = _now_iso()
         return next_event
     next_number = current + 1
-    if kind == "ladder":
+    if next_event.get("playoff"):
+        from jupr_app.domain.generator_playoffs import populate_playoff_final
+        next_round = _get_round(next_event, next_number)
+        populate_playoff_final(next_event, next_round)
+    elif kind == "ladder":
         order = _ladder_next_order(next_event, row, next_number)
         next_round = _create_ladder_round(next_event, next_number, order)
         next_event.setdefault("rounds", []).append(next_round)
@@ -1747,6 +1764,8 @@ def mutate_generator_roster(
     court_number: int | None = None,
 ) -> dict[str, Any]:
     next_event = copy.deepcopy(event)
+    if next_event.get("playoff"):
+        raise ValueError("Playoff teams are fixed. Players cannot be changed after seeding.")
     if str(next_event.get("status")) not in {"preview", "active"}:
         raise ValueError("Players can only be changed in a preview or active session.")
     clean_action = str(action or "").strip().lower()
