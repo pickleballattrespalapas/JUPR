@@ -79,7 +79,7 @@ const reply = (body, status = 200) => ({ ok: status < 400, status, json: async (
   }
   failure = null;
   await act(async () => button(tree, "Preview matchups").props.onClick());
-  assert.match(text(tree.toJSON()), /Preview ready: 5 rounds/);
+  assert.match(text(tree.toJSON()), /Starting schedule: 5 rounds/);
   await act(async () => button(tree, "Start unrated session").props.onClick());
   assert.equal(requests.length, 5);
   assert.equal(routes.length, 1);

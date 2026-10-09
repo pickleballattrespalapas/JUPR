@@ -112,17 +112,17 @@ export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey }
     void loadSession();
   }, [apiBase, clubId, sessionKey]);
 
-  async function continueSession(): Promise<void> {
+  async function updateSession(action: "advance" | "complete"): Promise<void> {
     if (!apiBase || !editToken || !session) return;
     setBusy(true);
     setMessage("");
     try {
       const response = await fetch(
-        apiUrl(apiBase, `/clubs/${encodeURIComponent(clubId)}/play-generators/sessions/${encodeURIComponent(sessionKey)}/advance`),
+        apiUrl(apiBase, `/clubs/${encodeURIComponent(clubId)}/play-generators/sessions/${encodeURIComponent(sessionKey)}/${action}`),
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ edit_token: editToken, expected_version: Number(session.version), idempotency_key: operationKey("standings-advance") })
+          body: JSON.stringify({ edit_token: editToken, expected_version: Number(session.version), idempotency_key: operationKey(`standings-${action}`) })
         }
       );
       const payload = await response.json().catch(() => null);
@@ -165,11 +165,13 @@ export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey }
 
   const scoringMode = session.scoring_mode || session.event.scoringMode || "scored";
   const currentRound = Number(session.current_round_number || session.event.currentRoundNumber || 1);
-  const totalRounds = Number(session.total_rounds || session.event.totalRounds || 1);
   const currentStatus = session.event.rounds?.find((row) => row.number === currentRound)?.status || "";
   const sortMode = session.standings_sort || session.event.standingsSort || "wins";
   const visibleRounds = (session.event.rounds || []).filter((row) => row.number <= currentRound);
-  const canContinue = Boolean(editToken) && scoringMode === "scored" && session.status === "active" && ["saved", "skipped"].includes(currentStatus);
+  const resultsLocked = Boolean(session.submission);
+  const canManage = Boolean(editToken) && scoringMode === "scored" && !resultsLocked;
+  const canContinue = canManage && ["active", "completed"].includes(session.status) && ["saved", "skipped"].includes(currentStatus);
+  const canFinish = canContinue && session.status === "active" && visibleRounds.every((row) => ["saved", "skipped"].includes(row.status));
 
   if (scoringMode === "unscored") {
     return <article style={cardStyle}><h1>{session.title}</h1><p>This unscored Round-Robin does not use standings.</p><Link href={`/clubs/${clubId}/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${currentRound}`}>Return to current round</Link></article>;
@@ -184,11 +186,11 @@ export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey }
       </article>
       <nav aria-label="Round-Robin session navigation" style={{ ...cardStyle, display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
         <Link href={`/clubs/${clubId}/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${currentRound}`} style={linkButton}>Current round</Link>
-        {visibleRounds.map((row) => <Link key={row.number} href={`/clubs/${clubId}/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${row.number}`} style={linkButton}>Round {row.number}</Link>)}
+        {visibleRounds.map((row) => <Link key={row.number} href={`/clubs/${clubId}/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${row.number}`} style={linkButton}>Round {row.number}{row.status === "skipped" ? " · Skipped" : ""}</Link>)}
       </nav>
       {session.status === "completed" || session.submission ? (
         <div style={{ display: "grid", gap: "0.5rem" }}>
-          <GeneratorSubmission ratingMode={session.rating_mode || "unrated"} submission={session.submission} canSubmit={session.status === "completed" && Boolean(editToken)} defaultDate={session.created_at} onSubmit={submitResults} />
+          <GeneratorSubmission ratingMode={session.rating_mode || "unrated"} submission={session.submission} canSubmit={!resultsLocked && session.status === "completed" && Boolean(editToken)} defaultDate={session.created_at} onSubmit={submitResults} />
           {session.submission ? <button type="button" onClick={() => void loadSession()} style={{ ...linkButton, cursor: "pointer", justifySelf: "start", background: "white" }}>Refresh approval status</button> : null}
         </div>
       ) : null}
@@ -197,15 +199,18 @@ export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey }
         <article style={{ ...cardStyle, background: "#ecfdf5", borderColor: "#86efac" }}>
           <h2 style={{ marginTop: 0 }}>Final standings</h2>
           <p style={{ marginBottom: 0, color: "#166534" }}>
-            All scheduled rounds are complete.
+            The cumulative standings are preserved above.
           </p>
         </article>
       ) : null}
       {canContinue ? (
         <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>{currentRound >= totalRounds ? "Finish the session" : `Continue to Round ${currentRound + 1}`}</h2>
-          <p style={{ color: "#475569" }}>Round {currentRound} is included. Continue when you’re ready.</p>
-          <button type="button" onClick={() => void continueSession()} disabled={busy} style={primaryButton}>{busy ? "Continuing…" : currentRound >= totalRounds ? "Finish session" : `Continue to Round ${currentRound + 1}`}</button>
+          <h2 style={{ marginTop: 0 }}>{session.status === "completed" ? "Keep playing" : `Continue to Round ${currentRound + 1}`}</h2>
+          <p style={{ color: "#475569" }}>Play as many rounds as you like. Finish the session when you’re ready to submit results.</p>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+            <button type="button" onClick={() => void updateSession("advance")} disabled={busy} style={primaryButton}>{busy ? "Working…" : session.status === "completed" ? `Keep playing · Round ${currentRound + 1}` : `Continue to Round ${currentRound + 1}`}</button>
+            {canFinish ? <button type="button" onClick={() => void updateSession("complete")} disabled={busy} style={{ ...linkButton, cursor: "pointer", background: "white" }}>Finish session</button> : null}
+          </div>
         </article>
       ) : null}
       {message ? <p role="status">{message}</p> : null}
