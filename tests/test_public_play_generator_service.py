@@ -75,6 +75,64 @@ def matches(round_row):
     return list(round_row.get("matches") or []) or [match for court in round_row.get("courts") or [] for match in court.get("matches") or []]
 
 
+@pytest.mark.parametrize("linked_indices", [(), (1, 3), (0, 1, 2, 3, 4)])
+@pytest.mark.parametrize("rating_mode", ["rated", "unrated"])
+def test_five_player_roster_preview_start_and_reload_preserve_profile_links(linked_indices, rating_mode):
+    supabase = FakeSupabase()
+    names = ["Manuel", "Jose", "Victor", "Chay", "Beto"]
+    supabase.db["players"] = [
+        {"id": 101 + index, "club_id": "club", "name": name}
+        for index, name in enumerate(names)
+    ]
+    players_before = deepcopy(supabase.db["players"])
+    setup = dict(
+        club_id="club", generator_kind="round_robin", play_format="doubles",
+        title="3.5+ RR", participant_names=names,
+        participant_player_ids={names[index]: 101 + index for index in linked_indices},
+        total_rounds=5, court_count=1, rating_mode=rating_mode,
+    )
+    preview = preview_public_play_generator(supabase, **setup)["preview"]
+    expected_ids = [101 + index if index in linked_indices else None for index in range(5)]
+    assert [player.get("player_id") for player in preview["participants"]] == expected_ids
+    assert [player["name"] for player in preview["participants"]] == names
+    assert len(preview["rounds"]) == 5
+    assert all(len(matches(row)) == 1 and len(row["byeParticipantIds"]) == 1 for row in preview["rounds"])
+    assert sorted(pid for row in preview["rounds"] for pid in row["byeParticipantIds"]) == [f"p-{i}" for i in range(1, 6)]
+    assert not supabase.db["live_sessions"], "Preview must not create a session"
+
+    created = create_public_play_generator_session(
+        supabase, **setup, preview_fingerprint=preview["previewFingerprint"],
+        idempotency_key=key("mixed-roster"), requester_hash=requester(), token_secret=token_secret(),
+    )
+    session = created["session"]
+    saved = save_public_play_generator_round(
+        supabase, club_id="club", session_key=session["session_key"], round_number=1,
+        scores=[{"match_id": matches(session["event"]["rounds"][0])[0]["id"], "score_a": 11, "score_b": 7}],
+        edit_token=created["edit_token"], expected_version=session["version"],
+        idempotency_key=key("mixed-score"), requester_hash=requester(),
+    )["session"]
+    reloaded = get_public_play_generator_session(supabase, club_id="club", session_key=saved["session_key"])["session"]
+    assert [player.get("player_id") for player in reloaded["event"]["participants"]] == expected_ids
+    assert reloaded["event"]["rounds"][0]["status"] == "saved"
+    assert supabase.db["players"] == players_before, "Manual names must not create or modify club profiles"
+
+
+@pytest.mark.parametrize("invalid_player", [
+    None,
+    {"id": 101, "club_id": "other-club", "name": "Manuel"},
+    {"id": 101, "club_id": "club", "name": "Someone Else"},
+])
+def test_mixed_roster_still_rejects_missing_cross_club_and_mismatched_profiles(invalid_player):
+    supabase = FakeSupabase()
+    supabase.db["players"] = [invalid_player] if invalid_player else []
+    with pytest.raises(public_play_generator_service.PublicPlayGeneratorError, match="Choose Manuel from the player list again"):
+        preview_public_play_generator(
+            supabase, club_id="club", generator_kind="round_robin", play_format="doubles",
+            title="Roster validation", participant_names=["Manuel", "Jose", "Victor", "Chay", "Beto"],
+            participant_player_ids={"Manuel": 101}, total_rounds=5, court_count=1,
+        )
+
+
 def test_public_eight_plus_four_preserves_round_and_persists_optional_extra_game():
     supabase = FakeSupabase()
     created = create_public_play_generator_session(
