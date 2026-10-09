@@ -4,6 +4,7 @@ import Link from "@/components/PublicClubLink";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import GeneratorSubmission, { GeneratorSubmissionStatus, generatorResultLabel } from "@/components/GeneratorSubmission";
+import GeneratorPlayoff, { type PlayoffFormat, type GeneratorPlayoffEvent, type GeneratorPlayoffOptions } from "@/components/GeneratorPlayoff";
 import PlayGeneratorStandingsTable, {
   PlayGeneratorStanding,
   standingsSortLabel
@@ -27,12 +28,13 @@ type Session = {
   total_rounds?: number | null;
   standings_sort?: StandingsSort;
   standings?: PlayGeneratorStanding[];
-  event: {
+  playoff_options?: GeneratorPlayoffOptions | null;
+  event: GeneratorPlayoffEvent & {
     scoringMode?: ScoringMode;
     standingsSort?: StandingsSort;
     currentRoundNumber?: number;
     totalRounds?: number;
-    rounds?: Array<{ number: number; status: string }>;
+    rounds?: Array<{ number: number; status: string; label?: string }>;
   };
 };
 
@@ -67,6 +69,7 @@ function requestFailureMessage(error: unknown, fallback: string): string {
 }
 
 function requestErrorMessage(status: number, detail?: unknown): string {
+  if (status === 400 && typeof detail === "string" && /^(Save or skip|At least|This session already has a playoff|Submitted results|Playoff)/.test(detail)) return detail;
   if (detail === "Score entry is temporarily unavailable.") return "This play tool is temporarily unavailable.";
   if (detail === "Live sessions are temporarily unavailable. Please try again later.") return "This play tool is temporarily unavailable.";
   if (status === 403) return "This organizer link can’t make changes to this session.";
@@ -144,6 +147,29 @@ export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey }
     }
   }
 
+  async function startPlayoff(format: PlayoffFormat): Promise<void> {
+    if (!apiBase || !editToken || !session || busy) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch(
+        apiUrl(apiBase, `/clubs/${encodeURIComponent(clubId)}/play-generators/sessions/${encodeURIComponent(sessionKey)}/playoff`),
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+          edit_token: editToken, expected_version: Number(session.version), playoff_format: format,
+          idempotency_key: `generator-playoff:${sessionKey}:${session.version}:${format}`,
+        }) }
+      );
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new UserFacingError(requestErrorMessage(response.status, payload?.detail));
+      if (!payload?.session) throw new UserFacingError("We couldn’t confirm the playoff. Refresh the page and try again.");
+      setSession(payload.session as Session);
+      router.push(`/clubs/${clubId}/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${payload.session.current_round_number}`);
+      router.refresh();
+    } catch (error) {
+      setMessage(requestFailureMessage(error, "We couldn’t start the playoff. Please try again."));
+    } finally { setBusy(false); }
+  }
+
   async function submitResults(organizerName: string, matchDate: string): Promise<void> {
     if (!apiBase || !editToken || !session) throw new Error("Use the organizer link to submit this session.");
     const response = await fetch(
@@ -165,13 +191,18 @@ export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey }
 
   const scoringMode = session.scoring_mode || session.event.scoringMode || "scored";
   const currentRound = Number(session.current_round_number || session.event.currentRoundNumber || 1);
+  const totalRounds = Number(session.total_rounds || session.event.totalRounds || 1);
   const currentStatus = session.event.rounds?.find((row) => row.number === currentRound)?.status || "";
   const sortMode = session.standings_sort || session.event.standingsSort || "wins";
   const visibleRounds = (session.event.rounds || []).filter((row) => row.number <= currentRound);
   const resultsLocked = Boolean(session.submission);
   const canManage = Boolean(editToken) && scoringMode === "scored" && !resultsLocked;
-  const canContinue = canManage && ["active", "completed"].includes(session.status) && ["saved", "skipped"].includes(currentStatus);
-  const canFinish = canContinue && session.status === "active" && visibleRounds.every((row) => ["saved", "skipped"].includes(row.status));
+  const canContinue = canManage && (session.status === "active" || (!session.event.playoff && session.status === "completed")) && ["saved", "skipped"].includes(currentStatus);
+  const canFinish = canContinue && !session.event.playoff && session.status === "active" && visibleRounds.every((row) => ["saved", "skipped"].includes(row.status));
+  const nextLabel = session.event.rounds?.find(row => row.number === currentRound + 1)?.label;
+  const continueLabel = session.event.playoff
+    ? currentRound >= totalRounds ? "Finish session" : `Continue to ${nextLabel || `Round ${currentRound + 1}`}`
+    : session.status === "completed" ? `Keep playing · Round ${currentRound + 1}` : `Continue to Round ${currentRound + 1}`;
 
   if (scoringMode === "unscored") {
     return <article style={cardStyle}><h1>{session.title}</h1><p>This unscored Round-Robin does not use standings.</p><Link href={`/clubs/${clubId}/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${currentRound}`}>Return to current round</Link></article>;
@@ -186,7 +217,7 @@ export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey }
       </article>
       <nav aria-label="Round-Robin session navigation" style={{ ...cardStyle, display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
         <Link href={`/clubs/${clubId}/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${currentRound}`} style={linkButton}>Current round</Link>
-        {visibleRounds.map((row) => <Link key={row.number} href={`/clubs/${clubId}/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${row.number}`} style={linkButton}>Round {row.number}{row.status === "skipped" ? " · Skipped" : ""}</Link>)}
+        {visibleRounds.map((row) => <Link key={row.number} href={`/clubs/${clubId}/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${row.number}`} style={linkButton}>{row.label || `Round ${row.number}`}{row.status === "skipped" ? " · Skipped" : ""}</Link>)}
       </nav>
       {session.status === "completed" || session.submission ? (
         <div style={{ display: "grid", gap: "0.5rem" }}>
@@ -194,7 +225,8 @@ export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey }
           {session.submission ? <button type="button" onClick={() => void loadSession()} style={{ ...linkButton, cursor: "pointer", justifySelf: "start", background: "white" }}>Refresh approval status</button> : null}
         </div>
       ) : null}
-      <PlayGeneratorStandingsTable rows={session.standings || []} sortMode={sortMode} />
+      <GeneratorPlayoff event={session.event} options={session.playoff_options} canManage={Boolean(editToken)} locked={Boolean(session.submission)} busy={busy} onStart={startPlayoff} roundHref={round => `/clubs/${clubId}/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${round}`} />
+      <PlayGeneratorStandingsTable rows={session.standings || []} sortMode={sortMode} title={session.event.playoff ? "Round-robin standings" : undefined} />
       {session.status === "completed" ? (
         <article style={{ ...cardStyle, background: "#ecfdf5", borderColor: "#86efac" }}>
           <h2 style={{ marginTop: 0 }}>Final standings</h2>
@@ -205,10 +237,10 @@ export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey }
       ) : null}
       {canContinue ? (
         <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>{session.status === "completed" ? "Keep playing" : `Continue to Round ${currentRound + 1}`}</h2>
-          <p style={{ color: "#475569" }}>Play as many rounds as you like. Finish the session when you’re ready to submit results.</p>
+          <h2 style={{ marginTop: 0 }}>{session.status === "completed" ? "Keep playing" : continueLabel}</h2>
+          <p style={{ color: "#475569" }}>{session.event.playoff ? "Save each playoff game, then continue to the final or finish the session." : "Play as many rounds as you like. Finish the session when you’re ready to submit results."}</p>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
-            <button type="button" onClick={() => void updateSession("advance")} disabled={busy} style={primaryButton}>{busy ? "Working…" : session.status === "completed" ? `Keep playing · Round ${currentRound + 1}` : `Continue to Round ${currentRound + 1}`}</button>
+            <button type="button" onClick={() => void updateSession("advance")} disabled={busy} style={primaryButton}>{busy ? "Working…" : continueLabel}</button>
             {canFinish ? <button type="button" onClick={() => void updateSession("complete")} disabled={busy} style={{ ...linkButton, cursor: "pointer", background: "white" }}>Finish session</button> : null}
           </div>
         </article>

@@ -18,6 +18,7 @@ export type PlayGeneratorStanding = {
 type Props = {
   rows: PlayGeneratorStanding[];
   sortMode: StandingsSort;
+  title?: string;
 };
 
 export function standingsSortLabel(mode: StandingsSort): string {
@@ -37,7 +38,7 @@ const primaryCell = {
   fontWeight: 850
 };
 
-export default function PlayGeneratorStandingsTable({ rows, sortMode }: Props) {
+export default function PlayGeneratorStandingsTable({ rows, sortMode, title = "Standings" }: Props) {
   const finalRoundRobin = rows.some(row => row.roundRobinVictoryRanking);
   if (finalRoundRobin) sortMode = "wins";
   return (
@@ -51,7 +52,7 @@ export default function PlayGeneratorStandingsTable({ rows, sortMode }: Props) {
       }}
     >
       <div style={{ marginBottom: "0.85rem" }}>
-        <h2 style={{ margin: "0 0 0.3rem" }}>Standings</h2>
+        <h2 style={{ margin: "0 0 0.3rem" }}>{title}</h2>
         <p style={{ margin: 0, color: "#475569" }}>
           Ranked by <strong>{standingsSortLabel(sortMode)}</strong>. {finalRoundRobin ? "Ties are decided by point difference, then total points, then an admin decision." : tieBreakText(sortMode)}
           {" "}Skipped and unplayed rounds do not affect the table.
