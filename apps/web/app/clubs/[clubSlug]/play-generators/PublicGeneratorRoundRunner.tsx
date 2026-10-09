@@ -30,6 +30,7 @@ type Participant = {
 
 type MatchRow = {
   id: string;
+  label?: string;
   round?: number;
   court?: number;
   miniRound?: number;
@@ -44,6 +45,8 @@ type MatchRow = {
 
 type RoundRow = {
   number: number;
+  stage?: string;
+  label?: string;
   status: "preview" | "active" | "saved" | "played" | "skipped" | string;
   matches?: MatchRow[];
   courts?: Array<{
@@ -59,6 +62,7 @@ type RoundRow = {
 
 type GeneratorEvent = {
   name: string;
+  playoff?: { format: string };
   generatorKind: GeneratorKind;
   playFormat: PlayFormat;
   scoringMode?: ScoringMode;
@@ -490,11 +494,11 @@ export default function GeneratorRoundRunner({
   const canEditRound =
     canManage &&
     session?.status === "active" &&
-    (isCurrent || generatorKind === "round_robin") &&
+    (isCurrent || (generatorKind === "round_robin" && !event?.playoff)) &&
     round?.status === "active";
-  const canReopenRound = canManage && generatorKind === "round_robin" && round?.status === "skipped";
+  const canReopenRound = canManage && !event?.playoff && generatorKind === "round_robin" && round?.status === "skipped";
   const hasOtherOpenRound = event?.rounds.some(row => row.status === "active" && row.number !== event.currentRoundNumber) ?? false;
-  const canFinishSession = canManage && generatorKind === "round_robin" && session?.status === "active" && isCurrent && !hasOtherOpenRound;
+  const canFinishSession = canManage && !event?.playoff && generatorKind === "round_robin" && session?.status === "active" && isCurrent && !hasOtherOpenRound;
   const draftScoreCount = scoredSession
     ? Object.values(scores).filter((value) => value !== "").length
     : 0;
@@ -877,7 +881,7 @@ export default function GeneratorRoundRunner({
         <article style={{ ...cardStyle, background: "#ecfdf5", borderColor: "#86efac" }}>
           <h2 style={{ marginTop: 0 }}>Session complete</h2>
           <p style={{ marginBottom: 0, color: "#166534" }}>Review the saved session history below.</p>
-          {generatorKind === "round_robin" && canManage ? (
+          {generatorKind === "round_robin" && canManage && !event.playoff ? (
             <button type="button" onClick={() => void advanceRound()} disabled={busy} style={{ ...primaryButton, marginTop: "1rem" }}>
               {busy ? "Continuing…" : "Keep playing"}
             </button>
@@ -890,7 +894,7 @@ export default function GeneratorRoundRunner({
       <article style={cardStyle}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
           <div>
-            <h2 style={{ marginTop: 0 }}>Round {roundNumber}</h2>
+            <h2 style={{ marginTop: 0 }}>{round.label || `Round ${roundNumber}`}</h2>
             {event.playFormat === "doubles_singles" ? (
               <p style={{ color: "#475569" }}>
                 {doublesGames} doubles game{doublesGames === 1 ? "" : "s"} · {singlesGames} singles game{singlesGames === 1 ? "" : "s"}
@@ -948,6 +952,7 @@ export default function GeneratorRoundRunner({
                 <p style={{ margin: "0 0 0.4rem", color: "#64748b" }}>
                   {matchFormatLabel(match, event.playFormat)} · Court {match.court || "—"}
                   {match.miniRound ? ` · Game ${match.miniRound}` : ""}
+                  {match.label ? ` · ${match.label}` : ""}
                 </p>
                 <div
                   style={{
@@ -1021,7 +1026,7 @@ export default function GeneratorRoundRunner({
                   {busy ? "Saving…" : "Mark round played"}
                 </button>
               )}
-              <input
+              {round.stage !== "playoff" ? <><input
                 value={skipReason}
                 onChange={(event_) => setSkipReason(event_.target.value)}
                 placeholder="Optional skip reason"
@@ -1054,6 +1059,7 @@ export default function GeneratorRoundRunner({
                 onConfirm={skipRound}
                 onAcknowledge={acknowledgeSkip}
               />
+              </> : null}
             </div>
           </div>
         ) : null}
@@ -1147,7 +1153,7 @@ export default function GeneratorRoundRunner({
         ) : null}
       </article>
 
-      {canManage && isCurrent && session.status === "active" && Boolean(editToken) ? (
+      {canManage && isCurrent && session.status === "active" && Boolean(editToken) && !event.playoff ? (
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>Change players</h2>
           <p style={{ color: "#475569" }}>

@@ -21,6 +21,7 @@ from jupr_app.services.public_play_generator_service import (
     save_public_play_generator_round,
     skip_public_play_generator_round,
     reopen_public_play_generator_round,
+    start_public_play_generator_playoff,
 )
 
 
@@ -53,6 +54,10 @@ class PublicGeneratorMutationRequest(BaseModel):
 class PublicGeneratorSubmitRequest(PublicGeneratorMutationRequest):
     organizer_name: str = Field(min_length=1, max_length=160)
     match_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+
+
+class PublicGeneratorPlayoffRequest(PublicGeneratorMutationRequest):
+    playoff_format: str = Field(pattern=r"^(groups_of_four|top_eight)$")
 
 
 class PublicGeneratorScorePayload(BaseModel):
@@ -366,6 +371,23 @@ def install_public_play_generator_routes(
                 expected_version=payload.expected_version,
                 idempotency_key=payload.idempotency_key,
                 requester_hash=requester_hash(request),
+            )
+        except Exception as exc:
+            raise_public_error(exc)
+            raise
+        return {"club": public_club_payload(club, club_slug), **result}
+
+    @app.post("/clubs/{club_slug}/play-generators/sessions/{session_key}/playoff")
+    def post_public_generator_playoff(
+        club_slug: str, session_key: str, payload: PublicGeneratorPlayoffRequest, request: Request,
+    ) -> dict[str, Any]:
+        require_public_writes()
+        require_service_role()
+        club, club_id, supabase = context(club_slug)
+        try:
+            result = start_public_play_generator_playoff(
+                supabase, club_id=club_id, session_key=session_key,
+                **_model_payload(payload), requester_hash=requester_hash(request),
             )
         except Exception as exc:
             raise_public_error(exc)

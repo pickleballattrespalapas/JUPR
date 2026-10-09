@@ -24,6 +24,7 @@ from jupr_app.domain.adaptive_play_engine import (
     reopen_generator_round,
     start_generator_event,
 )
+from jupr_app.domain.generator_playoffs import generator_playoff_options, start_generator_playoff
 from jupr_app.services.public_live_operation_service import (
     PublicLiveConflictError,
     PublicLiveRecoveryRequiredError,
@@ -226,6 +227,7 @@ def public_play_generator_session_payload(row: dict[str, Any]) -> dict[str, Any]
         "scoring_mode": str(event.get("scoringMode") or "scored") if event else "scored",
         "standings_sort": str(event.get("standingsSort") or "wins") if event else "wins",
         "standings": generator_event_standings(event) if event else [],
+        "playoff_options": generator_playoff_options(event) if event else None,
         "unrated": str(event.get("ratingMode") or "unrated") == "unrated",
         "rating_mode": str(event.get("ratingMode") or "unrated"),
         "submission": {
@@ -581,7 +583,8 @@ def get_public_play_generator_session(
 def _validate_editable(row: dict[str, Any], *, edit_token: str, allow_completed: bool = False) -> None:
     if not edit_token_matches(edit_token, str(row.get("edit_token_hash") or "")):
         raise PermissionError("This organizer link is no longer valid.")
-    if _state(row).get("generator_submission"):
+    official = _state(row).get("official_publish") or {}
+    if _state(row).get("generator_submission") or official.get("published_at") or official.get("published_match_ids"):
         raise PublicPlayGeneratorError("Submitted results are locked for administrator review.")
     allowed_statuses = {"active", "completed"} if allow_completed else {"active"}
     if str(row.get("status") or "") not in allowed_statuses:
@@ -655,6 +658,7 @@ def _run_mutation(
     action: str,
     request_payload: dict[str, Any],
     mutate: Callable[[dict[str, Any]], tuple[dict[str, Any], dict[str, Any]]],
+    allow_completed: bool = False,
 ) -> dict[str, Any]:
     operation, existed = begin_public_live_operation(
         supabase,
@@ -671,7 +675,7 @@ def _run_mutation(
     try:
         _validate_editable(
             row, edit_token=edit_token,
-            allow_completed=(
+            allow_completed=allow_completed or (
                 action in {"reopen", "advance"}
                 and _event_from_state(_state(row)).get("generatorKind") == "round_robin"
             ) or (
@@ -925,6 +929,20 @@ def advance_public_play_generator_session(
         action="advance",
         request_payload={},
         mutate=mutate,
+    )
+
+
+def start_public_play_generator_playoff(
+    supabase: Any, *, club_id: str, session_key: str, playoff_format: str,
+    edit_token: str, expected_version: int, idempotency_key: str, requester_hash: str,
+) -> dict[str, Any]:
+    return _run_mutation(
+        supabase, club_id=club_id, session_key=session_key, edit_token=edit_token,
+        expected_version=expected_version, idempotency_key=idempotency_key,
+        requester_hash=requester_hash, action="playoff", allow_completed=True,
+        request_payload={"playoff_format": playoff_format},
+        mutate=lambda event: (start_generator_playoff(event, playoff_format=playoff_format),
+                              {"status": "active", "completed_at": None, "expires_at": _ttl_iso()}),
     )
 
 
