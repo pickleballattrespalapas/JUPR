@@ -412,7 +412,7 @@ export default function GeneratorWorkspace({
       setPreview(payload.preview);
       setMessage(
         generatorKind === "round_robin"
-          ? `Previewed ${payload.preview.rounds.length} planned round(s).`
+          ? `Starting schedule: ${payload.preview.rounds.length} rounds. Add more as needed during play.`
           : "Previewed Round 1. Later ladder rounds are generated from results."
       );
     } catch (error) {
@@ -530,7 +530,7 @@ export default function GeneratorWorkspace({
     doc.text(
       generatorKind === "ladder"
         ? "Ladder preview: Round 1 only. Later rounds depend on results."
-        : `${preview.totalRounds} planned rounds`,
+        : `${preview.totalRounds} starting rounds - add more during play`,
       margin,
       margin + 24
     );
@@ -731,8 +731,8 @@ export default function GeneratorWorkspace({
             {generatorKind === "ladder"
               ? "Only Round 1 is shown. Round 2 and later are generated from saved results."
               : scoringMode === "unscored"
-                ? "Review every planned round, matchup, and bye. During play, use Round Played to move directly to the next round."
-                : "Review every planned round, matchup, and bye. Change the roster order above and regenerate when needed."}
+                ? "Review the starting schedule, matchups, and byes. Keep adding rounds for as long as you want. During play, use Round Played to move directly to the next round."
+                : "Review the starting schedule, matchups, and byes. Keep adding rounds for as long as you want. Change the roster order above and regenerate when needed."}
           </p>
           <div style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap", marginBottom: "1rem" }}>
             <button type="button" onClick={downloadCsv} style={secondaryButton}>
@@ -834,7 +834,7 @@ export default function GeneratorWorkspace({
                   <div>
                     <strong>{session.title}</strong>
                     <p style={{ margin: "0.25rem 0 0", color: "#475569" }}>
-                      {playFormatLabel(session.play_format)} · Round {session.current_round_number || 1} of {session.total_rounds || "?"}
+                      {playFormatLabel(session.play_format)} · Round {session.current_round_number || 1}{generatorKind === "ladder" ? ` of ${session.total_rounds || "?"}` : ""}
                       {" · "}{session.status}
                     </p>
                   </div>

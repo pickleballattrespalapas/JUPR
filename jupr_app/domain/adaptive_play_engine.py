@@ -2,7 +2,8 @@
 
 The engine is intentionally deterministic: the same roster order, history, court
 count, and round number produce the same schedule. Completed and skipped rounds
-are immutable inputs when future rounds are regenerated.
+retain their matchups when future rounds are regenerated. Skipped round-robin
+rounds may be explicitly reopened to play their original games.
 """
 
 from __future__ import annotations
@@ -210,8 +211,20 @@ def _candidate_playing_sets(
     if slots >= len(active_ids):
         return [(list(active_ids), [])]
     ordered = sorted(active_ids, key=lambda pid: _selection_priority(pid, history, roster_pos))
-    bye_count = len(active_ids) - slots
-    pool = ordered[: min(len(ordered), slots + max(bye_count * 2, 3))]
+    # Court time is a constraint, not a small pairing-cost penalty. Players
+    # with fewer games must play before those with more; at equal games,
+    # protect players who have already had more byes. Matchup variety may
+    # choose between players only when both counts are tied at the cutoff.
+    cutoff = _selection_priority(ordered[slots - 1], history, roster_pos)[:2]
+    required = [
+        pid for pid in ordered
+        if _selection_priority(pid, history, roster_pos)[:2] < cutoff
+    ]
+    tied = [
+        pid for pid in ordered
+        if _selection_priority(pid, history, roster_pos)[:2] == cutoff
+    ]
+    remaining_slots = slots - len(required)
     seen: set[tuple[str, ...]] = set()
     results: list[tuple[list[str], list[str]]] = []
     baseline_playing = ordered[:slots]
@@ -220,9 +233,12 @@ def _candidate_playing_sets(
     results.append((baseline_playing, [pid for pid in ordered if pid not in set(baseline_playing)]))
     rng = random.Random(seed)
     for _ in range(attempts):
-        sample_pool = pool[:]
+        sample_pool = tied[:]
         rng.shuffle(sample_pool)
-        playing = sorted(sample_pool[:slots], key=lambda pid: roster_pos.get(pid, 9999))
+        playing = sorted(
+            required + sample_pool[:remaining_slots],
+            key=lambda pid: roster_pos.get(pid, 9999),
+        )
         key = tuple(sorted(playing))
         if len(playing) < slots or key in seen:
             continue
@@ -1350,6 +1366,54 @@ def skip_generator_round(event: dict[str, Any], *, round_number: int, reason: st
     row["skipReason"] = _clean_name(reason)
     return next_event
 
+
+def reopen_generator_round(event: dict[str, Any], *, round_number: int) -> dict[str, Any]:
+    """Unlock a skipped round without changing games already sent onto court."""
+    next_event = copy.deepcopy(event)
+    if str(next_event.get("generatorKind") or "") != "round_robin":
+        raise ValueError("Reopening skipped rounds is available only for Round-Robin Generator sessions.")
+    if str(next_event.get("status")) not in {"active", "completed"}:
+        raise ValueError("Only a started Round-Robin can reopen a skipped round.")
+    row = _get_round(next_event, round_number)
+    if str(row.get("status")) != "skipped":
+        raise ValueError("Only a skipped round can be reopened.")
+    row["status"] = "active"
+    row["skippedAt"] = None
+    row["skipReason"] = ""
+    next_event["status"] = "active"
+    next_event["completedAt"] = None
+    # Keep currentRoundNumber and every original match intact. An earlier
+    # round can be scored while the newest round remains available.
+    return next_event
+
+
+def complete_generator_event(event: dict[str, Any]) -> dict[str, Any]:
+    """Finish explicitly, leaving any unplayed future schedule recoverable."""
+    next_event = copy.deepcopy(event)
+    if str(next_event.get("status")) not in {"active", "completed"}:
+        raise ValueError("Only a started session can be completed.")
+    current = int(next_event.get("currentRoundNumber") or 1)
+    row = _get_round(next_event, current)
+    if any(
+        int(other.get("number") or 0) != current and str(other.get("status")) == "active"
+        for other in next_event.get("rounds") or []
+    ):
+        raise ValueError("Save scores, mark played, or skip every open round before completing the session.")
+    if str(row.get("status")) == "active" and str(next_event.get("generatorKind")) == "round_robin":
+        if _round_has_any_scores(row):
+            raise ValueError("Save or clear entered scores before completing the session.")
+        next_event = skip_generator_round(
+            next_event,
+            round_number=current,
+            reason="Session finished before this round was played.",
+        )
+    elif str(row.get("status")) not in {"saved", "played", "skipped"}:
+        raise ValueError("Save scores, mark played, or skip the current round before completing the session.")
+    next_event["status"] = "completed"
+    next_event["completedAt"] = next_event.get("completedAt") or _now_iso()
+    return next_event
+
+
 def _round_standings(event: dict[str, Any], round_row: dict[str, Any], participant_ids: list[str]) -> list[dict[str, Any]]:
     participants = _participant_map(event)
     stats = {
@@ -1531,19 +1595,29 @@ def advance_generator_event(event: dict[str, Any]) -> dict[str, Any]:
     if str(row.get("status")) not in {"saved", "played", "skipped"}:
         raise ValueError("Save or skip the current round before continuing. Unscored Round-Robins may mark it played.")
     total = int(next_event.get("totalRounds") or 1)
-    if current >= total:
+    kind = str(next_event.get("generatorKind") or "round_robin")
+    if kind == "ladder" and current >= total:
         next_event["status"] = "completed"
         next_event["completedAt"] = _now_iso()
         return next_event
     next_number = current + 1
-    kind = str(next_event.get("generatorKind") or "round_robin")
     if kind == "ladder":
         order = _ladder_next_order(next_event, row, next_number)
         next_round = _create_ladder_round(next_event, next_number, order)
         next_event.setdefault("rounds", []).append(next_round)
     else:
+        # totalRounds is the generated schedule length, not a session limit.
+        # Append one round when needed so open-ended play stays incremental.
+        next_event["totalRounds"] = max(total, next_number)
+        next_event["status"] = "active"
+        next_event["completedAt"] = None
+        # Rebuild only unstarted rounds from the games actually played.
+        # This drops skipped rounds from bye/game accounting and applies
+        # current fairness rules to schedules saved by older generators.
+        _regenerate_round_robin_from(next_event, next_number)
         next_round = _get_round(next_event, next_number)
-    next_round["status"] = "active"
+    if str(next_round.get("status")) == "preview":
+        next_round["status"] = "active"
     next_event["currentRoundNumber"] = next_number
     return next_event
 
@@ -1626,6 +1700,7 @@ def _seat_generator_arrivals(
     _regenerate_round_robin_from(event, current + 1)
 
 def _regenerate_round_robin_from(event: dict[str, Any], start_round: int) -> None:
+    existing = {int(row.get("number") or 0): row for row in event.get("rounds") or []}
     preserved = [
         copy.deepcopy(row)
         for row in event.get("rounds") or []
@@ -1642,11 +1717,21 @@ def _regenerate_round_robin_from(event: dict[str, Any], start_round: int) -> Non
     generated = []
     total = int(event.get("totalRounds") or 1)
     for number in range(int(start_round), total+1):
-        row = _generate_round_robin_round(event, number, history)
+        previous = existing.get(number)
+        # Scores can be entered ahead of the current round. Never overwrite
+        # completed, skipped, displayed or partially scored games.
+        if previous and (
+            str(previous.get("status")) in {"saved", "played", "skipped", "active"}
+            or _round_has_any_scores(previous)
+        ):
+            row = copy.deepcopy(previous)
+        else:
+            row = _generate_round_robin_round(event, number, history)
         if str(event.get("status")) == "active" and number == int(event.get("currentRoundNumber") or 1):
             row["status"] = "active"
         generated.append(row)
-        _update_history_for_generated_round(history, row, str(event.get("playFormat") or "doubles"))
+        if str(row.get("status")) != "skipped":
+            _update_history_for_generated_round(history, row, str(event.get("playFormat") or "doubles"))
     event["rounds"] = [*preserved, *generated]
 
 def mutate_generator_roster(

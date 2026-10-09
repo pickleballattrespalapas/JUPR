@@ -12,7 +12,7 @@ from test_public_play_generator_service import Query as BaseQuery, matches
 from jupr_app.services import generator_submission_service as service
 from jupr_app.services import direct_match_entry_service as direct
 from jupr_app.services.public_play_generator_service import (
-    advance_public_play_generator_session, create_public_play_generator_session,
+    advance_public_play_generator_session, complete_public_play_generator_session, create_public_play_generator_session,
     save_public_play_generator_round, get_public_play_generator_session,
 )
 from jupr_app.services.public_live_operation_service import PublicLiveConflictError
@@ -115,7 +115,8 @@ def completed_session(db, *, rating_mode="unrated", play_format="doubles", kind=
         scored = save_public_play_generator_round(db, **args, round_number=number, expected_version=session["version"],
             idempotency_key=f"scores-{session['session_key']}-{number}",
             scores=[{"match_id": m["id"], "score_a": 11, "score_b": 7} for m in matches(session["event"]["rounds"][number - 1])])
-        session = advance_public_play_generator_session(db, **args, expected_version=scored["session"]["version"],
+        finish = advance_public_play_generator_session if number < total_rounds else complete_public_play_generator_session
+        session = finish(db, **args, expected_version=scored["session"]["version"],
             idempotency_key=f"finish-{session['session_key']}-{number}")["session"]
     assert session["status"] == "completed"
     return session, created["edit_token"]
@@ -314,9 +315,10 @@ def test_public_http_rating_choice_survives_preview_play_and_approval(public_cli
         assert response.status_code == 200, response.text
         session = response.json()["session"]
         assert session["rating_mode"] == rating_mode
-        response = public_client.post(f"{session_path}/advance", json={
+        finish_action = "advance" if number < setup["total_rounds"] else "complete"
+        response = public_client.post(f"{session_path}/{finish_action}", json={
             "edit_token": created["edit_token"], "expected_version": session["version"],
-            "idempotency_key": f"http-advance-{number}"})
+            "idempotency_key": f"http-{finish_action}-{number}"})
         assert response.status_code == 200, response.text
         session = response.json()["session"]
         assert session["rating_mode"] == rating_mode

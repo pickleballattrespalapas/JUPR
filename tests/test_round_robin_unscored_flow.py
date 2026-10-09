@@ -4,6 +4,7 @@ import pytest
 
 from jupr_app.domain.adaptive_play_engine import (
     advance_generator_event,
+    complete_generator_event,
     create_generator_preview,
     generator_event_standings,
     history_before_round,
@@ -77,7 +78,7 @@ def test_scored_round_robin_lifecycle_saves_standings_and_completes() -> None:
     assert event["currentRoundNumber"] == 2
     assert event["rounds"][1]["status"] == "active"
     event = _score_round(event, 2)
-    event = advance_generator_event(event)
+    event = complete_generator_event(event)
     assert event["status"] == "completed"
 
 
@@ -104,7 +105,11 @@ def test_unscored_round_played_is_idempotent_and_preserves_history() -> None:
     assert event["currentRoundNumber"] == 2
     event = mark_generator_round_played(event, round_number=2)
     event = advance_generator_event(event)
+    assert event["status"] == "active"
+    assert event["currentRoundNumber"] == 3
+    event = complete_generator_event(event)
     assert event["status"] == "completed"
+    assert event["rounds"][2]["status"] == "skipped"
     assert generator_event_standings(event) == []
 
 
@@ -214,6 +219,8 @@ def test_standings_pages_own_scored_progression_and_completion() -> None:
     ).read_text()
     for text in (admin, public):
         assert "Continue to Round" in text
-        assert "/advance" in text
+        assert 'action: "advance" | "complete"' in text
+        assert '/sessions/${encodeURIComponent(sessionKey)}/${action}' in text
+        assert 'updateSession("complete")' in text
         assert "This unscored Round-Robin does not use standings." in text
         assert "Session complete" in text

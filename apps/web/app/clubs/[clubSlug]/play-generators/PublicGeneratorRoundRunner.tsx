@@ -485,12 +485,16 @@ export default function GeneratorRoundRunner({
     Boolean(event) && Number(event?.currentRoundNumber || 1) === Number(roundNumber);
   const scoringMode: ScoringMode = session?.scoring_mode || event?.scoringMode || "scored";
   const scoredSession = scoringMode === "scored";
+  const resultsLocked = Boolean(session?.submission);
+  const canManage = Boolean(editToken) && !resultsLocked;
   const canEditRound =
-    Boolean(session) &&
-    Boolean(editToken) &&
+    canManage &&
     session?.status === "active" &&
-    isCurrent &&
+    (isCurrent || generatorKind === "round_robin") &&
     round?.status === "active";
+  const canReopenRound = canManage && generatorKind === "round_robin" && round?.status === "skipped";
+  const hasOtherOpenRound = event?.rounds.some(row => row.status === "active" && row.number !== event.currentRoundNumber) ?? false;
+  const canFinishSession = canManage && generatorKind === "round_robin" && session?.status === "active" && isCurrent && !hasOtherOpenRound;
   const draftScoreCount = scoredSession
     ? Object.values(scores).filter((value) => value !== "").length
     : 0;
@@ -608,7 +612,7 @@ export default function GeneratorRoundRunner({
       if (!payload.session) throw new UserFacingError("We couldn’t load the latest session. Refresh the page and check whether your change was saved.");
       skipCommitted = true;
       applySession(payload.session);
-      if (generatorKind === "round_robin" && !scoredSession) {
+      if (generatorKind === "round_robin" && !scoredSession && isCurrent) {
         const advancedPayload = await requestJson<MutationResponse>(
           `/clubs/${encodeURIComponent(clubId)}/play-generators/sessions/${encodeURIComponent(
             sessionKey
@@ -689,6 +693,42 @@ export default function GeneratorRoundRunner({
     if (destination !== null) router.refresh();
   }
 
+  async function reopenRound(): Promise<void> {
+    if (!canReopenRound || busy) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      await runMutation(
+        `/clubs/${encodeURIComponent(clubId)}/play-generators/sessions/${encodeURIComponent(sessionKey)}/rounds/${roundNumber}/reopen`,
+        {}
+      );
+      setMessage(`Round ${roundNumber} is ready to play. ${scoredSession ? "Enter the scores below." : "Mark it played when finished."}`);
+    } catch (error) {
+      setMessage(requestFailureMessage(error, "We couldn’t reopen this round. Please try again."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function finishSession(): Promise<ActionCompletion> {
+    if (!canFinishSession || busy) throw new Error("Finish the open rounds before completing this session.");
+    setBusy(true);
+    setMessage(null);
+    try {
+      await runMutation(
+        `/clubs/${encodeURIComponent(clubId)}/play-generators/sessions/${encodeURIComponent(sessionKey)}/complete`,
+        {}
+      );
+      setMessage("Session complete. Your saved results are ready to review.");
+      return actionSuccess("Session complete", "Your saved results are ready to review.");
+    } catch (error) {
+      setMessage(requestFailureMessage(error, "We couldn’t finish the session. Please try again."));
+      throw error;
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function advanceRound(): Promise<void> {
     if (!session) return;
     setBusy(true);
@@ -764,7 +804,7 @@ export default function GeneratorRoundRunner({
       setSecondSwapParticipant("");
       setNewPlayerName("");
       setNewPlayerId("");
-      setMessage(roundNumber < next.event.totalRounds
+      setMessage(generatorKind === "round_robin" || roundNumber < next.event.totalRounds
         ? `Players updated for Round ${roundNumber + 1}. Current games and score entries stay in place.`
         : "This is the final round. Added arrivals can play together on a spare court below.");
       const current = next.current_round_number || roundNumber;
@@ -828,8 +868,7 @@ export default function GeneratorRoundRunner({
         </p>
         <h1 style={{ margin: "0 0 0.4rem" }}>{session.title}</h1>
         <p style={{ margin: 0, color: "#475569" }}>
-          {playFormatLabel(session.play_format)} · Round {roundNumber} of{" "}
-          {event.totalRounds} · {scoredSession ? "Scores on" : "Scores off"} · {roundStatusLabel(round.status)} · {session.submission?.status !== "approved" ? `${session.rating_mode === "rated" ? "Rated" : "Unrated"} · ` : ""}{generatorResultLabel(session.submission)}
+          {playFormatLabel(session.play_format)} · Round {roundNumber}{generatorKind === "ladder" ? ` of ${event.totalRounds}` : ""} · {scoredSession ? "Scores on" : "Scores off"} · {roundStatusLabel(round.status)} · {session.submission?.status !== "approved" ? `${session.rating_mode === "rated" ? "Rated" : "Unrated"} · ` : ""}{generatorResultLabel(session.submission)}
         </p>
         {!editToken ? <p style={{ color: "#64748b" }}>Only the organizer can enter scores or change players.</p> : null}
       </article>
@@ -838,6 +877,11 @@ export default function GeneratorRoundRunner({
         <article style={{ ...cardStyle, background: "#ecfdf5", borderColor: "#86efac" }}>
           <h2 style={{ marginTop: 0 }}>Session complete</h2>
           <p style={{ marginBottom: 0, color: "#166534" }}>Review the saved session history below.</p>
+          {generatorKind === "round_robin" && canManage ? (
+            <button type="button" onClick={() => void advanceRound()} disabled={busy} style={{ ...primaryButton, marginTop: "1rem" }}>
+              {busy ? "Continuing…" : "Keep playing"}
+            </button>
+          ) : null}
         </article>
       ) : null}
 
@@ -862,6 +906,11 @@ export default function GeneratorRoundRunner({
             {generatorKind === "round_robin" && scoredSession ? (
               <Link href={standingsPath(clubId, sessionKey)} style={secondaryButton}>
                 Standings
+              </Link>
+            ) : null}
+            {!isCurrent ? (
+              <Link href={roundPath(generatorKind, clubId, sessionKey, event.currentRoundNumber)} style={secondaryButton}>
+                Current round
               </Link>
             ) : null}
             {previousRound ? (
@@ -983,8 +1032,8 @@ export default function GeneratorRoundRunner({
                 title={`Skip Round ${roundNumber}?`}
                 description={
                   anyDraftScore
-                    ? "This skips the current round and permanently discards the unsaved score entries shown below."
-                    : "This skips the current round without saving a result."
+                    ? "This skips this round and permanently discards the unsaved score entries shown below."
+                    : "This skips this round without saving a result."
                 }
                 preview={
                   <div style={{ display: "grid", gap: "0.35rem" }}>
@@ -1049,12 +1098,17 @@ export default function GeneratorRoundRunner({
         ) : null}
 
         {round.status === "skipped" ? (
-          <p style={{ marginTop: "1rem", padding: "0.7rem", background: "#fef3c7", borderRadius: "8px" }}>
-            This round was skipped{round.skipReason ? `: ${round.skipReason}` : "."}
-          </p>
+          <div style={{ marginTop: "1rem", padding: "0.7rem", background: "#fef3c7", borderRadius: "8px" }}>
+            <p>This round was skipped{round.skipReason ? `: ${round.skipReason}` : "."}</p>
+            {canReopenRound ? (
+              <button type="button" onClick={() => void reopenRound()} disabled={busy} style={primaryButton}>
+                {busy ? "Opening…" : "Play this round"}
+              </button>
+            ) : null}
+          </div>
         ) : null}
 
-        {isCurrent && ["saved", "played", "skipped"].includes(round.status) && session.status === "active" ? (
+        {canManage && isCurrent && ["saved", "played", "skipped"].includes(round.status) && session.status === "active" ? (
           generatorKind === "round_robin" && scoredSession ? (
             <Link href={standingsPath(clubId, sessionKey)} style={{ ...primaryButton, display: "inline-flex", marginTop: "1rem", textDecoration: "none" }}>
               View standings and continue
@@ -1066,7 +1120,7 @@ export default function GeneratorRoundRunner({
               disabled={busy}
               style={{ ...primaryButton, marginTop: "1rem" }}
             >
-              {roundNumber >= event.totalRounds
+              {generatorKind === "ladder" && roundNumber >= event.totalRounds
                 ? "Finish session"
                 : generatorKind === "ladder"
                   ? `Generate Round ${roundNumber + 1}`
@@ -1074,13 +1128,30 @@ export default function GeneratorRoundRunner({
             </button>
           )
         ) : null}
+        {canFinishSession ? (
+          <div style={{ marginTop: "1rem" }}>
+            <ConfirmAction
+              triggerLabel="Finish session"
+              title="Finish this session?"
+              description={round.status === "active"
+                ? "This unfinished round will not count. Saved scores and played rounds will be kept."
+                : "Finish with the saved scores and played rounds. You can keep playing again until results are submitted."}
+              confirmLabel="Finish session"
+              confirmationText="FINISH SESSION"
+              disabled={busy || (round.status === "active" && anyDraftScore)}
+              busy={busy}
+              onConfirm={finishSession}
+            />
+            {round.status === "active" && anyDraftScore ? <p>Save this round’s scores before finishing the session.</p> : null}
+          </div>
+        ) : null}
       </article>
 
-      {isCurrent && session.status === "active" && Boolean(editToken) ? (
+      {canManage && isCurrent && session.status === "active" && Boolean(editToken) ? (
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>Change players</h2>
           <p style={{ color: "#475569" }}>
-            {roundNumber < event.totalRounds
+            {generatorKind === "round_robin" || roundNumber < event.totalRounds
               ? "Changes apply from the next round. Current games, byes and scores stay in place."
               : "This is the final round. Current games, byes and scores stay in place."}
             {generatorKind === "round_robin" && ["singles", "doubles"].includes(event.playFormat)
@@ -1276,7 +1347,7 @@ export default function GeneratorRoundRunner({
             }
             style={{ ...primaryButton, marginTop: "0.8rem" }}
           >
-            {rosterAction === "add" ? (roundNumber < event.totalRounds ? "Add player for next round" : "Add late arrival") : "Apply change for next round"}
+            {rosterAction === "add" ? (generatorKind === "round_robin" || roundNumber < event.totalRounds ? "Add player for next round" : "Add late arrival") : "Apply change for next round"}
           </button>
           <GeneratorLateArrivals
             participants={event.participants}

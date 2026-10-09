@@ -14,12 +14,14 @@ from typing import Any, Callable
 from jupr_app.domain.adaptive_play_engine import (
     advance_generator_event,
     create_generator_preview,
+    complete_generator_event,
     generator_event_standings,
     mark_generator_round_played,
     mutate_generator_roster,
     save_generator_round,
     schedule_export_rows,
     skip_generator_round,
+    reopen_generator_round,
     start_generator_event,
 )
 from jupr_app.services.public_live_operation_service import (
@@ -576,10 +578,13 @@ def get_public_play_generator_session(
     }
 
 
-def _validate_editable(row: dict[str, Any], *, edit_token: str) -> None:
+def _validate_editable(row: dict[str, Any], *, edit_token: str, allow_completed: bool = False) -> None:
     if not edit_token_matches(edit_token, str(row.get("edit_token_hash") or "")):
         raise PermissionError("This organizer link is no longer valid.")
-    if str(row.get("status") or "") != "active":
+    if _state(row).get("generator_submission"):
+        raise PublicPlayGeneratorError("Submitted results are locked for administrator review.")
+    allowed_statuses = {"active", "completed"} if allow_completed else {"active"}
+    if str(row.get("status") or "") not in allowed_statuses:
         raise PublicPlayGeneratorError("This session is complete, so it can’t be edited.")
     if str(row.get("pending_operation_key") or ""):
         raise PublicLiveRecoveryRequiredError(
@@ -664,7 +669,16 @@ def _run_mutation(
     operation_key = str(operation.get("operation_key") or "")
     row = _get_row(supabase, club_id=str(club_id), session_key=str(session_key))
     try:
-        _validate_editable(row, edit_token=edit_token)
+        _validate_editable(
+            row, edit_token=edit_token,
+            allow_completed=(
+                action in {"reopen", "advance"}
+                and _event_from_state(_state(row)).get("generatorKind") == "round_robin"
+            ) or (
+                action == "complete"
+                and str(row.get("last_operation_key") or "") == operation_key
+            ),
+        )
     except Exception as exc:
         if str(operation.get("status") or "") != "completed":
             update_public_live_operation(
@@ -723,6 +737,8 @@ def _run_mutation(
         )
         raise PublicPlayGeneratorError(str(exc)) from exc
     patch = {"state": _put_event(state, next_event), **dict(extra_patch or {})}
+    if str(row.get("status")) == "completed" and str(next_event.get("status")) == "active":
+        patch["expires_at"] = _ttl_iso()
     try:
         updated = _update_cas(supabase, row=row, patch=patch, operation=operation)
     except PublicLiveConflictError:
@@ -803,7 +819,8 @@ def mark_public_play_generator_round_played(
             event,
             round_number=int(round_number),
         )
-        next_event = advance_generator_event(next_event)
+        if int(next_event.get("currentRoundNumber") or 1) == int(round_number):
+            next_event = advance_generator_event(next_event)
         if str(next_event.get("status") or "") == "completed":
             now = _now_iso()
             return next_event, {"status": "completed", "completed_at": now}
@@ -852,6 +869,34 @@ def skip_public_play_generator_round(
     )
 
 
+def reopen_public_play_generator_round(
+    supabase: Any,
+    *,
+    club_id: str,
+    session_key: str,
+    round_number: int,
+    edit_token: str,
+    expected_version: int,
+    idempotency_key: str,
+    requester_hash: str,
+) -> dict[str, Any]:
+    return _run_mutation(
+        supabase,
+        club_id=club_id,
+        session_key=session_key,
+        edit_token=edit_token,
+        expected_version=expected_version,
+        idempotency_key=idempotency_key,
+        requester_hash=requester_hash,
+        action="reopen",
+        request_payload={"round_number": int(round_number)},
+        mutate=lambda event: (
+            reopen_generator_round(event, round_number=int(round_number)),
+            {"status": "active", "completed_at": None},
+        ),
+    )
+
+
 def advance_public_play_generator_session(
     supabase: Any,
     *,
@@ -867,7 +912,7 @@ def advance_public_play_generator_session(
         if str(next_event.get("status") or "") == "completed":
             now = _now_iso()
             return next_event, {"status": "completed", "completed_at": now}
-        return next_event, {}
+        return next_event, {"status": "active", "completed_at": None}
 
     return _run_mutation(
         supabase,
@@ -956,18 +1001,8 @@ def complete_public_play_generator_session(
     requester_hash: str,
 ) -> dict[str, Any]:
     def mutate(event: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-        current = int(event.get("currentRoundNumber") or 1)
-        row = next(
-            (item for item in event.get("rounds") or [] if int(item.get("number") or 0) == current),
-            None,
-        )
-        if row and str(row.get("status") or "") not in {"saved", "skipped"}:
-            raise PublicPlayGeneratorError("Save or skip the current round before completing the session.")
-        next_event = copy.deepcopy(event)
-        now = _now_iso()
-        next_event["status"] = "completed"
-        next_event["completedAt"] = now
-        return next_event, {"status": "completed", "completed_at": now}
+        next_event = complete_generator_event(event)
+        return next_event, {"status": "completed", "completed_at": next_event["completedAt"]}
 
     return _run_mutation(
         supabase,
