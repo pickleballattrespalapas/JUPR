@@ -19,6 +19,8 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
+from jupr_app.domain.schedule import get_match_schedule
+
 
 STANDINGS_SORTS = {"wins", "points", "differential"}
 SCORING_MODES = {"scored", "unscored"}
@@ -816,6 +818,61 @@ def _update_history_for_generated_round(history: dict[str, Any], round_row: dict
     for match in _round_matches(round_row):
         _apply_match_history(history, match, play_format)
 
+
+def _perfect_doubles_round(
+    event: dict[str, Any],
+    round_number: int,
+    history: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[str], list[str]] | None:
+    """Continue a perfect opening rotation only while its history still fits.
+
+    Full eight- and nine-player templates pair everyone once and oppose them
+    twice over seven/nine rounds. Comparing the complete prefix also protects
+    existing sessions: never splice a template into unrelated games, skipped
+    rounds, or a changed roster. Those sessions retain adaptive scheduling.
+    """
+    initial_ids = active_participant_ids(event, 1)
+    count = len(initial_ids)
+    if count not in {8, 9} or event.get("playoff"):
+        return None
+    cycle_length = 7 if count == 8 else 9
+    if not 1 <= round_number <= cycle_length:
+        return None
+    if int(event.get("courtCount") or 0) == 1:
+        return None
+    if active_participant_ids(event, round_number) != initial_ids:
+        return None
+
+    # Explicitly request the full template; organized mode may truncate it.
+    template = get_match_schedule(f"{count}-Player", initial_ids, schedule_mode="full")
+    expected = _blank_history(event)
+    for number in range(1, round_number + 1):
+        matches = []
+        for court, source in enumerate(template[(number - 1) * 2:number * 2], start=1):
+            team_a, team_b = list(source["t1"]), list(source["t2"])
+            matches.append({
+                "id": f"r{number}-c{court}",
+                "round": number, "court": court, "playFormat": "doubles",
+                "sideA": team_a, "sideB": team_b,
+                "teamA": list(team_a), "teamB": list(team_b),
+                "scoreA": None, "scoreB": None, "status": "scheduled",
+            })
+        playing = {pid for match in matches for pid in match["sideA"] + match["sideB"]}
+        byes = [pid for pid in initial_ids if pid not in playing]
+        if number == round_number:
+            # Zero entries can differ after a preview edit or JSON reload.
+            for key, counts in expected.items():
+                actual_counts = {pid: value for pid, value in history[key].items() if value}
+                expected_counts = {pid: value for pid, value in counts.items() if value}
+                if actual_counts != expected_counts:
+                    return None
+            return matches, byes, []
+        _update_history_for_generated_round(
+            expected, {"matches": matches, "byeParticipantIds": byes}, "doubles"
+        )
+    return None
+
+
 def _generate_round_robin_round(
     event: dict[str, Any],
     round_number: int,
@@ -847,13 +904,17 @@ def _generate_round_robin_round(
             seed_salt=event.get("mixedScheduleSeed") or 0,
         )
     else:
-        matches, byes, warnings = _doubles_round(
-            active_ids=active_ids,
-            court_count=int(event.get("courtCount") or 0),
-            history=history,
-            roster_pos=roster_pos,
-            round_number=round_number,
-        )
+        perfect_round = _perfect_doubles_round(event, round_number, history)
+        if perfect_round is not None:
+            matches, byes, warnings = perfect_round
+        else:
+            matches, byes, warnings = _doubles_round(
+                active_ids=active_ids,
+                court_count=int(event.get("courtCount") or 0),
+                history=history,
+                roster_pos=roster_pos,
+                round_number=round_number,
+            )
         format_counts = {"doubles": len(matches), "singles": 0}
     return {
         "number": int(round_number),

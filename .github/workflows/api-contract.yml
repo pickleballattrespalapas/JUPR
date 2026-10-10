@@ -50,6 +50,7 @@ jobs:
           python -m pytest -q \
             tests/test_generator_late_arrivals.py \
             tests/test_generator_bye_fairness.py \
+            tests/test_generator_perfect_rotations.py \
             tests/test_generator_round_controls.py \
             tests/test_generator_round_controls_service.py \
             tests/test_generator_playoffs.py \
