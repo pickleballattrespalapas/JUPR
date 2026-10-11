@@ -1983,6 +1983,7 @@ def _run_atomic_match_side_effects(
     operation_key: str,
     write_plan: dict[str, Any],
     side_effect_context: dict[str, Any],
+    match_ids: list[int] | None = None,
 ) -> dict[str, Any]:
     from jupr_app.services.interclub_rating_service import reconcile_interclub_for_club
     interclub_ratings = reconcile_interclub_for_club(supabase, str(club_id))
@@ -2021,17 +2022,23 @@ def _run_atomic_match_side_effects(
         match_payloads=match_payloads,
         dedupe_match_id=clean_operation_key,
     )
+    if str(badge_summary.get("mode") or "").endswith("error"):
+        raise RuntimeError(
+            "Challenge result badge processing did not complete; retry durable recovery."
+        )
     player_update_queue = queue_player_updates(
         supabase=supabase,
         club_id=str(club_id),
         db_matches=db_matches,
         affected_players=affected_players,
         successful_match_dates=successful_dates,
+        match_ids=match_ids,
+        session_evidence={
+            "player_updates": list(write_plan.get("player_updates") or []),
+            "league_rating_updates": list(write_plan.get("league_rating_updates") or []),
+        },
+        badge_refs=badge_summary.get("notification_badge_refs", []),
     )
-    if str(badge_summary.get("mode") or "") == "inline_error":
-        raise RuntimeError(
-            "Challenge result badge processing did not complete; retry durable recovery."
-        )
     if (
         str(player_update_queue.get("mode") or "") == "error"
         or int(player_update_queue.get("failed") or 0) > 0
@@ -2380,6 +2387,7 @@ def recover_admin_challenge_ladder_operation_result(
             operation_key=str(operation.get("operation_key") or ""),
             write_plan=write_plan,
             side_effect_context=side_effect_context,
+            match_ids=list(observed_relation["match_ids"].values()),
         )
         official_result = {**official_matches, **side_effects}
     else:
@@ -2564,6 +2572,7 @@ def record_admin_challenge_ladder_result(
                 operation_key=operation_key,
                 write_plan=write_plan,
                 side_effect_context=side_effect_context,
+                match_ids=list((official_result.get("match_ids") or {}).values()),
             )
         )
     else:

@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from jupr_app.domain.match_processing import process_matches
 from jupr_app.domain.matches.side_effects import (
+    ensure_notification_badge_job,
     queue_player_updates,
     run_badge_side_effects,
 )
@@ -295,6 +296,7 @@ def _post_commit_side_effects(
     write_plan: dict[str, Any],
     side_effect_context: dict[str, Any],
     match_ids: list[Any],
+    queue_player_notifications: bool = True,
 ) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
     warnings: list[str] = []
     db_matches = list(write_plan.get("match_rows") or [])
@@ -325,7 +327,14 @@ def _post_commit_side_effects(
             "Match data is committed, but badge processing needs a later retry."
         )
 
+    if not queue_player_notifications:
+        return badge_summary, {"mode": "deferred_to_session"}, warnings
+
     try:
+        badge_refs = list(badge_summary.get("notification_badge_refs") or [])
+        if side_effect_context.get("has_badge_eligible_match") and badge_summary.get("mode") in {"error", "inline_error"}:
+            badge_refs = [ensure_notification_badge_job(supabase=supabase, club_id=str(club_id),
+                match_ids=match_ids, player_ids=sorted(affected_players))]
         player_update_queue = queue_player_updates(
             supabase=supabase,
             club_id=str(club_id),
@@ -334,6 +343,10 @@ def _post_commit_side_effects(
             successful_match_dates=list(
                 side_effect_context.get("successful_match_dates") or []
             ),
+            match_ids=match_ids,
+            session_evidence={"player_updates": list(write_plan.get("player_updates") or []),
+                "league_rating_updates": list(write_plan.get("league_rating_updates") or [])},
+            badge_refs=badge_refs,
         )
     except Exception as exc:  # noqa: BLE001 - core is already committed
         logger.warning(
@@ -365,6 +378,7 @@ def submit_atomic_direct_matches(
     default_k_factor: int = 32,
     min_win_delta_elo: float = 1.0,
     cap_loser_gain_elo: float | None = 16.0,
+    queue_player_notifications: bool = True,
 ) -> dict[str, Any]:
     clean_format = str(match_format or "").strip().lower()
     clean_idempotency_key = str(idempotency_key or "").strip()
@@ -476,6 +490,7 @@ def submit_atomic_direct_matches(
                 calculated.get("side_effect_context") or {}
             ),
             match_ids=match_ids,
+            queue_player_notifications=queue_player_notifications,
         )
         warnings.extend(post_commit_warnings)
 
@@ -492,6 +507,9 @@ def submit_atomic_direct_matches(
     }
     return {
         "ok": True,
+        **({"notification_evidence": {"player_updates": stored_player_updates,
+             "league_rating_updates": list(write_plan.get("league_rating_updates") or [])}}
+           if not queue_player_notifications else {}),
         "match_write_committed": True,
         "submitted_count": len(matches),
         "result": result,

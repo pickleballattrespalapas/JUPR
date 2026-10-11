@@ -60,6 +60,7 @@ def run_player_update_email_worker(club_id: str, *, limit: int = 250) -> dict[st
             "errors": int(summary.get("errors") or 0),
             "stale": int(summary.get("stale") or 0),
             "uncertain": int(summary.get("uncertain") or 0),
+            "waiting_for_awards": int(summary.get("waiting_for_awards") or 0),
             "email_mode": str(summary.get("email_mode") or "unknown"),
         }
         if run_id:
@@ -74,6 +75,7 @@ def run_player_update_email_worker(club_id: str, *, limit: int = 250) -> dict[st
                         "errors": result["errors"],
                         "stale": result["stale"],
                         "uncertain": result["uncertain"],
+                        "waiting_for_awards": result["waiting_for_awards"],
                         "email_mode": result["email_mode"],
                     },
                 }

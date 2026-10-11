@@ -241,6 +241,42 @@ def _existing_published_game_ids(supabase: Any, *, club_id: str, tournament_id: 
     return {str(row.get("tournament_game_id")) for row in rows if row.get("tournament_game_id")}
 
 
+def _committed_tournament_match_ids(
+    supabase: Any, *, club_id: str, tournament_id: str, game_ids: list[str]
+) -> list[int]:
+    """Read only the exact source games committed by this publish operation.
+
+    The rating RPC predates match-ID receipts. Missing, duplicate or ambiguous
+    evidence must leave automatic email unscoped, never broaden its date range.
+    """
+    if not game_ids or len(game_ids) != len(set(game_ids)):
+        return []
+    rows: list[dict[str, Any]] = []
+    try:
+        for start in range(0, len(game_ids), 300):
+            rows.extend(_safe_rows(
+                supabase.table("matches")
+                .select("id,tournament_game_id,deleted_at")
+                .eq("club_id", str(club_id))
+                .eq("tournament_id", str(tournament_id))
+                .in_("tournament_game_id", game_ids[start:start + 300])
+                .execute()
+            ))
+        actual_game_ids = [str(row.get("tournament_game_id") or "") for row in rows]
+        match_ids = [int(str(row.get("id"))) for row in rows]
+    except Exception:
+        return []
+    if (
+        len(rows) != len(game_ids)
+        or set(actual_game_ids) != set(game_ids)
+        or len(set(match_ids)) != len(match_ids)
+        or any(match_id <= 0 for match_id in match_ids)
+        or any(row.get("deleted_at") for row in rows)
+    ):
+        return []
+    return match_ids
+
+
 def _table_frame(supabase: Any, table_name: str, *, club_id: str | None = None) -> pd.DataFrame:
     try:
         query = supabase.table(table_name).select("*")
@@ -1099,17 +1135,32 @@ def publish_admin_tournament_draw_matches(
             affected_players=affected_players,
             db_matches=list(combined_write_plan["match_rows"]),
             match_payloads=side_effect_match_payloads,
+            dedupe_match_id=str(guarded_operation_key),
         )
+        if str(badge_summary.get("mode") or "").endswith("error"):
+            raise RuntimeError(
+                "Official match/rating core committed, but a required post-processor failed. Keep the guarded operation recovery-locked."
+            )
         player_update_queue = queue_player_updates(
             supabase=supabase,
             club_id=str(club_id),
             db_matches=list(combined_write_plan["match_rows"]),
             affected_players=affected_players,
             successful_match_dates=successful_dates,
+            match_ids=_committed_tournament_match_ids(
+                supabase,
+                club_id=str(club_id),
+                tournament_id=clean_tournament_id,
+                game_ids=list(current_plan["tournament_game_ids"]),
+            ),
+            session_evidence={
+                "player_updates": list(combined_write_plan["player_updates"]),
+                "league_rating_updates": list(combined_write_plan["league_rating_updates"]),
+            },
+            badge_refs=badge_summary.get("notification_badge_refs", []),
         )
         if (
-            str(badge_summary.get("mode") or "").endswith("error")
-            or str(player_update_queue.get("mode") or "") == "error"
+            str(player_update_queue.get("mode") or "") == "error"
             or int(player_update_queue.get("failed") or 0) > 0
         ):
             raise RuntimeError(

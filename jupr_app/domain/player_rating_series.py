@@ -5,6 +5,7 @@ from typing import Optional
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+from math import isfinite
 
 
 def _safe_int(x, default=None):
@@ -89,7 +90,7 @@ def _signed_delta_from_elo_delta(r: dict, player_id: int) -> float | None:
     return abs(float(raw)) if winner_team == my_team else -abs(float(raw))
 
 
-def _load_player_matches(supabase, club_id: str, player_id: int, limit: Optional[int] = 600) -> pd.DataFrame:
+def _load_player_matches(supabase, club_id: str, player_id: int, limit: Optional[int] = 600, *, match_ids: list[int | str] | None = None) -> pd.DataFrame:
     required_cols = [
         "id",
         "date",
@@ -103,7 +104,7 @@ def _load_player_matches(supabase, club_id: str, player_id: int, limit: Optional
         "t2_p2",
         "elo_delta",
     ]
-    optional_meta_cols = ["context_id", "context_type", "tournament_id"]
+    optional_meta_cols = ["context_id", "context_type", "tournament_id", "match_format", "rating_scope", "deleted_at"]
     snapshot_cols = [
         "t1_p1_r",
         "t1_p1_r_end",
@@ -117,6 +118,20 @@ def _load_player_matches(supabase, club_id: str, player_id: int, limit: Optional
 
     def _run(cols: list[str]) -> pd.DataFrame:
         select_cols = ",".join(cols)
+        if match_ids is not None:
+            # Read the committed session directly, including old/backdated games
+            # that may fall outside the ordinary profile history limit.
+            from jupr_app.data.paged_reads import read_all_rows
+            rows = []
+            ids = sorted({int(value) for value in match_ids})
+            for start in range(0, len(ids), 200):
+                batch = ids[start:start + 200]
+                rows.extend(read_all_rows(lambda: supabase.table("matches").select(select_cols)
+                    .eq("club_id", str(club_id)).in_("id", batch)))
+            if {int(row["id"]) for row in rows} != set(ids) or any(row.get("deleted_at") for row in rows):
+                raise ValueError("The session contains missing or removed games.")
+            return pd.DataFrame([row for row in rows if int(player_id) in {
+                _safe_int(row.get(key)) for key in ("t1_p1", "t1_p2", "t2_p1", "t2_p2")}])
         base_query = (
             supabase.table("matches")
             .select(select_cols)
@@ -153,18 +168,29 @@ def _load_player_matches(supabase, club_id: str, player_id: int, limit: Optional
     for cols in attempts:
         try:
             return _run(cols)
-        except Exception:
+        except Exception as exc:
+            if match_ids is not None:
+                # A scoped email must not fall back to incomplete metadata or
+                # silently claim an unread session contained no games.
+                raise RuntimeError("The session's complete match data could not be loaded.") from exc
             continue
     return pd.DataFrame()
 
 
-def build_player_overall_rating_series(supabase, club_id: str, player_id: int, limit: Optional[int] = 600) -> pd.DataFrame:
-    matches = _load_player_matches(supabase, club_id, int(player_id), limit=limit)
+def build_player_overall_rating_series(supabase, club_id: str, player_id: int, limit: Optional[int] = 600, *, match_ids: list[int | str] | None = None) -> pd.DataFrame:
+    matches = _load_player_matches(supabase, club_id, int(player_id), limit=limit, **({"match_ids": match_ids} if match_ids is not None else {}))
     if matches.empty:
         return pd.DataFrame(columns=["id", "Date", "League", "Score", "Result", "Overall Δ", "Overall After"])
 
     matches = matches.copy()
     matches["date_dt"] = pd.to_datetime(matches.get("date", None), errors="coerce", utc=True)
+    if match_ids is not None:
+        if matches["date_dt"].isna().any():
+            raise ValueError("A session game has no valid played date.")
+        for row in matches.to_dict("records"):
+            scores = [_safe_float(row.get(key)) for key in ("score_t1", "score_t2")]
+            if any(score is None or not isfinite(score) or score < 0 or int(score) != score for score in scores) or scores[0] == scores[1]:
+                raise ValueError("A session game has incomplete scores.")
     matches = matches.dropna(subset=["date_dt"]).copy()
     matches["league"] = matches.get("league", "").fillna("").astype(str).str.strip()
     matches["match_type"] = matches.get("match_type", "").fillna("").astype(str).str.strip()
@@ -193,6 +219,8 @@ def build_player_overall_rating_series(supabase, club_id: str, player_id: int, l
                 "Date": r.get("date_dt"),
                 "League": str(r.get("league", "") or "").strip(),
                 "match_type": str(r.get("match_type", "") or "").strip(),
+                "match_format": str(r.get("match_format") or ("singles" if pd.isna(r.get("t1_p2")) and pd.isna(r.get("t2_p2")) else "doubles")),
+                "rating_scope": str(r.get("rating_scope") or ""),
                 "Score": _score_for_player(r, int(player_id)),
                 "Result": _result_for_player(r, int(player_id)),
                 "Overall Δ": delta_jupr,
@@ -221,7 +249,7 @@ def build_player_overall_rating_series(supabase, club_id: str, player_id: int, l
     df["Overall Δ"] = pd.to_numeric(df["Overall Δ"], errors="coerce")
     df["Overall After"] = pd.to_numeric(df["Overall After"], errors="coerce")
 
-    if df["Overall After"].notna().any():
+    if match_ids is None and df["Overall After"].notna().any():
         for i in range(len(df)):
             if pd.isna(df.loc[i, "Overall After"]):
                 if i > 0 and pd.notna(df.loc[i - 1, "Overall After"]) and pd.notna(df.loc[i, "Overall Δ"]):

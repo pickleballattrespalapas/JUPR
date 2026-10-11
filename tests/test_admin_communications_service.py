@@ -89,6 +89,7 @@ def test_stale_claim_prevents_selected_email_delivery(monkeypatch) -> None:
         "errors": 0,
         "stale": 1,
         "uncertain": 0,
+        "waiting_for_awards": 0,
         "email_mode": "dry_run",
     }
 
@@ -116,6 +117,7 @@ def test_post_smtp_finalize_failure_stays_uncertain_not_retryable_error(monkeypa
         "week_end": "2026-07-07",
         "send_status": "pending",
         "row_version": 1,
+        "digest_snapshot_json": {"summary": {}, "links": {}},
     }
     status_calls: list[dict] = []
     monkeypatch.setenv("JUPR_STAGING_EMAIL_REDIRECT_TO", "sink@example.com")

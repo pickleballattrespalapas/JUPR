@@ -35,7 +35,7 @@ def test_run_player_update_email_worker_passes_club_and_limit(monkeypatch):
         captured["supabase"] = ctx.supabase
         captured["limit"] = limit
         captured["public_base_url"] = public_base_url
-        return {"attempted": 8, "sent": 5, "skipped": 2, "errors": 1, "email_mode": "dry_run"}
+        return {"attempted": 8, "sent": 5, "skipped": 2, "errors": 1, "waiting_for_awards": 3, "email_mode": "dry_run"}
 
     monkeypatch.setattr("jupr_app.workers.player_update_email_worker.make_supabase", fake_make_supabase)
     monkeypatch.setattr(
@@ -63,6 +63,7 @@ def test_run_player_update_email_worker_passes_club_and_limit(monkeypatch):
         "errors": 1,
         "stale": 0,
         "uncertain": 0,
+        "waiting_for_awards": 3,
         "email_mode": "dry_run",
     }
 
