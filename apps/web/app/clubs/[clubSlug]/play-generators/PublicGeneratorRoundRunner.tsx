@@ -76,6 +76,7 @@ type GeneratorEvent = {
 };
 
 type GeneratorSession = {
+  results_locked?: boolean;
   submission?: GeneratorSubmissionStatus | null;
   created_at?: string;
   rating_mode?: "rated" | "unrated";
@@ -359,6 +360,7 @@ export default function GeneratorRoundRunner({
   const [editToken, setEditToken] = useState("");
   const [session, setSession] = useState<GeneratorSession | null>(null);
   const [scores, setScores] = useState<Record<string, string>>({});
+  const [editingSavedScores, setEditingSavedScores] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [skipReason, setSkipReason] = useState("");
@@ -397,6 +399,7 @@ export default function GeneratorRoundRunner({
 
   function applySession(next: GeneratorSession, preserveDraftScores = false): void {
     setSession(next);
+    setEditingSavedScores(false);
     const nextScores: Record<string, string> = {};
     const requestedRound = next.event.rounds.find((row) => row.number === roundNumber);
     for (const match of flattenMatches(requestedRound || null)) {
@@ -489,13 +492,18 @@ export default function GeneratorRoundRunner({
     Boolean(event) && Number(event?.currentRoundNumber || 1) === Number(roundNumber);
   const scoringMode: ScoringMode = session?.scoring_mode || event?.scoringMode || "scored";
   const scoredSession = scoringMode === "scored";
-  const resultsLocked = Boolean(session?.submission);
+  const resultsLocked = Boolean(session?.submission || session?.results_locked);
   const canManage = Boolean(editToken) && !resultsLocked;
   const canEditRound =
     canManage &&
     session?.status === "active" &&
     (isCurrent || (generatorKind === "round_robin" && !event?.playoff)) &&
     round?.status === "active";
+  const canEditSavedScores =
+    canManage && scoredSession && round?.status === "saved" &&
+    (session?.status === "active" || session?.status === "completed") &&
+    (isCurrent || (generatorKind === "round_robin" && !event?.playoff));
+  const editingScores = canEditSavedScores && editingSavedScores;
   const canReopenRound = canManage && !event?.playoff && generatorKind === "round_robin" && round?.status === "skipped";
   const hasOtherOpenRound = event?.rounds.some(row => row.status === "active" && row.number !== event.currentRoundNumber) ?? false;
   const canFinishSession = canManage && !event?.playoff && generatorKind === "round_robin" && session?.status === "active" && isCurrent && !hasOtherOpenRound;
@@ -881,7 +889,7 @@ export default function GeneratorRoundRunner({
         <article style={{ ...cardStyle, background: "#ecfdf5", borderColor: "#86efac" }}>
           <h2 style={{ marginTop: 0 }}>Session complete</h2>
           <p style={{ marginBottom: 0, color: "#166534" }}>Review the saved session history below.</p>
-          {generatorKind === "round_robin" && canManage && !event.playoff ? (
+          {generatorKind === "round_robin" && canManage && !editingScores && !event.playoff ? (
             <button type="button" onClick={() => void advanceRound()} disabled={busy} style={{ ...primaryButton, marginTop: "1rem" }}>
               {busy ? "Continuing…" : "Keep playing"}
             </button>
@@ -889,7 +897,7 @@ export default function GeneratorRoundRunner({
         </article>
       ) : null}
 
-      {scoredSession ? <GeneratorSubmission ratingMode={session.rating_mode || "unrated"} submission={session.submission} canSubmit={session.status === "completed" && Boolean(editToken)} defaultDate={session.created_at} onSubmit={submitResults} /> : null}
+      {scoredSession ? <GeneratorSubmission ratingMode={session.rating_mode || "unrated"} submission={session.submission} canSubmit={session.status === "completed" && Boolean(editToken) && !editingScores} defaultDate={session.created_at} onSubmit={submitResults} /> : null}
 
       <article style={cardStyle}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
@@ -936,9 +944,31 @@ export default function GeneratorRoundRunner({
           </p>
         ) : null}
 
+        {canEditSavedScores ? (
+          <div style={{ marginBottom: "1rem" }}>
+            {editingScores ? (
+              <>
+                <p>Update the scores below, then save your changes.</p>
+                <div style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>
+                  <button type="button" onClick={() => void saveRound()} disabled={busy} style={primaryButton}>
+                    {busy ? "Saving…" : "Save score changes"}
+                  </button>
+                  <button type="button" onClick={() => applySession(session)} disabled={busy} style={secondaryButton}>
+                    Cancel
+                  </button>
+                </div>
+              </>
+            ) : (
+              <button type="button" onClick={() => { applySession(session); setMessage(null); setEditingSavedScores(true); }} disabled={busy} style={secondaryButton}>
+                Edit scores
+              </button>
+            )}
+          </div>
+        ) : null}
+
         <div style={{ display: "grid", gap: "0.75rem" }}>
           {matches.map((match) => {
-            const editable = canEditRound && scoredSession;
+            const editable = (canEditRound || editingScores) && scoredSession;
             return (
               <article
                 key={match.id}
@@ -979,6 +1009,7 @@ export default function GeneratorRoundRunner({
                         min={0}
                         max={99}
                         inputMode="numeric"
+                        disabled={busy}
                         aria-label={`${match.id} side A score`}
                         style={inputStyle}
                       />
@@ -994,6 +1025,7 @@ export default function GeneratorRoundRunner({
                         min={0}
                         max={99}
                         inputMode="numeric"
+                        disabled={busy}
                         aria-label={`${match.id} side B score`}
                         style={inputStyle}
                       />
@@ -1114,7 +1146,7 @@ export default function GeneratorRoundRunner({
           </div>
         ) : null}
 
-        {canManage && isCurrent && ["saved", "played", "skipped"].includes(round.status) && session.status === "active" ? (
+        {canManage && !editingScores && isCurrent && ["saved", "played", "skipped"].includes(round.status) && session.status === "active" ? (
           generatorKind === "round_robin" && scoredSession ? (
             <Link href={standingsPath(clubId, sessionKey)} style={{ ...primaryButton, display: "inline-flex", marginTop: "1rem", textDecoration: "none" }}>
               View standings and continue
@@ -1134,7 +1166,7 @@ export default function GeneratorRoundRunner({
             </button>
           )
         ) : null}
-        {canFinishSession ? (
+        {canFinishSession && !editingScores ? (
           <div style={{ marginTop: "1rem" }}>
             <ConfirmAction
               triggerLabel="Finish session"
