@@ -8,15 +8,18 @@ const {create, act} = require('react-test-renderer');
 const mocks = {
   '@/lib/useAdminSession': {useAdminSession: () => ({accessToken:'admin-token'})},
   '@/components/ConfirmAction': {ConfirmAction: props => React.createElement('button', {disabled:props.disabled, onClick:props.onConfirm}, props.triggerLabel)},
-  '@/components/interaction': {actionSuccess: (title, message) => ({title, message})},
   '@/components/SearchablePlayerSelect': ({children, onValueChange, ...props}) => React.createElement('select', {...props, onChange:e => onValueChange(e.target.value)}, children),
   './GeneratorPlayerCreate': () => null
 };
-const source = fs.readFileSync(path.join(__dirname, '../app/admin/play-generators/submissions/GeneratorSubmissions.tsx'), 'utf8');
-const code = ts.transpileModule(source, {compilerOptions:{target:ts.ScriptTarget.ES2022, module:ts.ModuleKind.CommonJS, jsx:ts.JsxEmit.ReactJSX, esModuleInterop:true}}).outputText;
-const compiled = {exports:{}};
-new Function('require', 'module', 'exports', code)(name => Object.hasOwn(mocks, name) ? mocks[name] : require(name), compiled, compiled.exports);
-const Component = compiled.exports.default;
+function compile(relative) {
+  const source = fs.readFileSync(path.join(__dirname, '..', relative), 'utf8');
+  const code = ts.transpileModule(source, {compilerOptions:{target:ts.ScriptTarget.ES2022, module:ts.ModuleKind.CommonJS, jsx:ts.JsxEmit.ReactJSX, esModuleInterop:true}}).outputText;
+  const compiled = {exports:{}};
+  new Function('require', 'module', 'exports', code)(name => Object.hasOwn(mocks, name) ? mocks[name] : require(name), compiled, compiled.exports);
+  return compiled.exports;
+}
+mocks['@/components/interaction'] = compile('components/interaction/types.ts');
+const Component = compile('app/admin/play-generators/submissions/GeneratorSubmissions.tsx').default;
 const label = node => typeof node === 'string' ? node : (node?.children || []).map(label).join('');
 const button = (tree, text) => tree.root.findAllByType('button').find(node => label(node) === text);
 const input = (tree, name) => tree.root.findAll(node => typeof node.type === 'string' && node.props['aria-label'] === name)[0];

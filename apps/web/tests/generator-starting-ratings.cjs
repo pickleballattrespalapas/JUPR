@@ -8,7 +8,6 @@ const mocks = {
   'next/link': ({children, ...props}) => React.createElement('a', props, children),
   '@/lib/useAdminSession': {useAdminSession: () => ({accessToken:'admin-token'})},
   '@/components/ConfirmAction': {ConfirmAction: props => React.createElement('button', {disabled:props.disabled, onClick:props.onConfirm}, props.triggerLabel)},
-  '@/components/interaction': {actionSuccess: (title, message) => ({title, message})},
   '@/components/SearchablePlayerSelect': ({children, onValueChange, ...props}) => React.createElement('select', {...props, onChange:e => onValueChange(e.target.value)}, children)
 };
 function compile(file) {
@@ -23,6 +22,7 @@ function compile(file) {
   }, compiled, compiled.exports);
   return compiled.exports;
 }
+mocks['@/components/interaction'] = compile(path.join(__dirname, '../components/interaction/types.ts'));
 const Component = compile(path.join(__dirname, '../app/admin/play-generators/submissions/GeneratorSubmissions.tsx')).default;
 const label = node => typeof node === 'string' ? node : (node?.children || []).map(label).join('');
 const button = (tree, text) => tree.root.findAllByType('button').find(node => label(node) === text);

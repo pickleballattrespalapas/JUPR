@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from test_public_play_generator_service import Query as BaseQuery, matches
+from jupr_app.data import load as data_loader
 from jupr_app.services import generator_submission_service as service
 from jupr_app.services import direct_match_entry_service as direct
 from jupr_app.services.public_play_generator_service import (
@@ -71,7 +72,8 @@ class Database:
                 assert (match.get("context_type") or "") in {"", "event", "league_live_session"}
             for update in params["p_player_updates"]:
                 current = next(p for p in self.db["players"] if p["id"] == update["player_id"])
-                assert all(current.get(key) == value for key, value in update["expected"].items())
+                if any(current.get(key) != value for key, value in update["expected"].items()):
+                    raise RuntimeError("JUPR_DIRECT_MATCH_PLAYER_STALE: player state changed before commit.")
             for match in params["p_match_rows"]:
                 match_id = len(self.db["matches"]) + 1
                 self.db["matches"].append({**copy.deepcopy(match), "id": match_id})
@@ -103,8 +105,9 @@ def db(monkeypatch):
     return database
 
 
-def completed_session(db, *, rating_mode="unrated", play_format="doubles", kind="round_robin", total_rounds=1):
-    names = [f"Player {i}" for i in range(1, 9 if play_format != "singles" else 5)]
+def completed_session(db, *, rating_mode="unrated", play_format="doubles", kind="round_robin", total_rounds=1, player_count=None):
+    count = player_count or (8 if play_format != "singles" else 4)
+    names = [f"Player {i}" for i in range(1, count + 1)]
     created = create_public_play_generator_session(db, club_id="club", generator_kind=kind,
         play_format=play_format, title="Sunday play", participant_names=names,
         participant_player_ids={}, total_rounds=total_rounds, court_count=2,
@@ -395,6 +398,186 @@ def test_mixed_approval_refreshes_shared_activity_between_formats(db):
     doubles = {m[k] for m in db.db["matches"] if m["match_format"] == "doubles" for k in ("t1_p1", "t1_p2", "t2_p1", "t2_p2")}
     assert singles & doubles
     assert len(db.db["matches"]) == 6
+
+
+@pytest.fixture
+def real_approval_data(db, monkeypatch):
+    # Exercise the actual display loader and rating-plan builder. Only the
+    # unrelated badge schema check and post-commit effects use test substitutes.
+    monkeypatch.setattr(data_loader, "ensure_badge_schema_preflight", lambda db: None)
+    snapshots = []
+    def load(db, club_id):
+        result = data_loader.load_data(db, club_id)
+        snapshots.append(result[0].copy(deep=True))
+        return result
+    monkeypatch.setattr(service, "load_data", load)
+    return snapshots
+
+
+@pytest.mark.parametrize("last_game_at", [None, "2025-01-01T12:00:00+00:00"])
+@pytest.mark.parametrize("rating_mode,play_format", [
+    ("rated", "doubles"), ("unrated", "doubles"),
+    ("rated", "singles"), ("rated", "doubles_singles"),
+])
+def test_approval_uses_persisted_activity_instead_of_leaderboard_projection(
+    db, real_approval_data, last_game_at, rating_mode, play_format,
+):
+    for player in db.db["players"]:
+        player["last_game_at"] = last_game_at
+        player["active"] = True
+    before = copy.deepcopy(db.db["players"])
+    session, token = completed_session(db, rating_mode=rating_mode, play_format=play_format, total_rounds=3)
+    session = submit(db, session, token)
+
+    result = service.review_generator_submission(db, **review_args(session))
+
+    assert result["status"] == "approved"
+    assert real_approval_data and not real_approval_data[0]["active"].any()
+    assert all(player["active"] for player in before)
+    assert len(db.db["matches"]) == 6
+    assert (db.db["players"] == before) == (rating_mode == "unrated")
+    assert all(receipt["result_json"]["committed"] for receipt in db.db["admin_direct_match_entry_operations"])
+
+
+def test_sealed_nine_player_approval_resumes_exact_eighteen_games_once(
+    db, monkeypatch, real_approval_data,
+):
+    db.db["players"].append({**copy.deepcopy(db.db["players"][-1]), "id": 9, "name": "Player 9"})
+    session, token = completed_session(db, rating_mode="rated", total_rounds=9, player_count=9)
+    session = submit(db, session, token)
+    args = review_args(session)
+    players_before = copy.deepcopy(db.db["players"])
+    original_rpc = db.rpc
+    def stale_rpc(name, params):
+        def execute():
+            raise RuntimeError("JUPR_DIRECT_MATCH_PLAYER_STALE: doubles player state changed before commit.")
+        return SimpleNamespace(execute=execute)
+    monkeypatch.setattr(db, "rpc", stale_rpc)
+    with pytest.raises(direct.DirectMatchConflictError):
+        service.review_generator_submission(db, **args)
+    row = db.db["live_sessions"][0]
+    sealed = copy.deepcopy(row["state"]["generator_submission"]["review"])
+    reserved_key = row["pending_operation_key"]
+    assert row["state"]["generator_submission"]["status"] == "processing"
+    assert len(sealed["payloads"]) == 18
+    assert not db.db["matches"] and not db.db.get("admin_direct_match_entry_operations")
+    assert db.db["players"] == players_before
+
+    monkeypatch.setattr(db, "rpc", original_rpc)
+    db.interrupt_after_commit = True
+    with pytest.raises(direct.DirectMatchRecoveryRequiredError):
+        service.review_generator_submission(db, **args)
+    assert len(db.db["matches"]) == 18
+    committed_players = copy.deepcopy(db.db["players"])
+    assert db.db["live_sessions"][0]["pending_operation_key"] == reserved_key
+    result = service.review_generator_submission(db, **args)
+
+    assert result["status"] == "approved"
+    assert db.rpc_calls == 1 and len(db.db["matches"]) == 18
+    assert len(db.db["admin_direct_match_entry_operations"]) == 1
+    assert db.db["players"] == committed_players
+    assert all(player["matches_played"] == 8 for player in committed_players)
+    assert db.db["live_sessions"][0]["state"]["generator_submission"]["review"] == sealed
+    assert db.db["live_sessions"][0]["pending_operation_key"] is None
+
+
+@pytest.mark.parametrize("failure,status,detail", [
+    (RuntimeError("JUPR_DIRECT_MATCH_PLAYER_STALE: doubles player state changed before commit."),
+     409, "Match or rating data changed before commit."),
+    (TimeoutError("database transport interrupted"), 503, "The server response was interrupted."),
+])
+def test_review_http_reports_resumable_conflict_and_recovery_errors(
+    db, monkeypatch, real_approval_data, failure, status, detail,
+):
+    from services.api import admin_play_generator_routes as routes
+    session, token = completed_session(db, rating_mode="rated")
+    session = submit(db, session, token)
+    monkeypatch.setattr(routes, "_require_write_gate", lambda *args: None)
+    monkeypatch.setattr(routes, "_resolve_role_or_403", lambda **kw: ("admin@example.invalid", "administrator"))
+    app = FastAPI()
+    routes.install_admin_play_generator_routes(app, get_supabase_client=lambda: db)
+    client = TestClient(app)
+    path = f"/admin/clubs/club/play-generators/sessions/{session['session_key']}/review"
+    body = {key: value for key, value in review_args(session).items()
+            if key in {"expected_version", "action", "player_ids", "match_date", "reason"}}
+    original_rpc = db.rpc
+    def failed_rpc(name, params):
+        def execute():
+            raise failure
+        return SimpleNamespace(execute=execute)
+    monkeypatch.setattr(db, "rpc", failed_rpc)
+
+    response = client.post(path, json=body)
+
+    assert response.status_code == status, response.text
+    assert response.json()["detail"].startswith(detail)
+    assert not db.db["matches"]
+    assert db.db["live_sessions"][0]["state"]["generator_submission"]["status"] == "processing"
+    monkeypatch.setattr(db, "rpc", original_rpc)
+    resumed = client.post(path, json=body)
+    assert resumed.status_code == 200, resumed.text
+    assert resumed.json()["status"] == "approved"
+    assert len(db.db["matches"]) == 2
+
+
+@pytest.mark.parametrize("committed", [False, True])
+def test_sealed_review_excludes_later_merged_player_but_can_finalize_existing_receipt(
+    db, monkeypatch, real_approval_data, committed,
+):
+    session, token = completed_session(db, rating_mode="rated")
+    session = submit(db, session, token)
+    args = review_args(session)
+    original_rpc = db.rpc
+    if committed:
+        db.interrupt_after_commit = True
+    else:
+        def failed_rpc(name, params):
+            def execute():
+                raise TimeoutError("response unavailable before commit")
+            return SimpleNamespace(execute=execute)
+        monkeypatch.setattr(db, "rpc", failed_rpc)
+    with pytest.raises(direct.DirectMatchRecoveryRequiredError):
+        service.review_generator_submission(db, **args)
+    monkeypatch.setattr(db, "rpc", original_rpc)
+    db.db["players"][0].update(name="Player 1 (MERGED into 2)", active=False)
+    before = copy.deepcopy(db.db["players"])
+    previous_rpc_calls = db.rpc_calls
+
+    if committed:
+        result = service.review_generator_submission(db, **args)
+        assert result["status"] == "approved"
+        assert len(db.db["matches"]) == 2
+    else:
+        with pytest.raises(RuntimeError, match="existing player snapshot for player 1"):
+            service.review_generator_submission(db, **args)
+        assert not db.db["matches"]
+        assert db.db["live_sessions"][0]["state"]["generator_submission"]["status"] == "processing"
+    assert db.db["players"] == before
+    assert db.rpc_calls == previous_rpc_calls
+
+
+def test_approval_still_rejects_a_rating_changed_after_its_persisted_snapshot(
+    db, monkeypatch, real_approval_data,
+):
+    session, token = completed_session(db, rating_mode="rated")
+    session = submit(db, session, token)
+    original_rpc = db.rpc
+    def concurrent_rating_change(name, params):
+        player = db.db["players"][0]
+        expected = next(update["expected"] for update in params["p_player_updates"]
+                        if update["player_id"] == player["id"])
+        assert expected["rating"] == player["rating"]
+        player["rating"] += 20
+        return original_rpc(name, params)
+    monkeypatch.setattr(db, "rpc", concurrent_rating_change)
+
+    with pytest.raises(direct.DirectMatchConflictError):
+        service.review_generator_submission(db, **review_args(session))
+
+    assert not db.db["matches"] and not db.db.get("admin_direct_match_entry_operations")
+    assert db.db["players"][0]["rating"] == 1420
+    assert all(player["matches_played"] == 0 for player in db.db["players"])
+    assert db.db["live_sessions"][0]["state"]["generator_submission"]["status"] == "processing"
 
 
 def test_public_submission_api_needs_organizer_token_but_no_account(db):
