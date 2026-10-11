@@ -669,8 +669,9 @@ def process_singles_matches(
             f"no singles match was written for: {league_labels}."
         )
 
+    committed_match_ids: list[int] = []
     if db_matches:
-        insert_match_chunks_with_rating_scope_fallback(db_matches=db_matches, supabase=supabase, sb_retry=sb_retry)
+        committed_match_ids = insert_match_chunks_with_rating_scope_fallback(db_matches=db_matches, supabase=supabase, sb_retry=sb_retry)
 
     for (pid, league_name), stats in sorted(league_updates.items()):
         rows = _league_frame_rows(
@@ -752,6 +753,8 @@ def process_singles_matches(
                 club_id=str(club_id),
                 affected_player_ids=sorted(affected_players),
                 match_dates=successful_match_dates,
+                match_ids=committed_match_ids,
+                badge_refs=[],
             )
             player_update_queue = {"mode": "queued", **queue_summary}
         except Exception as exc:  # noqa: BLE001

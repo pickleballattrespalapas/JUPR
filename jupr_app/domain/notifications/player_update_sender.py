@@ -18,6 +18,7 @@ from jupr_app.domain.notifications.player_profile_update_repo import (
     ensure_unsubscribe_token,
     list_active_subscriptions,
     list_outbox_rows,
+    normalize_session_match_ids,
     save_digest,
     update_outbox_status,
 )
@@ -38,6 +39,41 @@ from jupr_app.config import (
 )
 from jupr_app.domain.notifications.smtp_mailer import send_email_with_inline_chart
 from jupr_app.domain.recaps.player_weekly_digest import compute_player_weekly_digest
+from jupr_app.data.paged_reads import read_all_rows
+
+
+class SessionAwardsRecoveryRequiredError(RuntimeError):
+    """The exact award job exhausted automatic retries before email delivery."""
+
+
+def _session_awards_ready(supabase, club_id: str, snapshot: dict[str, Any]) -> bool:
+    """Wait only for the badge jobs belonging to these committed games."""
+    refs = snapshot.get("badge_refs") or []
+    if not isinstance(refs, list) or any(not isinstance(ref, str) or not ref.strip() for ref in refs):
+        return False
+    if not refs:
+        return True
+    try:
+        jobs = read_all_rows(lambda: supabase.table("badge_eval_queue").select("id,match_id,status,attempts")
+            .eq("club_id", club_id).eq("event_type", "match_recorded").in_("match_id", refs))
+    except Exception:
+        return False
+    for job in jobs:
+        if job.get("status") != "error":
+            continue
+        attempts = int(job.get("attempts") or 0)
+        if attempts >= 3:
+            raise SessionAwardsRecoveryRequiredError(
+                "This session's award evaluation failed three times. Repair its badge evaluation job, then retry this player update. No email was sent.")
+        try:
+            (supabase.table("badge_eval_queue").update({"status": "pending", "last_error": None,
+                "processed_at": None}).eq("club_id", club_id).eq("id", job["id"])
+                .eq("event_type", "match_recorded").eq("match_id", str(job["match_id"]))
+                .eq("status", "error").eq("attempts", attempts).execute())
+        except Exception:
+            return False
+    completed = {str(job.get("match_id")) for job in jobs if job.get("status") == "done"}
+    return set(refs) <= completed
 
 
 def _safe_subscription(supabase, subscription_id: str) -> dict | None:
@@ -500,6 +536,7 @@ def send_pending_player_update_emails(
     current_ids = {str(row.get("id") or "") for row in pending_rows}
     stale = len(set(expected_versions) - current_ids)
     uncertain = 0
+    waiting_for_awards = 0
 
     if (
         enforce_next_live_gate
@@ -516,6 +553,15 @@ def send_pending_player_update_emails(
         claimed_version: int | None = None
         external_delivery_attempted = False
         try:
+            snapshot = dict(outbox.get("digest_snapshot_json") or {})
+            award_failure = None
+            if snapshot.get("update_scope") == "session":
+                try:
+                    if not _session_awards_ready(supabase, club_id, snapshot):
+                        waiting_for_awards += 1
+                        continue
+                except SessionAwardsRecoveryRequiredError as exc:
+                    award_failure = exc
             expected_version = expected_versions.get(outbox_id, int(outbox.get("row_version") or 1))
             claimed = claim_outbox_row_for_send(
                 supabase,
@@ -527,6 +573,8 @@ def send_pending_player_update_emails(
             )
             claimed_version = int(claimed.get("row_version") or expected_version)
             delivery_attempt_id = str(claimed.get("delivery_attempt_id") or "").strip() or None
+            if award_failure is not None:
+                raise award_failure
             subscription = _safe_subscription(supabase, str(outbox.get("subscription_id") or ""))
             if not subscription:
                 raise ValueError("Subscription not found")
@@ -549,21 +597,19 @@ def send_pending_player_update_emails(
             player_id = int(outbox.get("player_id"))
 
             digest = dict(outbox.get("digest_snapshot_json") or {})
-            digest_row = None
+            if digest.get("update_scope") == "session":
+                match_ids = normalize_session_match_ids(digest.get("match_ids"))
+                # The date-window cache may contain other sessions or historical
+                # awards. Always build an automatic update from its exact games.
+                digest = compute_player_weekly_digest(ctx, player_id=player_id,
+                    start_date=week_start, end_date=week_end, match_ids=match_ids,
+                    session_evidence=dict(digest.get("session_evidence") or {}))
+            elif not digest:
+                # Old automatic rows have no game scope. Do not guess which
+                # same-day games or cached awards they were meant to include.
+                raise ValueError("This queued update has no saved game scope. Requeue the session before sending.")
             if not digest:
-                digest_row = _safe_digest_for_week(supabase, club_id, player_id, week_start, week_end)
-                digest = (digest_row or {}).get("final_json") or (digest_row or {}).get("generated_json") or {}
-            if not digest:
-                digest = compute_player_weekly_digest(ctx, player_id=player_id, start_date=week_start, end_date=week_end)
-                save_digest(
-                    supabase,
-                    club_id=club_id,
-                    player_id=player_id,
-                    week_start=week_start,
-                    week_end=week_end,
-                    generated_json=digest,
-                    final_json=digest,
-                )
+                raise ValueError("The session update could not be built from its saved games.")
 
             digest = _merge_links_for_send(
                 digest=digest,
@@ -676,6 +722,7 @@ def send_pending_player_update_emails(
         "errors": errors,
         "stale": stale,
         "uncertain": uncertain,
+        "waiting_for_awards": waiting_for_awards,
         "email_mode": email_mode,
     }
 

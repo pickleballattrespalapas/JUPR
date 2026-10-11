@@ -592,16 +592,21 @@ def process_matches(
         )
 
     badge_summary: dict[str, Any] = {"mode": "skipped", "awarded_count": 0, "candidate_count": 0, "badge_ids": []}
+    committed_match_ids: list[int] = []
+    notification_badge_refs: list[str] = []
     if db_matches:
-        insert_match_chunks_with_rating_scope_fallback(db_matches=db_matches, supabase=supabase, sb_retry=sb_retry)
+        committed_match_ids = insert_match_chunks_with_rating_scope_fallback(db_matches=db_matches, supabase=supabase, sb_retry=sb_retry)
         if supabase is not None and has_badge_eligible_match:
             enqueue_result = enqueue_badge_eval(
                 supabase,
                 club_id=str(club_id),
                 event_type="match_recorded",
                 player_ids=sorted(affected_players),
+                match_id=str(committed_match_ids[0]) if committed_match_ids else None,
                 payload={"match_count": len(db_matches), "matches": match_payloads[:10]},
             )
+            if enqueue_result.get("queued") and committed_match_ids:
+                notification_badge_refs = [str(committed_match_ids[0])]
             worker_result = None
             should_fallback = not bool(enqueue_result.get("queued"))
             if not should_fallback:
@@ -625,6 +630,8 @@ def process_matches(
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("Inline live badge fallback failed after match processing: %s", exc)
                     badge_summary = {"mode": "inline_error", "error": str(exc)}
+            if badge_summary.get("mode") == "inline":
+                notification_badge_refs = []
 
     def update_player_row(row, activity_update: dict):
         pid = int(row["id"])
@@ -665,11 +672,15 @@ def process_matches(
     player_update_queue: dict[str, Any] = {"mode": "skipped", "affected_players": len(affected_players), "week_windows": 0, "queued": 0, "already_queued": 0, "no_active_subscription": 0, "failed": 0}
     if db_matches and affected_players:
         try:
+            if str(badge_summary.get("mode") or "").endswith("error"):
+                raise RuntimeError("The games are saved, but award evaluation did not complete; player updates were not queued.")
             queue_summary = queue_player_updates_for_affected_subscribers(
                 supabase,
                 club_id=str(club_id),
                 affected_player_ids=sorted(affected_players),
                 match_dates=successful_match_dates,
+                match_ids=committed_match_ids,
+                badge_refs=notification_badge_refs,
             )
             player_update_queue = {"mode": "queued", **queue_summary}
         except Exception as exc:  # noqa: BLE001

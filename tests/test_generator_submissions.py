@@ -22,6 +22,9 @@ from jupr_app.services.public_player_service import _rating_projection
 
 
 class Query(BaseQuery):
+    def upsert(self, payload, **kwargs):
+        return self.insert(payload)
+
     def is_(self, field, value):
         return self.eq(field, None if value == "null" else value)
 
@@ -398,6 +401,57 @@ def test_mixed_approval_refreshes_shared_activity_between_formats(db):
     doubles = {m[k] for m in db.db["matches"] if m["match_format"] == "doubles" for k in ("t1_p1", "t1_p2", "t2_p1", "t2_p2")}
     assert singles & doubles
     assert len(db.db["matches"]) == 6
+
+
+@pytest.mark.parametrize("play_format,expected_matches", [("doubles_singles", 6), ("doubles", 202)])
+def test_complete_session_email_aggregates_batches_and_resumes_failed_queue_without_duplicate_games(
+    db, monkeypatch, play_format, expected_matches,
+):
+    session, token = completed_session(db, rating_mode="rated", play_format=play_format,
+        total_rounds=3 if play_format == "doubles_singles" else 1)
+    if play_format == "doubles":
+        event = db.db["live_sessions"][0]["state"]["page_state"]["event"]
+        first = copy.deepcopy(event["rounds"][0])
+        event["rounds"] = []
+        for number in range(1, 102):
+            round_row = copy.deepcopy(first)
+            round_row["roundNumber"] = number
+            for index, match in enumerate(round_row["matches"]):
+                match["id"] = f"round-{number}-match-{index}"
+            event["rounds"].append(round_row)
+    db.db["player_profile_update_subscriptions"] = [{"id": "subscription-1", "club_id": "club",
+        "player_id": 1, "email": "player@example.invalid", "request_status": "active"}]
+    session = submit(db, session, token)
+    original_queue = service.queue_player_updates
+    attempts = []
+    def interrupted_queue(**kwargs):
+        attempts.append(copy.deepcopy({key: value for key, value in kwargs.items() if key != "supabase"}))
+        if len(attempts) == 1:
+            return {"mode": "error", "failed": 1}
+        return original_queue(**kwargs)
+    monkeypatch.setattr(service, "queue_player_updates", interrupted_queue)
+    args = review_args(session)
+    with pytest.raises(RuntimeError, match="player updates could not be queued"):
+        service.review_generator_submission(db, **args)
+    assert len(db.db["matches"]) == expected_matches
+    assert not db.db.get("player_profile_update_outbox")
+    committed_players = copy.deepcopy(db.db["players"])
+    rpc_calls = db.rpc_calls
+
+    result = service.review_generator_submission(db, **args)
+
+    assert result["status"] == "approved"
+    assert db.rpc_calls == rpc_calls == 2
+    assert len(db.db["matches"]) == expected_matches
+    assert db.db["players"] == committed_players
+    assert attempts[0]["match_ids"] == attempts[1]["match_ids"]
+    assert attempts[0]["session_evidence"] == attempts[1]["session_evidence"]
+    rows = db.db["player_profile_update_outbox"]
+    assert len(rows) == 1
+    snapshot = rows[0]["digest_snapshot_json"]
+    assert set(snapshot["match_ids"]) == {str(match["id"]) for match in db.db["matches"]}
+    assert snapshot["session_evidence"]["player_updates"]
+    assert len(snapshot["badge_refs"]) == (2 if play_format == "doubles" else 1)
 
 
 @pytest.fixture

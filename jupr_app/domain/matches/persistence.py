@@ -108,8 +108,17 @@ def build_match_row(
     return row
 
 
-def insert_match_chunks_with_rating_scope_fallback(*, db_matches: list[dict[str, Any]], supabase, sb_retry: Callable):
+def insert_match_chunks_with_rating_scope_fallback(
+    *, db_matches: list[dict[str, Any]], supabase, sb_retry: Callable
+) -> list[int]:
+    """Insert rows and return their exact IDs when every response supplies them.
+
+    Missing receipt IDs must not turn a successful write into a retryable write
+    failure. Return no scope in that case so automatic email can fail closed.
+    """
     unsupported_optional_columns: set[str] = set()
+    committed_ids: list[int] = []
+    complete_receipts = True
 
     def _strip_unsupported(chunk: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not unsupported_optional_columns:
@@ -169,3 +178,20 @@ def insert_match_chunks_with_rating_scope_fallback(*, db_matches: list[dict[str,
                 "tournament_game_id": sample.get("tournament_game_id"),
             }
             raise RuntimeError("Failed to insert match rows into matches table; " f"error={error_obj!r}; sample_row={debug_payload}")
+        if not isinstance(inserted_rows, list) or len(inserted_rows) != len(chunk):
+            complete_receipts = False
+            continue
+        for row in inserted_rows:
+            raw_id = row.get("id") if isinstance(row, dict) else None
+            try:
+                match_id = int(str(raw_id))
+            except (TypeError, ValueError):
+                complete_receipts = False
+                continue
+            if match_id <= 0:
+                complete_receipts = False
+                continue
+            committed_ids.append(match_id)
+    if not complete_receipts or len(committed_ids) != len(set(committed_ids)):
+        return []
+    return committed_ids
