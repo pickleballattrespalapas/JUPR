@@ -47,6 +47,9 @@ from jupr_app.services.generator_submission_service import (
     list_generator_submissions, require_reviewer, review_generator_submission, submit_generator_session,
     set_generator_starting_rating, update_generator_submission_title,
 )
+from jupr_app.services.direct_match_entry_service import (
+    DirectMatchConflictError, DirectMatchRecoveryRequiredError,
+)
 from jupr_app.services.public_live_operation_service import PublicLiveConflictError
 
 
@@ -190,6 +193,10 @@ def _require_service_role() -> None:
 
 
 def _handle(exc: Exception) -> None:
+    if isinstance(exc, DirectMatchConflictError):
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if isinstance(exc, DirectMatchRecoveryRequiredError):
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     if isinstance(exc, PublicLiveConflictError):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if isinstance(exc, LiveLadderConflictError):
