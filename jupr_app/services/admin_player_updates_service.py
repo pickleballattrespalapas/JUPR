@@ -307,7 +307,7 @@ def auto_send_player_updates_for_match_payloads(
     if not dates:
         return {"mode": "skipped", "reason": "No match dates available for player update sending."}
     ctx = _build_ctx(supabase, club_id=str(club_id))
-    totals = {"attempted": 0, "sent": 0, "skipped": 0, "errors": 0}
+    totals = {"attempted": 0, "sent": 0, "skipped": 0, "errors": 0, "waiting_for_awards": 0}
     windows: list[dict[str, Any]] = []
     for day in dates:
         result = send_pending_player_update_emails_for_range(

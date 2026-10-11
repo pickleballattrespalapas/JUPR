@@ -4,6 +4,7 @@ from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 from jupr_app.domain.match_processing import process_matches
 from jupr_app.domain.notifications.player_profile_update_repo import (
@@ -127,6 +128,7 @@ class _Supabase:
                         str(cur.get("subscription_id")) == str(row.get("subscription_id"))
                         and str(cur.get("week_start")) == str(row.get("week_start"))
                         and str(cur.get("week_end")) == str(row.get("week_end"))
+                        and str(cur.get("queue_operation_key")) == str(row.get("queue_operation_key"))
                         for cur in rows
                     )
                     if duplicate:
@@ -162,7 +164,7 @@ def _players_df():
     )
 
 
-def test_queue_helper_queues_per_subscribed_player_per_digest_date_window():
+def test_queue_helper_queues_one_complete_session_per_subscribed_player():
     sb = _Supabase()
     sb.tables["player_profile_update_subscriptions"] = [
         {"id": "sub-1", "club_id": "club", "player_id": 1, "email": "a@example.com", "request_status": REQUEST_STATUS_ACTIVE},
@@ -174,22 +176,21 @@ def test_queue_helper_queues_per_subscribed_player_per_digest_date_window():
         club_id="club",
         affected_player_ids=[1, 2, 2, 3],
         match_dates=["2026-02-10", "2026-02-11", date(2026, 2, 17)],
+        match_ids=[101, 102, 103],
     )
 
     assert summary["affected_players"] == 3
     assert summary["active_subscriptions"] == 2
-    assert summary["week_windows"] == 3
-    assert summary["queued"] == 6
+    assert summary["week_windows"] == 1
+    assert summary["queued"] == 2
     assert summary["already_queued"] == 0
     assert summary["no_active_subscription"] == 1
     assert summary["failed"] == 0
-    assert len(sb.tables["player_profile_update_outbox"]) == 6
+    assert len(sb.tables["player_profile_update_outbox"]) == 2
     windows = {(row["week_start"], row["week_end"]) for row in sb.tables["player_profile_update_outbox"]}
-    assert windows == {
-        ("2026-02-10", "2026-02-10"),
-        ("2026-02-11", "2026-02-11"),
-        ("2026-02-17", "2026-02-17"),
-    }
+    assert windows == {("2026-02-10", "2026-02-17")}
+    assert all(row["digest_snapshot_json"]["match_ids"] == ["101", "102", "103"]
+               for row in sb.tables["player_profile_update_outbox"])
 
 
 def test_queue_helper_counts_duplicate_outbox_rows_as_already_queued():
@@ -197,24 +198,14 @@ def test_queue_helper_counts_duplicate_outbox_rows_as_already_queued():
     sb.tables["player_profile_update_subscriptions"] = [
         {"id": "sub-1", "club_id": "club", "player_id": 1, "email": "a@example.com", "request_status": REQUEST_STATUS_ACTIVE},
     ]
-    sb.tables["player_profile_update_outbox"] = [
-        {
-            "id": 1,
-            "subscription_id": "sub-1",
-            "club_id": "club",
-            "player_id": 1,
-            "week_start": "2026-02-10",
-            "week_end": "2026-02-10",
-            "email": "a@example.com",
-            "send_status": "pending",
-        }
-    ]
+    queue_player_updates_for_affected_subscribers(sb, club_id="club", affected_player_ids=[1],
+        match_dates=["2026-02-10"], match_ids=[101])
 
     summary = queue_player_updates_for_affected_subscribers(
         sb,
         club_id="club",
         affected_player_ids=[1],
-        match_dates=["2026-02-10"],
+        match_dates=["2026-02-10"], match_ids=[101],
     )
 
     assert summary["queued"] == 0
@@ -232,7 +223,7 @@ def test_queue_helper_does_not_queue_unsubscribed_subscriptions():
         sb,
         club_id="club",
         affected_player_ids=[1],
-        match_dates=["2026-02-10"],
+        match_dates=["2026-02-10"], match_ids=[101],
     )
 
     assert summary["active_subscriptions"] == 0
@@ -242,6 +233,10 @@ def test_queue_helper_does_not_queue_unsubscribed_subscriptions():
 
 def test_process_matches_queueing_errors_do_not_break_match_processing(monkeypatch):
     sb = _Supabase()
+    monkeypatch.setattr(
+        "jupr_app.domain.match_processing.run_live_badge_awards",
+        lambda *_args, **_kwargs: {"mode": "inline", "awarded_count": 0},
+    )
 
     def _boom(*_args, **_kwargs):
         raise RuntimeError("queue down")
@@ -263,8 +258,12 @@ def test_process_matches_queueing_errors_do_not_break_match_processing(monkeypat
     assert "queue down" in result["player_update_queue"]["error"]
 
 
-def test_process_matches_includes_player_update_queue_summary():
+def test_process_matches_includes_player_update_queue_summary(monkeypatch):
     sb = _Supabase()
+    monkeypatch.setattr(
+        "jupr_app.domain.match_processing.run_live_badge_awards",
+        lambda *_args, **_kwargs: {"mode": "inline", "awarded_count": 0},
+    )
     sb.tables["player_profile_update_subscriptions"] = [
         {"id": "sub-1", "club_id": "club", "player_id": 1, "email": "a@example.com", "request_status": REQUEST_STATUS_ACTIVE},
     ]
@@ -309,7 +308,7 @@ def test_process_matches_skips_queue_when_no_matches_inserted(monkeypatch):
     assert result["player_update_queue"]["mode"] == "skipped"
 
 
-def test_queue_helper_queues_multiple_distinct_match_dates():
+def test_queue_helper_keeps_a_multiday_session_together():
     sb = _Supabase()
     sb.tables["player_profile_update_subscriptions"] = [
         {"id": "sub-1", "club_id": "club", "player_id": 1, "email": "a@example.com", "request_status": REQUEST_STATUS_ACTIVE},
@@ -319,15 +318,61 @@ def test_queue_helper_queues_multiple_distinct_match_dates():
         sb,
         club_id="club",
         affected_player_ids=[1],
-        match_dates=[date(2026, 4, 24), date(2026, 4, 25)],
+        match_dates=[date(2026, 4, 24), date(2026, 4, 25)], match_ids=[201, 202],
     )
 
-    assert summary["queued"] == 2
+    assert summary["queued"] == 1
     windows = {(row["week_start"], row["week_end"]) for row in sb.tables["player_profile_update_outbox"]}
-    assert windows == {
-        ("2026-04-24", "2026-04-24"),
-        ("2026-04-25", "2026-04-25"),
-    }
+    assert windows == {("2026-04-24", "2026-04-25")}
+
+
+def test_independent_same_day_sessions_queue_separately_and_exact_retry_deduplicates():
+    sb = _Supabase()
+    sb.tables["player_profile_update_subscriptions"] = [
+        {"id": "sub-1", "club_id": "club", "player_id": 1, "email": "a@example.com", "request_status": REQUEST_STATUS_ACTIVE}]
+    evidence = {"player_updates": [{"player_id": 1, "expected": {"wins": 9}, "after": {"wins": 10}}]}
+    common = dict(club_id="club", affected_player_ids=[1], match_dates=["2026-10-10"])
+    first = queue_player_updates_for_affected_subscribers(sb, **common, match_ids=[101, 102],
+        session_evidence=evidence, badge_refs=["101"])
+    second = queue_player_updates_for_affected_subscribers(sb, **common, match_ids=[103, 104])
+    retry = queue_player_updates_for_affected_subscribers(sb, **common, match_ids=["0102", "101", 101],
+        session_evidence=evidence, badge_refs=["101"])
+    assert first["queued"] == second["queued"] == retry["already_queued"] == 1
+    rows = sb.tables["player_profile_update_outbox"]
+    assert len(rows) == 2 and len({row["queue_operation_key"] for row in rows}) == 2
+    assert rows[0]["digest_snapshot_json"] == {"update_scope": "session", "match_ids": ["101", "102"],
+        "session_evidence": evidence, "badge_refs": ["101"]}
+
+
+@pytest.mark.parametrize("match_ids", [None, [], [""], [True], ["garbage"], [-1], ["1.5"]])
+def test_automatic_queue_never_falls_back_to_dates_without_exact_match_ids(match_ids):
+    sb = _Supabase()
+    with pytest.raises(ValueError, match="committed match IDs"):
+        queue_player_updates_for_affected_subscribers(sb, club_id="club", affected_player_ids=[1],
+            match_dates=["2026-10-10"], match_ids=match_ids)
+    assert sb.tables["player_profile_update_outbox"] == []
+
+
+@pytest.mark.parametrize("status,after", [("error", "pending"), ("done", "done"), ("processing", "processing")])
+def test_session_badge_recovery_requeues_only_its_exact_failed_job(status, after):
+    from jupr_app.domain.matches.side_effects import ensure_notification_badge_job
+    sb = _Supabase()
+    sb.tables["badge_eval_queue"] = [
+        {"id": 1, "club_id": "club", "event_type": "match_recorded", "match_id": "101", "status": status},
+        {"id": 2, "club_id": "other", "event_type": "match_recorded", "match_id": "101", "status": "error"}]
+    assert ensure_notification_badge_job(supabase=sb, club_id="club", match_ids=[101, 102], player_ids=[1]) == "101"
+    assert sb.tables["badge_eval_queue"][0]["status"] == after
+    assert sb.tables["badge_eval_queue"][1]["status"] == "error"
+
+
+def test_confirmed_inline_badge_fallback_does_not_wait_on_failed_queue_job(monkeypatch):
+    from jupr_app.domain.matches import side_effects
+    monkeypatch.setattr(side_effects, "enqueue_badge_eval", lambda *args, **kwargs: {"queued": True})
+    monkeypatch.setattr(side_effects, "process_badge_eval_queue", lambda *args, **kwargs: {"errored": 1})
+    monkeypatch.setattr(side_effects, "run_live_badge_awards", lambda *args, **kwargs: {"mode": "inline", "awarded_count": 1})
+    summary = side_effects.run_badge_side_effects(supabase=object(), club_id="club",
+        has_badge_eligible_match=True, affected_players={1}, db_matches=[{}], match_payloads=[], dedupe_match_id="101")
+    assert summary["mode"] == "inline" and not summary.get("notification_badge_refs")
 
 
 def test_delete_pending_outbox_row_allows_pending_and_blocks_sent():

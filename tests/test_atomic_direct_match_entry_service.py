@@ -157,7 +157,7 @@ def _receipt(*, idempotent: bool = False) -> dict:
     }
 
 
-def _submit(monkeypatch, supabase, processor=CALCULATED):
+def _submit(monkeypatch, supabase, processor=CALCULATED, *, queue_player_notifications=True):
     monkeypatch.setattr(
         "jupr_app.services.direct_match_entry_service.process_matches",
         processor
@@ -177,6 +177,7 @@ def _submit(monkeypatch, supabase, processor=CALCULATED):
         df_players_all=_players(),
         df_leagues=pd.DataFrame(),
         df_meta=pd.DataFrame(),
+        queue_player_notifications=queue_player_notifications,
     )
 
 
@@ -202,6 +203,30 @@ def test_atomic_success_uses_one_rpc_and_runs_postprocessors_once(monkeypatch):
     assert result["feedback"]["latest_match_id"] == "101"
     assert result["feedback"]["ratings_updated"] is True
     assert calls == {"badges": 1, "queue": 1}
+
+
+def test_session_approval_can_defer_email_until_all_batches_commit(monkeypatch):
+    from jupr_app.services import direct_match_entry_service as direct
+    monkeypatch.setattr(direct, "run_badge_side_effects", lambda **kwargs: {"mode": "queue", "notification_badge_refs": ["101"]})
+    monkeypatch.setattr(direct, "queue_player_updates", lambda **kwargs: pytest.fail("A partial batch must not queue a session email"))
+    result = _submit(monkeypatch, RpcSupabase(_receipt()), queue_player_notifications=False)
+    assert result["result"]["player_update_queue"]["mode"] == "deferred_to_session"
+    assert result["notification_evidence"]["player_updates"] == PLAYER_UPDATES
+    assert result["operation"]["match_ids"] == ["101"]
+
+
+def test_direct_email_carries_receipt_ids_and_blocks_unrecoverable_award_failure(monkeypatch):
+    from jupr_app.services import direct_match_entry_service as direct
+    monkeypatch.setattr(direct, "run_badge_side_effects", lambda **kwargs: {"mode": "inline_error"})
+    def unavailable(**kwargs):
+        assert kwargs["match_ids"] == ["101"]
+        raise RuntimeError("Exact award job unavailable")
+    monkeypatch.setattr(direct, "ensure_notification_badge_job", unavailable)
+    monkeypatch.setattr(direct, "queue_player_updates", lambda **kwargs: pytest.fail("Do not queue an email without award readiness"))
+    result = _submit(monkeypatch, RpcSupabase(_receipt()))
+    assert result["match_write_committed"]
+    assert result["result"]["player_update_queue"]["mode"] == "error"
+    assert result["warnings"]
 
 
 def test_exact_retry_returns_stored_result_without_postprocessors(monkeypatch):
