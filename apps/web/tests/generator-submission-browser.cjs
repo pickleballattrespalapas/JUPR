@@ -155,7 +155,7 @@ async function main() {
         await page.getByRole('heading', {name:`${title} standings`, exact:true}).waitFor();
         assert.equal(await page.getByRole('button', {name:'Submit for approval', exact:true}).count(), 0);
         const last = round === rounds;
-        const advanced = await clickRequest(page, page.getByRole('button', {name:last ? 'Finish session' : `Continue to Round ${round+1}`, exact:true}), '/advance');
+        const advanced = await clickRequest(page, page.getByRole('button', {name:last ? 'Finish session' : `Continue to Round ${round+1}`, exact:true}), last ? '/complete' : '/advance');
         session = advanced.body.session;
         assert.equal(session.rating_mode, mode);
         if (!last) await page.waitForURL(new RegExp(`/rounds/${round+1}(?:#.*)?$`));
@@ -199,6 +199,25 @@ async function main() {
       await adminPage.getByRole('heading', {name:`${title} · ${capitalized}`, exact:true}).waitFor();
       const approveLabel = `Approve ${mode} results`;
       assert.equal(await adminPage.getByRole('button', {name:`Approve ${mode === 'rated' ? 'unrated' : 'rated'} results`, exact:true}).count(), 0);
+      if (mode === 'rated') {
+        await adminPage.getByRole('spinbutton', {name:'Player 1 doubles starting level', exact:true}).fill('4.25');
+        assert.equal(await adminPage.getByRole('button', {name:approveLabel, exact:true}).isDisabled(), true);
+        const savedLevel = await clickRequest(adminPage, adminPage.getByRole('button', {name:'Save doubles starting level', exact:true}), '/starting-ratings/1', 'PATCH');
+        assert.equal(savedLevel.body.player.ratings.doubles.rating_jupr, 4.25);
+        const seeded = await fixture();
+        const player = seeded.players.find(p => p.id === 1);
+        assert.equal(player.rating, 1700);
+        assert.equal(player.starting_rating, 1700);
+        assert.equal(player.singles_rating, before.players.find(p => p.id === 1).singles_rating);
+        assert.deepEqual(seeded.matches, before.matches, 'Saving a starting level does not approve scores');
+        await adminPage.setViewportSize({width:390, height:844});
+        await screenshot(adminPage, 'starting-levels-mobile.png');
+        const dimensions = await adminPage.evaluate(() => ({width:document.documentElement.clientWidth, scroll:document.documentElement.scrollWidth}));
+        assert(dimensions.scroll <= dimensions.width+1, 'Starting levels fit mobile width');
+        await adminPage.setViewportSize({width:1280, height:900});
+        await screenshot(adminPage, 'starting-levels-desktop.png');
+        console.log('PASS starting level: browser edit -> API -> current and baseline saved; approval blocked until save; singles preserved');
+      }
       await adminPage.getByRole('button', {name:approveLabel, exact:true}).click();
       const approved = await clickRequest(adminPage, adminPage.getByRole('dialog').getByRole('button', {name:approveLabel, exact:true}), '/review');
       assert.equal(approved.body.session.submission.approved_mode, mode);
@@ -208,6 +227,11 @@ async function main() {
       const expectedGames = session.event.rounds.reduce((sum, r) => sum+(r.matches || []).length, 0);
       assert.equal(records.length, expectedGames);
       assert(records.every(match => match.rating_scope === (mode === 'rated' ? 'overall_only' : 'unrated')));
+      if (mode === 'rated') {
+        const firstGame = records.find(m => ['t1_p1','t1_p2','t2_p1','t2_p2'].some(k => m[k] === 1));
+        const position = ['t1_p1','t1_p2','t2_p1','t2_p2'].find(k => firstGame[k] === 1);
+        assert.equal(firstGame[position + '_r'], 1700, 'First approved game uses the saved starting level');
+      }
       if (mode === 'rated') assert.notDeepEqual(after.players, before.players, 'Rated approval updates player ratings');
       else assert.deepEqual(after.players, before.players, 'Unrated approval leaves player ratings untouched');
       console.log(`PASS ${mode}: guest submitted from final standings; admin approval created ${records.length} official matches`);

@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import Any
@@ -11,6 +12,8 @@ from uuid import uuid4
 
 from jupr_app.data.load import load_data
 from jupr_app.data.paged_reads import read_all_rows
+from jupr_app.domain.player_visibility import is_merged_player
+from jupr_app.services.admin_guarded_write_service import required_audit_event
 from jupr_app.services.leaderboard_service import _leaderboard_settings
 from jupr_app.services.admin_play_generator_service import (
     _audit, _publish_payloads, _saved_matches, _session_payload,
@@ -24,6 +27,33 @@ from jupr_app.services.public_play_generator_service import public_play_generato
 
 ADMIN_ROLES = {"administrator", "club_owner", "super_admin"}
 GENERATOR_MODES = {"public_play_generator", "admin_play_generator"}
+RATING_FIELDS = ("rating", "starting_rating", "wins", "losses", "matches_played")
+SINGLES_FIELDS = ("singles_rating", "singles_wins", "singles_losses", "singles_matches_played", "singles_replay_baseline")
+RATING_PLAYER_COLUMNS = ",".join(("id", "name", *RATING_FIELDS, *SINGLES_FIELDS))
+
+
+def _rating_snapshot(player: dict, match_format: str) -> dict:
+    fields = SINGLES_FIELDS if match_format == "singles" else RATING_FIELDS
+    return {"id": player["id"], "name": player.get("name"),
+            **{field: player.get(field) for field in fields}}
+
+
+def _review_player(player: dict) -> dict:
+    ratings = {}
+    for match_format in ("doubles", "singles"):
+        prefix = "singles_" if match_format == "singles" else ""
+        snapshot = _rating_snapshot(player, match_format)
+        rating = player.get(f"{prefix}rating")
+        if match_format == "singles" and rating is None:
+            rating = (player.get("singles_replay_baseline") or {}).get("rating")
+        ratings[match_format] = {
+            "rating_jupr": float(rating) / 400 if rating is not None else None,
+            "matches_played": int(player.get(f"{prefix}matches_played") or 0),
+            "can_set_starting_rating": match_format == "doubles" and not any(
+                player.get(field) for field in ("wins", "losses", "matches_played")),
+            "state_fingerprint": hashlib.sha256(json.dumps(snapshot, sort_keys=True).encode()).hexdigest(),
+        }
+    return {"id": player["id"], "name": player.get("name"), "ratings": ratings}
 
 
 def _now() -> str:
@@ -153,9 +183,66 @@ def list_generator_submissions(db, *, club_id: str, actor_role: str, status: str
             "participants": [p for p in event.get("participants", []) if str(p.get("id")) in played],
             "matches": [{"round_number": number, **match} for number, match in saved],
         })
-    players = read_all_rows(lambda: db.table("players").select("id,name").eq("club_id", club_id))
+    players = [_review_player(p) for p in read_all_rows(
+        lambda: db.table("players").select(RATING_PLAYER_COLUMNS).eq("club_id", club_id)
+    ) if not is_merged_player(p)]
     players.sort(key=lambda p: (str(p.get("name") or "").casefold(), p["id"]))
     return {"ok": True, "submissions": submissions, "players": players}
+
+
+def set_generator_starting_rating(
+    db, *, club_id: str, session_key: str, participant_id: str, player_id: int,
+    match_format: str, rating_jupr: float, expected_state_fingerprint: str,
+    actor_email: str, actor_role: str,
+) -> dict:
+    """Set a new doubles player's current and replay baseline before approval.
+
+    This is an absolute assignment. After an interrupted response, refresh to
+    read the saved level; stale retries cannot overwrite later edits or games.
+    Singles replay baselines are immutable and remain outside this workflow.
+    """
+    require_reviewer(actor_role)
+    if match_format != "doubles":
+        raise ValueError("Starting levels in this review are for doubles.")
+    if not math.isfinite(rating_jupr) or not 1 <= rating_jupr <= 7:
+        raise ValueError("Starting level must be between 1.0 and 7.0.")
+    row = _row(db, club_id, session_key)
+    submission = row["state"].get("generator_submission") or {}
+    if row.get("status") != "completed" or submission.get("status") != "pending" or submission.get("rating_mode") != "rated":
+        raise ValueError("Starting levels can only be set before approving rated results.")
+    if row.get("pending_operation_key"):
+        raise PublicLiveConflictError("A review is already in progress. Refresh before continuing.")
+    relevant = False
+    for _, match in _saved_matches(_event(row)):
+        side_a = match.get("sideA") or match.get("teamA") or []
+        side_b = match.get("sideB") or match.get("teamB") or []
+        if len(side_a) == len(side_b) == 2 and str(participant_id) in {str(pid) for pid in side_a + side_b}:
+            relevant = True
+            break
+    if not relevant:
+        raise ValueError("Choose a player who has scored doubles games.")
+    players = _rows(db.table("players").select(RATING_PLAYER_COLUMNS).eq("club_id", club_id).eq("id", player_id).limit(1))
+    if not players or is_merged_player(players[0]):
+        raise ValueError("Choose a current player profile in this club.")
+    before = players[0]
+    rating = _review_player(before)["ratings"]["doubles"]
+    if not rating["can_set_starting_rating"]:
+        raise ValueError("This player already has rated games. Keep their current rating or use Player Editor for a reviewed correction.")
+    if rating["state_fingerprint"] != expected_state_fingerprint:
+        raise PublicLiveConflictError("This player's rating changed. Refresh and check their level before saving.")
+    patch = {"rating": round(rating_jupr * 400, 4), "starting_rating": round(rating_jupr * 400, 4)}
+    audit = dict(club_id=club_id, actor_email=actor_email, actor_role=actor_role,
+        entity_type="player", entity_id=str(player_id), source="generator_starting_rating",
+        before=before, after={"session_key": session_key, "match_format": match_format, "patch": patch})
+    required_audit_event(db, **audit, action_type="set_generator_starting_rating_intent", intent=True)
+    query = db.table("players").update(patch).eq("club_id", club_id)
+    for field, value in _rating_snapshot(before, "doubles").items():
+        query = query.is_(field, "null") if value is None else query.eq(field, value)
+    updated = _rows(query)
+    if not updated:
+        raise PublicLiveConflictError("This player's rating changed. Refresh and check their level before saving.")
+    required_audit_event(db, **audit, action_type="set_generator_starting_rating", intent=False)
+    return {"ok": True, "player": _review_player(updated[0])}
 
 
 def review_generator_submission(
@@ -201,13 +288,19 @@ def review_generator_submission(
             if not payloads:
                 raise ValueError("There are no scored games to approve.")
             ids = {int(m[key]) for m in payloads for key in ("t1_p1", "t1_p2", "t2_p1", "t2_p2") if m.get(key) is not None}
-            players = _rows(db.table("players").select("id").eq("club_id", club_id).in_("id", sorted(ids)))
-            if {int(p["id"]) for p in players} != ids:
+            players = _rows(db.table("players").select(RATING_PLAYER_COLUMNS).eq("club_id", club_id).in_("id", sorted(ids)))
+            if {int(p["id"]) for p in players if not is_merged_player(p)} != ids:
                 raise ValueError("Match every player to a profile in this club before approving.")
+            by_id = {int(p["id"]): p for p in players}
             for match in payloads:
                 match_ids = [match[k] for k in ("t1_p1", "t1_p2", "t2_p1", "t2_p2") if match.get(k) is not None]
                 if len(set(match_ids)) != len(match_ids):
                     raise ValueError("A player cannot appear more than once in the same game.")
+                if rating_mode == "rated" and match["match_format"] == "doubles":
+                    for pid in match_ids:
+                        value = by_id[pid].get("rating")
+                        if value is None or not math.isfinite(float(value)) or float(value) <= 0:
+                            raise ValueError(f"Set the doubles starting level for {by_id[pid]['name']} before approving.")
                 match["rating_scope"] = "unrated" if rating_mode == "unrated" else "overall_only"
         review = {"request": request, "fingerprint": fingerprint, "payloads": payloads,
                   "actor_email": actor_email, "actor_role": actor_role, "started_at": _now()}
