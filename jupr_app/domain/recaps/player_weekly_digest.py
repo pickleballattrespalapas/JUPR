@@ -5,7 +5,10 @@ from datetime import date, datetime, timezone
 
 import pandas as pd
 
-from jupr_app.domain.gamification.badge_registry import badge_schema_by_id
+from jupr_app.data.paged_reads import read_all_rows
+from jupr_app.domain.gamification.badge_registry import badge_schema_by_id, registry
+from jupr_app.domain.gamification.badge_types import BadgeEvaluationContext
+from jupr_app.domain.gamification.match_facts import build_hybrid_player_match_facts
 from jupr_app.domain.gamification.trophies import get_player_tournament_trophies
 from jupr_app.domain.player_rating_series import (
     build_player_overall_rating_series,
@@ -106,25 +109,125 @@ def _format_pct(numerator: int, denominator: int) -> str:
     return f"{(100.0 * float(numerator) / float(denominator)):.1f}%"
 
 
-def _load_badges_earned(supabase, club_id: str, player_id: int, start_dt_utc: datetime, end_dt_utc: datetime) -> list[dict]:
-    if not supabase:
+def _match_id(value) -> str | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    text = str(value).strip()
+    return str(int(text)) if text.isdecimal() and int(text) > 0 else None
+
+
+def _award_key(row: dict) -> tuple[str, str, str]:
+    return tuple(str(row.get(key) or "") for key in ("badge_id", "context_type", "context_id"))
+
+
+def _award_trigger(row: dict) -> str | None:
+    evidence = row.get("value_json") or {}
+    # An award's end/trigger match is authoritative. Earlier qualifying games
+    # (for example the first four clutch wins) do not cause the achievement.
+    return _match_id(row.get("match_id")) or _match_id(evidence.get("match_id")) or _match_id(evidence.get("trigger_match_id"))
+
+
+_FACT_MILESTONES = {
+    "weekly_regular", "iron_week", "marathon_month", "rocket_start",
+    "social_butterfly", "network_builder", "draft_master", "swiss_army_knife",
+}
+
+
+def _session_fact_milestones(ctx, player_id: int, match_ids: set[str], badge_ids: set[str]) -> set[tuple[str, str, str]]:
+    """Prove the first threshold crossing using the existing badge evaluators.
+
+    Complete history matters: removing a session from today's totals can make
+    an old milestone appear new. Instead compare the prefix before/after each
+    selected game. Never infer standings/rank milestones from match facts.
+    """
+    wanted = badge_ids & _FACT_MILESTONES
+    if not wanted:
+        return set()
+    supabase = getattr(ctx, "supabase", None)
+    club_id = str(getattr(ctx, "club_id", "") or "")
+    # Legacy rows can identify players through alias columns. Filtering the raw
+    # canonical seats first would erase those earlier games and invent a new
+    # threshold crossing. Normalize complete club history before player scope.
+    matches = read_all_rows(lambda: supabase.table("matches").select("*").eq("club_id", club_id))
+    facts = build_hybrid_player_match_facts(ctx, pd.DataFrame(matches), club_id)
+    if facts.empty:
+        return set()
+    facts = facts[facts["player_id"] == int(player_id)].copy()
+    normalized_ids = facts["match_id"].map(_match_id)
+    if normalized_ids.isna().any():
+        return set()  # Unorderable legacy evidence cannot prove the crossing.
+    facts["match_id"] = normalized_ids.map(int)
+    facts = facts.sort_values(["date_dt", "match_id"]).reset_index(drop=True)
+    specs = registry()
+    proven = set()
+    def keys(frame, badge_id):
+        evaluation = BadgeEvaluationContext(club_id, None, None, ctx, frame, frame)
+        return {(candidate.badge_id, candidate.context_type, str(candidate.context_id or ""))
+                for candidate in specs[badge_id].evaluator(evaluation) if candidate.player_id == int(player_id)}
+    for index, fact in facts.iterrows():
+        if _match_id(fact["match_id"]) not in match_ids:
+            continue
+        for badge_id in wanted:
+            proven.update(keys(facts.iloc[:index + 1], badge_id) - keys(facts.iloc[:index], badge_id))
+    return proven
+
+
+def _receipt_proves_milestone(row: dict, player_id: int, evidence: dict) -> bool:
+    thresholds = {"participant": ("matches_played", 1), "dedicated_participant_50": ("matches_played", 50),
+                  "lifetime_participant_200": ("matches_played", 200), "high_roller": ("wins", 100)}
+    badge_id = str(row.get("badge_id") or "")
+    if badge_id in thresholds:
+        field, threshold = thresholds[badge_id]
+        for update in evidence.get("player_updates") or []:
+            if str(update.get("player_id")) != str(player_id) or update.get("rating_mode") != "doubles":
+                continue
+            before = _safe_int((update.get("expected") or {}).get(field))
+            after = _safe_int((update.get("after") or {}).get(field))
+            if before is not None and after is not None and before < threshold <= after:
+                return True
+    if badge_id == "level_up":
+        award = row.get("value_json") or {}
+        threshold = _safe_float(award.get("milestone"))
+        for update in evidence.get("league_rating_updates") or []:
+            if str(update.get("player_id")) != str(player_id) or str(update.get("league_name")) != str(award.get("league")):
+                continue
+            before = _safe_float((update.get("expected") or {}).get("rating"))
+            after = _safe_float((update.get("after") or {}).get("rating"))
+            if before is not None and after is not None and threshold is not None and before / 400 < threshold <= after / 400:
+                return True
+    return False
+
+
+def _load_badges_earned(supabase, club_id: str, player_id: int, start_dt_utc: datetime, end_dt_utc: datetime,
+                        *, match_ids: set[str] | None = None, ctx=None, session_evidence: dict | None = None) -> list[dict]:
+    if not supabase or match_ids == set():
         return []
 
     try:
-        badge_rows = (
-            supabase.table("player_badges")
-            .select("badge_id,earned_at,context_type,context_id,value_num,value_json")
+        query = (supabase.table("player_badges")
+            .select("id,badge_id,earned_at,context_type,context_id,match_id,value_num,value_json,revoked_at")
             .eq("club_id", club_id)
-            .eq("player_id", int(player_id))
-            .gte("earned_at", start_dt_utc.isoformat())
-            .lte("earned_at", end_dt_utc.isoformat())
-            .order("earned_at", desc=True)
-            .execute()
-            .data
-            or []
-        )
+            .eq("player_id", int(player_id)))
+        if match_ids is None:
+            badge_rows = query.gte("earned_at", start_dt_utc.isoformat()).lte("earned_at", end_dt_utc.isoformat()).order("earned_at", desc=True).execute().data or []
+        else:
+            # Approval may happen days after play. Award insertion date is never
+            # evidence that a game in this session caused the badge.
+            badge_rows = read_all_rows(lambda: supabase.table("player_badges")
+                .select("id,badge_id,earned_at,context_type,context_id,match_id,value_num,value_json,revoked_at")
+                .eq("club_id", club_id).eq("player_id", int(player_id)))
     except Exception:
+        if match_ids is not None:
+            raise
         return []
+
+    badge_rows = [row for row in badge_rows if not row.get("revoked_at")]
+    if match_ids is not None:
+        milestone_keys = _session_fact_milestones(ctx, player_id, match_ids,
+            {str(row.get("badge_id")) for row in badge_rows if not _award_trigger(row)}) if ctx is not None else set()
+        badge_rows = [row for row in badge_rows if
+            (_award_trigger(row) in match_ids if _award_trigger(row) else
+             _award_key(row) in milestone_keys or _receipt_proves_milestone(row, player_id, session_evidence or {}))]
 
     badge_ids = sorted({str(row.get("badge_id") or "").strip() for row in badge_rows if row.get("badge_id")})
     badge_name_map: dict[str, str] = {}
@@ -204,10 +307,13 @@ def _group_badges_for_display(badges: list[dict]) -> list[dict]:
     return grouped_items
 
 
-def _load_trophies_earned(supabase, club_id: str, player_id: int, start_dt_utc: datetime, end_dt_utc: datetime) -> list[dict]:
+def _load_trophies_earned(supabase, club_id: str, player_id: int, start_dt_utc: datetime, end_dt_utc: datetime,
+                          *, match_ids: set[str] | None = None) -> list[dict]:
     trophies = get_player_tournament_trophies(supabase, club_id, int(player_id))
     if not trophies:
         return []
+    if match_ids is not None:
+        return [item for item in trophies if not item.get("revoked_at") and _award_trigger(item) in match_ids]
 
     start_ts = pd.Timestamp(start_dt_utc)
     end_ts = pd.Timestamp(end_dt_utc)
@@ -497,15 +603,23 @@ def _build_highlights(
     return lines[:6]
 
 
-def compute_player_weekly_digest(ctx, player_id: int, start_date: date, end_date: date, tz_name: str = "America/Mazatlan") -> dict:
+def compute_player_weekly_digest(ctx, player_id: int, start_date: date, end_date: date, tz_name: str = "America/Mazatlan",
+                                *, match_ids: list[int | str] | None = None, session_evidence: dict | None = None) -> dict:
     start_date, end_date = normalize_date_range(start_date, end_date)
     supabase = getattr(ctx, "supabase", None)
     club_id = str(getattr(ctx, "club_id", "") or "")
     start_dt_utc, end_dt_utc = get_date_range_bounds(start_date, end_date, tz_name)
 
-    overall_series = build_player_overall_rating_series(supabase, club_id, int(player_id), limit=1200)
-    window_series = filter_rating_series_for_window(overall_series, start_date, end_date, tz_name=tz_name).copy()
-    if not window_series.empty:
+    scoped_ids = None
+    if match_ids is not None:
+        scoped_ids = {_match_id(value) for value in match_ids}
+        if not scoped_ids or None in scoped_ids:
+            raise ValueError("A session update requires valid committed match IDs.")
+    overall_series = build_player_overall_rating_series(supabase, club_id, int(player_id), limit=1200,
+        **({"match_ids": sorted(scoped_ids, key=int)} if scoped_ids is not None else {}))
+    window_series = (overall_series[overall_series["id"].map(_match_id).isin(scoped_ids)].copy()
+        if scoped_ids is not None else filter_rating_series_for_window(overall_series, start_date, end_date, tz_name=tz_name).copy())
+    if not window_series.empty and scoped_ids is None:
         window_series["Date"] = pd.to_datetime(window_series.get("Date"), utc=True, errors="coerce")
         window_series = window_series[
             window_series["Date"].notna()
@@ -513,11 +627,21 @@ def compute_player_weekly_digest(ctx, player_id: int, start_date: date, end_date
             & (window_series["Date"] <= pd.Timestamp(end_dt_utc))
         ].copy()
     if not window_series.empty:
+        window_series = window_series.sort_values(["Date", "id"]).copy()
         window_series["player_id"] = int(player_id)
+
+    actual_ids = set(window_series["id"].map(_match_id)) if not window_series.empty else set()
+    if scoped_ids is not None:
+        if not actual_ids:
+            raise ValueError("No games in this session belong to this player.")
+        # Singles snapshots use a different rating and cannot be plotted as
+        # Overall doubles JUPR. Their games still belong in the session record.
+        singles = window_series.get("match_format", pd.Series("doubles", index=window_series.index)).eq("singles")
+        window_series.loc[singles, ["Overall After", "Overall Δ"]] = None
 
     before = None
     after = _safe_float(window_series["Overall After"].iloc[-1]) if not window_series.empty else None
-    if not window_series.empty:
+    if not window_series.empty and scoped_ids is None:
         first_window_row = window_series.iloc[0]
         first_window_id = first_window_row.get("id")
         overall_sorted = overall_series.copy()
@@ -545,6 +669,14 @@ def compute_player_weekly_digest(ctx, player_id: int, start_date: date, end_date
     overall_delta = None
     if before is not None and after is not None:
         overall_delta = after - before
+    if scoped_ids is not None:
+        rating_rows = window_series.dropna(subset=["Overall After", "Overall Δ"])
+        before = after = overall_delta = None
+        if not rating_rows.empty:
+            first = rating_rows.iloc[0]
+            before = float(first["Overall After"]) - float(first["Overall Δ"])
+            after = float(rating_rows.iloc[-1]["Overall After"])
+            overall_delta = float(rating_rows["Overall Δ"].sum())
 
     wins = int((window_series.get("Result") == "WIN").sum()) if not window_series.empty else 0
     losses = int((window_series.get("Result") == "LOSS").sum()) if not window_series.empty else 0
@@ -566,7 +698,7 @@ def compute_player_weekly_digest(ctx, player_id: int, start_date: date, end_date
             {
                 "id": "anchor",
                 "match_number": 0,
-                "date": start_dt_utc.isoformat(),
+                "date": (pd.Timestamp(window_series.iloc[0]["Date"]).isoformat() if scoped_ids is not None else start_dt_utc.isoformat()),
                 "overall_after": round(float(before), 3),
                 "overall_delta": 0.0,
                 "league": "",
@@ -592,9 +724,11 @@ def compute_player_weekly_digest(ctx, player_id: int, start_date: date, end_date
             }
         )
 
-    badges_earned = _load_badges_earned(supabase, club_id, int(player_id), start_dt_utc, end_dt_utc)
+    badge_scope = {"match_ids": actual_ids, "ctx": ctx, "session_evidence": session_evidence or {}} if scoped_ids is not None else {}
+    badges_earned = _load_badges_earned(supabase, club_id, int(player_id), start_dt_utc, end_dt_utc, **badge_scope)
     badges_grouped = _group_badges_for_display(badges_earned)
-    trophies_earned = _load_trophies_earned(supabase, club_id, int(player_id), start_dt_utc, end_dt_utc)
+    trophies_earned = _load_trophies_earned(supabase, club_id, int(player_id), start_dt_utc, end_dt_utc,
+        **({"match_ids": actual_ids} if scoped_ids is not None else {}))
 
     player_name = _player_name(ctx, int(player_id))
     display_range = _display_range(start_date, end_date)
@@ -643,6 +777,7 @@ def compute_player_weekly_digest(ctx, player_id: int, start_date: date, end_date
             summary_line = f"{result_score} — {date_text} — with {partners} vs {opponents}"
         matches_played_rows.append(
             {
+                "id": int(row.get("id")) if pd.notna(row.get("id")) else None,
                 "date": played_at.isoformat() if pd.notna(played_at) else None,
                 "date_display": date_text,
                 "partners": partners,
@@ -700,6 +835,9 @@ def compute_player_weekly_digest(ctx, player_id: int, start_date: date, end_date
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "tz_name": tz_name,
             "chart_points": len(points),
+            **({"scope": "session", "match_ids": sorted(actual_ids, key=int),
+                "rating_delta_scope": "selected_doubles_games", "award_scope": "trigger_match_or_proven_threshold"}
+               if scoped_ids is not None else {}),
         },
     }
     return digest

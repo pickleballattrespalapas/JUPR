@@ -461,7 +461,7 @@ def send_selected_outbox_rows(
         source=source,
     )
     try:
-        totals = {"attempted": 0, "sent": 0, "skipped": 0, "errors": 0, "stale": 0, "uncertain": 0}
+        totals = {"attempted": 0, "sent": 0, "skipped": 0, "errors": 0, "stale": 0, "uncertain": 0, "waiting_for_awards": 0}
         windows: list[dict[str, Any]] = []
         ctx = _build_ctx(supabase, club_id=str(club_id))
         for (start, end), window_items in grouped.items():

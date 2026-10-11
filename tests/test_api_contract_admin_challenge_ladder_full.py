@@ -1494,6 +1494,7 @@ def test_played_result_publishes_matches_and_swaps(monkeypatch):
     assert params["p_match_context_b"] == atomic_core["match_context_ids"][1]
     assert len(side_effect_calls) == 1
     assert side_effect_calls[0]["operation_key"] == operation_key
+    assert side_effect_calls[0]["match_ids"] == [501, 502]
 
 
 def test_played_result_rejects_any_existing_context_including_soft_deleted(monkeypatch):
@@ -1628,6 +1629,7 @@ def test_committed_result_receipt_recovers_post_processors_without_core_rpc(
     assert recovered["public_result_json"]["rank_change"]["swapped"] is True
     assert len(side_effect_calls) == 1
     assert side_effect_calls[0]["operation_key"] == operation["operation_key"]
+    assert side_effect_calls[0]["match_ids"] == [501, 502]
     assert side_effect_calls[0]["write_plan"] == operation["request_json"][
         "atomic_core"
     ]["write_plan"]

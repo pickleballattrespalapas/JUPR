@@ -64,6 +64,9 @@ def build_player_update_email_html(digest_json: dict, chart_cid: str | None) -> 
     trophies = digest.get("trophies_earned") or []
     matches = digest.get("matches_played_rows") or []
     links = digest.get("links") or {}
+    session_update = (digest.get("meta") or {}).get("scope") == "session"
+    awards_heading = "Awards from this session" if session_update else "New this period"
+    matches_heading = "Games from this session" if session_update else "Recent matches"
 
     player_name = html.escape(_s(digest.get("player_name")) or "Verified Player")
     display_range = html.escape(_s(digest.get("display_range")))
@@ -83,7 +86,7 @@ def build_player_update_email_html(digest_json: dict, chart_cid: str | None) -> 
     if badge_items or trophy_items:
         new_period_block = (
             "<tr><td style='padding:18px 24px 0;'>"
-            "<div style='font-size:16px;font-weight:700;margin-bottom:6px;'>New this period</div>"
+            f"<div style='font-size:16px;font-weight:700;margin-bottom:6px;'>{awards_heading}</div>"
             + (f"<div style='font-size:14px;font-weight:700;margin-top:6px;'>Prestige badges</div><table role='presentation' width='100%'>{badge_items}</table>" if badge_items else "")
             + (f"<div style='font-size:14px;font-weight:700;margin-top:10px;'>Trophies</div><table role='presentation' width='100%'>{trophy_items}</table>" if trophy_items else "")
             + "</td></tr>"
@@ -95,7 +98,7 @@ def build_player_update_email_html(digest_json: dict, chart_cid: str | None) -> 
     )
     recent_matches_block = (
         "<tr><td style='padding:14px 24px 0;'>"
-        "<div style='font-size:16px;font-weight:700;margin-bottom:6px;'>Recent matches</div>"
+        f"<div style='font-size:16px;font-weight:700;margin-bottom:6px;'>{matches_heading}</div>"
         f"<table role='presentation' width='100%'>{match_items}</table>"
         "</td></tr>"
         if match_items
@@ -171,6 +174,9 @@ def build_player_update_email_text(digest_json: dict) -> str:
     trophies = digest.get("trophies_earned") or []
     matches = digest.get("matches_played_rows") or []
     links = digest.get("links") or {}
+    session_update = (digest.get("meta") or {}).get("scope") == "session"
+    awards_heading = "Awards from this session:" if session_update else "New this period:"
+    matches_heading = "Games from this session:" if session_update else "Recent matches:"
     prestige_badges = [item for item in badges if int(item.get("prestige") or 0) >= 50]
 
     badge_lines = []
@@ -199,10 +205,10 @@ def build_player_update_email_text(digest_json: dict) -> str:
             f"Matches played: {int(summary.get('matches_played') or 0)}",
             "Rating trend graph: Available in the HTML version of this email and on your profile page.",
             "",
-            *(["New this period:", "Prestige badges:", *badge_lines] if badge_lines else []),
+            *([awards_heading, "Prestige badges:", *badge_lines] if badge_lines else []),
             *(["Trophies:", *trophy_lines] if trophy_lines else []),
             *([""] if badge_lines or trophy_lines else []),
-            *(["Recent matches:", *match_lines, ""] if match_lines else []),
+            *([matches_heading, *match_lines, ""] if match_lines else []),
             "",
             f"Profile link: {_s(links.get('player_profile'))}",
             f"Unsubscribe: {_s(links.get('unsubscribe'))}",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+import json
 import re
 import secrets
 from typing import Any
@@ -826,12 +827,31 @@ def create_outbox_row(
     return row
 
 
+def normalize_session_match_ids(match_ids: list[int | str] | None) -> list[str]:
+    """Require explicit committed-game scope; dates cannot identify a session."""
+    if not isinstance(match_ids, (list, tuple)) or not match_ids:
+        raise ValueError("Session updates require the exact committed match IDs.")
+    normalized = set()
+    for match_id in match_ids:
+        if isinstance(match_id, bool) or not isinstance(match_id, (int, str)) or not str(match_id).strip():
+            raise ValueError("Session updates require valid committed match IDs.")
+        value = str(match_id).strip()
+        if not value.isdecimal() or int(value) < 1:
+            raise ValueError("Session updates require valid committed match IDs.")
+        value = str(int(value))
+        normalized.add(value)
+    return sorted(normalized)
+
+
 def queue_player_updates_for_affected_subscribers(
     supabase,
     *,
     club_id: str,
     affected_player_ids: list[int] | set[int] | tuple[int, ...],
     match_dates: list[date | datetime | str] | tuple[date | datetime | str, ...] | None = None,
+    match_ids: list[int | str] | None = None,
+    session_evidence: dict[str, Any] | None = None,
+    badge_refs: list[str] | None = None,
 ) -> dict[str, int]:
     club_id = _require_nonempty(club_id, "club_id")
     unique_player_ids: list[int] = sorted({_safe_int(pid) for pid in (affected_player_ids or [])})
@@ -847,16 +867,19 @@ def queue_player_updates_for_affected_subscribers(
     if not unique_player_ids:
         return summary
 
-    digest_windows: set[tuple[date, date]] = set()
+    scoped_match_ids = normalize_session_match_ids(match_ids)
+    match_days: set[date] = set()
     for raw_date in match_dates or []:
         parsed = _coerce_date(raw_date)
         if parsed is None:
             continue
-        digest_windows.add(_digest_window_for_match_day(parsed))
-    if not digest_windows:
-        digest_windows.add(_digest_window_for_match_day(datetime.now(timezone.utc).date()))
-
-    summary["week_windows"] = len(digest_windows)
+        match_days.add(parsed)
+    if not match_days:
+        raise ValueError("Session updates require the dates of the committed games.")
+    digest_windows = {(min(match_days), max(match_days))}
+    operation_key = str(uuid5(NAMESPACE_URL,
+        f"jupr:session-player-update:{club_id}:" + json.dumps(scoped_match_ids, separators=(",", ":"))))
+    summary["week_windows"] = 1
 
     active_subs = list_active_subscriptions(supabase, club_id, limit=max(500, len(unique_player_ids) * 5))
     active_by_player: dict[int, dict[str, Any]] = {}
@@ -883,6 +906,12 @@ def queue_player_updates_for_affected_subscribers(
             continue
         for week_start, week_end in sorted(digest_windows):
             try:
+                existing = _safe_first(supabase.table("player_profile_update_outbox").select("id")
+                    .eq("club_id", club_id).eq("subscription_id", subscription_id)
+                    .eq("queue_operation_key", operation_key).limit(1).execute())
+                if existing:
+                    summary["already_queued"] += 1
+                    continue
                 create_outbox_row(
                     supabase,
                     subscription_id=subscription_id,
@@ -891,6 +920,10 @@ def queue_player_updates_for_affected_subscribers(
                     week_start=week_start,
                     week_end=week_end,
                     email=email,
+                    operation_key=operation_key,
+                    digest_snapshot={"update_scope": "session", "match_ids": scoped_match_ids,
+                        "session_evidence": dict(session_evidence or {}),
+                        "badge_refs": sorted({str(ref) for ref in badge_refs or []})},
                 )
                 summary["queued"] += 1
             except Exception as exc:

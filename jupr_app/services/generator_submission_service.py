@@ -15,6 +15,7 @@ import pandas as pd
 from jupr_app.data.load import load_data
 from jupr_app.data.paged_reads import read_all_rows
 from jupr_app.domain.player_visibility import is_merged_player
+from jupr_app.domain.matches.side_effects import ensure_notification_badge_job, queue_player_updates
 from jupr_app.services.admin_guarded_write_service import required_audit_event
 from jupr_app.services.leaderboard_service import _leaderboard_settings
 from jupr_app.services.admin_play_generator_service import (
@@ -352,6 +353,7 @@ def review_generator_submission(
     # Reservation freezes the chosen mode and identity mapping. Stable receipts let
     # an interrupted approval resume, including a mixed singles/doubles session.
     results = []
+    badge_refs = []
     if action != "reject":
         for match_format in ("doubles", "singles"):
             matches = [m for m in review["payloads"] if m["match_format"] == match_format]
@@ -370,13 +372,31 @@ def review_generator_submission(
                 # Preserve the loader's merged-identity exclusion. Keep the
                 # receipt-first path available for already committed retries.
                 player_frame = player_frame.loc[[not is_merged_player(p) for p in players]]
-                results.append(submit_atomic_direct_matches(
+                result = submit_atomic_direct_matches(
                     db, club_id=club_id, matches=batch, match_format=match_format,
                     idempotency_key=f"generator-approval-{operation_key}:{match_format}:{start // 200}",
                     actor_email=review["actor_email"], actor_role=review["actor_role"],
                     source="generator_admin_approval", name_to_id={p["name"]: p["id"] for p in players if not is_merged_player(p)},
                     df_players_all=player_frame, df_leagues=data[2], df_meta=data[4],
-                ))
+                    queue_player_notifications=False,
+                )
+                results.append(result)
+                if rating_mode == "rated" and match_format == "doubles":
+                    badge_refs.append(ensure_notification_badge_job(supabase=db, club_id=club_id,
+                        match_ids=result["operation"]["match_ids"], player_ids=batch_ids))
+        # One notification contains the complete session, even when publication
+        # needed multiple formats/batches. Stable receipt IDs make retries safe.
+        session_match_ids = [match_id for result in results for match_id in result["operation"]["match_ids"]]
+        evidence = {key: [update for result in results
+            for update in result.get("notification_evidence", {}).get(key, [])]
+            for key in ("player_updates", "league_rating_updates")}
+        queue_summary = queue_player_updates(supabase=db, club_id=club_id,
+            db_matches=review["payloads"],
+            affected_players={int(update["player_id"]) for update in evidence["player_updates"]},
+            successful_match_dates=[match["date"] for match in review["payloads"]],
+            match_ids=session_match_ids, session_evidence=evidence, badge_refs=badge_refs)
+        if queue_summary.get("mode") == "error" or queue_summary.get("failed"):
+            raise RuntimeError("The games are saved, but player updates could not be queued. Resume this approval to retry safely.")
     submission.update({"status": "rejected" if action == "reject" else "approved",
         "approved_mode": None if action == "reject" else rating_mode, "reviewed_at": _now(),
         "rejection_reason": request["reason"] if action == "reject" else None,
