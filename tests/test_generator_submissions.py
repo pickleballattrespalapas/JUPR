@@ -21,6 +21,9 @@ from jupr_app.services.public_player_service import _rating_projection
 
 
 class Query(BaseQuery):
+    def is_(self, field, value):
+        return self.eq(field, None if value == "null" else value)
+
     def range(self, start, end):
         self.bounds = (start, end)
         return self
@@ -47,7 +50,7 @@ class Database:
     def __init__(self):
         self.db = {"live_sessions": [], "public_live_operations": [], "matches": [], "players": [
             {"id": i, "club_id": "club", "name": f"Player {i}", "rating": 1400., "starting_rating": 1400.,
-             "singles_rating": 1300., "singles_starting_rating": 1300., "wins": 0, "losses": 0,
+             "singles_rating": 1300., "singles_replay_baseline": {"rating": 1300., "wins": 0, "losses": 0, "matches_played": 0}, "wins": 0, "losses": 0,
              "matches_played": 0, "singles_wins": 0, "singles_losses": 0, "singles_matches_played": 0,
              "active": True, "inactive_at": None, "last_game_at": None, "singles_last_game_at": None}
             for i in range(1, 9)
@@ -395,3 +398,180 @@ def test_staff_session_submission_preserves_choice_and_seals_edits(db):
     assert submitted["session"]["submission"]["rating_mode"] == "rated"
     with pytest.raises(ValueError, match="locked"):
         _persist_event(db, before=db.db["live_sessions"][0], event=session["event"], expected_version=submitted["session"]["version"])
+
+
+def starting_level_setup(db, rating_mode="rated", play_format="doubles"):
+    session, token = completed_session(db, play_format=play_format, rating_mode=rating_mode)
+    session = submit(db, session, token)
+    participant = session["event"]["participants"][0]
+    player_id = int(participant["name"].split()[-1])
+    queue = service.list_generator_submissions(db, club_id="club", actor_role="administrator")
+    player = next(p for p in queue["players"] if p["id"] == player_id)
+    args = dict(club_id="club", session_key=session["session_key"], participant_id=participant["id"],
+                player_id=player_id, match_format="doubles", rating_jupr=4.25,
+                expected_state_fingerprint=player["ratings"]["doubles"]["state_fingerprint"],
+                actor_email="admin@example.invalid", actor_role="administrator")
+    return session, args
+
+
+def test_starting_level_is_used_by_approval_and_survives_retry(db):
+    session, args = starting_level_setup(db)
+    before = copy.deepcopy(db.db["players"])
+    result = service.set_generator_starting_rating(db, **args)
+    player = next(p for p in db.db["players"] if p["id"] == args["player_id"])
+    assert player["rating"] == player["starting_rating"] == 1700
+    assert db.db["matches"] == []
+    assert player["matches_played"] == 0
+    original = next(p for p in before if p["id"] == player["id"])
+    assert {k: v for k, v in player.items() if k.startswith("singles_")} == {
+        k: v for k, v in original.items() if k.startswith("singles_")}
+    assert result["player"]["ratings"]["doubles"]["rating_jupr"] == 4.25
+    assert any(row["action_type"] == "set_generator_starting_rating" for row in db.db["admin_activity_log"])
+    with pytest.raises(PublicLiveConflictError):
+        service.set_generator_starting_rating(db, **args)
+    db.interrupt_after_commit = True
+    with pytest.raises(direct.DirectMatchRecoveryRequiredError):
+        service.review_generator_submission(db, **review_args(session))
+    service.review_generator_submission(db, **review_args(session))
+    assert player["starting_rating"] == 1700
+    assert player["matches_played"] == 1
+    assert abs(player["rating"] - 1700) < 100
+    game = next(m for m in db.db["matches"] if player["id"] in [m.get(k) for k in ("t1_p1", "t1_p2", "t2_p1", "t2_p2")])
+    position = next(k for k in ("t1_p1", "t1_p2", "t2_p1", "t2_p2") if game.get(k) == player["id"])
+    assert game[f"{position}_r"] == 1700
+    with pytest.raises(ValueError, match="before approving"):
+        service.set_generator_starting_rating(db, **args)
+
+
+@pytest.mark.parametrize("field", ["wins", "losses", "matches_played"])
+def test_starting_level_cannot_reset_an_established_player(db, field):
+    _, args = starting_level_setup(db)
+    db.db["players"][0][field] = 1
+    before = copy.deepcopy(db.db["players"])
+    with pytest.raises(ValueError, match="already has rated games"):
+        service.set_generator_starting_rating(db, **args)
+    assert db.db["players"] == before
+
+
+@pytest.mark.parametrize("override,error", [
+    ({"actor_role": "operator"}, PermissionError),
+    ({"player_id": 999}, ValueError),
+    ({"club_id": "other-club"}, ValueError),
+    ({"participant_id": "absent"}, ValueError),
+    ({"match_format": "singles"}, ValueError),
+    ({"rating_jupr": 0.5}, ValueError),
+    ({"rating_jupr": 8}, ValueError),
+    ({"rating_jupr": float("nan")}, ValueError),
+    ({"rating_jupr": float("inf")}, ValueError),
+    ({"expected_state_fingerprint": "0" * 64}, PublicLiveConflictError),
+])
+def test_invalid_starting_levels_leave_profiles_unchanged(db, override, error):
+    _, args = starting_level_setup(db)
+    before = copy.deepcopy(db.db["players"])
+    with pytest.raises(error):
+        service.set_generator_starting_rating(db, **{**args, **override})
+    assert db.db["players"] == before
+
+
+def test_unrated_and_singles_submissions_cannot_change_doubles_baselines(db):
+    _, args = starting_level_setup(db, rating_mode="unrated")
+    with pytest.raises(ValueError, match="rated results"):
+        service.set_generator_starting_rating(db, **args)
+    _, singles_args = starting_level_setup(db, play_format="singles")
+    with pytest.raises(ValueError, match="scored doubles"):
+        service.set_generator_starting_rating(db, **singles_args)
+
+
+def test_starting_level_compare_and_swap_rejects_concurrent_game(db, monkeypatch):
+    _, args = starting_level_setup(db)
+    execute = Query.execute
+    def concurrent_game(query):
+        if query.name == "players" and query.update_payload:
+            query.db["players"][0].update(rating=1450, wins=1, matches_played=1)
+        return execute(query)
+    monkeypatch.setattr(Query, "execute", concurrent_game)
+    with pytest.raises(PublicLiveConflictError):
+        service.set_generator_starting_rating(db, **args)
+    assert db.db["players"][0]["rating"] == 1450
+    assert db.db["players"][0]["starting_rating"] == 1400
+
+
+def test_starting_level_audit_failure_prevents_change(db, monkeypatch):
+    _, args = starting_level_setup(db)
+    before = copy.deepcopy(db.db["players"])
+    execute = Query.execute
+    def failed_audit(query):
+        if query.name == "admin_activity_log":
+            raise RuntimeError("Audit unavailable")
+        return execute(query)
+    monkeypatch.setattr(Query, "execute", failed_audit)
+    with pytest.raises(RuntimeError, match="Required audit intent"):
+        service.set_generator_starting_rating(db, **args)
+    assert db.db["players"] == before
+
+
+def test_null_doubles_rating_needs_starting_level_before_approval(db):
+    db.db["players"][0].update(rating=None, starting_rating=None)
+    session, args = starting_level_setup(db)
+    with pytest.raises(ValueError, match="Set the doubles starting level"):
+        service.review_generator_submission(db, **review_args(session))
+    assert db.db["matches"] == []
+    assert not db.db["live_sessions"][0].get("pending_operation_key")
+    service.set_generator_starting_rating(db, **args)
+    service.review_generator_submission(db, **review_args(session))
+    assert db.db["players"][0]["starting_rating"] == 1700
+
+
+def test_singles_baseline_is_read_only_and_remains_a_valid_initial_seed(db):
+    db.db["players"][0]["singles_rating"] = None
+    queue = service.list_generator_submissions(db, club_id="club", actor_role="administrator")
+    rating = next(p for p in queue["players"] if p["id"] == 1)["ratings"]["singles"]
+    assert rating["rating_jupr"] == 3.25
+    assert not rating["can_set_starting_rating"]
+    session, token = completed_session(db, rating_mode="rated", play_format="singles")
+    session = submit(db, session, token)
+    service.review_generator_submission(db, **review_args(session))
+    assert db.db["players"][0]["singles_replay_baseline"]["rating"] == 1300
+
+
+def test_merged_profiles_are_not_available_for_starting_levels(db):
+    _, args = starting_level_setup(db)
+    db.db["players"][0]["name"] = "Old Player (MERGED into Player 2 #2)"
+    queue = service.list_generator_submissions(db, club_id="club", actor_role="administrator")
+    assert args["player_id"] not in [p["id"] for p in queue["players"]]
+    with pytest.raises(ValueError, match="current player profile"):
+        service.set_generator_starting_rating(db, **args)
+
+
+def test_starting_level_http_route_uses_admin_and_write_gates(db, monkeypatch):
+    from services.api import admin_play_generator_routes as routes
+    session, args = starting_level_setup(db)
+    role = "operator"
+    monkeypatch.setattr(routes, "_resolve_role_or_403", lambda **kw: ("admin@example.invalid", role))
+    monkeypatch.setattr(routes, "_require_write_gate", lambda: None)
+    app = FastAPI()
+    routes.install_admin_play_generator_routes(app, get_supabase_client=lambda: db)
+    client = TestClient(app)
+    path = f"/admin/clubs/club/play-generators/sessions/{session['session_key']}/starting-ratings/{args['player_id']}"
+    body = {k: args[k] for k in ("participant_id", "match_format", "rating_jupr", "expected_state_fingerprint")}
+    assert client.patch(path, json=body).status_code == 403
+    role = "administrator"
+    assert client.patch(path, json={**body, "rating_jupr": 7.1}).status_code == 422
+    assert client.patch(path, json={**body, "match_format": "singles"}).status_code == 422
+    response = client.patch(path, json=body)
+    assert response.status_code == 200, response.text
+    assert response.json()["player"]["ratings"]["doubles"]["rating_jupr"] == 4.25
+    assert client.patch(path, json=body).status_code == 409
+    def closed_gate():
+        raise HTTPException(403, "Writes closed")
+    monkeypatch.setattr(routes, "_require_write_gate", closed_gate)
+    assert client.patch(path, json=body).status_code == 403
+
+
+def test_starting_level_route_keeps_existing_staging_wave_boundaries():
+    from scripts.staging_write_waves import wave_allows_request
+    path = "/admin/clubs/club/play-generators/sessions/session/starting-ratings/1"
+    assert wave_allows_request("open", "PATCH", path)
+    assert wave_allows_request("jupr-live", "PATCH", path)
+    for wave in ("none", "communications", "public-live", "public-intake-auth"):
+        assert not wave_allows_request(wave, "PATCH", path)
