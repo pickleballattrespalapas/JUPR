@@ -135,7 +135,7 @@ export default function GeneratorPlayerCreate({ clubId, sessionKey, participantI
     } finally { running.current = false; onBusyChange(false); }
   }
 
-  async function useExisting(playerId: number) {
+  async function selectExisting(playerId: number) {
     if (disabled || running.current) return;
     running.current = true; onBusyChange(true); setMessage("");
     try { await onCreated(playerId); }
@@ -155,7 +155,7 @@ export default function GeneratorPlayerCreate({ clubId, sessionKey, participantI
         disabled={disabled || Boolean(operation)} onChange={event => setLevel(event.target.value)} style={field} />
     </label>
     {!operation && matching.length ? <div role="status">A matching club profile exists.
-      {matching.map(player => <button key={player.id} type="button" disabled={disabled} style={{ ...field, display: "block", width: "100%", marginTop: 4 }} onClick={() => void useExisting(player.id)}>Use {player.name}</button>)}
+      {matching.map(player => <button key={player.id} type="button" disabled={disabled} style={{ ...field, display: "block", width: "100%", marginTop: 4 }} onClick={() => void selectExisting(player.id)}>Use {player.name}</button>)}
     </div> : null}
     <small>Creates a club profile now. Scores are applied when you approve the results.</small>
     {message ? <p role="status" style={{ margin: 0 }}>{message}</p> : null}
