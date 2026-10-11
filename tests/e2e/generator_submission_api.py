@@ -17,20 +17,37 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT), str(ROOT / "tests")]
 os.environ["JUPR_ENV"] = "test"
 os.environ["JUPR_PUBLIC_LIVE_TOKEN_SECRET"] = "local-browser-fixture-secret-00000000000000000000"
+os.environ["JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR"] = "1"
 
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from test_generator_submissions import db as fixture_db
+from test_generator_submissions import db as fixture_db, Query as FixtureQuery
 from jupr_app.services.public_live_operation_service import PublicLiveConflictError
 from jupr_app.services.public_play_generator_service import get_public_play_generator_session
 from services.api import admin_play_generator_routes as admin
+from services.api import admin_player_editor_routes as editor
 from services.api.club_site_models import default_site
 from services.api.public_play_generator_routes import install_public_play_generator_routes
 
 patches = pytest.MonkeyPatch()
 database = fixture_db.__wrapped__(patches)
+
+
+class CreationQuery(FixtureQuery):
+    """Mirror database-generated IDs for real player-creation service calls."""
+    def execute(self):
+        if self.name in {"players", "admin_guarded_operations"} and self.payload is not None:
+            rows = self.payload if isinstance(self.payload, list) else [self.payload]
+            next_id = max((int(row.get("id") or 0) for row in self.db.get(self.name, [])), default=0) + 1
+            for row in rows:
+                row.setdefault("id", next_id)
+                next_id += 1
+        return super().execute()
+
+
+database.table = lambda name: CreationQuery(database.db, name)
 app = FastAPI()
 web_port = int(os.environ.get("GENERATOR_BROWSER_WEB_PORT", "3038"))
 app.add_middleware(
@@ -65,10 +82,13 @@ def authenticate(authorization):
     return SimpleNamespace(email="reviewer@example.invalid", user_id="local-reviewer")
 
 
-patches.setattr(admin, "_require_write_gate", lambda: None)
+patches.setattr(admin, "_require_write_gate", lambda *args: None)
 patches.setattr(admin, "authenticate_bearer", authenticate)
 patches.setattr(admin, "resolve_admin_role", lambda **kw: SimpleNamespace(role="administrator"))
 admin.install_admin_play_generator_routes(app, get_supabase_client=lambda: database)
+patches.setattr(editor, "authenticate_bearer", authenticate)
+patches.setattr(editor, "resolve_admin_role", lambda **kw: SimpleNamespace(role="administrator"))
+editor.install_admin_player_editor_routes(app, get_supabase_client=lambda: database)
 
 
 @app.get("/public/clubs/{slug}/site")
