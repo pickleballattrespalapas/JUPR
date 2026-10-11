@@ -19,7 +19,7 @@ const common = {
   "@/lib/useAdminSession": { useAdminSession: () => ({ accessToken: token, session: token ? { user: { id: "staff" } } : null }), adminSessionLabel: () => "Staff" },
   "@/lib/useAuthenticatedAutoLoad": auth,
   "@/components/ConfirmAction": { ConfirmAction: props => React.createElement("button", { disabled: props.disabled, onClick: () => props.onConfirm(props.confirmationText) }, props.triggerLabel) },
-  "@/components/interaction": { actionSuccess: (title, message) => ({ title, message }) },
+  "@/components/interaction": load("components/interaction/types.ts"),
   "next/link": ({ children, ...props }) => React.createElement("a", props, children),
   "next/navigation": { useSearchParams: () => new URLSearchParams(window.location.search) },
   "@/components/SearchablePlayerSelect": ({ children, onValueChange, ...props }) => React.createElement("select", { ...props, onChange: event => onValueChange(event.target.value) }, children)

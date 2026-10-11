@@ -5,7 +5,7 @@ import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAdminSession } from "@/lib/useAdminSession";
 import { ConfirmAction } from "@/components/ConfirmAction";
-import { actionSuccess } from "@/components/interaction";
+import { actionSuccess, InteractionActionError } from "@/components/interaction";
 import GeneratorPlayerCreate from "./GeneratorPlayerCreate";
 
 type ReviewRequest = { expected_version: number; action: "approve" | "reject"; player_ids: Record<string, number>; match_date: string; reason: string };
@@ -65,13 +65,23 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
   const focusReview = useRef(false);
   const reviewPanel = useRef<HTMLElement | null>(null);
   const request = useCallback(async (path: string, body?: unknown, signal?: AbortSignal, method?: string) => {
-    if (!apiBase || !accessToken) throw new Error("Sign in to review generator results.");
+    if (!apiBase || !accessToken) throw new InteractionActionError("Sign in to review generator results.", { kind: "forbidden" });
     const response = await fetch(`${apiBase.replace(/\/$/, "")}/admin/clubs/${encodeURIComponent(clubId)}/play-generators/${path}`, {
       method: method || (body ? "POST" : "GET"), headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
       body: body ? JSON.stringify(body) : undefined, cache: "no-store", signal
     });
-    const payload = await response.json();
-    if (!response.ok) throw new Error(typeof payload.detail === "string" ? payload.detail : "Could not load generator results.");
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      // Only deliberate client-facing API failures are safe to show in the
+      // confirmation dialog. Network failures and server errors stay generic.
+      if (response.status >= 400 && response.status < 500 && typeof payload?.detail === "string" && payload.detail.trim()) {
+        throw new InteractionActionError(payload.detail, {
+          kind: response.status === 409 ? "conflict" : response.status === 401 || response.status === 403 ? "forbidden" : "validation"
+        });
+      }
+      throw new Error("Could not load generator results. Refresh and try again.");
+    }
+    if (!payload) throw new Error("Could not read generator results. Refresh and try again.");
     return payload;
   }, [accessToken, apiBase, clubId]);
   const refresh = useCallback(async () => {
@@ -178,18 +188,25 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
     setMessage(player.name + " is selected. Review the remaining players, then approve the results.");
   }
   async function decide(action: ReviewRequest["action"]) {
-    if (!selected) throw new Error("Choose a submission first.");
-    if (editingTitle) throw new Error("Save or cancel the title edit before reviewing results.");
+    if (!selected) throw new InteractionActionError("Choose a submission first.", { kind: "validation" });
+    if (editingTitle) throw new InteractionActionError("Save or cancel the title edit before reviewing results.", { kind: "validation" });
     setBusy(true); setMessage("");
     try {
       const body = selected.status === "processing" && selected.review ? selected.review.request : { expected_version: selected.version, action, player_ids: mapping, match_date: matchDate, reason };
       const payload = await request(`sessions/${encodeURIComponent(selected.session_key)}/review`, { ...body, expected_version: selected.version });
+      if (payload.status !== "approved" && payload.status !== "rejected") throw new Error("Review result was not confirmed.");
       const text = payload.status === "rejected" ? "Submission rejected. Club records are unchanged." : `Approved as ${selected.rating_mode}. Games are now included in player stats and available for weekly recaps.`;
       await refresh(); setMessage(text);
       return actionSuccess("Review saved", text);
     } catch (error) {
-      setMessage(`${error instanceof Error ? error.message : "Could not confirm the review."} Refresh to check the result. An interrupted approval can be resumed safely.`);
-      throw error;
+      const detail = error instanceof InteractionActionError ? error.message : `We couldn’t confirm whether the ${action === "approve" ? "approval" : "rejection"} finished.`;
+      const recovery = `Close this dialog and refresh the submissions before trying again. If this submission shows “Approval interrupted”, open it and choose “Resume ${action === "reject" ? "rejection" : `${selected.rating_mode} approval`}”.`;
+      const failure = new InteractionActionError(`${detail} ${recovery}`, {
+        kind: error instanceof InteractionActionError ? error.kind : "failed",
+        cause: error
+      });
+      setMessage(failure.message);
+      throw failure;
     } finally { setBusy(false); }
   }
   const editable = selected?.status === "pending";

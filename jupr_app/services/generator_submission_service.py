@@ -10,6 +10,8 @@ from zoneinfo import ZoneInfo
 from typing import Any
 from uuid import uuid4
 
+import pandas as pd
+
 from jupr_app.data.load import load_data
 from jupr_app.data.paged_reads import read_all_rows
 from jupr_app.domain.player_visibility import is_merged_player
@@ -357,12 +359,23 @@ def review_generator_submission(
                 # Every batch needs current ratings and shared activity fields,
                 # including when a player appears in both singles and doubles.
                 data = load_data(db, club_id)
+                batch = matches[start:start + 200]
+                batch_ids = sorted({int(match[key]) for match in batch
+                    for key in ("t1_p1", "t1_p2", "t2_p1", "t2_p2") if match.get(key) is not None})
+                # load_data derives `active` for leaderboard display. The atomic
+                # write's compare-and-swap must use the persisted values instead.
+                players = read_all_rows(lambda: db.table("players").select("*")
+                    .eq("club_id", club_id).in_("id", batch_ids))
+                player_frame = pd.DataFrame(players)
+                # Preserve the loader's merged-identity exclusion. Keep the
+                # receipt-first path available for already committed retries.
+                player_frame = player_frame.loc[[not is_merged_player(p) for p in players]]
                 results.append(submit_atomic_direct_matches(
-                    db, club_id=club_id, matches=matches[start:start + 200], match_format=match_format,
+                    db, club_id=club_id, matches=batch, match_format=match_format,
                     idempotency_key=f"generator-approval-{operation_key}:{match_format}:{start // 200}",
                     actor_email=review["actor_email"], actor_role=review["actor_role"],
-                    source="generator_admin_approval", name_to_id=data[7],
-                    df_players_all=data[0], df_leagues=data[2], df_meta=data[4],
+                    source="generator_admin_approval", name_to_id={p["name"]: p["id"] for p in players if not is_merged_player(p)},
+                    df_players_all=player_frame, df_leagues=data[2], df_meta=data[4],
                 ))
     submission.update({"status": "rejected" if action == "reject" else "approved",
         "approved_mode": None if action == "reject" else rating_mode, "reviewed_at": _now(),
