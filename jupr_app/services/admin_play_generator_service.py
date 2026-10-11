@@ -539,6 +539,9 @@ def save_play_generator_round(
     source: str,
 ) -> dict[str, Any]:
     before = _live_row(supabase, club_id=str(club_id), session_key=str(session_key))
+    official = _state(before).get("official_publish") or {}
+    if official.get("published_at") or official.get("published_match_ids"):
+        raise ValueError("Published results must be corrected through club match administration.")
     event = save_generator_round(
         _event_from_state(_state(before)),
         round_number=int(round_number),

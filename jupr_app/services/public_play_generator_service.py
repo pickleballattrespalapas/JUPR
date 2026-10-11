@@ -206,6 +206,7 @@ def _not_expired(row: dict[str, Any]) -> bool:
 def public_play_generator_session_payload(row: dict[str, Any]) -> dict[str, Any]:
     state = _state(row)
     event = _event_from_state(state)
+    official = state.get("official_publish") or {}
     return {
         "session_key": str(row.get("session_key") or ""),
         "title": _clean(row.get("title") or event.get("name")),
@@ -230,6 +231,7 @@ def public_play_generator_session_payload(row: dict[str, Any]) -> dict[str, Any]
         "playoff_options": generator_playoff_options(event) if event else None,
         "unrated": str(event.get("ratingMode") or "unrated") == "unrated",
         "rating_mode": str(event.get("ratingMode") or "unrated"),
+        "results_locked": bool(state.get("generator_submission") or official.get("published_at") or official.get("published_match_ids")),
         "submission": {
             key: value for key, value in (state.get("generator_submission") or {}).items()
             if key in {"status", "approved_mode", "rating_mode", "submitted_at", "reviewed_at", "match_date", "match_count", "rejection_reason"}
@@ -798,7 +800,8 @@ def save_public_play_generator_round(
         idempotency_key=idempotency_key,
         requester_hash=requester_hash,
         action="scores",
-        request_payload={"round_number": int(round_number), "score_count": len(scores or [])},
+        allow_completed=True,
+        request_payload={"round_number": int(round_number), "scores": scores},
         mutate=lambda event: (
             save_generator_round(event, round_number=int(round_number), scores=scores),
             {},
