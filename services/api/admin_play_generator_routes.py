@@ -4,7 +4,7 @@ import os
 from typing import Any
 
 from fastapi import HTTPException, Query
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from jupr_app.domain.admin.roles import (
     PERMISSION_ENTER_SCORES,
@@ -45,7 +45,7 @@ from jupr_app.services.production_feature_policy import production_feature_enabl
 from services.api.auth import authenticate_bearer, auth_header
 from jupr_app.services.generator_submission_service import (
     list_generator_submissions, require_reviewer, review_generator_submission, submit_generator_session,
-    set_generator_starting_rating,
+    set_generator_starting_rating, update_generator_submission_title,
 )
 from jupr_app.services.public_live_operation_service import PublicLiveConflictError
 
@@ -154,6 +154,18 @@ class GeneratorStartingRatingRequest(BaseModel):
     match_format: str = Field(pattern=r"^doubles$")
     rating_jupr: float = Field(ge=1.0, le=7.0, allow_inf_nan=False)
     expected_state_fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class GeneratorSubmissionTitleRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_version: int = Field(ge=1)
+    title: str = Field(min_length=1, max_length=160)
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def normalize_title(cls, value: Any) -> Any:
+        return " ".join(value.replace("<", "").replace(">", "").split()) if isinstance(value, str) else value
 
 
 def _model_payload(model: BaseModel) -> dict[str, Any]:
@@ -268,6 +280,19 @@ def install_admin_play_generator_routes(app, *, get_supabase_client) -> None:
         try:
             return submit_generator_session(supabase, club_id=club_id, session_key=session_key,
                 actor_email=email, **_model_payload(payload))
+        except Exception as exc:
+            _handle(exc)
+
+    @app.patch("/admin/clubs/{club_id}/play-generators/sessions/{session_key}/submission/title")
+    def patch_generator_submission_title(club_id: str, session_key: str,
+        payload: GeneratorSubmissionTitleRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
+        _require_write_gate(club_id)
+        supabase = get_supabase_client()
+        email, role = _resolve_role_or_403(supabase=supabase, club_id=club_id,
+            authorization=authorization, source="generator_submission_title")
+        try:
+            return update_generator_submission_title(supabase, club_id=club_id, session_key=session_key,
+                actor_email=email, actor_role=role, **_model_payload(payload))
         except Exception as exc:
             _handle(exc)
 

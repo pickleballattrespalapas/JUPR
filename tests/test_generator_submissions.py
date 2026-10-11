@@ -136,6 +136,157 @@ def review_args(session):
         "match_date": "2026-09-20", "reason": "", "actor_email": "admin@example.invalid", "actor_role": "administrator"}
 
 
+def title_args(session):
+    return {"club_id": "club", "session_key": session["session_key"], "expected_version": session["version"],
+            "title": "Saturday round robin", "actor_email": "admin@example.invalid", "actor_role": "administrator"}
+
+
+@pytest.mark.parametrize("mode", ["public_play_generator", "admin_play_generator"])
+@pytest.mark.parametrize("role", ["administrator", "club_owner", "super_admin"])
+def test_pending_title_edit_preserves_results_and_publishes_corrected_label(db, mode, role):
+    session, token = completed_session(db, total_rounds=3)
+    session = submit(db, session, token)
+    db.db["live_sessions"][0]["state"]["mode"] = mode
+    before = copy.deepcopy(db.db["live_sessions"][0])
+    players_before = copy.deepcopy(db.db["players"])
+    operations_before = copy.deepcopy(db.db["public_live_operations"])
+    result = service.update_generator_submission_title(db, **{
+        **title_args(session), "title": "  Saturday\n round   robin  ", "actor_role": role})
+    expected = copy.deepcopy(before)
+    expected["title"] = expected["state"]["event_name"] = "Saturday round robin"
+    expected["state"]["page_state"]["event_name"] = "Saturday round robin"
+    expected["state"]["page_state"]["event"]["name"] = "Saturday round robin"
+    expected["version"] += 1
+    expected["updated_at"] = db.db["live_sessions"][0]["updated_at"]
+    assert db.db["live_sessions"][0] == expected
+    assert db.db["players"] == players_before
+    assert db.db["public_live_operations"] == operations_before
+    assert db.db["matches"] == []
+    assert result["version"] == before["version"] + 1
+    assert result["title"] == result["session"]["title"] == result["session"]["event"]["name"] == "Saturday round robin"
+    assert [entry["action_type"] for entry in db.db["admin_activity_log"]][-2:] == [
+        "update_generator_submission_title_intent", "update_generator_submission_title"]
+    listed = service.list_generator_submissions(db, club_id="club", actor_role=role)["submissions"][0]
+    assert listed["title"] == "Saturday round robin" and listed["version"] == result["version"]
+    service.review_generator_submission(db, **{**review_args(session), "expected_version": result["version"]})
+    assert {match["week_tag"] for match in db.db["matches"]} == {
+        "Saturday round robin Round 1", "Saturday round robin Round 2", "Saturday round robin Round 3"}
+
+
+@pytest.mark.parametrize("override,error", [
+    ({"actor_role": "operator"}, PermissionError),
+    ({"actor_role": "player"}, PermissionError),
+    ({"club_id": "other-club"}, ValueError),
+    ({"session_key": "absent"}, ValueError),
+    ({"expected_version": 0}, PublicLiveConflictError),
+    ({"title": "   \n\t  "}, ValueError),
+    ({"title": "<>"}, ValueError),
+    ({"title": "X" * 161}, ValueError),
+])
+def test_invalid_title_edits_leave_session_and_results_unchanged(db, override, error):
+    session, token = completed_session(db)
+    session = submit(db, session, token)
+    before = copy.deepcopy(db.db)
+    with pytest.raises(error):
+        service.update_generator_submission_title(db, **{**title_args(session), **override})
+    assert db.db == before
+
+
+@pytest.mark.parametrize("locked_state", ["not_submitted", "active", "processing", "approved", "rejected", "pending_operation", "published"])
+def test_title_edit_does_not_reopen_or_change_locked_sessions(db, locked_state):
+    session, token = completed_session(db)
+    session = submit(db, session, token)
+    row = db.db["live_sessions"][0]
+    if locked_state == "not_submitted":
+        del row["state"]["generator_submission"]
+    elif locked_state == "active":
+        row["status"] = "active"
+    elif locked_state == "pending_operation":
+        row["pending_operation_key"] = "reserved-change"
+    elif locked_state == "published":
+        row["state"]["official_publish"] = {"published_match_ids": ["existing-match"]}
+    else:
+        row["state"]["generator_submission"]["status"] = locked_state
+    before = copy.deepcopy(db.db)
+    with pytest.raises(PublicLiveConflictError if locked_state == "pending_operation" else ValueError):
+        service.update_generator_submission_title(db, **title_args(session))
+    assert db.db == before
+
+
+def test_title_edit_compare_and_swap_preserves_concurrent_approval(db, monkeypatch):
+    session, token = completed_session(db)
+    session = submit(db, session, token)
+    execute = Query.execute
+    def concurrent_approval(query):
+        if query.name == "live_sessions" and query.update_payload:
+            row = query.db["live_sessions"][0]
+            row["version"] += 1
+            row["state"]["generator_submission"]["status"] = "processing"
+            row["pending_operation_key"] = "concurrent-approval"
+        return execute(query)
+    monkeypatch.setattr(Query, "execute", concurrent_approval)
+    with pytest.raises(PublicLiveConflictError):
+        service.update_generator_submission_title(db, **title_args(session))
+    row = db.db["live_sessions"][0]
+    assert row["title"] == row["state"]["page_state"]["event"]["name"] == "Sunday play"
+    assert row["state"]["generator_submission"]["status"] == "processing"
+    assert row["pending_operation_key"] == "concurrent-approval"
+
+
+def test_title_edit_requires_audit_intent_before_changing_metadata(db, monkeypatch):
+    session, token = completed_session(db)
+    session = submit(db, session, token)
+    before = copy.deepcopy(db.db["live_sessions"])
+    execute = Query.execute
+    def failed_audit(query):
+        if query.name == "admin_activity_log":
+            raise RuntimeError("Audit unavailable")
+        return execute(query)
+    monkeypatch.setattr(Query, "execute", failed_audit)
+    with pytest.raises(RuntimeError, match="Required audit intent"):
+        service.update_generator_submission_title(db, **title_args(session))
+    assert db.db["live_sessions"] == before
+
+
+def test_title_edit_http_uses_reviewer_club_write_validation_and_version_guards(db, monkeypatch):
+    from services.api import admin_play_generator_routes as routes
+    session, token = completed_session(db)
+    session = submit(db, session, token)
+    role = "operator"
+    monkeypatch.setattr(routes, "_resolve_role_or_403", lambda **kw: ("admin@example.invalid", role))
+    monkeypatch.setattr(routes, "_require_write_gate", lambda club_id: None)
+    app = FastAPI()
+    routes.install_admin_play_generator_routes(app, get_supabase_client=lambda: db)
+    client = TestClient(app)
+    path = f"/admin/clubs/club/play-generators/sessions/{session['session_key']}/submission/title"
+    body = {"expected_version": session["version"], "title": "Corrected title"}
+    before = copy.deepcopy(db.db["live_sessions"])
+    assert client.patch(path, json=body).status_code == 403
+    role = "administrator"
+    for invalid in ({"title": "  \n "}, {"title": "X" * 161}, {"expected_version": 0}, {"rating_mode": "rated"}):
+        assert client.patch(path, json={**body, **invalid}).status_code == 422
+    assert client.patch(path.replace("/clubs/club/", "/clubs/other-club/"), json=body).status_code == 400
+    assert db.db["live_sessions"] == before
+    response = client.patch(path, json={**body, "title": " " * 100 + "X" * 160 + "  "})
+    assert response.status_code == 200, response.text
+    assert response.json()["title"] == "X" * 160
+    assert response.json()["version"] == session["version"] + 1
+    assert client.patch(path, json=body).status_code == 409
+    def closed_gate(club_id):
+        raise HTTPException(403, "Writes closed")
+    monkeypatch.setattr(routes, "_require_write_gate", closed_gate)
+    assert client.patch(path, json={**body, "expected_version": response.json()["version"]}).status_code == 403
+
+
+def test_title_edit_route_keeps_existing_staging_wave_boundaries():
+    from scripts.staging_write_waves import wave_allows_request
+    path = "/admin/clubs/club/play-generators/sessions/session/submission/title"
+    assert wave_allows_request("open", "PATCH", path)
+    assert wave_allows_request("jupr-live", "PATCH", path)
+    for wave in ("none", "communications", "public-live", "public-intake-auth"):
+        assert not wave_allows_request(wave, "PATCH", path)
+
+
 @pytest.mark.parametrize("rating_mode", ["rated", "unrated"])
 @pytest.mark.parametrize("play_format,kind", [("singles", "round_robin"), ("doubles", "round_robin"), ("doubles_singles", "round_robin"), ("doubles", "ladder")])
 def test_organizer_choice_controls_approved_matches_ratings_stats_and_recap(db, rating_mode, play_format, kind):
