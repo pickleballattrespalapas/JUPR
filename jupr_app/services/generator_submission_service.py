@@ -190,6 +190,43 @@ def list_generator_submissions(db, *, club_id: str, actor_role: str, status: str
     return {"ok": True, "submissions": submissions, "players": players}
 
 
+def update_generator_submission_title(
+    db, *, club_id: str, session_key: str, expected_version: int, title: str,
+    actor_email: str, actor_role: str,
+) -> dict:
+    """Correct pending results' label without reopening or rebuilding the games."""
+    require_reviewer(actor_role)
+    clean_title = " ".join(str(title or "").replace("<", "").replace(">", "").split())
+    if not clean_title or len(clean_title) > 160:
+        raise ValueError("Enter a title between 1 and 160 characters.")
+    row = _row(db, club_id, session_key)
+    if int(row.get("version") or 1) != int(expected_version):
+        raise PublicLiveConflictError("This submission changed. Refresh before editing its title.")
+    if row.get("pending_operation_key"):
+        raise PublicLiveConflictError("A previous change is pending. Retry it first.")
+    state = copy.deepcopy(row["state"])
+    submission = state.get("generator_submission") or {}
+    if (row.get("status") != "completed" or submission.get("status") != "pending"
+            or (state.get("official_publish") or {}).get("published_match_ids")):
+        raise ValueError("The title can only be edited while results are awaiting approval.")
+    event = _event(row)
+    before = {"title": row.get("title"), "event_name": event.get("name"),
+              "version": int(row.get("version") or 1)}
+    event["name"] = clean_title
+    state["page_state"]["event"] = event
+    state["page_state"]["event_name"] = clean_title
+    state["event_name"] = clean_title
+    audit = dict(club_id=club_id, actor_email=actor_email, actor_role=actor_role,
+        entity_type="play_generator_session", entity_id=session_key,
+        source="generator_submission_title", before=before,
+        after={"title": clean_title, "event_name": clean_title, "version": before["version"] + 1})
+    required_audit_event(db, **audit, action_type="update_generator_submission_title_intent", intent=True)
+    updated = _save(db, row, state, title=clean_title)
+    required_audit_event(db, **audit, action_type="update_generator_submission_title", intent=False)
+    return {"ok": True, "session": _session(updated), "title": clean_title,
+            "version": int(updated["version"])}
+
+
 def set_generator_starting_rating(
     db, *, club_id: str, session_key: str, participant_id: str, player_id: int,
     match_format: str, rating_jupr: float, expected_state_fingerprint: str,

@@ -47,6 +47,8 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
   const [queue, setQueue] = useState<Queue>({ submissions: [], players: [] });
   const [status, setStatus] = useState("pending");
   const [selected, setSelected] = useState<Submission | null>(null);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
   const [mapping, setMapping] = useState<Record<string, number>>({});
   const [ratingDrafts, setRatingDrafts] = useState<Record<string, string>>({});
   const [pendingCreations, setPendingCreations] = useState<Record<string, boolean>>({});
@@ -92,6 +94,7 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
     return () => { controller.abort(); };
   }, [accessToken, clubId, request, status]);
   const select = useCallback((item: Submission) => {
+    setEditingTitle(false); setTitleDraft(item.title);
     setRatingDrafts({}); setPendingCreations({}); setMessage("");
     setSelected(item); setReason(item.review?.request.reason || ""); setMatchDate(item.review?.request.match_date || item.match_date);
     const ids: Record<string, number> = {};
@@ -120,6 +123,28 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
     reviewPanel.current.focus({ preventScroll: true });
   }, [selected]);
 
+  async function saveTitle() {
+    if (!selected || selected.status !== "pending" || busy) return;
+    const title = titleDraft.trim().replace(/\s+/g, " ");
+    if (!title || title.length > 160 || title === selected.title) return;
+    const scope = clubId + ":" + accessToken;
+    const current = generation.current;
+    setBusy(true); setMessage("");
+    try {
+      const payload = await request(`sessions/${encodeURIComponent(selected.session_key)}/submission/title`, {
+        expected_version: selected.version, title
+      }, undefined, "PATCH");
+      if (queueScope.current !== scope || generation.current !== current) return;
+      const updated = { ...selected, title: payload.title, version: payload.version };
+      setSelected(updated);
+      setQueue(old => ({ ...old, submissions: old.submissions.map(item => item.session_key === updated.session_key ? updated : item) }));
+      setTitleDraft(payload.title); setEditingTitle(false); setMessage("Title saved.");
+    } catch (error) {
+      if (queueScope.current === scope && generation.current === current) setMessage(error instanceof Error ? error.message : "Could not save the title. Try again.");
+    } finally {
+      if (queueScope.current === scope && generation.current === current) setBusy(false);
+    }
+  }
   async function saveStartingRating(participantId: string, matchFormat: MatchFormat) {
     if (!selected) return;
     const scope = clubId + ":" + accessToken;
@@ -154,6 +179,7 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
   }
   async function decide(action: ReviewRequest["action"]) {
     if (!selected) throw new Error("Choose a submission first.");
+    if (editingTitle) throw new Error("Save or cancel the title edit before reviewing results.");
     setBusy(true); setMessage("");
     try {
       const body = selected.status === "processing" && selected.review ? selected.review.request : { expected_version: selected.version, action, player_ids: mapping, match_date: matchDate, reason };
@@ -167,6 +193,7 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
     } finally { setBusy(false); }
   }
   const editable = selected?.status === "pending";
+  const normalizedTitle = titleDraft.trim().replace(/\s+/g, " ");
   const allMapped = selected?.participants.every(p => queue.players.some(player => player.id === mapping[p.id]));
   const ratingChecks = selected?.rating_mode === "rated" ? selected.participants.flatMap(p => {
     const player = queue.players.find(player => player.id === mapping[p.id]);
@@ -195,6 +222,16 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
     </div>
     {selected ? <article id="generator-submission-review" ref={reviewPanel} tabIndex={-1} style={{ padding: "1rem", border: "1px solid #2563eb", borderRadius: 14, scrollMarginTop: "1rem" }}>
       <h2>{selected.title} · {selected.rating_mode === "rated" ? "Rated" : "Unrated"}</h2>
+      {editable ? editingTitle ? <form aria-label="Edit session title" onSubmit={event => { event.preventDefault(); void saveTitle(); }} style={{ display: "grid", gap: "0.6rem", maxWidth: 560 }}>
+        <label style={{ display: "grid", gap: 4 }}>Session title
+          <input aria-label="Session title" value={titleDraft} maxLength={160} required autoFocus disabled={busy} style={field} onChange={event => setTitleDraft(event.target.value)} />
+        </label>
+        {!normalizedTitle ? <small role="alert">Enter a title.</small> : null}
+        <div style={{ display: "flex", gap: "0.6rem" }}>
+          <button type="submit" style={field} disabled={busy || !normalizedTitle || normalizedTitle.length > 160 || normalizedTitle === selected.title}>Save title</button>
+          <button type="button" style={field} disabled={busy} onClick={() => { setTitleDraft(selected.title); setEditingTitle(false); }}>Cancel</button>
+        </div>
+      </form> : <button type="button" style={field} disabled={busy} onClick={() => { setTitleDraft(selected.title); setEditingTitle(true); setMessage(""); }}>Edit title</button> : null}
       <p>{selected.match_count} scored games · Submitted by {selected.organizer_name}</p>
       <label>Date played <input type="date" value={matchDate} disabled={!editable || busy} onChange={e => setMatchDate(e.target.value)} style={field} /></label>
       <h3>Match players{selected.rating_mode === "rated" ? " and review ratings" : " to club profiles"}</h3>
@@ -241,12 +278,13 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
         {!allMapped ? <p>Choose a club profile for every player before approving.</p> : null}
         {!ratingsReady ? <p role="status">Save the missing or edited doubles starting levels before approving.</p> : null}
         {!creationsReady ? <p role="status">Check unfinished player creation before approving.</p> : null}
+        {editingTitle ? <p role="status">Save or cancel the title edit before reviewing results.</p> : null}
         <label style={{ display: "grid", gap: 4 }}>Reason if rejecting (optional)<textarea value={reason} disabled={busy} maxLength={500} onChange={e => setReason(e.target.value)} style={field} /></label>
         <div style={{ display: "flex", gap: "0.7rem", flexWrap: "wrap", marginTop: "1rem" }}>
           {(["approve", "reject"] as const).map(action => <ConfirmAction key={action}
             triggerLabel={action === "reject" ? "Reject" : `Approve ${selected.rating_mode} results`} title={action === "reject" ? "Reject these results?" : `Approve ${selected.match_count} ${selected.rating_mode} games?`}
             description={action === "reject" ? "These games will stay out of club records." : selected.rating_mode === "rated" ? "These games will update player ratings and count toward stats and recaps." : "These games will count toward stats and recaps. Ratings stay unchanged."}
-            confirmLabel={action === "reject" ? "Reject results" : `Approve ${selected.rating_mode} results`} confirmationText="" disabled={busy || (action !== "reject" && (!allMapped || !matchDate || !ratingsReady || !creationsReady))} onConfirm={() => decide(action)} />)}
+            confirmLabel={action === "reject" ? "Reject results" : `Approve ${selected.rating_mode} results`} confirmationText="" disabled={busy || editingTitle || (action !== "reject" && (!allMapped || !matchDate || !ratingsReady || !creationsReady))} onConfirm={() => decide(action)} />)}
         </div>
       </> : null}
       {selected.status === "processing" && selected.review ? <button disabled={busy} style={field} onClick={() => void decide(selected.review!.request.action).catch(() => {})}>Resume {selected.review.request.action === "reject" ? "rejection" : `${selected.rating_mode} approval`}</button> : null}
