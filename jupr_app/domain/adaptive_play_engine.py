@@ -1355,8 +1355,12 @@ def save_generator_round(
     row = _get_round(next_event, round_number)
     if next_event.get("playoff") and int(round_number) != int(next_event.get("currentRoundNumber") or 1):
         raise ValueError("Only the current playoff round can be scored.")
-    if str(row.get("status")) not in {"active", "preview"}:
-        raise ValueError("Only an active round can be scored.")
+    if str(row.get("status")) not in {"active", "preview", "saved"}:
+        raise ValueError("Only an active or saved round can be scored.")
+    if str(row.get("status")) == "saved" and next_event.get("generatorKind") == "ladder" and int(round_number) != int(next_event.get("currentRoundNumber") or 1):
+        raise ValueError("Ladder scores cannot be changed after the next round has been generated.")
+    if next_event.get("status") == "completed" and str(row.get("status")) != "saved":
+        raise ValueError("Only saved scores can be corrected in a completed session.")
     by_id = {str(match.get("id")): match for match in _round_matches(row)}
     score_by_id = {str(score.get("match_id")): score for score in scores or []}
     for match_id, match in by_id.items():
