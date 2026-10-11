@@ -24,6 +24,9 @@ const common = {
   "next/navigation": { useSearchParams: () => new URLSearchParams(window.location.search) },
   "@/components/SearchablePlayerSelect": ({ children, onValueChange, ...props }) => React.createElement("select", { ...props, onChange: event => onValueChange(event.target.value) }, children)
 };
+common["./GeneratorPlayerCreate"] = load("app/admin/play-generators/submissions/GeneratorPlayerCreate.tsx", {
+  "@/lib/playerSearch": load("lib/playerSearch.ts")
+}).default;
 const Generator = load("app/admin/play-generators/submissions/GeneratorSubmissions.tsx", common).default;
 const Support = load("app/admin/support-requests/SupportRequestsPanel.tsx", common).default;
 const Verified = load("app/admin/player-updates/verified-requests/VerifiedRequestsPanel.tsx", common).default;
