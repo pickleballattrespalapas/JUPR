@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "@/components/PublicClubLink";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
@@ -9,7 +8,6 @@ import {
   blankTeam,
   createSession,
   duplicateRosterNames,
-  lastTeamMatchSessionKey,
   legacyTeamMatchDraftKey,
   teamMatchDraftKey,
   teamReady,
@@ -71,7 +69,6 @@ export default function TeamMatchGenerator({ clubId }: { clubId: string }) {
   const [teams, setTeams] = useState<Team[]>([blankTeam(0), blankTeam(1)]);
   const [message, setMessage] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
-  const [lastSessionId, setLastSessionId] = useState<string | null>(null);
 
   useEffect(() => {
     try {
@@ -82,8 +79,6 @@ export default function TeamMatchGenerator({ clubId }: { clubId: string }) {
       if (stored.teams && stored.teams.length >= 2) {
         setTeams(stored.teams.map(cleanTeam));
       }
-      const recentId = window.localStorage.getItem(lastTeamMatchSessionKey(clubId));
-      if (recentId) setLastSessionId(recentId);
     } catch {
       // A damaged local draft should never block a clean setup.
     }
@@ -139,7 +134,6 @@ export default function TeamMatchGenerator({ clubId }: { clubId: string }) {
     const session = createSession(title, cleanedTeams);
     writeSession(clubId, session);
     window.localStorage.setItem(storageKey, JSON.stringify({ title: session.title, teams: cleanedTeams } satisfies StoredDraft));
-    setLastSessionId(session.id);
     router.push(
       `/clubs/${encodeURIComponent(clubId)}/team-match-generator/sessions/${encodeURIComponent(session.id)}`
     );
@@ -247,14 +241,6 @@ export default function TeamMatchGenerator({ clubId }: { clubId: string }) {
             return actionSuccess("Draft cleared", "Your draft was cleared.");
           }}
         />
-        {lastSessionId ? (
-          <Link
-            href={`/clubs/${encodeURIComponent(clubId)}/team-match-generator/sessions/${encodeURIComponent(lastSessionId)}`}
-            style={{ fontWeight: 800 }}
-          >
-            Resume most recent session →
-          </Link>
-        ) : null}
       </div>
 
       {message ? (

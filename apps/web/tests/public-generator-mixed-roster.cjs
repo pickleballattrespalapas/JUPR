@@ -4,10 +4,12 @@ const React = require("react"), { act, create } = require("react-test-renderer")
 const root = path.resolve(__dirname, ".."), cache = new Map();
 const routes = [], router = { push(url) { routes.push(url); }, refresh() {} };
 const stubs = {
-  "@/components/PublicClubLink": ({ children }) => React.createElement("a", null, children),
+  "@/components/PublicClubLink": ({ children, ...props }) => React.createElement("a", props, children),
   "next/link": ({ children }) => React.createElement("a", null, children),
   "@/lib/useAdminSession": { useAdminSession: () => ({ accessToken: "test-admin" }) },
-  "next/navigation": { useRouter: () => router }
+  "next/navigation": { useRouter: () => router },
+  "@/components/ConfirmAction": { ConfirmAction: ({ triggerLabel }) => React.createElement("button", null, triggerLabel) },
+  "@/components/interaction": { actionSuccess: (title, message) => ({ status: "success", title, message }) }
 };
 function load(name, parent = root) {
   if (Object.hasOwn(stubs, name)) return stubs[name];
@@ -94,9 +96,12 @@ const reply = (body, status = 200) => ({ ok: status < 400, status, json: async (
     const Setup = load(file).default;
     for (const [kind, format, count, courts] of [["round_robin", "doubles", 6, 0], ["round_robin", "singles", 4, 0], ["round_robin", "doubles_singles", 6, 2], ["ladder", "doubles", 5, 1]]) {
       storage.clear();
-      const bodies = [];
+      const bodies = [], historyRequests = [];
       global.fetch = async (_url, options = {}) => {
-        if (!options.body) return reply({ sessions: [], players: [] });
+        if (!options.body) {
+          if (_url.includes("/sessions?")) historyRequests.push(_url);
+          return reply({ sessions: [{ session_key: "previous-session", title: "Previous club session", play_format: "doubles", status: "completed", current_round_number: 3 }], players: [] });
+        }
         const body = JSON.parse(options.body);
         bodies.push(body);
         return _url.endsWith("/preview")
@@ -104,6 +109,10 @@ const reply = (body, status = 200) => ({ ok: status < 400, status, json: async (
           : reply({ session: { session_key: "auto-courts", current_round_number: 1 }, edit_token: "test-organizer" });
       };
       await act(async () => { tree = create(React.createElement(Setup, { apiBase: "https://api.test", clubId: "club", generatorKind: kind, status: { enabled: true, writes_enabled: true } })); });
+      const isPublic = file.includes("/clubs/");
+      assert.equal(historyRequests.length, isPublic ? 0 : 1, "Only admin setup fetches previous sessions");
+      assert.equal(text(tree.toJSON()).includes("Previous club session"), !isPublic, "Previous sessions remain in admin setup only");
+      if (isPublic) assert.doesNotMatch(text(tree.toJSON()), /Recent sessions/);
       const labelSelect = label => tree.root.findAllByType("label").find(node => text(node).startsWith(label)).findByType("select");
       await act(async () => labelSelect("Play format").props.onChange({ target: { value: format } }));
       await act(async () => labelSelect("Number of players").props.onChange({ target: { value: String(count) } }));
@@ -116,4 +125,39 @@ const reply = (body, status = 200) => ({ ok: status < 400, status, json: async (
     }
   }
   console.log("PASS public/admin preview and start: automatic Round-Robin courts, explicit ladder and mixed-format courts.");
+
+  // A navigation failure after a confirmed start still has a direct link to that
+  // session, without depending on a public history list or creating a duplicate.
+  storage.clear();
+  let starts = 0;
+  global.fetch = async (_url, options = {}) => {
+    if (!options.body) return reply({ players: [] });
+    starts++;
+    return reply({ session: { session_key: "just-started", current_round_number: 1 }, edit_token: "test-organizer" });
+  };
+  storage.set("public-play-generator-create:club:round_robin", JSON.stringify({ idempotency_key: "pending-create-123" }));
+  router.push = () => { throw new Error("Navigation unavailable"); };
+  await act(async () => { tree = create(React.createElement(Workspace, { apiBase: "https://api.test", clubId: "club", generatorKind: "round_robin", status: { enabled: true, writes_enabled: true } })); });
+  await act(async () => button(tree, "Try starting again").props.onClick());
+  assert.equal(starts, 1);
+  assert.match(text(tree.toJSON()), /The session started, but it didn't open automatically/);
+  const sessionLink = tree.root.findAllByType("a").find(node => text(node).includes("Open the session you just started"));
+  assert.match(sessionLink.props.href, /just-started\/rounds\/1#edit=test-organizer$/);
+  assert.doesNotMatch(text(tree.toJSON()), /Recent sessions/);
+  assert.equal(button(tree, "Try starting again"), undefined);
+  await act(async () => tree.unmount());
+
+  // A remembered Team Match session must not appear on public setup, including
+  // after a fresh visit with an existing browser-local session.
+  const teamState = load("@/app/clubs/[clubSlug]/team-match-generator/teamMatchState");
+  const TeamSetup = load("@/app/clubs/[clubSlug]/team-match-generator/TeamMatchGenerator").default;
+  storage.clear();
+  storage.set(teamState.lastTeamMatchSessionKey("club"), "old-team-session");
+  global.window.localStorage = global.sessionStorage;
+  await act(async () => { tree = create(React.createElement(TeamSetup, { clubId: "club" })); });
+  assert.doesNotMatch(text(tree.toJSON()), /Resume most recent session|Recent sessions/);
+  assert.equal(tree.root.findAllByType("a").length, 0);
+  assert.equal(storage.get(teamState.lastTeamMatchSessionKey("club")), "old-team-session", "Hiding history never deletes previous sessions");
+  await act(async () => tree.unmount());
+  console.log("PASS public history hidden for all three generators, admin history preserved, and confirmed start navigation recovery.");
 })().catch(error => { console.error(error); process.exit(1); });
