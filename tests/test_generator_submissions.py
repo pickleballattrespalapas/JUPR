@@ -566,3 +566,12 @@ def test_starting_level_http_route_uses_admin_and_write_gates(db, monkeypatch):
         raise HTTPException(403, "Writes closed")
     monkeypatch.setattr(routes, "_require_write_gate", closed_gate)
     assert client.patch(path, json=body).status_code == 403
+
+
+def test_starting_level_route_keeps_existing_staging_wave_boundaries():
+    from scripts.staging_write_waves import wave_allows_request
+    path = "/admin/clubs/club/play-generators/sessions/session/starting-ratings/1"
+    assert wave_allows_request("open", "PATCH", path)
+    assert wave_allows_request("jupr-live", "PATCH", path)
+    for wave in ("none", "communications", "public-live", "public-intake-auth"):
+        assert not wave_allows_request(wave, "PATCH", path)
