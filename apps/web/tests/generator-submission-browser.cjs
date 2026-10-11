@@ -202,8 +202,36 @@ async function main() {
       await adminPage.getByRole('heading', {name:`${title} · ${capitalized}`, exact:true}).waitFor();
       const approveLabel = `Approve ${mode} results`;
       assert.equal(await adminPage.getByRole('button', {name:`Approve ${mode === 'rated' ? 'unrated' : 'rated'} results`, exact:true}).count(), 0);
+      if (mode === 'rated') await adminPage.getByRole('spinbutton', {name:'Player 1 doubles starting level', exact:true}).fill('4.25');
+      const correctedTitle = `${mode} RR corrected title`;
+      const beforeTitleEdit = await fixture();
+      await adminPage.getByRole('button', {name:'Edit title', exact:true}).click();
+      await adminPage.getByLabel('Session title', {exact:true}).fill('   ');
+      assert.equal(await adminPage.getByRole('button', {name:'Save title', exact:true}).isDisabled(), true, 'Blank titles cannot be saved');
+      await adminPage.getByLabel('Session title', {exact:true}).fill(correctedTitle);
+      assert.equal(await adminPage.getByRole('button', {name:approveLabel, exact:true}).isDisabled(), true, 'Finish the title edit before reviewing');
+      const renamed = await clickRequest(adminPage, adminPage.getByRole('button', {name:'Save title', exact:true}), '/submission/title', 'PATCH');
+      assert.deepEqual(renamed.request, {expected_version:Number(submitted.body.session.version), title:correctedTitle});
+      assert.equal(renamed.body.title, correctedTitle);
+      assert.equal(renamed.body.version, Number(submitted.body.session.version) + 1);
+      await adminPage.getByRole('heading', {name:`${correctedTitle} · ${capitalized}`, exact:true}).waitFor();
+      await adminPage.getByRole('button', {name:new RegExp(correctedTitle)}).waitFor();
+      assert.equal(await adminPage.getByLabel('Date played', {exact:true}).inputValue(), '2026-09-20', 'Title save preserves the review date');
+      const afterTitleEdit = await fixture();
+      assert.deepEqual(afterTitleEdit.matches, beforeTitleEdit.matches, 'Renaming cannot create or change official matches');
+      assert.deepEqual(afterTitleEdit.players, beforeTitleEdit.players, 'Renaming cannot change ratings or profiles');
+      const renamedSession = afterTitleEdit.sessions.find(item => item.session_key === session.session_key);
+      const priorSession = beforeTitleEdit.sessions.find(item => item.session_key === session.session_key);
+      assert.equal(renamedSession.title, correctedTitle);
+      assert.deepEqual(renamedSession.event, {...priorSession.event, name:correctedTitle}, 'Renaming preserves all scores, rounds, and roster');
+      assert.deepEqual(renamedSession.submission, priorSession.submission, 'Renaming preserves the pending submission');
+      await spectator.reload();
+      await spectator.getByRole('heading', {name:`${correctedTitle} standings`, exact:true}).waitFor();
+      await spectator.getByRole('status').filter({hasText:'Awaiting admin approval'}).waitFor();
+      await screenshot(adminPage, `${mode}-title-corrected.png`);
+      console.log(`PASS ${mode}: admin title edit -> versioned API save -> preserved scores/ratings -> queue and public standings updated`);
       if (mode === 'rated') {
-        await adminPage.getByRole('spinbutton', {name:'Player 1 doubles starting level', exact:true}).fill('4.25');
+        assert.equal(await adminPage.getByRole('spinbutton', {name:'Player 1 doubles starting level', exact:true}).inputValue(), '4.25', 'Title save preserves an unsaved starting level');
         assert.equal(await adminPage.getByRole('button', {name:approveLabel, exact:true}).isDisabled(), true);
         const savedLevel = await clickRequest(adminPage, adminPage.getByRole('button', {name:'Save doubles starting level', exact:true}), '/starting-ratings/1', 'PATCH');
         assert.equal(savedLevel.body.player.ratings.doubles.rating_jupr, 4.25);
@@ -246,6 +274,7 @@ async function main() {
       }
       await adminPage.getByRole('button', {name:approveLabel, exact:true}).click();
       const approved = await clickRequest(adminPage, adminPage.getByRole('dialog').getByRole('button', {name:approveLabel, exact:true}), '/review');
+      assert.equal(approved.request.expected_version, renamed.body.version, 'Approval uses the version returned by the title edit');
       assert.equal(approved.body.session.submission.approved_mode, mode);
       await adminPage.getByRole('heading', {name:'Review saved', exact:true}).waitFor();
       const after = await fixture();
@@ -253,6 +282,7 @@ async function main() {
       const expectedGames = session.event.rounds.reduce((sum, r) => sum+(r.matches || []).length, 0);
       assert.equal(records.length, expectedGames);
       assert(records.every(match => match.rating_scope === (mode === 'rated' ? 'overall_only' : 'unrated')));
+      assert(records.every(match => match.week_tag.startsWith(`${correctedTitle} Round `)), 'Approved games use the corrected title');
       if (mode === 'rated') {
         const firstGame = records.find(m => ['t1_p1','t1_p2','t2_p1','t2_p2'].some(k => m[k] === 1));
         const position = ['t1_p1','t1_p2','t2_p1','t2_p2'].find(k => firstGame[k] === 1);
