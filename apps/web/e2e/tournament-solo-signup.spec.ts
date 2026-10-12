@@ -10,6 +10,10 @@ for (const entry of ["solo", "team"] as const) {
     await page.route("**/clubs/fixture/tournament-registration**", async route => {
       const request = route.request();
       const path = new URL(request.url()).pathname;
+      if (path.endsWith("/attempts")) {
+        expect(request.method()).toBe("POST");
+        return route.fulfill({ json: { ok: true } });
+      }
       if (path.endsWith("/confirmation")) return route.fulfill({ status: 302, headers: { location: "/tournament-signup-test?confirmation=1" }, body: "" });
       if (path.endsWith("/profile-resolution") || path.endsWith("/partner-profile-resolution")) return route.fulfill({ json: {
         can_start_new: true, profile_match_kind: "name_exact",

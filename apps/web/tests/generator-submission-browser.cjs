@@ -153,12 +153,14 @@ async function main() {
         const saved = await clickRequest(page, page.getByRole('button', {name:'Save round scores', exact:true}), `/rounds/${round}/scores`, 'PATCH');
         assert.equal(saved.body.session.rating_mode, mode);
         assert.equal(saved.body.session.event.rounds[round-1].status, 'saved');
-        await page.getByRole('link', {name:'View standings and continue', exact:true}).click();
+        const last = round === rounds;
+        if (last) {
+        await page.getByRole('link', {name:'Standings', exact:true}).click();
         await page.waitForURL(/\/standings$/);
         await page.getByRole('heading', {name:`${title} standings`, exact:true}).waitFor();
         assert.equal(await page.getByRole('button', {name:'Submit for approval', exact:true}).count(), 0);
-        const last = round === rounds;
-        const advanced = await clickRequest(page, page.getByRole('button', {name:last ? 'Finish session' : `Continue to Round ${round+1}`, exact:true}), last ? '/complete' : '/advance');
+        }
+        const advanced = await clickRequest(page, page.getByRole('button', {name:last ? 'Finish session' : 'Next scheduled round', exact:true}), last ? '/complete' : '/advance');
         session = advanced.body.session;
         assert.equal(session.rating_mode, mode);
         if (!last) await page.waitForURL(new RegExp(`/rounds/${round+1}(?:#.*)?$`));

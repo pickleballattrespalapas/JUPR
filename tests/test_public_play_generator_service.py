@@ -224,7 +224,10 @@ def test_automatic_courts_expand_and_mix_late_arrivals_after_round_is_finished(i
     old_partners = {frozenset(m[side]) for m in matches(first) for side in ("sideA", "sideB")}
     new_partners = {frozenset(m[side]) for m in matches(second) for side in ("sideA", "sideB")}
     assert not old_partners.intersection(new_partners)
-    assert all(len(matches(r)) == (initial_count + arrivals) // 4 for r in reloaded["event"]["rounds"][1:])
+    assert all(1 <= len(matches(r)) <= (initial_count + arrivals) // 4 for r in reloaded["event"]["rounds"][1:])
+    assert reloaded["event"]["perfectRotation"] is True
+    from jupr_app.domain.perfect_rotation_completion import is_perfect_rotation
+    assert is_perfect_rotation(sorted(all_ids), [(m["sideA"],m["sideB"]) for r in reloaded["event"]["rounds"] for m in matches(r)])
 
 
 def test_public_round_robin_preview_create_score_skip_and_roster():

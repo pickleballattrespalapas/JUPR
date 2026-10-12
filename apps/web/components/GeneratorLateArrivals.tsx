@@ -20,12 +20,13 @@ type Props = {
   roundStatus: string;
   courtCount?: number;
   usedCourts: number[];
+  byeParticipantIds?: string[];
   busy: boolean;
   onStart: (participantIds: string[], court: number) => Promise<void>;
 };
 
 export default function GeneratorLateArrivals({ participants, roundNumber, totalRounds,
-  generatorKind, playFormat, roundStatus, courtCount = 0, usedCourts, busy, onStart }: Props) {
+  generatorKind, playFormat, roundStatus, courtCount = 0, usedCourts, byeParticipantIds = [], busy, onStart }: Props) {
   const [selection, setSelection] = useState<string[] | null>(null);
   const [chosenCourt, setChosenCourt] = useState<number | null>(null);
   const arrivals = participants.filter(player =>
@@ -35,13 +36,15 @@ export default function GeneratorLateArrivals({ participants, roundNumber, total
   );
   const hasNextRound = generatorKind === "round_robin" || roundNumber < totalRounds;
   const required = playFormat === "singles" ? 2 : 4;
-  const selected = (selection ?? arrivals.slice(0, required).map(player => player.id))
-    .filter(id => arrivals.some(player => player.id === id));
+  const byes = participants.filter(player => byeParticipantIds.includes(player.id) && !arrivals.some(arrival => arrival.id === player.id));
+  const available = [...arrivals, ...byes];
+  const selected = (selection ?? available.slice(0, required).map(player => player.id))
+    .filter(id => available.some(player => player.id === id));
   const courts = Array.from({ length: Math.min(20, Math.max(courtCount, ...usedCourts, 0) + 1) }, (_, i) => i + 1)
     .filter(court => !usedCourts.includes(court));
   const court = chosenCourt != null && courts.includes(chosenCourt) ? chosenCourt : courts[0];
   const canStart = generatorKind === "round_robin" && ["singles", "doubles"].includes(playFormat) &&
-    roundStatus === "active" && arrivals.length >= required && courts.length > 0;
+    roundStatus === "active" && available.length >= required && courts.length > 0;
   if (!arrivals.length) return null;
 
   return (
@@ -52,15 +55,15 @@ export default function GeneratorLateArrivals({ participants, roundNumber, total
       <p>{arrivals.map(player => player.name).join(", ")}</p>
       {canStart ? (
         <>
-          <p>Have a spare court? These arrivals can play together now, leaving every game already on court in place.
+          <p>Have a spare court? Late arrivals and players on a bye can play now. Choose the players below.
             {hasNextRound ? " They will mix in with everyone from the next round." : " This is the final round."}</p>
           <fieldset disabled={busy} style={{ border: 0, padding: 0, margin: "0 0 1rem" }}>
-            <legend>Choose {required} late arrivals</legend>
-            {arrivals.map(player => (
+            <legend>Choose {required} players, including at least one late arrival</legend>
+            {available.map(player => (
               <label key={player.id} style={{ display: "block", padding: "0.25rem 0" }}>
                 <input type="checkbox" checked={selected.includes(player.id)} onChange={event =>
                   setSelection(event.target.checked ? [...selected, player.id] : selected.filter(id => id !== player.id))
-                } /> {player.name}
+                } /> {player.name}{byeParticipantIds.includes(player.id) ? " (on a bye)" : ""}
               </label>
             ))}
           </fieldset>
@@ -71,7 +74,7 @@ export default function GeneratorLateArrivals({ participants, roundNumber, total
             </select>
           </label>
           <p>Make sure this court is available for the rest of the session.</p>
-          <button type="button" disabled={busy || selected.length !== required} onClick={async () => {
+          <button type="button" disabled={busy || selected.length !== required || !arrivals.some(player => selected.includes(player.id))} onClick={async () => {
             await onStart(selected, court);
             setSelection(null);
           }} style={{ border: 0, borderRadius: 24, padding: "0.65rem 1rem", background: "#0f172a", color: "white", fontWeight: 800 }}>
@@ -80,8 +83,8 @@ export default function GeneratorLateArrivals({ participants, roundNumber, total
         </>
       ) : (
         <p>{hasNextRound ? "Current games stay as they are." : "There are no more scheduled rounds."}
-          {generatorKind === "round_robin" && ["singles", "doubles"].includes(playFormat) && roundStatus === "active" && arrivals.length < required
-            ? ` Add ${required - arrivals.length} more late ${required - arrivals.length === 1 ? "arrival" : "arrivals"} to offer a separate game on a spare court.` : ""}</p>
+          {generatorKind === "round_robin" && ["singles", "doubles"].includes(playFormat) && roundStatus === "active" && available.length < required
+            ? ` Add ${required - available.length} more late ${required - available.length === 1 ? "arrival" : "arrivals"} to offer a separate game on a spare court.` : ""}</p>
       )}
     </section>
   );

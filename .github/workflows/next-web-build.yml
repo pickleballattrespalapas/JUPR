@@ -11,6 +11,35 @@ permissions:
   contents: read
 
 jobs:
+  rr-navigation-ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install local fixture dependencies
+        run: |
+          pip install -r requirements.txt -r services/api/requirements.txt pytest uvicorn
+          npm ci --prefix apps/web --no-audit --no-fund
+      - name: Install browser
+        working-directory: apps/web
+        run: npx playwright install --with-deps chromium
+      - name: Verify full round schedule and navigation
+        working-directory: apps/web
+        run: node tests/rr-schedule-navigation-browser.cjs
+      - name: Upload round navigation browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rr-navigation-ui-${{ github.sha }}
+          path: apps/web/test-results/rr-navigation/
+          retention-days: 7
   build:
     runs-on: ubuntu-latest
     defaults:

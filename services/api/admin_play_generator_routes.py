@@ -39,6 +39,7 @@ from jupr_app.services.admin_play_generator_service import (
     save_play_generator_round,
     skip_play_generator_round,
     reopen_play_generator_round,
+    select_play_generator_round,
     start_play_generator_playoff,
 )
 from jupr_app.services.production_feature_policy import production_feature_enabled
@@ -100,6 +101,10 @@ class GeneratorSkipRequest(GeneratorDurableRequest):
 
 class GeneratorReopenRequest(GeneratorDurableRequest):
     source: str = "next_play_generator_reopen"
+
+
+class GeneratorSelectRequest(GeneratorDurableRequest):
+    source: str = "next_play_generator_select"
 
 
 class GeneratorAdvanceRequest(GeneratorDurableRequest):
@@ -712,6 +717,69 @@ def install_admin_play_generator_routes(app, *, get_supabase_client) -> None:
                 actor_role=actor_role,
                 source=payload.source,
                 mutate=lambda: reopen_play_generator_round(
+                    supabase,
+                    club_id=str(club_id),
+                    session_key=str(session_key),
+                    round_number=int(round_number),
+                    expected_version=payload.expected_version,
+                    actor_email=actor_email,
+                    actor_role=actor_role,
+                    source=payload.source,
+                ),
+                current_version_resolver=lambda: str(
+                    get_play_generator_session(
+                        supabase,
+                        club_id=str(club_id),
+                        session_key=str(session_key),
+                    )["session"].get("version")
+                    or ""
+                ),
+            )
+        except Exception as exc:
+            _handle(exc)
+
+    @app.post(
+        "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/rounds/{round_number}/select"
+    )
+    def post_generator_round_select(
+        club_id: str,
+        session_key: str,
+        round_number: int,
+        payload: GeneratorSelectRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        _require_write_gate()
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_role_or_403(
+            supabase=supabase,
+            club_id=str(club_id),
+            authorization=authorization,
+            source=payload.source,
+        )
+        try:
+            current = get_play_generator_session(
+                supabase,
+                club_id=str(club_id),
+                session_key=str(session_key),
+            )["session"]
+            return run_durable_admin_operation(
+                supabase,
+                club_id=str(club_id),
+                surface="play_generator",
+                operation_type="select_round",
+                entity_id=str(session_key),
+                idempotency_key=payload.idempotency_key,
+                expected_version=payload.expected_version,
+                current_version=str(current.get("version") or ""),
+                request_payload={**_model_payload(payload), "round_number": int(round_number)},
+                recovery=operation_recovery_handoff(
+                    surface="play_generator",
+                    entity_id=str(session_key),
+                ),
+                actor_email=actor_email,
+                actor_role=actor_role,
+                source=payload.source,
+                mutate=lambda: select_play_generator_round(
                     supabase,
                     club_id=str(club_id),
                     session_key=str(session_key),
