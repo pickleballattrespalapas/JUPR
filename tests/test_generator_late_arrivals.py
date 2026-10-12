@@ -32,9 +32,10 @@ def add_arrivals(event, count=4):
 
 
 def score(event):
-    return save_generator_round(event, round_number=1, scores=[
+    number = event["currentRoundNumber"]
+    return save_generator_round(event, round_number=number, scores=[
         {"match_id": match["id"], "score_a": 11, "score_b": 7}
-        for match in event["rounds"][0]["matches"]
+        for match in event["rounds"][number - 1]["matches"]
     ])
 
 
@@ -107,6 +108,56 @@ def test_without_spare_court_arrivals_join_next_round_with_configured_capacity()
     assert len(event["rounds"][1]["byeParticipantIds"]) == 4
     playing = {pid for m in event["rounds"][1]["matches"] for pid in m["sideA"] + m["sideB"]}
     assert {f"p-new-{i}" for i in range(1, 5)} <= playing
+
+
+@pytest.mark.parametrize("mode", ["scored", "unscored"])
+@pytest.mark.parametrize("number", [1, 2])
+def test_five_plus_three_can_seat_the_bye_with_arrivals_and_count_both_games(mode, number):
+    event = session(count=5, courts=1, rounds=5, mode=mode)
+    if number == 2:
+        event = advance_generator_event(score(event) if mode == "scored" else mark_generator_round_played(event, round_number=1))
+    row = event["rounds"][number - 1]
+    bye = row["byeParticipantIds"][0]
+    row["matches"][0]["scoreA"] = 5 if mode == "scored" else None
+    original = deepcopy(row["matches"])
+    earlier = deepcopy(event["rounds"][:number - 1])
+    history = history_before_round(event, number)
+    event = add_arrivals(event, 3)
+    ids = [f"p-new-{i}" for i in range(1, 4)] + [bye]
+    event = mutate_generator_roster(event, action="seat_arrivals", participant_ids=ids, court_number=2)
+    row = event["rounds"][number - 1]
+    assert row["matches"][:1] == original
+    assert not row["byeParticipantIds"]
+    assert set(row["matches"][1]["sideA"] + row["matches"][1]["sideB"]) == set(ids)
+    assert len({pid for match in row["matches"] for pid in match["sideA"] + match["sideB"]}) == 8
+    assert next(p for p in event["participants"] if p["id"] == bye)["active_from_round"] == 1
+    event = score(event) if mode == "scored" else mark_generator_round_played(event, round_number=number)
+    next_history = history_before_round(event, number + 1)
+    assert next_history["byes"][bye] == history["byes"][bye]
+    assert next_history["games"][bye] == history["games"][bye] + 1
+    assert all(next_history["games"][pid] == 1 for pid in ids if pid != bye)
+    event = advance_generator_event(event)
+    assert event["rounds"][:number - 1] == earlier
+    assert len(event["rounds"][number]["matches"]) == 2
+    assert not event["rounds"][number]["byeParticipantIds"]
+    with pytest.raises(ValueError, match="waiting"):
+        mutate_generator_roster(event, action="seat_arrivals", participant_ids=ids, court_number=3)
+
+
+def test_arrival_game_removes_only_selected_byes_and_requires_a_new_arrival():
+    event = add_arrivals(session(count=7, courts=1), 1)
+    byes = event["rounds"][0]["byeParticipantIds"]
+    assert len(byes) == 3
+    event = mutate_generator_roster(event, action="seat_arrivals", participant_ids=["p-new-1", *byes], court_number=2)
+    assert not event["rounds"][0]["byeParticipantIds"]
+    event = add_arrivals(session(count=9, courts=1), 1)
+    byes = event["rounds"][0]["byeParticipantIds"]
+    snapshot = deepcopy(event)
+    with pytest.raises(ValueError, match="at least one"):
+        mutate_generator_roster(event, action="seat_arrivals", participant_ids=byes[:4], court_number=2)
+    assert event == snapshot
+    event = mutate_generator_roster(event, action="seat_arrivals", participant_ids=["p-new-1", *byes[:3]], court_number=2)
+    assert event["rounds"][0]["byeParticipantIds"] == byes[3:]
 
 
 @pytest.mark.parametrize("ids,court,error", [

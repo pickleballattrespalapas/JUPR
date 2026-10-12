@@ -3,7 +3,7 @@ const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 const assert = require("node:assert/strict");
-const { chromium } = require("@playwright/test");
+const { chromium, expect } = require("@playwright/test");
 const webRoot = path.resolve(__dirname, ".."), root = path.resolve(webRoot, "../..");
 const apiPort = process.env.GENERATOR_BROWSER_API_PORT || "8057", webPort = process.env.GENERATOR_BROWSER_WEB_PORT || "3038";
 const api = `http://127.0.0.1:${apiPort}`, web = `http://127.0.0.1:${webPort}`;
@@ -93,6 +93,63 @@ async function request(path, body) {
       await ctx.close();
       console.log(`PASS ${count}: full ${rounds}-round schedule, alternate start, scores, direct next, skip, and preserved pairings`);
     }
+    // Reproduce the recording: five players, then three arrivals during Round 2.
+    const created = await request("/clubs/test/play-generators/sessions", {
+      generator_kind: "round_robin", play_format: "doubles", title: "Five plus three arrivals",
+      participant_names: ["Player 1", "Player 2", "Player 3", "Player 4", "Player 5"],
+      total_rounds: 5, court_count: 1, rating_mode: "unrated", scoring_mode: "scored", idempotency_key: crypto.randomUUID()
+    });
+    const key = created.session.session_key;
+    const ctx = await browser.newContext({ viewport: {width:1280,height:900} });
+    await ctx.route("**/*", route => ["127.0.0.1","localhost"].includes(new URL(route.request().url()).hostname) ? route.continue() : route.abort());
+    const page = await ctx.newPage();
+    page.on("pageerror", error => errors.push(error.message));
+    await page.goto(`${web}/clubs/test/round-robin-generator/sessions/${key}/rounds/1#edit=${encodeURIComponent(created.edit_token)}`);
+    await page.getByLabel("r1-c1 side A score").fill("11");
+    await page.getByLabel("r1-c1 side B score").fill("7");
+    await page.getByRole("button",{name:"Save round scores",exact:true}).click();
+    await page.getByRole("button",{name:"Next scheduled round",exact:true}).click();
+    await page.waitForURL(/\/rounds\/2$/);
+    const before = (await request(`/clubs/test/play-generators/sessions/${key}`)).session;
+    const original = before.event.rounds[1].matches;
+    const bye = before.event.rounds[1].byeParticipantIds[0];
+    const byeName = before.event.participants.find(p => p.id === bye).name;
+    await page.getByLabel("r2-c1 side A score").fill("5");
+    for (let i=6;i<=8;i++) {
+      await page.getByLabel("New player name").fill(`Player ${i}`);
+      const adding = page.waitForResponse(r => r.url().endsWith("/roster") && r.request().postDataJSON()?.action === "add");
+      await page.getByRole("button",{name:"Add player for next round",exact:true}).click();
+      assert.equal((await adding).ok(),true);
+      await expect(page.getByRole("button",{name:"Add player for next round",exact:true})).toBeEnabled();
+      await expect(page.getByLabel("New player name")).toHaveValue("");
+      assert.equal(await page.getByLabel("r2-c1 side A score").inputValue(),"5");
+    }
+    const late = page.locator('section[aria-label="Late arrivals"]');
+    assert.equal(await late.getByRole("checkbox").count(),4);
+    assert.equal(await late.getByRole("checkbox",{name:`${byeName} (on a bye)`,exact:true}).isChecked(),true);
+    const seating = page.waitForResponse(r => r.url().endsWith("/roster") && r.request().postDataJSON()?.action === "seat_arrivals");
+    await late.getByRole("button",{name:"Start late-arrival game on Court 2",exact:true}).click();
+    assert.equal((await seating).ok(),true);
+    await page.getByLabel("r2-c2 side A score").waitFor();
+    assert.equal(await page.getByLabel("r2-c1 side A score").inputValue(),"5");
+    const seated = (await request(`/clubs/test/play-generators/sessions/${key}`)).session;
+    assert.deepEqual(seated.event.rounds[1].matches[0],original[0]);
+    assert.deepEqual(seated.event.rounds[1].byeParticipantIds,[]);
+    assert.deepEqual(new Set(seated.event.rounds[1].matches[1].sideA.concat(seated.event.rounds[1].matches[1].sideB)),new Set([bye,"p-new-1","p-new-2","p-new-3"]));
+    await page.screenshot({path:path.join(output,"late-arrival-bye-game.png"),fullPage:true});
+    for (const [id,value] of [["r2-c1 side A score","11"],["r2-c1 side B score","7"],["r2-c2 side A score","11"],["r2-c2 side B score","6"]]) {
+      await page.getByLabel(id).fill(value);
+    }
+    await page.getByRole("button",{name:"Save round scores",exact:true}).click();
+    await page.getByRole("button",{name:"Next scheduled round",exact:true}).click();
+    await page.waitForURL(/\/rounds\/3$/);
+    const next = (await request(`/clubs/test/play-generators/sessions/${key}`)).session;
+    assert.equal(next.event.rounds[1].status,"saved");
+    assert.equal(next.event.rounds[1].matches.length,2);
+    assert.deepEqual(next.event.rounds[2].byeParticipantIds,[]);
+    assert.equal(next.event.rounds[2].matches.length,2);
+    await ctx.close();
+    console.log("PASS 5 + 3: bye player joins three arrivals on Court 2 during Round 2, original game and draft preserved, both games scored, eight-player next round");
     assert.deepEqual(errors,[]);
     assert.equal((await request("/fixture-result")).matches.length,0);
   } finally {
