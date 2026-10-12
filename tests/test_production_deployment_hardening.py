@@ -383,7 +383,9 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         ROOT / "supabase/migrations",
     )
 
-    assert len(versions) == 134
+    assert len(versions) == 135
+    assert "20261012215450" in versions
+    assert "registration_attempt_history" in contract["required_ledger_names"]
     assert "20261109004101" in versions
     assert "player_activity_leaderboard_visibility" in contract["required_ledger_names"]
     assert "restore_daily_player_inactivity" in contract["required_ledger_names"]
@@ -433,11 +435,12 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         "20261109004100",
         "20261109004101",
     )
-    assert len(names) == 134
+    assert len(names) == 135
     assert all("XX" not in version for version in versions)
-    assert len(contract["required_ledger_names"]) == 121
+    assert len(contract["required_ledger_names"]) == 122
     assert "partner_email_invitations" in contract["required_ledger_names"]
-    assert len(contract["deployment_order"]) == 121
+    assert len(contract["deployment_order"]) == 122
+    assert contract["deployment_order"][-1] == "registration_attempt_history"
     assert set(contract["deployment_order"]) == set(
         contract["required_ledger_names"]
     )

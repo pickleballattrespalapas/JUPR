@@ -21,6 +21,7 @@ from jupr_app.domain.tournament_registration_repo import (
 )
 from jupr_app.services.admin_tournament_award_service import award_admin_tournament_draw_podium
 from jupr_app.services.admin_tournament_bulk_service import bulk_update_admin_tournament_registrations
+from jupr_app.services.tournament_registration_attempt_service import list_registration_attempts
 from jupr_app.services.admin_tournament_bulk_team_import_service import import_admin_tournament_bulk_teams
 from jupr_app.services.admin_tournament_delete_service import delete_admin_tournament_draft
 from jupr_app.services.admin_tournament_draw_service import (
@@ -2019,6 +2020,20 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
                 preflight=preflight,
                 mutate=mutate,
             )
+        except Exception as exc:
+            _handle(exc)
+
+    @app.get("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/registration-attempts")
+    def get_admin_registration_attempts(club_id: str, tournament_id: str, response: Response,
+                                       search: str = Query(default="", max_length=160),
+                                       authorization: str | None = auth_header()) -> dict[str, Any]:
+        response.headers["Cache-Control"] = "no-store, private"
+        if not is_admin_tournament_admin_enabled():
+            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        supabase = get_supabase_client()
+        _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source="registration_attempt_support")
+        try:
+            return list_registration_attempts(supabase, club_id=club_id, tournament_id=tournament_id, search=search)
         except Exception as exc:
             _handle(exc)
 

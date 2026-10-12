@@ -38,6 +38,7 @@ import { invitationReturnPath } from "@/lib/tournamentPartnerInvitations";
 import { InteractionDialog } from "@/components/interaction";
 import TournamentCommerceChooser from "../TournamentCommerceChooser";
 import { automaticRegistrationProfile } from "@/lib/tournamentRegistrationProfile";
+import { useRegistrationAttempt } from "@/lib/useRegistrationAttempt";
 
 type EditTournamentRegistrationFormProps = {
   clubSlug: string;
@@ -210,6 +211,14 @@ export default function EditTournamentRegistrationForm({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<{ confirmationToken: string; deliveryStatus: string } | null>(null);
+  const attemptId = useRegistrationAttempt({
+    clubSlug, tournamentId, active: true, flow: "edit", stage: "edit",
+    name: `${firstName} ${lastName}`.trim(), email: registration.email, error,
+    completed: Boolean(success),
+    selections: selectedIds.map(id => ({ event_option_id: id, partner_mode: partnerModes[id],
+      partner_name: String(selectionDrafts[id]?.partner_name || ""),
+      same_email_as_player: Boolean(selectionDrafts[id]?.partner_email && String(selectionDrafts[id].partner_email).trim().toLowerCase() === registration.email.trim().toLowerCase()) }))
+  });
   const [commerceSelections, setCommerceSelections] = useState<
     TournamentCommerceSelection[]
   >(() => commerceOrder?.quote?.request.item_selections || []);
@@ -515,6 +524,7 @@ export default function EditTournamentRegistrationForm({
         }
       }
       const response = await submitClubTournamentRegistrationEdit(clubSlug, {
+        attempt_id: attemptId,
         partner_invitation_token: partnerInvitation.token || null,
         edit_token: editToken,
         expected_updated_at: registration.updated_at,
