@@ -4,17 +4,28 @@ for (const entry of ["solo", "team"] as const) {
   test(`${entry} four-player tournament signup saves on ${entry === "solo" ? "mobile" : "desktop"}`, async ({ page }, testInfo) => {
     if (entry === "solo") await page.setViewportSize({ width: 390, height: 844 });
     const writes: Array<{ path: string; body: any }> = [];
+    const auditRequests: Array<{ path: string; body: any }> = [];
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
     await page.route("**/clubs/fixture/tournament-registration**", async route => {
       const request = route.request();
       const path = new URL(request.url()).pathname;
       if (path.endsWith("/confirmation")) return route.fulfill({ status: 302, headers: { location: "/tournament-signup-test?confirmation=1" }, body: "" });
-      if (path.endsWith("/profile-resolution")) return route.fulfill({ json: {
+      if (path.endsWith("/profile-resolution") || path.endsWith("/partner-profile-resolution")) return route.fulfill({ json: {
         can_start_new: true, profile_match_kind: "name_exact",
         profile_candidates: [{ id: "fixture-player", display_name: "Fixture Player", doubles_skill: 4.5 }],
       } });
       expect(request.method()).toBe("POST");
+      if (path.endsWith("/attempts")) {
+        const body = request.postDataJSON();
+        expect(body.attempt_id).toMatch(/^[0-9a-f-]{36}$/);
+        expect(body.flow).toBe("new");
+        expect(body).not.toHaveProperty("phone");
+        expect(body).not.toHaveProperty("notes");
+        expect(body).not.toHaveProperty("confirmation_token");
+        auditRequests.push({ path, body });
+        return route.fulfill({ status: 202, json: { accepted: true } });
+      }
       writes.push({ path, body: request.postDataJSON() });
       if (path.endsWith("/four-player-team")) return route.fulfill({ json: { ok: true, team_id: "team1" } });
       expect(path).toBe("/clubs/fixture/tournament-registration");
@@ -26,6 +37,9 @@ for (const entry of ["solo", "team"] as const) {
       await page.getByLabel(label, { exact: true }).fill(value);
     }
     await page.getByLabel("Gender", { exact: true }).selectOption("Men");
+    // A person can leave the form here without ever submitting a registration.
+    await expect.poll(() => auditRequests.some(row => row.body.email === "fixture@example.invalid")).toBe(true);
+    expect(writes).toHaveLength(0);
     await page.getByRole("button", { name: "Continue", exact: true }).click();
     await page.getByRole("button", { name: "Continue to events", exact: true }).click();
     await page.getByRole("checkbox", { name: "Team Tournament Mixed 5.0", exact: true }).check();
@@ -53,6 +67,7 @@ for (const entry of ["solo", "team"] as const) {
     await page.getByRole("button", { name: "Submit registration", exact: true }).click();
     await expect(page).toHaveURL(/tournament-signup-test\?confirmation=1/);
     expect(writes).toHaveLength(entry === "solo" ? 1 : 2);
+    expect(writes[0].body.attempt_id).toBe(auditRequests.find(row => row.body.email === "fixture@example.invalid")!.body.attempt_id);
     expect(writes[0].body.selections).toEqual([expect.objectContaining({ event_option_id: "team-event", partner_mode: "NONE" })]);
     expect(writes[0].body.selections[0].partner_email || "").toBe("");
     if (entry === "team") {
