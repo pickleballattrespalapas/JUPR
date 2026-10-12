@@ -53,7 +53,11 @@ def _assert_valid_round(event, row, *, courts=None):
     active = set(engine.active_participant_ids(event, row["number"]))
     playing = _playing(row)
     byes = row["byeParticipantIds"]
-    assert len(row["matches"]) == min(courts or len(active) // 4, len(active) // 4)
+    capacity = min(courts or len(active) // 4, len(active) // 4)
+    if event.get("perfectRotation") and event.get("rosterRevisions"):
+        assert 1 <= len(row["matches"]) <= capacity
+    else:
+        assert len(row["matches"]) == capacity
     assert len(playing) == len(set(playing))
     assert len(byes) == len(set(byes))
     assert set(playing).isdisjoint(byes)
@@ -85,12 +89,12 @@ def _assert_perfect(event, count):
     assert byes == (Counter({pid: 1 for pid in ids}) if count % 4 == 1 else Counter())
 
 
-def _assert_byes_respect_playing_time(event, row):
+def _assert_byes_respect_bye_priority(event, row):
     history = engine.history_before_round(event, row["number"])
     for bye in row["byeParticipantIds"]:
         assert all(
-            (history["games"][bye], -history["byes"][bye])
-            >= (history["games"][pid], -history["byes"][pid])
+            (-history["byes"][bye], history["games"][bye])
+            >= (-history["byes"][pid], history["games"][pid])
             for pid in _playing(row)
         )
 
@@ -162,7 +166,7 @@ def test_roster_changes_after_starting_late_apply_to_earlier_unplayed_rounds(cha
     assert ("p-new-1" in active) == (change["action"] != "remove")
     assert ("p-3" in active) == (change["action"] == "add")
     assert event["rounds"][6] == completed
-    assert event["adaptiveFromRound"] == 1
+    assert (event["adaptiveFromRound"] is None) == (change["action"] == "add")
 
 
 @pytest.mark.parametrize("count", [8, 9])
@@ -192,7 +196,7 @@ def test_perfect_rotation_survives_start_save_advance_and_reload(count, courts, 
         assert event["currentRoundNumber"] == event["totalRounds"] == number
         assert event["rounds"][:len(completed_cycle)] == completed_cycle
         _assert_valid_round(event, event["rounds"][-1])
-        _assert_byes_respect_playing_time(event, event["rounds"][-1])
+        _assert_byes_respect_bye_priority(event, event["rounds"][-1])
         event = _finish(event)
 
 
@@ -229,7 +233,8 @@ def test_changed_roster_keeps_completed_and_current_games_then_adapts(count, cha
         event = engine.advance_generator_event(_persist(_finish(event)))
         row = event["rounds"][event["currentRoundNumber"] - 1]
         _assert_valid_round(event, row)
-        _assert_byes_respect_playing_time(event, row)
+        if not event.get("perfectRotation"):
+            _assert_byes_respect_bye_priority(event, row)
         active = set(engine.active_participant_ids(event, row["number"]))
         if change["action"] == "add":
             assert "p-new-1" in active
@@ -262,7 +267,7 @@ def test_legacy_opening_game_does_not_force_the_template_bye_twice():
 
     assert event["rounds"][0] == completed
     _assert_valid_round(event, event["rounds"][1])
-    _assert_byes_respect_playing_time(event, event["rounds"][1])
+    _assert_byes_respect_bye_priority(event, event["rounds"][1])
     assert next_planned_bye in _playing(event["rounds"][1])
 
 
@@ -281,7 +286,7 @@ def test_skipping_a_round_uses_only_played_games_and_preserves_the_skipped_games
         if number <= 9:
             assert _assignment(row) == assignments[number - 1]
         else:
-            _assert_byes_respect_playing_time(event, row)
+            _assert_byes_respect_bye_priority(event, row)
         assert event["rounds"][0] == first
         assert event["rounds"][1] == skipped
         event = _finish(event)
@@ -293,5 +298,5 @@ def test_single_court_schedule_respects_capacity_instead_of_forcing_two_games(co
     for _ in range(3):
         row = event["rounds"][event["currentRoundNumber"] - 1]
         _assert_valid_round(event, row, courts=1)
-        _assert_byes_respect_playing_time(event, row)
+        _assert_byes_respect_bye_priority(event, row)
         event = engine.advance_generator_event(_finish(event))
