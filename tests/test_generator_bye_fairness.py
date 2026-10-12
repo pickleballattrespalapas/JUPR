@@ -113,6 +113,7 @@ def _save(event, round_number):
 
 def _repeat_previous_schedule(event, previous_number, future_number):
     """Model an already-persisted unfair preview from the older scheduler."""
+    event.pop("fixedScheduleRoundCount", None)
     old = event["rounds"][previous_number - 1]
     future = event["rounds"][future_number - 1]
     future["byeParticipantIds"] = list(old["byeParticipantIds"])

@@ -22,6 +22,7 @@ from jupr_app.domain.adaptive_play_engine import (
     schedule_export_rows,
     skip_generator_round,
     reopen_generator_round,
+    select_generator_round,
     start_generator_event,
 )
 from jupr_app.domain.generator_playoffs import generator_playoff_options, start_generator_playoff
@@ -899,6 +900,35 @@ def reopen_public_play_generator_round(
         request_payload={"round_number": int(round_number)},
         mutate=lambda event: (
             reopen_generator_round(event, round_number=int(round_number)),
+            {"status": "active", "completed_at": None},
+        ),
+    )
+
+
+def select_public_play_generator_round(
+    supabase: Any,
+    *,
+    club_id: str,
+    session_key: str,
+    round_number: int,
+    edit_token: str,
+    expected_version: int,
+    idempotency_key: str,
+    requester_hash: str,
+) -> dict[str, Any]:
+    return _run_mutation(
+        supabase,
+        club_id=club_id,
+        session_key=session_key,
+        edit_token=edit_token,
+        expected_version=expected_version,
+        idempotency_key=idempotency_key,
+        requester_hash=requester_hash,
+        action="select",
+        allow_completed=True,
+        request_payload={"round_number": int(round_number)},
+        mutate=lambda event: (
+            select_generator_round(event, round_number=int(round_number)),
             {"status": "active", "completed_at": None},
         ),
     )

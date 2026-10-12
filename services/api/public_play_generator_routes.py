@@ -21,6 +21,7 @@ from jupr_app.services.public_play_generator_service import (
     save_public_play_generator_round,
     skip_public_play_generator_round,
     reopen_public_play_generator_round,
+    select_public_play_generator_round,
     start_public_play_generator_playoff,
 )
 
@@ -338,6 +339,33 @@ def install_public_play_generator_routes(
         club, club_id, supabase = context(club_slug)
         try:
             result = reopen_public_play_generator_round(
+                supabase,
+                club_id=club_id,
+                session_key=session_key,
+                round_number=round_number,
+                edit_token=payload.edit_token,
+                expected_version=payload.expected_version,
+                idempotency_key=payload.idempotency_key,
+                requester_hash=requester_hash(request),
+            )
+        except Exception as exc:
+            raise_public_error(exc)
+            raise
+        return {"club": public_club_payload(club, club_slug), **result}
+
+    @app.post("/clubs/{club_slug}/play-generators/sessions/{session_key}/rounds/{round_number}/select")
+    def post_public_generator_round_select(
+        club_slug: str,
+        session_key: str,
+        round_number: int,
+        payload: PublicGeneratorMutationRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        require_public_writes()
+        require_service_role()
+        club, club_id, supabase = context(club_slug)
+        try:
+            result = select_public_play_generator_round(
                 supabase,
                 club_id=club_id,
                 session_key=session_key,

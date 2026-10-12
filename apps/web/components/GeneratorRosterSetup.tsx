@@ -497,6 +497,7 @@ export default function GeneratorRosterSetup({
           <small style={{ color: "#475569" }}>
             {explanation(generatorKind, playFormat, setup.courtCount, setup.totalRounds)}
             {generatorKind === "round_robin" ? " You can keep adding rounds during play." : ""}
+            {generatorKind === "round_robin" && playFormat === "doubles" ? " A perfect partner-and-opponent rotation is prioritized whenever the roster and court capacity allow it." : ""}
           </small>
         </div>
       </div>

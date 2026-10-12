@@ -1,6 +1,7 @@
 "use client";
 
 import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
+import GeneratorRoundSchedule from "@/components/GeneratorRoundSchedule";
 import GeneratorLateArrivals from "@/components/GeneratorLateArrivals";
 
 import Link from "@/components/PublicClubLink";
@@ -72,6 +73,8 @@ type GeneratorEvent = {
   courtCount?: number;
   participants: Participant[];
   rounds: RoundRow[];
+  perfectRotation?: boolean;
+  adaptiveFromRound?: number | null;
   rosterRevisions?: Array<Record<string, unknown>>;
 };
 
@@ -705,6 +708,25 @@ export default function GeneratorRoundRunner({
     if (destination !== null) router.refresh();
   }
 
+  async function openScheduledRound(number: number): Promise<void> {
+    if (!session || !event || busy || editingScores || (canEditRound && anyDraftScore)) return;
+    const target = event.rounds.find(row => row.number === number);
+    if (!target || (number === roundNumber && isCurrent)) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      if (canManage && !event.playoff && ["preview", "active", "skipped"].includes(target.status)) {
+        await runMutation(`/clubs/${encodeURIComponent(clubId)}/play-generators/sessions/${encodeURIComponent(sessionKey)}/rounds/${number}/select`, {});
+      }
+      router.push(roundPath(generatorKind, clubId, sessionKey, number));
+      router.refresh();
+    } catch (error) {
+      setMessage(requestFailureMessage(error, "We couldn’t open that round. Please try again."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function reopenRound(): Promise<void> {
     if (!canReopenRound || busy) return;
     setBusy(true);
@@ -898,6 +920,15 @@ export default function GeneratorRoundRunner({
       ) : null}
 
       {scoredSession ? <GeneratorSubmission ratingMode={session.rating_mode || "unrated"} submission={session.submission} canSubmit={session.status === "completed" && Boolean(editToken) && !editingScores} defaultDate={session.created_at} onSubmit={submitResults} /> : null}
+
+      {generatorKind === "round_robin" && !event.playoff ? (
+        <GeneratorRoundSchedule rounds={event.rounds} participants={event.participants}
+          selectedRound={roundNumber} currentRound={event.currentRoundNumber}
+          disabled={busy || editingScores || (canEditRound && anyDraftScore)}
+          unsaved={editingScores || (canEditRound && anyDraftScore)}
+          perfect={Boolean(event.perfectRotation)} adaptive={Boolean(event.adaptiveFromRound)}
+          onOpen={number => void openScheduledRound(number)} />
+      ) : null}
 
       <article style={cardStyle}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
@@ -1147,11 +1178,6 @@ export default function GeneratorRoundRunner({
         ) : null}
 
         {canManage && !editingScores && isCurrent && ["saved", "played", "skipped"].includes(round.status) && session.status === "active" ? (
-          generatorKind === "round_robin" && scoredSession ? (
-            <Link href={standingsPath(clubId, sessionKey)} style={{ ...primaryButton, display: "inline-flex", marginTop: "1rem", textDecoration: "none" }}>
-              View standings and continue
-            </Link>
-          ) : (
             <button
               type="button"
               onClick={() => void advanceRound()}
@@ -1162,9 +1188,8 @@ export default function GeneratorRoundRunner({
                 ? "Finish session"
                 : generatorKind === "ladder"
                   ? `Generate Round ${roundNumber + 1}`
-                  : `Continue to Round ${roundNumber + 1}`}
+                  : "Next scheduled round"}
             </button>
-          )
         ) : null}
         {canFinishSession && !editingScores ? (
           <div style={{ marginTop: "1rem" }}>
