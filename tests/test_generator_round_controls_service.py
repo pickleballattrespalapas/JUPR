@@ -14,14 +14,14 @@ from jupr_app.services.public_live_operation_service import PublicLiveConflictEr
 
 
 class GeneratorSession:
-    def __init__(self, audience, *, rounds=3, scoring_mode="scored"):
+    def __init__(self, audience, *, rounds=3, scoring_mode="scored", player_count=5):
         self.audience = audience
         self.db = FakeSupabase()
         self.sequence = 0
         self.actor = dict(actor_email="staff@example.test", actor_role="admin", source="test")
         setup = dict(
             club_id="club", generator_kind="round_robin", play_format="doubles",
-            title="Evening round robin", participant_names=[f"Player {i}" for i in range(1, 6)],
+            title="Evening round robin", participant_names=[f"Player {i}" for i in range(1, player_count + 1)],
             total_rounds=rounds, court_count=1, scoring_mode=scoring_mode,
             rating_mode="unrated", preview_fingerprint=None,
         )
@@ -49,6 +49,7 @@ class GeneratorSession:
         names = {
             "skip": "skip_{prefix}play_generator_round",
             "reopen": "reopen_{prefix}play_generator_round",
+            "select": "select_{prefix}play_generator_round",
             "save": "save_{prefix}play_generator_round",
             "played": "mark_{prefix}play_generator_round_played",
             "advance": "advance_{prefix}play_generator_session",
@@ -79,6 +80,27 @@ class GeneratorSession:
         event = self.stored["state"]["page_state"]["event"]
         event.update(status="completed", completedAt="2026-10-08T19:25:00Z")
         self.reload()
+
+
+@pytest.mark.parametrize("audience", ["admin", "public"])
+def test_selected_scheduled_round_is_persisted_and_keeps_all_games(audience):
+    game = GeneratorSession(audience, rounds=7, player_count=8)
+    original = deepcopy(game.session["event"]["rounds"])
+    game.call("select", round_number=7)
+    assert game.reload()["current_round_number"] == 7
+    assert game.session["event"]["rounds"][0]["status"] == "preview"
+    assert game.session["event"]["rounds"][6]["status"] == "active"
+    for number in [7, 1, 2]:
+        if number != 7:
+            game.call("select", round_number=number)
+        game.score(number)
+        game.reload()
+    game.call("select", round_number=3)
+    game.call("skip", round_number=3, reason="Play it later")
+    game.call("advance")
+    for before, after in zip(original, game.session["event"]["rounds"]):
+        assert [(m["sideA"], m["sideB"]) for m in before["matches"]] == [(m["sideA"], m["sideB"]) for m in after["matches"]]
+    assert game.db.db.get("matches", []) == []
 
 
 @pytest.mark.parametrize("audience", ["admin", "public"])
@@ -191,35 +213,37 @@ def test_completion_waits_for_reopened_games_even_after_current_round_is_finishe
 
 
 @pytest.mark.parametrize("audience", ["admin", "public"])
-def test_reopen_rejects_stale_versions_and_submitted_results_without_changing_session(audience):
+@pytest.mark.parametrize("action", ["reopen", "select"])
+def test_round_navigation_rejects_stale_versions_and_submitted_results_without_changing_session(audience, action):
     game = GeneratorSession(audience, rounds=2)
     game.call("skip", round_number=1, reason="Skipped")
     game.call("advance")
     before = deepcopy(game.stored)
     stale = game.session["version"] - 1 if audience == "public" else "stale-version"
     with pytest.raises((ValueError, PublicLiveConflictError), match="changed"):
-        game.call("reopen", round_number=1, expected_version=stale)
+        game.call(action, round_number=1, expected_version=stale)
     assert game.stored == before
 
     game.stored["state"]["generator_submission"] = {"status": "pending"}
     game.set_legacy_completed()
     before = deepcopy(game.stored)
     with pytest.raises(ValueError, match="[Ss]ubmitted|locked|review"):
-        game.call("reopen", round_number=1)
+        game.call(action, round_number=1)
     assert game.stored == before
 
 
-def test_public_reopen_requires_organizer_token_and_replays_without_duplicate_mutation():
+@pytest.mark.parametrize("action", ["reopen", "select"])
+def test_public_round_navigation_requires_organizer_token_and_replays_without_duplicate_mutation(action):
     game = GeneratorSession("public", rounds=2)
     game.call("skip", round_number=1, reason="Skipped")
     game.call("advance")
     before = deepcopy(game.stored)
     with pytest.raises(PermissionError):
-        game.call("reopen", round_number=1, edit_token="wrong-token")
+        game.call(action, round_number=1, edit_token="wrong-token")
     assert game.stored == before
     version = game.session["version"]
-    first = game.call("reopen", round_number=1, expected_version=version, idempotency_key="reopen-replay-00001")
-    replay = game.call("reopen", round_number=1, expected_version=version, idempotency_key="reopen-replay-00001")
+    first = game.call(action, round_number=1, expected_version=version, idempotency_key=f"{action}-replay-00001")
+    replay = game.call(action, round_number=1, expected_version=version, idempotency_key=f"{action}-replay-00001")
     assert replay["idempotent_replay"] is True
     assert replay["session"]["version"] == first["session"]["version"] == version + 1
 
@@ -259,20 +283,21 @@ def test_public_complete_retries_after_session_is_completed_without_writing_agai
     assert game.stored == committed
 
 
-@pytest.mark.parametrize("action", ["reopen", "advance"])
+@pytest.mark.parametrize("action", ["reopen", "select", "advance"])
 def test_resuming_an_old_completed_public_round_robin_refreshes_expiry_and_stays_accessible(action):
     game = GeneratorSession("public", rounds=1)
     game.call("skip", round_number=1, reason="Skipped")
     game.set_legacy_completed()
     game.stored["expires_at"] = "2026-01-01T00:00:00Z"
-    game.call(action, **({"round_number": 1} if action == "reopen" else {}))
+    game.call(action, **({"round_number": 1} if action != "advance" else {}))
     session = game.reload()
     assert session["status"] == session["event"]["status"] == "active"
     assert datetime.fromisoformat(session["expires_at"].replace("Z", "+00:00")) > datetime.now(timezone.utc)
-    assert session["current_round_number"] == (1 if action == "reopen" else 2)
+    assert session["current_round_number"] == (1 if action != "advance" else 2)
 
 
-def test_public_reopen_http_route_requires_token_and_persists_original_round():
+@pytest.mark.parametrize("action", ["reopen", "select"])
+def test_public_navigation_http_route_requires_token_and_persists_original_round(action):
     from services.api.public_play_generator_routes import install_public_play_generator_routes
 
     game = GeneratorSession("public", rounds=2)
@@ -292,7 +317,7 @@ def test_public_reopen_http_route_requires_token_and_persists_original_round():
         raise_public_error=raise_error, public_writes_enabled=lambda: True, service_role_configured=lambda: True,
     )
     client = TestClient(app)
-    path = f"/clubs/test/play-generators/sessions/{game.session['session_key']}/rounds/1/reopen"
+    path = f"/clubs/test/play-generators/sessions/{game.session['session_key']}/rounds/1/{action}"
     body = {"edit_token": game.edit_token, "expected_version": game.session["version"], "idempotency_key": "http-reopen-000001"}
     assert client.post(path, json={**body, "edit_token": "invalid", "idempotency_key": "http-reopen-invalid"}).status_code == 403
     response = client.post(path, json=body)
@@ -301,4 +326,4 @@ def test_public_reopen_http_route_requires_token_and_persists_original_round():
     assert client.post(path, json=body).json()["idempotent_replay"] is True
     reloaded = game.reload()
     assert matches(reloaded["event"]["rounds"][0]) == original
-    assert reloaded["current_round_number"] == 2
+    assert reloaded["current_round_number"] == (1 if action == "select" else 2)

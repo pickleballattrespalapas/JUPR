@@ -168,7 +168,7 @@ export default function AdminGeneratorStandings({ apiBase, clubId, sessionKey }:
   const nextLabel = session.event.rounds?.find(row => row.number === currentRound + 1)?.label;
   const continueLabel = session.event.playoff
     ? currentRound >= totalRounds ? "Finish session" : `Continue to ${nextLabel || `Round ${currentRound + 1}`}`
-    : session.status === "completed" ? `Keep playing · Round ${currentRound + 1}` : `Continue to Round ${currentRound + 1}`;
+    : session.status === "completed" ? `Keep playing · Round ${currentRound + 1}` : "Next scheduled round";
 
   if (scoringMode === "unscored") {
     return <article style={cardStyle}><h1>{session.title}</h1><p>This unscored Round-Robin does not use standings.</p><Link href={`/admin/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${currentRound}`}>Return to current round</Link></article>;

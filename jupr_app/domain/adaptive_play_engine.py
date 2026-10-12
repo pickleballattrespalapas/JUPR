@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from jupr_app.domain.schedule import get_match_schedule
+from jupr_app.domain.perfect_round_robin import perfect_doubles_schedule
 
 
 STANDINGS_SORTS = {"wins", "points", "differential"}
@@ -116,9 +116,10 @@ def _participant_active_in_round(participant: dict[str, Any], round_number: int)
     return int(round_number) not in inactive_rounds
 
 def active_participant_ids(event: dict[str, Any], round_number: int) -> list[str]:
+    override = (event.get("rosterByRound") or {}).get(str(round_number))
     rows = [
         row for row in event.get("participants") or []
-        if _participant_active_in_round(row, round_number)
+        if (str(row["id"]) in override if override is not None else _participant_active_in_round(row, round_number))
     ]
     rows.sort(key=lambda row: (int(row.get("roster_order") or 0), str(row.get("name") or "").lower(), str(row.get("id"))))
     return [str(row["id"]) for row in rows]
@@ -824,32 +825,31 @@ def _perfect_doubles_round(
     round_number: int,
     history: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], list[str], list[str]] | None:
-    """Continue a perfect opening rotation only while its history still fits.
+    """Generate a perfect starting rotation when roster and courts allow it.
 
-    Full eight- and nine-player templates pair everyone once and oppose them
-    twice over seven/nine rounds. Comparing the complete prefix also protects
-    existing sessions: never splice a template into unrelated games, skipped
-    rounds, or a changed roster. Those sessions retain adaptive scheduling.
+    Prefix verification protects legacy adaptive sessions from an unrelated
+    template. Started fixed schedules are preserved without regenerating.
     """
     initial_ids = active_participant_ids(event, 1)
     count = len(initial_ids)
-    if count not in {8, 9} or event.get("playoff"):
+    if event.get("playoff") or (event.get("adaptiveFromRound") and round_number >= int(event["adaptiveFromRound"])):
         return None
-    cycle_length = 7 if count == 8 else 9
+    template = perfect_doubles_schedule(initial_ids)
+    if template is None:
+        return None
+    cycle_length = len(template)
     if not 1 <= round_number <= cycle_length:
         return None
-    if int(event.get("courtCount") or 0) == 1:
+    if 0 < int(event.get("courtCount") or 0) < count // 4:
         return None
     if active_participant_ids(event, round_number) != initial_ids:
         return None
 
     # Explicitly request the full template; organized mode may truncate it.
-    template = get_match_schedule(f"{count}-Player", initial_ids, schedule_mode="full")
     expected = _blank_history(event)
     for number in range(1, round_number + 1):
         matches = []
-        for court, source in enumerate(template[(number - 1) * 2:number * 2], start=1):
-            team_a, team_b = list(source["t1"]), list(source["t2"])
+        for court, (team_a, team_b) in enumerate(template[number - 1], start=1):
             matches.append({
                 "id": f"r{number}-c{court}",
                 "round": number, "court": court, "playFormat": "doubles",
@@ -1292,6 +1292,11 @@ def create_generator_preview(
         "createdAt": _now_iso(),
     }
     if kind == "round_robin":
+        perfect = perfect_doubles_schedule(active_participant_ids(event, 1)) if fmt == "doubles" else None
+        available = perfect is not None and (not resolved_court_count or resolved_court_count >= len(participants) // 4)
+        event["fixedScheduleRoundCount"] = min(event["totalRounds"], len(perfect)) if available else event["totalRounds"]
+        event["perfectRotation"] = bool(available and event["totalRounds"] >= len(perfect))
+        event["adaptiveFromRound"] = None
         event["rounds"] = _generate_round_robin_schedule(event)
     else:
         ordered_ids = active_participant_ids(event, 1)
@@ -1666,6 +1671,54 @@ def _ladder_next_order(event: dict[str, Any], round_row: dict[str, Any], next_ro
     flattened.extend(pid for pid in active_next if pid not in set(flattened))
     return flattened
 
+def _fixed_schedule_count(event: dict[str, Any]) -> int:
+    if "fixedScheduleRoundCount" in event:
+        return int(event.get("fixedScheduleRoundCount") or 0)
+    # Older sessions may use the exact templates too. Only adopt a legacy
+    # schedule when all stored assignments match; never rewrite its history.
+    if event.get("rosterRevisions") or event.get("playFormat") != "doubles":
+        return 0
+    template = perfect_doubles_schedule(active_participant_ids(event, 1))
+    if not template or 0 < int(event.get("courtCount") or 0) < len(template[0]):
+        return 0
+    rows = event.get("rounds") or []
+    count = min(len(template), len(rows))
+    for row, games in zip(rows[:count], template[:count]):
+        actual = [(m.get("sideA"), m.get("sideB")) for m in _round_matches(row)]
+        if actual != games:
+            return 0
+    return count
+
+
+def select_generator_round(event: dict[str, Any], *, round_number: int) -> dict[str, Any]:
+    """Choose a scheduled game without treating an unplayed round as skipped."""
+    next_event = copy.deepcopy(event)
+    if next_event.get("generatorKind") != "round_robin" or next_event.get("playoff"):
+        raise ValueError("Choose scheduled rounds only in a Round-Robin before playoffs.")
+    if next_event.get("status") not in {"active", "completed"}:
+        raise ValueError("Start the session before choosing a round.")
+    selected = _get_round(next_event, round_number)
+    if selected.get("status") not in {"preview", "active", "skipped"}:
+        raise ValueError("This round already has results. View or edit its saved scores instead.")
+    for row in next_event.get("rounds") or []:
+        if row is selected:
+            continue
+        if row.get("status") == "active":
+            if _round_has_any_scores(row):
+                raise ValueError("Save or clear entered scores before choosing another round.")
+            row["status"] = "preview"
+    fixed_count = _fixed_schedule_count(next_event)
+    if fixed_count and round_number > fixed_count and not next_event.get("adaptiveFromRound"):
+        next_event["adaptiveFromRound"] = fixed_count + 1
+    if next_event.get("adaptiveFromRound") and round_number >= int(next_event["adaptiveFromRound"]) and selected.get("status") in {"preview", "skipped"}:
+        selected["status"] = "preview"
+        _regenerate_round_robin_from(next_event, round_number)
+        selected = _get_round(next_event, round_number)
+    selected.update(status="active", skippedAt=None, skipReason="")
+    next_event.update(currentRoundNumber=int(round_number), status="active", completedAt=None)
+    return next_event
+
+
 def advance_generator_event(event: dict[str, Any]) -> dict[str, Any]:
     next_event = copy.deepcopy(event)
     current = int(next_event.get("currentRoundNumber") or 1)
@@ -1679,6 +1732,12 @@ def advance_generator_event(event: dict[str, Any]) -> dict[str, Any]:
         next_event["completedAt"] = _now_iso()
         return next_event
     next_number = current + 1
+    fixed_count = _fixed_schedule_count(next_event)
+    fixed = kind == "round_robin" and not next_event.get("playoff") and not next_event.get("adaptiveFromRound") and 0 < current <= fixed_count
+    if fixed:
+        pending = sorted(int(r["number"]) for r in next_event["rounds"]
+                         if int(r["number"]) <= fixed_count and r.get("status") in {"preview", "active"})
+        next_number = next((n for n in pending if n > current), pending[0] if pending else fixed_count + 1)
     if next_event.get("playoff"):
         from jupr_app.domain.generator_playoffs import populate_playoff_final
         next_round = _get_round(next_event, next_number)
@@ -1693,10 +1752,10 @@ def advance_generator_event(event: dict[str, Any]) -> dict[str, Any]:
         next_event["totalRounds"] = max(total, next_number)
         next_event["status"] = "active"
         next_event["completedAt"] = None
-        # Rebuild only unstarted rounds from the games actually played.
-        # This drops skipped rounds from bye/game accounting and applies
-        # current fairness rules to schedules saved by older generators.
-        _regenerate_round_robin_from(next_event, next_number)
+        if not fixed or next_number > fixed_count:
+            if fixed:
+                next_event["adaptiveFromRound"] = next_number
+            _regenerate_round_robin_from(next_event, next_number)
         next_round = _get_round(next_event, next_number)
     if str(next_round.get("status")) == "preview":
         next_round["status"] = "active"
@@ -1773,12 +1832,16 @@ def _seat_generator_arrivals(
     }
     for pid in ids:
         participants[pid]["active_from_round"] = current
+    overrides = event.get("rosterByRound") or {}
+    if str(current) in overrides:
+        overrides[str(current)] = list(dict.fromkeys([*overrides[str(current)], *ids]))
     if int(event.get("courtCount") or 0) > 0:
         event["courtCount"] = max(int(event["courtCount"]), court)
     event.setdefault("rosterRevisions", []).append({
         "action": "seat_arrivals", "effectiveRound": current,
         "participantIds": ids, "court": court, "at": _now_iso(),
     })
+    event["adaptiveFromRound"] = min(int(event.get("adaptiveFromRound") or current + 1), current + 1)
     _regenerate_round_robin_from(event, current + 1)
 
 def _regenerate_round_robin_from(event: dict[str, Any], start_round: int) -> None:
@@ -1789,9 +1852,12 @@ def _regenerate_round_robin_from(event: dict[str, Any], start_round: int) -> Non
         if int(row.get("number") or 0) < int(start_round)
     ]
     history = _blank_history(event)
-    for row in preserved:
-        if str(row.get("status")) == "skipped":
+    # Games played out of numeric order still count when choosing new matchups.
+    accounted = set()
+    for row in event.get("rounds") or []:
+        if str(row.get("status")) not in {"saved", "played", "active"}:
             continue
+        accounted.add(int(row["number"]))
         for pid in row.get("byeParticipantIds") or []:
             history["byes"][str(pid)] = int(history["byes"].get(str(pid), 0)) + 1
         for match in _round_matches(row):
@@ -1809,10 +1875,10 @@ def _regenerate_round_robin_from(event: dict[str, Any], start_round: int) -> Non
             row = copy.deepcopy(previous)
         else:
             row = _generate_round_robin_round(event, number, history)
-        if str(event.get("status")) == "active" and number == int(event.get("currentRoundNumber") or 1):
+        if row.get("status") == "preview" and str(event.get("status")) == "active" and number == int(event.get("currentRoundNumber") or 1):
             row["status"] = "active"
         generated.append(row)
-        if str(row.get("status")) != "skipped":
+        if str(row.get("status")) != "skipped" and number not in accounted:
             _update_history_for_generated_round(history, row, str(event.get("playFormat") or "doubles"))
     event["rounds"] = [*preserved, *generated]
 
@@ -1839,6 +1905,8 @@ def mutate_generator_roster(
         return next_event
     effective = _effective_roster_round(next_event)
     participants = _participant_map(next_event)
+    original_rosters = {str(row["number"]): active_participant_ids(next_event, int(row["number"]))
+                        for row in next_event.get("rounds") or []}
 
     if clean_action == "reorder":
         order = [str(pid) for pid in roster_order or []]
@@ -1914,7 +1982,32 @@ def mutate_generator_roster(
 
     kind = str(next_event.get("generatorKind") or "round_robin")
     if kind == "round_robin":
-        _regenerate_round_robin_from(next_event, effective)
+        if next_event.get("status") == "active":
+            # Round numbers are navigable, so membership changes must also
+            # reach earlier unplayed rounds. Preserve the roster of games
+            # already started and use explicit memberships for the rest.
+            overrides = next_event.setdefault("rosterByRound", {})
+            for row in next_event.get("rounds") or []:
+                number = int(row["number"])
+                ids = list(original_rosters[str(number)])
+                unstarted = row.get("status") in {"preview", "skipped"} and not _round_has_any_scores(row)
+                if unstarted:
+                    if clean_action == "add":
+                        ids.append(new_id)
+                    elif clean_action == "remove":
+                        ids = [item for item in ids if item != pid]
+                    elif clean_action == "substitute" and (scope == "rest" or number == effective):
+                        ids = [item for item in ids if item != pid]
+                        ids.append(new_id)
+                overrides[str(number)] = ids
+            next_event["adaptiveFromRound"] = 1
+        else:
+            ids = active_participant_ids(next_event, 1)
+            perfect = perfect_doubles_schedule(ids) if next_event.get("playFormat") == "doubles" else None
+            available = perfect is not None and (not next_event.get("courtCount") or int(next_event["courtCount"]) >= len(ids) // 4)
+            next_event["fixedScheduleRoundCount"] = min(int(next_event["totalRounds"]), len(perfect)) if available else int(next_event["totalRounds"])
+            next_event["perfectRotation"] = bool(available and int(next_event["totalRounds"]) >= len(perfect))
+        _regenerate_round_robin_from(next_event, 1 if next_event.get("status") == "active" else effective)
     else:
         current = int(next_event.get("currentRoundNumber") or 1)
         if effective == current:

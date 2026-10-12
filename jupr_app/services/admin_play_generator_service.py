@@ -22,6 +22,7 @@ from jupr_app.domain.adaptive_play_engine import (
     schedule_export_rows,
     skip_generator_round,
     reopen_generator_round,
+    select_generator_round,
     start_generator_event,
 )
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
@@ -685,6 +686,44 @@ def reopen_play_generator_round(
         source=source,
     )
     return {"ok": True, "mode": "play_generator_round_reopen", "session": session}
+
+
+def select_play_generator_round(
+    supabase: Any,
+    *,
+    club_id: str,
+    session_key: str,
+    round_number: int,
+    expected_version: str,
+    actor_email: str,
+    actor_role: str,
+    source: str,
+) -> dict[str, Any]:
+    before = _live_row(supabase, club_id=str(club_id), session_key=str(session_key))
+    event = select_generator_round(
+        _event_from_state(_state(before)),
+        round_number=int(round_number),
+    )
+    updated = _persist_event(
+        supabase,
+        before=before,
+        event=event,
+        expected_version=expected_version,
+        status="active",
+    )
+    session = _session_payload(updated)
+    _audit(
+        supabase,
+        club_id=club_id,
+        actor_email=actor_email,
+        actor_role=actor_role,
+        action_type="select_play_generator_round",
+        entity_id=session_key,
+        before_json={"session": _session_payload(before)},
+        after_json={"session": session, "round_number": int(round_number)},
+        source=source,
+    )
+    return {"ok": True, "mode": "play_generator_round_select", "session": session}
 
 
 def advance_play_generator_session(

@@ -191,11 +191,11 @@ async function standingsCanContinueBeyondSchedule(Component, isPublic) {
   };
   let tree;
   await act(async () => { tree = create(React.createElement(Component, props)); });
-  assert.ok(button(tree, "Continue to Round 9"), "A saved round at the initial schedule limit still offers another round");
+  assert.ok(button(tree, "Next scheduled round"), "A saved round at the initial schedule limit still offers another round");
   assert.ok(button(tree, "Finish session"), "Finishing remains an explicit separate choice");
   const skippedLink = tree.root.findAllByType("a").find(node => node.props.href.endsWith("/rounds/7"));
   assert.ok(skippedLink.children.includes(" · Skipped"), "Skipped rounds remain visible and labeled in navigation");
-  await act(async () => button(tree, "Continue to Round 9").props.onClick());
+  await act(async () => button(tree, "Next scheduled round").props.onClick());
   assert.deepEqual(routerCalls, [isPublic
     ? "/clubs/club/round-robin-generator/sessions/session-1/rounds/9"
     : "/admin/round-robin-generator/sessions/session-1/rounds/9"]);
@@ -243,7 +243,7 @@ async function cannotFinishWithReopenedRound(Component) {
   global.fetch = async () => reply({ session: current });
   let tree;
   await act(async () => { tree = create(React.createElement(Component, props)); });
-  assert.ok(button(tree, "Continue to Round 9"));
+  assert.ok(button(tree, "Next scheduled round"));
   assert.equal(button(tree, "Finish session"), undefined, "Reopened rounds must be resolved before finishing the session");
   await act(async () => tree.unmount());
 }

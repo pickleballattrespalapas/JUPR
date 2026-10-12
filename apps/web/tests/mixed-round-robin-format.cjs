@@ -40,7 +40,8 @@ for (const workspace of [adminWorkspace, publicWorkspace]) {
 for (const runner of [adminRunner, publicRunner]) {
   assert.match(runner, /Doubles \+ Singles Mix/);
   assert.match(runner, /matchFormatLabel\(match, event\.playFormat\)/);
-  assert.match(runner, /View standings and continue/);
+  assert.match(runner, /Next scheduled round/);
+  assert.match(runner, /GeneratorRoundSchedule/);
   assert.match(runner, /<GeneratorSubmission/);
 }
 
