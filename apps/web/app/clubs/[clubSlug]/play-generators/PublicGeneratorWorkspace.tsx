@@ -90,12 +90,6 @@ type GeneratorSession = {
   updated_at?: string | null;
 };
 
-type SessionListResponse = {
-  ok: boolean;
-  sessions: GeneratorSession[];
-  count: number;
-};
-
 type StartResponse = {
   ok: boolean;
   edit_token?: string;
@@ -287,19 +281,6 @@ function downloadBlob(contents: BlobPart, type: string, filename: string): void 
   URL.revokeObjectURL(href);
 }
 
-function formatTimestamp(value?: string | null): string {
-  if (!value) return "—";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
-}
-
-function sessionStatusLabel(status: string): string {
-  if (status === "completed") return "Complete";
-  if (status === "active") return "In progress";
-  return "Ready";
-}
-
 export default function GeneratorWorkspace({
   generatorKind,
   apiBase,
@@ -321,12 +302,12 @@ export default function GeneratorWorkspace({
   const [participantText, setParticipantText] = useState("");
   const [linkedPlayerIds, setLinkedPlayerIds] = useState<Record<string, number>>({});
   const [preview, setPreview] = useState<PreviewEvent | null>(null);
-  const [sessions, setSessions] = useState<GeneratorSession[]>([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [draftHydrated, setDraftHydrated] = useState(false);
   const [pendingStart, setPendingStart] = useState(false);
   const [startSucceeded, setStartSucceeded] = useState(false);
+  const [startedSessionUrl, setStartedSessionUrl] = useState<string | null>(null);
   const draftKey = useMemo(
     () => `public-play-generator-draft:${clubId}:${generatorKind}`,
     [clubId, generatorKind]
@@ -380,20 +361,9 @@ export default function GeneratorWorkspace({
     return payload as T;
   }
 
-  async function loadSessions(): Promise<void> {
-    if (!status?.enabled) return;
-    try {
-      const payload = await requestJson<SessionListResponse>(
-        `/clubs/${encodeURIComponent(clubId)}/play-generators/sessions?generator_kind=${generatorKind}&limit=100`
-      );
-      setSessions(payload.sessions || []);
-    } catch {
-      setMessage("We couldn't load saved sessions. Please try again.");
-    }
-  }
-
   useEffect(() => {
     setStartSucceeded(false);
+    setStartedSessionUrl(null);
     setDraftHydrated(false);
     const stored = readPlayGeneratorDraft<PreviewEvent>(draftKey);
     if (stored) {
@@ -450,11 +420,6 @@ export default function GeneratorWorkspace({
     linkedPlayerIds,
     preview
   ]);
-
-  useEffect(() => {
-    void loadSessions();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [generatorKind, status?.enabled]);
 
   const invalidatePreview = useCallback((): void => {
     setPreview(null);
@@ -574,13 +539,15 @@ export default function GeneratorWorkspace({
       const path = `/clubs/${clubId}/${generatorSlug(generatorKind)}/sessions/${encodeURIComponent(
         session.session_key
       )}/rounds/${session.current_round_number || 1}`;
-      router.push(`${path}#edit=${encodeURIComponent(editToken)}`);
+      const sessionUrl = `${path}#edit=${encodeURIComponent(editToken)}`;
+      setStartedSessionUrl(sessionUrl);
+      router.push(sessionUrl);
       router.refresh();
     } catch (error) {
       if (sessionConfirmed) {
         setStartSucceeded(true);
         setPendingStart(!clearPendingStartPayload(startOperationStorageKey));
-        setMessage("The session started, but it didn't open automatically. Open it from Recent sessions.");
+        setMessage("The session started, but it didn't open automatically. Use the link below to open it.");
       } else if (isDefinitiveStartRejection(error)) {
         setPendingStart(!clearPendingStartPayload(startOperationStorageKey));
         setMessage(error.message);
@@ -864,6 +831,11 @@ export default function GeneratorWorkspace({
             {message}
           </p>
         ) : null}
+        {startedSessionUrl ? (
+          <p>
+            <Link href={startedSessionUrl} style={{ fontWeight: 800 }}>Open the session you just started →</Link>
+          </p>
+        ) : null}
       </article>
 
       {pendingStart && !startSucceeded ? (
@@ -975,50 +947,6 @@ export default function GeneratorWorkspace({
         </article>
       ) : null}
 
-      <article style={cardStyle}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
-          <div>
-            <h2 style={{ marginTop: 0 }}>Recent sessions</h2>
-            <p style={{ color: "#475569" }}>Resume an active round or review a completed session.</p>
-          </div>
-          <button type="button" onClick={() => void loadSessions()} disabled={busy} style={secondaryButton}>
-            Refresh
-          </button>
-        </div>
-        {sessions.length ? (
-          <div style={{ display: "grid", gap: "0.65rem" }}>
-            {sessions.map((session) => (
-              <article
-                key={session.session_key}
-                style={{ border: "1px solid #e2e8f0", borderRadius: "10px", padding: "0.75rem" }}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
-                  <div>
-                    <strong>{session.title}</strong>
-                    <p style={{ margin: "0.25rem 0 0", color: "#475569" }}>
-                      {playFormatLabel(session.play_format)} · Round {session.current_round_number || 1}{generatorKind === "ladder" ? ` of ${session.total_rounds || "?"}` : ""}
-                      {" · "}{sessionStatusLabel(session.status)}
-                    </p>
-                  </div>
-                  <Link
-                    href={`/clubs/${clubId}/${generatorSlug(generatorKind)}/sessions/${encodeURIComponent(
-                      session.session_key
-                    )}/rounds/${session.current_round_number || 1}`}
-                    style={{ fontWeight: 800 }}
-                  >
-                    Open session
-                  </Link>
-                </div>
-                <p style={{ marginBottom: 0, color: "#64748b", fontSize: "0.85rem" }}>
-                  Updated {formatTimestamp(session.updated_at)}
-                </p>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <p style={{ color: "#64748b" }}>No saved sessions yet.</p>
-        )}
-      </article>
     </div>
   );
 }
