@@ -10,13 +10,13 @@ import pytest
 from jupr_app.domain import adaptive_play_engine as engine
 
 
-def _preview(count, *, courts=2, mode="scored", rounds=None):
+def _preview(count, *, courts=0, mode="scored", rounds=None):
     return engine.create_generator_preview(
         generator_kind="round_robin",
         play_format="doubles",
         title="Complete partner rotation",
         participant_names=[f"Player {number}" for number in range(1, count + 1)],
-        total_rounds=rounds if rounds is not None else (7 if count == 8 else 9),
+        total_rounds=rounds if rounds is not None else (count - 1 if count % 4 == 0 else count),
         court_count=courts,
         scoring_mode=mode,
     )
@@ -49,11 +49,15 @@ def _assignment(row):
     }
 
 
-def _assert_valid_round(event, row, *, courts=2):
+def _assert_valid_round(event, row, *, courts=None):
     active = set(engine.active_participant_ids(event, row["number"]))
     playing = _playing(row)
     byes = row["byeParticipantIds"]
-    assert len(row["matches"]) == min(courts, len(active) // 4)
+    capacity = min(courts or len(active) // 4, len(active) // 4)
+    if event.get("perfectRotation") and event.get("rosterRevisions"):
+        assert 1 <= len(row["matches"]) <= capacity
+    else:
+        assert len(row["matches"]) == capacity
     assert len(playing) == len(set(playing))
     assert len(byes) == len(set(byes))
     assert set(playing).isdisjoint(byes)
@@ -65,12 +69,13 @@ def _assert_valid_round(event, row, *, courts=2):
 def _assert_perfect(event, count):
     ids = {row["id"] for row in event["participants"]}
     assert len(ids) == count
-    rounds = event["rounds"][:7 if count == 8 else 9]
-    assert len(rounds) == (7 if count == 8 else 9)
+    cycle = count - 1 if count % 4 == 0 else count
+    rounds = event["rounds"][:cycle]
+    assert len(rounds) == cycle
     partners, opponents, games, byes = Counter(), Counter(), Counter(), Counter()
     for row in rounds:
         _assert_valid_round(event, row)
-        assert len(row["byeParticipantIds"]) == count - 8
+        assert len(row["byeParticipantIds"]) == count % 4
         byes.update(row["byeParticipantIds"])
         for match in row["matches"]:
             a, b = match["sideA"], match["sideB"]
@@ -81,17 +86,87 @@ def _assert_perfect(event, count):
     assert partners == Counter({pair: 1 for pair in expected_pairs})
     assert opponents == Counter({pair: 2 for pair in expected_pairs})
     assert games == Counter({pid: count - 1 for pid in ids})
-    assert byes == (Counter({pid: 1 for pid in ids}) if count == 9 else Counter())
+    assert byes == (Counter({pid: 1 for pid in ids}) if count % 4 == 1 else Counter())
 
 
-def _assert_byes_respect_playing_time(event, row):
+def _assert_byes_respect_bye_priority(event, row):
     history = engine.history_before_round(event, row["number"])
     for bye in row["byeParticipantIds"]:
         assert all(
-            (history["games"][bye], -history["byes"][bye])
-            >= (history["games"][pid], -history["byes"][pid])
+            (-history["byes"][bye], history["games"][bye])
+            >= (-history["byes"][pid], history["games"][pid])
             for pid in _playing(row)
         )
+
+
+@pytest.mark.parametrize("count", [n for n in range(4, 41) if n % 4 in {0, 1}])
+def test_every_supported_perfect_roster_has_exact_partner_opponent_and_bye_coverage(count):
+    preview = _preview(count)
+    assert preview["perfectRotation"] is True
+    _assert_perfect(preview, count)
+
+
+@pytest.mark.parametrize("count", [4, 5, 8, 9, 12, 16])
+@pytest.mark.parametrize("mode", ["scored", "unscored"])
+def test_choose_rounds_out_of_order_and_skip_without_changing_the_rotation(count, mode):
+    event = engine.start_generator_event(_preview(count, mode=mode))
+    assignments = [_assignment(row) for row in event["rounds"]]
+    # Begin on the last round, then play the full original schedule in reverse.
+    order = list(range(event["totalRounds"], 0, -1))
+    for number in order:
+        event = engine.select_generator_round(_persist(event), round_number=number)
+        assert event["currentRoundNumber"] == number
+        assert sum(row["status"] == "active" for row in event["rounds"]) == 1
+        assert [_assignment(row) for row in event["rounds"]] == assignments
+        if number == order[0]:
+            event = engine.skip_generator_round(event, round_number=number)
+            event = engine.select_generator_round(_persist(event), round_number=number)
+        event = _finish(event)
+    _assert_perfect(event, count)
+    event = engine.advance_generator_event(_persist(event))
+    assert event["currentRoundNumber"] == len(assignments) + 1
+    assert event["adaptiveFromRound"] == len(assignments) + 1
+    assert [_assignment(row) for row in event["rounds"][:len(assignments)]] == assignments
+
+
+def test_next_round_wraps_to_remaining_scheduled_games_after_starting_on_round_seven():
+    event = engine.start_generator_event(_preview(8))
+    event = engine.select_generator_round(event, round_number=7)
+    event = engine.advance_generator_event(_finish(event))
+    assert event["currentRoundNumber"] == 1
+    assert len(event["rounds"]) == 7
+    assert event["adaptiveFromRound"] is None
+
+
+def test_choosing_an_extra_round_switches_to_adaptive_without_rewriting_the_normal_cycle():
+    event = engine.start_generator_event(_preview(8, rounds=9))
+    original = [_assignment(row) for row in event["rounds"][:7]]
+    event = engine.select_generator_round(_persist(event), round_number=8)
+    assert event["adaptiveFromRound"] == 8
+    assert [_assignment(row) for row in event["rounds"][:7]] == original
+    _assert_valid_round(event, event["rounds"][7])
+
+
+@pytest.mark.parametrize("change", [
+    {"action": "add", "name": "Late arrival"},
+    {"action": "remove", "participant_id": "p-3"},
+    {"action": "substitute", "participant_id": "p-3", "name": "Substitute", "substitute_scope": "rest"},
+])
+def test_roster_changes_after_starting_late_apply_to_earlier_unplayed_rounds(change):
+    event = engine.start_generator_event(_preview(8))
+    event = engine.select_generator_round(event, round_number=7)
+    event = _finish(event)
+    completed = deepcopy(event["rounds"][6])
+    event = engine.mutate_generator_roster(_persist(event), **change)
+    assert event["rounds"][6] == completed
+    assert set(engine.active_participant_ids(event, 7)) == {f"p-{i}" for i in range(1, 9)}
+    event = engine.select_generator_round(_persist(event), round_number=1)
+    _assert_valid_round(event, event["rounds"][0])
+    active = set(engine.active_participant_ids(event, 1))
+    assert ("p-new-1" in active) == (change["action"] != "remove")
+    assert ("p-3" in active) == (change["action"] == "add")
+    assert event["rounds"][6] == completed
+    assert (event["adaptiveFromRound"] is None) == (change["action"] == "add")
 
 
 @pytest.mark.parametrize("count", [8, 9])
@@ -121,7 +196,7 @@ def test_perfect_rotation_survives_start_save_advance_and_reload(count, courts, 
         assert event["currentRoundNumber"] == event["totalRounds"] == number
         assert event["rounds"][:len(completed_cycle)] == completed_cycle
         _assert_valid_round(event, event["rounds"][-1])
-        _assert_byes_respect_playing_time(event, event["rounds"][-1])
+        _assert_byes_respect_bye_priority(event, event["rounds"][-1])
         event = _finish(event)
 
 
@@ -158,7 +233,8 @@ def test_changed_roster_keeps_completed_and_current_games_then_adapts(count, cha
         event = engine.advance_generator_event(_persist(_finish(event)))
         row = event["rounds"][event["currentRoundNumber"] - 1]
         _assert_valid_round(event, row)
-        _assert_byes_respect_playing_time(event, row)
+        if not event.get("perfectRotation"):
+            _assert_byes_respect_bye_priority(event, row)
         active = set(engine.active_participant_ids(event, row["number"]))
         if change["action"] == "add":
             assert "p-new-1" in active
@@ -172,6 +248,7 @@ def test_changed_roster_keeps_completed_and_current_games_then_adapts(count, cha
 
 def test_legacy_opening_game_does_not_force_the_template_bye_twice():
     event = engine.start_generator_event(_preview(9))
+    event.pop("fixedScheduleRoundCount")
     first = event["rounds"][0]
     old_bye = first["byeParticipantIds"][0]
     next_planned_bye = event["rounds"][1]["byeParticipantIds"][0]
@@ -190,12 +267,13 @@ def test_legacy_opening_game_does_not_force_the_template_bye_twice():
 
     assert event["rounds"][0] == completed
     _assert_valid_round(event, event["rounds"][1])
-    _assert_byes_respect_playing_time(event, event["rounds"][1])
+    _assert_byes_respect_bye_priority(event, event["rounds"][1])
     assert next_planned_bye in _playing(event["rounds"][1])
 
 
 def test_skipping_a_round_uses_only_played_games_and_preserves_the_skipped_games():
     event = engine.start_generator_event(_preview(9))
+    assignments = [_assignment(row) for row in event["rounds"]]
     event = engine.advance_generator_event(_finish(event))
     first = deepcopy(event["rounds"][0])
     event = engine.skip_generator_round(event, round_number=2, reason="Skipped before play")
@@ -205,7 +283,10 @@ def test_skipping_a_round_uses_only_played_games_and_preserves_the_skipped_games
         event = engine.advance_generator_event(_persist(event))
         row = event["rounds"][number - 1]
         _assert_valid_round(event, row)
-        _assert_byes_respect_playing_time(event, row)
+        if number <= 9:
+            assert _assignment(row) == assignments[number - 1]
+        else:
+            _assert_byes_respect_bye_priority(event, row)
         assert event["rounds"][0] == first
         assert event["rounds"][1] == skipped
         event = _finish(event)
@@ -217,5 +298,5 @@ def test_single_court_schedule_respects_capacity_instead_of_forcing_two_games(co
     for _ in range(3):
         row = event["rounds"][event["currentRoundNumber"] - 1]
         _assert_valid_round(event, row, courts=1)
-        _assert_byes_respect_playing_time(event, row)
+        _assert_byes_respect_bye_priority(event, row)
         event = engine.advance_generator_event(_finish(event))

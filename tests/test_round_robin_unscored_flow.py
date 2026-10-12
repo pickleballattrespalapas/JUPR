@@ -200,12 +200,13 @@ def test_public_and_staff_component_navigation_contracts() -> None:
     assert "Round Played" in admin_runner
     assert "Mark round played" in public_runner
     for runner in (admin_runner, public_runner):
-        assert "View standings and continue" in runner
+        assert "Next scheduled round" in runner
+        assert "GeneratorRoundSchedule" in runner
         assert "Session complete" in runner
 
     assert "Boolean(editToken)" in public_runner
     assert "{scoredSession ? (" in admin_runner
-    assert "{scoredSession && !session.official_publish?.published_match_ids?.length" in admin_runner
+    assert "{scoredSession && !editingScores && !session.official_publish?.published_match_ids?.length" in admin_runner
     assert "<GeneratorSubmission" in admin_runner
 
 
@@ -218,7 +219,7 @@ def test_standings_pages_own_scored_progression_and_completion() -> None:
         / "apps/web/app/clubs/[clubSlug]/play-generators/PublicGeneratorStandings.tsx"
     ).read_text()
     for text in (admin, public):
-        assert "Continue to Round" in text
+        assert "Next scheduled round" in text
         assert 'action: "advance" | "complete"' in text
         assert '/sessions/${encodeURIComponent(sessionKey)}/${action}' in text
         assert 'updateSession("complete")' in text

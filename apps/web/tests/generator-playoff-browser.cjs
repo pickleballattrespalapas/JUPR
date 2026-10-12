@@ -50,7 +50,7 @@ async function scoreRound(page, number) {
   await a.first().waitFor();
   for (let i = 0; i < await a.count(); i++) { await a.nth(i).fill("11"); await b.nth(i).fill(String(4 + i)); }
   const saved = await clickRequest(page, "Save round scores", `/rounds/${number}/scores`, "PATCH");
-  await page.getByRole("link", { name: "View standings and continue", exact: true }).click();
+  await page.getByRole("link", { name: "Standings", exact: true }).click();
   await page.waitForURL(/\/standings$/);
   return saved.session;
 }
@@ -87,7 +87,7 @@ async function scoreRound(page, number) {
       await page.waitForURL(/\/rounds\/1(?:#.*)?$/);
       for (const number of [1, 2]) {
         await scoreRound(page, number);
-        if (number === 1) { await clickRequest(page, "Continue to Round 2", "/advance"); await page.waitForURL(/\/rounds\/2$/); }
+        if (number === 1) { await clickRequest(page, "Next scheduled round", "/advance"); await page.waitForURL(/\/rounds\/2$/); }
       }
       const standingsUrl = page.url();
       const viewCtx = await context();

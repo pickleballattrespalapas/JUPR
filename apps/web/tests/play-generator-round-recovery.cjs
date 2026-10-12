@@ -128,8 +128,50 @@ async function checkRunner(file, isPublic) {
     await unmount();
   }
 }
+async function checkScheduleNavigation(file, isPublic) {
+  const Runner = load(file).default;
+  let session = initialSession();
+  session.version = 1;
+  session.current_round_number = session.event.currentRoundNumber = 1;
+  session.total_rounds = session.event.totalRounds = 3;
+  session.event.perfectRotation = true;
+  session.event.rounds = [1,2,3].map(number => ({ ...clone(session.event.rounds[0]), number, status: number === 1 ? "active" : "preview" }));
+  const original = clone(session.event.rounds.map(row => row.matches));
+  const calls = [];
+  global.sessionStorage = { getItem: () => "organizer", setItem() {} };
+  global.window = { location: { hash: "", pathname: "/test", search: "" }, history: { replaceState() {} } };
+  global.fetch = async (url, options = {}) => {
+    if (options.body) {
+      calls.push(url);
+      const body = JSON.parse(options.body);
+      assert.equal(Number(body.expected_version), session.version);
+      if (isPublic) assert.equal(body.edit_token, "organizer");
+      assert.ok(url.endsWith("/rounds/3/select"));
+      session.event.rounds[0].status = "preview";
+      session.event.rounds[2].status = "active";
+      session.current_round_number = session.event.currentRoundNumber = 3;
+      session.version++;
+    }
+    return { ok: true, status: 200, json: async () => ({ session: clone(session) }) };
+  };
+  let tree;
+  await act(async () => { tree = create(h(Runner, { ...props, roundNumber: 1 })); });
+  for (const n of [1,2,3]) assert.equal(tree.root.findByProps({ "aria-label": `Open round ${n}` }).props.disabled, false);
+  assert.match(text(tree.toJSON()), /Perfect rotation/);
+  assert.doesNotMatch(text(tree.toJSON()), /View standings and continue/);
+  await act(async () => tree.root.findByProps({ "aria-label": "r7-c1 side A score" }).props.onChange({ target: { value: "11" } }));
+  assert.equal(tree.root.findByProps({ "aria-label": "Open round 3" }).props.disabled, true, "Unsaved scores block navigation");
+  await act(async () => tree.root.findByProps({ "aria-label": "r7-c1 side A score" }).props.onChange({ target: { value: "" } }));
+  await act(async () => tree.root.findByProps({ "aria-label": "Open round 3" }).props.onClick());
+  assert.equal(calls.length, 1);
+  assert.ok(navigation.at(-1).endsWith("/rounds/3"));
+  assert.deepEqual(session.event.rounds.map(row => row.matches), original);
+  await act(async () => tree.unmount());
+}
 (async () => {
   await checkRunner("@/app/admin/play-generators/GeneratorRoundRunner", false);
   await checkRunner("@/app/clubs/[clubSlug]/play-generators/PublicGeneratorRoundRunner", true);
+  await checkScheduleNavigation("@/app/admin/play-generators/GeneratorRoundRunner", false);
+  await checkScheduleNavigation("@/app/clubs/[clubSlug]/play-generators/PublicGeneratorRoundRunner", true);
   console.log("PASS admin/public RR skipped round recovery, scoring older rounds, resume, finish draft protection, and locks.");
 })().catch(error => { console.error(error); process.exit(1); });
