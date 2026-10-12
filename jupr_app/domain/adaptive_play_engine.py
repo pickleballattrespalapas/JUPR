@@ -1790,7 +1790,7 @@ def _seat_generator_arrivals(
     required = 2 if play_format == "singles" else 4
     ids = [str(pid) for pid in participant_ids]
     if len(ids) != required or len(set(ids)) != required:
-        raise ValueError(f"Choose exactly {required} different late arrivals.")
+        raise ValueError(f"Choose exactly {required} different available players.")
     participants = _participant_map(event)
     existing = _round_matches(row)
     on_court = {
@@ -1799,16 +1799,20 @@ def _seat_generator_arrivals(
         for pid in (match.get("sideA") or match.get("teamA") or [])
         + (match.get("sideB") or match.get("teamB") or [])
     }
+    byes = set(row.get("byeParticipantIds") or [])
+    active = set(active_participant_ids(event, current))
+    arrivals = set()
     for pid in ids:
         player = participants.get(pid)
-        if (
-            not player
-            or int(player.get("active_from_round") or 1) != current + 1
-            or player.get("substitutes_for")
-            or not _participant_active_in_round(player, current + 1)
-            or pid in on_court
-        ):
-            raise ValueError("Choose only late arrivals waiting for the next round.")
+        waiting = bool(player and int(player.get("active_from_round") or 1) == current + 1
+                       and not player.get("substitutes_for")
+                       and _participant_active_in_round(player, current + 1))
+        if not player or pid in on_court or not (waiting or (pid in byes and pid in active)):
+            raise ValueError("Choose only waiting late arrivals or players on a bye in this round.")
+        if waiting:
+            arrivals.add(pid)
+    if not arrivals:
+        raise ValueError("Choose at least one waiting late arrival for this game.")
     court = int(court_number or 0)
     if court < 1 or court > 20:
         raise ValueError("Choose an available court between 1 and 20.")
@@ -1823,14 +1827,15 @@ def _seat_generator_arrivals(
         round_number=current,
         court_offset=court - 1,
     )
-    # Append only: IDs, teams, court assignments, byes and scores of every
-    # existing game remain untouched.
+    # Append only: IDs, teams, court assignments and scores of every existing
+    # game remain untouched. A selected bye player is now playing instead.
     row.setdefault("matches", []).extend(matches)
+    row["byeParticipantIds"] = [pid for pid in row.get("byeParticipantIds") or [] if pid not in ids]
     row["formatCounts"] = {
         fmt: sum(generator_match_play_format(match, play_format) == fmt for match in row["matches"])
         for fmt in ("singles", "doubles")
     }
-    for pid in ids:
+    for pid in arrivals:
         participants[pid]["active_from_round"] = current
     overrides = event.get("rosterByRound") or {}
     if str(current) in overrides:

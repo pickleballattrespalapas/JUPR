@@ -1218,7 +1218,7 @@ export default function GeneratorRoundRunner({
               ? "Changes apply from the next round. Current games, byes and scores stay in place."
               : "This is the final round. Current games, byes and scores stay in place."}
             {generatorKind === "round_robin" && ["singles", "doubles"].includes(event.playFormat)
-              ? " Add late arrivals here; if enough arrive for a game, you can put them together on a spare court below."
+              ? " Add late arrivals here; they can join players on a bye for a game on a spare court below."
               : " Added players join from the next round."}
           </p>
           <div
@@ -1421,6 +1421,7 @@ export default function GeneratorRoundRunner({
             roundStatus={round.status}
             courtCount={event.courtCount}
             usedCourts={matches.map(match => Number(match.court || 0))}
+            byeParticipantIds={round.byeParticipantIds}
             busy={busy}
             onStart={startArrivalGame}
           />
