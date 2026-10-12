@@ -28,6 +28,23 @@ async function ready(url) {
   throw new Error(`Fixture server unavailable: ${url}`);
 }
 const shape = rounds => rounds.map(r => ({ games: r.matches.map(m => [m.id, m.court, m.sideA, m.sideB]), byes: r.byeParticipantIds }));
+function assertPerfect(event) {
+  const partners = new Map(), opponents = new Map();
+  const add = (counts, a, b) => { const key = [a,b].sort().join("|"); counts.set(key,(counts.get(key)||0)+1); };
+  for (const row of event.rounds) {
+    const playing = row.matches.flatMap(m => [...m.sideA,...m.sideB]);
+    assert.equal(new Set(playing).size,playing.length);
+    for (const game of row.matches) {
+      add(partners,...game.sideA); add(partners,...game.sideB);
+      for (const a of game.sideA) for (const b of game.sideB) add(opponents,a,b);
+    }
+  }
+  for (let i=0;i<event.participants.length;i++) for (let j=i+1;j<event.participants.length;j++) {
+    const key = [event.participants[i].id,event.participants[j].id].sort().join("|");
+    assert.equal(partners.get(key),1,`Partner count ${key}`);
+    assert.equal(opponents.get(key),2,`Opponent count ${key}`);
+  }
+}
 async function request(path, body) {
   const r = await fetch(api + path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
   const data = await r.json();
@@ -150,6 +167,57 @@ async function request(path, body) {
     assert.equal(next.event.rounds[2].matches.length,2);
     await ctx.close();
     console.log("PASS 5 + 3: bye player joins three arrivals on Court 2 during Round 2, original game and draft preserved, both games scored, eight-player next round");
+    // Six starters + two arrivals: both opening games must anchor a perfect 8-player RR.
+    const six = await request("/clubs/test/play-generators/sessions", {
+      generator_kind:"round_robin",play_format:"doubles",title:"Six plus two perfect rotation",
+      participant_names:Array.from({length:6},(_,i)=>`Player ${i+1}`),
+      total_rounds:8,court_count:1,rating_mode:"unrated",scoring_mode:"scored",idempotency_key:crypto.randomUUID()
+    });
+    const sixKey = six.session.session_key, firstGame = six.session.event.rounds[0].matches[0];
+    const eightCtx = await browser.newContext({viewport:{width:1280,height:900}});
+    await eightCtx.route("**/*",route=>["127.0.0.1","localhost"].includes(new URL(route.request().url()).hostname)?route.continue():route.abort());
+    const eightPage = await eightCtx.newPage();
+    eightPage.on("pageerror",error=>errors.push(error.message));
+    await eightPage.goto(`${web}/clubs/test/round-robin-generator/sessions/${sixKey}/rounds/1#edit=${encodeURIComponent(six.edit_token)}`);
+    await eightPage.getByLabel("r1-c1 side A score").fill("5");
+    for (let i=7;i<=8;i++) {
+      await eightPage.getByLabel("New player name").fill(`Player ${i}`);
+      const adding = eightPage.waitForResponse(r=>r.url().endsWith("/roster")&&r.request().postDataJSON()?.action==="add");
+      await eightPage.getByRole("button",{name:"Add player for next round",exact:true}).click();
+      assert.equal((await adding).ok(),true);
+      await expect(eightPage.getByLabel("New player name")).toBeEnabled();
+      await expect(eightPage.getByLabel("New player name")).toHaveValue("");
+    }
+    const openingArrivals = eightPage.locator('section[aria-label="Late arrivals"]');
+    assert.equal(await openingArrivals.getByRole("checkbox").count(),4);
+    const openingSeating = eightPage.waitForResponse(r=>r.url().endsWith("/roster")&&r.request().postDataJSON()?.action==="seat_arrivals");
+    await openingArrivals.getByRole("button",{name:"Start late-arrival game on Court 2",exact:true}).click();
+    assert.equal((await openingSeating).ok(),true);
+    await eightPage.getByLabel("r1-c2 side A score").waitFor();
+    assert.equal(await eightPage.getByLabel("r1-c1 side A score").inputValue(),"5");
+    const perfect = (await request(`/clubs/test/play-generators/sessions/${sixKey}`)).session.event;
+    assert.deepEqual(perfect.rounds[0].matches[0],firstGame);
+    assert.equal(perfect.rounds[0].matches.length,2);
+    assert.equal(perfect.totalRounds,7);
+    assert.equal(perfect.perfectRotation,true);
+    assert.equal(perfect.adaptiveFromRound,null);
+    assertPerfect(perfect);
+    await expect(eightPage.getByRole("button",{name:/^Open round \d+$/})).toHaveCount(7);
+    await eightPage.screenshot({path:path.join(output,"six-plus-two-perfect-rotation.png"),fullPage:true});
+    for (const id of ["r1-c1","r1-c2"]) {
+      await eightPage.getByLabel(`${id} side A score`).fill("11");
+      await eightPage.getByLabel(`${id} side B score`).fill("7");
+    }
+    await eightPage.getByRole("button",{name:"Save round scores",exact:true}).click();
+    await eightPage.getByRole("button",{name:"Next scheduled round",exact:true}).click();
+    await eightPage.waitForURL(/\/rounds\/2$/);
+    await eightPage.getByRole("button",{name:"Open round 7",exact:true}).click();
+    await eightPage.waitForURL(/\/rounds\/7$/);
+    const navigated = (await request(`/clubs/test/play-generators/sessions/${sixKey}`)).session.event;
+    assert.deepEqual(shape(navigated.rounds),shape(perfect.rounds));
+    assertPerfect(navigated);
+    await eightCtx.close();
+    console.log("PASS 6 + 2: both opening games and score draft preserved, exactly seven visible rounds, every partnership once and opponent pair twice, save and alternate-round navigation preserve the perfect schedule");
     assert.deepEqual(errors,[]);
     assert.equal((await request("/fixture-result")).matches.length,0);
   } finally {

@@ -1,4 +1,4 @@
-"""Playing time has priority over variety when choosing round-robin byes."""
+"""Assigned byes have priority over game counts and matchup variety."""
 
 from copy import deepcopy
 
@@ -31,7 +31,7 @@ def _playing(round_row):
 
 def _pressure_to_bench(history, player_id, all_ids):
     # Variety optimization would prefer to sit this player out, even though
-    # their playing-time priority requires that they stay on court.
+    # their bye priority requires that they stay on court.
     for other in all_ids:
         if other != player_id:
             key = engine._pair_key(player_id, other)
@@ -195,3 +195,28 @@ def test_advance_preserves_future_started_rounds(state, round_number):
     updated = engine.advance_generator_event(event)
 
     assert updated["rounds"][round_number - 1] == expected
+
+
+@pytest.mark.parametrize("play_format,count,courts", [("singles",5,2),("doubles",9,2),("doubles_singles",7,2)])
+def test_late_arrival_takes_first_bye_before_regular_player_takes_second(play_format, count, courts):
+    event = _event(play_format, count, courts=courts)
+    history = engine._blank_history(event)
+    history["games"] = {pid: 5 for pid in history["games"]}
+    history["byes"] = {pid: 1 for pid in history["byes"]}
+    history["games"]["p-1"] = 0
+    history["byes"]["p-1"] = 0
+    _pressure_to_bench(history, "p-2", list(history["games"]))
+    row = engine._generate_round_robin_round(event, 6, history)
+    assert row["byeParticipantIds"] == ["p-1"]
+
+
+@pytest.mark.parametrize("play_format,count,courts", [("singles",7,2),("doubles",13,2),("doubles_singles",11,2)])
+def test_capacity_limited_byes_use_lowest_bye_tiers_before_any_other_player(play_format, count, courts):
+    event = _event(play_format, count, courts=courts)
+    history = engine._blank_history(event)
+    history["games"] = {f"p-{i}": count-i for i in range(1,count+1)}
+    history["byes"] = {f"p-{i}": i//3 for i in range(1,count+1)}
+    row = engine._generate_round_robin_round(event, 6, history)
+    byes = row["byeParticipantIds"]
+    playing = _playing(row)
+    assert max(history["byes"][pid] for pid in byes) <= min(history["byes"][pid] for pid in playing)

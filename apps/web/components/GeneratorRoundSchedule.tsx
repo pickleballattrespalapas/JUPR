@@ -20,8 +20,8 @@ export default function GeneratorRoundSchedule({ rounds, participants, selectedR
     <section aria-label="Round-Robin schedule" style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: 14, padding: "1rem" }}>
       <h2 style={{ marginTop: 0 }}>Round schedule</h2>
       <p style={{ color: "#475569" }}>
-        {adaptive ? "Adaptive matchups are in use after a roster change or extra round."
-          : perfect ? "Perfect rotation: partner everyone once and face everyone twice. Choose any round; skipping keeps the scheduled matchups."
+        {adaptive ? "Adaptive rotation: balance assigned byes first, then partner and opponent coverage."
+          : perfect ? "Perfect rotation: partner everyone once and face everyone twice. Compatible roster changes preserve this priority. Choose any round; skipping keeps the scheduled matchups."
           : "Choose any scheduled round. Matchups stay fixed until the roster changes or you add extra rounds."}
       </p>
       {unsaved ? <p style={{ color: "#92400e" }}>Save or cancel your score entries before changing rounds.</p> : null}

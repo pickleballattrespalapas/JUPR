@@ -114,8 +114,8 @@ def test_round_robins_continue_incrementally_beyond_eight_and_fifty(play_format,
         }
         for bye in next_round["byeParticipantIds"]:
             assert all(
-                (history["games"][bye], -history["byes"][bye])
-                >= (history["games"][pid], -history["byes"][pid])
+                (-history["byes"][bye], history["games"][bye])
+                >= (-history["byes"][pid], history["games"][pid])
                 for pid in playing
             )
         event = updated

@@ -20,6 +20,7 @@ from typing import Any
 from uuid import uuid4
 
 from jupr_app.domain.perfect_round_robin import perfect_doubles_schedule
+from jupr_app.domain.perfect_rotation_completion import find_perfect_completion, game_key, is_perfect_rotation
 
 
 STANDINGS_SORTS = {"wins", "points", "differential"}
@@ -136,6 +137,7 @@ def _blank_history(event: dict[str, Any]) -> dict[str, Any]:
         "singles_opponents": defaultdict(int),
         "doubles_opponents": defaultdict(int),
         "exact_matches": defaultdict(int),
+        "groups": defaultdict(int),
     }
 
 def _round_matches(round_row: dict[str, Any]) -> list[dict[str, Any]]:
@@ -173,6 +175,7 @@ def _apply_match_history(history: dict[str, Any], match: dict[str, Any], play_fo
             history["doubles_opponents"][key] += 1
     if len(side_a) == 2 and len(side_b) == 2:
         history["exact_matches"][_exact_match_key(side_a, side_b)] += 1
+        history["groups"][",".join(sorted(side_a + side_b))] += 1
 
 def history_before_round(event: dict[str, Any], round_number: int, *, include_preview: bool = False) -> dict[str, Any]:
     history = _blank_history(event)
@@ -196,8 +199,8 @@ def history_before_round(event: dict[str, Any], round_number: int, *, include_pr
 
 def _selection_priority(pid: str, history: dict[str, Any], roster_pos: dict[str, int]) -> tuple[Any, ...]:
     return (
-        int(history["games"].get(pid, 0)),
         -int(history["byes"].get(pid, 0)),
+        int(history["games"].get(pid, 0)),
         int(roster_pos.get(pid, 9999)),
         str(pid),
     )
@@ -214,10 +217,9 @@ def _candidate_playing_sets(
     if slots >= len(active_ids):
         return [(list(active_ids), [])]
     ordered = sorted(active_ids, key=lambda pid: _selection_priority(pid, history, roster_pos))
-    # Court time is a constraint, not a small pairing-cost penalty. Players
-    # with fewer games must play before those with more; at equal games,
-    # protect players who have already had more byes. Matchup variety may
-    # choose between players only when both counts are tied at the cutoff.
+    # Protect players with more assigned byes first. Game counts only break
+    # equal-bye ties, so a late arrival does not force another player's second
+    # bye before taking their own first. Variety breaks ties in both counts.
     cutoff = _selection_priority(ordered[slots - 1], history, roster_pos)[:2]
     required = [
         pid for pid in ordered
@@ -390,13 +392,13 @@ def _doubles_round(
     )
     best = None
     best_byes=[]
-    best_cost=float("inf")
+    best_cost=None
     for set_index,(playing,byes) in enumerate(candidate_sets):
         attempts=max(48,len(playing)*8)
         for attempt in range(attempts):
             rng=random.Random(_stable_seed("doubles",seed_salt,round_number,set_index,attempt,*playing))
             remaining=playing[:]; rng.shuffle(remaining)
-            teams=[]; partner_cost=0.0
+            teams=[]
             while remaining:
                 a=remaining.pop(0)
                 candidates=[]
@@ -407,9 +409,8 @@ def _doubles_round(
                 value,idx,b=min(candidates)
                 remaining.pop(idx)
                 teams.append(tuple(sorted((a,b))))
-                partner_cost+=value
             team_queue=teams[:]; rng.shuffle(team_queue)
-            match_pairs=[]; opponent_cost=0.0
+            match_pairs=[]
             while team_queue:
                 ta=team_queue.pop(0)
                 choices=[]
@@ -417,13 +418,20 @@ def _doubles_round(
                     exact=int(history["exact_matches"].get(_exact_match_key(list(ta),list(tb)),0))
                     doubles_opp=sum(int(history["doubles_opponents"].get(_pair_key(x,y),0)) for x in ta for y in tb)
                     all_opp=sum(int(history["opponents"].get(_pair_key(x,y),0)) for x in ta for y in tb)
-                    value=exact*200000.0+doubles_opp*1000.0+all_opp*100.0+rng.random()*0.0001
+                    excess=sum(max(0,int(history["doubles_opponents"].get(_pair_key(x,y),0))-1) for x in ta for y in tb)
+                    group=int(history.get("groups",{}).get(",".join(sorted(ta+tb)),0))
+                    value=(excess,doubles_opp,all_opp,exact,group,rng.random())
                     choices.append((value,idx,tb))
                 value,idx,tb=min(choices)
                 team_queue.pop(idx)
-                match_pairs.append((ta,tb)); opponent_cost+=value
-            total=partner_cost+opponent_cost+sum(int(history["byes"].get(pid,0)) for pid in byes)*5
-            if total<best_cost:
+                match_pairs.append((ta,tb))
+            partner_counts=[int(history["partners"].get(_pair_key(*team),0)) for game in match_pairs for team in game]
+            opponent_counts=[int(history["doubles_opponents"].get(_pair_key(x,y),0)) for ta,tb in match_pairs for x in ta for y in tb]
+            total=(sum(v>0 for v in partner_counts),sum(partner_counts),
+                   sum(max(0,v-1) for v in opponent_counts),sum(opponent_counts),
+                   sum(int(history["exact_matches"].get(_exact_match_key(list(a),list(b)),0)) for a,b in match_pairs),
+                   sum(int(history.get("groups",{}).get(",".join(sorted(a+b)),0)) for a,b in match_pairs))
+            if best_cost is None or total<best_cost:
                 best_cost=total;best=match_pairs;best_byes=byes
     if best is None:
         playing=sorted(active_ids,key=lambda pid:_selection_priority(pid,history,roster_pos))[:slots]
@@ -619,7 +627,6 @@ def _greedy_doubles_metrics(
         idx, team_b = min(
             enumerate(teams),
             key=lambda item: (
-                int(history["exact_matches"].get(_exact_match_key(list(team_a), list(item[1])), 0)),
                 sum(
                     int(history["doubles_opponents"].get(_pair_key(left, right), 0))
                     for left in team_a
@@ -630,6 +637,7 @@ def _greedy_doubles_metrics(
                     for left in team_a
                     for right in item[1]
                 ),
+                int(history["exact_matches"].get(_exact_match_key(list(team_a), list(item[1])), 0)),
                 item[1],
             ),
         )
@@ -750,22 +758,22 @@ def _mixed_round(
             singles_metrics = _greedy_singles_metrics(singles_ids, history, roster_pos)
             doubles_metrics = _greedy_doubles_metrics(doubles_ids, history, roster_pos)
             score = (
-                game_spread[0],
                 bye_spread[0],
+                game_spread[0],
                 singles_spread[0],
                 doubles_spread[0],
-                game_spread[1],
                 bye_spread[1],
+                game_spread[1],
                 singles_spread[1],
                 doubles_spread[1],
                 singles_metrics[0],
                 doubles_metrics[0],
-                doubles_metrics[2],
-                singles_metrics[1],
                 doubles_metrics[1],
-                doubles_metrics[3],
+                singles_metrics[1],
                 doubles_metrics[4],
                 singles_metrics[2] + doubles_metrics[5],
+                doubles_metrics[2],
+                doubles_metrics[3],
                 tuple(sorted(singles_ids)),
                 tuple(sorted(byes)),
             )
@@ -1111,18 +1119,18 @@ def _mixed_schedule_score(event: dict[str, Any], history: dict[str, Any]) -> tup
     singles = spread("singles_games")
     doubles = spread("doubles_games")
     return (
-        games[0],
         byes[0],
+        games[0],
         singles[0],
         doubles[0],
         partner_excess + singles_excess,
         partner_excess,
         singles_excess,
-        exact_excess,
         doubles_opponent_excess,
         all_opponent_excess,
-        games[1],
+        exact_excess,
         byes[1],
+        games[1],
         singles[1],
         doubles[1],
     )
@@ -1297,7 +1305,23 @@ def create_generator_preview(
         event["fixedScheduleRoundCount"] = min(event["totalRounds"], len(perfect)) if available else event["totalRounds"]
         event["perfectRotation"] = bool(available and event["totalRounds"] >= len(perfect))
         event["adaptiveFromRound"] = None
-        event["rounds"] = _generate_round_robin_schedule(event)
+        recovered = False
+        if perfect and 0 < resolved_court_count < len(participants) // 4:
+            needed = math.ceil(sum(len(games) for games in perfect) / resolved_court_count)
+            if event["totalRounds"] >= needed:
+                requested = event["totalRounds"]
+                recovered = _recover_perfect_rotation(event)
+                if recovered and requested > event["totalRounds"]:
+                    history = _blank_history(event)
+                    for row in event["rounds"]:
+                        _update_history_for_generated_round(history, row, fmt)
+                    for number in range(event["totalRounds"] + 1, requested + 1):
+                        row = _generate_round_robin_round(event, number, history)
+                        event["rounds"].append(row)
+                        _update_history_for_generated_round(history, row, fmt)
+                    event["totalRounds"] = requested
+        if not recovered:
+            event["rounds"] = _generate_round_robin_schedule(event)
     else:
         ordered_ids = active_participant_ids(event, 1)
         event["rounds"] = [_create_ladder_round(event, 1, ordered_ids)]
@@ -1690,6 +1714,120 @@ def _fixed_schedule_count(event: dict[str, Any]) -> int:
     return count
 
 
+def _recover_perfect_rotation(event: dict[str, Any]) -> bool:
+    """Recover an exact completion without changing any committed game.
+
+    Round positions are preserved for started, scored and skipped games.
+    Only unstarted games are replanned. Late arrivals need not have attended
+    prior rounds; those absences do not become assigned byes.
+    """
+    if event.get("generatorKind") != "round_robin" or event.get("playFormat") != "doubles" or event.get("playoff"):
+        return False
+    current = int(event.get("currentRoundNumber") or 1)
+    ids = active_participant_ids(event, _effective_roster_round(event))
+    if not perfect_doubles_schedule(ids):
+        event["perfectRotation"] = False
+        return False
+    rows = event.get("rounds") or []
+    protected = {int(row["number"]): row for row in rows
+                 if row.get("status") in {"active", "saved", "played", "skipped"} or _round_has_any_scores(row)}
+    fixed_games = [(m.get("sideA") or m.get("teamA") or [], m.get("sideB") or m.get("teamB") or [])
+                   for row in protected.values() for m in _round_matches(row)]
+    if any(set(active_participant_ids(event, int(row["number"]))) != set(ids)
+           for row in rows if int(row["number"]) not in protected):
+        event["perfectRotation"] = False
+        return False
+    # Retain a valid existing rotation, including an out-of-order start.
+    count = _fixed_schedule_count(event)
+    planned = [(m.get("sideA") or m.get("teamA") or [], m.get("sideB") or m.get("teamB") or [])
+               for row in rows if int(row["number"]) <= count for m in _round_matches(row)]
+    if all(number <= count for number in protected) and is_perfect_rotation(ids, planned):
+        event.update(perfectRotation=True, adaptiveFromRound=None)
+        return True
+    games = find_perfect_completion(ids, fixed_games)
+    if games is None:
+        event["perfectRotation"] = False
+        return False
+    fixed_keys = {game_key(game) for game in fixed_games}
+    pool = [game for game in games if game_key(game) not in fixed_keys]
+    last_protected = max(protected, default=0)
+    free_before_last = sum(number not in protected for number in range(1, last_protected + 1))
+    if len(pool) < free_before_last:
+        event["perfectRotation"] = False
+        return False
+    courts = min(len(ids) // 4, int(event.get("courtCount") or len(ids) // 4))
+    history = _blank_history(event)
+    for row in protected.values():
+        if row.get("status") != "skipped":
+            _update_history_for_generated_round(history, row, "doubles")
+    generated = []
+    game_order = {game_key(game): index for index, game in enumerate(games)}
+    normal_courts = len(ids) // 4
+    cycle = len(games) // normal_courts
+    anchor = next(iter(protected)) if len(protected) == 1 else 1 if not protected else 0
+    full_opening = anchor and anchor <= cycle and (not fixed_games or len(fixed_games) == normal_courts) and courts >= normal_courts
+    number = 1
+    while pool or number <= last_protected:
+        if number in protected:
+            generated.append(copy.deepcopy(protected[number]))
+            number += 1
+            continue
+        if full_opening:
+            offset = ((number - anchor) % cycle) * normal_courts
+            chosen = games[offset:offset + normal_courts]
+            playing = {p for game in chosen for side in game for p in side}
+        else:
+            reserve = sum(n not in protected for n in range(number + 1, last_protected + 1))
+            limit = min(courts, len(pool) - reserve)
+            # Exact coverage is already secured by the game set. Prefer players
+            # with more byes, then fewer games, when arranging its remaining games.
+            ordered = sorted(pool, key=lambda game: (
+                -sum(history["byes"].get(p, 0) for side in game for p in side),
+                sum(history["games"].get(p, 0) for side in game for p in side),
+                game_order[game_key(game)],
+            ))
+            choices = []
+            for first in ordered[:64]:
+                selection, used = [first], {p for side in first for p in side}
+                for game in ordered:
+                    participants = {p for side in game for p in side}
+                    if not participants & used and len(selection) < limit:
+                        selection.append(game)
+                        used.update(participants)
+                choices.append(((-len(selection), -sum(history["byes"].get(p, 0) for p in used),
+                                 sum(history["games"].get(p, 0) for p in used), tuple(game_order[game_key(g)] for g in selection)), selection, used))
+                if len(used) == len(ids):
+                    break
+            _rank, chosen, playing = min(choices, key=lambda choice: choice[0])
+        if not chosen:
+            event["perfectRotation"] = False
+            return False
+        pool = [game for game in pool if game not in chosen]
+        row = {"number": number, "status": "preview", "matches": [
+            {"id": f"r{number}-c{court}", "round": number, "court": court, "playFormat": "doubles",
+             "sideA": list(a), "sideB": list(b), "teamA": list(a), "teamB": list(b),
+             "scoreA": None, "scoreB": None, "status": "scheduled"}
+            for court, (a, b) in enumerate(chosen, 1)],
+            "byeParticipantIds": [p for p in ids if p not in playing], "warnings": [],
+            "formatCounts": {"doubles": len(chosen), "singles": 0}, "savedAt": None, "skippedAt": None}
+        if event.get("status") == "active" and number == current:
+            row["status"] = "active"
+        generated.append(row)
+        _update_history_for_generated_round(history, row, "doubles")
+        number += 1
+    # Never label a heuristic or partial schedule perfect.
+    result_games = [(m["sideA"], m["sideB"]) for row in generated for m in _round_matches(row)]
+    if not is_perfect_rotation(ids, result_games):
+        event["perfectRotation"] = False
+        return False
+    overrides = event.setdefault("rosterByRound", {})
+    event["rosterByRound"] = {str(row["number"]): overrides.get(str(row["number"]), ids) if int(row["number"]) in protected else list(ids)
+                            for row in generated}
+    event.update(rounds=generated, totalRounds=len(generated), fixedScheduleRoundCount=len(generated),
+                 perfectRotation=True, adaptiveFromRound=None)
+    return True
+
+
 def select_generator_round(event: dict[str, Any], *, round_number: int) -> dict[str, Any]:
     """Choose a scheduled game without treating an unplayed round as skipped."""
     next_event = copy.deepcopy(event)
@@ -1732,6 +1870,9 @@ def advance_generator_event(event: dict[str, Any]) -> dict[str, Any]:
         next_event["completedAt"] = _now_iso()
         return next_event
     next_number = current + 1
+    if kind == "round_robin" and next_event.get("rosterRevisions") and not next_event.get("perfectRotation") and not next_event.get("playoff"):
+        if _recover_perfect_rotation(next_event):
+            total = int(next_event["totalRounds"])
     fixed_count = _fixed_schedule_count(next_event)
     fixed = kind == "round_robin" and not next_event.get("playoff") and not next_event.get("adaptiveFromRound") and 0 < current <= fixed_count
     if fixed:
@@ -1847,7 +1988,8 @@ def _seat_generator_arrivals(
         "participantIds": ids, "court": court, "at": _now_iso(),
     })
     event["adaptiveFromRound"] = min(int(event.get("adaptiveFromRound") or current + 1), current + 1)
-    _regenerate_round_robin_from(event, current + 1)
+    if not _recover_perfect_rotation(event):
+        _regenerate_round_robin_from(event, current + 1)
 
 def _regenerate_round_robin_from(event: dict[str, Any], start_round: int) -> None:
     existing = {int(row.get("number") or 0): row for row in event.get("rounds") or []}
@@ -2012,7 +2154,8 @@ def mutate_generator_roster(
             available = perfect is not None and (not next_event.get("courtCount") or int(next_event["courtCount"]) >= len(ids) // 4)
             next_event["fixedScheduleRoundCount"] = min(int(next_event["totalRounds"]), len(perfect)) if available else int(next_event["totalRounds"])
             next_event["perfectRotation"] = bool(available and int(next_event["totalRounds"]) >= len(perfect))
-        _regenerate_round_robin_from(next_event, 1 if next_event.get("status") == "active" else effective)
+        if not _recover_perfect_rotation(next_event):
+            _regenerate_round_robin_from(next_event, 1 if next_event.get("status") == "active" else effective)
     else:
         current = int(next_event.get("currentRoundNumber") or 1)
         if effective == current:
