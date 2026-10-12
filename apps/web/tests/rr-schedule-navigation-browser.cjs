@@ -120,7 +120,7 @@ async function request(path, body) {
       const adding = page.waitForResponse(r => r.url().endsWith("/roster") && r.request().postDataJSON()?.action === "add");
       await page.getByRole("button",{name:"Add player for next round",exact:true}).click();
       assert.equal((await adding).ok(),true);
-      await expect(page.getByRole("button",{name:"Add player for next round",exact:true})).toBeEnabled();
+      await expect(page.getByLabel("New player name")).toBeEnabled();
       await expect(page.getByLabel("New player name")).toHaveValue("");
       assert.equal(await page.getByLabel("r2-c1 side A score").inputValue(),"5");
     }
