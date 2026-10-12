@@ -86,6 +86,7 @@ export type PublicRegistrationPlayer = {
 };
 
 export type PublicRegistrationProfileResolutionPayload = {
+  attempt_id?: string;
   tournament_id?: string | null;
   registration_slug?: string | null;
   first_name: string;
@@ -217,6 +218,7 @@ export type PublicRegistrationSelectionPayload = {
 };
 
 export type PublicRegistrationSubmitPayload = {
+  attempt_id?: string;
   partner_invitation_token?: string | null;
   tournament_id?: string | null;
   registration_slug?: string | null;

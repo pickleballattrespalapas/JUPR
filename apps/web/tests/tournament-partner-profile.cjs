@@ -14,6 +14,8 @@ function load(relative, overrides = {}) {
   compiled.paths = Module._nodeModulePaths(path.dirname(filename));
   const originalRequire = compiled.require.bind(compiled);
   compiled.require = name => {
+    if (name === "@/lib/useRegistrationAttempt") return load("lib/useRegistrationAttempt.ts");
+    if (name === "@/components/tournaments/RegistrationAttemptHistory") return { __esModule: true, default: () => null };
     if (name === "@/components/tournaments/usePartnerInvitationRegistration") return { usePartnerInvitationRegistration: () => invitationContext, PartnerInvitationRegistrationNotice: () => null };
     if (name === "@/lib/tournamentPartnerInvitations") return { invitationReturnPath: () => "" };
     if (name === "@/lib/tournamentRegistrationProfile") return load("lib/tournamentRegistrationProfile.ts");
