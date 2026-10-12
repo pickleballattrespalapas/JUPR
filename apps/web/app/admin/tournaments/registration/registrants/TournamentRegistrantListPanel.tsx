@@ -18,6 +18,7 @@ import {
 } from "@/lib/useAuthenticatedAutoLoad";
 import { useAdminSession } from "@/lib/useAdminSession";
 import { tournamentRouteHref } from "@/lib/tournamentRouteContext";
+import RegistrationAttemptHistory from "@/components/tournaments/RegistrationAttemptHistory";
 
 type Props = {
   apiBase: string | null;
@@ -327,6 +328,7 @@ export default function TournamentRegistrantListPanel({
           ) : null}
         </section>
       ) : null}
+      {detail ? <RegistrationAttemptHistory apiBase={apiBase} clubId={clubId} tournamentId={tournamentId} accessToken={accessToken} /> : null}
     </div>
   );
 }

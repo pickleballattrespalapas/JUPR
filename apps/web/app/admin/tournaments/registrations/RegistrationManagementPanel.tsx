@@ -15,6 +15,7 @@ import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthen
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 import { tournamentRouteHref } from "@/lib/tournamentRouteContext";
 import TournamentEmailDelivery from "./TournamentEmailDelivery";
+import RegistrationAttemptHistory from "@/components/tournaments/RegistrationAttemptHistory";
 
 type Props = {
   apiBase: string | null;
@@ -467,6 +468,7 @@ export default function RegistrationManagementPanel({ apiBase, clubId, status, i
               message={broadcastMessage} includeCancelled={includeCancelled} includeRegistrationEvents={includeRegistrationEvents} includeRegistrationEditLinks={includeRegistrationEditLinks} busy={busy || previewBusy} onBusy={setBusy} requestJson={requestJson} />
           </article>
 
+          <RegistrationAttemptHistory apiBase={apiBase} clubId={clubId} tournamentId={detail.tournament.id} accessToken={accessToken} />
           <article style={cardStyle}>
             <h2 style={{ marginTop: 0 }}>Filtered registrations</h2>
             <p style={{ color: "#64748b" }}>{filteredRegistrations.length} of {detail.registrations.length} registration(s).</p>

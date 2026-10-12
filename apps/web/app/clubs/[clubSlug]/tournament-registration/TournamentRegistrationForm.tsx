@@ -38,6 +38,7 @@ import { automaticRegistrationProfile } from "@/lib/tournamentRegistrationProfil
 import { usePartnerInvitationRegistration, PartnerInvitationRegistrationNotice } from "@/components/tournaments/usePartnerInvitationRegistration";
 import { invitationReturnPath } from "@/lib/tournamentPartnerInvitations";
 import EditLinkRequestForm from "./EditLinkRequestForm";
+import { useRegistrationAttempt } from "@/lib/useRegistrationAttempt";
 import TournamentCommerceChooser from "./TournamentCommerceChooser";
 import TournamentPartnerDetails, { type TournamentPartnerDetailsValue } from "@/components/tournaments/TournamentPartnerDetails";
 
@@ -270,6 +271,15 @@ export default function TournamentRegistrationForm({
     emailStatus?: string | null;
   } | null>(null);
   const [createdTeamEventIds, setCreatedTeamEventIds] = useState<string[]>([]);
+  const attemptId = useRegistrationAttempt({
+    clubSlug, tournamentId, active: mode === "new", flow: "new",
+    stage: pending ? "submit" : ["contact", "profile", "events", "review"][step - 1],
+    name: `${contact.firstName} ${contact.lastName}`.trim(), email: contact.email, error,
+    completed: Boolean(savedRegistration),
+    selections: selectedIds.map(id => ({ event_option_id: id, partner_mode: partnerDetails[id]?.mode,
+      partner_name: partnerDetails[id]?.name,
+      same_email_as_player: Boolean(partnerDetails[id]?.email && partnerDetails[id].email.trim().toLowerCase() === contact.email.trim().toLowerCase()) }))
+  });
 
   useEffect(() => {
     const prefill = partnerInvitation.invitation?.registration_prefill;
@@ -477,6 +487,7 @@ export default function TournamentRegistrationForm({
     setPending(true);
     try {
       const response = await resolveClubTournamentRegistrationProfile(clubSlug, {
+        attempt_id: attemptId,
         tournament_id: tournamentId,
         registration_slug: registrationSlug || null,
         first_name: contact.firstName,
@@ -732,6 +743,7 @@ export default function TournamentRegistrationForm({
     let saved = savedRegistration;
     if (!saved) {
       const response = await submitClubTournamentRegistration(clubSlug, {
+        attempt_id: attemptId,
         partner_invitation_token: partnerInvitation.token || null,
         tournament_id: tournamentId,
         registration_slug: registrationSlug || null,

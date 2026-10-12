@@ -34,6 +34,7 @@ from jupr_app.services.public_tournament_commerce_service import (
 from jupr_app.services.public_tournament_roster_service import build_public_tournament_roster_page
 from jupr_app.services.production_tournament_guard import require_production_tournament_writes
 from services.api.staging_write_guard import require_public_intake_or_403
+from jupr_app.services.tournament_registration_attempt_service import audited_registration_call, record_registration_attempt
 from jupr_app.domain.tournament_registration_repo import get_public_tournament_bundle
 from jupr_app.services.tournament_sponsor_service import public_sponsors
 
@@ -50,6 +51,7 @@ class PublicTournamentCommerceSelectionRequest(BaseModel):
 
 
 class PublicTournamentRegistrationRequest(BaseModel):
+    attempt_id: str | None = Field(default=None, max_length=36)
     partner_invitation_token: str | None = Field(default=None, max_length=4000)
     tournament_id: str | None = None
     registration_slug: str | None = None
@@ -91,6 +93,7 @@ class PublicTournamentRegistrationEditLinkRequest(BaseModel):
 
 
 class PublicTournamentRegistrationProfileResolutionRequest(BaseModel):
+    attempt_id: str | None = Field(default=None, max_length=36)
     tournament_id: str | None = None
     registration_slug: str | None = None
     first_name: str
@@ -107,6 +110,19 @@ class PublicTournamentPartnerProfileResolutionRequest(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     email: str | None = Field(default=None, max_length=320)
     website: str | None = None
+
+
+class RegistrationAttemptRequest(BaseModel):
+    attempt_id: str = Field(min_length=36, max_length=36)
+    tournament_id: str = Field(max_length=80)
+    event: str = Field(default="PROGRESS", max_length=40)
+    stage: str = Field(default="contact", max_length=40)
+    flow: str = Field(default="new", max_length=10)
+    display_name: str = Field(default="", max_length=160)
+    email: str = Field(default="", max_length=320)
+    message: str = Field(default="", max_length=500)
+    selections: list[dict[str, Any]] = Field(default_factory=list, max_length=8)
+    website: str | None = Field(default=None, max_length=160)
 
 
 def _dump_model(model: BaseModel) -> dict[str, Any]:
@@ -148,6 +164,15 @@ def install_public_tournament_registration_routes(
     public_club_payload,
 ) -> None:
     """Register public tournament registration routes on the main FastAPI app."""
+
+    @app.post("/clubs/{club_slug}/tournament-registration/attempts", status_code=202)
+    def record_club_registration_attempt(club_slug: str, payload: RegistrationAttemptRequest, response: Response) -> dict[str, bool]:
+        require_public_intake_or_403()
+        response.headers["Cache-Control"] = "no-store"
+        club = get_club(club_slug)
+        record_registration_attempt(get_supabase_client(), club_id=str(club.get("id") or club_slug), payload=_dump_model(payload))
+        # No read endpoint, identity lookup or result enumeration for public callers.
+        return {"accepted": True}
 
     @app.get("/clubs/{club_slug}/tournaments/{tournament_id}/sponsors")
     def get_tournament_sponsors(club_slug: str, tournament_id: str, response: Response) -> dict[str, Any]:
@@ -222,10 +247,10 @@ def install_public_tournament_registration_routes(
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
         supabase: Client = get_supabase_client()
         try:
-            result = resolve_public_tournament_registration_profile(
-                supabase,
-                club_id=club_id,
-                payload=_dump_model(payload),
+            result = audited_registration_call(
+                supabase, club_id=club_id, payload=_dump_model(payload), stage="profile",
+                operation=lambda: resolve_public_tournament_registration_profile(
+                    supabase, club_id=club_id, payload=_dump_model(payload)),
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -296,12 +321,15 @@ def install_public_tournament_registration_routes(
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
         supabase: Client = get_supabase_client()
         try:
-            result = submit_public_tournament_registration_edit(
+            result = audited_registration_call(
+                supabase, club_id=club_id, payload=_dump_model(payload), stage="edit",
+                operation=lambda: submit_public_tournament_registration_edit(
                 supabase,
                 club_id=club_id,
                 club_slug=club_slug,
                 edit_token=payload.edit_token,
                 payload=_dump_model(payload),
+                ),
             )
         except PublicRegistrationEditUnavailableError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -355,11 +383,14 @@ def install_public_tournament_registration_routes(
         try:
             request_payload = _dump_model(payload)
             request_payload["_require_demographics"] = True
-            result = submit_public_tournament_registration(
+            result = audited_registration_call(
+                supabase, club_id=club_id, payload=request_payload, stage="submit",
+                operation=lambda: submit_public_tournament_registration(
                 supabase,
                 club_id=club_id,
                 club_slug=club_slug,
                 payload=request_payload,
+                ),
             )
         except DuplicateTournamentRegistrationError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
