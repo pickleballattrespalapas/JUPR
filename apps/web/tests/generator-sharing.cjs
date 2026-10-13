@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), ts = require('typescript');
 const React = require('react'), { create, act } = require('react-test-renderer');
+const { QRCodeSVG } = require('qrcode.react');
 function load(file, mocks = {}) {
   const code = ts.transpileModule(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true }
@@ -18,7 +19,7 @@ Object.defineProperty(global, 'navigator', { configurable: true, value: { clipbo
 const reply = body => ({ ok: true, status: 200, json: async () => body });
 global.fetch = async (url, options) => {
   calls.push({ url, body: options?.body && JSON.parse(options.body), headers: options?.headers });
-  return reply({ sharing: { club_slug: 'resolved-slug', handoff_token: 'private-operator-token' } });
+  return reply({ sharing: { enabled: true, club_slug: 'resolved-slug', handoff_token: 'private-operator-token' } });
 };
 
 async function sharingControls() {
@@ -29,12 +30,18 @@ async function sharingControls() {
   assert.equal(copied.at(-1), 'https://club.test/clubs/resolved-slug/round-robin-generator/shared/session/standings');
   assert.equal(calls.at(-1).headers.Authorization, 'Bearer admin-session');
   assert.equal(calls.at(-1).body.expected_version, props.version);
+  const standings = copied.at(-1);
+  assert.equal(tree.root.findByType(QRCodeSVG).props.value, standings);
+  assert.equal(tree.root.findByProps({'aria-label':'Standings link'}).props.value, standings);
+  assert.equal(tree.root.findByType('a').props.href, standings);
   await act(async () => button(tree, 'Hand off RR').props.onClick());
   assert.equal(copied.at(-1), 'https://club.test/clubs/resolved-slug/round-robin-generator/shared/session#edit=private-operator-token');
   assert.ok(!calls.at(-1).url.includes('private-operator-token'));
+  assert.equal(tree.root.findByType(QRCodeSVG).props.value, standings, 'Courtside QR always stays view-only when handing off');
   await act(async () => button(tree, 'Revoke handoff link').props.onClick());
   assert.equal(calls.at(-1).body.action, 'revoke');
-  assert.equal(tree.root.findAllByType('input').length, 0);
+  assert.equal(tree.root.findAllByProps({'aria-label':'Private handoff link'}).length, 0);
+  assert.equal(tree.root.findByType(QRCodeSVG).props.value, standings, 'Revoking handoff preserves courtside sharing');
   assert.equal(changed, 3);
   await act(async () => tree.update(React.createElement(Sharing, { ...props, locked: true })));
   assert.equal(button(tree, 'Hand off RR').props.disabled, true);
@@ -44,6 +51,7 @@ async function sharingControls() {
   await act(async () => { tree = create(React.createElement(Sharing, { ...props, shared: true, adminToken: undefined })); });
   assert.equal(button(tree, 'Hand off RR'), undefined);
   assert.equal(button(tree, 'Revoke handoff link'), undefined);
+  assert.equal(tree.root.findByType(QRCodeSVG).props.value, 'https://club.test/clubs/opaque-club-id/round-robin-generator/shared/session/standings', 'Viewer gets a link and QR immediately without making a write request');
   await act(async () => button(tree, 'Share standings').props.onClick());
   assert.equal(calls.length, count, 'Spectator sharing is read-only and never requests access');
   assert.ok(copied.at(-1).endsWith('/standings') && !copied.at(-1).includes('#'));
@@ -101,5 +109,5 @@ async function sharedStandingsPollsWithoutOperationAccess() {
 
 (async () => {
   await sharingControls(); await currentRoundLanding(); await sharedStandingsPollsWithoutOperationAccess();
-  console.log('PASS sharing controls, private fragment handoff, revocation, current-round routing, and live spectator standings.');
+  console.log('PASS sharing controls, view-only standings link/QR, private fragment handoff, revocation, current-round routing, and live spectator standings.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const assert = require("node:assert/strict");
 const { chromium, expect } = require("@playwright/test");
+const jsQR = require("jsqr");
 const webRoot = path.resolve(__dirname, ".."), root = path.resolve(webRoot, "../..");
 const apiPort = process.env.GENERATOR_BROWSER_API_PORT || "8057", webPort = process.env.GENERATOR_BROWSER_WEB_PORT || "3038";
 const api = `http://127.0.0.1:${apiPort}`, web = `http://127.0.0.1:${webPort}`;
@@ -50,6 +51,22 @@ async function request(path, body, authorization) {
   const data = await r.json();
   assert.equal(r.ok, true, `${path}: ${r.status}`);
   return data;
+}
+async function verifyStandingsQr(page, expectedUrl) {
+  const frame = await page.getByRole("img",{name:"Standings QR code",exact:true}).evaluate(async svg => {
+    const img = new Image();
+    const loaded = new Promise((resolve,reject) => { img.onload = resolve; img.onerror = reject; });
+    img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(new XMLSerializer().serializeToString(svg));
+    await loaded;
+    const canvas = document.createElement("canvas");
+    canvas.width = 224; canvas.height = 224;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "white"; ctx.fillRect(0,0,224,224); ctx.drawImage(img,0,0,224,224);
+    return Array.from(ctx.getImageData(0,0,224,224).data);
+  });
+  const decoded = jsQR(new Uint8ClampedArray(frame),224,224);
+  assert.equal(decoded?.data,expectedUrl,"The rendered QR must scan to the exact public standings URL");
+  assert.equal(new URL(decoded.data).hash,"","Standings QR must not include operator credentials");
 }
 (async () => {
   fs.mkdirSync(output, { recursive: true });
@@ -99,12 +116,16 @@ async function request(path, body, authorization) {
     await owner.getByRole("button",{name:"Share standings",exact:true}).click();
     const standingsURL = await owner.getByLabel("Standings link").inputValue();
     assert.ok(standingsURL.endsWith("/standings") && !standingsURL.includes("#"));
+    await verifyStandingsQr(owner,standingsURL);
     await owner.getByRole("button",{name:"Hand off RR",exact:true}).click();
     const operatorURL = await owner.getByLabel("Private handoff link").inputValue();
     assert.ok(operatorURL.includes("#edit="));
     const viewer = await isolatedPage();
     await viewer.goto(standingsURL);
     await viewer.getByRole("table").waitFor();
+    await verifyStandingsQr(viewer,standingsURL);
+    assert.equal(await viewer.getByLabel("Standings link").inputValue(),standingsURL);
+    assert.equal(await viewer.getByRole("link",{name:"Open standings",exact:true}).getAttribute("href"),standingsURL);
     assert.equal(await viewer.getByRole("button",{name:"Hand off RR",exact:true}).count(),0);
     assert.equal(await viewer.getByRole("button",{name:"Next scheduled round",exact:true}).count(),0);
     const handed = await isolatedPage();
@@ -119,6 +140,7 @@ async function request(path, body, authorization) {
     assert.equal((await handedSave).ok(),true);
     await expect.poll(async () => (await viewer.getByRole("table").textContent()).includes("11"),{timeout:20000}).toBe(true);
     await viewer.setViewportSize({width:390,height:844});
+    await verifyStandingsQr(viewer,standingsURL);
     await viewer.screenshot({path:path.join(output,`shared-${audience}-rr-standings-mobile.png`),fullPage:true});
     await handed.getByRole("button",{name:"Next scheduled round",exact:true}).click();
     await handed.waitForURL(/\/shared\/[^/]+\/rounds\/2$/);
@@ -138,6 +160,7 @@ async function request(path, body, authorization) {
     assert.ok(sharedAfter.event.rounds[1].matches.every(match => match.scoreA == null));
     await viewer.reload();
     await viewer.getByRole("table").waitFor();
+    await verifyStandingsQr(viewer,standingsURL);
     for (const context of contexts) await context.close();
     console.log(`PASS ${audience} shared RR: independent organizer/operator/spectator sessions, live full standings, handed-off scores and current-round navigation, revocation blocks saves without removing standings`);
     }
