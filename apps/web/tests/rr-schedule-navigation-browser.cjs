@@ -72,7 +72,7 @@ async function request(path, body, authorization) {
       generator_kind: "round_robin", play_format: "doubles", title: "Shareable evening RR",
       participant_names: Array.from({length:8}, (_, i) => `Shared player ${i+1}`),
       total_rounds: 7, court_count: 2, rating_mode: "unrated", scoring_mode: "scored",
-      idempotency_key: crypto.randomUUID(), expected_version: ""
+      idempotency_key: crypto.randomUUID(), expected_version: "new"
     }, audience === "admin" ? "Bearer local-reviewer" : undefined);
     const sharedKey = sharedRR.session.session_key;
     const contexts = [];
