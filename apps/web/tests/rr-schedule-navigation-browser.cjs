@@ -45,8 +45,8 @@ function assertPerfect(event) {
     assert.equal(opponents.get(key),2,`Opponent count ${key}`);
   }
 }
-async function request(path, body) {
-  const r = await fetch(api + path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
+async function request(path, body, authorization) {
+  const r = await fetch(api + path, body ? { method: "POST", headers: { "Content-Type": "application/json", ...(authorization ? { Authorization: authorization } : {}) }, body: JSON.stringify(body) } : {});
   const data = await r.json();
   assert.equal(r.ok, true, `${path}: ${r.status}`);
   return data;
@@ -66,6 +66,81 @@ async function request(path, body) {
     await ready(`${api}/fixture-result`);
     await ready(`${web}/clubs/test/round-robin-generator`);
     browser = await chromium.launch({ headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.GENERATOR_BROWSER_EXECUTABLE ? { executablePath: process.env.GENERATOR_BROWSER_EXECUTABLE } : {}) });
+    // Three independent browsers for both public and Admin-created RRs.
+    for (const audience of ["public", "admin"]) {
+    const sharedRR = await request(audience === "admin" ? "/admin/clubs/club/play-generators/sessions" : "/clubs/test/play-generators/sessions", {
+      generator_kind: "round_robin", play_format: "doubles", title: "Shareable evening RR",
+      participant_names: Array.from({length:8}, (_, i) => `Shared player ${i+1}`),
+      total_rounds: 7, court_count: 2, rating_mode: "unrated", scoring_mode: "scored",
+      idempotency_key: crypto.randomUUID(), expected_version: ""
+    }, audience === "admin" ? "Bearer local-reviewer" : undefined);
+    const sharedKey = sharedRR.session.session_key;
+    const contexts = [];
+    async function isolatedPage() {
+      const context = await browser.newContext({viewport:{width:1280,height:900}});
+      contexts.push(context);
+      await context.route("**/*", route => ["127.0.0.1","localhost"].includes(new URL(route.request().url()).hostname) ? route.continue() : route.abort());
+      const page = await context.newPage();
+      page.on("pageerror", error => errors.push(error.message));
+      return page;
+    }
+    const owner = await isolatedPage();
+    if (audience === "admin") {
+      await owner.context().addCookies([{name:"jupr_admin_workspace_v1",value:encodeURIComponent(JSON.stringify({clubId:"club",clubSlug:"test"})),url:web}]);
+      await owner.context().addInitScript(origin => {
+        if (location.origin !== origin) return;
+        localStorage.setItem("jupr_admin_session_v1",JSON.stringify({access_token:"local-reviewer",expires_at:Date.now()+3600000,
+          user:{id:"local-reviewer",email:"reviewer@example.invalid"},
+          capabilities:{authorized:true,user:{email:"reviewer@example.invalid"},assignments:[{club_id:"club",role:"administrator",permissions:["enter_scores","manage_players"]}]}}));
+      },web);
+    }
+    await owner.goto(audience === "admin" ? `${web}/admin/round-robin-generator/sessions/${sharedKey}/rounds/1`
+      : `${web}/clubs/test/round-robin-generator/sessions/${sharedKey}/rounds/1#edit=${encodeURIComponent(sharedRR.edit_token)}`);
+    await owner.getByRole("button",{name:"Share standings",exact:true}).click();
+    const standingsURL = await owner.getByLabel("Standings link").inputValue();
+    assert.ok(standingsURL.endsWith("/standings") && !standingsURL.includes("#"));
+    await owner.getByRole("button",{name:"Hand off RR",exact:true}).click();
+    const operatorURL = await owner.getByLabel("Private handoff link").inputValue();
+    assert.ok(operatorURL.includes("#edit="));
+    const viewer = await isolatedPage();
+    await viewer.goto(standingsURL);
+    await viewer.getByRole("table").waitFor();
+    assert.equal(await viewer.getByRole("button",{name:"Hand off RR",exact:true}).count(),0);
+    assert.equal(await viewer.getByRole("button",{name:"Next scheduled round",exact:true}).count(),0);
+    const handed = await isolatedPage();
+    await handed.goto(operatorURL);
+    await handed.waitForURL(/\/shared\/[^/]+\/rounds\/1$/);
+    for (const id of ["r1-c1","r1-c2"]) {
+      await handed.getByLabel(`${id} side A score`).fill("11");
+      await handed.getByLabel(`${id} side B score`).fill("7");
+    }
+    const handedSave = handed.waitForResponse(r => r.url().includes("/shared-play-generators/") && r.request().method()==="PATCH");
+    await handed.getByRole("button",{name:"Save round scores",exact:true}).click();
+    assert.equal((await handedSave).ok(),true);
+    await expect.poll(async () => (await viewer.getByRole("table").textContent()).includes("11"),{timeout:20000}).toBe(true);
+    await viewer.setViewportSize({width:390,height:844});
+    await viewer.screenshot({path:path.join(output,`shared-${audience}-rr-standings-mobile.png`),fullPage:true});
+    await handed.getByRole("button",{name:"Next scheduled round",exact:true}).click();
+    await handed.waitForURL(/\/shared\/[^/]+\/rounds\/2$/);
+    await owner.reload();
+    await owner.getByRole("button",{name:"Revoke handoff link",exact:true}).click();
+    await expect(owner.getByRole("status").filter({hasText:"Handoff link revoked"})).toBeVisible();
+    for (const id of ["r2-c1","r2-c2"]) {
+      await handed.getByLabel(`${id} side A score`).fill("11");
+      await handed.getByLabel(`${id} side B score`).fill("8");
+    }
+    const revokedSave = handed.waitForResponse(r => r.url().includes("/shared-play-generators/") && r.request().method()==="PATCH");
+    await handed.getByRole("button",{name:"Save round scores",exact:true}).click();
+    assert.equal((await revokedSave).status(),403);
+    const sharedAfter = (await request(`/clubs/test/shared-play-generators/sessions/${sharedKey}`)).session;
+    assert.equal(sharedAfter.event.rounds[0].status,"saved");
+    assert.equal(sharedAfter.event.rounds[1].status,"active");
+    assert.ok(sharedAfter.event.rounds[1].matches.every(match => match.scoreA == null));
+    await viewer.reload();
+    await viewer.getByRole("table").waitFor();
+    for (const context of contexts) await context.close();
+    console.log(`PASS ${audience} shared RR: independent organizer/operator/spectator sessions, live full standings, handed-off scores and current-round navigation, revocation blocks saves without removing standings`);
+    }
     for (const count of [4,5,8,9,12,16]) {
       const rounds = count % 4 === 0 ? count - 1 : count;
       const created = await request("/clubs/test/play-generators/sessions", {
