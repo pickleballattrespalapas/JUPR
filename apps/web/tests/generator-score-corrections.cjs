@@ -12,6 +12,7 @@ const stubs = {
   "@/lib/useAdminSession": { useAdminSession: () => ({ accessToken: "test-admin" }) },
   "@/components/interaction": { actionSuccess: (title, message) => ({ status: "success", title, message }) },
   "@/components/ConfirmAction": { ConfirmAction: ({ triggerLabel, description, onConfirm, disabled }) => h("button", { onClick: onConfirm, disabled, "data-description": description }, triggerLabel) },
+  "@/components/GeneratorSharing": () => null,
   "@/components/GeneratorSubmission": { __esModule: true, default: () => null, generatorResultLabel: () => "Unrated" },
   "@/components/SearchablePlayerSelect": { __esModule: true, default: () => null },
 };

@@ -1,5 +1,7 @@
 "use client";
 
+import GeneratorSharing from "@/components/GeneratorSharing";
+
 import Link from "@/components/PublicClubLink";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -17,7 +19,8 @@ type Session = {
   session_key: string;
   title: string;
   status: string;
-  version: string;
+  version: string | number;
+  results_locked?: boolean;
   generator_kind: string;
   play_format: string;
   rating_mode?: "rated" | "unrated";
@@ -38,7 +41,7 @@ type Session = {
   };
 };
 
-type Props = { apiBase: string | null; clubId: string; sessionKey: string };
+type Props = { apiBase: string | null; clubId: string; sessionKey: string; shared?: boolean };
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 const linkButton = { display: "inline-flex", alignItems: "center", minHeight: "38px", padding: "0.45rem 0.75rem", border: "1px solid #cbd5e1", borderRadius: "999px", color: "#0f172a", fontWeight: 800, textDecoration: "none" };
@@ -79,7 +82,9 @@ function requestErrorMessage(status: number, detail?: unknown): string {
   return "We couldn’t complete that request. Please try again.";
 }
 
-export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey }: Props) {
+export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey, shared = false }: Props) {
+  const sessionSegment = shared ? "shared" : "sessions";
+  const apiSegment = shared ? "shared-play-generators" : "play-generators";
   const router = useRouter();
   const [editToken, setEditToken] = useState("");
   const [session, setSession] = useState<Session | null>(null);
@@ -93,11 +98,17 @@ export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey }
     }
     try {
       const response = await fetch(
-        apiUrl(apiBase, `/clubs/${encodeURIComponent(clubId)}/play-generators/sessions/${encodeURIComponent(sessionKey)}`),
+        apiUrl(apiBase, `/clubs/${encodeURIComponent(clubId)}/${apiSegment}/sessions/${encodeURIComponent(sessionKey)}`),
         { cache: "no-store" }
       );
       const payload = await response.json().catch(() => null);
-      if (!response.ok) throw new UserFacingError(requestErrorMessage(response.status, payload?.detail));
+      if (!response.ok) {
+        if (shared && response.status === 403) {
+          sessionStorage.removeItem(`shared-generator-edit:${clubId}:${sessionKey}`);
+          setEditToken("");
+        }
+        throw new UserFacingError(requestErrorMessage(response.status, payload?.detail));
+      }
       if (payload?.session?.generator_kind !== "round_robin") throw new UserFacingError("This session doesn’t include round-robin standings.");
       setSession(payload.session as Session);
       setMessage("");
@@ -107,13 +118,20 @@ export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey }
   }
 
   useEffect(() => {
-    const storageKey = `public-generator-edit:${clubId}:${sessionKey}`;
+    const storageKey = `${shared ? "shared-generator-edit" : "public-generator-edit"}:${clubId}:${sessionKey}`;
     const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
     const discovered = hash.get("edit") || sessionStorage.getItem(storageKey) || "";
     if (discovered) { sessionStorage.setItem(storageKey, discovered); setEditToken(discovered); }
     if (hash.has("edit")) window.history.replaceState({}, "", `${window.location.pathname}${window.location.search}`);
     void loadSession();
-  }, [apiBase, clubId, sessionKey]);
+  }, [apiBase, clubId, sessionKey, shared]);
+
+  useEffect(() => {
+    if (!shared || editToken) return;
+    const timer = setInterval(() => { void loadSession(); }, 15000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shared, editToken, apiBase, clubId, sessionKey]);
 
   async function updateSession(action: "advance" | "complete"): Promise<void> {
     if (!apiBase || !editToken || !session) return;
@@ -121,15 +139,21 @@ export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey }
     setMessage("");
     try {
       const response = await fetch(
-        apiUrl(apiBase, `/clubs/${encodeURIComponent(clubId)}/play-generators/sessions/${encodeURIComponent(sessionKey)}/${action}`),
+        apiUrl(apiBase, `/clubs/${encodeURIComponent(clubId)}/${apiSegment}/sessions/${encodeURIComponent(sessionKey)}/${action}`),
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ edit_token: editToken, expected_version: Number(session.version), idempotency_key: operationKey(`standings-${action}`) })
+          body: JSON.stringify({ edit_token: editToken, expected_version: shared ? String(session.version) : Number(session.version), idempotency_key: operationKey(`standings-${action}`) })
         }
       );
       const payload = await response.json().catch(() => null);
-      if (!response.ok) throw new UserFacingError(requestErrorMessage(response.status, payload?.detail));
+      if (!response.ok) {
+        if (shared && response.status === 403) {
+          sessionStorage.removeItem(`shared-generator-edit:${clubId}:${sessionKey}`);
+          setEditToken("");
+        }
+        throw new UserFacingError(requestErrorMessage(response.status, payload?.detail));
+      }
       const next = payload?.session as Session | undefined;
       if (!next) throw new UserFacingError("We couldn’t confirm the next round. Refresh the page and try again.");
       setSession(next);
@@ -138,7 +162,7 @@ export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey }
         return;
       }
       const nextRound = Number(next.current_round_number || 1);
-      router.push(`/clubs/${clubId}/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${nextRound}`);
+      router.push(`/clubs/${clubId}/round-robin-generator/${sessionSegment}/${encodeURIComponent(sessionKey)}/rounds/${nextRound}`);
       router.refresh();
     } catch (error) {
       setMessage(requestFailureMessage(error, "We couldn’t continue the session. Please try again."));
@@ -153,17 +177,23 @@ export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey }
     setMessage("");
     try {
       const response = await fetch(
-        apiUrl(apiBase, `/clubs/${encodeURIComponent(clubId)}/play-generators/sessions/${encodeURIComponent(sessionKey)}/playoff`),
+        apiUrl(apiBase, `/clubs/${encodeURIComponent(clubId)}/${apiSegment}/sessions/${encodeURIComponent(sessionKey)}/playoff`),
         { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
-          edit_token: editToken, expected_version: Number(session.version), playoff_format: format,
+          edit_token: editToken, expected_version: shared ? String(session.version) : Number(session.version), playoff_format: format,
           idempotency_key: `generator-playoff:${sessionKey}:${session.version}:${format}`,
         }) }
       );
       const payload = await response.json().catch(() => null);
-      if (!response.ok) throw new UserFacingError(requestErrorMessage(response.status, payload?.detail));
+      if (!response.ok) {
+        if (shared && response.status === 403) {
+          sessionStorage.removeItem(`shared-generator-edit:${clubId}:${sessionKey}`);
+          setEditToken("");
+        }
+        throw new UserFacingError(requestErrorMessage(response.status, payload?.detail));
+      }
       if (!payload?.session) throw new UserFacingError("We couldn’t confirm the playoff. Refresh the page and try again.");
       setSession(payload.session as Session);
-      router.push(`/clubs/${clubId}/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${payload.session.current_round_number}`);
+      router.push(`/clubs/${clubId}/round-robin-generator/${sessionSegment}/${encodeURIComponent(sessionKey)}/rounds/${payload.session.current_round_number}`);
       router.refresh();
     } catch (error) {
       setMessage(requestFailureMessage(error, "We couldn’t start the playoff. Please try again."));
@@ -173,11 +203,11 @@ export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey }
   async function submitResults(organizerName: string, matchDate: string): Promise<void> {
     if (!apiBase || !editToken || !session) throw new Error("Use the organizer link to submit this session.");
     const response = await fetch(
-      apiUrl(apiBase, `/clubs/${encodeURIComponent(clubId)}/play-generators/sessions/${encodeURIComponent(sessionKey)}/submit`),
+      apiUrl(apiBase, `/clubs/${encodeURIComponent(clubId)}/${apiSegment}/sessions/${encodeURIComponent(sessionKey)}/submit`),
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ edit_token: editToken, idempotency_key: `generator-submit:${sessionKey}`, expected_version: Number(session.version), organizer_name: organizerName, match_date: matchDate })
+        body: JSON.stringify({ edit_token: editToken, idempotency_key: `generator-submit:${sessionKey}`, expected_version: shared ? String(session.version) : Number(session.version), organizer_name: organizerName, match_date: matchDate })
       }
     );
     const payload = await response.json().catch(() => null);
@@ -195,7 +225,7 @@ export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey }
   const currentStatus = session.event.rounds?.find((row) => row.number === currentRound)?.status || "";
   const sortMode = session.standings_sort || session.event.standingsSort || "wins";
   const visibleRounds = (session.event.rounds || []).filter((row) => row.number <= currentRound);
-  const resultsLocked = Boolean(session.submission);
+  const resultsLocked = Boolean(session.submission) || Boolean(session.results_locked);
   const canManage = Boolean(editToken) && scoringMode === "scored" && !resultsLocked;
   const canContinue = canManage && (session.status === "active" || (!session.event.playoff && session.status === "completed")) && ["saved", "skipped"].includes(currentStatus);
   const canFinish = canContinue && !session.event.playoff && session.status === "active" && visibleRounds.every((row) => ["saved", "skipped"].includes(row.status));
@@ -205,7 +235,7 @@ export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey }
     : session.status === "completed" ? `Keep playing · Round ${currentRound + 1}` : "Next scheduled round";
 
   if (scoringMode === "unscored") {
-    return <article style={cardStyle}><h1>{session.title}</h1><p>This unscored Round-Robin does not use standings.</p><Link href={`/clubs/${clubId}/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${currentRound}`}>Return to current round</Link></article>;
+    return <article style={cardStyle}><h1>{session.title}</h1><p>This unscored Round-Robin does not use standings.</p><Link href={`/clubs/${clubId}/round-robin-generator/${sessionSegment}/${encodeURIComponent(sessionKey)}/rounds/${currentRound}`}>Return to current round</Link></article>;
   }
 
   return (
@@ -215,17 +245,18 @@ export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey }
         <h1 style={{ margin: "0 0 0.35rem" }}>{session.title} standings</h1>
         <p style={{ margin: 0, color: "#475569" }}>{playFormatLabel(session.play_format)} · {standingsSortLabel(sortMode)} · {sessionStatusLabel(session.status)} · {session.submission?.status !== "approved" ? `${session.rating_mode === "rated" ? "Rated" : "Unrated"} · ` : ""}{generatorResultLabel(session.submission)}</p>
       </article>
+      {shared || editToken ? <GeneratorSharing apiBase={apiBase} clubId={clubId} sessionKey={sessionKey} version={session.version} ownerToken={shared ? undefined : editToken} shared={shared} locked={resultsLocked} disabled={busy} onChanged={loadSession} /> : null}
       <nav aria-label="Round-Robin session navigation" style={{ ...cardStyle, display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-        <Link href={`/clubs/${clubId}/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${currentRound}`} style={linkButton}>Current round</Link>
-        {visibleRounds.map((row) => <Link key={row.number} href={`/clubs/${clubId}/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${row.number}`} style={linkButton}>{row.label || `Round ${row.number}`}{row.status === "skipped" ? " · Skipped" : ""}</Link>)}
+        <Link href={`/clubs/${clubId}/round-robin-generator/${sessionSegment}/${encodeURIComponent(sessionKey)}/rounds/${currentRound}`} style={linkButton}>Current round</Link>
+        {visibleRounds.map((row) => <Link key={row.number} href={`/clubs/${clubId}/round-robin-generator/${sessionSegment}/${encodeURIComponent(sessionKey)}/rounds/${row.number}`} style={linkButton}>{row.label || `Round ${row.number}`}{row.status === "skipped" ? " · Skipped" : ""}</Link>)}
       </nav>
       {session.status === "completed" || session.submission ? (
         <div style={{ display: "grid", gap: "0.5rem" }}>
-          <GeneratorSubmission ratingMode={session.rating_mode || "unrated"} submission={session.submission} canSubmit={!resultsLocked && session.status === "completed" && Boolean(editToken)} defaultDate={session.created_at} onSubmit={submitResults} />
+          <GeneratorSubmission ratingMode={session.rating_mode || "unrated"} submission={session.submission} canSubmit={!shared && !resultsLocked && session.status === "completed" && Boolean(editToken)} defaultDate={session.created_at} onSubmit={submitResults} />
           {session.submission ? <button type="button" onClick={() => void loadSession()} style={{ ...linkButton, cursor: "pointer", justifySelf: "start", background: "white" }}>Refresh approval status</button> : null}
         </div>
       ) : null}
-      <GeneratorPlayoff event={session.event} options={session.playoff_options} canManage={Boolean(editToken)} locked={Boolean(session.submission)} busy={busy} onStart={startPlayoff} roundHref={round => `/clubs/${clubId}/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${round}`} />
+      <GeneratorPlayoff event={session.event} options={session.playoff_options} canManage={Boolean(editToken)} locked={resultsLocked} busy={busy} onStart={startPlayoff} roundHref={round => `/clubs/${clubId}/round-robin-generator/${sessionSegment}/${encodeURIComponent(sessionKey)}/rounds/${round}`} />
       <PlayGeneratorStandingsTable rows={session.standings || []} sortMode={sortMode} title={session.event.playoff ? "Round-robin standings" : undefined} />
       {session.status === "completed" ? (
         <article style={{ ...cardStyle, background: "#ecfdf5", borderColor: "#86efac" }}>

@@ -1,5 +1,7 @@
 "use client";
 
+import GeneratorSharing from "@/components/GeneratorSharing";
+
 import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
 import GeneratorRoundSchedule from "@/components/GeneratorRoundSchedule";
 import GeneratorLateArrivals from "@/components/GeneratorLateArrivals";
@@ -109,7 +111,7 @@ type SkipRoundRequest = {
   skipBody: {
     reason: string;
     edit_token: string;
-    expected_version: number;
+    expected_version: number | string;
     idempotency_key: string;
   };
   advanceIdempotencyKey: string;
@@ -146,6 +148,7 @@ type Props = {
   generatorKind: GeneratorKind;
   sessionKey: string;
   roundNumber: number;
+  shared?: boolean;
 };
 
 const cardStyle = {
@@ -357,8 +360,16 @@ export default function GeneratorRoundRunner({
   clubId,
   generatorKind,
   sessionKey,
-  roundNumber
+  roundNumber,
+  shared = false
 }: Props) {
+  function sessionRoundPath(kind: GeneratorKind, slug: string, key: string, number: number): string {
+    return shared ? `/clubs/${slug}/round-robin-generator/shared/${encodeURIComponent(key)}/rounds/${number}` : roundPath(kind, slug, key, number);
+  }
+  function sessionStandingsPath(slug: string, key: string): string {
+    return shared ? `/clubs/${slug}/round-robin-generator/shared/${encodeURIComponent(key)}/standings` : standingsPath(slug, key);
+  }
+  function sessionVersion(value: string | number): string | number { return shared ? String(value) : Number(value); }
   const router = useRouter();
   const [editToken, setEditToken] = useState("");
   const [session, setSession] = useState<GeneratorSession | null>(null);
@@ -387,13 +398,17 @@ export default function GeneratorRoundRunner({
     }
     const headers = new Headers(options?.headers);
     if (options?.body) headers.set("Content-Type", "application/json");
-    const response = await fetch(apiUrl(apiBase, path), {
+    const response = await fetch(apiUrl(apiBase, shared ? path.replace("/play-generators/", "/shared-play-generators/") : path), {
       ...options,
       headers,
       cache: "no-store"
     });
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
+      if (shared && response.status === 403) {
+        sessionStorage.removeItem(`shared-generator-edit:${clubId}:${sessionKey}`);
+        setEditToken("");
+      }
       const detail = payload?.detail;
       throw new ApiRequestError(apiErrorMessage(response.status, detail), response.status, detail);
     }
@@ -453,7 +468,7 @@ export default function GeneratorRoundRunner({
       const hasRequested = payload.session.event.rounds.some((row) => row.number === roundNumber);
       if (!hasRequested) {
         router.replace(
-          roundPath(
+          sessionRoundPath(
             generatorKind,
             clubId,
             sessionKey,
@@ -469,7 +484,7 @@ export default function GeneratorRoundRunner({
   }
 
   useEffect(() => {
-    const storageKey = `public-generator-edit:${clubId}:${sessionKey}`;
+    const storageKey = `${shared ? "shared-generator-edit" : "public-generator-edit"}:${clubId}:${sessionKey}`;
     const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
     const discovered = hash.get("edit") || sessionStorage.getItem(storageKey) || "";
     if (discovered) {
@@ -481,7 +496,7 @@ export default function GeneratorRoundRunner({
     }
     void loadSession();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clubId, sessionKey, roundNumber]);
+  }, [clubId, sessionKey, roundNumber, shared]);
 
   const event = session?.event || null;
   const participants = useMemo(
@@ -525,7 +540,7 @@ export default function GeneratorRoundRunner({
       body: JSON.stringify({
         ...body,
         edit_token: editToken,
-        expected_version: Number(session?.version || 1),
+        expected_version: sessionVersion(session?.version || 1),
         idempotency_key: operationKey(String(body.action || path.split("/").pop() || "mutation"))
       })
     });
@@ -557,7 +572,7 @@ export default function GeneratorRoundRunner({
           body: JSON.stringify({
             scores: scoreRows,
             edit_token: editToken,
-            expected_version: Number(session.version),
+            expected_version: sessionVersion(session.version),
             idempotency_key: operationKey("scores")
           })
         }
@@ -585,7 +600,7 @@ export default function GeneratorRoundRunner({
           method: "POST",
           body: JSON.stringify({
             edit_token: editToken,
-            expected_version: Number(session.version),
+            expected_version: sessionVersion(session.version),
             idempotency_key: operationKey("played")
           })
         }
@@ -600,7 +615,7 @@ export default function GeneratorRoundRunner({
         return;
       }
       const nextRound = playedPayload.session.current_round_number || roundNumber + 1;
-      router.push(roundPath(generatorKind, clubId, sessionKey, nextRound));
+      router.push(sessionRoundPath(generatorKind, clubId, sessionKey, nextRound));
       router.refresh();
     } catch (error) {
       setMessage(requestFailureMessage(error, "We couldn’t update the round. Please try again."));
@@ -636,7 +651,7 @@ export default function GeneratorRoundRunner({
             method: "POST",
             body: JSON.stringify({
               edit_token: request.skipBody.edit_token,
-              expected_version: Number(payload.session.version),
+              expected_version: sessionVersion(payload.session.version),
               idempotency_key: request.advanceIdempotencyKey
             })
           }
@@ -692,7 +707,7 @@ export default function GeneratorRoundRunner({
       skipBody: {
         reason: skipReason,
         edit_token: editToken,
-        expected_version: Number(session.version),
+        expected_version: sessionVersion(session.version),
         idempotency_key: operationKey("skip")
       },
       advanceIdempotencyKey: operationKey("advance-after-skip")
@@ -703,7 +718,7 @@ export default function GeneratorRoundRunner({
     const destination = skipDestinationRef.current;
     skipDestinationRef.current = null;
     if (typeof destination === "number") {
-      router.push(roundPath(generatorKind, clubId, sessionKey, destination));
+      router.push(sessionRoundPath(generatorKind, clubId, sessionKey, destination));
     }
     if (destination !== null) router.refresh();
   }
@@ -718,7 +733,7 @@ export default function GeneratorRoundRunner({
       if (canManage && !event.playoff && ["preview", "active", "skipped"].includes(target.status)) {
         await runMutation(`/clubs/${encodeURIComponent(clubId)}/play-generators/sessions/${encodeURIComponent(sessionKey)}/rounds/${number}/select`, {});
       }
-      router.push(roundPath(generatorKind, clubId, sessionKey, number));
+      router.push(sessionRoundPath(generatorKind, clubId, sessionKey, number));
       router.refresh();
     } catch (error) {
       setMessage(requestFailureMessage(error, "We couldn’t open that round. Please try again."));
@@ -780,7 +795,7 @@ export default function GeneratorRoundRunner({
         return;
       }
       const nextRound = next.current_round_number || roundNumber + 1;
-      router.push(roundPath(generatorKind, clubId, sessionKey, nextRound));
+      router.push(sessionRoundPath(generatorKind, clubId, sessionKey, nextRound));
       router.refresh();
     } catch (error) {
       setMessage(requestFailureMessage(error, "We couldn’t continue to the next round. Please try again."));
@@ -843,7 +858,7 @@ export default function GeneratorRoundRunner({
         : "This is the final round. Added arrivals can play together on a spare court below.");
       const current = next.current_round_number || roundNumber;
       if (current !== roundNumber) {
-        router.push(roundPath(generatorKind, clubId, sessionKey, current));
+        router.push(sessionRoundPath(generatorKind, clubId, sessionKey, current));
       } else {
         router.refresh();
       }
@@ -907,6 +922,8 @@ export default function GeneratorRoundRunner({
         {!editToken ? <p style={{ color: "#64748b" }}>Only the organizer can enter scores or change players.</p> : null}
       </article>
 
+      {generatorKind === "round_robin" && (shared || editToken) ? <GeneratorSharing apiBase={apiBase} clubId={clubId} sessionKey={sessionKey} version={session.version} ownerToken={shared ? undefined : editToken} shared={shared} locked={resultsLocked} disabled={busy || editingScores || (canEditRound && anyDraftScore)} onChanged={loadSession} /> : null}
+
       {session.status === "completed" ? (
         <article style={{ ...cardStyle, background: "#ecfdf5", borderColor: "#86efac" }}>
           <h2 style={{ marginTop: 0 }}>Session complete</h2>
@@ -919,7 +936,7 @@ export default function GeneratorRoundRunner({
         </article>
       ) : null}
 
-      {scoredSession ? <GeneratorSubmission ratingMode={session.rating_mode || "unrated"} submission={session.submission} canSubmit={session.status === "completed" && Boolean(editToken) && !editingScores} defaultDate={session.created_at} onSubmit={submitResults} /> : null}
+      {scoredSession && !shared ? <GeneratorSubmission ratingMode={session.rating_mode || "unrated"} submission={session.submission} canSubmit={session.status === "completed" && Boolean(editToken) && !editingScores} defaultDate={session.created_at} onSubmit={submitResults} /> : null}
 
       {generatorKind === "round_robin" && !event.playoff ? (
         <GeneratorRoundSchedule rounds={event.rounds} participants={event.participants}
@@ -947,22 +964,22 @@ export default function GeneratorRoundRunner({
           </div>
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
             {generatorKind === "round_robin" && scoredSession ? (
-              <Link href={standingsPath(clubId, sessionKey)} style={secondaryButton}>
+              <Link href={sessionStandingsPath(clubId, sessionKey)} style={secondaryButton}>
                 Standings
               </Link>
             ) : null}
             {!isCurrent ? (
-              <Link href={roundPath(generatorKind, clubId, sessionKey, event.currentRoundNumber)} style={secondaryButton}>
+              <Link href={sessionRoundPath(generatorKind, clubId, sessionKey, event.currentRoundNumber)} style={secondaryButton}>
                 Current round
               </Link>
             ) : null}
             {previousRound ? (
-              <Link href={roundPath(generatorKind, clubId, sessionKey, previousRound)} style={secondaryButton}>
+              <Link href={sessionRoundPath(generatorKind, clubId, sessionKey, previousRound)} style={secondaryButton}>
                 Previous round
               </Link>
             ) : null}
             {nextExisting && nextExisting <= Number(event.currentRoundNumber || 1) ? (
-              <Link href={roundPath(generatorKind, clubId, sessionKey, nextExisting)} style={secondaryButton}>
+              <Link href={sessionRoundPath(generatorKind, clubId, sessionKey, nextExisting)} style={secondaryButton}>
                 Next round
               </Link>
             ) : null}
@@ -1132,7 +1149,7 @@ export default function GeneratorRoundRunner({
             <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
               <h3 style={{ margin: 0 }}>Round {roundNumber} results</h3>
               {generatorKind === "round_robin" && scoredSession ? (
-                <Link href={standingsPath(clubId, sessionKey)} style={secondaryButton}>View full standings</Link>
+                <Link href={sessionStandingsPath(clubId, sessionKey)} style={secondaryButton}>View full standings</Link>
               ) : null}
             </div>
             <div style={{ overflowX: "auto" }}>
@@ -1433,9 +1450,9 @@ export default function GeneratorRoundRunner({
         <p style={{ color: "#475569" }}>
           {session.rating_mode === "rated" ? "Ratings update only after admin approval." : "These games won’t affect ratings."} Share this page with players or download the results below.
         </p>
-        <a href={`/api/clubs/${clubId}/play-generators/sessions/${sessionKey}/export?format=csv`}>
+        {!shared ? <a href={`/api/clubs/${clubId}/play-generators/sessions/${sessionKey}/export?format=csv`}>
           Download session CSV
-        </a>
+        </a> : null}
       </article>
 
       {message ? (
