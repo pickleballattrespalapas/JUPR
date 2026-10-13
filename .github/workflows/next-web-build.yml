@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "apps/web/**"
+      - "tests/e2e/generator_submission_api.py"
       - ".github/workflows/next-web-build.yml"
   workflow_dispatch:
 
