@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import pytest
+
+from jupr_app.data.paged_reads import DataReadUnavailable
 
 from jupr_app.services.public_player_service import (
     build_public_player_directory,
@@ -22,6 +25,9 @@ class FakeQuery:
         self.rows_by_table = rows_by_table
         self.filters: dict[str, object] = {}
         self.in_filters: dict[str, set[str]] = {}
+        self.or_filters: list[tuple[str, str]] = []
+        self.null_filters: list[str] = []
+        self.order_by: list[tuple[str, bool]] = []
         self.row_limit: int | None = None
 
     def select(self, *_args, **_kwargs):
@@ -36,7 +42,17 @@ class FakeQuery:
         self.in_filters[str(key)] = {str(value) for value in values}
         return self
 
-    def order(self, *_args, **_kwargs):
+    def or_(self, expression):
+        self.or_filters = [(key, value) for key, operator, value in (part.split(".", 2) for part in expression.split(",")) if operator == "eq"]
+        return self
+
+    def is_(self, key, value):
+        assert value == "null"
+        self.null_filters.append(key)
+        return self
+
+    def order(self, key, desc=False):
+        self.order_by.append((key, desc))
         return self
 
     def limit(self, value):
@@ -53,10 +69,18 @@ class FakeQuery:
             rows = [row for row in rows if str(row.get(key)) == str(value)]
         for key, values in self.in_filters.items():
             rows = [row for row in rows if str(row.get(key)) in values]
+        if self.or_filters:
+            rows = [row for row in rows if any(str(row.get(key)) == value for key, value in self.or_filters)]
+        for key in self.null_filters:
+            rows = [row for row in rows if row.get(key) is None]
+        for key, descending in reversed(self.order_by):
+            rows.sort(key=lambda row: (row.get(key) is None, row.get(key)), reverse=descending)
         if self.row_limit is not None:
             rows = rows[: self.row_limit]
         if hasattr(self, "page_bounds"):
             rows = rows[self.page_bounds[0]:self.page_bounds[1] + 1]
+        if hasattr(self, "server_cap"):
+            rows = rows[:self.server_cap]
         if self.table_name == "player_badges" and self.selected_columns != ["*"]:
             rows = [{key: row.get(key) for key in self.selected_columns} for row in rows]
         return FakeResponse(rows)
@@ -355,6 +379,116 @@ def test_soft_deleted_matches_are_suppressed_from_all_public_match_reads():
         match["id"] != 99
         for match in get_public_matches(supabase, club_id="club-1")
     )
+
+
+def _history_database(match_count=41):
+    db = FakeSupabase()
+    template = db.rows_by_table["matches"][0]
+    old_matches = []
+    positions = ("t1_p1", "t1_p2", "t2_p1", "t2_p2")
+    for index in range(match_count):
+        row = {**template, "id": index + 1, "date": "2026-02-04T12:00:00+00:00"}
+        position = positions[index % 4]
+        row["t1_p1"], row[position] = row[position], row["t1_p1"]
+        old_matches.append(row)
+    # More than the old club-wide cutoff, all belonging to other players.
+    newer_matches = [
+        {**template, "id": 10000 + index, "date": "2026-10-01", "t1_p1": 5}
+        for index in range(700)
+    ]
+    db.rows_by_table["matches"] = newer_matches + old_matches + [
+        {**template, "id": 20000, "club_id": "club-2"},
+        {**template, "id": 20001, "deleted_at": "2026-07-10"},
+    ]
+    db.rows_by_table["players"][0].update(active=False, last_game_at="2026-02-04")
+    return db
+
+
+def test_returning_player_retains_all_old_matches_in_every_position_and_derived_stats():
+    db = _history_database()
+    profile = get_public_player_profile(db, club_id="club-1", player_id="1")
+
+    assert profile["history"]["total_matches"] == 41
+    assert [row["id"] for row in profile["match_history"]] == list(range(41, 0, -1))
+    assert len(profile["recent_matches"]) == 12
+    assert len(profile["rating_history"]) == 41
+    assert sum(row["matches"] for row in profile["rating_breakdowns"]) == 41
+    assert sum(row["matches"] for row in profile["relationships"]["partners"]) == 41
+    assert sum(row["matches"] for row in profile["relationships"]["rivals"]) == 82
+    assert profile["player"]["is_active"] is False
+    assert [row["id"] for row in get_public_matches(db, club_id="club-1", player_id=1, limit=12, offset=12)] == list(range(29, 17, -1))
+    _assert_private_fields_absent(profile)
+
+
+def test_long_player_history_pages_past_server_caps_without_losing_totals_or_stats():
+    db = _history_database(match_count=1205)
+    original_table = db.table
+
+    def capped_table(table_name):
+        query = original_table(table_name)
+        if table_name == "matches":
+            query.server_cap = 73
+        return query
+
+    db.table = capped_table
+    pages = [get_public_player_profile(db, club_id="club-1", player_id=1, history_limit=500, history_offset=offset) for offset in (0, 500, 1000)]
+    assert [len(page["match_history"]) for page in pages] == [500, 500, 205]
+    assert [page["history"]["has_more"] for page in pages] == [True, True, False]
+    assert [page["history"]["history_offset"] for page in pages] == [0, 500, 1000]
+    assert all(page["history"]["total_matches"] == 1205 for page in pages)
+    assert all(len(page["rating_history"]) == 1205 for page in pages)
+    assert pages[0]["relationships"] == pages[2]["relationships"]
+    assert [row["id"] for page in pages for row in page["match_history"]] == list(range(1205, 0, -1))
+
+
+def test_league_filter_precedes_recent_and_full_history_pagination():
+    db = _history_database(match_count=80)
+    for row in db.rows_by_table["matches"]:
+        if row["id"] <= 80:
+            row["league"] = "Previous season" if row["id"] <= 25 else "Open"
+    profile = get_public_player_profile(db, club_id="club-1", player_id=1, history_limit=12, history_offset=12, history_league="Previous season")
+
+    assert profile["history"]["total_matches"] == 80
+    assert profile["history"]["filtered_matches"] == 25
+    assert profile["history"]["leagues"] == ["Open", "Previous season"]
+    assert [row["id"] for row in profile["recent_matches"]] == list(range(25, 13, -1))
+    assert [row["id"] for row in profile["match_history"]] == list(range(13, 1, -1))
+    assert len(profile["rating_history"]) == 80
+    final = get_public_player_profile(db, club_id="club-1", player_id=1, history_limit=12, history_offset=999, history_league="Previous season")
+    assert final["history"]["history_offset"] == 24
+    assert [row["id"] for row in final["match_history"]] == [1]
+    empty = get_public_player_profile(db, club_id="club-1", player_id=1, history_offset=50, history_league="Missing league")
+    assert empty["history"]["filtered_matches"] == 0
+    assert empty["history"]["history_offset"] == 0
+    assert empty["match_history"] == []
+
+
+def test_failed_history_read_is_an_error_instead_of_an_empty_or_partial_record():
+    db = _history_database(match_count=501)
+    original_table = db.table
+
+    def failing_table(table_name):
+        query = original_table(table_name)
+        execute = query.execute
+
+        def failing_execute():
+            if table_name == "matches" and getattr(query, "page_bounds", (0, 0))[0] > 0:
+                raise RuntimeError("History page unavailable")
+            return execute()
+
+        query.execute = failing_execute
+        return query
+
+    db.table = failing_table
+    with pytest.raises(DataReadUnavailable):
+        get_public_player_profile(db, club_id="club-1", player_id=1)
+    with pytest.raises(DataReadUnavailable):
+        get_public_matches(db, club_id="club-1", player_id=1)
+
+
+def test_invalid_player_id_cannot_expand_the_history_query():
+    db = _history_database()
+    assert get_public_matches(db, club_id="club-1", player_id="1,t1_p1.gt.0") == []
 
 
 def test_directory_partial_name_suggestions_are_accent_insensitive_and_club_scoped():

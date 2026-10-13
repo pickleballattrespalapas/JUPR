@@ -258,7 +258,7 @@ export type PlayerProfileResponse = {
   social: PublicSocialProjection;
   recent_matches: PublicMatch[];
   match_history: PublicMatch[];
-  history: { total_matches: number; recent_limit: number; history_limit: number; has_more: boolean };
+  history: { total_matches: number; recent_limit: number; history_limit: number; has_more: boolean; filtered_matches?: number; history_offset?: number; league?: string | null; leagues?: string[] };
 };
 
 export type MatchesResponse = {
@@ -671,11 +671,13 @@ export async function getClubPlayerOptions(
 export async function getClubPlayerProfile(
   clubSlug: string,
   playerId: string,
-  limits: { recent?: number; history?: number } = {}
+  limits: { recent?: number; history?: number; offset?: number; league?: string | null } = {}
 ): Promise<ApiResult<PlayerProfileResponse>> {
   const params = new URLSearchParams();
   if (limits.recent != null) params.set("recent_limit", String(limits.recent));
   if (limits.history != null) params.set("history_limit", String(limits.history));
+  if (limits.offset != null) params.set("history_offset", String(limits.offset));
+  if (limits.league) params.set("history_league", limits.league);
   const query = params.toString();
   return fetchJson<PlayerProfileResponse>(`/clubs/${clubSlug}/players/${playerId}${query ? `?${query}` : ""}`);
 }

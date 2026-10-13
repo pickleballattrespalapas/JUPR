@@ -277,6 +277,23 @@ def _fetch_recent_matches(supabase: Any, club_id: str, *, limit: int = 300) -> l
             return []
 
 
+def _fetch_player_matches(supabase: Any, club_id: str, player_id: int | str) -> list[dict[str, Any]]:
+    """Read the player's complete history, independent of newer club activity."""
+    pid = _int_or_none(player_id)
+    if pid is None or pid <= 0:
+        return []
+    player_filter = ",".join(f"{column}.eq.{pid}" for column in ("t1_p1", "t1_p2", "t2_p1", "t2_p2"))
+    rows = read_all_rows(
+        lambda: supabase.table("matches")
+        .select(MATCH_SELECT)
+        .eq("club_id", club_id)
+        .or_(player_filter)
+        .is_("deleted_at", "null"),
+        order="id",
+    )
+    return sorted(rows, key=_match_sort_key, reverse=True)
+
+
 def _fetch_match(supabase: Any, club_id: str, match_id: int | str) -> dict[str, Any] | None:
     try:
         row = _safe_first(
@@ -922,6 +939,8 @@ def get_public_player_profile(
     player_id: int | str,
     recent_match_limit: int = PUBLIC_PROFILE_RECENT_LIMIT,
     history_limit: int = PUBLIC_PROFILE_HISTORY_LIMIT,
+    history_offset: int = 0,
+    history_league: str | None = None,
 ) -> dict[str, Any] | None:
     cid = str(club_id).strip()
     row = _fetch_player(supabase, cid, player_id)
@@ -939,8 +958,7 @@ def get_public_player_profile(
     players = _fetch_players(supabase, cid)
     public_players = [_player_base(item) for item in players]
     name_by_id = {str(item.get("id")): str(item.get("name") or "Player") for item in public_players}
-    matches = [m for m in _fetch_recent_matches(supabase, cid, limit=600) if _match_includes_player(m, player_id)]
-    matches.sort(key=_match_sort_key, reverse=True)
+    matches = _fetch_player_matches(supabase, cid, player_id)
     rating = _rating_projection(player, matches, player_id=player_id)
     points_by_match = {str(point.get("match_id")): point for point in rating["history"] if point.get("match_id") is not None}
     public_matches: list[dict[str, Any]] = []
@@ -960,6 +978,12 @@ def get_public_player_profile(
 
     safe_recent_limit = max(1, min(int(recent_match_limit or PUBLIC_PROFILE_RECENT_LIMIT), 25))
     safe_history_limit = max(safe_recent_limit, min(int(history_limit or PUBLIC_PROFILE_HISTORY_LIMIT), 500))
+    selected_league = str(history_league or "").strip() or None
+    filtered_matches = [match for match in public_matches if match.get("league") == selected_league] if selected_league else public_matches
+    last_page_offset = ((len(filtered_matches) - 1) // safe_history_limit) * safe_history_limit if filtered_matches else 0
+    safe_history_offset = max(0, int(history_offset))
+    if safe_history_offset >= len(filtered_matches):
+        safe_history_offset = last_page_offset
     verified_updates = _verified_update_projection(supabase, club_id=cid, player_id=player_id)
     return {
         "player": player,
@@ -976,13 +1000,17 @@ def get_public_player_profile(
         "awards": _public_awards(supabase, club_id=cid, player_id=player_id),
         "relationships": _relationship_rows(matches, player_id=player_id, name_by_id=name_by_id),
         "social": _social_projection(supabase, club_id=cid, player_id=player_id),
-        "recent_matches": public_matches[:safe_recent_limit],
-        "match_history": public_matches[:safe_history_limit],
+        "recent_matches": filtered_matches[:safe_recent_limit],
+        "match_history": filtered_matches[safe_history_offset : safe_history_offset + safe_history_limit],
         "history": {
             "total_matches": len(public_matches),
+            "filtered_matches": len(filtered_matches),
             "recent_limit": safe_recent_limit,
             "history_limit": safe_history_limit,
-            "has_more": len(public_matches) > safe_history_limit,
+            "history_offset": safe_history_offset,
+            "league": selected_league,
+            "leagues": sorted({match["league"] for match in public_matches if match.get("league")}),
+            "has_more": safe_history_offset + safe_history_limit < len(filtered_matches),
         },
     }
 
@@ -993,15 +1021,18 @@ def get_public_matches(
     club_id: str,
     player_id: int | str | None = None,
     limit: int = 100,
+    offset: int = 0,
 ) -> list[dict[str, Any]]:
     cid = str(club_id).strip()
     players = _fetch_players(supabase, cid)
     name_by_id = {str(p.get("id")): (_plain_text(p.get("name"), limit=160) or "Player") for p in players}
-    rows = _fetch_recent_matches(supabase, cid, limit=max(int(limit or 100), 300 if player_id is not None else int(limit or 100)))
     if player_id is not None:
-        rows = [row for row in rows if _match_includes_player(row, player_id)]
+        rows = _fetch_player_matches(supabase, cid, player_id)
+    else:
+        rows = _fetch_recent_matches(supabase, cid, limit=int(limit or 100))
     public_rows = [_public_match(row, name_by_id) for row in rows]
-    return public_rows[: max(1, min(int(limit or 100), 500))]
+    safe_offset = max(0, int(offset))
+    return public_rows[safe_offset : safe_offset + max(1, min(int(limit or 100), 500))]
 
 
 def get_public_match_detail(
