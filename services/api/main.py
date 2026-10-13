@@ -1159,6 +1159,8 @@ def get_club_player_profile(
     player_id: str,
     recent_limit: int = Query(default=12, ge=1, le=25),
     history_limit: int = Query(default=500, ge=12, le=500),
+    history_offset: int = Query(default=0, ge=0),
+    history_league: str | None = Query(default=None, max_length=120),
 ) -> dict[str, Any]:
     club = get_club(club_slug)
     club_id = str(club.get("id") or club.get("club_id") or club_slug)
@@ -1170,9 +1172,11 @@ def get_club_player_profile(
             player_id=player_id,
             recent_match_limit=recent_limit,
             history_limit=history_limit,
+            history_offset=history_offset,
+            history_league=history_league,
         )
     except DataReadUnavailable as exc:
-        raise HTTPException(status_code=503, detail="Player achievements are temporarily unavailable.") from exc
+        raise HTTPException(status_code=503, detail="Player profile is temporarily unavailable.") from exc
     if profile is None:
         raise HTTPException(status_code=404, detail="player not found")
     return {"club": _public_club_payload(club, club_slug), **profile}
@@ -1198,11 +1202,20 @@ def get_club_match_detail(club_slug: str, match_id: str) -> dict[str, Any]:
 
 
 @app.get("/clubs/{club_slug}/players/{player_id}/matches")
-def get_club_player_matches(club_slug: str, player_id: str, limit: int = Query(default=100, ge=1, le=500)) -> dict[str, Any]:
+def get_club_player_matches(
+    club_slug: str,
+    player_id: str,
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
     club = get_club(club_slug)
     club_id = str(club.get("id") or club.get("club_id") or club_slug)
     supabase = get_supabase_client()
-    return {"club": _public_club_payload(club, club_slug), "matches": get_public_matches(supabase, club_id=club_id, player_id=player_id, limit=limit)}
+    try:
+        matches = get_public_matches(supabase, club_id=club_id, player_id=player_id, limit=limit, offset=offset)
+    except DataReadUnavailable as exc:
+        raise HTTPException(status_code=503, detail="Player match history is temporarily unavailable.") from exc
+    return {"club": _public_club_payload(club, club_slug), "matches": matches}
 
 
 @app.get("/clubs/{club_slug}/live-sessions")
