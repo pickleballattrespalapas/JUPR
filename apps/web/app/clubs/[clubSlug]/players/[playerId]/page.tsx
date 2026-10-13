@@ -11,6 +11,7 @@ type PlayerProfilePageProps = {
 
 type SectionKey = "overview" | "ratings" | "positions" | "trophies" | "social" | "matches" | "badges";
 type HistoryKey = "recent" | "all";
+const HISTORY_PAGE_SIZE = 50;
 type PlayerAwardPlacement = LeagueAwardProgressRow & { eligible_count?: number | null };
 type LeaguePosition = {
   leagueName: string;
@@ -40,11 +41,12 @@ function normalizeHistory(value: string | null): HistoryKey {
   return value === "all" ? "all" : "recent";
 }
 
-function pageHref({ clubSlug, playerId, section, league, history }: { clubSlug: string; playerId: string; section?: SectionKey | null; league?: string | null; history?: HistoryKey | null }): string {
+function pageHref({ clubSlug, playerId, section, league, history, page }: { clubSlug: string; playerId: string; section?: SectionKey | null; league?: string | null; history?: HistoryKey | null; page?: number }): string {
   const params = new URLSearchParams();
   if (section && section !== "overview") params.set("section", section);
   if (league) params.set("league", league);
   if (history === "all") params.set("history", "all");
+  if (history === "all" && page && page > 1) params.set("page", String(page));
   const query = params.toString();
   return `/clubs/${clubSlug}/players/${encodeURIComponent(playerId)}${query ? `?${query}` : ""}`;
 }
@@ -154,7 +156,9 @@ export default async function PlayerProfilePage({ params, searchParams }: Player
   const section = normalizeSection(firstParam(searchParams, "section"));
   const selectedLeague = firstParam(searchParams, "league");
   const historyView = normalizeHistory(firstParam(searchParams, "history"));
-  const { data, error } = await getClubPlayerProfile(clubSlug, playerId, { recent: 12, history: 500 });
+  const requestedPage = Number(firstParam(searchParams, "page") || 1);
+  const historyPage = historyView === "all" && Number.isSafeInteger(requestedPage) && requestedPage > 0 && Number.isSafeInteger(requestedPage * HISTORY_PAGE_SIZE) ? requestedPage : 1;
+  const { data, error } = await getClubPlayerProfile(clubSlug, playerId, { recent: 12, history: HISTORY_PAGE_SIZE, offset: (historyPage - 1) * HISTORY_PAGE_SIZE, league: selectedLeague });
   const player = data?.player;
 
   if (error || !player || !data) {
@@ -169,9 +173,12 @@ export default async function PlayerProfilePage({ params, searchParams }: Player
 
   const leagueRatings = data.league_ratings ?? [];
   const sourceMatches = historyView === "all" ? data.match_history : data.recent_matches;
-  const leagues = Array.from(new Set([...leagueRatings.map((row) => row.league_name).filter(Boolean), ...data.match_history.map((match) => match.league).filter(Boolean)] as string[])).sort((a, b) => a.localeCompare(b));
+  const leagues = Array.from(new Set([...leagueRatings.map((row) => row.league_name).filter(Boolean), ...(data.history.leagues ?? []), ...data.match_history.map((match) => match.league).filter(Boolean)] as string[])).sort((a, b) => a.localeCompare(b));
   const leaguePositionNames = leagues.filter(isLeagueName);
   const matches = selectedLeague ? sourceMatches.filter((match) => match.league === selectedLeague) : sourceMatches;
+  const historyTotal = data.history.filtered_matches ?? data.history.total_matches;
+  const historyOffset = data.history.history_offset ?? 0;
+  const currentHistoryPage = Math.floor(historyOffset / data.history.history_limit) + 1;
   const awards = data.awards;
   const social = data.social;
   const verifiedLabel = data.verified_updates.status === "enabled" ? "Player updates are on" : data.verified_updates.status === "pending" ? "Player update request is pending" : "Player updates are available";
@@ -359,13 +366,17 @@ export default async function PlayerProfilePage({ params, searchParams }: Player
           <p style={{ color: "#475569" }}>Each match is labeled Singles or Doubles. Rating changes appear when they&apos;re available.</p>
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
             <Link data-testid="player-history-recent" aria-current={historyView === "recent" ? "page" : undefined} href={pageHref({ clubSlug, playerId, section: "matches", league: selectedLeague, history: "recent" })} style={{ ...pillStyle, background: historyView === "recent" ? "#dcfce7" : "white" }}>Recent {data.history.recent_limit}</Link>
-            <Link data-testid="player-history-all" aria-current={historyView === "all" ? "page" : undefined} href={pageHref({ clubSlug, playerId, section: "matches", league: selectedLeague, history: "all" })} style={{ ...pillStyle, background: historyView === "all" ? "#dcfce7" : "white" }}>Full history ({data.history.total_matches})</Link>
+            <Link data-testid="player-history-all" aria-current={historyView === "all" ? "page" : undefined} href={pageHref({ clubSlug, playerId, section: "matches", league: selectedLeague, history: "all" })} style={{ ...pillStyle, background: historyView === "all" ? "#dcfce7" : "white" }}>Full history ({historyTotal})</Link>
           </div>
           {leagues.length ? <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}><Link href={pageHref({ clubSlug, playerId, section: "matches", history: historyView })} style={{ ...pillStyle, background: !selectedLeague ? "#dbeafe" : "white" }}>All leagues</Link>{leagues.map((league) => <Link key={league} href={pageHref({ clubSlug, playerId, section: "matches", league, history: historyView })} style={{ ...pillStyle, background: selectedLeague === league ? "#dbeafe" : "white" }}>{league}</Link>)}</div> : null}
           {matches.length === 0 ? <p data-testid="player-match-empty" style={{ color: "#475569" }}>No matches match this view.</p> : <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: "1040px" }}><thead><tr><th style={thStyle}>Date</th><th style={thStyle}>Format</th><th style={thStyle}>Result</th><th style={thStyle}>Team 1</th><th style={thStyle}>Score</th><th style={thStyle}>Team 2</th><th style={thStyle}>JUPR before → after</th><th style={thStyle}>League</th></tr></thead><tbody>
             {matches.map((match, index) => { const detailHref = match.id != null ? `/clubs/${clubSlug}/matches/${match.id}` : `/clubs/${clubSlug}/matches`; return <tr key={`${match.id ?? index}`} data-testid="player-match-row" data-format={match.match_format ?? "doubles"}><td style={tdStyle}><Link href={detailHref}>{formatDate(match.date)}</Link></td><td style={tdStyle}>{match.match_format_label ?? (match.match_format === "singles" ? "Singles" : "Doubles")}</td><td style={tdStyle}>{match.player_result === "win" ? "Win" : match.player_result === "loss" ? "Loss" : "—"}</td><td style={tdStyle}>{teamLabel(clubSlug, match.team_1)}</td><td style={tdStyle}><Link href={detailHref}>{matchScore(match)}</Link></td><td style={tdStyle}>{teamLabel(clubSlug, match.team_2)}</td><td style={tdStyle}>{ratingLabel(match.player_rating_before_jupr)} → {ratingLabel(match.player_rating_after_jupr)} ({signedRating(match.player_rating_delta_jupr)})</td><td style={tdStyle}>{match.league ?? "—"}</td></tr>; })}
           </tbody></table></div>}
-          {data.history.has_more && historyView === "all" ? <p style={{ color: "#92400e" }}>Showing the newest {data.history.history_limit} matches. Search club match history to find older matches.</p> : null}
+          {historyView === "all" && historyTotal > 0 ? <nav data-testid="player-history-pagination" aria-label="Match history pages" style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap", marginTop: "1rem" }}>
+            {historyOffset > 0 ? <Link data-testid="player-history-newer" href={pageHref({ clubSlug, playerId, section: "matches", league: selectedLeague, history: "all", page: currentHistoryPage - 1 })} style={pillStyle}>Newer matches</Link> : null}
+            <span>Matches {historyOffset + 1}–{historyOffset + matches.length} of {historyTotal}</span>
+            {data.history.has_more ? <Link data-testid="player-history-older" href={pageHref({ clubSlug, playerId, section: "matches", league: selectedLeague, history: "all", page: currentHistoryPage + 1 })} style={pillStyle}>Older matches</Link> : null}
+          </nav> : null}
         </section>
       ) : null}</Display>
 

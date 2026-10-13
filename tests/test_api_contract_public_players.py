@@ -84,10 +84,10 @@ def test_player_profile_contract_exposes_parity_sections_and_forwards_limits(cli
         }
 
     monkeypatch.setattr("services.api.main.get_public_player_profile", fake_profile)
-    response = client.get("/clubs/tres-palapas/players/1?recent_limit=7&history_limit=80")
+    response = client.get("/clubs/tres-palapas/players/1?recent_limit=7&history_limit=80&history_offset=80&history_league=Fall+2025")
 
     assert response.status_code == 200
-    assert captured == {"club_id": "club-1", "player_id": "1", "recent_match_limit": 7, "history_limit": 80}
+    assert captured == {"club_id": "club-1", "player_id": "1", "recent_match_limit": 7, "history_limit": 80, "history_offset": 80, "history_league": "Fall 2025"}
     payload = response.json()
     for field in ("identity", "verified_updates", "rating_summary", "rating_breakdowns", "rating_history", "awards", "relationships", "social", "match_history"):
         assert field in payload
@@ -101,3 +101,30 @@ def test_unknown_player_is_a_stable_404(client, monkeypatch):
 
     assert response.status_code == 404
     assert response.json() == {"detail": "player not found"}
+
+
+def test_player_match_endpoint_forwards_pagination(client, monkeypatch):
+    captured = {}
+
+    def fake_matches(_supabase, **kwargs):
+        captured.update(kwargs)
+        return [{"id": 41}]
+
+    monkeypatch.setattr("services.api.main.get_public_matches", fake_matches)
+    response = client.get("/clubs/tres-palapas/players/1/matches?limit=50&offset=500")
+    assert response.status_code == 200
+    assert captured == {"club_id": "club-1", "player_id": "1", "limit": 50, "offset": 500}
+    assert response.json()["matches"] == [{"id": 41}]
+
+
+@pytest.mark.parametrize("suffix,function", [("", "get_public_player_profile"), ("/matches", "get_public_matches")])
+def test_player_history_failure_is_not_returned_as_zero_matches(client, monkeypatch, suffix, function):
+    from jupr_app.data.paged_reads import DataReadUnavailable
+
+    def unavailable(*_args, **_kwargs):
+        raise DataReadUnavailable("private database error")
+
+    monkeypatch.setattr(f"services.api.main.{function}", unavailable)
+    response = client.get(f"/clubs/tres-palapas/players/1{suffix}")
+    assert response.status_code == 503
+    assert "private database error" not in response.text
