@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import copy
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pytest
@@ -12,6 +14,7 @@ from test_public_play_generator_service import Query as BaseQuery, matches
 from jupr_app.data import load as data_loader
 from jupr_app.services import generator_submission_service as service
 from jupr_app.services import direct_match_entry_service as direct
+from jupr_app.domain import player_activity
 from jupr_app.services.public_play_generator_service import (
     advance_public_play_generator_session, complete_public_play_generator_session, create_public_play_generator_session,
     save_public_play_generator_round, get_public_play_generator_session,
@@ -140,6 +143,70 @@ def review_args(session):
     return {"club_id": "club", "session_key": session["session_key"], "expected_version": session["version"],
         "action": "approve", "player_ids": {p["id"]: int(p["name"].split()[-1]) for p in session["event"]["participants"]},
         "match_date": "2026-09-20", "reason": "", "actor_email": "admin@example.invalid", "actor_role": "administrator"}
+
+
+def freeze_approval_clock(monkeypatch, now):
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now.astimezone(tz) if tz else now.replace(tzinfo=None)
+    monkeypatch.setattr(service, "datetime", Clock)
+    monkeypatch.setattr(player_activity, "datetime", Clock)
+
+
+@pytest.mark.parametrize("rating_mode,play_format", [
+    ("rated", "doubles"),
+    ("rated", "singles"), ("rated", "doubles_singles"),
+])
+def test_morning_approval_keeps_players_active_and_retry_keeps_frozen_time(
+    db, monkeypatch, real_approval_data, rating_mode, play_format,
+):
+    now = datetime(2026, 10, 11, 15, 23, 50, tzinfo=timezone.utc)
+    freeze_approval_clock(monkeypatch, now)
+    session, token = completed_session(db, rating_mode=rating_mode, play_format=play_format)
+    session = submit(db, session, token)
+    args = {**review_args(session), "match_date": "2026-10-11"}
+    db.interrupt_after_commit = True
+    with pytest.raises(direct.DirectMatchRecoveryRequiredError):
+        service.review_generator_submission(db, **args)
+    committed = copy.deepcopy(db.db["matches"])
+    assert committed
+    for match in committed:
+        assert datetime.fromisoformat(match["date"]).astimezone(timezone.utc) == now
+    played_ids = {m[k] for m in committed for k in ("t1_p1", "t1_p2", "t2_p1", "t2_p2") if m.get(k) is not None}
+    for player in db.db["players"]:
+        if player["id"] in played_ids:
+            assert player["active"] is True and player["inactive_at"] is None
+            assert datetime.fromisoformat(player["last_game_at"]).astimezone(timezone.utc) == now
+    freeze_approval_clock(monkeypatch, now + timedelta(hours=8))
+    assert service.review_generator_submission(db, **args)["status"] == "approved"
+    # Mixed sessions may publish the second format on retry; all games must use
+    # the timestamp reserved by the original approval, with no duplicates.
+    assert db.db["matches"][:len(committed)] == committed
+    assert all(datetime.fromisoformat(m["date"]).astimezone(timezone.utc) == now for m in db.db["matches"])
+
+
+@pytest.mark.parametrize("now,played_on,expected", [
+    ("2026-10-11T20:00:00+00:00", "2026-10-11", "2026-10-11T12:00:00-07:00"),
+    ("2026-10-11T15:00:00+00:00", "2026-10-10", "2026-10-10T12:00:00-07:00"),
+    ("2026-10-12T02:00:00+00:00", "2026-10-11", "2026-10-11T12:00:00-07:00"),
+    ("2026-10-12T07:01:00+00:00", "2026-10-12", "2026-10-12T00:01:00-07:00"),
+])
+def test_date_only_game_time_uses_club_day(monkeypatch, now, played_on, expected):
+    freeze_approval_clock(monkeypatch, datetime.fromisoformat(now))
+    assert service._played_at(played_on, ZoneInfo("America/Mazatlan")) == expected
+
+
+def test_future_club_day_cannot_reserve_an_approval(db, monkeypatch):
+    freeze_approval_clock(monkeypatch, datetime(2026, 10, 12, 2, tzinfo=timezone.utc))
+    session, token = completed_session(db)
+    session = submit(db, session, token)
+    db.db.setdefault("pcs_club_sites", [])
+    db.db.setdefault("club_leaderboard_settings", [])
+    before = copy.deepcopy(db.db)
+    with pytest.raises(ValueError, match="cannot be in the future"):
+        service.review_generator_submission(db, **{**review_args(session), "match_date": "2026-10-12"})
+    assert db.db == before
 
 
 def title_args(session):
