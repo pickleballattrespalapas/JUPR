@@ -106,6 +106,16 @@ def _date(value: str) -> str:
     return parsed.isoformat()
 
 
+def _played_at(match_date: str, zone: ZoneInfo) -> str:
+    """Keep date-only games on their local day without future activity times."""
+    now = datetime.now(timezone.utc).astimezone(zone)
+    played_on = date.fromisoformat(match_date)
+    if played_on > now.date():
+        raise ValueError("The match date cannot be in the future.")
+    noon = datetime.combine(played_on, time(12), zone)
+    return min(noon, now).isoformat()
+
+
 def submit_generator_session(
     db, *, club_id: str, session_key: str, expected_version: str | int,
     organizer_name: str, match_date: str, edit_token: str | None = None,
@@ -322,7 +332,7 @@ def review_generator_submission(
                 pid = str(participant.get("id"))
                 participant["player_id"] = player_ids.get(pid, participant.get("player_id"))
             zone = ZoneInfo(_leaderboard_settings(db, club_id).get("timezone") or "America/Mazatlan")
-            played_at = datetime.combine(date.fromisoformat(request["match_date"]), time(12), zone).isoformat()
+            played_at = _played_at(request["match_date"], zone)
             payloads = _publish_payloads(event, session_key=session_key,
                 match_date=played_at, operation_key=operation_key, published_ids=set())
             if not payloads:
