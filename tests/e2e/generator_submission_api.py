@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT), str(ROOT / "tests")]
 os.environ["JUPR_ENV"] = "test"
 os.environ["JUPR_PUBLIC_LIVE_TOKEN_SECRET"] = "local-browser-fixture-secret-00000000000000000000"
+os.environ["JUPR_PUBLIC_LIVE_CREATE_LIMIT_PER_HOUR"] = "30"  # Many isolated browser scenarios share one fixture visitor.
 os.environ["JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR"] = "1"
 
 import pytest
