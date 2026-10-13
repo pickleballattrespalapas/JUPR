@@ -1,5 +1,7 @@
 "use client";
 
+import GeneratorSharing from "@/components/GeneratorSharing";
+
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -181,6 +183,7 @@ export default function AdminGeneratorStandings({ apiBase, clubId, sessionKey }:
         <h1 style={{ margin: "0 0 0.35rem" }}>{session.title} standings</h1>
         <p style={{ margin: 0, color: "#475569" }}>{playFormatLabel(session.play_format)} · {standingsSortLabel(sortMode)} · {session.status === "completed" ? "Complete" : "In progress"} · {session.submission?.status !== "approved" ? `${session.rating_mode === "rated" ? "Rated" : "Unrated"} · ` : ""}{generatorResultLabel(session.submission)}</p>
       </article>
+      <GeneratorSharing apiBase={apiBase} clubId={clubId} sessionKey={sessionKey} version={session.version} adminToken={accessToken || undefined} locked={resultsLocked} disabled={busy} onChanged={loadSession} />
       <nav aria-label="Round-Robin session navigation" style={{ ...cardStyle, display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
         <Link href={`/admin/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${currentRound}`} style={linkButton}>Current round</Link>
         {visibleRounds.map((row) => <Link key={row.number} href={`/admin/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${row.number}`} style={linkButton}>{row.label || `Round ${row.number}`}{row.status === "skipped" ? " · Skipped" : ""}</Link>)}

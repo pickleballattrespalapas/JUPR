@@ -1,5 +1,7 @@
 "use client";
 
+import GeneratorSharing from "@/components/GeneratorSharing";
+
 import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
 import GeneratorRoundSchedule from "@/components/GeneratorRoundSchedule";
 import GeneratorLateArrivals from "@/components/GeneratorLateArrivals";
@@ -875,6 +877,8 @@ export default function GeneratorRoundRunner({
           {playFormatLabel(session.play_format)} · Round {roundNumber}{generatorKind === "ladder" ? ` of ${event.totalRounds}` : ""} · {scoredSession ? "Scored" : "Unscored"} · {round.status}
         </p>
       </article>
+
+      {generatorKind === "round_robin" ? <GeneratorSharing apiBase={apiBase} clubId={clubId} sessionKey={sessionKey} version={session.version} adminToken={accessToken || undefined} locked={resultsLocked} disabled={busy || editingScores || (canEditRound && anyDraftScore)} onChanged={loadSession} /> : null}
 
       {session.status === "completed" ? (
         <article style={{ ...cardStyle, background: "#ecfdf5", borderColor: "#86efac" }}>
