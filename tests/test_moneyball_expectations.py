@@ -155,3 +155,76 @@ def test_missing_or_foreign_ratings_never_get_defaulted():
         preview_public_play_generator(db,club_id="club",generator_kind="round_robin",play_format="doubles",
             title="Moneyball",participant_names=names,participant_player_ids={name:i+1 for i,name in enumerate(names)},
             total_rounds=7,court_count=0,event_format="moneyball_expectations")
+
+
+@pytest.mark.parametrize("count", [n for n in range(4,41) if n % 4 in {0,1}])
+def test_every_supported_perfect_size_geometry(count):
+    from jupr_app.domain.perfect_round_robin import perfect_doubles_schedule
+    from jupr_app.domain.moneyball_expectations import config_from_event
+    schedule = perfect_doubles_schedule([f"p-{i}" for i in range(count)])
+    event = preview(participant_names=[f"Player {i}" for i in range(count)],
+                    player_ids=list(range(1,count+1)), total_rounds=len(schedule))
+    config = config_from_event(event, {p["id"]:3.5 for p in event["participants"]})
+    moneyball_probability.validate_config(config)
+    a, support, probabilities, pct, pmfs, expected = moneyball_probability.distributions(config,
+        __import__("json").loads(__import__("pathlib").Path(moneyball_probability.__file__).with_name("moneyball_model_v1.json").read_text()))
+    assert a.shape == (count*(count-1)//4,count)
+    assert pmfs.shape == (count,22*(count-1)+1)
+    assert all(abs(p.sum()-1)<1e-12 for p in pmfs)
+    assert len(event["rounds"]) == (count-1 if count%4==0 else count)
+
+
+def test_substitution_disqualifies_both_and_preserves_everyone_elses_expectations(frozen):
+    event = save(start_generator_event(frozen),1)
+    event = advance_generator_event(event)
+    before = deepcopy(event)
+    changed = mutate_generator_roster(event, action="substitute",participant_id="p-1",name="Substitute",player_id=99,substitute_scope="rest")
+    assert changed["moneyballPrivate"] == before["moneyballPrivate"]
+    assert changed["rounds"][0] == before["rounds"][0]
+    assert changed["moneyballDisqualified"] == ["p-1","p-sub-1"]
+    for number in range(2,8):
+        changed = save(changed,number,11,7)
+        before = save(before,number,11,7)
+    changed = complete_generator_event(changed)
+    before = complete_generator_event(before)
+    rows = {r["participantId"]:r for r in generator_event_standings(changed)}
+    original = {r["participantId"]:r for r in generator_event_standings(before)}
+    assert rows["p-1"]["matches"] == 1 and rows["p-sub-1"]["matches"] == 6
+    for pid in ["p-1","p-sub-1"]:
+        assert not rows[pid]["moneyballEligible"] and rows[pid]["rank"] == 0
+        assert rows[pid]["moneyballScore"] is None
+    for pid in original.keys()-{"p-1"}:
+        for key in ["moneyballScore","expectedWins","expectedDifferential","wins","differential"]:
+            assert rows[pid][key] == original[pid][key]
+    winners = settlement(changed,list(rows.values()))["winners"]
+    assert not {w["participantId"] for w in winners} & {"p-1","p-sub-1"}
+    assert sum(w["payoutMxn"] for w in winners)==800
+
+
+def test_temporary_and_chained_substitutes_cannot_win_or_change_saved_games(frozen):
+    event = start_generator_event(frozen)
+    changed = mutate_generator_roster(event,action="substitute",participant_id="p-1",name="Temporary",player_id=90,substitute_scope="round")
+    assert "p-sub-1" in str(changed["rounds"][0]["matches"])
+    assert changed["rounds"][1] == event["rounds"][1]
+    with pytest.raises(ValueError,match="different player"):
+        mutate_generator_roster(changed,action="substitute",participant_id="p-2",name="Duplicate",player_id=90)
+    rest = mutate_generator_roster(event,action="substitute",participant_id="p-1",name="First",player_id=91)
+    second = mutate_generator_roster(rest,action="substitute",participant_id="p-sub-1",name="Second",player_id=92)
+    assert set(second["moneyballDisqualified"]) == {"p-1","p-sub-1","p-sub-2"}
+    assert second["participants"][-1]["moneyballSlot"] == "p-1"
+    for n in range(1,8):second=save(second,n)
+    second=complete_generator_event(second)
+    assert all(not r["moneyballEligible"] for r in generator_event_standings(second) if r["participantId"] in second["moneyballDisqualified"])
+
+
+def test_pool_scales_with_starting_lineup_and_no_substitute_contributions():
+    from jupr_app.domain.moneyball_expectations import _prepare
+    event=preview(participant_names=[f"Player {i}" for i in range(5)],player_ids=list(range(1,6)),total_rounds=5)
+    event=freeze_moneyball(event,{p["id"]:3.5 for p in event["participants"]})
+    event=start_generator_event(event)
+    assert event["moneyball"]["prizePoolMxn"]==500 and event["moneyball"]["requiredRounds"]==5
+    event=mutate_generator_roster(event,action="substitute",participant_id=event["rounds"][0]["matches"][0]["sideA"][0],name="Guest")
+    for n in range(1,6):event=save(event,n)
+    event=complete_generator_event(event)
+    assert settlement(event,generator_event_standings(event))["totalGames"]==5
+    assert sum(w["payoutMxn"] for w in settlement(event,generator_event_standings(event))["winners"])==500

@@ -612,7 +612,8 @@ export default function GeneratorWorkspace({
               const format = event.target.value as "standard" | "moneyball_expectations";
               setEventFormat(format);
               if (format === "moneyball_expectations") {
-                setPlayFormat("doubles"); setScoringMode("scored"); setTargetCount(8);
+                setPlayFormat("doubles"); setScoringMode("scored");
+                if (targetCount % 4 !== 0 && targetCount % 4 !== 1) setTargetCount(8);
               }
               invalidatePreview();
             }} style={inputStyle}>
@@ -620,8 +621,8 @@ export default function GeneratorWorkspace({
               <option value="moneyball_expectations">Moneyball vs Expectations</option>
             </select>
             {moneyball ? <small style={{ display: "block", marginTop: ".5rem" }}>
-              Eight players · seven rounds · games to 11, win by two. 100 pesos each; winner takes the 800-peso pool.
-              Select rated club players. Ratings and matchups freeze before play. Best performance against expectations wins; close losses can help. This is a trial format.
+              {targetCount} players · {automaticSetup.totalRounds} fixed rounds · games to 11, win by two. 100 pesos each; winner takes the {targetCount * 100}-peso pool.
+              Select rated club players. The lineup, ratings and scheduled slots freeze before play. Substitutions disqualify both players from winning. Best performance against expectations wins; close losses can help. This is a trial format.
             </small> : null}
           </label> : null}
           <label>
@@ -716,7 +717,7 @@ export default function GeneratorWorkspace({
           clubKey={clubId}
           generatorKind={generatorKind}
           playFormat={playFormat}
-          fixedPlayerCount={moneyball ? 8 : undefined}
+          perfectRotationOnly={moneyball}
           targetCount={targetCount}
           participantText={participantText}
           linkedPlayerIds={linkedPlayerIds}
