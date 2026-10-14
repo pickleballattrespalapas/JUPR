@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT), str(ROOT / "tests")]
 os.environ["JUPR_ENV"] = "test"
 os.environ["JUPR_PUBLIC_LIVE_TOKEN_SECRET"] = "local-browser-fixture-secret-00000000000000000000"
+os.environ["JUPR_PUBLIC_LIVE_CREATE_LIMIT_PER_HOUR"] = "30"  # Many isolated browser scenarios share one fixture visitor.
 os.environ["JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR"] = "1"
 
 import pytest
@@ -30,14 +31,19 @@ from services.api import admin_play_generator_routes as admin
 from services.api import admin_player_editor_routes as editor
 from services.api.club_site_models import default_site
 from services.api.public_play_generator_routes import install_public_play_generator_routes
+from services.api.shared_play_generator_routes import install_shared_play_generator_routes
 
 patches = pytest.MonkeyPatch()
 database = fixture_db.__wrapped__(patches)
+database.db["clubs"] = [{"id": "club", "slug": "test"}]
 
 
 class CreationQuery(FixtureQuery):
     """Mirror database-generated IDs for real player-creation service calls."""
     def execute(self):
+        if self.name == "live_sessions" and self.payload is not None:
+            for row in self.payload if isinstance(self.payload, list) else [self.payload]:
+                row.setdefault("version", 1)
         if self.name in {"players", "admin_guarded_operations"} and self.payload is not None:
             rows = self.payload if isinstance(self.payload, list) else [self.payload]
             next_id = max((int(row.get("id") or 0) for row in self.db.get(self.name, [])), default=0) + 1
@@ -74,6 +80,10 @@ install_public_play_generator_routes(
     public_writes_enabled=lambda: True,
     service_role_configured=lambda: True,
 )
+install_shared_play_generator_routes(app, get_club=lambda slug: {"id": "club"},
+    get_supabase_client=lambda: database, require_public_writes=lambda: None,
+    require_service_role=lambda: None, require_admin_writes=lambda club_id: None,
+    requester_hash=lambda request: "a" * 64, raise_public_error=raise_error)
 
 
 def authenticate(authorization):
@@ -116,6 +126,6 @@ def players(slug: str):
 @app.get("/fixture-result")
 def result():
     # Public serializers omit organizer tokens and internal recovery data.
-    sessions = [get_public_play_generator_session(database, club_id="club", session_key=row["session_key"])["session"]
+    sessions = [(admin.get_play_generator_session if row["state"].get("mode") == "admin_play_generator" else get_public_play_generator_session)(database, club_id="club", session_key=row["session_key"])["session"]
                 for row in database.db["live_sessions"]]
     return {"matches": database.db["matches"], "players": database.db["players"], "sessions": sessions}
