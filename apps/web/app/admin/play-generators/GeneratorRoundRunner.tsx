@@ -389,6 +389,7 @@ export default function GeneratorRoundRunner({
 
   function applySession(next: GeneratorSession, preserveDraftScores = false): void {
     setSession(next);
+    if (next.event.eventFormat === "moneyball_expectations") setRosterAction("substitute");
     setEditingSavedScores(false);
     const nextScores: Record<string, string> = {};
     const requestedRound = next.event.rounds.find((row) => row.number === roundNumber);
@@ -809,7 +810,9 @@ export default function GeneratorRoundRunner({
       setSecondSwapParticipant("");
       setNewPlayerName("");
       setNewPlayerId("");
-      setMessage(generatorKind === "round_robin" || roundNumber < next.event.totalRounds
+      setMessage(next.event.eventFormat === "moneyball_expectations"
+        ? "Substitution applied. Both players are ineligible to win; expectations remain fixed."
+        : generatorKind === "round_robin" || roundNumber < next.event.totalRounds
         ? `Players updated for Round ${roundNumber + 1}. Current games and score entries stay in place.`
         : "This is the final round. Added arrivals can play together on a spare court below.");
       const current = next.current_round_number || roundNumber;
@@ -1182,14 +1185,14 @@ export default function GeneratorRoundRunner({
         ) : null}
       </article>
 
-      {canManage && isCurrent && session.status === "active" && !event.playoff && event.eventFormat !== "moneyball_expectations" ? (
+      {canManage && isCurrent && session.status === "active" && !event.playoff ? (
         <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>Adaptive roster</h2>
+          <h2 style={{ marginTop: 0 }}>{event.eventFormat === "moneyball_expectations" ? "Substitute a player" : "Adaptive roster"}</h2>
           <p style={{ color: "#475569" }}>
-            {generatorKind === "round_robin" || roundNumber < event.totalRounds
+            {event.eventFormat === "moneyball_expectations" ? "A substitute fills the same scheduled slot. Both the original player and substitute become ineligible to win. Saved games and everyone else’s expectations stay fixed." : generatorKind === "round_robin" || roundNumber < event.totalRounds
               ? "Changes apply from the next round. Current games, byes and scores stay in place."
               : "This is the final round. Current games, byes and scores stay in place."}
-            {generatorKind === "round_robin" && ["singles", "doubles"].includes(event.playFormat)
+            {event.eventFormat === "moneyball_expectations" ? "" : generatorKind === "round_robin" && ["singles", "doubles"].includes(event.playFormat)
               ? " Add late arrivals here; they can join players on a bye for a game on a spare court below."
               : " Added players join from the next round."}
           </p>
@@ -1210,11 +1213,11 @@ export default function GeneratorRoundRunner({
                 }
                 style={inputStyle}
               >
-                <option value="add">Add player</option>
-                <option value="remove">Remove player</option>
+                {event.eventFormat !== "moneyball_expectations" ? <><option value="add">Add player</option>
+                <option value="remove">Remove player</option></> : null}
                 <option value="substitute">Substitute player</option>
-                <option value="swap">Swap players</option>
-                <option value="reorder">Reorder roster</option>
+                {event.eventFormat !== "moneyball_expectations" ? <><option value="swap">Swap players</option>
+                <option value="reorder">Reorder roster</option></> : null}
               </select>
             </label>
 
@@ -1323,7 +1326,7 @@ export default function GeneratorRoundRunner({
                   style={inputStyle}
                 >
                   <option value="rest">Rest of session</option>
-                  <option value="round">Next round only</option>
+                  <option value="round">{event.eventFormat === "moneyball_expectations" ? "Current unscored round only" : "Next round only"}</option>
                 </select>
               </label>
             ) : null}
@@ -1371,6 +1374,7 @@ export default function GeneratorRoundRunner({
             onClick={() => void saveRosterChange()}
             disabled={
               busy ||
+              (event.eventFormat === "moneyball_expectations" && (editingScores || (canEditRound && anyDraftScore))) ||
               (rosterAction === "remove" && !selectedParticipant) ||
               (rosterAction === "substitute" &&
                 (!selectedParticipant || !newPlayerName.trim())) ||
@@ -1382,9 +1386,9 @@ export default function GeneratorRoundRunner({
             }
             style={{ ...primaryButton, marginTop: "0.8rem" }}
           >
-            {rosterAction === "add" ? (generatorKind === "round_robin" || roundNumber < event.totalRounds ? "Add player for next round" : "Add late arrival") : "Apply change for next round"}
+            {rosterAction === "add" ? (generatorKind === "round_robin" || roundNumber < event.totalRounds ? "Add player for next round" : "Add late arrival") : event.eventFormat === "moneyball_expectations" ? "Apply substitution · both players ineligible" : "Apply change for next round"}
           </button>
-          <GeneratorLateArrivals
+          {event.eventFormat !== "moneyball_expectations" ? <GeneratorLateArrivals
             participants={event.participants}
             roundNumber={roundNumber}
             totalRounds={event.totalRounds}
@@ -1396,7 +1400,7 @@ export default function GeneratorRoundRunner({
             byeParticipantIds={round.byeParticipantIds}
             busy={busy}
             onStart={startArrivalGame}
-          />
+          /> : null}
         </article>
       ) : null}
 

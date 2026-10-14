@@ -20,7 +20,7 @@ from typing import Any
 from uuid import uuid4
 
 from jupr_app.domain.moneyball_expectations import (
-    is_moneyball, validate_score, standings as moneyball_standings, all_games_saved,
+    is_moneyball, validate_score, standings as moneyball_standings, all_games_saved, substitute_moneyball,
 )
 from jupr_app.domain.perfect_round_robin import perfect_doubles_schedule
 from jupr_app.domain.perfect_rotation_completion import find_perfect_completion, game_key, is_perfect_rotation
@@ -1284,12 +1284,15 @@ def create_generator_preview(
     if event_format not in {"standard", "moneyball_expectations"}:
         raise ValueError("Choose Standard or Moneyball vs Expectations.")
     if event_format == "moneyball_expectations":
-        if kind != "round_robin" or fmt != "doubles" or scoring != "scored" or len(participants) != 8:
-            raise ValueError("Moneyball vs Expectations requires eight players in a scored doubles round robin.")
-        if resolved_court_count not in {0, 2} or int(total_rounds) != 7:
-            raise ValueError("Moneyball uses two courts and seven fixed rounds.")
-        if len(ids) != 8 or any(pid is None for pid in ids) or len(set(ids)) != 8:
-            raise ValueError("Select eight different Moneyball players from the club player list.")
+        if kind != "round_robin" or fmt != "doubles" or scoring != "scored" :
+            raise ValueError("Moneyball vs Expectations requires a scored doubles round robin.")
+        perfect = perfect_doubles_schedule([p["id"] for p in participants])
+        if perfect is None:
+            raise ValueError("Choose a supported perfect doubles RR player count for Moneyball.")
+        if resolved_court_count not in {0, len(participants)//4} or int(total_rounds) != len(perfect):
+            raise ValueError("Moneyball must use the full perfect rotation with all required courts.")
+        if len(ids) != len(participants) or any(pid is None for pid in ids) or len(set(ids)) != len(participants):
+            raise ValueError("Select every Moneyball player from the club player list.")
     event = {
         "eventFormat": event_format,
         "schemaVersion": 3,
@@ -1470,7 +1473,7 @@ def mark_generator_round_played(event: dict[str, Any], *, round_number: int) -> 
 def skip_generator_round(event: dict[str, Any], *, round_number: int, reason: str = "") -> dict[str, Any]:
     next_event = copy.deepcopy(event)
     if is_moneyball(next_event):
-        raise ValueError("Moneyball requires all seven rounds. Choose another scheduled round instead of skipping.")
+        raise ValueError("Moneyball requires the complete perfect rotation. Choose another scheduled round instead of skipping.")
     row = _get_round(next_event, round_number)
     if row.get("stage") == "playoff":
         raise ValueError("Playoff games need a winning score and cannot be skipped.")
@@ -1510,7 +1513,7 @@ def complete_generator_event(event: dict[str, Any]) -> dict[str, Any]:
     """Finish explicitly, leaving any unplayed future schedule recoverable."""
     next_event = copy.deepcopy(event)
     if is_moneyball(next_event) and not all_games_saved(next_event):
-        raise ValueError("Save all fourteen Moneyball games before finishing and awarding the pool.")
+        raise ValueError("Save all scheduled Moneyball games before finishing and awarding the pool.")
     if next_event.get("playoff") and any(
         r.get("stage") == "playoff" and r.get("status") != "saved"
         for r in next_event.get("rounds", [])
@@ -2079,7 +2082,10 @@ def mutate_generator_roster(
 ) -> dict[str, Any]:
     next_event = copy.deepcopy(event)
     if is_moneyball(next_event):
-        raise ValueError("Moneyball players and matchups are frozen. Start a new event to change the roster.")
+        if action != "substitute":
+            raise ValueError("Moneyball’s starting lineup is fixed. Only substitutions are allowed; both players become ineligible to win.")
+        return substitute_moneyball(next_event, participant_id=participant_id, name=name,
+                                   player_id=player_id, scope=substitute_scope)
     if next_event.get("playoff"):
         raise ValueError("Playoff teams are fixed. Players cannot be changed after seeding.")
     if str(next_event.get("status")) not in {"preview", "active"}:

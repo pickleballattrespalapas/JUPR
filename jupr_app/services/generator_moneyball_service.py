@@ -12,8 +12,8 @@ def prepare_moneyball(supabase: Any, *, club_id: str, event: dict[str, Any]) -> 
         return event
     participants = event["participants"]
     ids = [p.get("player_id") for p in participants]
-    if any(pid is None for pid in ids) or len(set(ids)) != 8:
-        raise ValueError("Moneyball needs eight different players selected from the club player list, each with a starting rating.")
+    if any(pid is None for pid in ids) or len(set(ids)) != len(participants):
+        raise ValueError("Moneyball needs a fixed lineup of different players selected from the club player list, each with a starting rating.")
     response = supabase.table("players").select("id,name,rating").eq("club_id", str(club_id)).in_("id", ids).execute()
     by_id = {int(p["id"]): p for p in response.data or []}
     ratings = {}

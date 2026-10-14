@@ -24,10 +24,11 @@ def digest(value):
 
 def validate_config(config):
     players, matches = config['players'], config['matches']
-    if len(players) != 8 or len(matches) != 14:
-        raise ValueError('This prototype requires exactly 8 players and 14 doubles games.')
+    count = len(players)
+    if not 4 <= count <= 40 or count % 4 not in {0, 1} or len(matches) != count*(count-1)//4:
+        raise ValueError('Use a supported complete perfect doubles round robin.')
     ids = [p['id'] for p in players]
-    if len(set(ids)) != 8:
+    if len(set(ids)) != count:
         raise ValueError('Player IDs must be unique.')
     for p in players:
         if not isinstance(p['name'],str) or not p['name'].strip() or not np.isfinite(p['rating']) or not 1 <= p['rating'] <= 8:
@@ -51,8 +52,8 @@ def validate_config(config):
             for b in t2:
                 pair = tuple(sorted((a,b)))
                 opponents[pair] = opponents.get(pair,0)+1
-    if set(game_count.values()) != {7} or len(partners) != 28 or set(partners.values()) != {1} or len(opponents) != 28 or set(opponents.values()) != {2}:
-        raise ValueError('Use a complete perfect RR: everyone plays 7 games, partners once and opposes twice.')
+    if set(game_count.values()) != {count-1} or len(partners) != count*(count-1)//2 or set(partners.values()) != {1} or len(opponents) != count*(count-1)//2 or set(opponents.values()) != {2}:
+        raise ValueError('Use a complete perfect RR: everyone plays every partner once, partners once and opposes twice.')
 
 
 def match_probabilities(model, differences):
@@ -71,7 +72,7 @@ def distributions(config,model):
     ids = [p['id'] for p in config['players']]
     index = {pid:i for i,pid in enumerate(ids)}
     ratings = {p['id']:p['rating'] for p in config['players']}
-    a = np.zeros((14,8),dtype=np.int16)
+    a = np.zeros((len(config['matches']),len(ids)),dtype=np.int16)
     differences = []
     for j,m in enumerate(config['matches']):
         differences.append(sum(ratings[pid] for pid in m['team1'])/2-sum(ratings[pid] for pid in m['team2'])/2)
@@ -84,7 +85,7 @@ def distributions(config,model):
     game_means = probabilities@support
     expected_pd = game_means@a
     percentiles, pmfs = [], []
-    for player in range(8):
+    for player in range(len(ids)):
         pmf = np.array([1.])
         for j in np.flatnonzero(a[:,player]):
             single = np.zeros(23)
@@ -92,7 +93,7 @@ def distributions(config,model):
             if a[j,player] < 0:
                 single = single[::-1]
             pmf = np.convolve(pmf,single)
-        assert len(pmf) == 155 and abs(pmf.sum()-1) < 1e-12
+        assert len(pmf) == 22*(len(ids)-1)+1 and abs(pmf.sum()-1) < 1e-12
         cdf = np.cumsum(pmf)
         # Midpoint CDF avoids counting a result's whole discrete probability mass as beaten.
         percentiles.append(cdf-.5*pmf)
@@ -101,18 +102,23 @@ def distributions(config,model):
 
 
 def simulate(a,support,probabilities,percentiles,number,seed):
-    rng = np.random.default_rng(seed)
-    margins = np.empty((number,14),dtype=np.int16)
+    rng = seed if isinstance(seed,np.random.Generator) else np.random.default_rng(seed)
+    count = a.shape[1]
+    totals = np.zeros((number,count),dtype=np.int16)
+    wins = np.zeros((number,count),dtype=np.int16)
     for j,p in enumerate(probabilities):
         cdf = np.cumsum(p)
         cdf[-1] = 1
-        margins[:,j] = support[np.searchsorted(cdf,rng.random(number),side='right')]
-    totals = margins@a
-    wins = ((margins > 0).astype(np.int16)@np.maximum(a,0)+(margins < 0).astype(np.int16)@np.maximum(-a,0))
-    u = np.empty((number,8))
-    for i in range(8):
-        u[:,i] = percentiles[i,totals[:,i]+77]
-    z = np.log(np.clip(u,1e-12,1-1e-12))-np.log1p(-np.clip(u,1e-12,1-1e-12))
+        margin = support[np.searchsorted(cdf,rng.random(number),side='right')]
+        for i in np.flatnonzero(a[j]):
+            signed = margin*a[j,i]
+            totals[:,i] += signed
+            wins[:,i] += signed > 0
+    u = np.empty((number,count))
+    for i in range(count):
+        u[:,i] = percentiles[i,totals[:,i]+11*(count-1)]
+    clipped = np.clip(u,1e-12,1-1e-12)
+    z = np.log(clipped)-np.log1p(-clipped)
     return totals,wins,u,z
 
 
@@ -122,18 +128,20 @@ def winning_shares(scores):
     return np.mean(tied/tied.sum(axis=1)[:,None],axis=0)
 
 
-def balance(z,tolerance=.0005,max_iterations=70):
-    offsets = np.zeros(8)
+def balance(z,tolerance=.001,max_iterations=100):
+    count = z.shape[1]
+    target = 1/count
+    offsets = np.zeros(count)
     history = []
     for iteration in range(max_iterations):
         chances = winning_shares(z+offsets)
-        error = float(np.max(np.abs(chances-.125)))
+        error = float(np.max(np.abs(chances-target)))
         history.append({'iteration':iteration,'max_first_place_deviation':error})
         if error <= tolerance:
             break
         # Inputs are simulated before scoring; adjustments never look at played results.
-        gain = 3.0 if iteration < 30 else 1.5
-        offsets += gain*(.125-chances)
+        gain = (3.0 if iteration < 50 else 1.5)*count/8
+        offsets += gain*(target-chances)
         offsets -= offsets.mean()
     return offsets,history
 
@@ -148,33 +156,34 @@ def prepare(event,model,calibration_sims=200000,audit_sims=300000,seed=202610140
         raise ValueError('Use at least 10,000 calibration and audit simulations.')
     config = canonical_config(event)
     a,support,p,pct,pmfs,expected_pd = distributions(config,model)
-    totals,wins,u,z = simulate(a,support,p,pct,calibration_sims,seed)
+    count = len(config['players'])
+    batch_size = 20000
+    rng = np.random.default_rng(seed)
+    z = np.empty((calibration_sims,count))
+    for start in range(0,calibration_sims,batch_size):
+        size = min(batch_size,calibration_sims-start)
+        z[start:start+size] = simulate(a,support,p,pct,size,rng)[3]
     offsets,history = balance(z)
     base_chances = winning_shares(z)
     train_chances = winning_shares(z+offsets)
-    del totals, wins, u, z
-    # Independent second batch checks fairness; this batch never tunes offsets.
-    test_totals,test_wins,test_u,test_z = simulate(a,support,p,pct,audit_sims,seed+1)
-    audit_chances = winning_shares(test_z+offsets)
-    points_chances = winning_shares(test_totals-expected_pd)
-    examples = []
-    score_matrix = test_z+offsets
-    winner = score_matrix.argmax(axis=1)
-    for i,pinfo in enumerate(config['players']):
-        eligible = np.flatnonzero((winner == i)&(test_wins[:,i] <= 3))
-        example_index = int(eligible[0]) if len(eligible) else int(np.flatnonzero(winner == i)[0])
-        examples.append({'player_id':pinfo['id'],'player':pinfo['name'],'simulated_winning_record':f"{test_wins[example_index,i]}-{7-test_wins[example_index,i]}",
-                         'simulated_point_differential':int(test_totals[example_index,i]),'simulation_row':example_index,
-                         'label':'Simulated illustration, not a played game or promised result.'})
-    max_error = float(np.max(np.abs(audit_chances-.125)))
+    del z
+    audit_chances = np.zeros(count)
+    points_chances = np.zeros(count)
+    rng = np.random.default_rng(seed+1)
+    for start in range(0,audit_sims,batch_size):
+        size = min(batch_size,audit_sims-start)
+        totals,_,_,z = simulate(a,support,p,pct,size,rng)
+        audit_chances += winning_shares(z+offsets)*size/audit_sims
+        points_chances += winning_shares(totals-expected_pd)*size/audit_sims
+    max_error = float(np.max(np.abs(audit_chances-1/count)))
     lock = {
-        'version':'fair-moneyball-event-v1','config':config,'config_sha256':digest(config),'model_sha256':digest(model),'model':model,
+        'version':'fair-moneyball-event-v2','config':config,'config_sha256':digest(config),'model_sha256':digest(model),'model':model,
         'seed':seed,'margin_probabilities':p.tolist(),'player_total_margin_pmf':pmfs.tolist(),
         'player_percentiles':pct.tolist(),'balance_logit_offsets':offsets.tolist(),'expected_point_differentials':expected_pd.tolist(),
-        'entry_fee_mxn':100,'prizes_mxn':[800],
+        'entry_fee_mxn':100,'prizes_mxn':[100*count],
         'tie_policy':'Exact score ties share the total prizes for the positions occupied.',
         'fairness':{
-            'target_first_place_chance_percent':12.5,'calibration_simulations':calibration_sims,'audit_simulations':audit_sims,
+            'target_first_place_chance_percent':100/count,'calibration_simulations':calibration_sims,'audit_simulations':audit_sims,
             'unbalanced_percentile_chances':public_chances(config['players'],base_chances,calibration_sims),
             'calibration_chances':public_chances(config['players'],train_chances,calibration_sims),
             'independent_audit_chances':public_chances(config['players'],audit_chances,audit_sims),
@@ -182,7 +191,6 @@ def prepare(event,model,calibration_sims=200000,audit_sims=300000,seed=202610140
             'max_audit_deviation_percentage_points':max_error*100,
             'simulation_fairness_check_passed':bool(max_error <= .005),
             'adjustment_iterations':len(history),'optimization_history':history,
-            'simulated_winning_examples':examples,
             'claim_scope':'Winning chances under this score model with accurate frozen ratings and conditional match independence; not a real-world guarantee.',
         },
     }
@@ -201,8 +209,9 @@ def score(event,lock):
         raise ValueError('Players, ratings or schedule changed after setup was frozen.')
     ids = [p['id'] for p in lock['config']['players']]
     index = {pid:i for i,pid in enumerate(ids)}
-    totals = np.zeros(8,dtype=int)
-    wins = np.zeros(8,dtype=int)
+    count = len(ids)
+    totals = np.zeros(count,dtype=int)
+    wins = np.zeros(count,dtype=int)
     for m in event['matches']:
         s1,s2 = m.get('score1'),m.get('score2')
         if isinstance(s1,bool) or isinstance(s2,bool) or not isinstance(s1,int) or not isinstance(s2,int) or min(s1,s2) < 0 or abs(s1-s2) < 2 or max(s1,s2) < 11 or (max(s1,s2) > 11 and abs(s1-s2) != 2):
@@ -220,18 +229,18 @@ def score(event,lock):
     game_probabilities=np.array(lock['margin_probabilities'])
     support=np.array(lock['model']['margin_support'])
     team1_win_probability=game_probabilities[:,support>0].sum(axis=1)
-    expected_wins=np.zeros(8)
+    expected_wins=np.zeros(count)
     for j,m in enumerate(lock['config']['matches']):
         for pid in m['team1']:
             expected_wins[index[pid]]+=team1_win_probability[j]
         for pid in m['team2']:
             expected_wins[index[pid]]+=1-team1_win_probability[j]
     for i,p in enumerate(lock['config']['players']):
-        u=float(percentiles[i,totals[i]+77])
+        u=float(percentiles[i,totals[i]+11*(count-1)])
         u=float(np.clip(u,1e-12,1-1e-12))
         z=np.log(u)-np.log1p(-u)+lock['balance_logit_offsets'][i]
         fair_score=float(100/(1+np.exp(-z)))
-        rows.append({'player_id':p['id'],'player':p['name'],'wins':int(wins[i]),'losses':int(7-wins[i]),
+        rows.append({'player_id':p['id'],'player':p['name'],'wins':int(wins[i]),'losses':int(count-1-wins[i]),
                      'expected_wins':float(expected_wins[i]),
                      'actual_point_differential':int(totals[i]),
                      'expected_point_differential':float(lock['expected_point_differentials'][i]),
@@ -239,10 +248,10 @@ def score(event,lock):
                      'simulated_first_place_chance_percent':lock['fairness']['independent_audit_chances'][i]['first_place_chance_percent']})
     rows.sort(key=lambda r:r['moneyball_score'],reverse=True)
     j=0
-    prizes=lock['prizes_mxn']+[0]*(8-len(lock['prizes_mxn']))
-    while j<8:
+    prizes=lock['prizes_mxn']+[0]*(count-len(lock['prizes_mxn']))
+    while j<count:
         end=j+1
-        while end<8 and abs(rows[end]['moneyball_score']-rows[j]['moneyball_score']) < 1e-10:
+        while end<count and abs(rows[end]['moneyball_score']-rows[j]['moneyball_score']) < 1e-10:
             end+=1
         prize=sum(prizes[j:end])/(end-j)
         for row in rows[j:end]:
@@ -255,7 +264,7 @@ def score(event,lock):
     if drift:
         rows[0]['prize_mxn']=round(rows[0]['prize_mxn']+drift,2)
         rows[0]['net_after_entry_mxn']=round(rows[0]['prize_mxn']-lock['entry_fee_mxn'],2)
-    return {'event_name':event['name'],'method':'Fair Play Moneyball v1','entry_fee_mxn':100,'prize_pool_mxn':800,
+    return {'event_name':event['name'],'method':'Fair Play Moneyball v1','entry_fee_mxn':100,'prize_pool_mxn':sum(lock['prizes_mxn']),
             'standings':rows,'fairness':lock['fairness'],'holdout_validation':lock['model']['validation'],
             'setup_lock_sha256':lock['lock_sha256'],'experimental':True,'individual_ratings_displayed':False}
 
