@@ -52,6 +52,8 @@ const reply = body => ({ok:true,status:200,json:async()=>body});
     const count=tree.root.findAllByType("label").find(node=>text(node).startsWith("Number of players")).findByType("select");
     assert.equal(count.props.value,8); assert.equal(count.props.disabled,true);
     assert.ok(!JSON.stringify(tree.toJSON()).includes("Standings ranked by"));
+    assert.ok(!JSON.stringify(tree.toJSON()).includes("You can keep adding rounds"));
+    assert.ok(JSON.stringify(tree.toJSON()).includes("Players and matchups stay fixed after starting"));
     for (const player of players) {
       await act(async()=>tree.root.findByProps({placeholder:"Type at least 2 letters, then add a player"}).props.onChange({target:{value:player.name}}));
       await act(async()=>button(tree,"Add").props.onClick());

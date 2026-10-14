@@ -499,8 +499,9 @@ export default function GeneratorRosterSetup({
           </p>
           <small style={{ color: "#475569" }}>
             {explanation(generatorKind, playFormat, setup.courtCount, setup.totalRounds)}
-            {generatorKind === "round_robin" ? " You can keep adding rounds during play." : ""}
-            {generatorKind === "round_robin" && playFormat === "doubles" ? " A perfect partner-and-opponent rotation is the first priority, including compatible roster changes. Adaptive rounds balance assigned byes before game counts." : ""}
+            {generatorKind === "round_robin" && !fixedPlayerCount ? " You can keep adding rounds during play." : ""}
+            {fixedPlayerCount ? " Moneyball uses seven fixed rounds. Everyone partners once and faces each opponent twice. Players and matchups stay fixed after starting." : ""}
+            {generatorKind === "round_robin" && playFormat === "doubles" && !fixedPlayerCount ? " A perfect partner-and-opponent rotation is the first priority, including compatible roster changes. Adaptive rounds balance assigned byes before game counts." : ""}
           </small>
         </div>
       </div>
@@ -520,7 +521,7 @@ export default function GeneratorRosterSetup({
         </label>
         {playerSearch.trim().length < 2 ? (
           <p style={{ margin: 0, color: "#64748b", fontSize: "0.9rem" }}>
-            Search the club player list, or type names directly below.
+            {fixedPlayerCount ? "Choose all eight players from the club list so their ratings can set expectations." : "Search the club player list, or type names directly below."}
           </p>
         ) : filteredPlayerOptions.length ? (
           <div style={{ display: "grid", gap: "0.4rem" }}>
@@ -560,7 +561,7 @@ export default function GeneratorRosterSetup({
           </div>
         ) : (
           <p style={{ margin: 0, color: "#b45309", fontSize: "0.9rem" }}>
-            No club players match “{playerSearch.trim()}”. You can type the name below instead.
+            No club players match “{playerSearch.trim()}”. {fixedPlayerCount ? "Add their profile and starting rating before using Moneyball." : "You can type the name below instead."}
           </p>
         )}
         {directoryError ? (
@@ -585,7 +586,7 @@ export default function GeneratorRosterSetup({
           {countMessage}
         </p>
         <p style={{ margin: "0.25rem 0 0", color: "#64748b", fontSize: "0.9rem" }}>
-          {linkedCount} chosen from the club list · {manualCount} entered manually. The order below sets the starting order and who gets the first bye.
+          {linkedCount} chosen from the club list · {manualCount} entered manually. {fixedPlayerCount ? "The order below sets the seven-round Moneyball schedule." : "The order below sets the starting order and who gets the first bye."}
         </p>
         {pickerMessage ? (
           <p role="status" aria-live="polite" style={{ margin: "0.25rem 0 0", color: "#1d4ed8" }}>
