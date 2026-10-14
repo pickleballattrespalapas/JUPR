@@ -264,7 +264,7 @@
 @media (max-width: 640px) {
   .desktopNav { display: none; }
   .mobileNav { display: block; margin-bottom: 1rem; border-bottom: 1px solid #e2e8f0; }
-  .mobileNav > summary { padding: .65rem .25rem; min-height: 44px; font-weight: 750; cursor: pointer; }
+  .mobileNav > summary { box-sizing: border-box; padding: .65rem .25rem; min-height: 44px; font-weight: 750; cursor: pointer; }
   .mobileNav .nav { margin: 0; border: 0; padding-top: .25rem; }
   .header { margin: .5rem 0; gap: .5rem; }
   .brand { font-size: 1.05rem; gap: .65rem; }

@@ -1,6 +1,6 @@
 .shell { min-width: 0; margin: 0 0 1rem; }
 .panel { min-width: 0; background: white; border: 1px solid #cbd5e1; border-radius: 12px; }
-.toggle { padding: .65rem .85rem; cursor: pointer; font-weight: 750; color: #0f172a; overflow-wrap: anywhere; }
+.toggle { box-sizing: border-box; padding: .65rem .85rem; cursor: pointer; font-weight: 750; color: #0f172a; overflow-wrap: anywhere; }
 .toggle::marker { color: #2563eb; }
 .toggle:focus-visible { outline: 3px solid #60a5fa; outline-offset: 3px; border-radius: 10px; }
 .content { min-width: 0; padding: .75rem; border-top: 1px solid #e2e8f0; }

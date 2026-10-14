@@ -1,5 +1,6 @@
 
 import PublicControls from "@/components/PublicControls";
+import PublicLeagueNav from "@/components/PublicLeagueNav";
 import { Display } from "@/components/ClubDisplay";
 import Link from "@/components/PublicClubLink";
 import { getClubLeagueResults } from "@/lib/api";
@@ -369,6 +370,7 @@ export default async function LeagueResultsPage({ params, searchParams }: League
       {!error && !data?.leagues?.length ? <p>No leagues are available yet.</p> : null}
 
       <PublicControls resetKey={`${selectedLeague}:${activeSection}:${selectedWeek}:${selectedPlayerId}:${weeklyMinGames}`} context={[selectedLeague, sectionLabels[activeSection], activeSection === "weekly" && selectedWeek ? `Week ${selectedWeek}` : "", activeSection === "player" ? selectedPlayerName : ""].filter(Boolean).join(" · ")}>
+{selectedLeague ? <PublicLeagueNav clubSlug={clubSlug} leagueName={selectedLeague} active={activeSection} /> : null}
 {data?.leagues?.length ? (
         <div className="no-print" style={{ display: "grid", gap: "0.75rem", marginBottom: "1rem" }}>
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
