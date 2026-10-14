@@ -1,3 +1,4 @@
+import { openPublicControls } from "./support/publicControls";
 import { expect, test } from "@playwright/test";
 import { verifyInactivePlayerVisibility } from "./support/player-activity";
 import { bootstrapStagingContext, clubSlug } from "./support/staging";
@@ -11,6 +12,7 @@ test("player directory includes all profiles and keeps search plus stable links 
 
   await expect(page.getByTestId("players-status-active")).toHaveCount(0);
   const search = page.getByRole("combobox", { name: "Find player" });
+  await openPublicControls(page);
   await expect(search).toBeVisible();
   const rows = page.getByTestId("players-row");
   expect(await rows.count(), "staging should contain a public player fixture").toBeGreaterThan(0);
@@ -43,33 +45,40 @@ test("player profile keeps positions, trophies, badges, relationships, and histo
   await expect(page.getByTestId("player-summary-cards")).toContainText("Singles");
   await expect(page.getByTestId("player-overview")).toBeVisible();
 
+  await openPublicControls(page);
   await page.getByTestId("player-section-ratings").click();
   await expect(page).toHaveURL(/section=ratings/);
   await expect(page.getByTestId("player-ratings")).toBeVisible();
   await expect(page.getByTestId("player-format-row")).toHaveCount(2);
 
+  await openPublicControls(page);
   await page.getByTestId("player-section-positions").click();
   await expect(page).toHaveURL(/\/players\/[^/?#]+\?section=positions/);
   await expect(page.getByTestId("player-league-positions")).toBeVisible();
   await expect(page.getByRole("link", { name: "Leaderboard snapshot" })).toHaveCount(0);
 
+  await openPublicControls(page);
   await page.getByTestId("player-section-trophies").click();
   await expect(page.getByTestId("player-trophies")).toBeVisible();
   await expect(page.getByTestId("player-trophies")).toContainText(/major honors|tournament honors/i);
 
+  await openPublicControls(page);
   await page.getByTestId("player-section-badges").click();
   await expect(page.getByTestId("player-badges")).toBeVisible();
   await expect(page.getByRole("link", { name: "Badge codex" })).toHaveCount(0);
 
+  await openPublicControls(page);
   await page.getByTestId("player-section-social").click();
   await expect(page.getByTestId("player-best-partner")).toBeVisible();
   await expect(page.getByTestId("player-rival")).toBeVisible();
   await expect(page.getByTestId("player-social")).toBeVisible();
 
+  await openPublicControls(page);
   await page.getByTestId("player-section-matches").click();
   await expect(page.getByTestId("player-match-history")).toBeVisible();
   const publicIdentity = page.getByTestId("player-public-identity");
   await expect(publicIdentity).toContainText(/player updates (are on|are available)|player update request is pending/i);
+  await openPublicControls(page);
   const requestUpdates = page.getByRole("link", { name: "Request player updates" });
   if (await requestUpdates.count()) await expect(requestUpdates).toBeVisible();
   else await expect(publicIdentity).toContainText(/club staff will review this request|preferences link in a player update email/i);
@@ -79,6 +88,7 @@ test("player profile keeps positions, trophies, badges, relationships, and histo
   const emptyTrend = page.getByTestId("player-rating-trend-empty");
   expect((await trend.count()) + (await emptyTrend.count())).toBe(1);
 
+  await openPublicControls(page);
   await page.getByTestId("player-history-all").click();
   await expect(page).toHaveURL(/section=matches/);
   await expect(page).toHaveURL(/history=all/);

@@ -1,3 +1,5 @@
+
+import PublicControls from "@/components/PublicControls";
 import { Display } from "@/components/ClubDisplay";
 import Link from "@/components/PublicClubLink";
 import { getClubLeagueResults } from "@/lib/api";
@@ -366,7 +368,8 @@ export default async function LeagueResultsPage({ params, searchParams }: League
       {error ? <p style={{ color: "#b91c1c" }}>We couldn&apos;t load league results. Please try again.</p> : null}
       {!error && !data?.leagues?.length ? <p>No leagues are available yet.</p> : null}
 
-      {data?.leagues?.length ? (
+      <PublicControls resetKey={`${selectedLeague}:${activeSection}:${selectedWeek}:${selectedPlayerId}:${weeklyMinGames}`} context={[selectedLeague, sectionLabels[activeSection], activeSection === "weekly" && selectedWeek ? `Week ${selectedWeek}` : "", activeSection === "player" ? selectedPlayerName : ""].filter(Boolean).join(" · ")}>
+{data?.leagues?.length ? (
         <div className="no-print" style={{ display: "grid", gap: "0.75rem", marginBottom: "1rem" }}>
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
             {data.leagues.map((league) => {
@@ -393,7 +396,6 @@ export default async function LeagueResultsPage({ params, searchParams }: League
       ) : null}
 
       {data && selectedLeague ? (
-        <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
             <article style={cardStyle}><strong>League</strong><br />{selectedLeague}</article>
             <article style={cardStyle}><strong>Minimum games</strong><br />{data.league?.min_games ?? 0}</article>
@@ -405,6 +407,45 @@ export default async function LeagueResultsPage({ params, searchParams }: League
             <article style={cardStyle}><strong>Weeks with results</strong><br />{data.weeks.length}</article>
           </div>
 
+                ) : null}
+{data && showWeekly ? <>
+{data.weeks.length ? (
+                <div className="no-print" style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap", marginBottom: "1rem" }}>
+                  {data.weeks.map((week) => {
+                    const active = week.week_num === selectedWeek;
+                    return (
+                      <Link key={week.week_num} href={pageHref({ clubSlug, league: selectedLeague, section: "weekly", week: week.week_num, player: selectedPlayerId, weeklyMinGames })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.35rem 0.65rem", background: active ? "#dbeafe" : "white", color: "#0f172a", textDecoration: "none", fontWeight: active ? 800 : 600 }}>
+                        {week.week_label}{week.has_results === false ? " · no results" : ""}
+                      </Link>
+                    );
+                  })}
+                </div>
+              ) : null}
+              <div className="no-print" style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap", alignItems: "center", marginBottom: "1rem" }}>
+                <strong>Minimum games for win percentage:</strong>
+                {[1, 2, 4, 6, 8].map((minimum) => (
+                  <Link key={minimum} href={pageHref({ clubSlug, league: selectedLeague, section: "weekly", week: selectedWeek, player: selectedPlayerId, weeklyMinGames: minimum })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.3rem 0.6rem", background: minimum === weeklyMinGames ? "#dcfce7" : "white", color: "#0f172a", textDecoration: "none", fontWeight: minimum === weeklyMinGames ? 800 : 600 }}>
+                    {minimum}+ {minimum === 1 ? "game" : "games"}
+                  </Link>
+                ))}
+              </div>
+              </> : null}
+{showPlayer ? <>
+<div className="no-print" style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap", marginBottom: "1rem" }}>
+                {playerCandidates.map((row) => {
+                  const active = String(row.player_id) === String(selectedPlayerId);
+                  return (
+                    <Link key={`player-${row.player_id}`} href={pageHref({ clubSlug, league: selectedLeague, section: "player", week: selectedWeek, player: row.player_id, weeklyMinGames })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.35rem 0.65rem", background: active ? "#dbeafe" : "white", color: "#0f172a", textDecoration: "none", fontWeight: active ? 800 : 600 }}>
+                      {row.player_name}
+                    </Link>
+                  );
+                })}
+              </div>
+</> : null}
+</PublicControls>
+
+      {data && selectedLeague ? (
+        <>
           {showOverall ? (
             <section style={sectionStyle} data-testid="league-results-awards-race">
               <h2>Awards race</h2>
@@ -435,26 +476,6 @@ export default async function LeagueResultsPage({ params, searchParams }: League
               <p style={{ color: "#64748b" }}>
                 Weekly results show recorded matches. Season standings include all official league results.
               </p>
-              {data.weeks.length ? (
-                <div className="no-print" style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap", marginBottom: "1rem" }}>
-                  {data.weeks.map((week) => {
-                    const active = week.week_num === selectedWeek;
-                    return (
-                      <Link key={week.week_num} href={pageHref({ clubSlug, league: selectedLeague, section: "weekly", week: week.week_num, player: selectedPlayerId, weeklyMinGames })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.35rem 0.65rem", background: active ? "#dbeafe" : "white", color: "#0f172a", textDecoration: "none", fontWeight: active ? 800 : 600 }}>
-                        {week.week_label}{week.has_results === false ? " · no results" : ""}
-                      </Link>
-                    );
-                  })}
-                </div>
-              ) : null}
-              <div className="no-print" style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap", alignItems: "center", marginBottom: "1rem" }}>
-                <strong>Minimum games for win percentage:</strong>
-                {[1, 2, 4, 6, 8].map((minimum) => (
-                  <Link key={minimum} href={pageHref({ clubSlug, league: selectedLeague, section: "weekly", week: selectedWeek, player: selectedPlayerId, weeklyMinGames: minimum })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.3rem 0.6rem", background: minimum === weeklyMinGames ? "#dcfce7" : "white", color: "#0f172a", textDecoration: "none", fontWeight: minimum === weeklyMinGames ? 800 : 600 }}>
-                    {minimum}+ {minimum === 1 ? "game" : "games"}
-                  </Link>
-                ))}
-              </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "1rem", marginBottom: "1rem" }}>
                 <BarList title="Weekly wins" rows={[...recentWeeklyRows].sort((a, b) => safeNumber(b.wins) - safeNumber(a.wins)).slice(0, 10).map((row) => ({ key: `wins-${row.player_id}`, label: row.player_name, value: safeNumber(row.wins), detail: countLabel(row.wins, "win"), href: playerHref(clubSlug, row.player_id) }))} />
                 <BarList title="Weekly games" rows={[...recentWeeklyRows].sort((a, b) => safeNumber(b.games) - safeNumber(a.games)).slice(0, 10).map((row) => ({ key: `games-${row.player_id}`, label: row.player_name, value: safeNumber(row.games), detail: countLabel(row.games, "game"), href: playerHref(clubSlug, row.player_id) }))} />
@@ -473,17 +494,7 @@ export default async function LeagueResultsPage({ params, searchParams }: League
               <p style={{ color: "#64748b" }}>
                 Season stats include official league results; recent activity shows the latest matches.
               </p>
-              <div className="no-print" style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap", marginBottom: "1rem" }}>
-                {playerCandidates.map((row) => {
-                  const active = String(row.player_id) === String(selectedPlayerId);
-                  return (
-                    <Link key={`player-${row.player_id}`} href={pageHref({ clubSlug, league: selectedLeague, section: "player", week: selectedWeek, player: row.player_id, weeklyMinGames })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.35rem 0.65rem", background: active ? "#dbeafe" : "white", color: "#0f172a", textDecoration: "none", fontWeight: active ? 800 : 600 }}>
-                      {row.player_name}
-                    </Link>
-                  );
-                })}
-              </div>
-              <p>
+                            <p>
                 <Link href={playerHref(clubSlug, selectedPlayerId)}>Open player profile</Link>
               </p>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0.75rem" }}>

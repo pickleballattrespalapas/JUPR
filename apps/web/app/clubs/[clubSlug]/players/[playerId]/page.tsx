@@ -1,3 +1,5 @@
+
+import PublicControls from "@/components/PublicControls";
 import { Display } from "@/components/ClubDisplay";
 import Link from "@/components/PublicClubLink";
 import { getClubLeagueResults, getClubPlayerProfile, type LeagueAwardProgressRow, type LeagueResultsResponse, type PublicMatch, type PublicRatingHistoryPoint, type PublicRelationship } from "@/lib/api";
@@ -200,11 +202,24 @@ export default async function PlayerProfilePage({ params, searchParams }: Player
     }))
     : [];
 
+  const summaryCards = (
+<div data-testid="player-summary-cards" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(165px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
+        <Display field="ratings"><article style={cardStyle}><strong>Doubles / overall</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{ratingLabel(player.rating_jupr)}</div></article></Display>
+        <Display field="singles"><article style={cardStyle}><strong>Singles</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{ratingLabel(player.singles_rating_jupr)}</div></article></Display>
+        <Display field="records"><article style={cardStyle}><strong>Doubles record</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{player.wins ?? 0}-{player.losses ?? 0}</div><small>{pctLabel(player.wins, player.losses)}</small></article></Display>
+        <Display field="singles"><article style={cardStyle}><strong>Singles record</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{player.singles_wins ?? 0}-{player.singles_losses ?? 0}</div><small>{pctLabel(player.singles_wins, player.singles_losses)}</small></article></Display>
+        <Display field="profile_trophies"><article style={cardStyle}><strong>Major honors</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{awards.trophy_count ?? awards.trophies.length}</div><small>Trophy case</small></article></Display>
+        <Display field="badges"><article style={cardStyle}><strong>Badges earned</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{awards.badge_award_count}</div><small>{awards.prestige_total} prestige</small></article></Display>
+        <Display field="last_played"><article style={cardStyle}><strong>Last played</strong><div style={{ fontSize: "1.35rem", fontWeight: 800 }}>{formatDate(player.last_game_at)}</div><small>{player.is_active === false ? "Inactive" : "Active"}</small></article></Display>
+      </div>
+  );
+
   return (
     <section data-testid="player-profile">
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>{data.club?.name ?? clubSlug} · Player profile</p>
       <h1 style={{ marginTop: 0 }}>{data.identity.display_name}</h1>
-      <p style={{ color: "#475569", maxWidth: "820px" }}>View this player&apos;s ratings, match history, awards, frequent partners and opponents, and Club Social results.</p>
+      <PublicControls resetKey={`${section}:${selectedLeague}:${historyView}`} context={[section === "positions" ? "League positions" : section === "trophies" ? "Trophy case" : section === "badges" ? "Badge cabinet" : section[0].toUpperCase() + section.slice(1), section === "matches" ? historyView === "all" ? "Full history" : "Recent matches" : "", section === "matches" ? selectedLeague || "All leagues" : ""].filter(Boolean).join(" · ")}>
+<p style={{ color: "#475569", maxWidth: "820px" }}>View this player&apos;s ratings, match history, awards, frequent partners and opponents, and Club Social results.</p>
 
       <article data-testid="player-public-identity" style={{ ...cardStyle, background: "#eff6ff", marginBottom: "1rem" }}>
         <strong>{verifiedLabel}</strong>
@@ -222,15 +237,22 @@ export default async function PlayerProfilePage({ params, searchParams }: Player
         <Link href={`/clubs/${clubSlug}/verified-updates?player_id=${encodeURIComponent(String(player.id))}`} style={{ ...pillStyle, background: "white", fontWeight: 700 }}>Request verified updates</Link>
       </nav>
 
-      <div data-testid="player-summary-cards" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(165px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
-        <Display field="ratings"><article style={cardStyle}><strong>Doubles / overall</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{ratingLabel(player.rating_jupr)}</div></article></Display>
-        <Display field="singles"><article style={cardStyle}><strong>Singles</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{ratingLabel(player.singles_rating_jupr)}</div></article></Display>
-        <Display field="records"><article style={cardStyle}><strong>Doubles record</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{player.wins ?? 0}-{player.losses ?? 0}</div><small>{pctLabel(player.wins, player.losses)}</small></article></Display>
-        <Display field="singles"><article style={cardStyle}><strong>Singles record</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{player.singles_wins ?? 0}-{player.singles_losses ?? 0}</div><small>{pctLabel(player.singles_wins, player.singles_losses)}</small></article></Display>
-        <Display field="profile_trophies"><article style={cardStyle}><strong>Major honors</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{awards.trophy_count ?? awards.trophies.length}</div><small>Trophy case</small></article></Display>
-        <Display field="badges"><article style={cardStyle}><strong>Badges earned</strong><div style={{ fontSize: "1.8rem", fontWeight: 800 }}>{awards.badge_award_count}</div><small>{awards.prestige_total} prestige</small></article></Display>
-        <Display field="last_played"><article style={cardStyle}><strong>Last played</strong><div style={{ fontSize: "1.35rem", fontWeight: 800 }}>{formatDate(player.last_game_at)}</div><small>{player.is_active === false ? "Inactive" : "Active"}</small></article></Display>
-      </div>
+      {section === "matches" ? <>
+<div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
+            <Link data-testid="player-history-recent" aria-current={historyView === "recent" ? "page" : undefined} href={pageHref({ clubSlug, playerId, section: "matches", league: selectedLeague, history: "recent" })} style={{ ...pillStyle, background: historyView === "recent" ? "#dcfce7" : "white" }}>Recent {data.history.recent_limit}</Link>
+            <Link data-testid="player-history-all" aria-current={historyView === "all" ? "page" : undefined} href={pageHref({ clubSlug, playerId, section: "matches", league: selectedLeague, history: "all" })} style={{ ...pillStyle, background: historyView === "all" ? "#dcfce7" : "white" }}>Full history ({historyTotal})</Link>
+          </div>
+          {leagues.length ? <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}><Link href={pageHref({ clubSlug, playerId, section: "matches", history: historyView })} style={{ ...pillStyle, background: !selectedLeague ? "#dbeafe" : "white" }}>All leagues</Link>{leagues.map((league) => <Link key={league} href={pageHref({ clubSlug, playerId, section: "matches", league, history: historyView })} style={{ ...pillStyle, background: selectedLeague === league ? "#dbeafe" : "white" }}>{league}</Link>)}</div> : null}
+          </> : null}
+{section !== "overview" ? <>
+{summaryCards}
+
+      </> : null}
+</PublicControls>
+{section === "overview" ? <>
+{summaryCards}
+
+      </> : null}
 
       {sectionVisible(section, "overview") ? (
         <section data-testid="player-overview" style={{ display: "grid", gap: "1rem", marginBottom: "1rem" }}>
@@ -364,11 +386,6 @@ export default async function PlayerProfilePage({ params, searchParams }: Player
         <section id="matches" data-testid="player-match-history" style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>{historyView === "all" ? "Full match history" : "Recent matches"}</h2>
           <p style={{ color: "#475569" }}>Each match is labeled Singles or Doubles. Rating changes appear when they&apos;re available.</p>
-          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
-            <Link data-testid="player-history-recent" aria-current={historyView === "recent" ? "page" : undefined} href={pageHref({ clubSlug, playerId, section: "matches", league: selectedLeague, history: "recent" })} style={{ ...pillStyle, background: historyView === "recent" ? "#dcfce7" : "white" }}>Recent {data.history.recent_limit}</Link>
-            <Link data-testid="player-history-all" aria-current={historyView === "all" ? "page" : undefined} href={pageHref({ clubSlug, playerId, section: "matches", league: selectedLeague, history: "all" })} style={{ ...pillStyle, background: historyView === "all" ? "#dcfce7" : "white" }}>Full history ({historyTotal})</Link>
-          </div>
-          {leagues.length ? <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}><Link href={pageHref({ clubSlug, playerId, section: "matches", history: historyView })} style={{ ...pillStyle, background: !selectedLeague ? "#dbeafe" : "white" }}>All leagues</Link>{leagues.map((league) => <Link key={league} href={pageHref({ clubSlug, playerId, section: "matches", league, history: historyView })} style={{ ...pillStyle, background: selectedLeague === league ? "#dbeafe" : "white" }}>{league}</Link>)}</div> : null}
           {matches.length === 0 ? <p data-testid="player-match-empty" style={{ color: "#475569" }}>No matches match this view.</p> : <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: "1040px" }}><thead><tr><th style={thStyle}>Date</th><th style={thStyle}>Format</th><th style={thStyle}>Result</th><th style={thStyle}>Team 1</th><th style={thStyle}>Score</th><th style={thStyle}>Team 2</th><th style={thStyle}>JUPR before → after</th><th style={thStyle}>League</th></tr></thead><tbody>
             {matches.map((match, index) => { const detailHref = match.id != null ? `/clubs/${clubSlug}/matches/${match.id}` : `/clubs/${clubSlug}/matches`; return <tr key={`${match.id ?? index}`} data-testid="player-match-row" data-format={match.match_format ?? "doubles"}><td style={tdStyle}><Link href={detailHref}>{formatDate(match.date)}</Link></td><td style={tdStyle}>{match.match_format_label ?? (match.match_format === "singles" ? "Singles" : "Doubles")}</td><td style={tdStyle}>{match.player_result === "win" ? "Win" : match.player_result === "loss" ? "Loss" : "—"}</td><td style={tdStyle}>{teamLabel(clubSlug, match.team_1)}</td><td style={tdStyle}><Link href={detailHref}>{matchScore(match)}</Link></td><td style={tdStyle}>{teamLabel(clubSlug, match.team_2)}</td><td style={tdStyle}>{ratingLabel(match.player_rating_before_jupr)} → {ratingLabel(match.player_rating_after_jupr)} ({signedRating(match.player_rating_delta_jupr)})</td><td style={tdStyle}>{match.league ?? "—"}</td></tr>; })}
           </tbody></table></div>}

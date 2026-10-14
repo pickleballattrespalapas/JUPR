@@ -30,7 +30,7 @@ async function main() {
   assert.equal(select('Filter results by club').props.value, 'a');
   const gameRows = () => visible()[0].findAllByProps({ 'data-result-game':'' });
   assert.equal(gameRows().length, 6, 'A club selection immediately shows all its games across meets');
-  assert.equal(visible()[0].findAllByType('details').length, 0, 'No matchup or pairing expansion is needed');
+  assert.equal(visible()[0].findAllByType('details').filter(node => !Object.hasOwn(node.props, 'data-public-controls-panel')).length, 0, 'No matchup or pairing expansion is needed');
   await act(async () => select('Filter results by meet').props.onChange({ target:{value:'m1'} }));
   let panel = visible()[0]; assert.equal(gameRows().length, 3);
   const choosePlayer = value => panel.findAllByType('select').find(node => node.props.hidden).props.onChange({ target:{value} });
@@ -50,7 +50,7 @@ async function main() {
   assert.equal(gameRows().length, 9);
   await act(async () => tab('Schedule').props.onClick());
   assert.equal(visible().length, 1); assert.ok(text(visible()[0]).includes('Meet schedule'));
-  assert.equal(visible()[0].findAllByType('details').length, 0);
+  assert.equal(visible()[0].findAllByType('details').filter(node => !Object.hasOwn(node.props, 'data-public-controls-panel')).length, 0);
   await act(async () => tree.unmount());
   assert.equal(views.resultGameWinner({status:'retired',a:9,b:4,winner:'b'}), 'b');
   assert.equal(views.resultGameWinner({status:'double_forfeit',a:null,b:null,winner:null}), null);

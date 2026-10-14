@@ -15,7 +15,7 @@ function load(file) {
     if (name === './PublicInterclubCompetition') return load('components/PublicInterclubCompetition.tsx');
     if (name === './EventHistoryView') return load('components/EventHistoryView.tsx');
     if (name === './SearchablePlayerSelect') return playerSearch('@/components/SearchablePlayerSelect');
-    return require(name);
+    return require('./public-controls-module.cjs')(name) || require(name);
   }, module, module.exports);
   cache.set(file, module.exports); return module.exports;
 }

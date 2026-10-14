@@ -1,3 +1,5 @@
+
+import PublicControls from "@/components/PublicControls";
 import Link from "@/components/PublicClubLink";
 import PublicLeagueNav from "@/components/PublicLeagueNav";
 import { getClubLeagueResults, type LeagueResultsStatRow } from "@/lib/api";
@@ -106,7 +108,8 @@ export default async function PublicLeagueWeeklyHistoryPage({ params, searchPara
         Week-by-week activity, records, rating movement, and highlights for {leagueName}.
       </p>
 
-      <PublicLeagueNav clubSlug={params.clubSlug} leagueName={leagueName} active="weekly" leagueView={leagueView} />
+      <PublicControls resetKey={String(selectedWeek)} context={`${leagueName} · ${selectedWeek ? `Week ${selectedWeek}` : "Weekly history"}`}>
+<PublicLeagueNav clubSlug={params.clubSlug} leagueName={leagueName} active="weekly" leagueView={leagueView} />
 
       {data.weeks.length ? (
         <nav aria-label="League weeks" style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap", marginBottom: "1rem" }}>
@@ -140,6 +143,8 @@ export default async function PublicLeagueWeeklyHistoryPage({ params, searchPara
         <article style={cardStyle}><strong>Player appearances</strong><br />{totalGames}</article>
         <article style={cardStyle}><strong>Weeks available</strong><br />{data.weeks.length}</article>
       </div>
+
+      </PublicControls>
 
       <section>
         <h2>{selectedWeek ? `Week ${selectedWeek} results` : "Weekly results"}</h2>

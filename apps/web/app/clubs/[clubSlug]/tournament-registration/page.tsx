@@ -1,3 +1,5 @@
+
+import PublicControls from "@/components/PublicControls";
 import { Display } from "@/components/ClubDisplay";
 import PublicTournamentSponsors from "@/components/PublicTournamentSponsors";
 import Link from "@/components/PublicClubLink";
@@ -99,13 +101,13 @@ export default async function TournamentRegistrationPage({
       ) : null}
 
       {tournament ? (
-        <PublicTournamentNav
+        <PublicControls context="Registration"><PublicTournamentNav
           clubSlug={clubSlug}
           tournamentName={tournament.name}
           tournamentId={tournament.id}
           registrationSlug={settings?.registration_slug ?? null}
           active="registration"
-        />
+        /></PublicControls>
       ) : null}
 
       {tournament ? (

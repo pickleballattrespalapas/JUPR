@@ -1,0 +1,16 @@
+.shell { min-width: 0; margin: 0 0 1rem; }
+.panel { min-width: 0; background: white; border: 1px solid #cbd5e1; border-radius: 12px; }
+.toggle { padding: .65rem .85rem; cursor: pointer; font-weight: 750; color: #0f172a; overflow-wrap: anywhere; }
+.toggle::marker { color: #2563eb; }
+.toggle:focus-visible { outline: 3px solid #60a5fa; outline-offset: 3px; border-radius: 10px; }
+.content { min-width: 0; padding: .75rem; border-top: 1px solid #e2e8f0; }
+.content > :last-child { margin-bottom: 0; }
+.context { margin-top: .5rem; color: #475569; font-size: .88rem; overflow-wrap: anywhere; }
+.content form, .content label { min-width: 0; }
+.content select, .content input, .content textarea { max-width: 100%; box-sizing: border-box; }
+@media (max-width: 640px) {
+  .toggle { min-height: 44px; }
+  .content form { grid-template-columns: minmax(0, 1fr) !important; }
+  .content form > label { min-width: 0 !important; }
+}
+@media print { .shell { display: none !important; } }

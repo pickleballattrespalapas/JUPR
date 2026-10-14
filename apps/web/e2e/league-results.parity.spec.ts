@@ -1,3 +1,4 @@
+import { openPublicControls } from "./support/publicControls";
 import { expect, test } from "@playwright/test";
 import {
   bootstrapStagingContext,
@@ -21,6 +22,7 @@ test("league results overall view presents one authoritative season record", asy
   await expect(page.getByRole("heading", { name: /season highlights/i })).toBeVisible();
   await expect(page.getByRole("heading", { name: /season cumulative performance/i })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Print view", exact: true })).toHaveCount(0);
+  await openPublicControls(page);
   await expect(page.getByRole("button", { name: "Print / save PDF" })).toBeVisible();
 });
 
@@ -45,6 +47,7 @@ test("league results deep link preserves its section and prints the current view
   await page.evaluate(() => {
     window.print = () => window.sessionStorage.setItem("league-results-print", "called");
   });
+  await openPublicControls(page);
   await page.getByRole("button", { name: "Print / save PDF" }).click();
   await expect
     .poll(() => page.evaluate(() => window.sessionStorage.getItem("league-results-print")))

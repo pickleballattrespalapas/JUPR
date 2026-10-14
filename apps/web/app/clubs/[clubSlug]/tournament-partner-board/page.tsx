@@ -174,40 +174,10 @@ export default async function TournamentPartnerBoardPage({
         active="partner-board"
         kicker="Players Needing Partners"
         description="Find a player and click Request to partner. Send a message, then pair up when they accept."
-      />
-
-      {error ? (
-        <article
-          role="alert"
-          style={{
-            ...cardStyle,
-            marginBottom: "1rem",
-            borderColor: "#fecaca",
-            background: "#fef2f2"
-          }}
-        >
-          <h2 style={{ marginTop: 0 }}>Players Needing Partners temporarily unavailable</h2>
-          <p style={{ color: "#7f1d1d" }}>Please try again shortly.</p>
-        </article>
-      ) : null}
-      {editResponse.error ? (
-        <article
-          role="alert"
-          style={{
-            ...cardStyle,
-            marginBottom: "1rem",
-            borderColor: "#fecaca",
-            background: "#fef2f2"
-          }}
-        >
-          <h2 style={{ marginTop: 0 }}>Edit link could not be verified</h2>
-          <p style={{ color: "#7f1d1d" }}>
-            Request a new edit link from the registration page.
-          </p>
-        </article>
-      ) : null}
-
-      <article
+        resetKey={selectedEvent || "all"}
+        context={`${selectedEvent ? eventChoices.find(([key]) => key === selectedEvent)?.[1] || selectedEvent : "All events"} · ${visiblePlayerGroups.length} players needing partners`}
+      >
+<article
         style={{
           ...cardStyle,
           marginBottom: "1rem",
@@ -259,17 +229,6 @@ export default async function TournamentPartnerBoardPage({
           <div><strong>Tournament players</strong><br />{data?.summary?.total_players ?? 0}</div>
         </div>
       </article>
-
-      {editToken && editResponse.data ? (
-        <PartnerRequestReviewPanel
-          apiBase={apiBase}
-          clubSlug={params.clubSlug}
-          tournamentId={tournament.id}
-          registrationSlug={settings?.registration_slug || null}
-          editToken={editToken}
-          focusRequestId={selectedPartnerRequestId}
-        />
-      ) : null}
 
       {partnerEntries.length ? (
         <nav
@@ -326,6 +285,50 @@ export default async function TournamentPartnerBoardPage({
             );
           })}
         </nav>
+      ) : null}
+
+            </PublicTournamentModuleHeader>
+
+      {error ? (
+        <article
+          role="alert"
+          style={{
+            ...cardStyle,
+            marginBottom: "1rem",
+            borderColor: "#fecaca",
+            background: "#fef2f2"
+          }}
+        >
+          <h2 style={{ marginTop: 0 }}>Players Needing Partners temporarily unavailable</h2>
+          <p style={{ color: "#7f1d1d" }}>Please try again shortly.</p>
+        </article>
+      ) : null}
+      {editResponse.error ? (
+        <article
+          role="alert"
+          style={{
+            ...cardStyle,
+            marginBottom: "1rem",
+            borderColor: "#fecaca",
+            background: "#fef2f2"
+          }}
+        >
+          <h2 style={{ marginTop: 0 }}>Edit link could not be verified</h2>
+          <p style={{ color: "#7f1d1d" }}>
+            Request a new edit link from the registration page.
+          </p>
+        </article>
+      ) : null}
+
+      {editToken && editResponse.data ? (
+        <PartnerRequestReviewPanel
+          apiBase={apiBase}
+          clubSlug={params.clubSlug}
+          tournamentId={tournament.id}
+          registrationSlug={settings?.registration_slug || null}
+          editToken={editToken}
+          focusRequestId={selectedPartnerRequestId}
+        />
       ) : null}
 
       {!settings?.partner_board_enabled ? (

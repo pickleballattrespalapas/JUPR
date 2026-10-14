@@ -1,3 +1,5 @@
+
+import PublicControls from "@/components/PublicControls";
 import PublicPlayerSearch from "@/components/PublicPlayerSearch";
 import { Display } from "@/components/ClubDisplay";
 import Link from "@/components/PublicClubLink";
@@ -295,7 +297,8 @@ export default async function ClubLeaderboardPage({ params, searchParams }: Lead
     <section>
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>Leaderboards</p>
       <h1 style={{ marginTop: 0 }}>{clubName} leaderboards</h1>
-      <p style={{ color: "#475569", maxWidth: "780px" }}>
+      <PublicControls resetKey={JSON.stringify(state)} context={[overall ? "Overall" : selectedLeague, state.leagueView === "past" ? "Past leagues" : "", overall ? selectedPeriod?.name || "All time" : "", state.status === "all" ? "All players" : state.status === "inactive" ? "Inactive players" : "Active players", `Sort: ${state.sort === "win_pct" ? "Win %" : state.sort}`, state.search ? `Search: ${state.search}` : ""].filter(Boolean).join(" · ")}>
+<p style={{ color: "#475569", maxWidth: "780px" }}>
         {state.leagueView === "past"
           ? "See final standings for finished leagues. Active players are shown by default."
           : "See overall and league standings, qualification progress, and earned badges. Active players are shown by default."}
@@ -417,6 +420,8 @@ export default async function ClubLeaderboardPage({ params, searchParams }: Lead
           Qualification for {selectedLeague}: {minGames > 0 ? `at least ${minGames} recorded games.` : "every ranked player currently qualifies."}
         </p>
       ) : null}
+
+      </PublicControls>
 
       {data.snapshot ? (
         <article id={data.snapshot.player_id != null ? playerAnchor(data.snapshot.player_id) : "player-snapshot"} style={{ ...cardStyle, borderColor: "#93c5fd", background: "#eff6ff", marginBottom: "1rem" }} data-testid="leaderboard-player-snapshot">

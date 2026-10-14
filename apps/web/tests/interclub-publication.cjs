@@ -4,7 +4,7 @@ const { renderToStaticMarkup } = require('react-dom/server');
 function load(file, mocks) {
   const code = ts.transpileModule(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true } }).outputText;
   const module = { exports: {} };
-  new Function('require', 'module', 'exports', code)(name => Object.hasOwn(mocks, name) ? mocks[name] : require(name), module, module.exports);
+  new Function('require', 'module', 'exports', code)(name => Object.hasOwn(mocks, name) ? mocks[name] : (require('./helpers/public-controls-module.cjs')(name) || require(name)), module, module.exports);
   return module.exports;
 }
 const css = new Proxy({}, { get: (_, key) => key });

@@ -12,7 +12,7 @@ function load(relative, overrides = {}) {
   compiled.filename = filename;
   compiled.paths = Module._nodeModulePaths(path.dirname(filename));
   const originalRequire = compiled.require.bind(compiled);
-  compiled.require = name => name === "@/lib/useRegistrationAttempt" ? load("lib/useRegistrationAttempt.ts") : name === "@/components/tournaments/RegistrationAttemptHistory" ? { __esModule: true, default: () => null } : overrides[name] || originalRequire(name);
+  compiled.require = name => name === "@/lib/useRegistrationAttempt" ? load("lib/useRegistrationAttempt.ts") : name === "@/components/tournaments/RegistrationAttemptHistory" ? { __esModule: true, default: () => null } : overrides[name] || (require("./helpers/public-controls-module.cjs")(name) || originalRequire(name));
   compiled._compile(ts.transpileModule(fs.readFileSync(filename, "utf8"), {
     compilerOptions: { esModuleInterop: true, jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }
   }).outputText, filename);

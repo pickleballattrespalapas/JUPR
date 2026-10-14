@@ -52,7 +52,13 @@ async function request(path, body, authorization) {
   assert.equal(r.ok, true, `${path}: ${r.status}`);
   return data;
 }
+async function openControls(page) {
+  const panel = page.locator('[data-public-controls-panel]').first();
+  await expect(panel).toBeAttached();
+  if (await panel.getAttribute('open') === null) await panel.locator('summary').first().click();
+}
 async function verifyStandingsQr(page, expectedUrl) {
+  await openControls(page);
   const frame = await page.getByRole("img",{name:"Standings QR code",exact:true}).evaluate(async svg => {
     const img = new Image();
     const loaded = new Promise((resolve,reject) => { img.onload = resolve; img.onerror = reject; });
@@ -113,6 +119,8 @@ async function verifyStandingsQr(page, expectedUrl) {
     }
     await owner.goto(audience === "admin" ? `${web}/admin/round-robin-generator/sessions/${sharedKey}/rounds/1`
       : `${web}/clubs/test/round-robin-generator/sessions/${sharedKey}/rounds/1#edit=${encodeURIComponent(sharedRR.edit_token)}`);
+    await expect(owner.locator("[data-public-controls-panel]").first()).not.toHaveAttribute("open", "");
+    await openControls(owner);
     await owner.getByRole("button",{name:"Share standings",exact:true}).click();
     const standingsURL = await owner.getByLabel("Standings link").inputValue();
     assert.ok(standingsURL.endsWith("/standings") && !standingsURL.includes("#"));
@@ -145,6 +153,7 @@ async function verifyStandingsQr(page, expectedUrl) {
     await handed.getByRole("button",{name:"Next scheduled round",exact:true}).click();
     await handed.waitForURL(/\/shared\/[^/]+\/rounds\/2$/);
     await owner.reload();
+    await openControls(owner);
     await owner.getByRole("button",{name:"Revoke handoff link",exact:true}).click();
     await expect(owner.getByRole("status").filter({hasText:"Handoff link revoked"})).toBeVisible();
     for (const id of ["r2-c1","r2-c2"]) {
@@ -179,15 +188,37 @@ async function verifyStandingsQr(page, expectedUrl) {
       const page = await ctx.newPage();
       page.on("pageerror", error => errors.push(error.message));
       await page.goto(`${web}/clubs/test/round-robin-generator/sessions/${key}/rounds/1#edit=${encodeURIComponent(created.edit_token)}`);
+      const controls = page.locator('[data-public-controls-panel]').first();
+      await expect(controls).not.toHaveAttribute('open', '');
+      await expect(page.getByLabel('r1-c1 side A score')).toBeVisible();
+      await expect(page.locator('section[aria-label="Round-Robin schedule"]')).toBeHidden();
+      if (count === 8) {
+        await page.setViewportSize({ width: 390, height: 844 });
+        const inputBox = await page.getByLabel('r1-c1 side A score').boundingBox();
+        assert.ok(inputBox && inputBox.y < 844, 'Current scores appear in the first mobile screen');
+        assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'Collapsed controls fit mobile width');
+        await page.screenshot({ path: path.join(output, 'collapsed-controls-mobile.png') });
+        await controls.locator('summary').focus();
+        await controls.locator('summary').press('Enter');
+        await expect(page.locator('section[aria-label="Round-Robin schedule"]')).toBeVisible();
+        await controls.locator('summary').press('Enter');
+        await expect(page.locator('section[aria-label="Round-Robin schedule"]')).toBeHidden();
+        await page.setViewportSize({ width: 1280, height: 900 });
+        await page.screenshot({ path: path.join(output, 'collapsed-controls-desktop.png') });
+      }
+      await openControls(page);
       await page.getByRole("button", {name:`Open round ${rounds}`,exact:true}).waitFor();
+      await openControls(page);
       assert.equal(await page.getByRole("button", {name:/^Open round \d+$/}).count(), rounds);
       const selecting = page.waitForResponse(r => r.url().endsWith(`/rounds/${rounds}/select`) && r.request().method() === "POST");
+      await openControls(page);
       await page.getByRole("button", {name:`Open round ${rounds}`,exact:true}).click();
       assert.equal((await selecting).ok(),true);
       await page.waitForURL(new RegExp(`/rounds/${rounds}$`));
       const a = page.locator('input[aria-label$="side A score"]'), b = page.locator('input[aria-label$="side B score"]');
       await a.first().waitFor();
       for (let i=0;i<await a.count();i++) { await a.nth(i).fill("11");await b.nth(i).fill("7"); }
+      await openControls(page);
       assert.equal(await page.getByRole("button",{name:"Open round 1",exact:true}).isDisabled(),true);
       const saving = page.waitForResponse(r => r.url().endsWith(`/rounds/${rounds}/scores`) && r.request().method() === "PATCH");
       await page.getByRole("button",{name:"Save round scores",exact:true}).click();
@@ -300,6 +331,7 @@ async function verifyStandingsQr(page, expectedUrl) {
     assert.equal(perfect.perfectRotation,true);
     assert.equal(perfect.adaptiveFromRound,null);
     assertPerfect(perfect);
+      await openControls(eightPage);
     await expect(eightPage.getByRole("button",{name:/^Open round \d+$/})).toHaveCount(7);
     await eightPage.screenshot({path:path.join(output,"six-plus-two-perfect-rotation.png"),fullPage:true});
     for (const id of ["r1-c1","r1-c2"]) {
@@ -309,6 +341,7 @@ async function verifyStandingsQr(page, expectedUrl) {
     await eightPage.getByRole("button",{name:"Save round scores",exact:true}).click();
     await eightPage.getByRole("button",{name:"Next scheduled round",exact:true}).click();
     await eightPage.waitForURL(/\/rounds\/2$/);
+      await openControls(eightPage);
     await eightPage.getByRole("button",{name:"Open round 7",exact:true}).click();
     await eightPage.waitForURL(/\/rounds\/7$/);
     const navigated = (await request(`/clubs/test/play-generators/sessions/${sixKey}`)).session.event;
