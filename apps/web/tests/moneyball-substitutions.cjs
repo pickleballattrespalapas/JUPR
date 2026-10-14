@@ -17,6 +17,7 @@ const stubs = {
   "@/components/SearchablePlayerSelect": { __esModule: true, default: ({value,onValueChange,children,...props}) => h("select",{...props,value,onChange:event=>onValueChange(event.target.value)},children) },
 };
 function load(name, parent = root) {
+  if (name === "@/components/PublicControls") return require("./helpers/public-controls-module.cjs")(name);
   if (Object.hasOwn(stubs, name)) return stubs[name];
   if (!name.startsWith("@/") && !name.startsWith(".")) return require(name);
   const base = name.startsWith("@/") ? path.join(root, name.slice(2)) : path.resolve(parent, name);

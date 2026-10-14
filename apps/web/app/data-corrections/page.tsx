@@ -1,3 +1,5 @@
+
+import PublicControls from "@/components/PublicControls";
 import DataCorrectionForm from "./DataCorrectionForm";
 import { SUPPORT_EMAIL } from "@/lib/publicSupportContent";
 
@@ -20,7 +22,8 @@ export default function DataCorrectionsPage() {
       </p>
 
       <div style={{ display: "grid", gap: "1rem" }}>
-        <article style={cardStyle}>
+        <PublicControls label="Help & guidance">
+<article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>What to include</h2>
           <ul style={{ color: "#475569", paddingLeft: "1.25rem" }}>
             <li>Your name and email so staff can follow up.</li>
@@ -30,7 +33,8 @@ export default function DataCorrectionsPage() {
             <li>Any sheet, screenshot, organizer note, or other context that supports the correction.</li>
           </ul>
         </article>
-        <article style={cardStyle}>
+        </PublicControls>
+<article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Correction request form</h2>
           <p style={{ color: "#475569" }}>
             Staff will review the original information and correct the relevant player, match, league, tournament, badge, or rating details.

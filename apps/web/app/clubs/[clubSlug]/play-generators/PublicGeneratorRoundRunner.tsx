@@ -1,5 +1,7 @@
 "use client";
 
+import PublicControls from "@/components/PublicControls";
+
 import GeneratorSharing from "@/components/GeneratorSharing";
 
 import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
@@ -926,7 +928,21 @@ export default function GeneratorRoundRunner({
         {!editToken ? <p style={{ color: "#64748b" }}>Only the organizer can enter scores or change players.</p> : null}
       </article>
 
-      {generatorKind === "round_robin" && (shared || editToken) ? <GeneratorSharing apiBase={apiBase} clubId={clubId} sessionKey={sessionKey} version={session.version} ownerToken={shared ? undefined : editToken} shared={shared} locked={resultsLocked} disabled={busy || editingScores || (canEditRound && anyDraftScore)} onChanged={loadSession} /> : null}
+      <PublicControls resetKey={String(roundNumber)} context={`Round ${roundNumber} · ${roundStatusLabel(round.status)}`}>
+{generatorKind === "round_robin" && (shared || editToken) ? <GeneratorSharing apiBase={apiBase} clubId={clubId} sessionKey={sessionKey} version={session.version} ownerToken={shared ? undefined : editToken} shared={shared} locked={resultsLocked} disabled={busy || editingScores || (canEditRound && anyDraftScore)} onChanged={loadSession} /> : null}
+
+      {scoredSession && !shared ? <GeneratorSubmission ratingMode={session.rating_mode || "unrated"} submission={session.submission} canSubmit={session.status === "completed" && Boolean(editToken) && !editingScores} defaultDate={session.created_at} onSubmit={submitResults} /> : null}
+
+      {generatorKind === "round_robin" && !event.playoff ? (
+        <GeneratorRoundSchedule rounds={event.rounds} participants={event.participants}
+          selectedRound={roundNumber} currentRound={event.currentRoundNumber}
+          disabled={busy || editingScores || (canEditRound && anyDraftScore)}
+          unsaved={editingScores || (canEditRound && anyDraftScore)}
+          perfect={Boolean(event.perfectRotation)} adaptive={Boolean(event.adaptiveFromRound)}
+          onOpen={number => void openScheduledRound(number)} />
+      ) : null}
+
+      </PublicControls>
 
       {session.status === "completed" ? (
         <article style={{ ...cardStyle, background: "#ecfdf5", borderColor: "#86efac" }}>
@@ -938,17 +954,6 @@ export default function GeneratorRoundRunner({
             </button>
           ) : null}
         </article>
-      ) : null}
-
-      {scoredSession && !shared ? <GeneratorSubmission ratingMode={session.rating_mode || "unrated"} submission={session.submission} canSubmit={session.status === "completed" && Boolean(editToken) && !editingScores} defaultDate={session.created_at} onSubmit={submitResults} /> : null}
-
-      {generatorKind === "round_robin" && !event.playoff ? (
-        <GeneratorRoundSchedule rounds={event.rounds} participants={event.participants}
-          selectedRound={roundNumber} currentRound={event.currentRoundNumber}
-          disabled={busy || editingScores || (canEditRound && anyDraftScore)}
-          unsaved={editingScores || (canEditRound && anyDraftScore)}
-          perfect={Boolean(event.perfectRotation)} adaptive={Boolean(event.adaptiveFromRound)}
-          onOpen={number => void openScheduledRound(number)} />
       ) : null}
 
       <article style={cardStyle}>

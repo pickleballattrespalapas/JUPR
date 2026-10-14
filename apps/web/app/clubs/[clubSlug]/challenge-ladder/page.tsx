@@ -1,3 +1,5 @@
+
+import PublicControls from "@/components/PublicControls";
 import Link from "@/components/PublicClubLink";
 import ChallengeLadderResultDetails from "@/components/ChallengeLadderResultDetails";
 import { getClubChallengeLadder } from "@/lib/challengeLadderApi";
@@ -304,7 +306,8 @@ export default async function ChallengeLadderPage({ params, searchParams }: Chal
 
       {data ? (
         <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
+          <PublicControls resetKey={`${section}:${selectedTier}:${selectedStatus}:${q}`} context={[sectionLabels[section], selectedTier ? data.tiers.find(tier => tier.tier_id === selectedTier)?.label : "", selectedStatus, q ? `Search: ${q}` : ""].filter(Boolean).join(" · ")}>
+<div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
             <article style={cardStyle}><strong>Active ladder players</strong><br />{data.summary.active_player_count}</article>
             <article style={cardStyle}><strong>Tiers with players</strong><br />{data.summary.populated_tier_count} / {data.summary.tier_count}</article>
             <article style={cardStyle}><strong>Active challenges</strong><br />{data.summary.active_challenge_count}</article>
@@ -323,9 +326,8 @@ export default async function ChallengeLadderPage({ params, searchParams }: Chal
             })}
           </div>
 
-          {section === "ladder" ? (
-            <>
-              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
+          {section === "ladder" ? <>
+<div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
                 <Link href={pageHref({ clubSlug, q })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.35rem 0.65rem", background: !selectedTier ? "#dcfce7" : "white", color: "#0f172a", textDecoration: "none", fontWeight: !selectedTier ? 800 : 600 }}>All tiers</Link>
                 {data.tiers.map((tier) => {
                   const active = tier.tier_id === selectedTier;
@@ -336,6 +338,24 @@ export default async function ChallengeLadderPage({ params, searchParams }: Chal
                   );
                 })}
               </div>
+              </> : null}
+{section === "challenges" ? <>
+<div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
+                <Link href={pageHref({ clubSlug, section: "challenges", challenge: selectedChallengeId })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.35rem 0.65rem", background: !selectedStatus ? "#dcfce7" : "white", color: "#0f172a", textDecoration: "none", fontWeight: !selectedStatus ? 800 : 600 }}>All challenges</Link>
+                {data.challenge_sections.map((challengeSection) => {
+                  const active = challengeSection.name === selectedStatus;
+                  return (
+                    <Link key={challengeSection.name} href={pageHref({ clubSlug, section: "challenges", status: challengeSection.name, challenge: selectedChallengeId })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.35rem 0.65rem", background: active ? "#dcfce7" : "white", color: "#0f172a", textDecoration: "none", fontWeight: active ? 800 : 600 }}>
+                      {challengeSection.name} ({challengeSection.challenges.length})
+                    </Link>
+                  );
+                })}
+              </div>
+              </> : null}
+</PublicControls>
+
+      {section === "ladder" ? (
+            <>
               {q ? <p style={{ color: "#475569" }}>Filtering ladder by: <strong>{q}</strong></p> : null}
               {selectedPlayer ? <PlayerChallengePanel player={selectedPlayer} clubSlug={clubSlug} /> : null}
               <h2>Ladder standings</h2>
@@ -349,17 +369,6 @@ export default async function ChallengeLadderPage({ params, searchParams }: Chal
             <>
               <h2>Challenges & results</h2>
               {!hasChallenges ? <p style={{ color: "#64748b" }}>No challenges yet.</p> : null}
-              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
-                <Link href={pageHref({ clubSlug, section: "challenges", challenge: selectedChallengeId })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.35rem 0.65rem", background: !selectedStatus ? "#dcfce7" : "white", color: "#0f172a", textDecoration: "none", fontWeight: !selectedStatus ? 800 : 600 }}>All challenges</Link>
-                {data.challenge_sections.map((challengeSection) => {
-                  const active = challengeSection.name === selectedStatus;
-                  return (
-                    <Link key={challengeSection.name} href={pageHref({ clubSlug, section: "challenges", status: challengeSection.name, challenge: selectedChallengeId })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.35rem 0.65rem", background: active ? "#dcfce7" : "white", color: "#0f172a", textDecoration: "none", fontWeight: active ? 800 : 600 }}>
-                      {challengeSection.name} ({challengeSection.challenges.length})
-                    </Link>
-                  );
-                })}
-              </div>
               {data.challenge_sections.map((challengeSection) => {
                 if (selectedStatus && challengeSection.name !== selectedStatus) return null;
                 if (!challengeSection.challenges.length) return null;

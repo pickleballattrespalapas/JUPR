@@ -1,3 +1,5 @@
+
+import PublicControls from "@/components/PublicControls";
 import { Display } from "@/components/ClubDisplay";
 import PublicTournamentSponsors from "@/components/PublicTournamentSponsors";
 import Link from "@/components/PublicClubLink";
@@ -509,7 +511,8 @@ export default async function TournamentResultsPage({ params, searchParams }: Pr
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>Live & Results</p>
       <PublicTournamentSponsors clubSlug={params.clubSlug} tournamentId={data.tournament.id} placement="header" title={data.tournament.name} />
       <p style={{ color: "#475569", maxWidth: "52rem" }}>Follow live scores, standings, brackets, and medal winners.</p>
-      <PublicTournamentNav
+      <PublicControls resetKey={`${resultsTab}:${selectedCurrentDraw?.public_draw_key || selectedCompletedDraw?.public_draw_key || ""}`} context={[resultsTab === "completed" ? "Completed draws" : "Live & upcoming", selectedCurrentDraw?.name || selectedCompletedDraw?.name].filter(Boolean).join(" · ")}>
+<PublicTournamentNav
         clubSlug={params.clubSlug}
         tournamentName={data.tournament.name}
         tournamentId={data.tournament.id}
@@ -524,10 +527,7 @@ export default async function TournamentResultsPage({ params, searchParams }: Pr
           Completed <span className={styles.count}>{completedDraws.length}</span>
         </Link>
       </nav>
-      {resultsTab === "live" && currentDraws.length ? (
-        <section aria-labelledby="current-draws-title" style={{ marginBottom: "1.25rem" }}>
-          <h2 id="current-draws-title" style={{ marginBottom: "0.25rem" }}>Current draws</h2>
-          <p style={{ color: "#475569", marginTop: 0 }}>Choose a draw to see its live standings, scores, and bracket.</p>
+      {resultsTab === "live" && currentDraws.length ? <>
           <nav
             aria-label="Current tournament draws"
             style={{
@@ -569,6 +569,14 @@ export default async function TournamentResultsPage({ params, searchParams }: Pr
               );
             })}
           </nav>
+      </> : null}
+
+      </PublicControls>
+
+      {resultsTab === "live" && currentDraws.length ? (
+        <section aria-labelledby="current-draws-title" style={{ marginBottom: "1.25rem" }}>
+          <h2 id="current-draws-title" style={{ marginBottom: "0.25rem" }}>Current draws</h2>
+          <p style={{ color: "#475569", marginTop: 0 }}>Choose a draw to see its live standings, scores, and bracket.</p>
           {selectedCurrentDraw ? <DrawResults draw={selectedCurrentDraw} /> : null}
         </section>
       ) : null}

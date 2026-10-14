@@ -13,6 +13,8 @@ const league = { document: { name: 'Southern BCS', start_date: '2026-12-01', end
   players: [{ id:'original',name:'Ana Original',club_id:'a' },{ id:'sub',name:'Sara Replacement',club_id:'a' },{ id:'partner',name:'Pat Partner',club_id:'a' },{ id:'opponent',name:'Bea Opponent',club_id:'b' },{ id:'other',name:'Other Opponent',club_id:'b' }] }, standings: [{ division:'3.0',rows:[{ club_id:'a',points:3,games_won:6,pairings_won:2,meets_played:2,point_differential:-4,position:1 }] }, { division:'3.5',rows:[{ club_id:'a',points:3,games_won:4,pairings_won:1,meets_played:2,point_differential:3,position:1 }] }], club_cup:{ standings:[{ club_id:'a',position:1,points:12,regular_points:6,championship_points:6,meets_played:3,pairings_won:5,games_won:16,point_differential:14 }],champions:[],status:'provisional' } };
 async function main() {
   let tree; await act(async () => { tree = create(React.createElement(League, { league })); });
+  const tabIds = () => tree.root.findAllByProps({ role: 'tab' }).map(node => node.props.id);
+  assert.equal(new Set(tabIds()).size, tabIds().length, 'Only the active view renders the shared navigation IDs');
   const tab = label => tree.root.findAllByProps({ role:'tab' }).find(node => text(node) === label);
   const visible = () => tree.root.findAllByProps({ role:'tabpanel' }).filter(node => !node.props.hidden);
   assert.equal(visible().length, 1); assert.ok(text(visible()[0]).includes('Overall Club Cup'));
@@ -26,11 +28,12 @@ async function main() {
   assert.deepEqual(visible()[0].findByType('tbody').findAllByType('td').map(text), ['1','3','2','2','6','-4']);
   await act(async () => tree.root.findByProps({ 'aria-label':'View results for Alpha' }).props.onClick());
   assert.equal(tab('Results').props['aria-selected'], true);
+  assert.equal(new Set(tabIds()).size, tabIds().length, 'Navigation IDs remain unique after changing views');
   const select = name => tree.root.findAllByType('select').find(node => node.props['aria-label'] === name);
   assert.equal(select('Filter results by club').props.value, 'a');
   const gameRows = () => visible()[0].findAllByProps({ 'data-result-game':'' });
   assert.equal(gameRows().length, 6, 'A club selection immediately shows all its games across meets');
-  assert.equal(visible()[0].findAllByType('details').length, 0, 'No matchup or pairing expansion is needed');
+  assert.equal(visible()[0].findAllByType('details').filter(node => !Object.hasOwn(node.props, 'data-public-controls-panel')).length, 0, 'No matchup or pairing expansion is needed');
   await act(async () => select('Filter results by meet').props.onChange({ target:{value:'m1'} }));
   let panel = visible()[0]; assert.equal(gameRows().length, 3);
   const choosePlayer = value => panel.findAllByType('select').find(node => node.props.hidden).props.onChange({ target:{value} });
@@ -50,7 +53,7 @@ async function main() {
   assert.equal(gameRows().length, 9);
   await act(async () => tab('Schedule').props.onClick());
   assert.equal(visible().length, 1); assert.ok(text(visible()[0]).includes('Meet schedule'));
-  assert.equal(visible()[0].findAllByType('details').length, 0);
+  assert.equal(visible()[0].findAllByType('details').filter(node => !Object.hasOwn(node.props, 'data-public-controls-panel')).length, 0);
   await act(async () => tree.unmount());
   assert.equal(views.resultGameWinner({status:'retired',a:9,b:4,winner:'b'}), 'b');
   assert.equal(views.resultGameWinner({status:'double_forfeit',a:null,b:null,winner:null}), null);

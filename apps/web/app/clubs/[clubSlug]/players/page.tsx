@@ -1,3 +1,5 @@
+
+import PublicControls from "@/components/PublicControls";
 import PublicPlayerSearch from "@/components/PublicPlayerSearch";
 import { Display } from "@/components/ClubDisplay";
 import Link from "@/components/PublicClubLink";
@@ -106,7 +108,7 @@ export default async function ClubPlayersPage({ params, searchParams }: PlayersP
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>Player profiles</p>
       <h1 style={{ marginTop: 0 }}>{clubName} players</h1>
       <p style={{ color: "#334155", maxWidth: "780px" }}>
-        Find a player, then explore doubles and singles ratings, match history, awards, frequent partners, and opponents. All player profiles remain available here.
+        Browse player ratings, records, and profiles.
       </p>
 
       {error ? (
@@ -117,7 +119,8 @@ export default async function ClubPlayersPage({ params, searchParams }: PlayersP
 
       {!error ? (
         <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
+          <PublicControls resetKey={`${q}:${sort}:${page}`} context={[`${summary?.filtered_players ?? 0} players`, `Sort: ${sort === "win_pct" ? "Win %" : sort}`, q ? `Search: ${q}` : ""].filter(Boolean).join(" · ")}>
+<div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
             <article style={cardStyle}><strong>Players</strong><br />{summary?.public_players ?? 0}</article>
             <article style={cardStyle}><strong>Active players</strong><br />{summary?.active_players ?? 0}</article>
             <article style={cardStyle}><strong>Inactive players</strong><br />{summary?.inactive_players ?? 0}</article>
@@ -146,7 +149,9 @@ export default async function ClubPlayersPage({ params, searchParams }: PlayersP
             ))}
           </div>
 
-          {players.length === 0 ? (
+          </PublicControls>
+
+      {players.length === 0 ? (
             <article data-testid="players-filter-empty-state" style={cardStyle}>
               <h2 style={{ marginTop: 0 }}>No players match this view</h2>
               <p>Try a different player name.</p>

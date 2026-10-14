@@ -103,7 +103,7 @@ async function main() {
     "@/components/PublicClubLink": { __esModule: true, default: Link },
     "next/navigation": { redirect: () => { throw Error("Unexpected redirect"); } },
     "@/components/PublicTournamentSponsors": { __esModule: true, default: () => null },
-    "@/components/PublicTournamentModuleHeader": { __esModule: true, default: () => null },
+    "@/components/PublicTournamentModuleHeader": { __esModule: true, default: ({ children }) => children },
     "@/lib/tournamentRegistrationApi": { getClubTournamentRoster: async () => ({ data: {
       tournament: { id: "fixture", name: "Fixture Tournament" }, settings: { registration_slug: "fixture-tournament" },
       summary: { total_registrations: 1, total_players: 1 },

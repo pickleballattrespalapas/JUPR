@@ -1,12 +1,14 @@
 "use client";
 
-import { Fragment, useId, useState } from "react";
+import PublicControls from "@/components/PublicControls";
+
+import { Fragment, useId, useState, type ReactNode } from "react";
 import type { CompetitionResult, PublicLeague, PublicMeet, ResultGame, ResultPlayer } from "@/lib/interclubPublic";
 import { gameResultNote, hasResultPlayer, resultGameWinner, resultPairingNames, resultPlayers, sortSkillLevels } from "@/lib/interclubResultViews";
 import SearchablePlayerSelect from "./SearchablePlayerSelect";
 import styles from "./InterclubResults.module.css";
 
-export function CompetitionStandings({ league, onClubSelect }: { league: PublicLeague; onClubSelect?: (club: string) => void }) {
+export function CompetitionStandings({ league, onClubSelect, navigation }: { navigation?: ReactNode; league: PublicLeague; onClubSelect?: (club: string) => void }) {
   const [division, setDivision] = useState("");
   const names = Object.fromEntries(league.document.clubs.map(club => [club.id, club.name]));
   const group = league.standings.find(group => group.division === division);
@@ -17,8 +19,11 @@ export function CompetitionStandings({ league, onClubSelect }: { league: PublicL
   const label = division ? `${division} standings` : "Club Cup standings";
   const clubLabel = (id: string, fallback?: string) => onClubSelect ? <button type="button" className={styles.clubButton} onClick={() => onClubSelect(id)} aria-label={`View results for ${names[id] || fallback || id}`}>{names[id] || fallback || id}</button> : names[id] || fallback || id;
   return <section className={styles.workspace} aria-label="Season standings">
-    <div className={styles.heading}><div><h2>{division ? `${division} skill level` : "Overall Club Cup"}</h2><p className={styles.meta}>{division ? "3 points for a matchup win · 1 each for a split" : "Season points across all skill levels"}</p></div>
+    <PublicControls context={division ? `${division} skill level` : "Overall Club Cup"}>{navigation}
       <label className={styles.field}>Standings<select aria-label="Standings" value={division} onChange={event => setDivision(event.target.value)}><option value="">Overall Club Cup</option>{options.map(value => <option key={value} value={value}>{value} skill level</option>)}</select></label>
+    </PublicControls>
+    <div className={styles.heading}><div><h2>{division ? `${division} skill level` : "Overall Club Cup"}</h2><p className={styles.meta}>{division ? "3 points for a matchup win · 1 each for a split" : "Season points across all skill levels"}</p></div>
+
     </div>
     <p className={styles.scrollHint}>Swipe the table to see all standings.</p>
     <div className={styles.scroll} role="region" aria-label={label} tabIndex={0}><table className={`${styles.table} ${styles.standingsTable}`} aria-label={label}>
@@ -70,7 +75,8 @@ function MatchResultRows({ row, names, catalog, club, player }: {
   </tbody>;
 }
 
-export function CompetitionResults({ results, names, meets = [], timezone = "America/Mazatlan", players = [], initialClub = "", singleMeet = false }: {
+export function CompetitionResults({ results, names, meets = [], timezone = "America/Mazatlan", players = [], initialClub = "", singleMeet = false, navigation }: {
+  navigation?: ReactNode;
   results: CompetitionResult[]; names: Record<string, string>; meets?: PublicMeet[]; timezone?: string; players?: ResultPlayer[]; initialClub?: string; singleMeet?: boolean;
 }) {
   const [meet, setMeet] = useState(""), [club, setClub] = useState(initialClub), [division, setDivision] = useState(""), [player, setPlayer] = useState("");
@@ -90,15 +96,19 @@ export function CompetitionResults({ results, names, meets = [], timezone = "Ame
   const tiebreakCount = filtered.filter(row => row.tiebreak?.status === "completed" && (!player || resultPlayers(row.tiebreak).includes(player))).length;
   const reset = () => { setMeet(""); setClub(""); setDivision(""); setPlayer(""); };
   const fieldChanged = (change: () => void) => { change(); setPlayer(""); };
-  if (!results.length) return <p className={styles.empty}>Results will appear after the organizer approves and publishes them.</p>;
+  if (!results.length) return <><PublicControls context="Results">{navigation}</PublicControls><p className={styles.empty}>Results will appear after the organizer approves and publishes them.</p></>;
   return <section className={styles.workspace} aria-label="Browse match results">
-    <div className={`${styles.filters} ${singleMeet ? styles.meetFilters : ""}`}>
+    <PublicControls context={[meetNames[meet] || "All meets", names[club] || "All clubs", division ? `${division} skill level` : "All skill levels", player ? catalog[player]?.name : ""].filter(Boolean).join(" · ")}>
+{navigation}
+<div className={`${styles.filters} ${singleMeet ? styles.meetFilters : ""}`}>
       {!singleMeet && <label className={styles.field}>Meet<select aria-label="Filter results by meet" value={meet} onChange={event => fieldChanged(() => setMeet(event.target.value))}><option value="">All meets</option>{orderedMeets.filter(meet => results.some(row => row.meet_id === meet.id)).map(meet => <option key={meet.id} value={meet.id}>{meetNames[meet.id]}</option>)}</select></label>}
       <label className={styles.field}>Club<select aria-label="Filter results by club" value={club} onChange={event => fieldChanged(() => setClub(event.target.value))}><option value="">All clubs</option>{Object.entries(names).sort((a, b) => a[1].localeCompare(b[1])).map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label>
       <label className={styles.field}>Skill level<select aria-label="Filter results by skill level" value={division} onChange={event => fieldChanged(() => setDivision(event.target.value))}><option value="">All skill levels</option>{sortSkillLevels([...new Set(results.map(row => row.division))]).map(value => <option key={value} value={value}>{value}</option>)}</select></label>
       <label className={styles.field} htmlFor={playerInputId}>Player<SearchablePlayerSelect id={playerInputId} aria-label="Filter results by player" disabled={!players.length} value={player} onValueChange={setPlayer}><option value="">All players</option>{playerOptions.map(row => <option key={row.id} value={row.id}>{row.name} · {names[row.club_id] || row.club_id}</option>)}</SearchablePlayerSelect></label>
     </div>
-    <div className={styles.count}><p className={styles.meta} role="status">{filtered.length} {filtered.length === 1 ? "matchup" : "matchups"} · {gameCount} doubles {gameCount === 1 ? "game" : "games"}{tiebreakCount ? ` · ${tiebreakCount} ${tiebreakCount === 1 ? "tiebreak" : "tiebreaks"}` : ""}{player ? ` involving ${catalog[player]?.name || "this player"}` : ""}</p>{(meet || club || division || player) && <button type="button" className={styles.reset} onClick={reset}>Clear filters</button>}</div>
+    </PublicControls>
+
+      <div className={styles.count}><p className={styles.meta} role="status">{filtered.length} {filtered.length === 1 ? "matchup" : "matchups"} · {gameCount} doubles {gameCount === 1 ? "game" : "games"}{tiebreakCount ? ` · ${tiebreakCount} ${tiebreakCount === 1 ? "tiebreak" : "tiebreaks"}` : ""}{player ? ` involving ${catalog[player]?.name || "this player"}` : ""}</p>{(meet || club || division || player) && <button type="button" className={styles.reset} onClick={reset}>Clear filters</button>}</div>
     {!players.length && <p className={styles.meta}>Player details are not available for these results yet.</p>}
     {!filtered.length && <p className={styles.empty}>No results match these filters. Try another selection or clear the filters.</p>}
     {visibleMeetIds.map(meetId => <section key={meetId} aria-label={meetNames[meetId] || "Meet results"}>

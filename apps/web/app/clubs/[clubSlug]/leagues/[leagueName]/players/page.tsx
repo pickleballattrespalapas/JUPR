@@ -1,3 +1,5 @@
+
+import PublicControls from "@/components/PublicControls";
 import Link from "@/components/PublicClubLink";
 import PublicLeagueNav from "@/components/PublicLeagueNav";
 import { getClubLeagueResults, type LeagueResultsRecentMatch } from "@/lib/api";
@@ -103,7 +105,8 @@ export default async function PublicLeaguePlayerSummariesPage({ params, searchPa
         Choose a player to see their record, rating changes, and recent matches.
       </p>
 
-      <PublicLeagueNav clubSlug={params.clubSlug} leagueName={leagueName} active="player" leagueView={leagueView} />
+      <PublicControls resetKey={String(selectedPlayerId)} context={`${leagueName} · ${selectedPlayerName}`}>
+<PublicLeagueNav clubSlug={params.clubSlug} leagueName={leagueName} active="player" leagueView={leagueView} />
 
       <div style={{ ...cardStyle, marginBottom: "1rem" }}>
         <LeaguePlayerSelect
@@ -112,6 +115,8 @@ export default async function PublicLeaguePlayerSummariesPage({ params, searchPa
           selectedPlayerId={selectedPlayerId}
         />
       </div>
+
+      </PublicControls>
 
       {summary && selectedPlayerId != null ? (
         <>

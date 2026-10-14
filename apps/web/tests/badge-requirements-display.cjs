@@ -14,7 +14,7 @@ const mod = {exports:{}};
 new Function('require','module','exports',output)((name)=>{
  if(name==='@/components/PublicClubLink') return {__esModule:true,default:({children,...props})=>React.createElement('a',props,children)};
  if(name==='@/lib/badgeApi') return {getClubBadgeCodex:async()=>({data:payload,error:null})};
- return require(name);
+ return (require('./helpers/public-controls-module.cjs')(name) || require(name));
 },mod,mod.exports);
 (async()=>{
  const html = renderToStaticMarkup(await mod.exports.default({params:{clubSlug:'test'},searchParams:{bucket:'all'}}));

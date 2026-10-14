@@ -1,3 +1,5 @@
+
+import PublicControls from "@/components/PublicControls";
 import Link from "next/link";
 import { SERVICE_LOCATION, SERVICE_OPERATOR, SUPPORT_EMAIL } from "@/lib/publicSupportContent";
 import SupportRequestForm from "./SupportRequestForm";
@@ -22,7 +24,8 @@ export default function SupportPage() {
         Get help with player profiles, corrections, or anything else on the website.
       </p>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "1rem" }}>
+      <PublicControls label="Help & guidance">
+<div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "1rem" }}>
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>General support</h2>
           <p style={{ color: "#475569" }}>Questions about ratings, pages, access, tournament registration, or club setup can start here.</p>
@@ -39,7 +42,8 @@ export default function SupportPage() {
           <Link href="/faq">Read FAQ</Link>
         </article>
       </div>
-      <article id="general-support-form" style={{ ...cardStyle, marginTop: "1rem" }}>
+      </PublicControls>
+<article id="general-support-form" style={{ ...cardStyle, marginTop: "1rem" }}>
         <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Send a support request</h2>
         <p style={{ color: "#475569" }}>Send your question to the club&apos;s support team. Submitting this form will not change player, match, rating, or tournament information.</p>
         <SupportRequestForm />

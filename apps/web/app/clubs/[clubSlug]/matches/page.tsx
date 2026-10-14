@@ -1,3 +1,5 @@
+
+import PublicControls from "@/components/PublicControls";
 import { Display } from "@/components/ClubDisplay";
 import Link from "@/components/PublicClubLink";
 import { getClubMatches, type PublicMatch } from "@/lib/api";
@@ -113,8 +115,9 @@ export default async function MatchesPage({ params, searchParams }: MatchesPageP
       {error ? <p role="alert" style={{ color: "#b91c1c" }}>Match history is unavailable right now. Please try again shortly.</p> : null}
       {!error && matches.length === 0 ? <p>No matches have been recorded yet.</p> : null}
 
-      {matches.length > 0 ? (
+      {!error ? (
         <>
+<PublicControls resetKey={`${selectedLeague}:${selectedSort}:${q}`} context={[selectedLeague || "All leagues", `Sort: ${selectedSort}`, q ? `Search: ${q}` : ""].filter(Boolean).join(" · ")}>
 <Display field="result_summary">          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
             <article style={cardStyle}><strong>Recorded matches</strong><br />{matches.length}</article>
             <article style={cardStyle}><strong>Scored matches</strong><br />{scoredCount}</article>
@@ -145,7 +148,9 @@ export default async function MatchesPage({ params, searchParams }: MatchesPageP
             </div>
           </div>
 
-          <div style={{ overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: "12px", background: "white" }}>
+          </PublicControls>
+
+      <div style={{ overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: "12px", background: "white" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.95rem", minWidth: "820px" }}>
               <thead>
                 <tr>

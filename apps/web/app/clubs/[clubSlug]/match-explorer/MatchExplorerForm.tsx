@@ -1,5 +1,7 @@
 "use client";
 
+import PublicControls from "@/components/PublicControls";
+
 import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -366,7 +368,8 @@ export default function MatchExplorerForm({ apiBase, clubSlug, players, contexts
 
   return (
     <section data-testid="match-explorer-form" style={{ border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" }}>
-      <h2 style={{ marginTop: 0 }}>Preview a doubles matchup</h2>
+      <PublicControls initiallyOpen={availablePlayers.length < 4} label="View & filters" context={preview ? `${playerName(availablePlayers, me)} / ${playerName(availablePlayers, partner)} vs ${playerName(availablePlayers, opp1)} / ${playerName(availablePlayers, opp2)} · ${scoreYou}–${scoreOpp}` : undefined}>
+<h2 style={{ marginTop: 0 }}>Preview a doubles matchup</h2>
       <p style={{ color: "#475569", marginTop: "-0.25rem" }}>
         Choose the players and a possible final score. You can copy a link to share this matchup.
       </p>
@@ -396,11 +399,14 @@ export default function MatchExplorerForm({ apiBase, clubSlug, players, contexts
         <p style={{ color: "#475569", margin: 0 }}>
           Current selection: {playerName(availablePlayers, me) || "—"} / {playerName(availablePlayers, partner) || "—"} vs {playerName(availablePlayers, opp1) || "—"} / {playerName(availablePlayers, opp2) || "—"}
         </p>
+
+      </div>
+
+      </PublicControls>
         <div aria-live="polite">
           {message ? <p data-testid="match-explorer-validation" style={{ color: "#b91c1c" }}>{message}</p> : null}
           {infoMessage ? <p style={{ color: "#047857", fontWeight: 700 }}>{infoMessage}</p> : null}
         </div>
-      </div>
 
       {preview ? (
         <div style={{ borderTop: "1px solid #e2e8f0", marginTop: "1rem", paddingTop: "1rem" }}>

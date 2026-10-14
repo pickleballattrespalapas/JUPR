@@ -1,3 +1,5 @@
+
+import PublicControls from "@/components/PublicControls";
 import { notFound } from "next/navigation";
 import PublicTournamentNav from "@/components/PublicTournamentNav";
 import EventHistoryView from "@/components/EventHistoryView";
@@ -10,5 +12,5 @@ export default async function TournamentHistoryPage({ params, searchParams }: { 
   const history = await publicSiteFetch<EventHistory>(`/public/clubs/${encodeURIComponent(params.clubSlug)}/event-history?${new URLSearchParams({ kind: "tournament", event })}`);
   if (!history) notFound();
   const selected = history.seasons.find(season => season.selected);
-  return <><h1>{history.series_name}</h1><PublicTournamentNav clubSlug={params.clubSlug} tournamentId={selected?.source_id} active="history" /><EventHistoryView history={history} /></>;
+  return <><h1>{history.series_name}</h1><PublicControls context="History"><PublicTournamentNav clubSlug={params.clubSlug} tournamentId={selected?.source_id} active="history" /></PublicControls><EventHistoryView history={history} /></>;
 }
