@@ -291,6 +291,8 @@ export default function GeneratorWorkspace({
   const [title, setTitle] = useState(
     `${generatorTitle(generatorKind)} ${new Date().toISOString().slice(0, 10)}`
   );
+  const [eventFormat, setEventFormat] = useState<"standard" | "moneyball_expectations">("standard");
+  const moneyball = generatorKind === "round_robin" && eventFormat === "moneyball_expectations";
   const [playFormat, setPlayFormat] = useState<PlayFormat>("doubles");
   const [standingsSort, setStandingsSort] = useState<StandingsSort>("wins");
   const [scoringMode, setScoringMode] = useState<ScoringMode>("scored");
@@ -368,6 +370,7 @@ export default function GeneratorWorkspace({
     const stored = readPlayGeneratorDraft<PreviewEvent>(draftKey);
     if (stored) {
       setTitle(stored.title);
+      setEventFormat(generatorKind === "round_robin" ? stored.eventFormat || "standard" : "standard");
       setPlayFormat(stored.playFormat);
       setStandingsSort(stored.standingsSort || "wins");
       setScoringMode(generatorKind === "round_robin" ? stored.scoringMode || "scored" : "scored");
@@ -396,6 +399,7 @@ export default function GeneratorWorkspace({
       title,
       playFormat,
       standingsSort,
+      eventFormat,
       scoringMode,
       ratingMode,
       targetCount,
@@ -411,6 +415,7 @@ export default function GeneratorWorkspace({
     title,
     playFormat,
     standingsSort,
+    eventFormat,
     scoringMode,
     ratingMode,
     targetCount,
@@ -441,8 +446,9 @@ export default function GeneratorWorkspace({
     );
     return {
       generator_kind: generatorKind,
+      event_format: generatorKind === "round_robin" ? eventFormat : "standard",
       play_format: playFormat,
-      standings_sort: standingsSort,
+      standings_sort: moneyball ? "differential" : standingsSort,
       scoring_mode: generatorKind === "round_robin" ? scoringMode : "scored",
       rating_mode: ratingMode,
       title: title.trim(),
@@ -709,10 +715,29 @@ export default function GeneratorWorkspace({
               style={inputStyle}
             />
           </label>
+          {generatorKind === "round_robin" ? <label>
+            Event format<br />
+            <select aria-label="Event format" value={eventFormat} onChange={event => {
+              const format = event.target.value as "standard" | "moneyball_expectations";
+              setEventFormat(format);
+              if (format === "moneyball_expectations") {
+                setPlayFormat("doubles"); setScoringMode("scored"); setTargetCount(8);
+              }
+              invalidatePreview();
+            }} style={inputStyle}>
+              <option value="standard">Standard round robin</option>
+              <option value="moneyball_expectations">Moneyball vs Expectations</option>
+            </select>
+            {moneyball ? <small style={{ display: "block", marginTop: ".5rem" }}>
+              Eight players · seven rounds · games to 11, win by two. 100 pesos each; winner takes the 800-peso pool.
+              Select rated club players. Ratings and matchups freeze before play. Best performance against expectations wins; close losses can help. This is a trial format.
+            </small> : null}
+          </label> : null}
           <label>
             Play format
             <br />
             <select
+              disabled={moneyball}
               value={playFormat}
               onChange={(event) => {
                 const nextFormat = event.target.value as PlayFormat;
@@ -756,7 +781,7 @@ export default function GeneratorWorkspace({
                 <br />
                 <select
                   value={scoringMode}
-                  disabled={ratingMode === "rated"}
+                  disabled={ratingMode === "rated" || moneyball}
                   onChange={(event) => {
                     setScoringMode(event.target.value as ScoringMode);
                     invalidatePreview();
@@ -770,7 +795,7 @@ export default function GeneratorWorkspace({
                   Unscored sessions have no score fields or standings between rounds.
                 </small>
               </label>
-              {scoringMode === "scored" ? (
+              {scoringMode === "scored" && !moneyball ? (
                 <label>
                   Standings ranked by
                   <br />
@@ -800,6 +825,7 @@ export default function GeneratorWorkspace({
           clubKey={clubId}
           generatorKind={generatorKind}
           playFormat={playFormat}
+          fixedPlayerCount={moneyball ? 8 : undefined}
           targetCount={targetCount}
           participantText={participantText}
           linkedPlayerIds={linkedPlayerIds}

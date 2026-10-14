@@ -19,6 +19,9 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
+from jupr_app.domain.moneyball_expectations import (
+    is_moneyball, validate_score, standings as moneyball_standings, all_games_saved,
+)
 from jupr_app.domain.perfect_round_robin import perfect_doubles_schedule
 from jupr_app.domain.perfect_rotation_completion import find_perfect_completion, game_key, is_perfect_rotation
 
@@ -1199,6 +1202,7 @@ def create_generator_preview(
     standings_sort: str = "wins",
     scoring_mode: str = "scored",
     rating_mode: str = "unrated",
+    event_format: str = "standard",
 ) -> dict[str, Any]:
     kind = str(generator_kind or "").strip().lower().replace("-", "_")
     if kind not in {"round_robin", "ladder"}:
@@ -1277,7 +1281,17 @@ def create_generator_preview(
         raise ValueError("Choose rated or unrated before starting the session.")
     if rating_mode == "rated" and scoring == "unscored":
         raise ValueError("Rated sessions require scores.")
+    if event_format not in {"standard", "moneyball_expectations"}:
+        raise ValueError("Choose Standard or Moneyball vs Expectations.")
+    if event_format == "moneyball_expectations":
+        if kind != "round_robin" or fmt != "doubles" or scoring != "scored" or len(participants) != 8:
+            raise ValueError("Moneyball vs Expectations requires eight players in a scored doubles round robin.")
+        if resolved_court_count not in {0, 2} or int(total_rounds) != 7:
+            raise ValueError("Moneyball uses two courts and seven fixed rounds.")
+        if len(ids) != 8 or any(pid is None for pid in ids) or len(set(ids)) != 8:
+            raise ValueError("Select eight different Moneyball players from the club player list.")
     event = {
+        "eventFormat": event_format,
         "schemaVersion": 3,
         "sourceEventUid": f"generator-{uuid4().hex}",
         "name": _clean_name(title) or ("Round-Robin Generator" if kind == "round_robin" else "Ladder Generator"),
@@ -1339,6 +1353,7 @@ def create_generator_preview(
                 "standings_sort": event["standingsSort"],
                 "scoring_mode": event["scoringMode"],
                 "rating_mode": event["ratingMode"],
+                "event_format": event["eventFormat"],
                 "schedule": event["rounds"],
             },
             sort_keys=True,
@@ -1400,6 +1415,8 @@ def save_generator_round(
         b = score.get("score_b")
         if a in (None, "") or b in (None, ""):
             raise ValueError("Enter every score before saving the round, or skip the round.")
+        if is_moneyball(next_event):
+            validate_score(a, b)
         a = int(a)
         b = int(b)
         if a < 0 or b < 0 or a > 99 or b > 99:
@@ -1452,6 +1469,8 @@ def mark_generator_round_played(event: dict[str, Any], *, round_number: int) -> 
 
 def skip_generator_round(event: dict[str, Any], *, round_number: int, reason: str = "") -> dict[str, Any]:
     next_event = copy.deepcopy(event)
+    if is_moneyball(next_event):
+        raise ValueError("Moneyball requires all seven rounds. Choose another scheduled round instead of skipping.")
     row = _get_round(next_event, round_number)
     if row.get("stage") == "playoff":
         raise ValueError("Playoff games need a winning score and cannot be skipped.")
@@ -1490,6 +1509,8 @@ def reopen_generator_round(event: dict[str, Any], *, round_number: int) -> dict[
 def complete_generator_event(event: dict[str, Any]) -> dict[str, Any]:
     """Finish explicitly, leaving any unplayed future schedule recoverable."""
     next_event = copy.deepcopy(event)
+    if is_moneyball(next_event) and not all_games_saved(next_event):
+        raise ValueError("Save all fourteen Moneyball games before finishing and awarding the pool.")
     if next_event.get("playoff") and any(
         r.get("stage") == "playoff" and r.get("status") != "saved"
         for r in next_event.get("rounds", [])
@@ -1567,6 +1588,8 @@ def generator_event_standings(event: dict[str, Any]) -> list[dict[str, Any]]:
     """
     if normalize_scoring_mode(event.get("scoringMode")) == "unscored":
         return []
+    if is_moneyball(event):
+        return moneyball_standings(event)
     if event.get("playoff"):
         return copy.deepcopy(event["playoff"]["seedStandings"])
     if event.get("type") == "round_robin" and event.get("status") == "completed":
@@ -1831,6 +1854,8 @@ def _recover_perfect_rotation(event: dict[str, Any]) -> bool:
 def select_generator_round(event: dict[str, Any], *, round_number: int) -> dict[str, Any]:
     """Choose a scheduled game without treating an unplayed round as skipped."""
     next_event = copy.deepcopy(event)
+    if is_moneyball(next_event) and next_event.get("status") == "completed":
+        raise ValueError("This Moneyball event is complete. Saved scores can still be corrected before submission.")
     if next_event.get("generatorKind") != "round_robin" or next_event.get("playoff"):
         raise ValueError("Choose scheduled rounds only in a Round-Robin before playoffs.")
     if next_event.get("status") not in {"active", "completed"}:
@@ -1868,6 +1893,17 @@ def advance_generator_event(event: dict[str, Any]) -> dict[str, Any]:
     if (kind == "ladder" or next_event.get("playoff")) and current >= total:
         next_event["status"] = "completed"
         next_event["completedAt"] = _now_iso()
+        return next_event
+    if is_moneyball(next_event):
+        if next_event.get("status") == "completed":
+            raise ValueError("This Moneyball event is complete. Start a new event to play again.")
+        pending = sorted(r["number"] for r in next_event["rounds"] if r.get("status") != "saved")
+        if not pending:
+            return complete_generator_event(next_event)
+        next_number = next((n for n in pending if n > current), pending[0])
+        next_round = _get_round(next_event, next_number)
+        next_round["status"] = "active"
+        next_event["currentRoundNumber"] = next_number
         return next_event
     next_number = current + 1
     if kind == "round_robin" and next_event.get("rosterRevisions") and not next_event.get("perfectRotation") and not next_event.get("playoff"):
@@ -2042,6 +2078,8 @@ def mutate_generator_roster(
     court_number: int | None = None,
 ) -> dict[str, Any]:
     next_event = copy.deepcopy(event)
+    if is_moneyball(next_event):
+        raise ValueError("Moneyball players and matchups are frozen. Start a new event to change the roster.")
     if next_event.get("playoff"):
         raise ValueError("Playoff teams are fixed. Players cannot be changed after seeding.")
     if str(next_event.get("status")) not in {"preview", "active"}:

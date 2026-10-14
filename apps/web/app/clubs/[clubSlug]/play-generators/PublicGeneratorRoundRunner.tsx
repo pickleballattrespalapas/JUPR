@@ -67,6 +67,7 @@ type GeneratorEvent = {
   name: string;
   playoff?: { format: string };
   generatorKind: GeneratorKind;
+  eventFormat?: "standard" | "moneyball_expectations";
   playFormat: PlayFormat;
   scoringMode?: ScoringMode;
   status: string;
@@ -524,7 +525,7 @@ export default function GeneratorRoundRunner({
   const editingScores = canEditSavedScores && editingSavedScores;
   const canReopenRound = canManage && !event?.playoff && generatorKind === "round_robin" && round?.status === "skipped";
   const hasOtherOpenRound = event?.rounds.some(row => row.status === "active" && row.number !== event.currentRoundNumber) ?? false;
-  const canFinishSession = canManage && !event?.playoff && generatorKind === "round_robin" && session?.status === "active" && isCurrent && !hasOtherOpenRound;
+  const canFinishSession = canManage && (event?.eventFormat !== "moneyball_expectations" || event.rounds.every(row => row.status === "saved")) && !event?.playoff && generatorKind === "round_robin" && session?.status === "active" && isCurrent && !hasOtherOpenRound;
   const draftScoreCount = scoredSession
     ? Object.values(scores).filter((value) => value !== "").length
     : 0;
@@ -928,7 +929,7 @@ export default function GeneratorRoundRunner({
         <article style={{ ...cardStyle, background: "#ecfdf5", borderColor: "#86efac" }}>
           <h2 style={{ marginTop: 0 }}>Session complete</h2>
           <p style={{ marginBottom: 0, color: "#166534" }}>Review the saved session history below.</p>
-          {generatorKind === "round_robin" && canManage && !editingScores && !event.playoff ? (
+          {generatorKind === "round_robin" && canManage && !editingScores && !event.playoff && event.eventFormat !== "moneyball_expectations" ? (
             <button type="button" onClick={() => void advanceRound()} disabled={busy} style={{ ...primaryButton, marginTop: "1rem" }}>
               {busy ? "Continuing…" : "Keep playing"}
             </button>
@@ -1106,7 +1107,7 @@ export default function GeneratorRoundRunner({
                   {busy ? "Saving…" : "Mark round played"}
                 </button>
               )}
-              {round.stage !== "playoff" ? <><input
+              {round.stage !== "playoff" && event.eventFormat !== "moneyball_expectations" ? <><input
                 value={skipReason}
                 onChange={(event_) => setSkipReason(event_.target.value)}
                 placeholder="Optional skip reason"
@@ -1227,7 +1228,7 @@ export default function GeneratorRoundRunner({
         ) : null}
       </article>
 
-      {canManage && isCurrent && session.status === "active" && Boolean(editToken) && !event.playoff ? (
+      {canManage && isCurrent && session.status === "active" && Boolean(editToken) && !event.playoff && event.eventFormat !== "moneyball_expectations" ? (
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>Change players</h2>
           <p style={{ color: "#475569" }}>

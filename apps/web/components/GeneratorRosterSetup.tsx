@@ -33,6 +33,7 @@ type Props = {
   generatorKind: GeneratorKind;
   playFormat: PlayFormat;
   targetCount: number;
+  fixedPlayerCount?: number;
   participantText: string;
   linkedPlayerIds: LinkedPlayerIds;
   doublesCourtCount: number;
@@ -265,6 +266,7 @@ export default function GeneratorRosterSetup({
   generatorKind,
   playFormat,
   targetCount,
+  fixedPlayerCount,
   participantText,
   linkedPlayerIds,
   doublesCourtCount,
@@ -424,6 +426,7 @@ export default function GeneratorRosterSetup({
         <label style={{ display: "grid", gap: "0.25rem", fontWeight: 700 }}>
           Number of players
           <select
+            disabled={Boolean(fixedPlayerCount)}
             value={targetCount}
             onChange={(event) => changeTargetCount(Number(event.target.value))}
             style={inputStyle}
