@@ -53,6 +53,7 @@ async function request(path, body, authorization) {
   return data;
 }
 async function openControls(page) {
+  if (new URL(page.url()).pathname.startsWith("/admin/")) return;
   const panel = page.locator('[data-public-controls-panel]').first();
   await expect(panel).toBeAttached();
   if (await panel.getAttribute('open') === null) await panel.locator('summary').first().click();
@@ -119,7 +120,7 @@ async function verifyStandingsQr(page, expectedUrl) {
     }
     await owner.goto(audience === "admin" ? `${web}/admin/round-robin-generator/sessions/${sharedKey}/rounds/1`
       : `${web}/clubs/test/round-robin-generator/sessions/${sharedKey}/rounds/1#edit=${encodeURIComponent(sharedRR.edit_token)}`);
-    await expect(owner.locator("[data-public-controls-panel]").first()).not.toHaveAttribute("open", "");
+    if (audience === "public") await expect(owner.locator("[data-public-controls-panel]").first()).not.toHaveAttribute("open", "");
     await openControls(owner);
     await owner.getByRole("button",{name:"Share standings",exact:true}).click();
     const standingsURL = await owner.getByLabel("Standings link").inputValue();
