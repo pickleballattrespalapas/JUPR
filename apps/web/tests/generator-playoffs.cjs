@@ -60,6 +60,7 @@ async function standingsRequest(admin, fail = false) {
   const mocks = {
     "next/link": Link, "@/components/PublicClubLink": Link, "next/navigation": { useRouter: () => router },
     "@/lib/useAdminSession": { useAdminSession: () => ({ accessToken: "admin-token" }) },
+    "@/components/GeneratorMoneyball": load("components/GeneratorMoneyball.tsx"),
     "@/components/GeneratorPlayoff": playoffModule,
     "@/components/GeneratorSubmission": load("components/GeneratorSubmission.tsx"),
     "@/components/PlayGeneratorStandingsTable": { __esModule: true, default: () => h("table"), standingsSortLabel: () => "Total wins" }

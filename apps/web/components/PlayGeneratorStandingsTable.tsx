@@ -1,7 +1,11 @@
-type StandingsSort = "wins" | "points" | "differential";
+type StandingsSort = "wins" | "points" | "differential" | "moneyball_expectations";
 
 export type PlayGeneratorStanding = {
   rank: number;
+  expectedWins?: number;
+  expectedDifferential?: number;
+  moneyballScore?: number | null;
+  moneyballFinal?: boolean;
   roundRobinVictoryRanking?: boolean;
   winnerNeedsAdmin?: boolean;
   winnerDecidedByAdmin?: boolean;
@@ -22,6 +26,7 @@ type Props = {
 };
 
 export function standingsSortLabel(mode: StandingsSort): string {
+  if (mode === "moneyball_expectations") return "Moneyball vs Expectations";
   if (mode === "points") return "Total points";
   if (mode === "differential") return "Point differential";
   return "Total wins";
@@ -39,6 +44,21 @@ const primaryCell = {
 };
 
 export default function PlayGeneratorStandingsTable({ rows, sortMode, title = "Standings" }: Props) {
+  if (sortMode === "moneyball_expectations") return <article style={{ border: "1px solid #e2e8f0", borderRadius: 14, padding: "1rem", background: "white" }}>
+    <h2>{title}</h2>
+    <p>Highest Moneyball score wins. Your point performance is compared with expectations from ratings frozen before play. Wins are shown for context, with no separate win bonus.</p>
+    <p>{rows.every(row => row.moneyballFinal) ? "All seven rounds are scored. Tied winners split the pool." : "Provisional standings — the winner is decided after all fourteen games. Expected figures cover saved games only."}</p>
+    <div style={{ overflowX: "auto" }}><table style={{ width: "100%", minWidth: 720, borderCollapse: "collapse" }}>
+      <thead><tr>{["Place", "Player", "Wins / Games", "Expected wins", "Point diff.", "Expected point diff.", "Moneyball / 100"].map(label => <th key={label} style={{ padding: ".65rem", textAlign: "left" }}>{label}</th>)}</tr></thead>
+      <tbody>{rows.map(row => <tr key={row.participantId} style={{ borderTop: "1px solid #e2e8f0" }}>
+        <td style={{ padding: ".65rem" }}>{row.moneyballScore == null ? "—" : row.rank}</td><td>{row.name}</td>
+        <td>{row.wins} / {row.matches}</td><td>{row.expectedWins?.toFixed(2)}</td>
+        <td>{row.differential > 0 ? "+" : ""}{row.differential}</td>
+        <td>{(row.expectedDifferential || 0) > 0 ? "+" : ""}{row.expectedDifferential?.toFixed(2)}</td>
+        <td style={{ fontWeight: 850 }}>{row.moneyballScore?.toFixed(2) ?? "—"}</td>
+      </tr>)}</tbody>
+    </table></div>
+  </article>;
   const finalRoundRobin = rows.some(row => row.roundRobinVictoryRanking);
   if (finalRoundRobin) sortMode = "wins";
   return (

@@ -4,6 +4,7 @@ export type StoredPlayGeneratorDraft<TPreview> = {
   playFormat: "singles" | "doubles" | "doubles_singles";
   standingsSort?: "wins" | "points" | "differential";
   scoringMode?: "scored" | "unscored";
+  eventFormat?: "standard" | "moneyball_expectations";
   ratingMode?: "rated" | "unrated";
   targetCount: number;
   doublesCourtCount?: number;

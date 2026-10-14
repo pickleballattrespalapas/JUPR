@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from jupr_app.domain.moneyball_expectations import public_event, is_moneyball, settlement
+from jupr_app.services.generator_moneyball_service import prepare_moneyball
+
 import copy
 import hashlib
 import os
@@ -141,11 +144,12 @@ def _session_payload(row: dict[str, Any]) -> dict[str, Any]:
         "total_rounds": int(event.get("totalRounds") or 0) if event else None,
         "doubles_court_count": int(event.get("doublesCourtCount") or 0) if event else 0,
         "singles_court_count": int(event.get("singlesCourtCount") or 0) if event else 0,
-        "event": event,
+        "event": public_event(event),
         "schedule_rows": schedule_export_rows(event) if event else [],
         "scoring_mode": str(event.get("scoringMode") or "scored") if event else "scored",
         "standings_sort": str(event.get("standingsSort") or "wins") if event else "wins",
         "standings": generator_event_standings(event) if event else [],
+        "moneyball": settlement(event, generator_event_standings(event)) if is_moneyball(event) else None,
         "playoff_options": generator_playoff_options(event) if event else None,
         "official_publish": _as_dict(state.get("official_publish")),
         "rating_mode": str(event.get("ratingMode") or "rated"),
@@ -274,6 +278,8 @@ def preview_play_generator(
     standings_sort: str = "wins",
     scoring_mode: str = "scored",
     rating_mode: str = "unrated",
+    event_format: str = "standard",
+    _include_private: bool = False,
 ) -> dict[str, Any]:
     names, ids = _resolve_names_and_ids(
         supabase,
@@ -294,11 +300,13 @@ def preview_play_generator(
         standings_sort=standings_sort,
         scoring_mode=scoring_mode,
         rating_mode=rating_mode,
+        event_format=event_format,
     )
+    event = prepare_moneyball(supabase, club_id=club_id, event=event)
     return {
         "ok": True,
         "mode": "play_generator_preview",
-        "preview": event,
+        "preview": event if _include_private else public_event(event),
         "schedule_rows": schedule_export_rows(event),
     }
 
@@ -349,6 +357,7 @@ def create_play_generator_session(
     standings_sort: str = "wins",
     scoring_mode: str = "scored",
     rating_mode: str = "unrated",
+    event_format: str = "standard",
 ) -> dict[str, Any]:
     preview = preview_play_generator(
         supabase,
@@ -365,6 +374,8 @@ def create_play_generator_session(
         standings_sort=standings_sort,
         scoring_mode=scoring_mode,
         rating_mode=rating_mode,
+        event_format=event_format,
+        _include_private=True,
     )["preview"]
     supplied = _clean_text(preview_fingerprint, limit=128)
     if supplied and supplied != str(preview.get("previewFingerprint") or ""):
