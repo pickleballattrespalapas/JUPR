@@ -52,6 +52,8 @@ from jupr_app.services.direct_match_entry_service import (
     DirectMatchConflictError, DirectMatchRecoveryRequiredError,
 )
 from jupr_app.services.public_live_operation_service import PublicLiveConflictError
+from jupr_app.services.generator_sharing_service import manage_generator_sharing
+from services.api.shared_play_generator_routes import GeneratorSharingRequest
 
 
 class GeneratorPreviewRequest(BaseModel):
@@ -269,6 +271,21 @@ def _require_write_gate(club_id: str) -> None:
 
 def install_admin_play_generator_routes(app, *, get_supabase_client) -> None:
     """Install durable Round-Robin and Ladder Generator administration routes."""
+
+    @app.post("/admin/clubs/{club_id}/play-generators/sessions/{session_key}/sharing")
+    def manage_sharing(club_id: str, session_key: str, payload: GeneratorSharingRequest,
+                       authorization: str | None = auth_header()) -> dict[str, Any]:
+        _require_write_gate(club_id)
+        supabase = get_supabase_client()
+        _resolve_role_or_403(supabase=supabase, club_id=club_id, authorization=authorization,
+                             source="generator_sharing")
+        try:
+            return manage_generator_sharing(supabase, club_id=club_id, session_key=session_key,
+                action=payload.action, expected_version=payload.expected_version, admin_authorized=True)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:
+            _handle(exc)
 
     @app.get("/admin/clubs/{club_id}/play-generators/submissions")
     def get_generator_submissions(club_id: str,
@@ -685,7 +702,7 @@ def install_admin_play_generator_routes(app, *, get_supabase_client) -> None:
         payload: GeneratorReopenRequest,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
-        _require_write_gate()
+        _require_write_gate(club_id)
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_role_or_403(
             supabase=supabase,
@@ -748,7 +765,7 @@ def install_admin_play_generator_routes(app, *, get_supabase_client) -> None:
         payload: GeneratorSelectRequest,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
-        _require_write_gate()
+        _require_write_gate(club_id)
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_role_or_403(
             supabase=supabase,
@@ -867,7 +884,7 @@ def install_admin_play_generator_routes(app, *, get_supabase_client) -> None:
         club_id: str, session_key: str, payload: GeneratorPlayoffRequest,
         authorization: str | None = auth_header(),
     ) -> dict[str, Any]:
-        _require_write_gate()
+        _require_write_gate(club_id)
         supabase = get_supabase_client()
         actor_email, actor_role = _resolve_role_or_403(
             supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source,
