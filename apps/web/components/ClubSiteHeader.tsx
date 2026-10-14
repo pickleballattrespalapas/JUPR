@@ -1,4 +1,5 @@
 import Link from "next/link";
+import PublicMobileNavigation from "./PublicMobileNavigation";
 import {
   publicClubLinks,
   clubPageHref,
@@ -52,7 +53,7 @@ export default function ClubSiteHeader({
         </div>
       </header>
       <div className={styles.desktopNav}>{navigation}</div>
-      <details className={styles.mobileNav}><summary>Menu</summary>{navigation}</details>
+      <PublicMobileNavigation className={styles.mobileNav}>{navigation}</PublicMobileNavigation>
     </>
   );
 }

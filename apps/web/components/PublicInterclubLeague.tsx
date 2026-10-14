@@ -47,7 +47,7 @@ export default function PublicInterclubLeague({
         {history ? <EventHistoryView history={history} /> : <p>History is temporarily unavailable. Refresh this page to try again.</p>}
       </section>
       <section id={`${panelId}-standings`} role="tabpanel" aria-labelledby={`${panelId}-standings-tab`} hidden={view !== "standings"}>
-        {doc.scoring_version === 1 ? <CompetitionStandings navigation={navigation} league={league} onClubSelect={club => { setResultClub(club); setView("results"); }} /> : <>
+        {doc.scoring_version === 1 ? <CompetitionStandings navigation={view === "standings" ? navigation : null} league={league} onClubSelect={club => { setResultClub(club); setView("results"); }} /> : <>
         <p>
           Ranked by encounter wins, then game difference and point difference.
           Clubs with equal totals are tied.
@@ -133,7 +133,7 @@ export default function PublicInterclubLeague({
       </section>
       <section id={`${panelId}-results`} role="tabpanel" aria-labelledby={`${panelId}-results-tab`} hidden={view !== "results"}>
         <h2>Results</h2>
-        {doc.scoring_version === 1 ? <CompetitionResults navigation={navigation} key={resultClub} results={doc.competition_results || []} names={names} meets={doc.meets} timezone={doc.timezone} players={doc.players} initialClub={resultClub} /> : !doc.results.length ? (
+        {doc.scoring_version === 1 ? <CompetitionResults navigation={view === "results" ? navigation : null} key={resultClub} results={doc.competition_results || []} names={names} meets={doc.meets} timezone={doc.timezone} players={doc.players} initialClub={resultClub} /> : !doc.results.length ? (
           <p>Results will appear after the organizer publishes them.</p>
         ) : (
           <div className={styles.grid}>
