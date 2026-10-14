@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import GeneratorSubmission, { GeneratorSubmissionStatus, generatorResultLabel } from "@/components/GeneratorSubmission";
+import GeneratorMoneyball, { type MoneyballSettlement } from "@/components/GeneratorMoneyball";
 import GeneratorPlayoff, { type PlayoffFormat, type GeneratorPlayoffEvent, type GeneratorPlayoffOptions } from "@/components/GeneratorPlayoff";
 import PlayGeneratorStandingsTable, {
   PlayGeneratorStanding,
@@ -13,7 +14,7 @@ import PlayGeneratorStandingsTable, {
 } from "@/components/PlayGeneratorStandingsTable";
 import { useAdminSession } from "@/lib/useAdminSession";
 
-type StandingsSort = "wins" | "points" | "differential";
+type StandingsSort = "wins" | "points" | "differential" | "moneyball_expectations";
 type ScoringMode = "scored" | "unscored";
 
 type Session = {
@@ -29,6 +30,7 @@ type Session = {
   scoring_mode?: ScoringMode;
   current_round_number?: number | null;
   total_rounds?: number | null;
+  moneyball?: MoneyballSettlement | null;
   standings_sort?: StandingsSort;
   standings?: PlayGeneratorStanding[];
   playoff_options?: GeneratorPlayoffOptions | null;
@@ -161,14 +163,16 @@ export default function AdminGeneratorStandings({ apiBase, clubId, sessionKey }:
   const currentRound = Number(session.current_round_number || session.event.currentRoundNumber || 1);
   const totalRounds = Number(session.total_rounds || session.event.totalRounds || 1);
   const currentStatus = session.event.rounds?.find((row) => row.number === currentRound)?.status || "";
+  const moneyball = Boolean(session.moneyball);
+  const moneyballDone = session.moneyball?.completedGames === session.moneyball?.totalGames;
   const sortMode = session.standings_sort || session.event.standingsSort || "wins";
   const visibleRounds = (session.event.rounds || []).filter((row) => row.number <= currentRound);
   const resultsLocked = Boolean(session.submission);
   const canManage = Boolean(accessToken) && scoringMode === "scored" && !resultsLocked;
-  const canContinue = canManage && (session.status === "active" || (!session.event.playoff && session.status === "completed")) && ["saved", "skipped"].includes(currentStatus);
-  const canFinish = canContinue && !session.event.playoff && session.status === "active" && visibleRounds.every((row) => ["saved", "skipped"].includes(row.status));
+  const canContinue = canManage && !(moneyball && session.status === "completed") && (session.status === "active" || (!session.event.playoff && session.status === "completed")) && ["saved", "skipped"].includes(currentStatus);
+  const canFinish = canContinue && (!moneyball || moneyballDone) && !session.event.playoff && session.status === "active" && visibleRounds.every((row) => ["saved", "skipped"].includes(row.status));
   const nextLabel = session.event.rounds?.find(row => row.number === currentRound + 1)?.label;
-  const continueLabel = session.event.playoff
+  const continueLabel = moneyball && moneyballDone ? "Finish Moneyball" : session.event.playoff
     ? currentRound >= totalRounds ? "Finish session" : `Continue to ${nextLabel || `Round ${currentRound + 1}`}`
     : session.status === "completed" ? `Keep playing · Round ${currentRound + 1}` : "Next scheduled round";
 
@@ -195,7 +199,8 @@ export default function AdminGeneratorStandings({ apiBase, clubId, sessionKey }:
           <p style={{ margin: 0 }}><Link href="/admin/play-generators/submissions">Review generator submissions</Link> (club administrators)</p>
         </div>
       ) : null}
-      <GeneratorPlayoff event={session.event} options={session.playoff_options} canManage={Boolean(accessToken)} locked={Boolean(session.submission) || Boolean(session.official_publish?.published_at) || Boolean(session.official_publish?.published_match_ids?.length)} busy={busy} onStart={startPlayoff} roundHref={round => `/admin/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${round}`} />
+      {!moneyball ? <GeneratorPlayoff event={session.event} options={session.playoff_options} canManage={Boolean(accessToken)} locked={Boolean(session.submission) || Boolean(session.official_publish?.published_at) || Boolean(session.official_publish?.published_match_ids?.length)} busy={busy} onStart={startPlayoff} roundHref={round => `/admin/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${round}`} /> : null}
+      <GeneratorMoneyball value={session.moneyball} />
       <PlayGeneratorStandingsTable rows={session.standings || []} sortMode={sortMode} title={session.event.playoff ? "Round-robin standings" : undefined} />
       {session.status === "completed" ? (
         <article style={{ ...cardStyle, background: "#ecfdf5", borderColor: "#86efac" }}>
@@ -208,7 +213,7 @@ export default function AdminGeneratorStandings({ apiBase, clubId, sessionKey }:
       {canContinue ? (
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>{session.status === "completed" ? "Keep playing" : continueLabel}</h2>
-          <p style={{ color: "#475569" }}>{session.event.playoff ? "Save each playoff game, then continue to the final or finish the session." : "Play as many rounds as you like. Finish the session when you’re ready to submit results."}</p>
+          <p style={{ color: "#475569" }}>{session.event.playoff ? "Save each playoff game, then continue to the final or finish the session." : moneyball ? "Play the complete fixed rotation, then finish Moneyball to confirm the payout." : "Play as many rounds as you like. Finish the session when you’re ready to submit results."}</p>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
             <button type="button" onClick={() => void updateSession("advance")} disabled={busy} style={primaryButton}>{busy ? "Working…" : continueLabel}</button>
             {canFinish ? <button type="button" onClick={() => void updateSession("complete")} disabled={busy} style={{ ...linkButton, cursor: "pointer", background: "white" }}>Finish session</button> : null}

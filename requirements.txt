@@ -6,3 +6,5 @@ matplotlib>=3.8,<4
 markdown-it-py>=3,<5
 
 Pillow==12.3.0
+
+numpy>=1.26,<3

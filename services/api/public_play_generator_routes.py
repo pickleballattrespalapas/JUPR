@@ -27,6 +27,7 @@ from jupr_app.services.public_play_generator_service import (
 
 
 class PublicGeneratorPreviewRequest(BaseModel):
+    event_format: str = Field(default="standard", pattern=r"^(standard|moneyball_expectations)$")
     generator_kind: str = Field(pattern=r"^(round_robin|ladder)$")
     play_format: str = Field(pattern=r"^(singles|doubles|doubles_singles)$")
     title: str = Field(default="Play session", max_length=160)
@@ -163,6 +164,7 @@ def install_public_play_generator_routes(
                 standings_sort=payload.standings_sort,
                 scoring_mode=payload.scoring_mode,
                 rating_mode=payload.rating_mode,
+                event_format=payload.event_format,
             )
         except Exception as exc:
             raise_public_error(exc)
@@ -215,6 +217,7 @@ def install_public_play_generator_routes(
                 standings_sort=payload.standings_sort,
                 scoring_mode=payload.scoring_mode,
                 rating_mode=payload.rating_mode,
+                event_format=payload.event_format,
                 idempotency_key=payload.idempotency_key,
                 requester_hash=requester_hash(request),
             )
