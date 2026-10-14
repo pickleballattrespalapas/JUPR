@@ -17,7 +17,9 @@ def generator_playoff_options(event: dict[str, Any]) -> dict[str, Any]:
     current = int(event.get("currentRoundNumber") or 1)
     current_row = next((r for r in event.get("rounds", []) if r.get("number") == current), {})
     reason = None
-    if event.get("generatorKind") != "round_robin" or event.get("playFormat") == "singles":
+    if event.get("eventFormat") == "moneyball_expectations":
+        reason = "Moneyball ends after the full perfect rotation. The highest Moneyball score wins the pool."
+    elif event.get("generatorKind") != "round_robin" or event.get("playFormat") == "singles":
         reason = "Playoffs are available for doubles round robins."
     elif normalize_scoring_mode(event.get("scoringMode")) != "scored":
         reason = "Playoffs require scored standings."

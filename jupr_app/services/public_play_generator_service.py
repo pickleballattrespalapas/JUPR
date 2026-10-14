@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from jupr_app.domain.moneyball_expectations import public_event, is_moneyball, settlement
+from jupr_app.services.generator_moneyball_service import prepare_moneyball
+
 import base64
 import copy
 import csv
@@ -30,6 +33,8 @@ from jupr_app.services.public_live_operation_service import (
     PublicLiveConflictError,
     PublicLiveRecoveryRequiredError,
     begin_public_live_operation,
+    canonical_fingerprint,
+    operation_key as creation_operation_key,
     completed_operation_result,
     edit_token_matches,
     hash_edit_token,
@@ -224,11 +229,12 @@ def public_play_generator_session_payload(row: dict[str, Any]) -> dict[str, Any]
         "total_rounds": int(event.get("totalRounds") or 0) if event else None,
         "doubles_court_count": int(event.get("doublesCourtCount") or 0) if event else 0,
         "singles_court_count": int(event.get("singlesCourtCount") or 0) if event else 0,
-        "event": event,
+        "event": public_event(event),
         "schedule_rows": schedule_export_rows(event) if event else [],
         "scoring_mode": str(event.get("scoringMode") or "scored") if event else "scored",
         "standings_sort": str(event.get("standingsSort") or "wins") if event else "wins",
         "standings": generator_event_standings(event) if event else [],
+        "moneyball": settlement(event, generator_event_standings(event)) if is_moneyball(event) else None,
         "playoff_options": generator_playoff_options(event) if event else None,
         "unrated": str(event.get("ratingMode") or "unrated") == "unrated",
         "rating_mode": str(event.get("ratingMode") or "unrated"),
@@ -295,6 +301,8 @@ def preview_public_play_generator(
     standings_sort: str = "wins",
     scoring_mode: str = "scored",
     rating_mode: str = "unrated",
+    event_format: str = "standard",
+    _include_private: bool = False,
 ) -> dict[str, Any]:
     kind = _normalize_kind(generator_kind)
     fmt = _normalize_format(play_format)
@@ -319,9 +327,13 @@ def preview_public_play_generator(
             standings_sort=standings_sort,
             scoring_mode=scoring_mode,
             rating_mode=rating_mode,
+            event_format=event_format,
         )
+        preview = prepare_moneyball(supabase, club_id=club_id, event=preview)
     except ValueError as exc:
         raise PublicPlayGeneratorError(str(exc)) from exc
+    if not _include_private:
+        preview = public_event(preview)
     return {"ok": True, "preview": preview, "schedule_rows": schedule_export_rows(preview)}
 
 
@@ -360,7 +372,28 @@ def create_public_play_generator_session(
     standings_sort: str = "wins",
     scoring_mode: str = "scored",
     rating_mode: str = "unrated",
+    event_format: str = "standard",
 ) -> dict[str, Any]:
+    creation_fingerprint = None
+    if event_format == "moneyball_expectations":
+        creation_fingerprint = canonical_fingerprint({
+            "generator_kind": generator_kind, "play_format": play_format, "title": title,
+            "participant_names": participant_names, "participant_player_ids": participant_player_ids,
+            "total_rounds": total_rounds, "court_count": court_count,
+            "doubles_court_count": doubles_court_count, "singles_court_count": singles_court_count,
+            "standings_sort": standings_sort, "scoring_mode": scoring_mode, "rating_mode": rating_mode,
+            "event_format": event_format, "preview_fingerprint": preview_fingerprint,
+        })
+        key = creation_operation_key(club_id=club_id, action="create", idempotency_key=idempotency_key)
+        existing = _find_creation_row(supabase, club_id=club_id, operation_key=key)
+        if existing:
+            if _state(existing).get("moneyball_creation_fingerprint") != creation_fingerprint:
+                raise PublicLiveConflictError("This start request changed. Refresh before starting again.")
+            # A response-loss retry must return the same frozen event even if club ratings changed.
+            update_public_live_operation(supabase, club_id=club_id, operation_key_value=key,
+                                         status="completed", result={})
+            return {"ok": True, "edit_token": _edit_token(secret=_token_secret(token_secret), operation_key=key),
+                    "session": public_play_generator_session_payload(existing), "idempotent_replay": True}
     preview_result = preview_public_play_generator(
         supabase,
         club_id=str(club_id),
@@ -376,6 +409,8 @@ def create_public_play_generator_session(
         standings_sort=standings_sort,
         scoring_mode=scoring_mode,
         rating_mode=rating_mode,
+        event_format=event_format,
+        _include_private=True,
     )
     preview = preview_result["preview"]
     supplied = str(preview_fingerprint or "").strip()
@@ -393,6 +428,7 @@ def create_public_play_generator_session(
         "standings_sort": str(preview.get("standingsSort") or "wins"),
         "scoring_mode": str(preview.get("scoringMode") or "scored"),
         "rating_mode": str(preview.get("ratingMode") or "unrated"),
+        "event_format": event_format,
         "live_mode": "quick",
     }
     operation, existed = begin_public_live_operation(
@@ -449,6 +485,8 @@ def create_public_play_generator_session(
         "last_seen_at": now,
         "expires_at": _ttl_iso(),
     }
+    if creation_fingerprint:
+        payload["state"]["moneyball_creation_fingerprint"] = creation_fingerprint
     update_public_live_operation(
         supabase,
         club_id=str(club_id),

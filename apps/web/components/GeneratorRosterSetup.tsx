@@ -33,6 +33,8 @@ type Props = {
   generatorKind: GeneratorKind;
   playFormat: PlayFormat;
   targetCount: number;
+  fixedPlayerCount?: number;
+  perfectRotationOnly?: boolean;
   participantText: string;
   linkedPlayerIds: LinkedPlayerIds;
   doublesCourtCount: number;
@@ -265,6 +267,8 @@ export default function GeneratorRosterSetup({
   generatorKind,
   playFormat,
   targetCount,
+  fixedPlayerCount,
+  perfectRotationOnly,
   participantText,
   linkedPlayerIds,
   doublesCourtCount,
@@ -291,8 +295,8 @@ export default function GeneratorRosterSetup({
   );
   const minimumPlayers = playFormat === "singles" ? 2 : playFormat === "doubles_singles" ? 6 : 4;
   const participantCounts = useMemo(
-    () => Array.from({ length: 40 - minimumPlayers + 1 }, (_, index) => minimumPlayers + index),
-    [minimumPlayers]
+    () => Array.from({ length: 40 - minimumPlayers + 1 }, (_, index) => minimumPlayers + index).filter(count => !perfectRotationOnly || count % 4 === 0 || count % 4 === 1),
+    [minimumPlayers, perfectRotationOnly]
   );
   const setup = useMemo(
     () => recommendedGeneratorSetup(generatorKind, playFormat, targetCount, doublesCourtCount, singlesCourtCount),
@@ -424,6 +428,7 @@ export default function GeneratorRosterSetup({
         <label style={{ display: "grid", gap: "0.25rem", fontWeight: 700 }}>
           Number of players
           <select
+            disabled={Boolean(fixedPlayerCount)}
             value={targetCount}
             onChange={(event) => changeTargetCount(Number(event.target.value))}
             style={inputStyle}
@@ -496,8 +501,9 @@ export default function GeneratorRosterSetup({
           </p>
           <small style={{ color: "#475569" }}>
             {explanation(generatorKind, playFormat, setup.courtCount, setup.totalRounds)}
-            {generatorKind === "round_robin" ? " You can keep adding rounds during play." : ""}
-            {generatorKind === "round_robin" && playFormat === "doubles" ? " A perfect partner-and-opponent rotation is the first priority, including compatible roster changes. Adaptive rounds balance assigned byes before game counts." : ""}
+            {generatorKind === "round_robin" && !perfectRotationOnly && !fixedPlayerCount ? " You can keep adding rounds during play." : ""}
+            {perfectRotationOnly || fixedPlayerCount ? ` Moneyball uses ${setup.totalRounds} fixed rounds. Everyone partners once and faces each opponent twice. The starting lineup and scheduled slots stay fixed. Substitutions make both players ineligible to win.` : ""}
+            {generatorKind === "round_robin" && playFormat === "doubles" && !perfectRotationOnly && !fixedPlayerCount ? " A perfect partner-and-opponent rotation is the first priority, including compatible roster changes. Adaptive rounds balance assigned byes before game counts." : ""}
           </small>
         </div>
       </div>
@@ -517,7 +523,7 @@ export default function GeneratorRosterSetup({
         </label>
         {playerSearch.trim().length < 2 ? (
           <p style={{ margin: 0, color: "#64748b", fontSize: "0.9rem" }}>
-            Search the club player list, or type names directly below.
+            {perfectRotationOnly || fixedPlayerCount ? "Choose the complete starting lineup from the club list so ratings can set expectations." : "Search the club player list, or type names directly below."}
           </p>
         ) : filteredPlayerOptions.length ? (
           <div style={{ display: "grid", gap: "0.4rem" }}>
@@ -557,7 +563,7 @@ export default function GeneratorRosterSetup({
           </div>
         ) : (
           <p style={{ margin: 0, color: "#b45309", fontSize: "0.9rem" }}>
-            No club players match “{playerSearch.trim()}”. You can type the name below instead.
+            No club players match “{playerSearch.trim()}”. {perfectRotationOnly || fixedPlayerCount ? "Add their profile and starting rating before using Moneyball." : "You can type the name below instead."}
           </p>
         )}
         {directoryError ? (
@@ -582,7 +588,7 @@ export default function GeneratorRosterSetup({
           {countMessage}
         </p>
         <p style={{ margin: "0.25rem 0 0", color: "#64748b", fontSize: "0.9rem" }}>
-          {linkedCount} chosen from the club list · {manualCount} entered manually. The order below sets the starting order and who gets the first bye.
+          {linkedCount} chosen from the club list · {manualCount} entered manually. {perfectRotationOnly || fixedPlayerCount ? "The order below sets the fixed Moneyball schedule." : "The order below sets the starting order and who gets the first bye."}
         </p>
         {pickerMessage ? (
           <p role="status" aria-live="polite" style={{ margin: "0.25rem 0 0", color: "#1d4ed8" }}>
