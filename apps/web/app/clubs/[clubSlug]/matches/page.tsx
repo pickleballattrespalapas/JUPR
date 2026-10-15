@@ -117,7 +117,7 @@ export default async function MatchesPage({ params, searchParams }: MatchesPageP
 
       {!error ? (
         <>
-<PublicControls resetKey={`${selectedLeague}:${selectedSort}:${q}`} context={[selectedLeague || "All leagues", `Sort: ${selectedSort}`, q ? `Search: ${q}` : ""].filter(Boolean).join(" · ")}>
+<PublicControls navigation resetKey={`${selectedLeague}:${selectedSort}:${q}`} context={[selectedLeague || "All leagues", `Sort: ${selectedSort}`, q ? `Search: ${q}` : ""].filter(Boolean).join(" · ")}>
 <Display field="result_summary">          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
             <article style={cardStyle}><strong>Recorded matches</strong><br />{matches.length}</article>
             <article style={cardStyle}><strong>Scored matches</strong><br />{scoredCount}</article>

@@ -306,7 +306,7 @@ export default async function ChallengeLadderPage({ params, searchParams }: Chal
 
       {data ? (
         <>
-          <PublicControls resetKey={`${section}:${selectedTier}:${selectedStatus}:${q}`} context={[sectionLabels[section], selectedTier ? data.tiers.find(tier => tier.tier_id === selectedTier)?.label : "", selectedStatus, q ? `Search: ${q}` : ""].filter(Boolean).join(" · ")}>
+          <PublicControls navigation resetKey={`${section}:${selectedTier}:${selectedStatus}:${q}`} context={[sectionLabels[section], selectedTier ? data.tiers.find(tier => tier.tier_id === selectedTier)?.label : "", selectedStatus, q ? `Search: ${q}` : ""].filter(Boolean).join(" · ")}>
 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
             <article style={cardStyle}><strong>Active ladder players</strong><br />{data.summary.active_player_count}</article>
             <article style={cardStyle}><strong>Tiers with players</strong><br />{data.summary.populated_tier_count} / {data.summary.tier_count}</article>

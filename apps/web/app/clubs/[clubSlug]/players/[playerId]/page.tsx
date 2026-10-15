@@ -218,7 +218,7 @@ export default async function PlayerProfilePage({ params, searchParams }: Player
     <section data-testid="player-profile">
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>{data.club?.name ?? clubSlug} · Player profile</p>
       <h1 style={{ marginTop: 0 }}>{data.identity.display_name}</h1>
-      <PublicControls resetKey={`${section}:${selectedLeague}:${historyView}`} context={[section === "positions" ? "League positions" : section === "trophies" ? "Trophy case" : section === "badges" ? "Badge cabinet" : section[0].toUpperCase() + section.slice(1), section === "matches" ? historyView === "all" ? "Full history" : "Recent matches" : "", section === "matches" ? selectedLeague || "All leagues" : ""].filter(Boolean).join(" · ")}>
+      <PublicControls navigation resetKey={`${section}:${selectedLeague}:${historyView}`} context={[section === "positions" ? "League positions" : section === "trophies" ? "Trophy case" : section === "badges" ? "Badge cabinet" : section[0].toUpperCase() + section.slice(1), section === "matches" ? historyView === "all" ? "Full history" : "Recent matches" : "", section === "matches" ? selectedLeague || "All leagues" : ""].filter(Boolean).join(" · ")}>
 <p style={{ color: "#475569", maxWidth: "820px" }}>View this player&apos;s ratings, match history, awards, frequent partners and opponents, and Club Social results.</p>
 
       <article data-testid="player-public-identity" style={{ ...cardStyle, background: "#eff6ff", marginBottom: "1rem" }}>

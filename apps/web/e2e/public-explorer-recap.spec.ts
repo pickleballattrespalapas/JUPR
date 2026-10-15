@@ -29,7 +29,8 @@ test("Match Explorer hydrates a share link and reacts through Python projections
   // settled before Playwright changes the controlled player fields.
   await expect(page.getByTestId("match-explorer-summary")).toContainText("Your team's win chance");
 
-  await openPublicControls(page);
+  await expect(me).toBeVisible();
+  await expect(page.locator("[data-public-controls-panel]")).toHaveCount(0);
   await choose(me, playerIds[0]);
   await choose(partner, playerIds[0]);
   await expect(page.getByTestId("match-explorer-validation")).toContainText("four different players");

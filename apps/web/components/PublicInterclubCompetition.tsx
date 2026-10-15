@@ -19,7 +19,7 @@ export function CompetitionStandings({ league, onClubSelect, navigation }: { nav
   const label = division ? `${division} standings` : "Club Cup standings";
   const clubLabel = (id: string, fallback?: string) => onClubSelect ? <button type="button" className={styles.clubButton} onClick={() => onClubSelect(id)} aria-label={`View results for ${names[id] || fallback || id}`}>{names[id] || fallback || id}</button> : names[id] || fallback || id;
   return <section className={styles.workspace} aria-label="Season standings">
-    <PublicControls context={division ? `${division} skill level` : "Overall Club Cup"}>{navigation}
+    <PublicControls navigation={Boolean(navigation)} context={division ? `${division} skill level` : "Overall Club Cup"}>{navigation}
       <label className={styles.field}>Standings<select aria-label="Standings" value={division} onChange={event => setDivision(event.target.value)}><option value="">Overall Club Cup</option>{options.map(value => <option key={value} value={value}>{value} skill level</option>)}</select></label>
     </PublicControls>
     <div className={styles.heading}><div><h2>{division ? `${division} skill level` : "Overall Club Cup"}</h2><p className={styles.meta}>{division ? "3 points for a matchup win · 1 each for a split" : "Season points across all skill levels"}</p></div>
@@ -96,9 +96,9 @@ export function CompetitionResults({ results, names, meets = [], timezone = "Ame
   const tiebreakCount = filtered.filter(row => row.tiebreak?.status === "completed" && (!player || resultPlayers(row.tiebreak).includes(player))).length;
   const reset = () => { setMeet(""); setClub(""); setDivision(""); setPlayer(""); };
   const fieldChanged = (change: () => void) => { change(); setPlayer(""); };
-  if (!results.length) return <><PublicControls context="Results">{navigation}</PublicControls><p className={styles.empty}>Results will appear after the organizer approves and publishes them.</p></>;
+  if (!results.length) return <><PublicControls navigation={Boolean(navigation)} context="Results">{navigation}</PublicControls><p className={styles.empty}>Results will appear after the organizer approves and publishes them.</p></>;
   return <section className={styles.workspace} aria-label="Browse match results">
-    <PublicControls context={[meetNames[meet] || "All meets", names[club] || "All clubs", division ? `${division} skill level` : "All skill levels", player ? catalog[player]?.name : ""].filter(Boolean).join(" · ")}>
+    <PublicControls navigation={Boolean(navigation)} context={[meetNames[meet] || "All meets", names[club] || "All clubs", division ? `${division} skill level` : "All skill levels", player ? catalog[player]?.name : ""].filter(Boolean).join(" · ")}>
 {navigation}
 <div className={`${styles.filters} ${singleMeet ? styles.meetFilters : ""}`}>
       {!singleMeet && <label className={styles.field}>Meet<select aria-label="Filter results by meet" value={meet} onChange={event => fieldChanged(() => setMeet(event.target.value))}><option value="">All meets</option>{orderedMeets.filter(meet => results.some(row => row.meet_id === meet.id)).map(meet => <option key={meet.id} value={meet.id}>{meetNames[meet.id]}</option>)}</select></label>}

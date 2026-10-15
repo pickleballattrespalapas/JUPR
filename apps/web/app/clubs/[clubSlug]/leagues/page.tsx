@@ -60,7 +60,7 @@ export default async function PublicLeaguesPage({ params, searchParams }: Props)
           : "Choose a league to see standings, weekly results, and player stats."}
       </p>
 
-      <PublicControls resetKey={view} context={view === "past" ? "Past leagues" : "Active leagues"}>
+      <PublicControls navigation resetKey={view} context={view === "past" ? "Past leagues" : "Active leagues"}>
 <nav
         aria-label="League collections"
         data-testid="public-league-view-toggle"

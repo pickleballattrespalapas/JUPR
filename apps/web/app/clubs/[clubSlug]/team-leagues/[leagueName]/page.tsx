@@ -38,7 +38,7 @@ export default async function TeamLeagueDetailPage({ params }: Props) {
           {data.league.playoff_format === "none" ? "Round robin season" : "Round robin plus playoffs"}
         </p>
       </header>
-      <PublicControls label="Register & league details" context={data.registration.open ? "Registration open" : "Registration closed"}><PublicLeagueNav clubSlug={params.clubSlug} leagueName={leagueName} active="home" team />
+      <PublicControls navigation context={data.registration.open ? "Registration open" : "Registration closed"}><PublicLeagueNav clubSlug={params.clubSlug} leagueName={leagueName} active="home" team />
       <article style={card}>
         <TeamLeagueRegistrationForm apiBase={teamLeagueApiBaseUrl()} clubSlug={params.clubSlug} leagueName={leagueName} detail={data} />
       </article></PublicControls>

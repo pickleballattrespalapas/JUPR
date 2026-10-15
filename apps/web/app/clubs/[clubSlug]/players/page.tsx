@@ -119,7 +119,7 @@ export default async function ClubPlayersPage({ params, searchParams }: PlayersP
 
       {!error ? (
         <>
-          <PublicControls resetKey={`${q}:${sort}:${page}`} context={[`${summary?.filtered_players ?? 0} players`, `Sort: ${sort === "win_pct" ? "Win %" : sort}`, q ? `Search: ${q}` : ""].filter(Boolean).join(" · ")}>
+          <PublicControls navigation resetKey={`${q}:${sort}:${page}`} context={[`${summary?.filtered_players ?? 0} players`, `Sort: ${sort === "win_pct" ? "Win %" : sort}`, q ? `Search: ${q}` : ""].filter(Boolean).join(" · ")}>
 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
             <article style={cardStyle}><strong>Players</strong><br />{summary?.public_players ?? 0}</article>
             <article style={cardStyle}><strong>Active players</strong><br />{summary?.active_players ?? 0}</article>

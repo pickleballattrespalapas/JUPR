@@ -369,7 +369,7 @@ export default async function LeagueResultsPage({ params, searchParams }: League
       {error ? <p style={{ color: "#b91c1c" }}>We couldn&apos;t load league results. Please try again.</p> : null}
       {!error && !data?.leagues?.length ? <p>No leagues are available yet.</p> : null}
 
-      <PublicControls resetKey={`${selectedLeague}:${activeSection}:${selectedWeek}:${selectedPlayerId}:${weeklyMinGames}`} context={[selectedLeague, sectionLabels[activeSection], activeSection === "weekly" && selectedWeek ? `Week ${selectedWeek}` : "", activeSection === "player" ? selectedPlayerName : ""].filter(Boolean).join(" · ")}>
+      <PublicControls navigation resetKey={`${selectedLeague}:${activeSection}:${selectedWeek}:${selectedPlayerId}:${weeklyMinGames}`} context={[selectedLeague, sectionLabels[activeSection], activeSection === "weekly" && selectedWeek ? `Week ${selectedWeek}` : "", activeSection === "player" ? selectedPlayerName : ""].filter(Boolean).join(" · ")}>
 {selectedLeague ? <PublicLeagueNav clubSlug={clubSlug} leagueName={selectedLeague} active={activeSection} /> : null}
 {data?.leagues?.length ? (
         <div className="no-print" style={{ display: "grid", gap: "0.75rem", marginBottom: "1rem" }}>

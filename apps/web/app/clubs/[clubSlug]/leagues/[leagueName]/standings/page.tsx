@@ -90,7 +90,7 @@ export default async function PublicLeagueStandingsPage({ params }: Props) {
         See the award leaders first, followed by the full player list.
       </p>
 
-      <PublicControls context={`${leagueName} · Awards race & player roster`}>
+      <PublicControls navigation context={`${leagueName} · Awards race & player roster`}>
 <PublicLeagueNav clubSlug={params.clubSlug} leagueName={leagueName} active="overall" leagueView={leagueView} />
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>

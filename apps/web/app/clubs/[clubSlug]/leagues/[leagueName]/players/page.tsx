@@ -105,7 +105,7 @@ export default async function PublicLeaguePlayerSummariesPage({ params, searchPa
         Choose a player to see their record, rating changes, and recent matches.
       </p>
 
-      <PublicControls resetKey={String(selectedPlayerId)} context={`${leagueName} · ${selectedPlayerName}`}>
+      <PublicControls navigation resetKey={String(selectedPlayerId)} context={`${leagueName} · ${selectedPlayerName}`}>
 <PublicLeagueNav clubSlug={params.clubSlug} leagueName={leagueName} active="player" leagueView={leagueView} />
 
       <div style={{ ...cardStyle, marginBottom: "1rem" }}>

@@ -42,7 +42,7 @@ export default function PublicInterclubLeague({
         clubs
       </p>
       {league.final_results?.complete && league.id && <p className={styles.notice}><strong>Season complete.</strong> <Link href={`/interclub/${league.id}/final-results`}>View final results, champions, and trophies →</Link></p>}
-      {doc.scoring_version !== 1 || (view !== "standings" && view !== "results") ? <PublicControls context={tabs.find(tab => tab.id === view)?.label}>{navigation}</PublicControls> : null}
+      {doc.scoring_version !== 1 || (view !== "standings" && view !== "results") ? <PublicControls navigation context={tabs.find(tab => tab.id === view)?.label}>{navigation}</PublicControls> : null}
       <section id={`${panelId}-history`} role="tabpanel" aria-labelledby={`${panelId}-history-tab`} hidden={view !== "history"}>
         {history ? <EventHistoryView history={history} /> : <p>History is temporarily unavailable. Refresh this page to try again.</p>}
       </section>

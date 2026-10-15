@@ -425,7 +425,7 @@ export default async function BadgeCodexPage({ params, searchParams }: BadgeCode
 
       {data ? (
         <>
-          <PublicControls resetKey={`${bucket}:${selectedCategory}:${selectedScope}`} context={[bucketLabel(bucket), selectedCategory || "All categories", selectedScope ? badgeScopeLabel(selectedScope) : "All play"].join(" · ")}>
+          <PublicControls navigation resetKey={`${bucket}:${selectedCategory}:${selectedScope}`} context={[bucketLabel(bucket), selectedCategory || "All categories", selectedScope ? badgeScopeLabel(selectedScope) : "All play"].join(" · ")}>
 {data?.seasons?.length ? <details style={{ ...cardStyle, marginBottom: "1rem" }}><summary style={{ cursor: "pointer", fontWeight: 700 }}>Season dates for badges</summary><ul>{data.seasons.map(season => <li key={season.id}>{season.name}: {season.start_date} through {season.end_date} ({season.timezone})</li>)}</ul></details> : data ? <p style={{ color: "#475569" }}>The club hasn’t set badge season dates yet. Season-based badges will start once dates are added.</p> : null}
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>

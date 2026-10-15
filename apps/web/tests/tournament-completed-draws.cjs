@@ -22,7 +22,7 @@ new Function("require", "module", "exports", compiled)((name) => {
   if (name === "@/components/PublicClubLink") return { __esModule: true, default: ({ prefetch, scroll, ...props }) => React.createElement("a", props) };
   if (name === "@/components/PublicTournamentSponsors" || name === "@/components/PublicTournamentNav") return { __esModule: true, default: () => null };
   if (name === "@/lib/tournamentResultsApi") return { getPublicTournamentResults: async () => ({ data: mockData(), error: null }) };
-  return (require('./helpers/public-controls-module.cjs')(name) || require(name));
+  return require(name);
 }, loaded, loaded.exports);
 
 function draw(key, name, state) {

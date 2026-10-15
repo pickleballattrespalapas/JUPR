@@ -277,7 +277,7 @@ export default async function WeeklyRecapPage({ params, searchParams }: WeeklyRe
       ) : null}
 
       {!printMode && data?.recaps?.length ? (
-        <PublicControls resetKey={`${selected?.week_start}:${activeSection}:${activePage}`} context={`${dateLabel(selected?.week_start)} · ${sectionLabels[activeSection]}`}>
+        <PublicControls navigation resetKey={`${selected?.week_start}:${activeSection}:${activePage}`} context={`${dateLabel(selected?.week_start)} · ${sectionLabels[activeSection]}`}>
 <div className="no-print" style={{ display: "grid", gap: "0.75rem", marginBottom: "1rem" }}>
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
             {data.recaps.map((recap) => {
