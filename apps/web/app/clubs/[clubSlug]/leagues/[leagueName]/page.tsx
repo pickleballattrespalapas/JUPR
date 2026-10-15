@@ -128,7 +128,7 @@ export default async function PublicLeagueHomePage({ params }: Props) {
         Follow the award races, browse players, and review weekly results.
       </p>
 
-      <PublicControls context={`${leagueName} · ${leagueView === "past" ? "Finished league" : "Awards race"}`}>
+      <PublicControls navigation context={`${leagueName} · ${leagueView === "past" ? "Finished league" : "Awards race"}`}>
 <PublicLeagueNav
         clubSlug={params.clubSlug}
         leagueName={leagueName}

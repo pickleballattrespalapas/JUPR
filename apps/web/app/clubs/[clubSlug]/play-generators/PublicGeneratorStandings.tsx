@@ -251,7 +251,7 @@ export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey, 
         <h1 style={{ margin: "0 0 0.35rem" }}>{session.title} standings</h1>
         <p style={{ margin: 0, color: "#475569" }}>{playFormatLabel(session.play_format)} · {standingsSortLabel(sortMode)} · {sessionStatusLabel(session.status)} · {session.submission?.status !== "approved" ? `${session.rating_mode === "rated" ? "Rated" : "Unrated"} · ` : ""}{generatorResultLabel(session.submission)}</p>
       </article>
-      <PublicControls resetKey={String(currentRound)} context={`${sessionStatusLabel(session.status)} · ${standingsSortLabel(sortMode)}`}>
+      <PublicControls navigation resetKey={String(currentRound)} context={`${sessionStatusLabel(session.status)} · ${standingsSortLabel(sortMode)}`}>
 {shared || editToken ? <GeneratorSharing apiBase={apiBase} clubId={clubId} sessionKey={sessionKey} version={session.version} ownerToken={shared ? undefined : editToken} shared={shared} locked={resultsLocked} disabled={busy} onChanged={loadSession} /> : null}
       <nav aria-label="Round-Robin session navigation" style={{ ...cardStyle, display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
         <Link href={`/clubs/${clubId}/round-robin-generator/${sessionSegment}/${encodeURIComponent(sessionKey)}/rounds/${currentRound}`} style={linkButton}>Current round</Link>

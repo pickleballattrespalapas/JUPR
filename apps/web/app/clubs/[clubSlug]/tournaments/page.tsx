@@ -1,5 +1,3 @@
-
-import PublicControls from "@/components/PublicControls";
 import PublicTournamentSponsors from "@/components/PublicTournamentSponsors";
 import Link from "@/components/PublicClubLink";
 import PublicTournamentNav, {
@@ -302,8 +300,7 @@ export default async function PublicTournamentsPage({
         tournament.
       </p>
 
-      <PublicControls context={`${dateLabel(tournament.start_date)} – ${dateLabel(tournament.end_date)} · ${registrationStatusLabel(data?.registration_open)}`}>
-<PublicTournamentNav
+      <PublicTournamentNav
         clubSlug={params.clubSlug}
         tournamentName={tournament.name}
         tournamentId={currentId}
@@ -377,8 +374,6 @@ export default async function PublicTournamentsPage({
           {data?.roster_summary?.players_needing_partners ?? 0}
         </article>
       </div>
-
-      </PublicControls>
 
       <section style={{ marginBottom: "1.25rem" }}>
         <h2>What would you like to do?</h2>

@@ -194,10 +194,24 @@ export default async function TournamentRosterPage({
         active="roster"
         kicker="Tournament Roster"
         description="See who's playing in each event and division. Contact details are only visible to organizers."
-        resetKey={`${selectedDay}:${selectedEvent}:${selectedDivision}:${selectedStatus}`}
-        context={[selectedDay || "All days", selectedEvent || "All events", selectedDivision, selectedStatus === "all" ? "" : selectedStatus, `${filteredEntries.length} entries`].filter(Boolean).join(" · ")}
-      >
-<article
+      />
+
+      {error ? (
+        <article
+          role="alert"
+          style={{
+            ...cardStyle,
+            marginBottom: "1rem",
+            borderColor: "#fecaca",
+            background: "#fef2f2"
+          }}
+        >
+          <h2 style={{ marginTop: 0 }}>Roster temporarily unavailable</h2>
+          <p style={{ color: "#7f1d1d" }}>Please try again shortly.</p>
+        </article>
+      ) : null}
+
+      <article
         style={{
           ...cardStyle,
           marginBottom: "1rem",
@@ -305,23 +319,6 @@ export default async function TournamentRosterPage({
             </span>
           </div>
         </form>
-      ) : null}
-
-            </PublicTournamentModuleHeader>
-
-      {error ? (
-        <article
-          role="alert"
-          style={{
-            ...cardStyle,
-            marginBottom: "1rem",
-            borderColor: "#fecaca",
-            background: "#fef2f2"
-          }}
-        >
-          <h2 style={{ marginTop: 0 }}>Roster temporarily unavailable</h2>
-          <p style={{ color: "#7f1d1d" }}>Please try again shortly.</p>
-        </article>
       ) : null}
 
       {filteredEntries.length ? (

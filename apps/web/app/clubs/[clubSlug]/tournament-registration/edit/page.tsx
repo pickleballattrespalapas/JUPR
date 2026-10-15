@@ -1,5 +1,3 @@
-
-import PublicControls from "@/components/PublicControls";
 import PublicTournamentSponsors from "@/components/PublicTournamentSponsors";
 import PublicTournamentNav, { publicTournamentHref } from "@/components/PublicTournamentNav";
 import Link from "@/components/PublicClubLink";
@@ -38,7 +36,7 @@ export default async function EditTournamentRegistrationPage({ params, searchPar
         Edit Tournament Registration
       </p>
       <PublicTournamentSponsors clubSlug={clubSlug} tournamentId={tournament?.id} placement="header" title={tournament?.name ?? "Edit registration"} />
-      <PublicControls context="Edit my registration"><PublicTournamentNav clubSlug={clubSlug} tournamentId={tournament?.id ?? searchParams?.tournament_id} registrationSlug={settings?.registration_slug ?? searchParams?.tournament} active="edit-registration" /></PublicControls>
+      <PublicTournamentNav clubSlug={clubSlug} tournamentId={tournament?.id ?? searchParams?.tournament_id} registrationSlug={settings?.registration_slug ?? searchParams?.tournament} active="edit-registration" />
       <p style={{ color: "#334155", maxWidth: "820px" }}>
         Open an event to change your partner or remove the event. Save changes when you’re done.
       </p>

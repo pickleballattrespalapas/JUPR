@@ -51,7 +51,7 @@ export default async function TeamLeaguesPage({ params, searchParams }: Props) {
           ? "See final standings and results from past team leagues."
           : "Register a team, view the schedule, and follow the season."}
       </p>
-      <PublicControls resetKey={view} context={view === "past" ? "Past leagues" : "Active leagues"}>
+      <PublicControls navigation resetKey={view} context={view === "past" ? "Past leagues" : "Active leagues"}>
 <nav aria-label="Team league collections" data-testid="public-team-league-view-toggle" style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
         {(["active", "past"] as LeagueView[]).map((option) => {
           const current = option === view;

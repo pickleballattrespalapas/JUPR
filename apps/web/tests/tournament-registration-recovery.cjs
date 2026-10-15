@@ -21,7 +21,7 @@ function load(relative, overrides = {}) {
     if (name === "@/components/ClubDisplay") return load("components/ClubDisplay.tsx");
     if (name === "@/lib/clubSite") return load("lib/clubSite.ts");
     const override = overrides[name];
-    return override ? ("default" in override ? { __esModule: true, ...override } : override) : (require("./helpers/public-controls-module.cjs")(name) || originalRequire(name));
+    return override ? ("default" in override ? { __esModule: true, ...override } : override) : originalRequire(name);
   };
   compiled._compile(ts.transpileModule(fs.readFileSync(filename, "utf8"), {
     compilerOptions: { esModuleInterop: true, jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }

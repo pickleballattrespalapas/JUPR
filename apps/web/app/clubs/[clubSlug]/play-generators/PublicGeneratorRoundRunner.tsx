@@ -928,7 +928,7 @@ export default function GeneratorRoundRunner({
         {!editToken ? <p style={{ color: "#64748b" }}>Only the organizer can enter scores or change players.</p> : null}
       </article>
 
-      <PublicControls resetKey={String(roundNumber)} context={`Round ${roundNumber} · ${roundStatusLabel(round.status)}`}>
+      <PublicControls navigation resetKey={String(roundNumber)} context={`Round ${roundNumber} · ${roundStatusLabel(round.status)}`}>
 {generatorKind === "round_robin" && (shared || editToken) ? <GeneratorSharing apiBase={apiBase} clubId={clubId} sessionKey={sessionKey} version={session.version} ownerToken={shared ? undefined : editToken} shared={shared} locked={resultsLocked} disabled={busy || editingScores || (canEditRound && anyDraftScore)} onChanged={loadSession} /> : null}
 
       {scoredSession && !shared ? <GeneratorSubmission ratingMode={session.rating_mode || "unrated"} submission={session.submission} canSubmit={session.status === "completed" && Boolean(editToken) && !editingScores} defaultDate={session.created_at} onSubmit={submitResults} /> : null}

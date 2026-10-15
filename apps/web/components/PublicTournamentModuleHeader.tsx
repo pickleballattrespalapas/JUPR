@@ -1,6 +1,3 @@
-
-import PublicControls from "@/components/PublicControls";
-import type { ReactNode } from "react";
 import Link from "next/link";
 import PublicTournamentSponsors from "./PublicTournamentSponsors";
 import PublicTournamentNav, {
@@ -16,9 +13,6 @@ type Props = {
   active: PublicTournamentModule;
   kicker: string;
   description: string;
-  children?: ReactNode;
-  context?: ReactNode;
-  resetKey?: string;
 };
 
 export default function PublicTournamentModuleHeader({
@@ -28,7 +22,7 @@ export default function PublicTournamentModuleHeader({
   registrationSlug,
   active,
   kicker,
-  description, children, context, resetKey
+  description
 }: Props) {
   return (
     <>
@@ -58,7 +52,6 @@ export default function PublicTournamentModuleHeader({
         {kicker}
       </p>
       <PublicTournamentSponsors clubSlug={clubSlug} tournamentId={tournamentId} placement="header" title={tournamentName} />
-      <PublicControls context={context || kicker} resetKey={resetKey}>
       <p style={{ color: "#334155", maxWidth: "820px" }}>{description}</p>
       <PublicTournamentNav
         clubSlug={clubSlug}
@@ -67,8 +60,6 @@ export default function PublicTournamentModuleHeader({
         registrationSlug={registrationSlug}
         active={active}
       />
-      {children}
-      </PublicControls>
     </>
   );
 }

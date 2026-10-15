@@ -108,7 +108,7 @@ export default async function PublicLeagueWeeklyHistoryPage({ params, searchPara
         Week-by-week activity, records, rating movement, and highlights for {leagueName}.
       </p>
 
-      <PublicControls resetKey={String(selectedWeek)} context={`${leagueName} · ${selectedWeek ? `Week ${selectedWeek}` : "Weekly history"}`}>
+      <PublicControls navigation resetKey={String(selectedWeek)} context={`${leagueName} · ${selectedWeek ? `Week ${selectedWeek}` : "Weekly history"}`}>
 <PublicLeagueNav clubSlug={params.clubSlug} leagueName={leagueName} active="weekly" leagueView={leagueView} />
 
       {data.weeks.length ? (

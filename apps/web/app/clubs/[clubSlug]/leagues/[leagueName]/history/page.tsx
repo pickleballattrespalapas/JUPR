@@ -11,5 +11,5 @@ export default async function LeagueHistoryPage({ params }: { params: { clubSlug
   const history = await publicSiteFetch<EventHistory>(`/public/clubs/${encodeURIComponent(params.clubSlug)}/event-history?${new URLSearchParams({ kind: "league", event: name })}`);
   if (!history) notFound();
   const selected = history.seasons.find(season => season.selected);
-  return <><h1>{history.series_name}</h1><PublicControls context="History"><PublicLeagueNav clubSlug={params.clubSlug} leagueName={name} active="history" team={selected?.league_type === "Team"} leagueView={selected?.complete ? "past" : "active"} /></PublicControls><EventHistoryView history={history} /></>;
+  return <><h1>{history.series_name}</h1><PublicControls navigation context="History"><PublicLeagueNav clubSlug={params.clubSlug} leagueName={name} active="history" team={selected?.league_type === "Team"} leagueView={selected?.complete ? "past" : "active"} /></PublicControls><EventHistoryView history={history} /></>;
 }
