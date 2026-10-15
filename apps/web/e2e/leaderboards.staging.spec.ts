@@ -1,3 +1,4 @@
+import { openPublicControls } from "./support/publicControls";
 import { expect, test } from "@playwright/test";
 import { bootstrapStagingContext, clubSlug } from "./support/staging";
 
@@ -39,15 +40,18 @@ test("leaderboard search, league tabs, and pagination preserve deterministic lin
   await expect(page.getByTestId("leaderboard-pagination")).toBeVisible();
 
   const playerName = (await page.getByTestId("leaderboard-row").first().locator("td").nth(1).locator("strong").innerText()).trim();
-  await page.getByRole("textbox", { name: "Find player" }).fill(playerName);
+  await openPublicControls(page);
+  await page.getByRole("combobox", { name: "Find player" }).fill(playerName);
   await page.getByRole("button", { name: "Search" }).click();
   await expect(page).toHaveURL(/q=/);
   await expect(page.getByTestId("leaderboard-player-snapshot")).toContainText(playerName);
 
+  await openPublicControls(page);
   const scopeTabs = page.getByTestId("leaderboard-scope-tabs").getByRole("link");
   if ((await scopeTabs.count()) > 1) {
     await scopeTabs.nth(1).click();
     await expect(page).toHaveURL(/league=/);
+    await openPublicControls(page);
     await expect(page.getByTestId("leaderboard-qualification-note")).toBeVisible();
   }
 });

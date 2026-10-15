@@ -8,6 +8,7 @@ const stubs = {
   '@/components/interaction': {},
 };
 function load(name, parent = root) {
+  if (name === "@/components/PublicControls") return require("./helpers/public-controls-module.cjs")(name);
   if (stubs[name]) return stubs[name];
   if (!name.startsWith('@/') && !name.startsWith('.')) return require(name);
   const base = name.startsWith('@/') ? path.join(root, name.slice(2)) : path.resolve(parent, name);

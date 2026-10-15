@@ -1,5 +1,7 @@
 "use client";
 
+import PublicControls from "@/components/PublicControls";
+
 import Link from "@/components/PublicClubLink";
 import { useMemo, useState } from "react";
 import type { LeagueResultsStanding } from "@/lib/api";
@@ -53,7 +55,8 @@ export default function LeaguePlayerRoster({ standings, clubSlug }: { standings:
 
   return (
     <div data-testid="league-player-roster">
-      <label style={{ display: "inline-flex", gap: "0.5rem", alignItems: "center", marginBottom: "0.75rem", fontWeight: 700 }}>
+      <PublicControls label="Sort players" context={`Sort: ${sort === "win_pct" ? "Win percentage" : sort === "rating" ? "League rating" : sort}`}>
+<label style={{ display: "inline-flex", gap: "0.5rem", alignItems: "center", marginBottom: "0.75rem", fontWeight: 700 }}>
         Sort roster by
         <select aria-label="Sort player roster" value={sort} onChange={(event) => setSort(event.target.value as SortKey)} style={{ padding: "0.35rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" }}>
           <option value="player">Player</option>
@@ -64,6 +67,8 @@ export default function LeaguePlayerRoster({ standings, clubSlug }: { standings:
           <option value="improvement">Improvement</option>
         </select>
       </label>
+      </PublicControls>
+
       <div style={{ overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: "14px", background: "white" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "720px" }}>
           <thead><tr><th style={thStyle}>Player</th><th style={thStyle}>League rating</th><th style={thStyle}>Record</th><th style={thStyle}>Games</th><th style={thStyle}>Win %</th><th style={thStyle}>Improvement</th></tr></thead>

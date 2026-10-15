@@ -10,7 +10,7 @@ function compile(file, imports) {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true }
   }).outputText;
   const module = { exports: {} };
-  new Function("require", "module", "exports", code)(name => imports[name] ?? require(name), module, module.exports);
+  new Function("require", "module", "exports", code)(name => imports[name] ?? (require('./helpers/public-controls-module.cjs')(name) || require(name)), module, module.exports);
   return module.exports;
 }
 
