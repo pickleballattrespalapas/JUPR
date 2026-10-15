@@ -1,3 +1,5 @@
+
+import PublicControls from "@/components/PublicControls";
 import Link from "@/components/PublicClubLink";
 import { getClubWeeklyRecaps, getWeeklyRecapPdfUrl } from "@/lib/weeklyRecapApi";
 import type { WeeklyRecapJson, WeeklyRecapSpotlight, WeeklyRecapTournament } from "@/lib/weeklyRecapApi";
@@ -275,7 +277,8 @@ export default async function WeeklyRecapPage({ params, searchParams }: WeeklyRe
       ) : null}
 
       {!printMode && data?.recaps?.length ? (
-        <div className="no-print" style={{ display: "grid", gap: "0.75rem", marginBottom: "1rem" }}>
+        <PublicControls navigation resetKey={`${selected?.week_start}:${activeSection}:${activePage}`} context={`${dateLabel(selected?.week_start)} · ${sectionLabels[activeSection]}`}>
+<div className="no-print" style={{ display: "grid", gap: "0.75rem", marginBottom: "1rem" }}>
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
             {data.recaps.map((recap) => {
               const active = recap.week_start === selected?.week_start;
@@ -311,7 +314,9 @@ export default async function WeeklyRecapPage({ params, searchParams }: WeeklyRe
               ) : null}
             </nav>
           ) : null}
-        </div>
+        </div></PublicControls>
+
+
       ) : null}
 
       {selected ? (

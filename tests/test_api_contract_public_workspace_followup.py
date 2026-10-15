@@ -15,6 +15,7 @@ def test_public_leagues_open_dedicated_league_home() -> None:
     nav = read("components/PublicLeagueNav.tsx")
     route_nav = read("components/PublicLeagueResultsRouteNav.tsx")
     results_layout = read("app/clubs/[clubSlug]/league-results/layout.tsx")
+    results_page = read("app/clubs/[clubSlug]/league-results/page.tsx")
 
     assert "publicLeagueHomeHref" in hub
     assert "Open League Home" in hub
@@ -29,7 +30,10 @@ def test_public_leagues_open_dedicated_league_home() -> None:
     assert "Weekly History" in nav
     assert "Player Summaries" in nav
     assert "useSearchParams" in route_nav
-    assert "PublicLeagueResultsRouteNav" in results_layout
+    assert "PublicLeagueResultsRouteNav" not in results_layout
+    controls = results_page.split("<PublicControls", 1)[1].split("</PublicControls>", 1)[0]
+    assert "<PublicLeagueNav" in controls
+    assert "leagueName={selectedLeague}" in controls
 
 
 def test_roster_is_a_selected_tournament_workspace() -> None:

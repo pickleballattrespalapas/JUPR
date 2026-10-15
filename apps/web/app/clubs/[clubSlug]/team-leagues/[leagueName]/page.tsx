@@ -1,3 +1,5 @@
+
+import PublicControls from "@/components/PublicControls";
 import Link from "@/components/PublicClubLink";
 import { LeagueAwardRaceGrid } from "@/components/LeagueAwardRace";
 import { getPublicTeamLeague, teamLeagueApiBaseUrl } from "@/lib/teamLeagueApi";
@@ -35,9 +37,10 @@ export default async function TeamLeagueDetailPage({ params }: Props) {
           {data.league.playoff_format === "none" ? "Round robin season" : "Round robin plus playoffs"}
         </p>
       </header>
+      <PublicControls label="Register & league details" context={data.registration.open ? "Registration open" : "Registration closed"}>
       <article style={card}>
         <TeamLeagueRegistrationForm apiBase={teamLeagueApiBaseUrl()} clubSlug={params.clubSlug} leagueName={leagueName} detail={data} />
-      </article>
+      </article></PublicControls>
       <article style={card}>
         <h2 style={{ marginTop: 0 }}>Teams</h2>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 200px), 1fr))", gap: "0.75rem", minWidth: 0 }}>

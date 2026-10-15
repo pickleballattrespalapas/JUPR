@@ -1,3 +1,5 @@
+
+import PublicControls from "@/components/PublicControls";
 import Link from "next/link";
 import ProfilePrivacyRequestForm from "./ProfilePrivacyRequestForm";
 
@@ -20,7 +22,8 @@ export default function ProfilePrivacyPage() {
       </p>
 
       <div style={{ display: "grid", gap: "1rem" }}>
-        <article style={cardStyle}>
+        <PublicControls label="Help & guidance">
+<article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>How privacy review works</h2>
           <ul style={{ color: "#475569", paddingLeft: "1.25rem" }}>
             <li>Staff verify that the requester is connected to the affected player profile.</li>
@@ -31,7 +34,8 @@ export default function ProfilePrivacyPage() {
             <li>Do not attach identity documents to the form; staff will arrange an appropriate verification method.</li>
           </ul>
         </article>
-        <article style={cardStyle}>
+        </PublicControls>
+<article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Privacy request form</h2>
           <ProfilePrivacyRequestForm />
         </article>

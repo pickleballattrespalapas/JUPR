@@ -1,3 +1,5 @@
+
+import PublicControls from "@/components/PublicControls";
 import Link from "@/components/PublicClubLink";
 import { getClubBadgeCodex, getClubBadgeEarners } from "@/lib/badgeApi";
 import type {
@@ -418,14 +420,15 @@ export default async function BadgeCodexPage({ params, searchParams }: BadgeCode
         Celebrate showing up, improving, playing with different partners, and earning major trophies. Each badge below explains exactly how to earn it.
       </p>
 
-      {data?.seasons?.length ? <details style={{ ...cardStyle, marginBottom: "1rem" }}><summary style={{ cursor: "pointer", fontWeight: 700 }}>Season dates for badges</summary><ul>{data.seasons.map(season => <li key={season.id}>{season.name}: {season.start_date} through {season.end_date} ({season.timezone})</li>)}</ul></details> : data ? <p style={{ color: "#475569" }}>The club hasn’t set badge season dates yet. Season-based badges will start once dates are added.</p> : null}
-
       {error ? <p role="alert" style={{ color: "#b91c1c" }}>Badges are unavailable right now. Please try again shortly.</p> : null}
       {!error && data && !badges.length ? <p>No badges are available yet.</p> : null}
 
       {data ? (
         <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
+          <PublicControls navigation resetKey={`${bucket}:${selectedCategory}:${selectedScope}`} context={[bucketLabel(bucket), selectedCategory || "All categories", selectedScope ? badgeScopeLabel(selectedScope) : "All play"].join(" · ")}>
+{data?.seasons?.length ? <details style={{ ...cardStyle, marginBottom: "1rem" }}><summary style={{ cursor: "pointer", fontWeight: 700 }}>Season dates for badges</summary><ul>{data.seasons.map(season => <li key={season.id}>{season.name}: {season.start_date} through {season.end_date} ({season.timezone})</li>)}</ul></details> : data ? <p style={{ color: "#475569" }}>The club hasn’t set badge season dates yet. Season-based badges will start once dates are added.</p> : null}
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", marginBottom: "1rem" }}>
             <article style={cardStyle}><strong>Badges</strong><br />{data.summary.badge_count}</article>
             <article style={cardStyle}><strong>Earned badge types</strong><br />{data.summary.earned_badge_count}</article>
             <article style={cardStyle}><strong>Badge earners</strong><br />{data.summary.unique_earner_count ?? "—"}</article>
@@ -466,7 +469,9 @@ export default async function BadgeCodexPage({ params, searchParams }: BadgeCode
 
           <p style={{ color: "#475569" }}>Match achievements count eligible recorded club matches. Deleted, invalid, PopUp, and tournament matches are excluded. Participation milestones and 100 lifetime wins use club standings totals. Weeks run Monday–Sunday; months and calendar years use UTC.</p>
           <Link href={pageHref({ clubSlug, bucket: "all", category: "Trophies", badgeLimit: "all" })}>Explore league awards and tournament trophies</Link>
-        </>
+        </PublicControls>
+
+      </>
       ) : null}
 
       {selectedEarners ? (

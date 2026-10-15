@@ -14,7 +14,7 @@ function load(file, mocks = {}) {
     compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true }
   }).outputText;
   const module = { exports: {} };
-  new Function("require", "module", "exports", code)(name => name === "@/components/GeneratorSharing" ? (() => null) : Object.hasOwn(mocks, name) ? mocks[name] : require(name), module, module.exports);
+  new Function("require", "module", "exports", code)(name => name === "@/components/GeneratorSharing" ? (() => null) : Object.hasOwn(mocks, name) ? mocks[name] : (require('./helpers/public-controls-module.cjs')(name) || require(name)), module, module.exports);
   return module.exports;
 }
 const playoffModule = load("components/GeneratorPlayoff.tsx", { "@/components/PublicClubLink": Link });
