@@ -1,4 +1,5 @@
 
+import { WeeklyReportIntro, WeeklyReportEvents, WeeklyReportProgress, WeeklyReportUpcoming } from "@/components/WeeklyReportSections";
 import PublicControls from "@/components/PublicControls";
 import Link from "@/components/PublicClubLink";
 import { getClubWeeklyRecaps, getWeeklyRecapPdfUrl } from "@/lib/weeklyRecapApi";
@@ -10,7 +11,7 @@ type WeeklyRecapPageProps = {
   searchParams?: Record<string, string | string[] | undefined>;
 };
 
-type RecapSection = "all" | "spotlight" | "around" | "tournaments" | "ahead";
+type RecapSection = "all" | "spotlight" | "around" | "tournaments" | "progress" | "ahead";
 
 const cardStyle = {
   border: "1px solid #e2e8f0",
@@ -24,6 +25,7 @@ const sectionLabels: Record<RecapSection, string> = {
   spotlight: "Spotlight Reel",
   around: "Around the Club",
   tournaments: "Tournaments",
+  progress: "Season progress",
   ahead: "Looking Ahead"
 };
 
@@ -63,7 +65,7 @@ function decodeParam(value: string | null): string | null {
 }
 
 function normalizeSection(value: string | null): RecapSection {
-  if (value === "spotlight" || value === "around" || value === "tournaments" || value === "ahead") return value;
+  if (value === "spotlight" || value === "around" || value === "tournaments" || value === "progress" || value === "ahead") return value;
   return "all";
 }
 
@@ -96,7 +98,7 @@ function showSection(active: RecapSection, section: RecapSection): boolean {
 }
 
 function NumberStrip({ recap }: { recap: WeeklyRecapJson }) {
-  const cards = recap.numbers_cards?.length
+  const cards = recap.report?.version === 1 ? (recap.numbers_cards || []).filter(card => ["matches", "players", "new_faces"].includes(String(card.key))) : recap.numbers_cards?.length
     ? recap.numbers_cards
     : [
         { key: "matches", label: "Matches", value: recap.numbers?.matches ?? 0 },
@@ -168,7 +170,7 @@ function Podium({ tournament }: { tournament: WeeklyRecapTournament }) {
   );
 }
 
-function RecapBody({ recap, activeSection }: { recap: WeeklyRecapJson; activeSection: RecapSection }) {
+function RecapBody({ recap, activeSection, clubSlug }: { recap: WeeklyRecapJson; activeSection: RecapSection; clubSlug: string }) {
   const spotlight = (recap.spotlight || []).filter((item) => item.include !== false).sort((a, b) => Number(a.order ?? 999) - Number(b.order ?? 999));
   const aroundCards: Array<{ title: string; rows: string[]; tone: "league" | "round_robin" | "community" }> = [];
   for (const item of recap.around_club?.leagues || []) aroundCards.push({ title: item.league_name, rows: (item.highlights || []).map((row) => row.display).filter(Boolean), tone: "league" });
@@ -181,9 +183,11 @@ function RecapBody({ recap, activeSection }: { recap: WeeklyRecapJson; activeSec
 
   return (
     <>
+      {recap.report?.version === 1 && activeSection === "all" ? <WeeklyReportIntro report={recap.report} /> : null}
       <NumberStrip recap={recap} />
+      {recap.report?.version === 1 && showSection(activeSection, "around") ? <WeeklyReportEvents report={recap.report} clubSlug={clubSlug} /> : null}
 
-      {showSection(activeSection, "spotlight") ? (
+      {showSection(activeSection, "spotlight") && (spotlight.length > 0 || !recap.report) ? (
         <section id="spotlight" data-testid="weekly-recap-section-content-spotlight" style={{ pageBreakInside: "avoid" }}>
           <h2>Spotlight Reel</h2>
           {spotlight.length ? (
@@ -194,7 +198,7 @@ function RecapBody({ recap, activeSection }: { recap: WeeklyRecapJson; activeSec
         </section>
       ) : null}
 
-      {showSection(activeSection, "around") ? (
+      {recap.report?.version !== 1 && showSection(activeSection, "around") ? (
         <section id="around" data-testid="weekly-recap-section-content-around" style={{ pageBreakInside: "avoid" }}>
           <h2>Around the Club</h2>
           {visibleAroundCards.length ? (
@@ -205,7 +209,7 @@ function RecapBody({ recap, activeSection }: { recap: WeeklyRecapJson; activeSec
         </section>
       ) : null}
 
-      {showSection(activeSection, "tournaments") ? (
+      {showSection(activeSection, "tournaments") && (recap.tournaments?.length > 0 || !recap.report) && (recap.report?.version !== 1 || activeSection === "tournaments" || !recap.report.event_results?.some(e => e.kind === "Tournament")) ? (
         <section id="tournaments" data-testid="weekly-recap-section-content-tournaments" style={{ pageBreakInside: "avoid" }}>
           <h2>Tournaments</h2>
           {recap.tournaments?.length ? (
@@ -216,6 +220,8 @@ function RecapBody({ recap, activeSection }: { recap: WeeklyRecapJson; activeSec
         </section>
       ) : null}
 
+      {recap.report?.version === 1 && showSection(activeSection, "progress") ? <WeeklyReportProgress report={recap.report} clubSlug={clubSlug} /> : null}
+      {recap.report?.version === 1 && showSection(activeSection, "ahead") ? <WeeklyReportUpcoming report={recap.report} /> : null}
       {showSection(activeSection, "ahead") && recap.looking_ahead?.length ? (
         <section id="ahead" data-testid="weekly-recap-section-content-ahead" style={{ pageBreakInside: "avoid" }}>
           <h2>Looking Ahead</h2>
@@ -342,7 +348,7 @@ export default async function WeeklyRecapPage({ params, searchParams }: WeeklyRe
               <div className="no-print"><PrintButton /></div>
             </header>
           )}
-          <RecapBody recap={selected.recap} activeSection={activeSection} />
+          <RecapBody recap={selected.recap} activeSection={activeSection} clubSlug={clubSlug} />
         </div>
       ) : null}
     </section>

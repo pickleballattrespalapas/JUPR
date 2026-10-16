@@ -92,6 +92,14 @@ class _Q:
     def __init__(self, rows: list[dict]):
         self.rows = rows
         self.filters: list[tuple[str, object]] = []
+        self.window = None
+
+    def order(self, *args, **kwargs):
+        return self
+
+    def range(self, start, end):
+        self.window = (start, end)
+        return self
 
     def select(self, _cols: str):
         return self
@@ -126,6 +134,8 @@ class _Q:
                 result = [row for row in result if row.get(col) in value]
             else:
                 result = [row for row in result if row.get(key) == value]
+        if self.window:
+            result = result[self.window[0]:self.window[1] + 1]
         return _Resp(result)
 
 

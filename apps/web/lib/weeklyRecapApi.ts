@@ -23,6 +23,7 @@ export type WeeklyRecapTournament = {
 };
 
 export type WeeklyRecapJson = {
+  report?: WeeklyReport;
   week_start?: string | null;
   week_end?: string | null;
   start_date?: string | null;
@@ -104,3 +105,18 @@ export function getWeeklyRecapPdfUrl(clubSlug: string, weekStart: string): strin
   if (!clubSlug || !weekStart) return null;
   return `/api/clubs/${encodeURIComponent(clubSlug)}/weekly-recaps/${encodeURIComponent(weekStart)}/pdf`;
 }
+
+export type WeeklyReport = {
+  version?: number;
+  club_name?: string;
+  club_slug?: string;
+  headline?: string;
+  opening?: string;
+  event_notes?: string;
+  upcoming?: Array<{ text: string; url: string }>;
+  event_results?: Array<{ id?: string; title: string; kind: string; date?: string; summary: string; details: string[]; href?: string }>;
+  season_races?: Array<{ title: string; lines: string[]; href?: string }>;
+  achievements?: string[];
+  new_faces?: string[];
+  coverage?: { games?: number; players?: number; included?: Array<{ title: string; date?: string; status?: string }>; pending?: Array<{ title: string; date?: string; status?: string }>; warnings?: string[] };
+};
