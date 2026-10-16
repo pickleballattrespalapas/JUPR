@@ -12,13 +12,13 @@ This document is an evidence inventory, not a claim that every unsafe-method rou
 
 | Measure | Count | Result |
 |---|---:|---|
-| Unsafe-method FastAPI contracts | **199** | Complete AST inventory |
-| `POST` / `PATCH` / `PUT` / `DELETE` | **160 / 30 / 8 / 1** | All enumerated below |
-| Admin-prefixed / public contracts | **167 / 31** | Admin routes resolve authenticated club-scoped access; public routes use task-specific tokens, secrets, identity, and/or anti-abuse controls |
-| Contracts in `OPEN_WRITE_ROUTES` | **199** | Exact match to the AST inventory |
+| Unsafe-method FastAPI contracts | **202** | Complete AST inventory |
+| `POST` / `PATCH` / `PUT` / `DELETE` | **163 / 30 / 8 / 1** | All enumerated below |
+| Admin-prefixed / public contracts | **171 / 31** | Admin routes resolve authenticated club-scoped access; public routes use task-specific tokens, secrets, identity, and/or anti-abuse controls |
+| Contracts in `OPEN_WRITE_ROUTES` | **202** | Exact match to the AST inventory |
 | Missing from staging write-wave manifest | **0** | Pass |
 | Stale/extra manifest entries | **0** | Pass |
-| Additional named-wave assignments beyond each route's primary assignment | **12** | Intentional overlap across 10 route contracts is listed below |
+| Additional named-wave assignments beyond each route's primary assignment | **13** | Intentional overlap across 11 route contracts is listed below |
 | Request contracts carrying a typed-confirmation field | **136** | Post-remediation count; one is a preview request where the field is not required; apply-mode dry runs bypass phrases intentionally |
 | Request contracts carrying expected-state/CAS input | **99** | Post-remediation count; nested retained requests are included, and some additional guarded families derive a server-side fingerprint |
 | Request contracts carrying an idempotency/operation key | **105** | Post-remediation count; nested retained requests are included, and some tournament operations derive a deterministic server-side operation key |
@@ -26,7 +26,7 @@ This document is an evidence inventory, not a claim that every unsafe-method rou
 
 ### Verdict
 
-There is **no externally exposed route that bypasses the global environment/write-wave boundary** in the audited tree. `StagingWriteWaveMiddleware` is fail-closed for every unsafe method, production writes remain disabled unless explicitly enabled, and the checked-in open-wave manifest covers all 199 contracts exactly (`services/api/middleware.py`, `scripts/staging_write_waves.py`, `tests/test_staging_write_wave_guards.py`, `tests/test_permanent_staging_write_mode.py`).
+There is **no externally exposed route that bypasses the global environment/write-wave boundary** in the audited tree. `StagingWriteWaveMiddleware` is fail-closed for every unsafe method, production writes remain disabled unless explicitly enabled, and the checked-in open-wave manifest covers all 202 audited contracts exactly (`services/api/middleware.py`, `scripts/staging_write_waves.py`, `tests/test_staging_write_wave_guards.py`, `tests/test_permanent_staging_write_mode.py`).
 
 The strongest mutation families already meet most of the interaction standard: live-ladder operations, tournament guarded operations, direct match entry, replay/exclusion recovery, team competition, and public live writes use combinations of compare-and-swap, stable operation identity, durable intent/completion rows, atomic RPCs, audit evidence, and explicit reconciliation.
 
@@ -651,3 +651,14 @@ Final result for this exact backend-remediation command: **146 passed**, with th
 The final frozen candidate broad run completed with **2835 passed, 9 failed, and 40 warnings**. The exact `dcf08791` baseline completed with **2756 passed, 10 failed, and 40 warnings**. Each of the candidate's nine failures belongs to the baseline's ten-failure set; one baseline failure now passes and no new interaction-standard regression remains. These counts are regression evidence rather than a claim that the repository-wide suite is globally green.
 
 Re-run the AST/manifest comparison whenever a FastAPI route decorator changes. The stable-ID table should be updated in the same pull request; new unsafe routes receive IDs after `BE-199`. Four authenticated operation-inspection routes remain safe-method `GET` contracts; five separately appended proof-only reconciliation routes `BE-193`–`BE-197`, the server-retained League Live retry `BE-198`, and score-first movement apply `BE-199` are `POST` contracts, raising the unsafe-route and staging-manifest totals from 192 to 199.
+
+
+## League Live independent setup — October 16, 2026
+
+League Live uses its own authenticated preview and player-batch routes, so production can keep the standalone Match Uploader disabled. The shared player service preserves reviewed fingerprints, idempotency, required audits, and proof-only recovery; the League Live route fixes the workflow internally and checks club scope. These three POST contracts extend the audited inventory to 202. The associated operation-inspection GET is also authenticated and scoped but does not change the unsafe-method count.
+
+| ID | Route | Confirmation | Expected state | Replay key | Write waves |
+|---|---|---|---|---|---|
+| BE-200 | League Live — `POST /admin/clubs/{club_id}/league-manager/live/round-robin/preview` — `post_admin_league_live_round_robin_preview` | — | — | — | league-live-domain,league-live-submit |
+| BE-201 | League Live — `POST /admin/clubs/{club_id}/league-manager/live/players` — `post_admin_league_live_players` | `CREATE PLAYERS` | reviewed_fingerprint | idempotency_key | league-live-submit |
+| BE-202 | League Live — `POST /admin/clubs/{club_id}/league-manager/live/player-operations/{operation_key}/reconcile` — `post_admin_league_live_player_batch_reconcile` | `RECONCILE PLAYER BATCH` | persisted reviewed player batch | operation_key | league-live-submit |

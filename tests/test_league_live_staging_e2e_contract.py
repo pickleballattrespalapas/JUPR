@@ -135,4 +135,4 @@ def test_four_week_acceptance_is_guarded_and_verifies_the_full_story() -> None:
 def test_league_live_admin_player_lookup_bypasses_public_cache() -> None:
     text = LEAGUE_LIVE_PAGE.read_text(encoding="utf-8")
 
-    assert 'getClubPlayers(clubSlug, { status: "all", limit: 1000, sort: "name", noStore: true })' in text
+    assert 'getClubPlayerOptions(clubSlug, { status: "all", noStore: true })' in text
