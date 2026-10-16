@@ -5,6 +5,35 @@ a name, optional website, uploaded logo, tier, public tier label, visibility, an
 private staff notes. Changes save to the tournament draft; publish from Review to
 update public pages. Preview placement shows the draft at desktop or phone width.
 
+## Saved club sponsors
+
+**Add sponsor → Saved club sponsor** reuses a business from the club's directory.
+Its name, website, public description, and logo prefill the form. Choose the tier,
+public tier label, visibility, and private tournament notes for this event, then
+save the draft. Sponsors already in the tournament cannot be selected twice.
+
+New sponsors default to **Save details and logo to club sponsors for future
+tournaments**. Optional contact name, email, and phone stay private to club staff.
+When editing a saved sponsor, explicitly check **Update saved club sponsor for
+future tournaments** to update that profile. Existing published tournaments and
+their drafts retain their own details; profile edits do not rewrite past events.
+Removing a tournament sponsor leaves its saved club profile available.
+
+The `club_sponsor_directory` migration imports published and saved-draft sponsors
+within each club, consolidating names with differences in casing or whitespace
+and preserving the most recent nonempty website, description, and valid logo.
+It does not copy sponsorship tiers or tournament notes into the shared profile.
+Differently spelled business names remain separate profiles.
+
+The directory is server-only with RLS enabled and no browser/anonymous table
+grants. Every API call requires tournament management permission for the requested
+club. Profile saves and logo reuse also check the destination tournament's club
+and the setup mutation gate. Contact fields never enter tournament sponsor JSON
+or public responses. Reused logos are copied into the destination tournament's
+private asset namespace, so existing public-page and email validation still
+applies. Retry identities, normalized-name uniqueness, and optimistic timestamps
+prevent duplicate profiles and stale staff updates.
+
 Premier / Presenting sponsors appear immediately below the tournament title as
 “Presented by Sponsor Name” followed by the logo. Supporting and Community
 sponsors appear in separate groups at the bottom of tournament pages. Sponsor

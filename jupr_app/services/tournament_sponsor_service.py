@@ -94,7 +94,7 @@ def normalize_sponsors(value: Any, *, club_id: str, tournament_id: str, strict: 
                 raise ValueError("Sponsor IDs must be unique.")
             continue
         ids.add(sponsor_id)
-        result.append({"id": sponsor_id, "name": name, "tier": tier,
+        result.append({"id": sponsor_id, "club_sponsor_id": str(row.get("club_sponsor_id") or "")[:36], "name": name, "tier": tier,
                        "level": str(row.get("level") or "").strip()[:80],
                        "public_description": description[:500],
                        "website": website, "notes": str(row.get("notes") or "")[:2000],
