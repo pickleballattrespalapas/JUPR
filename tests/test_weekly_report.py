@@ -21,6 +21,8 @@ class Query:
     def select(self, *a): return self
     def eq(self, key, value):
         self.data = [r for r in self.data if r.get(key) == value]; return self
+    def is_(self, key, value):
+        self.data = [r for r in self.data if r.get(key) is value]; return self
     def in_(self, key, values):
         self.data = [r for r in self.data if r.get(key) in values]; return self
     def gte(self, key, value):
