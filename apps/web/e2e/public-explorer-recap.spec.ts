@@ -1,3 +1,4 @@
+import { openPublicControls } from "./support/publicControls";
 import { expect, test, type Locator } from "@playwright/test";
 import { bootstrapStagingContext, clubSlug } from "./support/staging";
 
@@ -28,6 +29,8 @@ test("Match Explorer hydrates a share link and reacts through Python projections
   // settled before Playwright changes the controlled player fields.
   await expect(page.getByTestId("match-explorer-summary")).toContainText("Your team's win chance");
 
+  await expect(me).toBeVisible();
+  await expect(page.locator("[data-public-controls-panel]")).toHaveCount(0);
   await choose(me, playerIds[0]);
   await choose(partner, playerIds[0]);
   await expect(page.getByTestId("match-explorer-validation")).toContainText("four different players");
@@ -64,11 +67,13 @@ test("Weekly Recap exposes published deep links, print view, and same-origin PDF
   await expect(page.getByTestId("weekly-recap-document"), "Staging needs at least one published recap fixture").toBeVisible();
   await expect(page.getByTestId("weekly-recap-number-cards").locator("article")).toHaveCount(6);
 
+  await openPublicControls(page);
   const firstWeek = page.getByTestId("weekly-recap-week-link").first();
   await expect(firstWeek).toBeVisible();
   await firstWeek.click();
   await expect(page).toHaveURL(/[?&]week=\d{4}-\d{2}-\d{2}(?:&|$)/);
 
+  await openPublicControls(page);
   await page.getByTestId("weekly-recap-section-spotlight").click();
   await expect(page).toHaveURL(/[?&]section=spotlight(?:&|$)/);
   await expect(page.getByTestId("weekly-recap-section-content-spotlight")).toBeVisible();
@@ -83,6 +88,7 @@ test("Weekly Recap exposes published deep links, print view, and same-origin PDF
   expect(pdfResponse.headers()["content-type"] || "").toContain("application/pdf");
   expect((await pdfResponse.body()).subarray(0, 8).toString()).toBe("%PDF-1.4");
 
+  await openPublicControls(page);
   await page.getByTestId("weekly-recap-print-link").click();
   await expect(page).toHaveURL(/[?&]print=1(?:&|$)/);
   await expect(page.getByTestId("weekly-recap-page")).toHaveAttribute("data-print-mode", "true");

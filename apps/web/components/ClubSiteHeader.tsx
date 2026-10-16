@@ -1,4 +1,5 @@
 import Link from "next/link";
+import PublicMobileNavigation from "./PublicMobileNavigation";
 import {
   publicClubLinks,
   clubPageHref,
@@ -13,6 +14,23 @@ export default function ClubSiteHeader({
   document: SiteDocument;
   slug: string;
 }) {
+  const navigation = (
+<nav className={styles.nav} aria-label="Club navigation">
+        <Link href={`/clubs/${slug}`}>Home</Link>
+        {publicClubLinks(doc).map(([label, path]) => (
+          <Link key={path} href={`/clubs/${slug}/${path}`}>
+            {label}
+          </Link>
+        ))}
+        {doc.pages
+          .filter((p) => p.slug !== "home" && p.in_navigation)
+          .map((p) => (
+            <Link key={p.slug} href={clubPageHref(slug, p.slug)}>
+              {p.title}
+            </Link>
+          ))}
+      </nav>
+  );
   return (
     <>
       <header className={styles.header}>
@@ -31,21 +49,8 @@ export default function ClubSiteHeader({
           <Link href="/admin/login">Staff sign in</Link>
         </div>
       </header>
-      <nav className={styles.nav} aria-label="Club navigation">
-        <Link href={`/clubs/${slug}`}>Home</Link>
-        {publicClubLinks(doc).map(([label, path]) => (
-          <Link key={path} href={`/clubs/${slug}/${path}`}>
-            {label}
-          </Link>
-        ))}
-        {doc.pages
-          .filter((p) => p.slug !== "home" && p.in_navigation)
-          .map((p) => (
-            <Link key={p.slug} href={clubPageHref(slug, p.slug)}>
-              {p.title}
-            </Link>
-          ))}
-      </nav>
+      <div className={styles.desktopNav}>{navigation}</div>
+      <PublicMobileNavigation className={styles.mobileNav}>{navigation}</PublicMobileNavigation>
     </>
   );
 }

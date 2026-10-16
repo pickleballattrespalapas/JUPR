@@ -1,3 +1,5 @@
+
+import PublicControls from "@/components/PublicControls";
 import Link from "@/components/PublicClubLink";
 import PublicLeagueNav, {
   publicLeagueResultsHref
@@ -126,7 +128,8 @@ export default async function PublicLeagueHomePage({ params }: Props) {
         Follow the award races, browse players, and review weekly results.
       </p>
 
-      <PublicLeagueNav
+      <PublicControls navigation context={`${leagueName} · ${leagueView === "past" ? "Finished league" : "Awards race"}`}>
+<PublicLeagueNav
         clubSlug={params.clubSlug}
         leagueName={leagueName}
         active="home"
@@ -231,6 +234,8 @@ export default async function PublicLeagueHomePage({ params }: Props) {
           ))}
         </div>
       </section>
+
+      </PublicControls>
 
       <section>
         <div

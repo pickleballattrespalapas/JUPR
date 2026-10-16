@@ -13,7 +13,7 @@ module.exports = function load(name) {
   const module = { exports: {} };
   const source = fs.readFileSync(path.join(__dirname, '../..', files[name]), 'utf8');
   const code = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true } }).outputText;
-  new Function('require', 'module', 'exports', code)(dependency => load(dependency) || require(dependency), module, module.exports);
+  new Function('require', 'module', 'exports', code)(dependency => load(dependency) || require('./public-controls-module.cjs')(dependency) || require(dependency), module, module.exports);
   cache.set(name, module.exports);
   return module.exports;
 };

@@ -1,3 +1,5 @@
+
+import PublicControls from "@/components/PublicControls";
 import Link from "@/components/PublicClubLink";
 import { publicLeagueHomeHref } from "@/components/PublicLeagueNav";
 import { getClubLeagueResults } from "@/lib/api";
@@ -66,7 +68,8 @@ export default async function PublicLeaguesPage({ params, searchParams }: Props)
           : "Register for a team league, or choose a league to see standings, weekly results, and player stats."}
       </p>
 
-      <nav
+      <PublicControls navigation resetKey={view} context={view === "past" ? "Past leagues" : "Active leagues"}>
+<nav
         aria-label="League collections"
         data-testid="public-league-view-toggle"
         style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}
@@ -92,7 +95,7 @@ export default async function PublicLeaguesPage({ params, searchParams }: Props)
             </Link>
           );
         })}
-      </nav>
+      </nav></PublicControls>
 
       <section aria-label="Team leagues" style={{ marginBottom: "1.5rem" }}>
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", flexWrap: "wrap", gap: "0.5rem" }}>
