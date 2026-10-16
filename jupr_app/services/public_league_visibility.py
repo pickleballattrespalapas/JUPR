@@ -8,7 +8,7 @@ PAST_LEAGUE_VIEW = "past"
 PUBLIC_LEAGUE_VIEWS = {ACTIVE_LEAGUE_VIEW, PAST_LEAGUE_VIEW}
 
 _ACTIVE_STATUSES = {"active", "running", "live"}
-_ENDED_STATUSES = {"ended", "completed", "complete", "done"}
+_ENDED_STATUSES = {"ended", "completed", "complete", "done", "archived"}
 
 
 def normalize_public_league_view(value: Any) -> str:
@@ -23,10 +23,9 @@ def public_league_view(row: Mapping[str, Any] | None) -> str | None:
 
     Public league discovery is deliberately fail-closed. A league must have a
     consistent manager lifecycle state: currently active leagues appear in the
-    default collection, while ended leagues appear in the past collection.
-    The manager can end only a previously started active/paused league, so the
-    ended state is the durable signal that the finished league was published.
-    Draft/inactive, paused, archived, inconsistent, and metadata-less records
+    default collection, while ended and archived leagues appear in the past
+    collection. Archiving follows ending a league and preserves public results.
+    Draft/inactive, paused, inconsistent, and metadata-less records
     are not public league options.
     """
 

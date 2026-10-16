@@ -238,6 +238,23 @@ global.fetch = async (url, options = {}) => {
     }
   }
 
+  data.filters.league_view = "past";
+  data.filters.status = "all";
+  for (const status of [undefined, "active", "inactive", "all"]) {
+    markup = await render({ league_view: "past", league: "Ladder", ...(status ? { status } : {}) });
+    assert.equal(requests.at(-1).options.status, "all", "Historical standings always request all participants, even from an old filtered link");
+    assert.match(markup, /All participants are included, regardless of current activity/);
+    assert.doesNotMatch(markup, /data-testid="leaderboard-status-(?:active|inactive|all)"/, "Current activity cannot hide past participants");
+    assert.match(markup, /name="status" value="all"/, "Historical searches retain all participants");
+    const activeLink = markup.match(/href="([^"]+)"[^>]*>Active leagues<\/a>/)[1];
+    assert.doesNotMatch(activeLink, /(?:status|league_view)=/, "Returning to active leagues restores its active-player default");
+  }
+  data.filters.league_view = "active";
+  data.filters.status = "active";
+  markup = await render();
+  assert.equal(requests.at(-1).options.status, "active");
+  assert.match(markup, /data-testid="leaderboard-status-active"/);
+
   process.env.JUPR_API_BASE_URL = "https://api.test";
   let requestedUrl;
   global.fetch = async url => { requestedUrl = new URL(url); return { ok: true, json: async () => ({}) }; };
