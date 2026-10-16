@@ -1,25 +1,182 @@
 {
-  "start_date":"2026-10-05","end_date":"2026-10-11",
-  "numbers":{"matches":96,"players":48,"new_faces":6},
-  "numbers_cards":[{"key":"matches","label":"Games","value":96},{"key":"players","label":"Players","value":48},{"key":"new_faces","label":"New faces","value":6}],
-  "spotlight":[{"key":"ABOVE_EXPECTATIONS_WEEK","label":"Above Expectations","players":["Alex — +2.1 wins above expected"],"description":"Rated games only; minimum 4 rated games.","include":true},{"key":"TOP_PERFORMER_WEEK","label":"Top Performer","players":["Bea — 7–1"],"description":"Most wins minus losses; minimum 4 games.","include":true}],
-  "report":{
-    "version":1,"club_name":"Tres Palapas","club_slug":"tres-palapas",
-    "headline":"This week on the courts · Example report",
-    "opening":"EXAMPLE DATA — These names and results illustrate the new report; they are not actual Tres results.\n\nA little competition, some new faces, and plenty of good games. Here’s a look at the week on the courts.",
-    "event_notes":"Thanks to everyone who helped welcome the new players this week. Keep bringing your friends along!",
-    "event_results":[
-      {"title":"Tuesday Moneyball","kind":"Moneyball","date":"2026-10-06","summary":"Winner: Alex — the strongest finish against expectations.","details":["8 players · 14 games","5 wins vs 2.9 expected","Point difference: +17 vs −3.4 expected"],"href":"match-explorer"},
-      {"title":"Thursday Social Round Robins","kind":"Social play","date":"2026-10-08","summary":"24 players joined across three groups.","details":["Everyone who played is included, including late arrivals and early departures."],"href":"league-results"},
-      {"title":"Sunday Fall Ladder","kind":"Ladder","date":"2026-10-11","summary":"Standings leader: Bea — 7–1 for the day.","details":["16 players · 28 games"],"href":"leagues/Fall%20Ladder/standings"},
-      {"title":"Baja League · 4.0","kind":"Interclub","date":"2026-10-10","summary":"Tres Palapas vs Guest Club","details":["Points: 3–1","Games won: 7–5"],"href":"interclub"},
-      {"title":"Example Tournament · Mixed 3.5","kind":"Tournament","summary":"Division podium","details":["1. Cam + Dee","2. Eli + Fran","3. Gus + Hana"],"href":"tournament-results?tournament=example"}
-    ],
-    "season_races":[{"title":"Fall Ladder · Most Wins","lines":["1. Bea — 18 wins · up 1","2. Alex — 16 wins"],"href":"leagues/Fall%20Ladder/standings"},{"title":"Fall Ladder · Most Upset Wins","lines":["Cam: 24 of 32 games to qualify","Dee: 20 of 32 games to qualify"],"href":"leagues/Fall%20Ladder/standings"}],
-    "achievements":["Alex — first round-robin win","Bea — a new participation milestone"],
-    "new_faces":["Eli","Fran","Gus","Hana","Ira","Jules"],
-    "upcoming":[{"text":"Register for Moneyball","url":"https://app.courtreserve.com/Online/Events/Public/8043/2308082"}],
-    "coverage":{"games":96,"players":48,"included":[{"title":"Tuesday Moneyball","date":"2026-10-06","status":"approved"}],"pending":[{"title":"Example pending session","date":"2026-10-11","status":"pending"}],"warnings":[]}
+  "start_date": "2026-10-05",
+  "end_date": "2026-10-11",
+  "numbers": {
+    "matches": 96,
+    "players": 48,
+    "new_faces": 6
   },
-  "around_club":{"leagues":[],"round_robins":[],"community_events":[]},"tournaments":[],"looking_ahead":[],"highlights":[]
+  "numbers_cards": [
+    {
+      "key": "matches",
+      "label": "Games",
+      "value": 96
+    },
+    {
+      "key": "players",
+      "label": "Players",
+      "value": 48
+    },
+    {
+      "key": "new_faces",
+      "label": "New faces",
+      "value": 6
+    }
+  ],
+  "spotlight": [
+    {
+      "key": "ABOVE_EXPECTATIONS_WEEK",
+      "label": "Above Expectations",
+      "players": [
+        "Alex — +2.1 wins above expected"
+      ],
+      "description": "Rated games only; minimum 4 rated games.",
+      "include": true
+    },
+    {
+      "key": "TOP_PERFORMER_WEEK",
+      "label": "Top Performer",
+      "players": [
+        "Bea — 7–1"
+      ],
+      "description": "Most wins minus losses; minimum 4 games.",
+      "include": true
+    }
+  ],
+  "report": {
+    "version": 1,
+    "club_name": "Tres Palapas",
+    "club_slug": "tres-palapas",
+    "headline": "This week on the courts · Example report",
+    "opening": "EXAMPLE DATA — These names and results illustrate the new report; they are not actual Tres results.\n\nA little competition, some new faces, and plenty of good games. Here’s a look at the week on the courts.\n\nOnly cards with a public results page include a results link. The league links open the existing staging league.",
+    "event_notes": "Thanks to everyone who helped welcome the new players this week. Keep bringing your friends along!",
+    "event_results": [
+      {
+        "title": "Tuesday Moneyball",
+        "kind": "Moneyball",
+        "date": "2026-10-06",
+        "summary": "Winner: Alex — the strongest finish against expectations.",
+        "details": [
+          "8 players · 14 games",
+          "5 wins vs 2.9 expected",
+          "Point difference: +17 vs −3.4 expected"
+        ],
+        "href": ""
+      },
+      {
+        "title": "Thursday Social Round Robin",
+        "kind": "Social play",
+        "date": "2026-10-08",
+        "summary": "Winner: Cam (5–1)",
+        "details": [
+          "24 players · 36 games · Unrated",
+          "1. Cam — 5–1 · point difference +28",
+          "2. Alex — 4–2 · point difference +19",
+          "3. Bea — 4–2 · point difference +12"
+        ],
+        "href": ""
+      },
+      {
+        "title": "Summer Social",
+        "kind": "League",
+        "date": "2026-10-11",
+        "summary": "Weekly highlights and player records.",
+        "details": [
+          "Open a recorded league week below."
+        ],
+        "href": "leagues/Summer%20Social/standings",
+        "weekly_reports": [
+          {
+            "label": "Weekly report · Week 7",
+            "href": "leagues/Summer%20Social/weekly-history?week=7"
+          }
+        ]
+      },
+      {
+        "title": "Baja League · 4.0",
+        "kind": "Interclub",
+        "date": "2026-10-10",
+        "summary": "Tres Palapas vs Guest Club",
+        "details": [
+          "Points: 3–1",
+          "Games won: 7–5"
+        ],
+        "href": ""
+      },
+      {
+        "title": "Example Tournament · Mixed 3.5",
+        "kind": "Tournament",
+        "summary": "Division podium",
+        "details": [
+          "1. Cam + Dee",
+          "2. Eli + Fran",
+          "3. Gus + Hana"
+        ],
+        "href": ""
+      }
+    ],
+    "season_races": [
+      {
+        "title": "Fall Ladder · Most Wins",
+        "lines": [
+          "1. Bea — 18 wins · up 1",
+          "2. Alex — 16 wins"
+        ],
+        "href": ""
+      },
+      {
+        "title": "Fall Ladder · Most Upset Wins",
+        "lines": [
+          "Cam: 24 of 32 games to qualify",
+          "Dee: 20 of 32 games to qualify"
+        ],
+        "href": ""
+      }
+    ],
+    "achievements": [
+      "Alex — first round-robin win",
+      "Bea — a new participation milestone"
+    ],
+    "new_faces": [
+      "Eli",
+      "Fran",
+      "Gus",
+      "Hana",
+      "Ira",
+      "Jules"
+    ],
+    "upcoming": [
+      {
+        "text": "Register for Moneyball",
+        "url": "https://app.courtreserve.com/Online/Events/Public/8043/2308082"
+      }
+    ],
+    "coverage": {
+      "games": 96,
+      "players": 48,
+      "included": [
+        {
+          "title": "Tuesday Moneyball",
+          "date": "2026-10-06",
+          "status": "approved"
+        }
+      ],
+      "pending": [
+        {
+          "title": "Example pending session",
+          "date": "2026-10-11",
+          "status": "pending"
+        }
+      ],
+      "warnings": []
+    }
+  },
+  "around_club": {
+    "leagues": [],
+    "round_robins": [],
+    "community_events": []
+  },
+  "tournaments": [],
+  "looking_ahead": [],
+  "highlights": []
 }

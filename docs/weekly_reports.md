@@ -22,3 +22,11 @@ Exports use the established Tres palette (#123e37 green, #f8f3e9 sand, #17665c t
 Exports never send email. Staging retains `JUPR_EMAIL_MODE=dry_run` and never targets production. No schema migration is required; additions are stored in the existing recap JSON snapshots, and old published editions retain their legacy layout until regenerated.
 
 `apps/web/tests/fixtures/weekly-report.json` is explicitly illustrative data for rendering checks; its numbers and names are not actual Tres results.
+
+## Results links and league reports
+
+Generator cards link directly to shared standings only when viewing has been enabled and the session is readable. Sessions without a public results page keep their verified summary on the card. Match Explorer and an unrelated league's results are never used as fallback destinations. Interclub cards open the published season directly.
+
+Social round robins show the event winner and record using the canonical wins, point difference, and points scored rules. Numerical ties stay labeled as tied pending the club's decision; a recorded decision is honored only while its result fingerprint remains valid. Saved legacy social events use their recorded event snapshot, with saved match seats as a fallback.
+
+League cards in the report include **Weekly report · Week N** links for every league week played in the report period. These links also appear in published email exports, including compact exports. The public league directory has a **Weekly report** shortcut on each card. An unqualified weekly link opens the latest week with results, while explicit week selections remain available.

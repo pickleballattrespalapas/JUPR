@@ -42,6 +42,69 @@ def completed_games(event):
                 yield round_row, game
 
 
+def round_robin_summary(rows, *, final=True):
+    leaders = [r for r in rows if r.get("rank") == 1]
+    if not leaders:
+        return "No completed results"
+    names = ", ".join(f"{r['name']} ({r.get('wins', 0)}–{r.get('losses', 0)})" for r in leaders)
+    if any(r.get("winnerNeedsAdmin") for r in leaders):
+        return f"Tied for first: {names} · awaiting the club's winner decision"
+    return ("Winner: " if final and len(leaders) == 1 else "Standings leader: ") + names
+
+
+def generator_results_href(row, event):
+    """Only link to an enabled, readable public results surface."""
+    from jupr_app.services.public_play_generator_service import _not_expired
+
+    state = row.get("state") or {}
+    if (event.get("generatorKind") == "round_robin"
+            and (state.get("generator_sharing") or {}).get("enabled")
+            and row.get("status") in {"active", "completed"}
+            and (state.get("mode") == "admin_play_generator" or _not_expired(row))
+            and clean(row.get("session_key"))):
+        return f"round-robin-generator/shared/{quote(str(row['session_key']), safe='')}/standings"
+    return ""
+
+
+def social_result(event_row, social_data):
+    """Use the event's recorded RR tiebreak decision, never the weekly spotlight."""
+    from jupr_app.domain.live_beta_engine import round_robin_standings, league_aggregate_standings
+
+    event_id = str(event_row["id"])
+    event = event_row.get("raw_event_json") or {}
+    if not isinstance(event, dict) or not event.get("rounds"):
+        # Older saved events may predate raw snapshots. Rebuild only saved seats.
+        people = [p for p in social_data.get("participants", []) if str(p.get("event_id")) == event_id]
+        ids = {str(p["id"]) for p in people}
+        games = []
+        for game in social_data.get("matches", []):
+            if str(game.get("event_id")) != event_id:
+                continue
+            seats = [str(game.get(k) or "") for k in ("t1_p1_participant_id", "t1_p2_participant_id", "t2_p1_participant_id", "t2_p2_participant_id")]
+            a, b = game.get("score_t1"), game.get("score_t2")
+            if len(set(seats)) != 4 or not set(seats) <= ids or a is None or b is None or a == b:
+                continue
+            games.append({"id": str(game.get("id")), "teamA": seats[:2], "teamB": seats[2:], "scoreA": a, "scoreB": b})
+        event = {"type": "round_robin", "participants": [{"id": str(p["id"]), "name": p.get("display_name_snapshot") or "Player"} for p in people], "rounds": [{"matches": games}]}
+    is_rr = event_row.get("event_type") == "round_robin"
+    # Raw ladder snapshots keep the court/mini-round structure used by the engine.
+    rows = (round_robin_standings if is_rr or event.get("type") == "round_robin" else league_aggregate_standings)(event)
+    rows = [r for r in rows if int(r.get("matches") or 0) > 0]
+    if not rows:
+        return None
+    details = [f"{r.get('rank', i)}. {r['name']} — {r['wins']}–{r['losses']} · point difference {r['differential']:+d}" for i, r in enumerate(rows[:5], 1)]
+    return {"id": event_id, "title": event_row.get("name") or "Social round robin", "kind": "Social round robin" if is_rr else "Social ladder", "date": event_row.get("event_date") or "", "summary": round_robin_summary(rows) if is_rr else f"Standings leader: {rows[0]['name']} ({rows[0]['wins']}–{rows[0]['losses']})", "details": details, "href": ""}
+
+
+def league_weekly_reports(name, matches):
+    from jupr_app.services.public_league_results_service import _parse_week_num
+    from jupr_app.domain.recaps.weekly_recap import _resolve_event_key
+
+    weeks = sorted({week for m in matches if _resolve_event_key(m) == ("LEAGUE", name)
+                    and (week := _parse_week_num(m.get("week_tag"))) is not None})
+    return [{"label": f"Weekly report · Week {week}", "href": f"leagues/{quote(name, safe='')}/weekly-history?week={week}"} for week in weeks]
+
+
 def generator_result(row, start_date, end_date, matches=None):
     """Only approved/published generators become public result summaries."""
     from jupr_app.domain.adaptive_play_engine import generator_event_standings
@@ -81,15 +144,14 @@ def generator_result(row, start_date, end_date, matches=None):
             eligible = r.get("moneyballEligible", True)
             details.append(f"{r['name']}: {r['wins']} wins vs {r['expectedWins']:.1f} expected; point difference {r['differential']:+d} vs {r['expectedDifferential']:+.1f} expected" + (" · ineligible after substitution" if not eligible else ""))
     else:
-        leaders = [r for r in rows if r.get("rank") == 1] or rows[:1]
-        summary = "Standings leader: " + ", ".join(f"{r['name']} ({r.get('wins', 0)}–{r.get('losses', 0)})" for r in leaders)
+        summary = round_robin_summary(rows, final=event.get("status") == "completed" and event.get("type") == "round_robin" and not event.get("playoff"))
         for round_row, game in games:
             if round_row.get("stage") != "playoff":
                 continue
             side = "A" if game["scoreA"] > game["scoreB"] else "B"
             names = [clean(participants.get(str(pid), {}).get("name")) for pid in game.get(f"side{side}", [])]
             details.append(f"{game.get('label') or round_row.get('label') or 'Playoff'}: {' + '.join(names)} won {max(game['scoreA'], game['scoreB'])}–{min(game['scoreA'], game['scoreB'])}")
-    return {"id": clean(row.get("session_key")), "title": title, "kind": kind, "date": played_on, "summary": summary, "details": details, "href": "match-explorer"}, coverage
+    return {"id": clean(row.get("session_key")), "title": title, "kind": kind, "date": played_on, "summary": summary, "details": details, "href": generator_results_href(row, event)}, coverage
 
 
 def _season_races(ctx, start_date, end_date):
@@ -186,7 +248,7 @@ def build_weekly_report(ctx, recap, df_week, social_data, start_date, end_date):
         except Exception:
             coverage["warnings"].append("Club branding could not be loaded.")
         try:
-            sessions = read_all_rows(lambda: db.table("live_sessions").select("session_key,title,state,status")
+            sessions = read_all_rows(lambda: db.table("live_sessions").select("session_key,title,state,status,expires_at")
                 .eq("club_id", club_id).in_("state->>mode", ["admin_play_generator", "public_play_generator"]), order="session_key")
             for row in sessions:
                 try:
@@ -226,11 +288,18 @@ def build_weekly_report(ctx, recap, df_week, social_data, start_date, end_date):
             coverage["warnings"].append("First-time player history could not be fully verified.")
     # Retain named leagues and legacy social events, even without generators.
     for item in recap.get("around_club", {}).get("leagues", []):
-        report["event_results"].append({"title": item["league_name"], "kind": "League", "date": "", "summary": "", "details": [h["display"] for h in item.get("highlights", [])], "href": f"leagues/{quote(item['league_name'], safe='')}/standings"})
+        report["event_results"].append({"title": item["league_name"], "kind": "League", "date": "", "summary": "", "details": [h["display"] for h in item.get("highlights", [])], "href": f"leagues/{quote(item['league_name'], safe='')}/standings", "weekly_reports": league_weekly_reports(item["league_name"], matches)})
     for item in recap.get("around_club", {}).get("round_robins", []):
-        report["event_results"].append({"title": item["event_name"], "kind": "Round robin", "date": "", "summary": "", "details": [h["display"] for h in item.get("highlights", [])], "href": "league-results"})
+        report["event_results"].append({"title": item["event_name"], "kind": "Round robin", "date": "", "summary": "", "details": [h["display"] for h in item.get("highlights", [])], "href": ""})
     for event in social_data.get("events", []):
-        report["event_results"].append({"title": event.get("name") or "Social round robin", "kind": "Social play", "date": event.get("event_date") or "", "summary": "Saved social results", "details": [], "href": "league-results"})
+        try:
+            result = social_result(event, social_data)
+        except Exception:
+            coverage["warnings"].append(f"The social result for {clean(event.get('name')) or 'an event'} could not be verified.")
+            continue
+        if not result:
+            continue
+        report["event_results"].append(result)
         coverage["included"].append({"title": event.get("name") or "Social play", "date": event.get("event_date"), "status": "saved"})
     report["event_results"].sort(key=lambda e: (e.get("date") or "", e["title"]))
     coverage["games"] = int(recap.get("numbers", {}).get("matches", 0))
@@ -287,7 +356,7 @@ def _add_interclub(db, club_id, start, end, report):
                     continue
                 outcome = result.get("outcome") or {}
                 details = [f"Points: {outcome.get('points_a', 0)}–{outcome.get('points_b', 0)}", f"Games won: {outcome.get('games_a', 0)}–{outcome.get('games_b', 0)}"]
-                report["event_results"].append({"title": f"{doc.get('name', 'Interclub')} · {result.get('division', '')}", "kind": "Interclub", "date": played_on, "summary": f"{clubs.get(result['club_a'], 'Club A')} vs {clubs.get(result['club_b'], 'Club B')}", "details": details, "href": "interclub"})
+                report["event_results"].append({"title": f"{doc.get('name', 'Interclub')} · {result.get('division', '')}", "kind": "Interclub", "date": played_on, "summary": f"{clubs.get(result['club_a'], 'Club A')} vs {clubs.get(result['club_b'], 'Club B')}", "details": details, "href": f"/interclub/{quote(str(membership['season_id']), safe='')}"})
 
 
 def _new_faces(db, club_id, matches, social_data, start, end, names):

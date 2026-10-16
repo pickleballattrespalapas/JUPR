@@ -5,8 +5,8 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
-from jupr_app.domain.recaps.weekly_report import generator_result, _new_faces, _achievements, _add_interclub, _add_tournament_draws
-from jupr_app.domain.recaps.weekly_report_public import sanitize_report, safe_url
+from jupr_app.domain.recaps.weekly_report import generator_result, social_result, league_weekly_reports, _new_faces, _achievements, _add_interclub, _add_tournament_draws
+from jupr_app.domain.recaps.weekly_report_public import sanitize_report, safe_url, report_href
 from jupr_app.domain.recaps.weekly_recap import _compute_stats, _build_spotlight_candidates, _event_highlights, _filter_matches, _load_matches
 from jupr_app.services.admin_weekly_recap_service import apply_weekly_recap_edits
 from jupr_app.services.public_weekly_recap_service import sanitize_public_recap_json, build_weekly_recap_pdf_bytes
@@ -79,6 +79,55 @@ def test_approval_date_correction_and_direct_publication_use_play_date():
     row['state']['official_publish'] = {'published_match_ids':['r1-c1'], 'match_context_by_live_id':{'r1-c1':'ctx'}}
     result, _ = generator_result(row, '2026-10-12', '2026-10-18', [match(1,context_id='ctx')])
     assert result and result['date'] == '2026-10-13'
+
+
+def test_generator_links_only_to_a_readable_shared_result():
+    event = finished_event()
+    row = session(event)
+    assert generator_result(row, '2026-10-12', '2026-10-18')[0]['href'] == ''
+    row.update(status='completed')
+    row['state'].update(mode='public_play_generator', generator_sharing={'enabled':True})
+    assert generator_result(row, '2026-10-12', '2026-10-18')[0]['href'] == 'round-robin-generator/shared/session/standings'
+    row.update(status='archived')
+    assert generator_result(row, '2026-10-12', '2026-10-18')[0]['href'] == ''
+    row.update(status='active', expires_at='2020-01-01T00:00:00Z')
+    assert generator_result(row, '2026-10-12', '2026-10-18')[0]['href'] == ''
+
+
+def test_social_rr_winner_uses_event_tiebreaks_and_valid_recorded_decision():
+    from jupr_app.domain.live_beta_engine import round_robin_result_fingerprint
+    event = {'type':'round_robin', 'participants':[{'id':str(i), 'name':name} for i,name in enumerate(['Alex','Bea','Cam','Dee'], 1)],
+             'rounds':[{'matches':[{'id':'game','teamA':['1','2'],'teamB':['3','4'],'scoreA':11,'scoreB':5}]}]}
+    source = {'id':'social','name':'Thursday Social','event_type':'round_robin','event_date':'2026-10-13','raw_event_json':event}
+    result = social_result(source, {})
+    assert result['summary'].startswith('Tied for first:') and 'awaiting' in result['summary']
+    assert result['href'] == ''  # No unrelated league-results page.
+    event['round_robin_winner'] = {'participant_id':'2', 'display_fingerprint':round_robin_result_fingerprint(event)}
+    assert social_result(source, {})['summary'] == 'Winner: Bea (1–0)'
+    event['rounds'][0]['matches'][0]['scoreA'] = 12
+    assert social_result(source, {})['summary'].startswith('Tied for first:')
+    event['rounds'][0]['matches'].append({'id':'game2','teamA':['2','3'],'teamB':['1','4'],'scoreA':11,'scoreB':4})
+    assert social_result(source, {})['summary'] == 'Winner: Bea (2–0)'
+
+
+def test_legacy_social_results_use_saved_seats_and_keep_events_separate():
+    people = [{'id':str(i), 'event_id':'social', 'display_name_snapshot':name} for i,name in enumerate(['Alex','Bea','Cam','Dee'], 1)]
+    game = {'id':'game', 'event_id':'social', 't1_p1_participant_id':'1','t1_p2_participant_id':'2','t2_p1_participant_id':'3','t2_p2_participant_id':'4','score_t1':11,'score_t2':5}
+    source = {'id':'social','event_type':'round_robin','raw_event_json':{'participants':people}}
+    result = social_result(source, {'participants':people,'matches':[game,{**game, 'event_id':'other', 'score_t1':0}]})
+    assert 'Alex (1–0), Bea (1–0)' in result['summary']
+    assert social_result(source, {'participants':people,'matches':[{**game,'score_t2':None}]}) is None
+
+
+def test_league_report_links_preserve_each_recorded_league_week():
+    links = league_weekly_reports('Fall 3.5', [match(1,league='Fall 3.5',week_tag='Week 4'),match(2,league='Fall 3.5',week_tag='Week 5'),match(3,league='Other',week_tag='Week 6')])
+    assert [r['href'] for r in links] == ['leagues/Fall%203.5/weekly-history?week=4','leagues/Fall%203.5/weekly-history?week=5']
+    public = sanitize_report({'version':1,'event_results':[{'title':'Fall','weekly_reports':links}]})
+    assert public['event_results'][0]['weekly_reports'] == links
+    for href in [r['href'] for r in links] + ['round-robin-generator/shared/session/standings','/interclub/season']:
+        assert report_href(href) == href
+    for href in ['match-explorer','league-results','interclub','//example.com','leagues/Fall/weekly-history?week=4&admin=true','leagues/../standings']:
+        assert report_href(href) == ''
 
 
 def test_moneyball_report_uses_canonical_settlement_not_most_wins(monkeypatch):

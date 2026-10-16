@@ -10,8 +10,15 @@ export function emailUrl(value: string | undefined): string {
 }
 export function reportLink(origin: string, clubSlug: string, path: string): string {
   const base = emailUrl(origin);
-  if (!base || !clubSlug || !path || path.startsWith("/") || path.includes("..") || path.includes("\\") || path.includes(":")) return "";
-  return emailUrl(`${base.replace(/\/$/, "")}/clubs/${encodeURIComponent(clubSlug)}/${path}`);
+  const target = reportPath(clubSlug, path);
+  return base && target ? emailUrl(`${new URL(base).origin}${target}`) : "";
+}
+export function reportPath(clubSlug: string, path: string | undefined): string {
+  if (!clubSlug || !path || /\s|\.\.|\\|:|#/.test(path)) return "";
+  const segment = "[A-Za-z0-9_.%~-]+";
+  const routes = [`leagues/${segment}/standings`, `leagues/${segment}/weekly-history(?:\\?week=[1-9][0-9]*)?`, `round-robin-generator/shared/${segment}/standings`, `tournament-team-results/${segment}/${segment}`, `tournament-results\\?tournament=${segment}`, `weekly-recap\\?week=[0-9]{4}-[0-9]{2}-[0-9]{2}`];
+  if (new RegExp(`^/interclub/${segment}$`).test(path)) return path;
+  return routes.some(pattern => new RegExp(`^${pattern}$`).test(path)) ? `/clubs/${encodeURIComponent(clubSlug)}/${path}` : "";
 }
 function p(value: unknown) { return `<p style="${body}margin:0 0 12px;">${esc(value).replace(/\n/g, "<br>")}</p>`; }
 function list(values: string[]) { return `<ul style="${body}margin:0 0 12px;padding-left:22px;">${values.map(v => `<li style="margin:0 0 5px;">${esc(v)}</li>`).join("")}</ul>`; }
@@ -33,7 +40,7 @@ export function buildWeeklyReportEmail(recap: Partial<WeeklyRecapJson>, options:
   const n = recap.numbers || {};
   rows += section("THE WEEK IN NUMBERS", `<table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr>${[[n.matches ?? 0, "Games"], [n.players ?? 0, "Players"], [n.new_faces ?? 0, "New faces"]].map(([v, label]) => `<td width="33%" valign="top" style="${font}text-align:center;color:#123e37;padding:8px 3px;"><strong style="font-size:26px;line-height:32px;">${esc(v)}</strong><br><span style="font-size:13px;line-height:20px;">${label}</span></td>`).join("")}</tr></table>`);
   const events = (report.event_results || []).slice(0, compact ? 3 : 100);
-  if (events.length) rows += section("EVENT RESULTS", events.map(e => `<h3 style="${h}">${esc(e.title)}</h3>${e.summary ? p(e.summary) : ""}${!compact && e.details?.length ? list(e.details) : ""}${!compact && published && e.href ? pLink("View results", reportLink(options.origin, options.clubSlug, e.href)) : ""}`).join(""));
+  if (events.length) rows += section("EVENT RESULTS", events.map(e => `<h3 style="${h}">${esc(e.title)}</h3>${e.summary ? p(e.summary) : ""}${!compact && e.details?.length ? list(e.details) : ""}${!compact && published && reportPath(options.clubSlug, e.href) ? pLink("View results", reportLink(options.origin, options.clubSlug, e.href!)) : ""}${published ? (e.weekly_reports || []).filter(link => reportPath(options.clubSlug, link.href)).map(link => pLink(link.label, reportLink(options.origin, options.clubSlug, link.href))).join("") : ""}`).join(""));
   if (report.event_notes) rows += section("AROUND THE CLUB", p(report.event_notes), true);
   const spotlights = (recap.spotlight || []).filter(s => s.include !== false && s.players?.length).slice(0, compact ? 2 : 20);
   if (spotlights.length) rows += section("PLAYER HIGHLIGHTS", spotlights.map(s => `<h3 style="${h}">${esc(s.label)}</h3>${list(compact ? s.players.slice(0, 1) : s.players)}${!compact && s.description ? p(s.description) : ""}`).join(""), true);
