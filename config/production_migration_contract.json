@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile": "tres-club-team-leagues-2026-09-24",
-  "repository_migration_content_sha256": "8ed90c6b800085abda139603b6bb43311bb6b94bda5facafa41590c58a1d880e",
+  "repository_migration_content_sha256": "08d30429d9478eaad8635756cfd02bb1a568192d2deb2ed76b4adac835a3b0b1",
   "allow_additional_ledger_names": true,
   "allowed_duplicate_ledger_names": [
     "tournament_admin_operations"
@@ -130,7 +130,8 @@
     "player_game_activity_only",
     "registration_attempt_history",
     "reconcile_player_game_activity",
-    "club_sponsor_directory"
+    "club_sponsor_directory",
+    "tournament_team_division_transfer"
   ],
   "required_ledger_names": [
     "add_admin_activity_log",
@@ -253,6 +254,7 @@
     "tournament_setup_courts_flexible_bundles",
     "tournament_setup_policies_multiday",
     "tournament_sponsor_logo_storage",
+    "tournament_team_division_transfer",
     "tournament_team_retirement_results",
     "tournament_terminal_completion_and_schedule_recovery",
     "tournament_venue_inventory",
