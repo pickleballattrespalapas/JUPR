@@ -327,7 +327,7 @@ export default async function WeeklyRecapPage({ params, searchParams }: WeeklyRe
       ) : null}
 
       {selected ? (
-        <div className="weekly-recap-document" data-testid="weekly-recap-document">
+        <div className="weekly-recap-document" data-testid="weekly-recap-document" data-report-version={selected.recap.report?.version || 0}>
           {!printMode ? (
             <div style={{ ...cardStyle, marginBottom: "1rem" }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap" }}>
