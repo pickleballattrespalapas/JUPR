@@ -28,7 +28,8 @@ const Panel = load("app/admin/weekly-recap/WeeklyRecapAdminPanel.tsx", {
   "@/components/interaction": { actionSuccess: (title, message) => ({ title, message }) },
   "@/lib/useAuthenticatedAutoLoad": load("lib/useAuthenticatedAutoLoad.ts"),
   "@/lib/useAdminSession": { useAdminSession: () => ({ accessToken, loading: false, session: { user: { email: "admin@example.com" } } }), adminSessionLabel: () => "Admin" },
-  "@/lib/clubDate": { clubWeekStartIso: () => draft.week_start, clubTodayIso: () => draft.week_end },
+  "./WeeklyReportExport": () => null,
+  "@/lib/clubDate": { weeklyReportDatePreset: () => ({ start: draft.week_start, end: draft.week_end }), clubWeekStartIso: () => draft.week_start, clubTodayIso: () => draft.week_end },
   "./AdminWeeklyRecapPreview": () => React.createElement("div", null, "Recap preview")
 }).default;
 global.fetch = async (url, options = {}) => {
@@ -79,7 +80,7 @@ function reset() { canDelete = true; accessToken = "local-token"; requests = [];
   assert.equal(requests.filter(request => request.url.includes("?limit=")).length, 2, "Deletion refreshes saved recap list");
   await act(async () => tree.unmount());
 
-  for (const label of ["Regenerate draft", "Save draft edits", "Publish recap", "Unpublish recap"]) {
+  for (const label of ["Refresh results", "Save draft edits", "Publish recap", "Unpublish recap"]) {
     reset();
     if (label === "Unpublish recap") recaps[0].status = "published";
     tree = await mount();

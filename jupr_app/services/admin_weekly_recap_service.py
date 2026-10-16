@@ -126,6 +126,15 @@ def apply_weekly_recap_edits(generated_json: dict[str, Any] | None, edits_json: 
     if not recap:
         return recap
     edits = dict(edits_json or {})
+    editorial = edits.get("editorial") or {}
+    if isinstance(editorial, dict) and editorial:
+        report = recap.setdefault("report", {})
+        for key, limit in (("headline", 160), ("opening", 3000), ("event_notes", 3000)):
+            if key in editorial:
+                report[key] = _clean_text(editorial[key], limit=limit)
+        if isinstance(editorial.get("upcoming"), list):
+            from jupr_app.domain.recaps.weekly_report_public import safe_url
+            report["upcoming"] = [{"text": _clean_text(item.get("text"), limit=240), "url": safe_url(item.get("url"))} for item in editorial["upcoming"][:10] if isinstance(item, dict) and _clean_text(item.get("text"))]
     looking_ahead = edits.get("looking_ahead")
     if isinstance(looking_ahead, list):
         recap["looking_ahead"] = [_clean_text(item, limit=240) for item in looking_ahead if _clean_text(item, limit=240)]
@@ -566,6 +575,8 @@ def generate_admin_weekly_recap(
     source: str = "next_weekly_recap_generate",
     expected_row_version: int | None = None,
     expected_recap_id: str | None = None,
+    preserve_edits: bool = True,
+    edits_json: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not is_admin_weekly_recap_enabled():
         raise PermissionError("Next Weekly Recap Admin is disabled.")
@@ -580,14 +591,22 @@ def generate_admin_weekly_recap(
     ctx = _recap_context(supabase, club_id=str(club_id))
     recap = compute_weekly_recap(ctx, start_date=start_date, end_date=end_date, include_tournaments=True, tz_name=tz_name)
     candidates = get_spotlight_candidates(ctx, start_date=start_date, end_date=end_date, include_tournaments=True, tz_name=tz_name)
+    preserved = deepcopy(edits_json if edits_json is not None else (before or {}).get("edits_json") or {}) if preserve_edits else {}
+    # Preserve editorial work; stale selections are omitted rather than replaced with a different winner.
+    for key, override in (preserved.get("spotlight_overrides") or {}).items():
+        if not isinstance(override, dict):
+            continue
+        available = {c["candidate_id"] for c in candidates.get(key, [])}
+        override["players"] = [pid for pid in override.get("players", []) if pid in available]
+    final = apply_weekly_recap_edits(recap, preserved, candidates) if preserved else recap
     payload = {
         "club_id": str(club_id),
         "week_start": start_date.isoformat(),
         "week_end": str(recap.get("end_date") or end_date.isoformat()),
         "status": "draft",
         "generated_json": recap,
-        "edits_json": {},
-        "final_json": recap,
+        "edits_json": preserved,
+        "final_json": final,
         "published_at": None,
         "published_by": None,
     }

@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from jupr_app.data.sb_safe import safe_execute
+from jupr_app.data.paged_reads import read_all_rows
 from jupr_app.domain.event_tags import (
     SKILL_LEVEL_OPTIONS,
     derive_default_date_tags,
@@ -31,7 +32,8 @@ class SpotlightCandidate:
 
 MAX_FEATURED_PER_CATEGORY = 3
 DEFAULT_SPOTLIGHT_DESCRIPTIONS = {
-    "TOP_PERFORMER_WEEK": "Best overall performance in the selected date range.",
+    "TOP_PERFORMER_WEEK": "Most wins minus losses, with opponent strength breaking ties. Minimum 4 games.",
+    "ABOVE_EXPECTATIONS_WEEK": "Most wins above pre-game rating expectations. Rated games only; minimum 4 rated games.",
     "BIGGEST_JUMP_WEEK": "Largest positive JUPR rating movement.",
     "COMMUNITY_STANDOUT_WEEK": "Best social/community performance in the selected date range.",
     "GIANT_SLAYER_WEEK": "Biggest upset by JUPR gap.",
@@ -41,6 +43,7 @@ DEFAULT_SPOTLIGHT_DESCRIPTIONS = {
 }
 SPOTLIGHT_DEFAULT_ORDER = [
     "TOP_PERFORMER_WEEK",
+    "ABOVE_EXPECTATIONS_WEEK",
     "BIGGEST_JUMP_WEEK",
     "COMMUNITY_STANDOUT_WEEK",
     "GIANT_SLAYER_WEEK",
@@ -101,6 +104,7 @@ def get_spotlight_candidates(
         end_date,
         include_tournaments=include_tournaments,
         tz_name=tz_name,
+        include_report=False,
     )
     return {
         key: [candidate.__dict__ for candidate in items]
@@ -168,6 +172,7 @@ def _compute_weekly_recap_payload(
     *,
     include_tournaments: bool,
     tz_name: str,
+    include_report: bool = True,
 ) -> tuple[dict, dict[str, list[SpotlightCandidate]]]:
     club_id = str(ctx.club_id)
     supabase = getattr(ctx, "supabase", None)
@@ -253,6 +258,9 @@ def _compute_weekly_recap_payload(
             "tz_name": tz_name,
         },
     }
+    from jupr_app.domain.recaps.weekly_report import build_weekly_report
+    if include_report:
+        recap["report"] = build_weekly_report(ctx, recap, df_week, social_data, start_date, end_date)
     return recap, spotlight_candidates
 
 
@@ -260,35 +268,19 @@ def _load_social_live_data(supabase, club_id: str, start_date: date, end_date: d
     if supabase is None:
         return {"events": [], "participants": [], "matches": []}
 
-    events_response = safe_execute(
-        supabase.table("live_events")
+    events = read_all_rows(lambda: supabase.table("live_events")
         .select("id,name,event_type,event_date,status,result_mode,summary_json")
-        .eq("club_id", club_id)
-        .eq("result_mode", "social_unrated")
-        .eq("status", "saved")
-        .gte("event_date", start_date.isoformat())
-        .lte("event_date", end_date.isoformat())
-    )
-    events = events_response.data or []
-    event_ids = [str(row.get("id")) for row in events if row.get("id")]
-    if not event_ids:
-        return {"events": events, "participants": [], "matches": []}
-
-    participants_response = safe_execute(
-        supabase.table("live_event_participants")
-        .select("id,event_id,club_person_id,linked_player_id,display_name_snapshot")
-        .in_("event_id", event_ids)
-    )
-    matches_response = safe_execute(
-        supabase.table("live_event_matches")
-        .select("event_id,played_on,t1_p1_participant_id,t1_p2_participant_id,t2_p1_participant_id,t2_p2_participant_id,score_t1,score_t2")
-        .in_("event_id", event_ids)
-    )
-    return {
-        "events": events,
-        "participants": participants_response.data or [],
-        "matches": matches_response.data or [],
-    }
+        .eq("club_id", club_id).eq("result_mode", "social_unrated").eq("status", "saved")
+        .gte("event_date", start_date.isoformat()).lte("event_date", end_date.isoformat()))
+    participants, matches = [], []
+    event_ids = [str(row["id"]) for row in events]
+    for offset in range(0, len(event_ids), 200):
+        batch = event_ids[offset:offset + 200]
+        participants.extend(read_all_rows(lambda: supabase.table("live_event_participants")
+            .select("id,event_id,club_person_id,linked_player_id,display_name_snapshot").in_("event_id", batch)))
+        matches.extend(read_all_rows(lambda: supabase.table("live_event_matches")
+            .select("id,event_id,played_on,t1_p1_participant_id,t1_p2_participant_id,t2_p1_participant_id,t2_p2_participant_id,score_t1,score_t2").in_("event_id", batch)))
+    return {"events": events, "participants": participants, "matches": matches}
 
 
 def _compute_social_stats(social_data: dict, id_to_name: dict[int, str]) -> tuple[dict, dict, dict]:
@@ -418,7 +410,7 @@ def _compute_social_stats(social_data: dict, id_to_name: dict[int, str]) -> tupl
     canonical_identities = set(stats.keys())
     return stats, skill_stats, {
         "events": event_lookup,
-        "social_match_count": int(sum(1 for row in matches if (_safe_int(row.get("score_t1")) or 0) + (_safe_int(row.get("score_t2")) or 0) > 0)),
+        "social_match_count": int(sum(entry["games"] for entry in stats.values()) // 4),
         "social_event_count": len(event_lookup),
         "canonical_identities": canonical_identities,
     }
@@ -600,17 +592,14 @@ def _load_matches(
         "t2_p2_r_end",
         "context_type",
         "context_id",
+        "live_match_id",
         "tournament_id",
         "tournament_game_id",
     ]
-    response = safe_execute(
-        supabase.table("matches")
-        .select(",".join(select_cols))
-        .eq("club_id", club_id)
-        .gte("date", start_dt.isoformat())
-        .lte("date", end_dt.isoformat())
-    )
-    frames.append(pd.DataFrame(response.data or []))
+    loaded = read_all_rows(lambda: supabase.table("matches")
+        .select(",".join(select_cols)).eq("club_id", club_id)
+        .gte("date", start_dt.isoformat()).lte("date", end_dt.isoformat()))
+    frames.append(pd.DataFrame(loaded))
     combined = pd.concat([df for df in frames if not df.empty], ignore_index=True) if frames else pd.DataFrame()
     return _dedupe_matches(combined)
 
@@ -696,7 +685,7 @@ def _load_completed_tournaments(supabase, club_id: str, start_dt: datetime, end_
         .select("id,name,status")
         .eq("club_id", club_id)
         .in_("id", unique_ids)
-        .eq("status", "COMPLETE")
+        .in_("status", ["COMPLETE", "COMPLETED"])
     )
     tournaments = tournaments_response.data or []
     order = {t_id: idx for idx, t_id in enumerate(unique_ids)}
@@ -904,7 +893,7 @@ def _filter_matches(df_matches: pd.DataFrame, *, include_tournaments: bool) -> p
     df = df_matches.copy()
     df["score_t1"] = pd.to_numeric(df.get("score_t1", 0), errors="coerce").fillna(0).astype(int)
     df["score_t2"] = pd.to_numeric(df.get("score_t2", 0), errors="coerce").fillna(0).astype(int)
-    df = df[(df["score_t1"] + df["score_t2"]) > 0].copy()
+    df = df[((df["score_t1"] + df["score_t2"]) > 0) & (df["score_t1"] != df["score_t2"])].copy()
     if not include_tournaments:
         non_tournament_mask = ~df.apply(lambda row: _is_tournament_match(row.to_dict()), axis=1)
         df = df[non_tournament_mask].copy()
@@ -929,21 +918,10 @@ def _filter_by_date_bounds(
     if "date" not in df.columns:
         return df.iloc[0:0]
 
-    # Convert to pandas datetime safely
-    date_values = pd.to_datetime(df["date"], utc=True, errors="coerce")
-
-    # Drop invalid timestamps (NaT)
-    valid_mask = date_values.notna()
-
-    # Convert to pure Python date
-    date_only = date_values.dt.date
-
-    # Vectorized comparison (safe)
-    in_range_mask = (
-        valid_mask
-        & (date_only >= start_date)
-        & (date_only <= end_date)
-    )
+    from jupr_app.domain.recaps.weekly_report import played_day
+    # Preserve date-only legacy game dates; timestamped games use the club day.
+    date_only = df["date"].map(played_day)
+    in_range_mask = (date_only >= start_date.isoformat()) & (date_only <= end_date.isoformat())
 
     return df.loc[in_range_mask].copy()
 
@@ -1021,7 +999,7 @@ def _compute_stats(
             continue
         s1 = int(match.get("score_t1", 0) or 0)
         s2 = int(match.get("score_t2", 0) or 0)
-        if (s1 + s2) <= 0:
+        if (s1 + s2) <= 0 or s1 == s2:
             continue
         t1_win = s1 > s2
         t2_win = s2 > s1
@@ -1040,6 +1018,7 @@ def _compute_stats(
         team2_avg = r3 if singles else (r3 + r4) / 2.0 if r3 is not None and r4 is not None else None
         match_format = "singles" if singles else "doubles"
         unrated = match.get("rating_scope") == "unrated"
+        snapshot_ratings = all(_safe_float(match.get(key)) is not None for key in (("t1_p1_r", "t2_p1_r") if singles else ("t1_p1_r", "t1_p2_r", "t2_p1_r", "t2_p2_r")))
 
         event_key = _resolve_event_key(match)
         if event_key is not None:
@@ -1069,6 +1048,13 @@ def _compute_stats(
                 entry["opponent_ratings"].append(float(opp_avg))
             if event_key is not None:
                 entry["event_keys"].append(event_key)
+            if not unrated and snapshot_ratings and pre is not None and opp_avg is not None:
+                own_avg = team1_avg if pid in (p1, p2) else team2_avg
+                if own_avg is not None:
+                    expected = 1 / (1 + 10 ** max(-300, min(300, (opp_avg - own_avg) / 400)))
+                    entry["expected_wins"] = entry.get("expected_wins", 0) + expected
+                    entry["rated_games"] = entry.get("rated_games", 0) + 1
+                    entry["rated_wins"] = entry.get("rated_wins", 0) + win
             if not unrated and pre is not None and end is not None:
                 formats = entry.setdefault("rating_by_format", {})
                 track = formats.setdefault(match_format, {"start": float(pre), "end": float(pre)})
@@ -1094,6 +1080,13 @@ def _compute_stats(
             entry["losses"] += loss
             if opp_avg is not None:
                 entry["opponent_ratings"].append(float(opp_avg))
+            if not unrated and snapshot_ratings and pre is not None and opp_avg is not None:
+                own_avg = team1_avg if pid in (p1, p2) else team2_avg
+                if own_avg is not None:
+                    expected = 1 / (1 + 10 ** max(-300, min(300, (opp_avg - own_avg) / 400)))
+                    entry["expected_wins"] = entry.get("expected_wins", 0) + expected
+                    entry["rated_games"] = entry.get("rated_games", 0) + 1
+                    entry["rated_wins"] = entry.get("rated_wins", 0) + win
             if not unrated and pre is not None and end is not None:
                 formats = entry.setdefault("rating_by_format", {})
                 track = formats.setdefault(match_format, {"start": float(pre), "end": float(pre)})
@@ -1179,6 +1172,7 @@ def _build_spotlight_candidates(
 
     candidates: dict[str, list[SpotlightCandidate]] = {
         "TOP_PERFORMER_WEEK": [],
+        "ABOVE_EXPECTATIONS_WEEK": [],
         "BIGGEST_JUMP_WEEK": [],
         "GIANT_SLAYER_WEEK": [],
         "GRIND_WEEK": [],
@@ -1205,13 +1199,20 @@ def _build_spotlight_candidates(
                     candidate_id=f"player:{pid}",
                     key="TOP_PERFORMER_WEEK",
                     label="Top Performer",
-                    display=f"{name} — {wins}-{losses} (+{wins - losses})",
+                    display=f"{name} — {wins}-{losses} ({wins - losses:+d})",
                     player_ids=[pid],
                     event_key=event_key,
                     value_json={"wins": wins, "losses": losses, "games": games, "avg_opponent_rating": avg_opp},
                     band=band_for_player(pid),
                 )
             )
+        if entry.get("rated_games", 0) >= 4:
+            above = entry.get("rated_wins", 0) - entry.get("expected_wins", 0)
+            if above > 0:
+                candidates["ABOVE_EXPECTATIONS_WEEK"].append(SpotlightCandidate(
+                    candidate_id=f"player:{pid}", key="ABOVE_EXPECTATIONS_WEEK", label="Above Expectations",
+                    display=f"{name} — {above:+.1f} wins above expected ({entry['rated_wins']} vs {entry['expected_wins']:.1f})",
+                    player_ids=[pid], event_key=event_key, value_json={"above": above, "games": entry['rated_games']}, band=band_for_player(pid)))
         if games >= 3 and delta > 0:
             candidates["BIGGEST_JUMP_WEEK"].append(
                 SpotlightCandidate(
@@ -1284,6 +1285,7 @@ def _build_spotlight_candidates(
             min(x.player_ids) if x.player_ids else 0,
         )
     )
+    candidates["ABOVE_EXPECTATIONS_WEEK"].sort(key=lambda x: (-x.value_json["above"], -x.value_json["games"], min(x.player_ids)))
     candidates["BIGGEST_JUMP_WEEK"].sort(
         key=lambda x: (-x.value_json.get("delta_jupr", 0), -x.value_json.get("games", 0), min(x.player_ids) if x.player_ids else 0)
     )
@@ -1528,7 +1530,7 @@ def _event_highlights(
 
     categories: list[dict] = []
     top_cfg = RECAP_CATEGORY_CONFIG.get("TOP_PERFORMER", {})
-    top_ranked = _stable_ranked_players(stats, primary_metric="wins", tie_break_metric="games")
+    top_ranked = sorted(((pid, row) for pid, row in stats.items() if int(row.get("games", 0)) >= 4), key=lambda item: (-(item[1].get("wins", 0) - item[1].get("losses", 0)), -(sum(item[1].get("opponent_ratings", [])) / len(item[1]["opponent_ratings"]) if item[1].get("opponent_ratings") else 0), item[0]))
     top_players = _players_payload(top_ranked, int(top_cfg.get("max_featured", MAX_FEATURED_PER_CATEGORY)))
     if top_players:
         categories.append(
