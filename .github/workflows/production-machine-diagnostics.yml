@@ -1,9 +1,9 @@
-name: Read production machine diagnostics
+name: Recover reviewed unavailable API replica
 
 on:
   push:
     branches: [rollback-feb8]
-    paths: [.github/workflows/production-machine-diagnostics.yml]
+    paths: [.github/workflows/production-machine-diagnostics.yml, scripts/recover_weekly_report_replica.py]
 
 permissions:
   contents: read
@@ -16,17 +16,16 @@ jobs:
   inspect:
     runs-on: ubuntu-latest
     environment: production
+    timeout-minutes: 8
     steps:
-      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - uses: actions/checkout@v4
         with:
-          version: "0.4.49"
-      - name: Read only machine identity and host status
+          persist-credentials: false
+      - name: Replace exact unavailable replica after health and storage checks
         shell: bash
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
           set -euo pipefail
-          flyctl machines list --app juprleagues-api --json \
-            | jq '[.[] | {id, state, region, host_status, created_at, updated_at, image_ref, configured_image: .config.image}]'
-          flyctl machine status e820e37c790718 --app juprleagues-api --json \
-            | jq '{id, state, region, host_status, created_at, updated_at, image_ref, configured_image: .config.image, events: [.events[]? | {type, status, source, timestamp}]}'
+          test "$GITHUB_REF" = refs/heads/rollback-feb8
+          python -m scripts.recover_weekly_report_replica
