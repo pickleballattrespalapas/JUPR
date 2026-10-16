@@ -1592,7 +1592,7 @@ def test_production_workflow_is_exact_candidate_and_never_creates_or_retargets_a
     assert "/database/query\"" not in workflow
     assert workflow.count(
         "${{ secrets.FLY_SSH_TOKEN || secrets.FLY_API_TOKEN }}"
-    ) == 7
+    ) == 8
     assert "PRODUCTION_SOURCE_BRANCH: rollback-feb8" in workflow
     assert "ref: rollback-feb8" in workflow
     assert "github.event.repository.default_branch" not in workflow
@@ -1659,6 +1659,8 @@ def test_production_workflow_verifies_database_runtime_cors_and_final_write_poli
     assert "steps.deploy.outcome == 'success'" in workflow
     assert "steps.candidate_activation.outcome == 'success'" in workflow
     assert "steps.cors_verify.outcome == 'success'" in workflow
+    assert "steps.weekly_recap_read.outcome == 'success'" in workflow
+    assert "scripts.verify_weekly_recap_generation --club-id tres_palapas" in workflow
     assert "--promotion-accepted \"$PROMOTION_ACCEPTED\"" in workflow
     assert workflow.index("deployment_verifier.py preflight") < workflow.index(
         "flyctl deploy"
@@ -1705,7 +1707,7 @@ def test_production_workflow_verifies_database_runtime_cors_and_final_write_poli
     assert 'sha256sum "$PREDEPLOY_CONFIG"' not in workflow
     assert '&& [ "$DEPLOY_OUTCOME" != "skipped" ]; then' in workflow
     assert workflow.index("--no-pending-only") < workflow.index("flyctl secrets set")
-    assert workflow.count("flyctl ssh console") == 5
+    assert workflow.count("flyctl ssh console") == 6
     assert 'expected_production_feature_flags(profile="release")' in workflow
     assert 'PRODUCTION_FEATURE_PROFILE="$live_feature_profile"' in workflow
     assert 'final_feature_profile="$rollback_feature_profile"' in workflow

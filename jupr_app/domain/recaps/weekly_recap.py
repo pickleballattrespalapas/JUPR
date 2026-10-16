@@ -592,12 +592,13 @@ def _load_matches(
         "t2_p2_r_end",
         "context_type",
         "context_id",
-        "live_match_id",
+        "deleted_at",
         "tournament_id",
         "tournament_game_id",
     ]
     loaded = read_all_rows(lambda: supabase.table("matches")
         .select(",".join(select_cols)).eq("club_id", club_id)
+        .is_("deleted_at", None)
         .gte("date", start_dt.isoformat()).lte("date", end_dt.isoformat()))
     frames.append(pd.DataFrame(loaded))
     combined = pd.concat([df for df in frames if not df.empty], ignore_index=True) if frames else pd.DataFrame()
@@ -891,6 +892,8 @@ def _filter_matches(df_matches: pd.DataFrame, *, include_tournaments: bool) -> p
     if df_matches is None or df_matches.empty:
         return pd.DataFrame()
     df = df_matches.copy()
+    if "deleted_at" in df.columns:
+        df = df[df["deleted_at"].isna()].copy()
     df["score_t1"] = pd.to_numeric(df.get("score_t1", 0), errors="coerce").fillna(0).astype(int)
     df["score_t2"] = pd.to_numeric(df.get("score_t2", 0), errors="coerce").fillna(0).astype(int)
     df = df[((df["score_t1"] + df["score_t2"]) > 0) & (df["score_t1"] != df["score_t2"])].copy()
