@@ -29,6 +29,7 @@ PUBLIC_RECAP_KEYS = {
     "tournaments",
     "looking_ahead",
     "highlights",
+    "report",
 }
 
 
@@ -225,14 +226,17 @@ def sanitize_public_recap_json(raw: Any, *, week_start: str | None = None, week_
     recap["tournaments"] = _sanitize_tournaments(recap.get("tournaments")) if "tournaments" in recap else []
     recap["looking_ahead"] = _clean_text_list(recap.get("looking_ahead"), limit=10)
     recap["highlights"] = _clean_text_list(recap.get("highlights"), limit=10)
+    if "report" in source:
+        from jupr_app.domain.recaps.weekly_report_public import sanitize_report
+        recap["report"] = sanitize_report(source["report"])
     return recap
 
 
 def _recap_summary(recap: dict[str, Any]) -> dict[str, Any]:
     numbers = recap.get("numbers") if isinstance(recap.get("numbers"), dict) else {}
     spotlight = [item for item in (recap.get("spotlight") or []) if isinstance(item, dict) and item.get("include", True)]
-    headline = None
-    if spotlight:
+    headline = (recap.get("report") or {}).get("headline") or None
+    if not headline and spotlight:
         players = spotlight[0].get("players") or []
         headline = f"{spotlight[0].get('label', 'Spotlight')}: {', '.join(players[:3])}" if players else str(spotlight[0].get("label") or "Spotlight")
     if not headline:
@@ -360,6 +364,9 @@ def _weekly_recap_pdf_lines(recap: dict[str, Any], *, week_start: str, week_end:
         label = str(card.get("label") or card.get("key") or "Metric").strip()
         lines.append(f"- {label}: {card.get('value', 0)}")
 
+    if recap.get("report"):
+        from jupr_app.domain.recaps.weekly_report_public import report_lines
+        lines.extend(["", *report_lines(recap["report"])])
     lines.extend(["", "Spotlight Reel"])
     spotlight = [item for item in (recap.get("spotlight", []) or []) if item.get("include", True)]
     if not spotlight:

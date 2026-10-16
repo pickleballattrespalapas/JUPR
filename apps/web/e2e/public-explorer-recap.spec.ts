@@ -65,7 +65,8 @@ test("Weekly Recap exposes published deep links, print view, and same-origin PDF
   const response = await page.goto(`/clubs/${clubSlug}/weekly-recap`, { waitUntil: "domcontentloaded" });
   expect(response?.status()).toBeLessThan(400);
   await expect(page.getByTestId("weekly-recap-document"), "Staging needs at least one published recap fixture").toBeVisible();
-  await expect(page.getByTestId("weekly-recap-number-cards").locator("article")).toHaveCount(6);
+  const reportVersion = await page.getByTestId("weekly-recap-document").getAttribute("data-report-version");
+  await expect(page.getByTestId("weekly-recap-number-cards").locator("article")).toHaveCount(reportVersion === "1" ? 3 : 6);
 
   await openPublicControls(page);
   const firstWeek = page.getByTestId("weekly-recap-week-link").first();

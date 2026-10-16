@@ -39,3 +39,12 @@ export function clubWeekStartIso(now = new Date(), timeZone = DEFAULT_CLUB_TIME_
   calendar.setUTCDate(calendar.getUTCDate() - daysSinceMonday);
   return utcCalendarIso(calendar);
 }
+
+export function weeklyReportDatePreset(preset: "last_week" | "this_week" | "last_seven", now = new Date(), timeZone = DEFAULT_CLUB_TIME_ZONE): { start: string; end: string } {
+  const today = clubTodayIso(now, timeZone);
+  const monday = clubWeekStartIso(now, timeZone);
+  const shift = (iso: string, days: number) => { const d = utcCalendar(iso); d.setUTCDate(d.getUTCDate() + days); return utcCalendarIso(d); };
+  if (preset === "last_week") return { start: shift(monday, -7), end: shift(monday, -1) };
+  if (preset === "this_week") return { start: monday, end: today };
+  return { start: shift(today, -6), end: today };
+}

@@ -26,6 +26,8 @@ from services.api.auth import authenticate_bearer, auth_header
 
 
 class AdminWeeklyRecapGenerateRequest(BaseModel):
+    preserve_edits: bool = True
+    edits_json: dict[str, Any] | None = None
     week_start: str
     week_end: str
     tz_name: str = "America/Mazatlan"
@@ -176,6 +178,8 @@ def install_admin_weekly_recap_routes(app, *, get_supabase_client) -> None:
                 club_id=str(club_id),
                 week_start=payload.week_start,
                 week_end=payload.week_end,
+                preserve_edits=payload.preserve_edits,
+                edits_json=payload.edits_json,
                 actor_email=actor_email,
                 actor_role=actor_role,
                 confirmation_text=payload.confirmation_text,

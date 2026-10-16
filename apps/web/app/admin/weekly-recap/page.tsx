@@ -21,7 +21,7 @@ export default async function AdminWeeklyRecapPage({ searchParams }: PageProps) 
 
       {error ? <p style={{ color: "#b91c1c" }}>Weekly Recap Admin status is unavailable. {error}</p> : null}
 
-      {status ? <WeeklyRecapAdminPanel apiBase={getAdminWeeklyRecapApiBaseUrl()} clubId={clubId} status={status} initialWeekStart={searchParams?.week_start || ""} printMode={["1", "true", "yes"].includes(String(searchParams?.print || "").toLowerCase())} /> : null}
+      {status ? <WeeklyRecapAdminPanel apiBase={getAdminWeeklyRecapApiBaseUrl()} clubId={clubId} clubSlug={clubSlug} status={status} initialWeekStart={searchParams?.week_start || ""} printMode={["1", "true", "yes"].includes(String(searchParams?.print || "").toLowerCase())} /> : null}
 
       <p style={{ marginTop: "1rem" }}>
         <Link href={`/clubs/${encodeURIComponent(clubSlug)}/weekly-recap`}>Public weekly recap</Link> · <Link href="/admin/player-updates">Player Updates</Link> · <Link href="/admin">Admin Home</Link>
