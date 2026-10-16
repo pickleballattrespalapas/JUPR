@@ -31,7 +31,11 @@ def test_awards_and_live_panels_do_not_expose_deployment_instructions() -> None:
     assert "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_SUBMIT" not in live
     assert "Awards editing is closed for this staging test." not in awards
     assert "state.writes_unavailable_reason" in awards
-    assert "League Live is not available yet" in live
+    assert "League Live is disabled" in live
+    assert "Live league operations are disabled on this site." in live
+    assert "if (!leagueStatus.enabled || !liveDomainStatus.enabled)" in live
+    assert "uploaderStatus" not in live
+    assert "unavailable in this build" not in live
 
 
 def test_empty_award_evidence_cannot_advance_the_workflow() -> None:
