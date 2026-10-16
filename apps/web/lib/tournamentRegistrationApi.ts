@@ -267,9 +267,21 @@ export type PublicRegistrationEditRegistration = {
   updated_at: string;
 };
 
+export type PublicRegistrationDivisionTransferContext = {
+  team_link_id: string;
+  team_link_updated_at: string;
+  partner_selection_id: string;
+  partner_selection_updated_at: string;
+  partner_registration_id: string;
+  partner_registration_updated_at: string;
+};
+
 export type PublicRegistrationEditSelection = PublicRegistrationSelectionPayload & {
   id: string;
   updated_at: string;
+  confirmed_team_id?: string | null;
+  confirmed_partner_name?: string | null;
+  division_transfer_context?: PublicRegistrationDivisionTransferContext | null;
 };
 
 export type PublicRegistrationEditResponse = TournamentRegistrationResponse & {
@@ -287,7 +299,10 @@ export type PublicRegistrationEditSubmitPayload = Omit<PublicRegistrationSubmitP
   email?: string | null;
   expected_updated_at: string;
   expected_selection_versions: Array<{ id: string; updated_at: string }>;
-  selections: Array<PublicRegistrationSelectionPayload & { id?: string | null }>;
+  selections: Array<PublicRegistrationSelectionPayload & {
+    id?: string | null;
+    division_transfer_context?: PublicRegistrationDivisionTransferContext | null;
+  }>;
 };
 
 export type PublicRegistrationEditLinkRequestPayload = {

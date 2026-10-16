@@ -137,6 +137,15 @@ function numericState(value: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function sameDivisionEvent(left: PublicRegistrationEvent, right: PublicRegistrationEvent): boolean {
+  const normalize = (value?: string | null) => String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+  return normalize(left.event_family_label) === normalize(right.event_family_label)
+    && normalize(left.event_type) === normalize(right.event_type)
+    && normalize(left.gender_restriction || "ANY") === normalize(right.gender_restriction || "ANY")
+    && normalize(left.competition_format || "STANDARD") === normalize(right.competition_format || "STANDARD")
+    && Boolean(left.partner_required) === Boolean(right.partner_required);
+}
+
 export default function EditTournamentRegistrationForm({
   clubSlug,
   tournamentId,
@@ -163,6 +172,11 @@ export default function EditTournamentRegistrationForm({
   }, [partnerInvitation.invitation]);
   const initialSelectionIds = selections.map((selection) => selection.event_option_id).filter(Boolean);
   const [selectedIds, setSelectedIds] = useState<string[]>(initialSelectionIds);
+  // A division can play on another day. Keep the original selection identity
+  // explicitly instead of guessing from the target day or family.
+  const [selectionSources, setSelectionSources] = useState<Record<string, string>>(() =>
+    Object.fromEntries(selections.map((selection) => [selection.event_option_id, selection.id]))
+  );
   const [partnerModes, setPartnerModes] = useState<Record<string, "NONE" | "HAS_PARTNER" | "NEEDS_PARTNER">>(() => {
     const modes: Record<string, "NONE" | "HAS_PARTNER" | "NEEDS_PARTNER"> = {};
     for (const selection of selections) {
@@ -314,6 +328,7 @@ export default function EditTournamentRegistrationForm({
     singlesSkill: linkedPlayer?.singles_skill ?? numericState(singlesSkill)
   }), [ageDraft, gender, linkedPlayer, doublesSkill, singlesSkill]);
   const selectionByEventId = useMemo(() => new Map(selections.map((selection) => [selection.event_option_id, selection])), [selections]);
+  const selectionById = useMemo(() => new Map(selections.map((selection) => [selection.id, selection])), [selections]);
   const selectionByFamily = useMemo(() => {
     const lookup = new Map<string, PublicRegistrationEditSelection>();
     for (const selection of selections) {
@@ -359,7 +374,57 @@ export default function EditTournamentRegistrationForm({
     [commerceQuote?.quote_fingerprint]
   );
 
+  function savedSelectionForEvent(eventId: string) {
+    const eventOption = eventById.get(eventId);
+    return selectionById.get(selectionSources[eventId])
+      ?? selectionByEventId.get(eventId)
+      ?? (eventOption ? selectionByFamily.get(publicEventFamilyKey(eventOption)) : undefined);
+  }
+
+  function changeDivision(sourceEventId: string, targetEventId: string) {
+    const sourceEvent = eventById.get(sourceEventId);
+    const targetEvent = eventById.get(targetEventId);
+    if (!sourceEvent || !targetEvent || sourceEventId === targetEventId || pending) return;
+    const sourceSelection = savedSelectionForEvent(sourceEventId);
+    if (!sameDivisionEvent(sourceEvent, targetEvent) || (!targetEvent.selectable && targetEventId !== sourceSelection?.event_option_id) || selectedIds.includes(targetEventId)
+      || publicEventEligibilityReason(targetEvent, eligibilityProfile)) return;
+    setSelectedIds((current) => current.map((id) => id === sourceEventId ? targetEventId : id));
+    if (sourceSelection) setSelectionSources((current) => ({ ...current, [targetEventId]: sourceSelection.id }));
+    setPartnerModes((current) => ({
+      ...current,
+      [targetEventId]: sourceSelection?.confirmed_team_id ? sourceSelection.partner_mode
+        : current[sourceEventId] ?? (sourceEvent.partner_required ? "NEEDS_PARTNER" : "NONE")
+    }));
+    setSelectionDrafts((current) => ({ ...current, [targetEventId]: sourceSelection?.confirmed_team_id ? {
+      partner_name: sourceSelection.partner_name || "",
+      partner_email: sourceSelection.partner_email || "",
+      partner_phone: sourceSelection.partner_phone || "",
+      partner_dupr_id: sourceSelection.partner_dupr_id || "",
+      partner_skill: sourceSelection.partner_skill ?? null,
+      partner_age: sourceSelection.partner_age ?? null,
+      partner_gender: normalizeRegistrationGender(sourceSelection.partner_gender),
+      partner_note: sourceSelection.partner_note || "",
+      show_on_partner_board: Boolean(sourceSelection.show_on_partner_board)
+    } : { ...(current[sourceEventId] || {}) } }));
+    setEditingEventId(targetEventId);
+    setError(null);
+    if (commerce?.available) {
+      setCommerceQuote(null);
+      setCommerceIdempotencyKey(crypto.randomUUID());
+    }
+  }
+
   function toggleEvent(eventId: string, checked: boolean) {
+    const nextEvent = eventById.get(eventId);
+    const replacedEventId = nextEvent ? selectedIds.find((id) => {
+      const selectedEvent = eventById.get(id);
+      return selectedEvent && publicEventFamilyKey(selectedEvent) === publicEventFamilyKey(nextEvent);
+    }) : undefined;
+    if (checked && replacedEventId && replacedEventId !== eventId && nextEvent && eventById.get(replacedEventId)
+      && sameDivisionEvent(eventById.get(replacedEventId)!, nextEvent)) {
+      changeDivision(replacedEventId, eventId);
+      return;
+    }
     setSelectedIds((current) => {
       if (!checked) return current.filter((id) => id !== eventId);
       const nextEvent = eventById.get(eventId);
@@ -368,7 +433,9 @@ export default function EditTournamentRegistrationForm({
       return [...current.filter((id) => id !== eventId && !sameGroup(id)), eventId];
     });
     if (checked && !partnerModes[eventId]) {
-      setPartnerModes((current) => ({ ...current, [eventId]: eventById.get(eventId)?.partner_required ? "NEEDS_PARTNER" : "NONE" }));
+      const prior = nextEvent ? selectionByFamily.get(publicEventFamilyKey(nextEvent)) : undefined;
+      setPartnerModes((current) => ({ ...current, [eventId]: prior?.partner_mode ?? (eventById.get(eventId)?.partner_required ? "NEEDS_PARTNER" : "NONE") }));
+      if (prior) setSelectionSources((current) => ({ ...current, [eventId]: prior.id }));
     }
     if (checked && !selectionDrafts[eventId]) {
       const nextEvent = eventById.get(eventId);
@@ -423,11 +490,11 @@ export default function EditTournamentRegistrationForm({
     }
     const editedEvent = eventById.get(editingEventId);
     if (!editedEvent) return;
+    const sourceSelection = savedSelectionForEvent(editingEventId);
     // An event's save includes only that event's draft. A closed dialog may
     // still hold unfinished edits, which must not leak into another save.
     const eventIds = initialSelectionIds.flatMap((id) => {
-      const priorEvent = eventById.get(id);
-      const replacesPrior = id === editingEventId || (priorEvent && publicEventFamilyKey(priorEvent) === publicEventFamilyKey(editedEvent));
+      const replacesPrior = id === editingEventId || id === sourceSelection?.event_option_id;
       return replacesPrior ? (remove ? [] : [editingEventId]) : [id];
     });
     if (!remove && !eventIds.includes(editingEventId)) eventIds.push(editingEventId);
@@ -477,14 +544,21 @@ export default function EditTournamentRegistrationForm({
       setError(`${ineligible.row.division_name}: ${ineligible.reason}`);
       return;
     }
-    const payloadSelections: Array<PublicRegistrationSelectionPayload & { id?: string }> = eventIds.map((eventId) => {
+    const payloadSelections: Array<PublicRegistrationSelectionPayload & {
+      id?: string;
+      division_transfer_context?: PublicRegistrationEditSelection["division_transfer_context"];
+    }> = eventIds.map((eventId) => {
       const eventOption = eventById.get(eventId);
-      const prior = selectionByEventId.get(eventId) ?? (eventOption ? selectionByFamily.get(publicEventFamilyKey(eventOption)) : undefined);
       const useSavedSelection = Boolean(editedEventId && eventId !== editedEventId);
-      const mode = (useSavedSelection ? prior?.partner_mode : partnerModes[eventId]) ?? (eventOption?.partner_required ? "NEEDS_PARTNER" : "NONE");
-      const draft = (useSavedSelection ? prior : selectionDrafts[eventId]) || {};
+      const prior = useSavedSelection ? selectionByEventId.get(eventId) : savedSelectionForEvent(eventId);
+      const keepSavedPartner = useSavedSelection || Boolean(prior?.confirmed_team_id && prior.event_option_id !== eventId);
+      const mode = (keepSavedPartner ? prior?.partner_mode : partnerModes[eventId]) ?? (eventOption?.partner_required ? "NEEDS_PARTNER" : "NONE");
+      const draft = (keepSavedPartner ? prior : selectionDrafts[eventId]) || {};
       return {
         id: prior?.id,
+        ...(prior?.event_option_id !== eventId && prior?.division_transfer_context
+          ? { division_transfer_context: prior.division_transfer_context }
+          : {}),
         event_option_id: eventId,
         registration_day_id: eventOption?.registration_day_id,
         partner_mode: mode,
@@ -664,7 +738,7 @@ export default function EditTournamentRegistrationForm({
       <section style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>Registered events</h2>
         <p style={{ color: "#475569" }}>
-          Open an event, make your changes, and select Save changes to finish.
+          Use Change division to move to another level in the same event. Open Edit event to update your partner or other details.
         </p>
         <div style={{ display: "grid", gap: "0.65rem" }}>
           {selectedIds.map((eventId) => {
@@ -675,6 +749,8 @@ export default function EditTournamentRegistrationForm({
               partnerModes[eventId] ||
               (eventOption.partner_required ? "NEEDS_PARTNER" : "NONE");
             const eligibilityReason = publicEventEligibilityReason(eventOption, eligibilityProfile);
+            const savedSelection = savedSelectionForEvent(eventId);
+            const hasDivisionChoices = events.some((candidate) => candidate.id !== eventId && candidate.selectable && sameDivisionEvent(candidate, eventOption));
             return (
               <article
                 key={eventId}
@@ -700,10 +776,20 @@ export default function EditTournamentRegistrationForm({
                   <span style={{ color: "#475569" }}>
                     Partner: {eventId === partnerInvitation.invitation?.registration_prefill?.event_option_id
                       ? partnerInvitation.invitation.target_name
-                      : partnerStatusLabel(mode)}
+                      : savedSelection?.confirmed_partner_name || partnerStatusLabel(mode)}
                   </span>
+                  {savedSelection && savedSelection.event_option_id !== eventId ? <p style={{ color: "#92400e", marginBottom: 0 }}>Division change not saved yet.</p> : null}
                   {eligibilityReason ? <p role="alert" style={{ color: "#b91c1c", marginBottom: 0 }}>{eligibilityReason} Update the player details or choose another division before saving.</p> : null}
                 </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+                {hasDivisionChoices ? <button
+                  type="button"
+                  onClick={() => { setError(null); setEditingEventId(eventId); }}
+                  disabled={pending || eventId === partnerInvitation.invitation?.registration_prefill?.event_option_id}
+                  style={{ ...eventButtonStyle, color: "#1d4ed8", borderColor: "#2563eb" }}
+                >
+                  Change division
+                </button> : null}
                 <button
                   type="button"
                   onClick={() => { setError(null); setEditingEventId(eventId); }}
@@ -720,6 +806,7 @@ export default function EditTournamentRegistrationForm({
                 >
                   Edit event
                 </button>
+                </div>
               </article>
             );
           })}
@@ -807,6 +894,11 @@ export default function EditTournamentRegistrationForm({
       {editingEventId && eventById.get(editingEventId) ? (() => {
         const eventOption = eventById.get(editingEventId)!;
         const invitedEvent = partnerInvitation.invitation?.registration_prefill?.event_option_id === editingEventId;
+        const savedSelection = savedSelectionForEvent(editingEventId);
+        const originalEvent = savedSelection ? eventById.get(savedSelection.event_option_id) : null;
+        const divisionChanged = Boolean(savedSelection && savedSelection.event_option_id !== editingEventId);
+        const confirmedTeamTransfer = Boolean(divisionChanged && savedSelection?.confirmed_team_id);
+        const divisionOptions = events.filter((candidate) => sameDivisionEvent(candidate, eventOption));
         const prior = selectionDrafts[editingEventId];
         const partnerValue: TournamentPartnerDetailsValue = {
           name: prior?.partner_name || "",
@@ -853,6 +945,36 @@ export default function EditTournamentRegistrationForm({
             {genderNotice ? <p role="status" style={{ color: "#92400e" }}>{genderNotice}</p> : null}
             <p style={{ color: "#475569" }}>{scheduledDaysLabel(eventOption, dayById) || "Schedule TBD"}<br />{eventMeta(eventOption)}</p>
             <fieldset ref={eventEditorRef} disabled={pending} style={{ display: "grid", gap: "0.85rem", border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+              {divisionOptions.length > 1 ? (
+                <fieldset disabled={pending || invitedEvent} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+                  <legend style={{ fontSize: "1.125rem", fontWeight: 800, marginBottom: "0.5rem" }}>Division</legend>
+                  <div style={{ display: "grid", gap: "0.5rem" }}>
+                    {divisionOptions.map((candidate) => {
+                      const current = candidate.id === editingEventId;
+                      const unavailable = !current && (
+                        selectedIds.includes(candidate.id) ? "Already in your registration."
+                          : !candidate.selectable && candidate.id !== savedSelection?.event_option_id ? "Not available for registration."
+                            : publicEventEligibilityReason(candidate, eligibilityProfile)
+                      );
+                      return (
+                        <label key={candidate.id} style={{ display: "flex", gap: "0.75rem", alignItems: "center", minHeight: "48px", padding: "0.75rem", border: `2px solid ${current ? "#2563eb" : "#cbd5e1"}`, borderRadius: "10px", background: current ? "#eff6ff" : "white", cursor: unavailable ? "default" : "pointer" }}>
+                          <input type="radio" name="event_division" value={candidate.id} checked={current} disabled={Boolean(unavailable)} onChange={() => changeDivision(editingEventId, candidate.id)} />
+                          <span><strong>{candidate.division_name || candidate.label}</strong>
+                            <span style={{ display: "block", color: "#475569" }}>{scheduledDaysLabel(candidate, dayById) || "Schedule TBD"}{candidate.price_usd != null ? ` · $${Number(candidate.price_usd).toFixed(2)}` : ""}</span>
+                            {unavailable ? <span style={{ display: "block", color: "#92400e" }}>{unavailable}</span> : null}
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                  {invitedEvent ? <p style={{ color: "#475569" }}>Complete this partner request before changing divisions.</p> : null}
+                  {savedSelection?.confirmed_team_id ? <p style={{ color: "#475569" }}>Changing division moves you and {savedSelection.confirmed_partner_name || "your confirmed partner"} together. Your other events and existing payments are kept.</p> : <p style={{ color: "#475569" }}>Your partner details move with this entry. Your other events and existing payments are kept.</p>}
+                </fieldset>
+              ) : null}
+              {divisionChanged ? <p role="status" style={{ margin: 0, padding: "0.85rem", background: "#eff6ff", borderRadius: "10px", color: "#1e40af" }}>
+                {originalEvent?.division_name || "Current division"} → {eventOption.division_name}. {confirmedTeamTransfer ? `You and ${savedSelection?.confirmed_partner_name || "your confirmed partner"} will move together. ` : ""}Select Save changes to confirm.
+              </p> : null}
+              {confirmedTeamTransfer ? <p style={{ margin: 0 }}>Your confirmed partner is kept for this move. To change partners, save that separately before changing division.</p> : <>
               {invitedEvent ? <p>Partner: <strong>{partnerInvitation.invitation?.target_name}</strong>. PCS will add your partner automatically when you save. Keep this division selected to complete the partnership.</p> : eventOption.partner_required ? (
                 <fieldset style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
                   <legend style={{ fontSize: "1.125rem", fontWeight: 800, marginBottom: "0.5rem" }}>Do you have a partner?</legend>
@@ -906,7 +1028,8 @@ export default function EditTournamentRegistrationForm({
                   <p id="edit-partner-board-help" style={{ color: "#475569", marginBottom: 0 }}>This only controls whether other players can find you. Found a partner? Choose “I have a partner” above to add them.</p>
                 </section>
               ) : null}
-              <label>Public partner note (optional)<br /><textarea aria-describedby="edit-partner-note-help" value={prior?.partner_note || ""} onChange={(event) => updateSelectionDraft(editingEventId, { partner_note: event.target.value })} rows={2} style={{ width: "100%", font: "inherit" }} /></label>
+              </>}
+              <label>Public partner note (optional)<br /><textarea aria-describedby="edit-partner-note-help" disabled={confirmedTeamTransfer} value={prior?.partner_note || ""} onChange={(event) => updateSelectionDraft(editingEventId, { partner_note: event.target.value })} rows={2} style={{ width: "100%", font: "inherit" }} /></label>
               <p id="edit-partner-note-help" style={{ margin: 0, color: "#475569", fontSize: "0.9rem" }}>Visible to everyone when you are listed in Players Needing Partners. Use Notes for organizers for private messages to tournament staff.</p>
             </fieldset>
             {commerce?.available && commerceQuote ? <p><strong>Registration total: {formatCommerceMoney(commerceQuote.total_minor)}</strong></p> : null}

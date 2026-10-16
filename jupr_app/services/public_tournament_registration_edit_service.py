@@ -24,6 +24,7 @@ from jupr_app.services.public_tournament_registration_service import (
     _clean_email,
     _clean_text,
     _get_club_player,
+    _normalized_gender,
     _public_day,
     _public_event,
     _public_registration_player,
@@ -46,6 +47,10 @@ from jupr_app.services.admin_guarded_write_service import (
     GuardedWriteRecoveryRequired,
     begin_guarded_operation,
     update_guarded_operation,
+)
+from jupr_app.services.tournament_division_transfer_service import (
+    confirmed_division_team, division_family_key,
+    hydrated_partner_selection, validate_confirmed_division_transfer,
 )
 
 
@@ -92,6 +97,9 @@ def _selection_public_payload(selection: dict[str, Any]) -> dict[str, Any]:
         "partner_note": _clean_text(selection.get("partner_note"), limit=500),
         "show_on_partner_board": _safe_bool(selection.get("show_on_partner_board")),
         "updated_at": selection.get("updated_at"),
+        **({key: selection.get(key) for key in (
+            "confirmed_team_id", "confirmed_partner_name", "division_transfer_context",
+        )} if selection.get("confirmed_team_id") else {}),
     }
 
 
@@ -100,6 +108,9 @@ def _selection_edit_values(selection: dict[str, Any]) -> dict[str, Any]:
     values = _selection_public_payload(selection)
     for key in ("id", "updated_at"):
         values.pop(key)
+    for key in ("confirmed_team_id", "confirmed_partner_name", "division_transfer_context"):
+        values.pop(key, None)
+    values["partner_gender"] = _normalized_gender(values.get("partner_gender"))
     for key in ("partner_skill", "partner_age"):
         raw = selection.get(key)
         values[key] = None if raw in (None, "") else _safe_float(raw)
@@ -161,10 +172,11 @@ def _selections_with_confirmed_partners(
     if not selected:
         return selections
     partners: dict[str, tuple[str, str]] = {}
+    partner_links: dict[str, dict[str, Any]] = {}
     for side, other_side in (("1", "2"), ("2", "1")):
         links = _safe_rows(
             supabase.table("tournament_registration_team_links")
-            .select("event_option_id,selection1_id,selection2_id,registration1_id,registration2_id")
+            .select("id,updated_at,event_option_id,selection1_id,selection2_id,registration1_id,registration2_id")
             .eq("tournament_id", tournament_id)
             .eq(f"registration{side}_id", registration_id)
             .in_(f"selection{side}_id", list(selected))
@@ -187,13 +199,14 @@ def _selections_with_confirmed_partners(
                         "This event has conflicting partner records. Please contact tournament staff."
                     )
                 partners[selection_id] = (partner_id, partner_selection_id)
+                partner_links[selection_id] = link
     if not partners:
         return selections
     partner_entries = {
         str(row.get("id") or ""): row
         for row in _safe_rows(
             supabase.table("tournament_registration_selections")
-            .select("id,registration_id,event_option_id")
+            .select("id,registration_id,event_option_id,updated_at")
             .eq("tournament_id", tournament_id)
             .in_("id", [value[1] for value in partners.values()])
             .execute()
@@ -203,7 +216,7 @@ def _selections_with_confirmed_partners(
         str(row.get("id") or ""): row
         for row in _safe_rows(
             supabase.table("tournament_registrations")
-            .select("id,display_name,first_name,last_name,email,doubles_skill,age,gender")
+            .select("id,display_name,first_name,last_name,email,doubles_skill,age,gender,updated_at")
             .eq("tournament_id", tournament_id)
             .in_("id", [value[0] for value in partners.values()])
             .neq("status", "cancelled")
@@ -230,6 +243,18 @@ def _selections_with_confirmed_partners(
                 "partner_age": partner.get("age"),
                 "partner_gender": partner.get("gender"),
                 "show_on_partner_board": False,
+                "confirmed_team_id": partner_links[str(selection["id"])].get("id"),
+                "confirmed_partner_name": partner.get("display_name") or " ".join(
+                    str(partner.get(key) or "").strip() for key in ("first_name", "last_name")
+                ).strip(),
+                "division_transfer_context": {
+                    "team_link_id": str(partner_links[str(selection["id"])].get("id") or ""),
+                    "team_link_updated_at": str(partner_links[str(selection["id"])].get("updated_at") or ""),
+                    "partner_selection_id": partner_selection_id,
+                    "partner_selection_updated_at": str(entry.get("updated_at") or ""),
+                    "partner_registration_id": partner_id,
+                    "partner_registration_updated_at": str(partner.get("updated_at") or ""),
+                },
             }
         resolved.append(selection)
     return resolved
@@ -382,7 +407,7 @@ def _versioned_edit_selections(
         target_family = _event_family_key(events.get(event_id) or {})
         if candidate:
             candidate_event = events.get(str(candidate.get("event_option_id") or "")) or {}
-            if _event_family_key(candidate_event) != target_family:
+            if division_family_key(candidate_event) != division_family_key(events.get(event_id) or {}):
                 raise ValueError("The selected event doesn’t match this registration entry.")
         elif requested_id:
             raise TournamentRegistrationEditConflictError(
@@ -396,6 +421,54 @@ def _versioned_edit_selections(
         used_ids.add(selection_id)
         versioned.append({**selection, "id": selection_id})
     return versioned, expected_versions
+
+
+def _prepare_confirmed_division_transfers(
+    supabase: Any, *, club_id: str, tournament_id: str, bundle: dict[str, Any],
+    payload: dict[str, Any], resolved_selections: list[dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """Validate a move using the saved team, then retain its stored fields."""
+    stored = {str(row.get("id") or ""): row for row in bundle.get("selections") or []}
+    resolved = {str(row.get("id") or ""): row for row in resolved_selections}
+    events = {str(row.get("id") or ""): row for row in bundle.get("event_options") or []}
+    selections = []
+    transfers = {}
+    for raw in payload.get("selections") or []:
+        if not isinstance(raw, dict):
+            selections.append(raw)
+            continue
+        before = stored.get(str(raw.get("id") or ""))
+        target_id = str(raw.get("event_option_id") or "")
+        if not before or target_id == str(before.get("event_option_id") or ""):
+            selections.append(raw)
+            continue
+        source = events.get(str(before.get("event_option_id") or "")) or {}
+        target = events.get(target_id)
+        if not target or division_family_key(source) != division_family_key(target):
+            raise ValueError("Choose a division within the same event, such as Men's Doubles 4.0 to 4.5.")
+        team = confirmed_division_team(supabase, tournament_id=tournament_id, selection=before)
+        if not team:
+            selections.append(raw)
+            continue
+        context = validate_confirmed_division_transfer(
+            supabase, club_id=club_id, tournament_id=tournament_id, selection=before,
+            registration=bundle.get("registration") or {}, source_event=source, target_event=target,
+            settings=bundle.get("settings") or {}, team=team,
+            expected_context=raw.get("division_transfer_context"),
+        )
+        raw_values = _selection_edit_values(raw)
+        allowed = [_selection_edit_values(row) for row in (before, resolved[str(before["id"])])]
+        for values in [raw_values, *allowed]:
+            values.pop("event_option_id", None)
+            values.pop("registration_day_id", None)
+        if raw_values not in allowed:
+            raise TournamentRegistrationRelationshipLockedError(
+                "A division change keeps your confirmed partner. Save other partner changes separately with tournament staff."
+            )
+        selections.append({**hydrated_partner_selection(before, team["partner_registration"]),
+                           "event_option_id": target_id, "registration_day_id": target.get("registration_day_id")})
+        transfers[str(before["id"])] = {"selection": before, "context": context}
+    return {**payload, "selections": selections}, transfers
 
 
 def request_public_tournament_registration_edit_link(
@@ -695,6 +768,10 @@ def submit_public_tournament_registration_edit(
         supabase, tournament_id=tournament_id, registration_id=registration_id,
         selections=stored_selections,
     )
+    payload, division_transfers = _prepare_confirmed_division_transfers(
+        supabase, club_id=str(club_id), tournament_id=tournament_id, bundle=bundle,
+        payload=payload, resolved_selections=resolved_selections,
+    )
     unchanged_selections = _unchanged_edit_selections(
         stored=stored_selections, resolved=resolved_selections,
         submitted=payload.get("selections") or [],
@@ -759,6 +836,7 @@ def submit_public_tournament_registration_edit(
         expected_selection_versions=expected_selection_versions,
         atomic_edit=True,
         commerce_transaction=commerce_transaction,
+        division_transfers=division_transfers,
         preserved_selections={
             str(row["id"]): row for row in unchanged_selections.values()
             if str(row["id"]) in save_payload.get("_preserved_selection_ids", [])
