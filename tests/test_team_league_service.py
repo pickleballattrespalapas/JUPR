@@ -328,8 +328,9 @@ def test_active_manager_league_is_listed_for_public_registration() -> None:
     assert public_list["leagues"][0]["registration_open"] is True
 
 
-def test_ended_team_league_is_past_and_read_only() -> None:
-    supabase = _RegistrationRecoverySupabase(manager_status="ended")
+@pytest.mark.parametrize("manager_status", ["ended", "archived"])
+def test_finished_team_league_is_past_and_read_only(manager_status) -> None:
+    supabase = _RegistrationRecoverySupabase(manager_status=manager_status)
 
     active = list_public_team_leagues(supabase, club_id="club")
     past = list_public_team_leagues(
@@ -348,7 +349,7 @@ def test_ended_team_league_is_past_and_read_only() -> None:
     assert detail["registration"]["open"] is False
 
 
-@pytest.mark.parametrize("manager_status", ["draft", "paused", "archived"])
+@pytest.mark.parametrize("manager_status", ["draft", "paused"])
 def test_nonpublic_manager_states_never_enter_team_league_collections(
     manager_status: str,
 ) -> None:
