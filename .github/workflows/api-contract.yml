@@ -73,6 +73,7 @@ jobs:
             tests/test_ci_safety_contracts.py \
             tests/test_combined_rating_team_tournament_migration_postgres_compatibility.py \
             tests/test_tournament_draw_child_trigger_postgres_compatibility.py \
+            tests/test_tournament_team_division_transfer_migration.py \
             tests/test_staging_evidence_automation.py \
             tests/test_staging_evidence_automation_workflow.py \
             tests/test_staging_write_session.py \
@@ -112,6 +113,7 @@ jobs:
             tests/test_league_manager_operator_ux_static.py \
             tests/test_league_roster_rating_integrity_migration.py \
             tests/test_public_tournament_registration_edit_service.py \
+            tests/test_tournament_division_transfer_service.py \
             tests/test_public_tournament_registration_service.py \
             tests/test_public_tournament_team_setup_recovery.py \
             tests/test_partner_email_invitations.py \
