@@ -652,7 +652,7 @@ test("creates and completes a disposable five-round League Live session", async 
     const previewResponsePromise = page.waitForResponse((response) => {
       const url = new URL(response.url());
       return url.origin === expectedApiOrigin
-        && url.pathname === `/admin/clubs/${clubId}/match-uploader/round-robin/preview`
+        && url.pathname === `/admin/clubs/${clubId}/league-manager/live/round-robin/preview`
         && response.request().method() === "POST";
     });
     await page.getByRole("button", { name: "Start next round", exact: true }).click();

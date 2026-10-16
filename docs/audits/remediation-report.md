@@ -17,9 +17,9 @@ Production, staging deployment state, runtime flags, DNS, and remote Supabase da
 | Inventory | Exact audited count | Coverage |
 | --- | ---: | --- |
 | Frontend action families/source instances | **232** | 42 Create, 52 Edit, 21 Delete, 17 Bulk Edit, 21 Publish, and 79 Guarded actions |
-| Backend unsafe-method FastAPI contracts | **199** | 160 `POST`, 30 `PATCH`, 8 `PUT`, and 1 `DELETE`; 168 admin-prefixed and 31 public contracts |
-| Total audited frontend + backend contracts | **431** | 232 frontend rows + 199 backend unsafe-method contracts |
-| Staging write-wave coverage | **199 / 199** | 0 missing and 0 stale manifest entries; 12 additional named-wave assignments across 10 multi-wave contracts |
+| Backend unsafe-method FastAPI contracts | **202** | 163 `POST`, 30 `PATCH`, 8 `PUT`, and 1 `DELETE`; 171 admin-prefixed and 31 public contracts |
+| Total audited frontend + backend contracts | **434** | 232 frontend rows + 202 backend unsafe-method contracts |
+| Staging write-wave coverage | **202 / 202** | 0 missing and 0 stale manifest entries in the updated inventory; 13 additional named-wave assignments across 11 multi-wave contracts |
 
 The frontend rows are recorded in [frontend-interaction-inventory.md](frontend-interaction-inventory.md). The backend routes, guards, durability families, and stable IDs `BE-001` through `BE-199` are recorded in [backend-guarded-action-inventory.md](backend-guarded-action-inventory.md). Existing rows `BE-001`–`BE-192` remain unchanged; five authenticated proof-only reconciliation routes are appended as `BE-193`–`BE-197`, followed by the server-retained League Live retry as `BE-198` and score-first movement apply as `BE-199`. The governing requirements are in [interaction-standard.md](../interaction-standard.md); the implementation sequence and test model are in [implementation-plan.md](implementation-plan.md).
 
@@ -173,3 +173,5 @@ The terms below are deliberately separate:
 | All 199 backend contracts fully transaction-atomic and uniformly reconcilable | Boundary audit complete; not all contracts have that requirement or guarantee | No | No | **No** |
 
 No line item in this report is formally accepted or production-deployed. Promotion remains a separate guarded decision after the exact candidate commit, final automated evidence, and manual staging acceptance are recorded.
+
+October 16 addition: League Live preview, player batch creation, and scoped player-batch reconciliation are appended as `BE-200`–`BE-202`. These reuse the existing guarded services under League Live capabilities while standalone uploader routes stay disabled. Historical test results below retain their original counts.

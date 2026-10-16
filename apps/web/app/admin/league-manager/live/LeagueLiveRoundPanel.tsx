@@ -8,7 +8,7 @@ import { ConfirmAction } from "@/components/ConfirmAction";
 import { actionSuccess, actionUncertain, type ActionCompletion } from "@/components/interaction";
 import type { MovementBoardAssignment } from "./LeagueMovementCourtBoard";
 import type { AdminLeagueLiveStatusResponse, AdminLeagueManagerDetailResponse, AdminLeagueManagerListResponse, AdminLeagueManagerStatusResponse } from "@/lib/adminLeagueManagerApi";
-import type { AdminMatchUploaderCreatePlayersResult, AdminMatchUploaderRoundRobinCourt, AdminMatchUploaderRoundRobinMatch, AdminMatchUploaderRoundRobinPreview, AdminMatchUploaderStatusResponse } from "@/lib/adminMatchUploaderApi";
+import type { AdminMatchUploaderCreatePlayersResult, AdminMatchUploaderRoundRobinCourt, AdminMatchUploaderRoundRobinMatch, AdminMatchUploaderRoundRobinPreview } from "@/lib/adminMatchUploaderApi";
 import type { PublicPlayer } from "@/lib/api";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
@@ -23,7 +23,6 @@ type Props = {
   clubId: string;
   selectedLeagueName: string;
   leagueStatus: AdminLeagueManagerStatusResponse;
-  uploaderStatus: AdminMatchUploaderStatusResponse;
   players: PublicPlayer[];
   liveDomainStatus: AdminLeagueLiveStatusResponse;
 };
@@ -525,7 +524,7 @@ function persistedScorePublishedRoundNumber(
   return currentRoundNumber;
 }
 
-export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueName, leagueStatus, uploaderStatus, players, liveDomainStatus }: Props) {
+export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueName, leagueStatus, players, liveDomainStatus }: Props) {
   const { session, accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
   const [workflowStep, setWorkflowStep] = useState<WorkflowStep>(1);
   const [leagues, setLeagues] = useState<string[]>([]);
@@ -1182,6 +1181,10 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
   }
 
   async function createMissingPlayers() {
+    if (!liveDomainStatus.player_create_enabled) {
+      setMessage("Creating players in League Live is disabled on this site. You can still select existing club players.");
+      return;
+    }
     if (playerCreateRecovery) {
       setMessage(`Check exact player operation ${playerCreateRecovery.operationKey} before creating another batch.`);
       return;
@@ -1213,7 +1216,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
         ? createPlayersOperationRef.current.key
         : `league-live-players:${globalThis.crypto.randomUUID()}`;
       createPlayersOperationRef.current = { fingerprint: requestFingerprint, key: idempotencyKey };
-      const payload = await requestJson<AdminMatchUploaderCreatePlayersResult>(`/admin/clubs/${encodeURIComponent(clubId)}/match-uploader/players`, {
+      const payload = await requestJson<AdminMatchUploaderCreatePlayersResult>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live/players`, {
         method: "POST",
         body: JSON.stringify({
           players: reviewedPlayers,
@@ -1289,7 +1292,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       return;
     }
     const addRecoveredPlayersToSession = Boolean(recovery.leagueName && recovery.leagueName === leagueName);
-    const operationPath = `/admin/clubs/${encodeURIComponent(clubId)}/match-uploader/player-operations/${encodeURIComponent(recovery.operationKey)}`;
+    const operationPath = `/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live/player-operations/${encodeURIComponent(recovery.operationKey)}`;
     setCheckingPlayerCreateRecovery(true);
     setMessage(null);
     try {
@@ -1307,6 +1310,10 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       if (operationStatus === "failed" && operation.recovery_required !== true) {
         clearPlayerCreateRecovery();
         setMessage(`Exact player operation ${recovery.operationKey} is proven failed. Review the player list before submitting a new batch.`);
+        return;
+      }
+      if (!liveDomainStatus.player_create_enabled) {
+        setMessage(`Exact player operation ${recovery.operationKey} still needs recovery. Player creation and reconciliation are disabled on this site; keep this operation for an administrator to recover.`);
         return;
       }
       const reconciled = await requestJson<AdminMatchUploaderCreatePlayersResult>(`${operationPath}/reconcile`, {
@@ -1512,7 +1519,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
   }
 
   useAuthenticatedAutoLoad(
-    leagueStatus.enabled && uploaderStatus.enabled && liveDomainStatus.enabled ? accessToken : "",
+    leagueStatus.enabled && liveDomainStatus.enabled ? accessToken : "",
     loadInitialWorkspace
   );
 
@@ -2188,7 +2195,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
 
   async function requestRoundPreview(roundForPreview: number, courtDrafts = courts): Promise<AdminMatchUploaderRoundRobinPreview> {
     const courtPayload = courtsToPayload(courtDrafts, roundForPreview).map((court) => ({ court: court.court, format_type: court.format_type, player_names: court.player_names }));
-    return requestJson<AdminMatchUploaderRoundRobinPreview>(`/admin/clubs/${encodeURIComponent(clubId)}/match-uploader/round-robin/preview`, {
+    return requestJson<AdminMatchUploaderRoundRobinPreview>(`/admin/clubs/${encodeURIComponent(clubId)}/league-manager/live/round-robin/preview`, {
       method: "POST",
       body: JSON.stringify({ courts: courtPayload, schedule_mode: "full", source: "next_league_manager_live_preview" })
     });
@@ -2689,7 +2696,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     }
   }
 
-  const liveCourtFormats = (uploaderStatus.round_robin_format_options || ["4-Player", "5-Player"])
+  const liveCourtFormats = (liveDomainStatus.round_robin_format_options || ["4-Player", "5-Player"])
     .filter((option) => /^[45]-player$/i.test(option));
   if (!liveCourtFormats.length) liveCourtFormats.push("4-Player", "5-Player");
   const unresolvedPastedPlayers = pastedPlayerResolutions.filter((row) => row.status !== "existing").length;
@@ -2727,11 +2734,11 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     setWorkflowStep(step);
   }
 
-  if (!leagueStatus.enabled || !uploaderStatus.enabled || !liveDomainStatus.enabled) {
+  if (!leagueStatus.enabled || !liveDomainStatus.enabled) {
     return (
       <article style={{ ...cardStyle, background: "#f8fafc" }}>
-        <h2 style={{ marginTop: 0 }}>League Live is not available yet</h2>
-        <p style={{ color: "#475569" }}>Live round scoring remains unavailable in this build. Continue using the existing League Manager scoring workflow for league night.</p>
+        <h2 style={{ marginTop: 0 }}>League Live is disabled</h2>
+        <p style={{ color: "#475569" }}>Live league operations are disabled on this site. Ask a site administrator to enable League Live, then reload this page.</p>
       </article>
     );
   }
@@ -2742,7 +2749,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
         <h2 style={{ marginTop: 0 }}>Admin session</h2>
         <p style={{ color: "#475569" }}>{adminSessionLabel(session)}</p>
         <p style={{ color: "#166534" }}><strong>Movement planning:</strong> {liveDomainStatus.movement_authority === "python_fastapi" ? "Ready" : "Unavailable"}. League Live calculates the plan; this page only displays it.</p>
-        <p style={{ color: liveDomainStatus.submit_enabled ? "#166534" : "#92400e" }}><strong>Result publishing:</strong> {liveDomainStatus.submit_enabled ? "Available" : "Unavailable in this build"}.</p>
+        <p style={{ color: liveDomainStatus.submit_enabled ? "#166534" : "#92400e" }}><strong>Result publishing:</strong> {liveDomainStatus.submit_enabled ? "Available" : "Disabled on this site"}.</p>
         <p style={{ color: "#475569" }}><strong>Recovery:</strong> Interrupted operations can be reviewed below before play resumes.</p>
         {sessionLoading ? <p>Checking session…</p> : null}
         {sessionMessage ? <p style={{ color: "#64748b" }}>{sessionMessage}</p> : null}
@@ -2894,6 +2901,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
               <section style={{ marginTop: "1rem", padding: "0.75rem", borderRadius: "10px", background: "#fffbeb", border: "1px solid #f59e0b" }}>
                 <h4 style={{ marginTop: 0 }}>Create missing players</h4>
                 <p style={{ color: "#92400e" }}>Every new player must receive an explicit Starting JUPR from 1.0 through 7.0. No value is assumed.</p>
+                {!liveDomainStatus.player_create_enabled ? <p role="alert" style={{ color: "#92400e" }}>Creating players in League Live is disabled on this site. You can still select existing club players.</p> : null}
                 <div style={{ display: "grid", gap: "0.5rem" }}>
                   {missingPlayerDrafts.map((draft, index) => (
                     <div key={playerNameKey(draft.name)} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 180px), 1fr))", gap: "0.5rem" }}>
@@ -2902,7 +2910,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
                     </div>
                   ))}
                 </div>
-                <p><button type="button" onClick={() => void createMissingPlayers()} disabled={creatingMissingPlayers || busy || Boolean(playerCreateRecovery) || missingPlayerDrafts.some((draft) => !Number.isFinite(Number(draft.startingJupr)) || Number(draft.startingJupr) < 1 || Number(draft.startingJupr) > 7)} style={buttonStyle}>{creatingMissingPlayers ? "Creating players…" : "Create missing players"}</button></p>
+                <p><button type="button" onClick={() => void createMissingPlayers()} disabled={!liveDomainStatus.player_create_enabled || creatingMissingPlayers || busy || Boolean(playerCreateRecovery) || missingPlayerDrafts.some((draft) => !Number.isFinite(Number(draft.startingJupr)) || Number(draft.startingJupr) < 1 || Number(draft.startingJupr) > 7)} style={buttonStyle}>{creatingMissingPlayers ? "Creating players…" : "Create missing players"}</button></p>
               </section>
             ) : null}
             {playerCreateRecovery ? (
