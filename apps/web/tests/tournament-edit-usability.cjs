@@ -211,6 +211,68 @@ async function verifyIndependentEventSaves() {
   assert.equal(submissions[0].selections[0].partner_mode, "HAS_PARTNER");
 }
 
+async function verifyDivisionChanges() {
+  const context = { team_link_id: "team", team_link_updated_at: "team-version", partner_selection_id: "partner-selection", partner_selection_updated_at: "partner-selection-version", partner_registration_id: "partner-reg", partner_registration_updated_at: "partner-reg-version" };
+  const confirmed = { ...selections[0], partner_mode: "HAS_PARTNER", partner_name: "Confirmed Partner", partner_email: "partner@example.invalid", partner_gender: "Male", partner_note: "Saved note", show_on_partner_board: false, confirmed_team_id: "team", confirmed_partner_name: "Confirmed Partner", division_transfer_context: context };
+  const original = { ...events[0], division_name: "4.0", event_type: "GENDER_DOUBLES", gender_restriction: "MEN" };
+  const target = { ...original, id: "doubles-4.5", division_name: "4.5", registration_day_id: "day-2" };
+  const additional = [
+    { ...target, id: "closed", division_name: "5.0", selectable: false },
+    { ...target, id: "age-restricted", division_name: "80+", age_mode: "MIN_AGE", age_rules: { min_age: 80 } },
+    { ...target, id: "women", division_name: "Women's 4.5", gender_restriction: "WOMEN" },
+    { ...target, id: "four-player", division_name: "Team 4.5", competition_format: "FOUR_PLAYER_TEAM" }
+  ];
+  const patch = { events: [original, events[1], target, ...additional], selections: [confirmed, selections[1]], days: [...props.days, { id: "day-2", label: "Day 2" }] };
+  const division = value => dialog().findByProps({ type: "radio", name: "event_division", value });
+  await mount(patch);
+  await act(async () => renderer.root.findByType(Dialog).props.onRequestClose());
+  await act(async () => button("Change division").props.onClick());
+  assert.match(text(dialog()), /Changing division moves you and Confirmed Partner together/);
+  assert.deepEqual(dialog().findAllByProps({ name: "event_division" }).map(node => node.props.value), ["doubles", "doubles-4.5", "closed", "age-restricted"], "Division choices stay in the same event and gender, across days");
+  assert.equal(division("closed").props.disabled, true);
+  assert.equal(division("age-restricted").props.disabled, true);
+  // A team transfer preserves the confirmed partnership even if the player
+  // started a partner edit before deciding to move divisions.
+  await act(async () => renderer.root.findByProps({ "aria-label": "Partner name" }).props.onChange({ target: { value: "Unfinished partner edit" } }));
+  await act(async () => division(target.id).props.onChange());
+  assert.match(text(dialog()), /4\.0 → 4\.5/);
+  assert.match(text(dialog()), /You and Confirmed Partner will move together/);
+  assert.match(text(dialog()), /Day 2/);
+  assert.equal(dialog().findAllByProps({ "aria-label": "Partner name" }).length, 0, "Changing a confirmed team's division does not also edit its partnership");
+  assert.equal(dialog().findByType("textarea").props.disabled, true);
+  await act(async () => button("Save changes").props.onClick());
+  assert.equal(submissions.length, 1);
+  assert.deepEqual(submissions[0].selections.map(row => row.event_option_id), [target.id, "singles"]);
+  assert.equal(submissions[0].selections[0].id, confirmed.id, "A cross-day move preserves the exact original selection");
+  assert.equal(submissions[0].selections[0].registration_day_id, "day-2");
+  assert.equal(submissions[0].selections[0].partner_mode, "HAS_PARTNER");
+  assert.equal(submissions[0].selections[0].partner_name, "Confirmed Partner");
+  assert.equal(submissions[0].selections[0].partner_email, confirmed.partner_email);
+  assert.equal(submissions[0].selections[0].partner_note, "Saved note");
+  assert.equal(submissions[0].selections[0].partner_gender, "Male", "A team move preserves saved partner fields exactly, including legacy aliases");
+  assert.deepEqual(submissions[0].selections[0].division_transfer_context, context, "Both partners' and the team version accompany the atomic move");
+  assert.equal(submissions[0].selections[1].id, selections[1].id);
+  assert.equal(submissions[0].selections[1].division_transfer_context, undefined);
+
+  await mount(patch);
+  await act(async () => division(target.id).props.onChange());
+  await act(async () => renderer.root.findByType(Dialog).props.onRequestClose());
+  const singlesCard = renderer.root.findAllByType("article").find(node => text(node).includes("Singles"));
+  await act(async () => singlesCard.findByType("button").props.onClick());
+  await act(async () => button("Save changes").props.onClick());
+  assert.deepEqual(submissions[0].selections.map(row => row.event_option_id), ["doubles", "singles"], "An unsaved cross-day transfer cannot leak into another event's save");
+  assert.equal(submissions[0].selections[0].division_transfer_context, undefined);
+
+  await mount({ ...patch, selections: [{ ...confirmed, confirmed_team_id: null, confirmed_partner_name: null, division_transfer_context: null }, selections[1]] });
+  await act(async () => division(target.id).props.onChange());
+  assert.equal(renderer.root.findByProps({ "aria-label": "Partner name" }).props.value, "Confirmed Partner", "An unconfirmed partner request is also preserved when moving divisions");
+  await act(async () => division("doubles").props.onChange());
+  await act(async () => button("Save changes").props.onClick());
+  assert.equal(submissions[0].selections[0].id, confirmed.id);
+  assert.equal(submissions[0].selections[0].event_option_id, "doubles");
+  assert.equal(submissions[0].selections[0].partner_mode, "HAS_PARTNER");
+}
+
 async function verifyRecovery() {
   if (renderer) await act(async () => renderer.unmount());
   const requests = [];
@@ -261,10 +323,11 @@ async function main() {
   try {
     await verifySaving();
     await verifyIndependentEventSaves();
+    await verifyDivisionChanges();
     await verifyPrices();
     await verifyRecovery();
     await verifyNavigation();
-    console.log("Registration editing: one-step saves, partner choices, errors, duplicate clicks, removal, quote review, email dialog and scoped navigation passed.");
+    console.log("Registration editing: one-step saves, division/team transfers, partner choices, errors, duplicate clicks, removal, quote review, email dialog and scoped navigation passed.");
   } finally {
     if (renderer) await act(async () => renderer.unmount());
     global.FormData = originalFormData;
