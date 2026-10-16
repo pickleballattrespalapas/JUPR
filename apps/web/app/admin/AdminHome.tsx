@@ -54,6 +54,7 @@ function ClubDashboard({ accessToken, session, clubId, clubSlug }: {
       {isAdmin || can("manage_players") ? <section className={styles.desk} aria-labelledby="desk-heading">
         <h2 id="desk-heading">Club desk</h2>
         <div className={styles.deskLinks}>
+          {isAdmin ? <Link href="/admin/interclub">Interclub seasons</Link> : null}
           {can("manage_players") ? <Link href="/admin/players">Find or add a player</Link> : null}
           {isAdmin ? <><Link href="/admin/match-uploader">Enter match results</Link><Link href="/admin/match-log">Review match history</Link></> : null}
         </div>

@@ -55,11 +55,12 @@ def test_release_preserves_every_preexisting_production_gate():
 def test_deferred_routes_are_absent_from_release():
     from services.api.main import app
     routes = {route.path for route in app.routes if hasattr(route, "path")}
+    assert "/admin/clubs/{club_id}/interclub/setup" in routes
     assert "/admin/clubs/{club_id}/leaderboard-settings" in routes
     assert "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/review" in routes
-    assert not any("interclub" in path or path.startswith("/admin/platform") or path == "/clubs/create" for path in routes)
+    assert not any(path.startswith("/admin/platform") or path == "/clubs/create" for path in routes)
     root = Path(__file__).resolve().parents[1]
-    for path in ["apps/web/app/admin/interclub", "apps/web/app/admin/platform", "apps/web/app/clubs/create"]:
+    for path in ["apps/web/app/admin/platform", "apps/web/app/clubs/create"]:
         assert not (root / path).exists()
 
 

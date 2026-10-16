@@ -28,6 +28,23 @@
   max-width: 780px;
   white-space: pre-wrap;
 }
+.introduction {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.introduction > :first-child {
+  margin-top: 0;
+}
+.heroWithChampionships {
+  display: grid;
+  align-items: start;
+  gap: 2rem;
+}
+@media (min-width: 900px) {
+  .heroWithChampionships {
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 1fr);
+  }
+}
 .actions {
   display: flex;
   gap: 0.7rem;

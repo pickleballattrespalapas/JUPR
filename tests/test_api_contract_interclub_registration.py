@@ -1,0 +1,483 @@
+import json
+from types import SimpleNamespace
+from uuid import uuid4
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from httpx import Client, MockTransport, Response
+from postgrest import SyncPostgrestClient
+
+from services.api import admin_auth_routes, interclub_registration_routes as routes
+from tests.interclub_registration_fixtures import set_registration_phase
+
+
+class Query:
+    def __init__(self, rows):
+        self.rows, self.filters, self.columns, self.bounds = rows, [], "*", (0, 100000)
+    def select(self, fields): self.columns = fields; return self
+    def eq(self, key, value): self.filters.append(lambda row: row.get(key) == value); return self
+    def is_(self, key, value): self.filters.append(lambda row: row.get(key) is None); return self
+    def contains(self, key, values):
+        values = json.loads(values) if isinstance(values, str) else values
+        self.filters.append(lambda row: set(values).issubset(row.get(key, [])))
+        return self
+    def in_(self, key, values): self.filters.append(lambda row: row.get(key) in values); return self
+    def ilike(self, key, value): self.filters.append(lambda row: value.strip("%").lower() in row[key].lower()); return self
+    def order(self, *_args, **_kwargs): return self
+    def limit(self, limit): self.bounds = (0, limit); return self
+    def range(self, start, end): self.bounds = (start, end+1); return self
+    def execute(self):
+        rows = [r for r in self.rows if all(check(r) for check in self.filters)][self.bounds[0]:self.bounds[1]]
+        def field(row, path):
+            for key in path.split("->"):
+                row = row.get(key) if isinstance(row, dict) else None
+            return row
+        return SimpleNamespace(data=[dict(r) if self.columns == "*" else {k.split("->")[-1]: field(r, k) for k in self.columns.split(",")} for r in rows])
+
+
+@pytest.fixture
+def setup(monkeypatch):
+    uid, sid, tid, mid = str(uuid4()), str(uuid4()), str(uuid4()), str(uuid4())
+    user = SimpleNamespace(user_id=uid, email="admin@example.test")
+    assignment = dict(club_id="alpha", email=user.email, user_id=uid, role="administrator")
+    season = dict(id=sid, organizer_club_id="alpha", source_revision=2, opened_at="2026-09-08T00:00:00Z", roster_deadline="2099-01-01T00:00:00Z",
+                  details=dict(name="Coastal League",club_ids=["beta","gamma"],divisions=["3.5"],timezone="America/Mazatlan",meets=[]), rules={"3.5":dict(min_rating=None,max_rating=3.75,women_required=2)})
+    set_registration_phase(season, "closed")
+    meet = dict(id=mid,season_id=sid,plan_index=0,host_club_id="beta",club_ids=["beta","gamma"],starts_at="2099-01-10T18:00:00Z",roster_deadline="2099-01-10T18:00:00Z",revision=1,roster_open=True,deadline_editable=False)
+    participation = dict(season_id=sid,club_id="beta",status="accepted",revision=2)
+    version = dict(team_id=tid,revision=1,name="Beta Blue",status="needs_exception",issues=[dict(code="rating_above_maximum",message="Player exceeds limit",private="secret")],late_change=False,
+                   roster=[dict(entry_id=str(uuid4()),player_id=str(i),name=f"Player {i}",starting_rating=3.6,gender="female",email="private@example.test",phone="secret") for i in range(1,5)])
+    team = dict(id=tid,season_id=sid,meet_id=mid,club_id="beta",division="3.5",withdrawn=False,**version)
+    tables = {"admin_role_assignments":[assignment],"pcs_interclub_seasons":[season],"pcs_interclub_participations":[participation],"pcs_interclub_publications":[],
+              "pcs_interclub_meet_workspaces":[meet],"pcs_interclub_current_rosters":[team],"pcs_interclub_teams":[team],"pcs_interclub_roster_versions":[version],
+              "clubs":[dict(id=c,name=c.title(),slug=c) for c in ("alpha","beta","gamma")],
+              "players":[dict(id=i,club_id="beta",name=f"Player {i}",rating=1600,gender="female",active=True,email="private@example.test") for i in range(1,5)] + [dict(id=99,club_id="gamma",name="Private other club player",active=True,rating=1800)],
+              "pcs_interclub_entries":[dict(season_id=sid,club_id="beta",player_id=1,starting_rating=3.2)]}
+    tables["pcs_interclub_pool_members"] = [dict(season_id=sid, club_id="beta", player_id=i, status="active", approval_status="approved") for i in range(1, 5)]
+    tables["pcs_interclub_drafts"]=[dict(id=sid,organizer_club_id="alpha",revision=2,draft={**season["details"],"start_date":"2099-01-01","end_date":"2099-03-31","registration_rules":season["rules"],"meets":[dict(host_club_id="beta",club_ids=["beta","gamma"],starts_at=meet["starts_at"],duration_minutes=180,courts=4)]})]
+    state = dict(meet=meet,user=user,assignment=assignment,season=season,participation=participation,team=team,tables=tables,calls=[],reads=[],error="")
+    def table(name): state["reads"].append(name); return Query(tables[name])
+    def rpc(name, params):
+        state["calls"].append((name,params))
+        def execute():
+            if state["error"]:
+                e = RuntimeError("private database failure"); e.code=state["error"]; raise e
+            if name == "pcs_interclub_meet_player_ratings":
+                rows = state.get("meet_player_ratings")
+                if rows is None:
+                    rows = [dict(player_id=p["id"], entry_id=str(uuid4()), eligibility_rating=p.get("rating", 1400)/400, gender=p.get("gender"), rating_deadline=meet["roster_deadline"], rating_locked=False) for p in tables["players"] if p["club_id"] == params["p_club_id"]]
+                return SimpleNamespace(data=rows)
+            if name == "pcs_set_interclub_registration_window":
+                season.update(registration_opens_at=params["p_opens_at"], registration_closes_at=params["p_closes_at"],
+                              registration_revision=params["p_revision"] + 1)
+                return SimpleNamespace(data=season)
+            data = season if name == "pcs_open_interclub_meet_registration" else participation if name == "pcs_interclub_participation" else meet if name == "pcs_set_interclub_meet_deadline" else {"team":team,"roster":version}
+            return SimpleNamespace(data=data)
+        return SimpleNamespace(execute=execute)
+    monkeypatch.setattr(admin_auth_routes,"authenticate_bearer",lambda _: user)
+    state["db"] = SimpleNamespace(table=table,rpc=rpc)
+    app = FastAPI(); routes.install_interclub_registration_routes(app,get_supabase_client=lambda:state["db"])
+    return TestClient(app),state
+
+
+def base(s, club="alpha"):
+    return f"/admin/clubs/{club}/interclub/registrations/{s['season']['id']}"
+
+
+def meet_base(s, club="alpha"):
+    return base(s, club) + f"/meets/{s['meet']['id']}"
+
+
+def test_organizer_sees_submitted_facts_without_other_club_directories_or_contacts(setup):
+    c,s=setup
+    response=c.get(meet_base(s)); assert response.status_code==200
+    roster=response.json()["teams"][0]["roster"]
+    assert roster[0]["name"]=="Player 1" and "player_id" not in roster[0]
+    assert "private" not in response.text and "phone" not in response.text
+    assert "players" not in s["reads"] and "pcs_interclub_entries" not in s["reads"]
+    assert c.get(meet_base(s)+"/players").status_code==403
+
+
+def test_participating_club_sees_only_own_teams_and_directory_with_frozen_seed(setup):
+    c,s=setup; s["assignment"]["club_id"]="beta"
+    s["tables"]["pcs_interclub_current_rosters"].append({**s["team"],"id":str(uuid4()),"club_id":"gamma","name":"Other club private team"})
+    season_result=c.get(base(s,"beta")).json()
+    result=c.get(meet_base(s,"beta")).json()
+    assert not season_result["is_organizer"] and len(result["teams"])==1 and result["teams"][0]["roster"][0]["player_id"]=="1"
+    assert [p["club_id"] for p in season_result["participations"]]==["beta"]
+    response=c.get(meet_base(s,"beta")+"/players")
+    assert response.status_code==200
+    assert len(response.json()["players"])==4 and response.json()["players"][0]["starting_rating"]==3.2
+    assert response.json()["players"][1]["starting_rating"]==4.0
+    assert "private" not in response.text and "email" not in response.text
+
+
+def test_uninvited_club_cannot_read_season_history_or_players(setup):
+    c,s=setup; s["assignment"]["club_id"]="gamma"
+    for suffix in ["","/players",f"/teams/{s['team']['id']}/history"]:
+        assert c.get(base(s,"gamma")+suffix).status_code==404
+
+
+@pytest.mark.parametrize("change",[dict(role="operator"),dict(user_id="someone-else"),dict(revoked_at="2020-01-01"),dict(expires_at="2020-01-01T00:00:00Z")])
+def test_revoked_expired_wrong_identity_or_operator_cannot_access_registration(setup, change):
+    c,s=setup; s["assignment"].update(change)
+    assert c.get("/admin/clubs/alpha/interclub/registrations").status_code==403
+    assert c.get(base(s)).status_code==403
+    assert c.post(base(s)+"/participations/beta",json={"action":"cancel","expected_revision":2}).status_code==403
+    assert not s["calls"]
+
+
+def test_club_list_only_unions_owned_and_invited_seasons(setup):
+    c,s=setup
+    s["tables"]["pcs_interclub_seasons"].append({**s["season"],"id":str(uuid4()),"organizer_club_id":"gamma"})
+    assert len(c.get("/admin/clubs/alpha/interclub/registrations").json()["seasons"])==1
+    s["assignment"]["club_id"]="beta"
+    assert len(c.get("/admin/clubs/beta/interclub/registrations").json()["seasons"])==1
+
+
+@pytest.mark.parametrize("club", ["alpha", "beta"])
+@pytest.mark.parametrize("phase", ["open", "closed"])
+@pytest.mark.parametrize("published,expected", [
+    (None, False), ({}, False),
+    ({"season_complete": False, "club_cup": {"status": "complete"}}, False),
+    ({"season_complete": True, "club_cup": {"status": "pending"}}, False),
+    ({"season_complete": True, "club_cup": {"status": "complete"}}, True),
+])
+def test_workspace_completion_uses_only_this_seasons_published_results(setup, club, phase, published, expected):
+    c, s = setup
+    s["assignment"]["club_id"] = club
+    set_registration_phase(s["season"], phase)
+    s["tables"]["pcs_interclub_publications"] = [
+        {"season_id": str(uuid4()), "published": {"season_complete": True, "club_cup": {"status": "complete"}}},
+        {"season_id": s["season"]["id"], "published": published,
+         "draft": {"season_complete": True, "club_cup": {"status": "complete"}, "private_notes": "private draft"}},
+    ]
+    response = c.get(base(s, club))
+    assert response.status_code == 200
+    assert response.json()["season_complete"] is expected
+    assert "private draft" not in response.text and "published" not in response.json()
+    assert not s["calls"], "Opening a finished season must not change its results or start another season."
+
+
+def test_workspace_without_a_publication_stays_active(setup):
+    c, s = setup
+    assert c.get(base(s)).json()["season_complete"] is False
+
+
+def test_open_uses_exact_saved_revision_and_verified_organizer(setup):
+    c,s=setup
+    response=c.post(base(s)+"/open",json={"expected_revision":2,"rules":s["season"]["rules"]})
+    assert response.status_code==200
+    name,args=s["calls"][0]
+    assert name=="pcs_open_interclub_meet_registration" and args["p_club_id"]=="alpha" and args["p_actor_id"]==s["user"].user_id
+    assert args["p_revision"] == 2
+    assert args["p_rules"] == {"3.5": {"min_rating": None, "max_rating": 3.999, "women_required": 2}}
+
+
+@pytest.mark.parametrize("patch",[dict(min_rating=4,max_rating=3),dict(max_rating=9),dict(women_required=5),dict(private="injected")])
+def test_invalid_eligibility_settings_are_rejected_before_writing(setup,patch):
+    c,s=setup
+    response=c.post(base(s)+"/open",json={"expected_revision":2,"rules":{"3.5":patch}})
+    assert response.status_code==422 and not s["calls"]
+
+
+def test_roster_and_decision_pass_scope_and_revision_to_atomic_transactions(setup):
+    c,s=setup; s["assignment"]["club_id"]="beta"
+    url=meet_base(s,"beta")+f"/teams/{s['team']['id']}"
+    response=c.put(url,json={"expected_meet_revision":1,"expected_revision":1,"name":"Beta Blue","division":"3.5","player_ids":[1,2,3,4]})
+    assert response.status_code==200
+    name,args=s["calls"][-1]
+    assert name=="pcs_save_interclub_meet_roster" and args["p_club_id"]=="beta" and args["p_revision"]==1 and args["p_player_ids"]==[1,2,3,4]
+    assert "private" not in response.text
+    s["assignment"]["club_id"]="alpha"
+    response=c.post(meet_base(s)+f"/teams/{s['team']['id']}/eligibility",json={"expected_meet_revision":1,"expected_revision":1,"approve":True,"reason":" Approved for this roster "})
+    assert response.status_code==200 and s["calls"][-1][1]["p_reason"]=="Approved for this roster"
+    assert "player_id" not in response.json()["team"]["roster"][0]
+
+
+@pytest.mark.parametrize("patch",[dict(player_ids=[1,2,3]),dict(player_ids=[1,1,2,3]),dict(player_ids=[-1,2,3,4]),dict(player_ids=[1,2,3,4,5]),dict(club_id="gamma"),dict(actor_id="forged"),dict(name=" ")])
+def test_bad_or_forged_roster_inputs_never_write(setup,patch):
+    c,s=setup
+    payload=dict(expected_meet_revision=1,expected_revision=0,name="Team",division="3.5",player_ids=[1,2,3,4]); payload.update(patch)
+    assert c.put(meet_base(s)+f"/teams/{s['team']['id']}",json=payload).status_code==422
+    assert not s["calls"]
+
+
+def test_history_is_private_to_owner_and_organizer_with_contact_redaction(setup):
+    c,s=setup
+    response=c.get(meet_base(s)+f"/teams/{s['team']['id']}/history")
+    assert response.status_code==200 and "private" not in response.text
+    assert "player_id" not in response.json()["history"][0]["roster"][0]
+    s["assignment"]["club_id"]="gamma"
+    s["tables"]["pcs_interclub_participations"].append({**s["participation"],"club_id":"gamma"})
+    assert c.get(meet_base(s,"gamma")+f"/teams/{s['team']['id']}/history").status_code==404
+
+
+@pytest.mark.parametrize("code,status",[("42501",403),("40001",409),("PT409",409),("23505",409),("22023",422),("PT423",423),("P0002",404),("unknown",503)])
+def test_database_failures_are_actionable_without_internal_details(setup,code,status):
+    c,s=setup; s["error"]=code
+    r=c.post(base(s)+"/participations/beta",json={"expected_revision":2,"action":"cancel"})
+    assert r.status_code==status and "private" not in r.text
+
+
+def test_player_and_team_lists_have_explicit_pagination(setup):
+    c,s=setup; s["assignment"]["club_id"]="beta"
+    s["tables"]["players"]=[dict(id=i,club_id="beta",name=f"Player {i}",rating=1400,active=True) for i in range(1,103)]
+    s["tables"]["pcs_interclub_pool_members"] = [dict(season_id=s["season"]["id"], club_id="beta", player_id=i, status="active", approval_status="approved") for i in range(1, 103)]
+    s["tables"]["pcs_interclub_current_rosters"]=[{**s["team"],"id":str(uuid4())} for _ in range(102)]
+    assert len(c.get(meet_base(s,"beta")+"/players").json()["players"])==100
+    assert c.get(meet_base(s,"beta")+"/players").json()["next_offset"]==100
+    assert len(c.get(meet_base(s,"beta")+"/players?offset=100").json()["players"])==2
+    assert c.get(meet_base(s,"beta")).json()["next_team_offset"]==100
+    assert len(c.get(meet_base(s,"beta")+"?team_offset=100").json()["teams"])==2
+
+
+def test_rosters_are_scoped_to_one_meet_and_legacy_rows_remain_separate(setup):
+    c,s=setup; s["assignment"]["club_id"]="beta"
+    second = {**s["meet"],"id":str(uuid4())}
+    s["tables"]["pcs_interclub_meet_workspaces"].append(second)
+    s["tables"]["pcs_interclub_current_rosters"].extend([
+        {**s["team"],"id":str(uuid4()),"meet_id":second["id"],"name":"Next meet team"},
+        {**s["team"],"id":str(uuid4()),"meet_id":None,"name":"Archived season team"}])
+    assert [t["name"] for t in c.get(meet_base(s,"beta")).json()["teams"]]==["Beta Blue"]
+    assert [t["name"] for t in c.get(base(s,"beta")+"/meets/"+second["id"]).json()["teams"]]==["Next meet team"]
+    assert [t["name"] for t in c.get(base(s,"beta")).json()["teams"]]==["Archived season team"]
+    assert c.get(base(s,"beta")+"/meets/"+second["id"]+f"/teams/{s['team']['id']}/history").status_code==404
+
+
+def test_meet_not_in_this_season_or_club_is_unavailable(setup):
+    c,s=setup; s["assignment"]["club_id"]="beta"
+    hidden={**s["meet"],"id":str(uuid4()),"club_ids":["alpha","gamma"]}
+    s["tables"]["pcs_interclub_meet_workspaces"].append(hidden)
+    assert len(c.get(base(s,"beta")).json()["meets"])==1
+    for suffix in ("","/players",f"/teams/{s['team']['id']}/history"):
+        assert c.get(base(s,"beta")+"/meets/"+hidden["id"]+suffix).status_code==404
+    s["meet"]["season_id"]=str(uuid4())
+    assert c.get(meet_base(s,"beta")).status_code==404
+
+
+@pytest.mark.parametrize("club", ["beta", "alpha"])
+def test_season_meet_filter_uses_jsonb_over_postgrest_and_preserves_club_scope(setup, monkeypatch, club):
+    """Exercise the real SDK: list containment is serialized as a SQL array, not JSONB."""
+    c, s = setup
+    s["assignment"]["club_id"] = club
+    hidden_meet = {**s["meet"], "id": str(uuid4()), "club_ids": ["alpha", "gamma"]}
+    other_season_meet = {**s["meet"], "id": str(uuid4()), "season_id": str(uuid4())}
+    s["tables"]["pcs_interclub_meet_workspaces"].extend([hidden_meet, other_season_meet])
+    s["tables"]["pcs_interclub_participations"].append({**s["participation"], "club_id": "gamma"})
+    s["tables"]["clubs"].append(dict(id="delta", name="Unrelated club", slug="delta"))
+    other_team = {**s["team"], "id": str(uuid4()), "club_id": "gamma", "name": "Gamma team"}
+    s["tables"]["pcs_interclub_current_rosters"].extend([
+        other_team,
+        {**s["team"], "id": str(uuid4()), "meet_id": None, "name": "Beta archived team"},
+        {**other_team, "id": str(uuid4()), "meet_id": None, "name": "Gamma archived team"},
+    ])
+    requests = []
+
+    def respond(request):
+        assert request.method == "GET"
+        assert request.url.path.endswith("/pcs_interclub_meet_workspaces")
+        params = request.url.params
+        requests.append(params)
+        rows = s["tables"]["pcs_interclub_meet_workspaces"]
+        for field in ("season_id", "id"):
+            if field in params:
+                assert params[field].startswith("eq.")
+                rows = [row for row in rows if row[field] == params[field][3:]]
+        if "club_ids" in params:
+            assert params["club_ids"].startswith("cs.")
+            try:
+                club_ids = json.loads(params["club_ids"][3:])
+            except json.JSONDecodeError:
+                # Match PostgreSQL's rejection of the SDK's SQL-array {beta} literal.
+                return Response(400, json={"code": "22P02", "message": "invalid input syntax for type json", "details": None, "hint": None})
+            assert isinstance(club_ids, list)
+            rows = [row for row in rows if set(club_ids).issubset(row["club_ids"])]
+        columns = params["select"].split(",")
+        return Response(200, json=[{key: row.get(key) for key in columns} for row in rows])
+
+    original_table = s["db"].table
+    with Client(transport=MockTransport(respond), trust_env=False) as http_client:
+        db = SyncPostgrestClient("https://postgrest.example.test/rest/v1", http_client=http_client)
+        monkeypatch.setattr(s["db"], "table", lambda name: db.table(name) if name == "pcs_interclub_meet_workspaces" else original_table(name))
+        response = c.get(base(s, club))
+        assert response.status_code == 200
+        data = response.json()
+        assert {meet["id"] for meet in data["meets"]} == ({s["meet"]["id"], hidden_meet["id"]} if club == "alpha" else {s["meet"]["id"]})
+        assert {entry["club_id"] for entry in data["participations"]} == ({"beta", "gamma"} if club == "alpha" else {"beta"})
+        assert {team["club_id"] for team in data["teams"]} == ({"beta", "gamma"} if club == "alpha" else {"beta"})
+        assert {entry["id"] for entry in data["clubs"]} == {"alpha", "beta", "gamma"}
+        assert "private" not in response.text and "email" not in response.text and "phone" not in response.text
+        assert ("player_id" in data["teams"][0]["roster"][0]) == (club == "beta")
+        assert requests[0]["season_id"] == f"eq.{s['season']['id']}"
+        if club == "beta":
+            assert json.loads(requests[0]["club_ids"][3:]) == ["beta"]
+        else:
+            assert "club_ids" not in requests[0]
+
+        meet_response = c.get(meet_base(s, club))
+        assert meet_response.status_code == 200
+        assert {team["club_id"] for team in meet_response.json()["teams"]} == ({"beta", "gamma"} if club == "alpha" else {"beta"})
+        assert c.get(base(s, club) + "/meets/" + hidden_meet["id"]).status_code == (200 if club == "alpha" else 404)
+        assert c.get(base(s, club) + "/meets/" + other_season_meet["id"]).status_code == 404
+
+
+def test_old_season_write_urls_and_deadline_payload_require_reload(setup):
+    c,s=setup
+    for method,suffix in [(c.put,""),(c.post,"/withdraw"),(c.post,"/eligibility")]:
+        response=method(base(s)+f"/teams/{s['team']['id']}"+suffix,json={"expected_revision":1})
+        assert response.status_code==409 and "individual meets" in response.text
+    assert not s["calls"]
+    assert c.post(base(s)+"/open",json={"expected_revision":2,"rules":s["season"]["rules"],"roster_deadline":"2099-01-01T00:00:00Z"}).status_code==422
+
+
+def test_meet_deadline_and_roster_revision_are_passed_to_the_transaction(setup):
+    c,s=setup
+    assert c.put(meet_base(s)+"/deadline",json={"expected_revision":1,"roster_deadline":"2099-01-10T12:00:00Z"}).status_code==200
+    name,args=s["calls"][-1]
+    assert name=="pcs_set_interclub_meet_deadline" and args["p_meet_id"]==s["meet"]["id"] and args["p_revision"]==1
+    assert c.put(meet_base(s)+f"/teams/{s['team']['id']}",json={"expected_meet_revision":3,"expected_revision":0,"name":"Team","division":"3.5","player_ids":[1,2,3,4]}).status_code==200
+    assert s["calls"][-1][1]["p_meet_revision"]==3 and s["calls"][-1][1]["p_meet_id"]==s["meet"]["id"]
+
+
+def test_started_meet_keeps_history_but_player_picker_is_closed(setup):
+    c,s=setup; s["assignment"]["club_id"]="beta"; s["meet"]["roster_open"]=False
+    assert c.get(meet_base(s,"beta")).status_code==200
+    assert c.get(meet_base(s,"beta")+f"/teams/{s['team']['id']}/history").status_code==200
+    assert c.get(meet_base(s,"beta")+"/players").status_code==409
+    assert "players" not in s["reads"]
+
+
+@pytest.mark.parametrize("patch",[dict(name=""),dict(start_date=None),dict(club_ids=["beta"]),dict(meets=[]),dict(meets=[dict(host_club_id="beta",club_ids=["beta","gamma"],starts_at=None)])])
+def test_incomplete_or_unreviewed_setup_cannot_open_invitations(setup,patch):
+    c,s=setup; s["tables"]["pcs_interclub_drafts"][0]["draft"].update(patch)
+    r=c.post(base(s)+"/open",json={"expected_revision":2,"rules":s["season"]["rules"]})
+    assert r.status_code in (409,422) and not s["calls"]
+
+
+def test_open_requires_current_saved_setup_owned_by_this_organizer(setup):
+    c,s=setup
+    s["tables"]["pcs_interclub_drafts"][0]["revision"]=3
+    assert c.post(base(s)+"/open",json={"expected_revision":2,"rules":s["season"]["rules"]}).status_code==409
+    s["tables"]["pcs_interclub_drafts"][0]["organizer_club_id"]="gamma"
+    assert c.post(base(s)+"/open",json={"expected_revision":3,"rules":s["season"]["rules"]}).status_code==404
+    assert not s["calls"]
+
+
+def test_open_normalizes_legacy_custom_rating_rules_to_allow_playing_up(setup):
+    c, s = setup
+    draft = s["tables"]["pcs_interclub_drafts"][0]["draft"]
+    draft["divisions"] = ["3.0", "3.5", "Open", "4.5/Open"]
+    legacy_rules = {
+        "3.0": {"min_rating": 3.0, "max_rating": 3.499, "women_required": None},
+        "3.5": {"min_rating": 3.5, "max_rating": 4, "women_required": None},
+        "Open": {"min_rating": 4.5, "women_required": None},
+        "4.5/Open": {"min_rating": 4.5, "women_required": None},
+    }
+    draft["registration_rules"] = legacy_rules
+    response = c.post(base(s) + "/open", json={"expected_revision": 2, "rules": legacy_rules})
+    assert response.status_code == 200
+    assert s["calls"][0][1]["p_rules"] == {
+        "3.0": {"min_rating": None, "max_rating": 3.499, "women_required": 2},
+        "3.5": {"min_rating": None, "max_rating": 3.999, "women_required": 2},
+        "Open": {"min_rating": None, "max_rating": None, "women_required": 2},
+        "4.5/Open": {"min_rating": None, "max_rating": None, "women_required": 2},
+    }
+
+
+def test_meet_player_lookup_only_approved_pool_and_uses_deadline_rating(setup):
+    client, state = setup
+    state["assignment"]["club_id"] = "beta"
+    state["tables"]["pcs_interclub_pool_members"][1]["approval_status"] = "pending"
+    state["tables"]["pcs_interclub_pool_members"][2]["status"] = "withdrawn"
+    state["meet_player_ratings"] = [dict(player_id=i, entry_id=str(uuid4()), eligibility_rating=4.125, gender="female", rating_deadline=state["meet"]["roster_deadline"], rating_locked=True) for i in range(1, 5)]
+    response = client.get(meet_base(state, "beta") + "/players")
+    assert response.status_code == 200
+    rows = response.json()["players"]
+    assert [row["id"] for row in rows] == ["1", "4"]
+    assert rows[0]["starting_rating"] == 3.2
+    assert rows[0]["eligibility_rating"] == 4.125 and rows[0]["rating_locked"]
+    assert "email" not in response.text
+    # The separate directory lookup still supports linking a new signup.
+    response = client.get(base(state, "beta") + "/players")
+    assert len(response.json()["players"]) == 4
+
+
+def test_two_player_roster_requires_explicit_missing_pairing_declaration(setup):
+    client, state = setup
+    state["assignment"]["club_id"] = "beta"
+    payload = dict(expected_meet_revision=1, expected_revision=0, name="Women only", division="3.5", player_ids=[1, 2])
+    url = meet_base(state, "beta") + "/teams/" + str(uuid4())
+    assert client.put(url, json=payload).status_code == 422
+    response = client.put(url, json={**payload, "missing_pairing_forfeit": True})
+    assert response.status_code == 200
+    assert state["calls"][-1][1]["p_player_ids"] == [1, 2]
+    assert client.put(url, json={**payload, "player_ids": [1, 2, 3], "missing_pairing_forfeit": True}).status_code == 422
+    assert client.put(url, json={**payload, "player_ids": [1, 2, 3, 4], "missing_pairing_forfeit": True}).status_code == 422
+
+
+@pytest.mark.parametrize("phase", ["unconfigured", "scheduled", "open"])
+def test_direct_meet_planning_urls_stay_locked_until_season_registration_closes(setup, phase):
+    client, state = setup
+    set_registration_phase(state["season"], phase)
+    result = client.get(base(state))
+    assert result.status_code == 200
+    body = result.json()
+    assert body["season"]["registration"]["status"] == phase
+    assert body["meets"] == [] and body["teams"] == []
+    assert body["meet_schedule"] == [{key: state["meet"][key] for key in ("id", "starts_at", "host_club_id", "club_ids")}]
+    assert body["first_meet_at"] == state["meet"]["starts_at"]
+    assert not {"roster_deadline", "roster_open", "deadline_editable", "revision", "teams", "roster"}.intersection(body["meet_schedule"][0])
+    assert client.put(meet_base(state) + "/deadline", json={
+        "expected_revision": 1, "roster_deadline": "2099-01-10T12:00:00Z"
+    }).status_code == 423
+    assert client.post(meet_base(state) + f"/teams/{state['team']['id']}/eligibility", json={
+        "expected_meet_revision": 1, "expected_revision": 1, "approve": True, "reason": "Reviewed"
+    }).status_code == 423
+    state["assignment"]["club_id"] = "beta"
+    root = meet_base(state, "beta")
+    assert client.get(root + "/players").status_code == 423
+    assert client.put(root + f"/teams/{state['team']['id']}", json={
+        "expected_meet_revision": 1, "expected_revision": 1, "name": "Beta Blue", "division": "3.5",
+        "player_ids": [1, 2, 3, 4]
+    }).status_code == 423
+    assert client.post(root + f"/teams/{state['team']['id']}/withdraw", json={
+        "expected_meet_revision": 1, "expected_revision": 1
+    }).status_code == 423
+    assert not state["calls"], "Locked operations must never reach a mutation RPC."
+
+
+def test_only_commissioner_updates_shared_registration_window_with_exact_revision(setup):
+    client, state = setup
+    set_registration_phase(state["season"], "unconfigured")
+    payload = {"expected_revision": 0, "opens_at": "2026-01-01T00:00:00Z", "closes_at": "2098-12-31T23:59:59Z"}
+    state["assignment"]["club_id"] = "beta"
+    assert client.put(base(state, "beta") + "/registration-window", json=payload).status_code == 403
+    state["assignment"]["club_id"] = "gamma"
+    assert client.put(base(state, "gamma") + "/registration-window", json=payload).status_code == 403
+    assert not state["calls"]
+    state["assignment"]["club_id"] = "alpha"
+    assert client.put(base(state) + "/registration-window", json={**payload, "expected_revision": 1}).status_code == 409
+    assert not state["calls"]
+    result = client.put(base(state) + "/registration-window", json=payload)
+    assert result.status_code == 200
+    assert result.json()["season"]["registration"]["status"] == "open"
+    assert result.json()["season"]["registration"]["revision"] == 1
+    name, args = state["calls"][-1]
+    assert name == "pcs_set_interclub_registration_window"
+    assert args["p_actor_id"] == state["user"].user_id and args["p_club_id"] == "alpha"
+    assert args["p_revision"] == 0 and args["p_season_id"] == state["season"]["id"]
+    state["assignment"]["club_id"] = "beta"
+    participant = client.get(base(state, "beta"))
+    assert participant.status_code == 200
+    assert participant.json()["season"]["registration"] == result.json()["season"]["registration"]
+
+
+@pytest.mark.parametrize("patch", [{"opens_at": "2099-01-01T00:00:00Z"}, {"closes_at": "2020-01-01T00:00:00Z"},
+                                  {"opens_at": "2026-01-01T00:00:00"}, {"closes_at": None}, {"club_id": "beta"}])
+def test_registration_window_requires_ordered_aware_dates_and_route_scope(setup, patch):
+    client, state = setup
+    result = client.put(base(state) + "/registration-window", json={"expected_revision": 1,
+        "opens_at": "2026-01-01T00:00:00Z", "closes_at": "2099-01-01T00:00:00Z", **patch})
+    assert result.status_code == 422 and not state["calls"]

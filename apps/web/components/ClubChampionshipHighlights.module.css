@@ -1,0 +1,116 @@
+.championships {
+  min-width: 0;
+}
+.championships h2 {
+  margin: 0 0 0.85rem;
+  font-size: 1.15rem;
+  letter-spacing: -0.02em;
+}
+.cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+.card {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid #e9d7aa;
+  border-radius: 16px;
+  background: #fffdf7;
+  color: #422f11;
+  text-decoration: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.card:first-child:nth-last-child(odd) {
+  grid-column: 1 / -1;
+}
+.leagueChampion {
+  background: linear-gradient(120deg, #fff8df, #fffdf7);
+  border-color: #dbba66;
+}
+.card:hover {
+  border-color: #a87912;
+  box-shadow: 0 3px 12px #78591414;
+}
+.card:focus-visible,
+.caseLink:focus-visible {
+  outline: 3px solid #1d4ed8;
+  outline-offset: 3px;
+}
+.trophy {
+  flex: 0 0 auto;
+  font-size: 2rem;
+  line-height: 1;
+}
+.leagueChampion .trophy {
+  font-size: 2.6rem;
+}
+.details {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.season {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 650;
+  color: #75520e;
+}
+.card h3 {
+  margin: 0.35rem 0;
+  font-size: 1.05rem;
+  line-height: 1.25;
+}
+.leagueChampion h3 {
+  font-size: 1.3rem;
+}
+.date {
+  display: block;
+  font-size: 0.78rem;
+  color: #6b5d44;
+}
+.caseLink {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  margin-top: 0.35rem;
+  color: #785510;
+  font-size: 0.9rem;
+  font-weight: 700;
+  text-underline-offset: 3px;
+}
+.tournamentHighlights {
+  margin: 1.5rem 0 2rem;
+}
+.goldCards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 270px), 1fr));
+  gap: 0.75rem;
+}
+.goldCards .card {
+  grid-column: auto;
+  align-items: flex-start;
+}
+.division,
+.winners,
+.resultLink {
+  display: block;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+.winners {
+  margin-top: 0.35rem;
+  color: #6b5d44;
+}
+.resultLink {
+  margin-top: 0.6rem;
+  font-weight: 700;
+  color: #785510;
+}
+@media (max-width: 640px) {
+  .cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

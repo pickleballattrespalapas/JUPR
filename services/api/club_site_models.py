@@ -161,7 +161,7 @@ class SiteDocument(StrictModel):
     leaderboard: LeaderboardSettings = Field(default_factory=LeaderboardSettings)
     page_visibility: dict[
         Literal["players", "leaderboards", "leagues", "tournaments", "matches", "play",
-                "match-explorer", "weekly-recap", "badge-codex", "interclub"],
+                "match-explorer", "weekly-recap", "badge-codex", "interclub", "trophies"],
         Literal["public", "private"],
     ] = Field(default_factory=dict)
     pages: list[SitePage] = Field(default_factory=lambda: [SitePage(slug="home", title="Home")], min_length=1, max_length=20)
