@@ -25,12 +25,13 @@ const eligibility = load("lib/tournamentRegistrationEligibility.ts", {
   "@/lib/tournamentSkillEligibility": load("lib/tournamentSkillEligibility.ts")
 });
 const ConfirmAction = () => null;
+const FormDialog = ({ open, children }) => open ? React.createElement("div", { role: "dialog" }, children) : null;
 const redirects = [];
 const Panel = load("app/admin/tournaments/registration/registrants/[registrationId]/TournamentRegistrantEditPanel.tsx", {
   "next/link": { __esModule: true, default: ({ children }) => children },
   "next/navigation": { useRouter: () => ({ replace: href => redirects.push(href) }) },
   "@/components/ConfirmAction": { ConfirmAction },
-  "@/components/interaction": { ...interaction, FormDialog: ({ open, children }) => open ? React.createElement("div", { role: "dialog" }, children) : null },
+  "@/components/interaction": { ...interaction, FormDialog },
   "@/lib/tournamentRegistrationActionError": errors,
   "@/lib/tournamentRegistrationEligibility": eligibility,
   "@/lib/useAdminSession": { useAdminSession: () => ({ accessToken: "fixture-session", loading: false }) },
@@ -203,6 +204,34 @@ async function main() {
     await act(async () => field("Division").findByType("select").props.onChange({ target: { value: "doubles" } }));
     assert.equal(field("Partner state").findByType("select").props.value, "NEEDS_PARTNER");
     assert.equal(renderer.root.findAllByType("input").find(node => node.props.type === "checkbox" && node.parent.type === "label" && content(node.parent).includes("Show this request")).props.checked, false, "Partner-board opt-in is not carried through a singles entry");
+    // A confirmed team changes division in one save, preserving its pairing and
+    // sending the version snapshot so a stale partner update cannot be overwritten.
+    eventOptions.push(event("doubles-4.5", { event_family_label: "doubles", division_name: "Men's Doubles 4.5", event_type: "GENDER_DOUBLES", partner_required: true, registration_day_id: "day-2" }));
+    selections[1].partner_selection_id = "sel-partner";
+    selections[1].partner_display_name = "Fixture Partner";
+    selections[1].division_transfer_context = { team_link_id: "link", team_link_updated_at: "v1", partner_selection_id: "sel-partner", partner_selection_updated_at: "v2", partner_registration_id: "reg-partner", partner_registration_updated_at: "v3" };
+    await act(async () => { await save(); });
+    await act(async () => entry("Doubles entry").findAllByType("button").find(node => content(node) === "Change division").props.onClick());
+    const divisionDialog = () => renderer.root.findAllByType(FormDialog).find(node => node.props.open);
+    const newDivision = () => renderer.root.findByProps({ "aria-label": "New division" });
+    assert.equal(newDivision().props.disabled, false, "A confirmed partnership must not lock the division selector");
+    assert.deepEqual(newDivision().findAllByType("option").map(node => node.props.value), ["", "doubles", "doubles-4.5"], "Division choices stay within the event, including divisions on another day");
+    assert.match(content(renderer.root), /Fixture Player and Fixture Partner move together/);
+    assert.equal(divisionDialog().props.submitDisabled, true, "The current division is not a change");
+    await act(async () => newDivision().props.onChange({ target: { value: "doubles-4.5" } }));
+    assert.equal(divisionDialog().props.submitLabel, "Move both players");
+    assert.equal(divisionDialog().props.submitDisabled, false);
+    rejection = { status: 409, detail: "Partner entry changed. Reload before moving this team." };
+    await act(async () => { try { await divisionDialog().props.onSubmit(); } catch {} });
+    assert.equal(newDivision().props.value, "doubles-4.5", "A rejected transfer retains the chosen division");
+    rejection = null;
+    await act(async () => { completion = await divisionDialog().props.onSubmit(); });
+    assert.equal(completion.status, "success");
+    const transfer = requests.at(-1);
+    assert.equal(transfer.event_option_id, "doubles-4.5");
+    assert.deepEqual(transfer.division_transfer_context, selections[1].division_transfer_context);
+    assert.equal(transfer.partner_mode, undefined, "Moving a division must not reset the partner state");
+    assert.equal(transfer.expected_updated_at, selections[1].updated_at);
     await verifyPublicLegacyGenders();
     await act(async () => field("Registration status").findByType("select").props.onChange({ target: { value: "cancelled" } }));
     const cancellation = () => renderer.root.findAllByType(ConfirmAction).find(node => node.props.confirmLabel === "Yes, cancel and remove");
