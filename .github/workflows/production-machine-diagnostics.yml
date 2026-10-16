@@ -1,0 +1,32 @@
+name: Read production machine diagnostics
+
+on:
+  push:
+    branches: [rollback-feb8]
+    paths: [.github/workflows/production-machine-diagnostics.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jupr-production-api-deploy
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+        with:
+          version: "0.4.49"
+      - name: Read only machine identity and host status
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          flyctl machines list --app juprleagues-api --json \
+            | jq '[.[] | {id, state, region, host_status, created_at, updated_at, image_ref, configured_image: .config.image}]'
+          flyctl machine status e820e37c790718 --app juprleagues-api --json \
+            | jq '{id, state, region, host_status, created_at, updated_at, image_ref, configured_image: .config.image, events: [.events[]? | {type, status, source, timestamp}]}'
