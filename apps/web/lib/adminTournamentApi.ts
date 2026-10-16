@@ -105,6 +105,14 @@ export type AdminTournamentSelection = {
   partner_selection_id?: string | null;
   partner_registration_id?: string | null;
   partner_display_name?: string | null;
+  division_transfer_context?: {
+    team_link_id: string;
+    team_link_updated_at: string;
+    partner_selection_id: string;
+    partner_selection_updated_at: string;
+    partner_registration_id: string;
+    partner_registration_updated_at: string;
+  } | null;
   created_at?: string | null;
   updated_at?: string | null;
 };

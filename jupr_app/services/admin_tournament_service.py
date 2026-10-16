@@ -14,6 +14,7 @@ from jupr_app.domain.tournament_registration_repo import (
     PARTNER_MODE_OPTIONS,
     StaleTournamentRegistrationAdminError,
     StaleTournamentRegistrationSelectionError,
+    TournamentRegistrationEditConflictError,
     create_admin_registration_selection,
     delete_admin_registration_selection,
     is_day_enabled,
@@ -31,6 +32,10 @@ from jupr_app.services.public_tournament_registration_service import (
     _get_club_player,
     build_tournament_registration_player_profile,
     validate_and_clean_tournament_selection,
+)
+from jupr_app.services.tournament_division_transfer_service import (
+    confirmed_division_team, division_family_key,
+    validate_confirmed_division_transfer,
 )
 
 CANCELLATION_ADMIN_ROLES = frozenset({"administrator", "club_owner", "super_admin"})
@@ -58,8 +63,8 @@ SELECTION_SELECT = (
 EVENT_OPTION_SELECT = (
     "id,tournament_id,registration_day_id,label,event_family_label,division_name,event_type,"
     "gender_restriction,skill_label,age_label,partner_required,capacity_teams,public_partner_board,"
-    "event_format_default,scoring_default,skill_mode,skill_min_rating,skill_max_rating,age_mode,status,enabled,waitlist_enabled,"
-    "partner_board_enabled,eligibility_mode,combined_rating_cap,sort_order"
+    "event_format_default,scoring_default,skill_mode,skill_min_rating,skill_max_rating,age_mode,age_rules,status,enabled,waitlist_enabled,"
+    "partner_board_enabled,eligibility_mode,combined_rating_cap,competition_format,price_usd,sort_order"
 )
 DAY_SELECT = "id,tournament_id,label,event_date,enabled,sort_order,court_count,court_labels,available_court_ids,court_open_time,court_close_time,court_notes,created_at"
 CONFIRM_REGISTRATION_UPDATE = "SAVE REGISTRATION"
@@ -462,6 +467,7 @@ def _selection_payload(
         "partner_selection_id": (partner or {}).get("selection_id"),
         "partner_registration_id": (partner or {}).get("registration_id"),
         "partner_display_name": (partner or {}).get("display_name"),
+        "division_transfer_context": (partner or {}).get("division_transfer_context"),
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
     }
@@ -516,6 +522,14 @@ def _partner_relationships_for_tournament(
                 "display_name": _display_name(partner_registration)
                 if partner_registration
                 else None,
+                "division_transfer_context": {
+                    "team_link_id": _clean_text(link.get("id"), limit=120),
+                    "team_link_updated_at": str(link.get("updated_at") or ""),
+                    "partner_selection_id": partner_selection_id,
+                    "partner_selection_updated_at": str(partner_selection.get("updated_at") or ""),
+                    "partner_registration_id": partner_registration_id,
+                    "partner_registration_updated_at": str(partner_registration.get("updated_at") or ""),
+                },
             }
     return result
 
@@ -1499,6 +1513,11 @@ def update_admin_tournament_selection(
     if not event:
         raise ValueError("event option not found for this tournament")
     event_changed = next_event_id != current_event_id
+    division_team = confirmed_division_team(
+        supabase, tournament_id=clean_tournament_id, selection=before,
+    ) if event_changed else None
+    if division_team and division_family_key(events_by_id.get(current_event_id) or {}) != division_family_key(event):
+        raise ValueError("Choose a division within the same event, such as Men's Doubles 4.0 to 4.5.")
 
     days = _table_rows_for_tournament(
         supabase,
@@ -1540,7 +1559,7 @@ def update_admin_tournament_selection(
     partner_mode_changed = next_partner_mode != current_partner_mode
     partner_fields_supplied = any(field in patch for field in _PARTNER_EDIT_FIELDS)
     relationship_sensitive_change = event_changed or partner_mode_changed or partner_fields_supplied
-    if relationship_sensitive_change:
+    if relationship_sensitive_change and not division_team:
         relationship_lock = _selection_relationship_lock_reason(
             supabase,
             tournament_id=clean_tournament_id,
@@ -1556,6 +1575,25 @@ def update_admin_tournament_selection(
         raise ValueError("This event entry is already imported into a draw. Make the corresponding team change in Tournament Ops; this registration editor will not bypass draw integrity.")
 
     settings = _required_registration_settings(supabase, tournament_id=clean_tournament_id)
+    transfer_context = None
+    if division_team:
+        # This path moves an existing team; partner replacement is a separate
+        # operation and must never be combined with the division change.
+        if partner_mode_changed or any(
+            field in patch and patch.get(field) not in (before.get(field), before.get(field) or "")
+            for field in (*_PARTNER_EDIT_FIELDS, "partner_note")
+        ):
+            raise ValueError("A division change keeps the confirmed partner. Save partner changes separately.")
+        try:
+            transfer_context = validate_confirmed_division_transfer(
+                supabase, club_id=str(club_id), tournament_id=clean_tournament_id,
+                selection=before, registration=registration,
+                source_event=events_by_id.get(current_event_id) or {}, target_event=event,
+                settings=settings, team=division_team,
+                expected_context=patch.get("division_transfer_context"),
+            )
+        except TournamentRegistrationEditConflictError as exc:
+            raise StaleTournamentRegistrationSelectionError(str(exc)) from exc
     candidate = dict(before)
     candidate["event_option_id"] = next_event_id
     candidate["registration_day_id"] = day_id
@@ -1575,7 +1613,7 @@ def update_admin_tournament_selection(
         candidate["show_on_partner_board"] = False
 
     validated: dict[str, Any] | None = None
-    if event_changed or "partner_mode" in patch or partner_fields_supplied:
+    if (event_changed or "partner_mode" in patch or partner_fields_supplied) and not division_team:
         validated = _validate_admin_selection_candidate(
             supabase,
             club_id=str(club_id),
@@ -1597,6 +1635,11 @@ def update_admin_tournament_selection(
             update_payload[field] = canonical.get(field)
     if "partner_note" in patch:
         update_payload["partner_note"] = _clean_text(patch.get("partner_note"), limit=500)
+    if division_team:
+        update_payload = {
+            "event_option_id": next_event_id, "registration_day_id": day_id,
+            "division_transfer_context": transfer_context,
+        }
     if not update_payload:
         raise ValueError("No supported event-entry fields were provided.")
     if dry_run:

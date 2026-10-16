@@ -341,6 +341,31 @@ def _manual_partner_error_message(exc: Exception) -> str | None:
     )
 
 
+def _raise_division_transfer_failure(result: dict[str, Any], *, public_edit: bool) -> None:
+    """Translate atomic transfer failures without exposing database internals."""
+    if result.get("ok") is True:
+        return
+    reason = str(result.get("reason") or "").upper()
+    messages = {
+        "REGISTRATION_CANCELLED": "A cancelled registration cannot change divisions.",
+        "INVALID_DIVISION_TARGET": "Choose an open division within the same event.",
+        "DIVISION_PRICE_CHANGED": "These divisions have different entry fees. Tournament staff must review payment before moving the team.",
+        "DIVISION_COMMERCE_REVIEW_REQUIRED": "This registration has event-specific pricing. Tournament staff must review payment before moving the team.",
+        "DUPLICATE_EVENT_FAMILY": "A team member already has another entry in this event.",
+        "DIVISION_FULL": "The selected division is full. Choose another division or contact tournament staff.",
+        "TEAM_NOT_ELIGIBLE": "One or both players do not meet the selected division's requirements.",
+    }
+    if reason in messages:
+        raise ValueError(messages[reason])
+    if reason in {"STALE_TEAM_VERSION", "PARTNER_RELATIONSHIP_CHANGED"}:
+        error_type = TournamentRegistrationEditConflictError if public_edit else StaleTournamentRegistrationSelectionError
+        raise error_type("This team changed after it was loaded. Refresh and try again.")
+    if str(result.get("code") or "").upper() in {"REGISTRATION_IMPORTED_TO_DRAW", "SELECTION_IMPORTED_TO_DRAW"}:
+        raise TournamentRegistrationImportedDrawError(
+            "This team is already imported into a draw. Tournament staff must update the draw before changing divisions."
+        )
+
+
 def _normalize_email(value: Any) -> str:
     return str(value or "").strip().lower()
 
@@ -2902,6 +2927,8 @@ def update_admin_registration_selection(
             clean_payload[field] = payload.get(field)
     if "show_on_partner_board" in payload:
         clean_payload["show_on_partner_board"] = _coerce_bool(payload.get("show_on_partner_board"))
+    if isinstance(payload.get("division_transfer_context"), dict):
+        clean_payload["division_transfer_context"] = dict(payload["division_transfer_context"])
     if clean_payload.get("partner_mode") and clean_payload["partner_mode"] not in PARTNER_MODE_OPTIONS:
         raise ValueError(f"Invalid partner mode: {clean_payload['partner_mode']}")
 
@@ -2956,6 +2983,7 @@ def update_admin_registration_selection(
     result = _rpc_object(resp)
     if result is None:
         raise RuntimeError("Registration selection update returned an invalid response.")
+    _raise_division_transfer_failure(result, public_edit=False)
     code = str(result.get("code") or "").strip().upper()
     if code == SELECTION_WRITE_CONFLICT_CODE:
         raise StaleTournamentRegistrationSelectionError(
@@ -3252,6 +3280,7 @@ def save_registration(
     commerce_transaction: dict[str, Any] | None = None,
     trusted_admin_create: bool = False,
     preserved_selections: dict[str, dict[str, Any]] | None = None,
+    division_transfers: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     email = _normalize_email(payload.get("email"))
     if not email:
@@ -3413,6 +3442,21 @@ def save_registration(
             }
         )
 
+    if division_transfers:
+        from jupr_app.services.tournament_division_transfer_service import PARTNER_FIELDS
+        for row in rows:
+            transfer = division_transfers.get(str(row.get("id") or ""))
+            if not transfer:
+                continue
+            before = transfer["selection"]
+            if (not atomic_edit or not expected_registration_id
+                    or str(before.get("id") or "") != str(row.get("id") or "")
+                    or str(before.get("registration_id") or "") != registration_id
+                    or str(before.get("tournament_id") or "") != str(tournament_id)):
+                raise ValueError("Division changes must belong to this verified registration.")
+            row.update({key: before.get(key) for key in PARTNER_FIELDS})
+            row["division_transfer_context"] = dict(transfer["context"])
+
     if atomic_edit:
         if not expected_registration_id:
             raise ValueError("Atomic registration edits require an expected registration id.")
@@ -3513,10 +3557,15 @@ def save_registration(
         result = _rpc_object(resp)
         if result is None:
             raise RuntimeError("Tournament registration edit returned an invalid response.")
+        _raise_division_transfer_failure(result, public_edit=True)
         code = str(result.get("code") or "").strip().upper()
         if code == REGISTRATION_EDIT_CONFLICT_CODE:
             raise TournamentRegistrationEditConflictError(
                 "Registration changed after it was loaded. Refresh the edit link and try again."
+            )
+        if code == SELECTION_WRITE_CONFLICT_CODE:
+            raise TournamentRegistrationEditConflictError(
+                "This team changed after it was loaded. Refresh and try again."
             )
         if code == REGISTRATION_EDIT_IMPORTED_CODE:
             raise TournamentRegistrationImportedDrawError(

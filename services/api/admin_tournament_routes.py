@@ -380,6 +380,7 @@ class AdminTournamentGenderReviewRequest(BaseModel):
 
 class AdminTournamentSelectionUpdateRequest(BaseModel):
     expected_updated_at: str
+    division_transfer_context: dict[str, str] | None = None
     event_option_id: str | None = None
     partner_mode: str | None = None
     partner_name: str | None = None
