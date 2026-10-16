@@ -98,8 +98,8 @@ def _honors(db, club_id, kind, source_id, source):
 
 
 def _history_is_public(kind, source, honors):
-    # Archiving removes a league from public results discovery, but its finalized,
-    # public award records remain part of the series' permanent history.
+    # Preserve finalized public awards in series history for archived leagues,
+    # including legacy source projections without a public visibility flag.
     return bool(source.get("public") or (
         kind == "league" and source.get("complete")
         and str(source["event"].get("status", "")).strip().lower() == "archived"
