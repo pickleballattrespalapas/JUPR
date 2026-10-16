@@ -25,8 +25,16 @@ def validate_source(machine):
 
 def recover(api, health, *, pause=time.sleep):
     machines = {m["id"]: m for m in api("GET", "/machines")}
+    volumes = api("GET", "/volumes")
+    print(json.dumps({"machines": [
+        {"id": m["id"], "state": m.get("state"), "host_status": m.get("host_status"),
+         "image": (m.get("config") or {}).get("image"),
+         "digest": (m.get("image_ref") or {}).get("digest")}
+        for m in machines.values()],
+        "volumes": [{"id": v.get("id"), "attached_machine_id": v.get("attached_machine_id"),
+                     "state": v.get("state")} for v in volumes]}), flush=True)
     assert set(machines) == {SOURCE, UNREACHABLE}, "Unexpected machine inventory"
-    assert api("GET", "/volumes") == [], "Recovery requires a volume-free app"
+    assert volumes == [], "Recovery requires a volume-free app"
     source, failed = machines[SOURCE], machines[UNREACHABLE]
     validate_source(source)
     assert failed["host_status"] == "unreachable", "Target host is no longer unavailable"
@@ -85,6 +93,7 @@ def main():
         recover(api, health)
     except Exception as exc:
         print(json.dumps({"ok": False, "error_type": type(exc).__name__,
+                          "condition": str(exc) if isinstance(exc, AssertionError) else None,
                           "http_status": getattr(exc, "code", None)}), flush=True)
         return 1
     return 0
