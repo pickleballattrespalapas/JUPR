@@ -879,7 +879,8 @@ def _build_resolved_league_results(
     valid_weeks = [int(row["week_num"]) for row in weeks]
     selected_week = int(week_num) if week_num is not None and int(week_num) in valid_weeks else None
     if selected_week is None:
-        selected_week = max(valid_weeks) if valid_weeks else None
+        played_weeks = [int(row["week_num"]) for row in weeks if row.get("has_results")]
+        selected_week = max(played_weeks or valid_weeks) if valid_weeks else None
     selected_week_rows = [row for row in weekly if row.get("week_num") == selected_week]
     weekly_min_games = max(1, min(20, int(weekly_min_games or DEFAULT_WEEKLY_HIGHLIGHT_MIN_GAMES)))
     season_min_games = max(1, int((league or {}).get("min_games") or 1))

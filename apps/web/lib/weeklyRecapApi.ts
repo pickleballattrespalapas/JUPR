@@ -114,7 +114,7 @@ export type WeeklyReport = {
   opening?: string;
   event_notes?: string;
   upcoming?: Array<{ text: string; url: string }>;
-  event_results?: Array<{ id?: string; title: string; kind: string; date?: string; summary: string; details: string[]; href?: string }>;
+  event_results?: Array<{ id?: string; title: string; kind: string; date?: string; summary: string; details: string[]; href?: string; weekly_reports?: Array<{ label: string; href: string }> }>;
   season_races?: Array<{ title: string; lines: string[]; href?: string }>;
   achievements?: string[];
   new_faces?: string[];

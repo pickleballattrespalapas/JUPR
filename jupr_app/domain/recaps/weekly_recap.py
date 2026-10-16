@@ -269,7 +269,7 @@ def _load_social_live_data(supabase, club_id: str, start_date: date, end_date: d
         return {"events": [], "participants": [], "matches": []}
 
     events = read_all_rows(lambda: supabase.table("live_events")
-        .select("id,name,event_type,event_date,status,result_mode,summary_json")
+        .select("id,name,event_type,event_date,status,result_mode,summary_json,raw_event_json")
         .eq("club_id", club_id).eq("result_mode", "social_unrated").eq("status", "saved")
         .gte("event_date", start_date.isoformat()).lte("event_date", end_date.isoformat()))
     participants, matches = [], []

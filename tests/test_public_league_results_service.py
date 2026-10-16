@@ -393,6 +393,19 @@ def test_public_league_results_honors_week_player_and_qualification_deep_links()
     assert [row["player_name"] for row in payload["recent_matches"][0]["opponents"]] == ["Alex", "Casey"]
 
 
+def test_weekly_report_opens_latest_played_week_before_future_schedule() -> None:
+    db = fake_supabase()
+    for row in db._tables['leagues_metadata']:
+        if row.get('league_name') == 'Open':
+            row['schedule_config'] = {'weeks': 12}
+    data = build_public_league_results(db, club_id='club', league_name='Open')
+    assert data['selected_week'] == 2
+    assert data['weekly_highlights']['week_num'] == 2
+    # A direct selection of an unplayed scheduled week still works.
+    selected = build_public_league_results(db, club_id='club', league_name='Open', week_num=12)
+    assert selected['selected_week'] == 12
+
+
 def test_public_league_results_returns_empty_payload_when_no_leagues() -> None:
     payload = build_public_league_results(FakeSupabase({}), club_id="club")
 
