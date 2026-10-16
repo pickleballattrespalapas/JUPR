@@ -9,7 +9,13 @@ export type TournamentSponsor = {
   logo_url?: string;
   sort_order?: number;
 };
-export type SponsorDraft = TournamentSponsor & { notes: string; logo_path: string; is_visible: boolean };
+export type SponsorDraft = TournamentSponsor & { notes: string; logo_path: string; is_visible: boolean; club_sponsor_id?: string };
+export type ClubSponsor = {
+  id: string; name: string; website: string; public_description: string;
+  logo_path: string; logo_url: string; updated_at: string;
+  contact_name: string; contact_email: string; contact_phone: string;
+};
+export type ClubSponsorInput = Pick<ClubSponsor, "name" | "website" | "public_description" | "logo_path" | "contact_name" | "contact_email" | "contact_phone"> & { expected_updated_at?: string };
 export const sponsorTiers: SponsorTier[] = ["presenting", "premier", "supporting"];
 export const sponsorTierLabels: Record<SponsorTier, string> = { presenting: "Premier / Presenting", premier: "Supporting sponsors", supporting: "Community sponsors" };
 export function sponsorPlacement(tier: SponsorTier): string {

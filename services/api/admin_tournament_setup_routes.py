@@ -35,11 +35,26 @@ from jupr_app.services.admin_tournament_guarded_operation import (
 )
 from services.api.auth import authenticate_bearer, auth_header
 from jupr_app.services.tournament_sponsor_service import upload_logo
+from jupr_app.services.club_sponsor_service import (
+    SponsorConflictError, list_club_sponsors, save_club_sponsor, use_club_sponsor,
+)
 from jupr_app.domain.tournament_registration_repo import get_tournament_record
 
 
 class SponsorLogoRequest(BaseModel):
     image_base64: str = Field(min_length=1, max_length=6990508)
+
+
+class ClubSponsorSaveRequest(BaseModel):
+    tournament_id: str
+    name: str = Field(min_length=1, max_length=120)
+    website: str = Field(default="", max_length=2048)
+    public_description: str = Field(default="", max_length=500)
+    logo_path: str = Field(default="", max_length=400)
+    contact_name: str = Field(default="", max_length=120)
+    contact_email: str = Field(default="", max_length=254)
+    contact_phone: str = Field(default="", max_length=80)
+    expected_updated_at: str | None = None
 
 
 class TournamentSetupSettingsRequest(BaseModel):
@@ -177,6 +192,58 @@ def _require_canonical_uuid(value: str, *, field: str) -> str:
 
 def install_admin_tournament_setup_routes(app, *, get_supabase_client) -> None:
     """Register guarded Tournament Setup Manager routes for the Next staging surface."""
+
+    def sponsor_context(club_id: str, authorization: str | None, *, mutation: bool = False, tournament_id: str | None = None):
+        if not is_admin_tournament_setup_enabled():
+            raise HTTPException(status_code=403, detail="Next Tournament Setup is disabled.")
+        supabase = get_supabase_client()
+        email, role = _resolve_role_or_403(supabase=supabase, club_id=club_id, authorization=authorization, source="club_sponsors")
+        if mutation:
+            require_tournament_admin_mutation_runtime("setup")
+        if tournament_id is not None:
+            tournament = get_tournament_record(supabase, tournament_id)
+            if not tournament or str(tournament.get("club_id")) != club_id:
+                raise HTTPException(status_code=404, detail="Tournament not found.")
+        return supabase, email, role
+
+    @app.get("/admin/clubs/{club_id}/sponsors")
+    def get_club_sponsors(club_id: str, authorization: str | None = auth_header()) -> dict[str, Any]:
+        supabase, _, _ = sponsor_context(club_id, authorization)
+        return {"sponsors": list_club_sponsors(supabase, club_id=club_id)}
+
+    @app.put("/admin/clubs/{club_id}/sponsors/{sponsor_id}")
+    def put_club_sponsor(club_id: str, sponsor_id: str, payload: ClubSponsorSaveRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
+        try:
+            supabase, email, role = sponsor_context(club_id, authorization, mutation=True, tournament_id=payload.tournament_id)
+            result = save_club_sponsor(supabase, club_id=club_id, sponsor_id=sponsor_id,
+                tournament_id=payload.tournament_id, value=_dump_model(payload), expected_updated_at=payload.expected_updated_at)
+            write_admin_activity_log(supabase, build_activity_payload(
+                club_id=club_id, actor_email=email, actor_role=role, action_type="club_sponsor_save",
+                entity_type="club_sponsor", entity_id=sponsor_id,
+                after_json={"name": result["name"]}, source_page="club_sponsors"))
+            return {"sponsor": result}
+        except SponsorConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (ValueError, PermissionError) as exc:
+            _handle(exc)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="The club sponsor could not be saved. Your tournament edits are still here.") from exc
+
+    @app.post("/admin/clubs/{club_id}/tournaments/setup/tournaments/{tournament_id}/saved-sponsors/{sponsor_id}/use")
+    def post_use_club_sponsor(club_id: str, tournament_id: str, sponsor_id: str, authorization: str | None = auth_header()) -> dict[str, Any]:
+        try:
+            supabase, _, _ = sponsor_context(club_id, authorization, mutation=True, tournament_id=tournament_id)
+            return {"sponsor": use_club_sponsor(supabase, club_id=club_id, tournament_id=tournament_id, sponsor_id=sponsor_id)}
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="Saved sponsor not found in this club.") from exc
+        except (ValueError, PermissionError) as exc:
+            _handle(exc)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="The saved sponsor could not be loaded. Please try again.") from exc
 
     @app.post("/admin/clubs/{club_id}/tournaments/setup/tournaments/{tournament_id}/sponsor-logos")
     def post_sponsor_logo(club_id: str, tournament_id: str, payload: SponsorLogoRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
