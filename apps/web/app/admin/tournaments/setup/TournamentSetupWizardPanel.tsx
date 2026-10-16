@@ -322,6 +322,7 @@ function normalizeSponsors(value: unknown, urls: Record<string, string> = {}): S
     .filter((row): row is Record<string, unknown> => Boolean(row) && typeof row === "object" && !Array.isArray(row))
     .map((row, index) => ({
       id: safeString(row.id) || sponsorId(),
+      club_sponsor_id: safeString(row.club_sponsor_id),
       name: safeString(row.name),
       sort_order: index,
       tier: sponsorTiers.includes(row.tier as SponsorTier) ? row.tier as SponsorTier : "supporting",
@@ -355,6 +356,7 @@ function basicsDraftPayload(basics: BasicsDraft): Record<string, unknown> {
     timezone: basics.timezone,
     sponsors_json: basics.sponsors.map((sponsor) => ({
       id: sponsor.id,
+      club_sponsor_id: sponsor.club_sponsor_id || "",
       tier: sponsor.tier,
       logo_path: sponsor.logo_path,
       is_visible: sponsor.is_visible,
@@ -2389,9 +2391,13 @@ async function saveResolutionDraft() {
         </article>
 
         <TournamentSponsorEditor
+          key={`${clubId}:${tournamentId}`}
           sponsors={basics.sponsors}
           tournamentName={basics.name}
           disabled={busy}
+          onListSaved={() => requestJson(`/admin/clubs/${encodeURIComponent(clubId)}/sponsors`)}
+          onUseSaved={(sponsorId) => requestJson(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/setup/tournaments/${encodeURIComponent(tournamentId)}/saved-sponsors/${encodeURIComponent(sponsorId)}/use`, { method: "POST" })}
+          onSaveShared={(sponsorId, profile) => requestJson(`/admin/clubs/${encodeURIComponent(clubId)}/sponsors/${encodeURIComponent(sponsorId)}`, { method: "PUT", body: JSON.stringify({ ...profile, tournament_id: tournamentId }) })}
           onUpload={(image_base64) => requestJson(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/setup/tournaments/${encodeURIComponent(tournamentId)}/sponsor-logos`, { method: "POST", body: JSON.stringify({ image_base64 }) })}
           onSave={(sponsors) => persistConfigurationDraft(configuration, "basics", "Sponsor draft saved. Publish from Review when you’re ready.", settings, { ...basics, sponsors }, true)}
         />

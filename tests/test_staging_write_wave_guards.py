@@ -489,3 +489,17 @@ def test_every_communications_route_has_an_independent_service_guard() -> None:
                     )
 
     assert guarded_routes == expected_routes
+
+
+@pytest.mark.parametrize("method,path", [
+    ("PUT", "/admin/clubs/fixture/sponsors/sponsor-1"),
+    ("POST", "/admin/clubs/fixture/tournaments/setup/tournaments/t1/saved-sponsors/sponsor-1/use"),
+])
+def test_club_sponsor_actions_follow_setup_write_wave(method: str, path: str) -> None:
+    assert wave_allows_request("open", method, path)
+    assert wave_allows_request("tournament-setup", method, path)
+    assert not wave_allows_request(NO_WRITE_WAVE, method, path)
+    assert not wave_allows_request("public-intake-auth", method, path)
+    assert not wave_allows_request("tournament-setup", method, path + "/extra")
+
+
