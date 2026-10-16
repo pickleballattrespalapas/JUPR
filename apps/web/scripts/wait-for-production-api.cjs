@@ -18,6 +18,13 @@ function operationsReady(health) {
     && REQUIRED_FLAGS.every((flag) => health.feature_flags?.[flag] === true);
 }
 
+function weeklyReportReady(openapi) {
+  const fields = openapi?.components?.schemas?.AdminWeeklyRecapGenerateRequest?.properties;
+  return fields?.preserve_edits?.type === "boolean"
+    && fields.preserve_edits.default === true
+    && Object.prototype.hasOwnProperty.call(fields, "edits_json");
+}
+
 async function waitForProductionApi({
   environment = process.env.VERCEL_ENV,
   request = fetch,
@@ -27,15 +34,20 @@ async function waitForProductionApi({
 } = {}) {
   if (environment !== "production") return;
   const deadline = now() + timeoutMs;
-  console.log("Waiting for the production club settings API before building the website.");
+  console.log("Waiting for the production operations and weekly report APIs before building the website.");
   while (now() < deadline) {
     try {
       const response = await request("https://api.juprleagues.com/health", {
         cache: "no-store", signal: AbortSignal.timeout(10000),
       });
       if (response.ok && operationsReady(await response.json())) {
-        console.log("Production operations API is ready.");
-        return;
+        const contract = await request("https://api.juprleagues.com/openapi.json", {
+          cache: "no-store", signal: AbortSignal.timeout(10000),
+        });
+        if (contract.ok && weeklyReportReady(await contract.json())) {
+          console.log("Production operations and weekly report APIs are ready.");
+          return;
+        }
       }
     } catch {
       // A deployment restart or timeout must leave the current website serving.
@@ -45,7 +57,7 @@ async function waitForProductionApi({
   throw new Error("Production operations API is not ready. The current website remains active; retry after API verification.");
 }
 
-module.exports = { operationsReady, waitForProductionApi, REQUIRED_FLAGS };
+module.exports = { operationsReady, weeklyReportReady, waitForProductionApi, REQUIRED_FLAGS };
 if (require.main === module) {
   waitForProductionApi().catch((error) => { console.error(error.message); process.exitCode = 1; });
 }
