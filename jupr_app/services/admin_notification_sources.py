@@ -156,6 +156,32 @@ def _sources(db: Any, *, club_id: str, assignments: list[dict[str, Any]], now: d
                 href=_href("/admin/tools", submission=row.get("id")) + "#social-submissions", version_field="updated_at"),
             filters=lambda q: q.eq("result_mode", "social_unrated").eq("status", "pending"))
 
+    if administrator:
+        add("interclub_invitations", "Interclub invitations", "Season invitations sent to your club.",
+            "/admin/interclub", "action", "pcs_interclub_participations",
+            "season_id,revision,updated_at,season:pcs_interclub_seasons!inner(id,details)",
+            lambda row: _item(row, title=_season_name(row), description="Accept or decline your club's invitation.",
+                href=_href("/admin/interclub/registrations", season=row.get("season_id")) + "#invitation-title",
+                id_field="season_id", time_field="updated_at", version_field="revision"),
+            id_field="season_id", time_field="updated_at",
+            filters=lambda q: q.eq("status", "invited").neq("season.organizer_club_id", club_id))
+        add("interclub_results", "Interclub result approvals", "Submitted meets in seasons your club organizes.",
+            "/admin/interclub/competition", "action", "pcs_interclub_competition_batches",
+            "id,season_id,meet_id,revision,updated_at,season:pcs_interclub_seasons!inner(id,details)",
+            lambda row: _item(row, title=_season_name(row), description="Review submitted meet results.",
+                href=_href("/admin/interclub/competition", season=row.get("season_id"), meet=row.get("meet_id")) + "#meet-results-review",
+                time_field="updated_at", version_field="revision"), time_field="updated_at", club_scoped=False,
+            filters=lambda q: q.eq("state", "submitted").eq("season.organizer_club_id", club_id)
+                .lte("season.registration_closes_at", now.isoformat()))
+        add("interclub_eligibility", "Late interclub signup approvals", "Late signups requiring the season organizer's approval.",
+            "/admin/interclub/registrations", "action", "pcs_interclub_pool_members",
+            "id,season_id,name,revision,created_at,pool_settings:pcs_interclub_pool_settings!inner(participation:pcs_interclub_participations!inner(season:pcs_interclub_seasons!inner(id)))",
+            lambda row: _item(row, title=_text(row.get("name"), "Late interclub signup"),
+                description="Review eligibility for this late season signup.", version_field="revision",
+                href=_href("/admin/interclub/registrations", season=row.get("season_id"), step="pool", member=row.get("id")) + "#season-eligibility-approvals"),
+            club_scoped=False, filters=lambda q: q.eq("status", "active").eq("approval_status", "pending").eq("late_join", True)
+                .eq("pool_settings.participation.season.organizer_club_id", club_id))
+
     if PERMISSION_MANAGE_TOURNAMENTS in permissions and is_admin_tournament_admin_enabled():
         for kind, key, label in (("registration", "tournament_registrations", "Tournament registrations"),
                                  ("cancellation", "tournament_cancellations", "Tournament cancellations")):
@@ -187,6 +213,12 @@ def _sources(db: Any, *, club_id: str, assignments: list[dict[str, Any]], now: d
                     description=_text(row.get("league_name"), "Team league"),
                     href=_href("/admin/league-manager/teams", league_id=row.get("league_name"), league_name=row.get("league_name"), mode="Team")))
 
+    if administrator:
+        add("interclub_signups", "Interclub player signups", f"Your club's season signups from the past {history_days} days.",
+            "/admin/interclub/registrations", "activity", "pcs_interclub_pool_members", "id,season_id,name,created_at",
+            lambda row: _item(row, title=_text(row.get("name"), "A player") + " joined the season pool",
+                description="Review your club's interclub player pool.",
+                href=_href("/admin/interclub/registrations", season=row.get("season_id"), step="pool")))
     return sources
 
 

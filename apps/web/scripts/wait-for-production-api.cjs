@@ -10,6 +10,7 @@ const REQUIRED_FLAGS = [
 function operationsReady(health) {
   return health?.ok === true
     && health.club_website_settings_available === true
+    && health.interclub_seasons_available === true
     && health.environment === "production"
     && health.fly_app_name === "juprleagues-api"
     && health.supabase_project_ref === "dnoockbwfenunhcibwfn"

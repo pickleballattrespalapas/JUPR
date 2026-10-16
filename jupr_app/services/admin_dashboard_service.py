@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import logging
 from typing import Any, Callable
+from urllib.parse import urlencode
 
 from jupr_app.domain.admin.roles import (
     PERMISSION_MANAGE_MATCHES,
@@ -23,6 +24,14 @@ from jupr_app.services.admin_weekly_recap_service import is_admin_weekly_recap_e
 logger = logging.getLogger(__name__)
 
 
+def _next_interclub_href(row: dict[str, Any], *, results: bool) -> str:
+    fields = {"season": "season_id", **({"meet": "meet_id"} if results else {})}
+    if any(not isinstance(row.get(field), str) or not row[field] for field in fields.values()):
+        raise ValueError("Next review destination unavailable")
+    params = {key: row[field] for key, field in fields.items()}
+    if results:
+        return "/admin/interclub/competition?" + urlencode(params)
+    return "/admin/interclub/registrations?" + urlencode({**params, "step": "pool"}) + "#season-eligibility-approvals"
 
 
 def build_admin_dashboard(db: Any, *, club_id: str, assignments: list[dict[str, Any]]) -> dict[str, Any]:
@@ -99,5 +108,35 @@ def build_admin_dashboard(db: Any, *, club_id: str, assignments: list[dict[str, 
             "Approve or reject submitted Club Social results.",
             "/admin/tools#social-submissions",
             lambda: count_query("live_events").eq("result_mode", "social_unrated").eq("status", "pending"))
+
+    if administrator:
+        add("interclub_invitations", "Interclub invitations",
+            "Accept or decline season invitations sent to your club.",
+            "/admin/interclub",
+            lambda: count_query("pcs_interclub_participations", "season_id,pcs_interclub_seasons!inner(id)")
+                .eq("status", "invited").neq("pcs_interclub_seasons.organizer_club_id", club_id))
+        # These rows belong to participating clubs, but only the season's
+        # organizer may approve them. Filter through the season owner, never
+        # through the participant/host club or a caller-supplied season list.
+        add("interclub_results", "Interclub results awaiting approval",
+            "Review next submitted meet. The count includes all submitted meets in seasons your club organizes.",
+            "/admin/interclub/competition",
+            lambda: db.table("pcs_interclub_competition_batches")
+                .select("id,season_id,meet_id,season:pcs_interclub_seasons!inner(id)", count="exact")
+                .eq("state", "submitted").eq("season.organizer_club_id", club_id)
+                # The season constraint requires both valid dates or both NULL.
+                # Only a closed registration window permits meet approval.
+                .lte("season.registration_closes_at", datetime.now(timezone.utc).isoformat())
+                .order("updated_at").order("id").limit(1),
+            next_href=lambda row: _next_interclub_href(row, results=True))
+        add("interclub_eligibility", "Late interclub signups awaiting review",
+            "Review next late signup. The count includes all late signups awaiting eligibility review in seasons your club organizes.",
+            "/admin/interclub/registrations",
+            lambda: db.table("pcs_interclub_pool_members")
+                .select("id,season_id,pool_settings:pcs_interclub_pool_settings!inner(participation:pcs_interclub_participations!inner(season:pcs_interclub_seasons!inner(id)))", count="exact")
+                .eq("status", "active").eq("approval_status", "pending").eq("late_join", True)
+                .eq("pool_settings.participation.season.organizer_club_id", club_id)
+                .order("created_at").order("id").limit(1),
+            next_href=lambda row: _next_interclub_href(row, results=False))
 
     return {"club_id": club_id, "checked_at": datetime.now(timezone.utc).isoformat(), "queues": queues}

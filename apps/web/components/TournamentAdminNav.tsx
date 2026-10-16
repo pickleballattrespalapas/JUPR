@@ -64,7 +64,8 @@ function selectedItems(context: TournamentRouteContext): NavigationItem[] {
         pathname.startsWith("/admin/tournaments/publish/") ||
         pathname === "/admin/tournaments/ops/results" ||
         pathname === "/admin/tournaments/ops/publish"
-    }
+    },
+    { href: `/admin/event-history?${new URLSearchParams({ kind: "tournament", event: context.tournamentId })}`, label: "History", match: exact("/admin/event-history") }
   ];
 }
 

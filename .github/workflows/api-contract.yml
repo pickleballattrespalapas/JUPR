@@ -68,6 +68,8 @@ jobs:
             tests/test_adaptive_play_engine.py \
             tests/test_public_play_generator_service.py \
             tests/test_admin_play_generator_service.py
+      - name: Verify interclub season lifecycle
+        run: python -m pytest -q tests/test_interclub*.py tests/test_event_season*.py tests/test_rating_integrity_clashes.py
 
       - name: Run deployment and admin UX safety contracts
         run: |

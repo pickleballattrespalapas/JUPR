@@ -89,7 +89,8 @@ test("club website tabs save and publish without changing leaderboard choices", 
   await page.getByLabel("Public club name", { exact: true }).fill("Tres Palapas Baja Pickleball");
   await editor.getByRole("button", { name: "Page visibility", exact: true }).click();
   await page.getByLabel("Visibility for Players", { exact: true }).selectOption("private");
-  await expect(page.getByText("Interclub leagues", { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("Visibility for Interclub leagues", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Visibility for Club trophy case", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Save draft", exact: true }).click();
   await expect(page.getByRole("status")).toContainText("Draft saved");
   expect(state.website.published.name).toBe("Tres Palapas");

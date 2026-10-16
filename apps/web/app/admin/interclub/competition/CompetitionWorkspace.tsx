@@ -1,0 +1,325 @@
+"use client";
+
+import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
+import { getAdminApiBaseUrl } from "@/lib/adminAuthClient";
+import { readBrowserWorkspace } from "@/lib/adminWorkspace";
+import { useAdminSession } from "@/lib/useAdminSession";
+import { useAdminWorkspace } from "@/lib/useAdminWorkspace";
+import { RegistrationSeason } from "@/lib/interclubRegistration";
+import { CompetitionBatch, CompetitionContext, CompetitionDocument, CompetitionFormat, CompetitionPhase, CompetitionScheduleMode, MeetCompetition, automaticDraftScores, competitionPath, competitionPlayers, competitionRequest, fromLocalInput, gameCount, gameHasOutcome, phaseLabels, regularSeasonComplete } from "@/lib/interclubCompetition";
+import ScoreEditor from "./ScoreEditor";
+import { CompetitionResults } from "@/components/PublicInterclubCompetition";
+import { documentResults, documentResultPlayers } from "@/lib/interclubResultViews";
+import SubstitutionRepair from "./SubstitutionRepair";
+import PrintPacket from "./PrintPacket";
+import Standings from "./Standings";
+import ScheduleMeet from "./ScheduleMeet";
+import ChampionshipSetup from "./ChampionshipSetup";
+import CourtSchedule from "./CourtSchedule";
+import styles from "./competition.module.css";
+import InterclubWorkflow, { workflowHref } from "../InterclubWorkflow";
+import { useRegistrationWindow } from "@/lib/useRegistrationWindow";
+import type { MeetPdfScope } from "@/lib/interclubMeetPdf";
+import { gameFromError, reviewSubstitutions, substitutionEligibilityProblem, substituteForRemainingGames, type SubstitutionReview } from "@/lib/interclubSubstitutions";
+
+export default function CompetitionWorkspace({ initialSeasonId, initialMeetId }: { initialSeasonId: string; initialMeetId: string }) {
+  const { session, accessToken, loading } = useAdminSession();
+  const { clubId } = useAdminWorkspace();
+  const allowed = session?.capabilities?.assignments.some(assignment => assignment.club_id === clubId && ["administrator", "club_owner", "super_admin", "operator"].includes(assignment.role));
+  if (loading) return <p>Checking club access…</p>;
+  if (!allowed || !accessToken) return <p>Sign in as a club administrator to open meet operations. <Link href="/admin/login">Sign in</Link></p>;
+  return <CompetitionHome key={`${clubId}:${session?.user?.id || session?.user?.email}`} clubId={clubId} accessToken={accessToken} initialSeasonId={initialSeasonId} initialMeetId={initialMeetId} />;
+}
+
+export function CompetitionHome({ clubId, accessToken, initialSeasonId, initialMeetId }: { clubId: string; accessToken: string; initialSeasonId: string; initialMeetId: string }) {
+  const api = getAdminApiBaseUrl();
+  const [seasons, setSeasons] = useState<RegistrationSeason[]>([]), [seasonId, setSeasonId] = useState(initialSeasonId);
+  const [data, setData] = useState<CompetitionContext | null>(null), [error, setError] = useState(""), [refresh, setRefresh] = useState(0), [loading, setLoading] = useState(true);
+  const [meetId, setMeetId] = useState(initialMeetId), [locked, setLocked] = useState(false);
+  const [view, setView] = useState<"championships" | "meet" | null>(initialMeetId ? "meet" : null);
+  const token = useRef(accessToken); token.current = accessToken;
+  const registrationCheck = useRef<AbortController | null>(null);
+  const { meetPlanningOpen } = useRegistrationWindow(data?.season.registration, () => void recheckRegistration());
+  useEffect(() => () => registrationCheck.current?.abort(), [api, clubId, seasonId]);
+  async function recheckRegistration() {
+    if (!data || !api) return;
+    registrationCheck.current?.abort();
+    const request = new AbortController(); registrationCheck.current = request;
+    try {
+      const result = await competitionRequest<CompetitionContext>(competitionPath(api, clubId, seasonId), token.current, request.signal);
+      if (!request.signal.aborted) {
+        setData(current => current && (current.season.registration?.revision || 0) <= (result.season.registration?.revision || 0) ? result : current);
+        setMeetId(old => !result.meets.length || result.meets.some(meet => meet.id === old) ? old : result.meets[0]?.id || "");
+        setError("");
+      }
+    } catch (cause) { if (!request.signal.aborted) setError(message(cause)); }
+  }
+  useEffect(() => {
+    const controller = new AbortController();
+    if (!api) { setError("Meet operations are unavailable. Please try again later."); setLoading(false); return; }
+    void competitionRequest<{ seasons: RegistrationSeason[] }>(`${api}/admin/clubs/${encodeURIComponent(clubId)}/interclub/competition`, token.current, controller.signal)
+      .then(result => { if (!controller.signal.aborted) { setSeasons(result.seasons); setSeasonId(old => result.seasons.some(season => season.id === old) ? old : result.seasons[0]?.id || ""); if (!result.seasons.length) setLoading(false); } })
+      .catch(cause => { if (!controller.signal.aborted) { setError(message(cause)); setLoading(false); } });
+    return () => controller.abort();
+  }, [api, clubId]);
+  useEffect(() => {
+    const controller = new AbortController();
+    if (!seasonId || !api) return;
+    registrationCheck.current?.abort();
+    setLoading(true); setError(""); setData(null);
+    void competitionRequest<CompetitionContext>(competitionPath(api, clubId, seasonId), token.current, controller.signal)
+      .then(result => { if (!controller.signal.aborted) { setData(result); setMeetId(old => !result.meets.length || result.meets.some(meet => meet.id === old) ? old : result.meets[0]?.id || ""); } })
+      .catch(cause => { if (!controller.signal.aborted) setError(message(cause)); })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    return () => controller.abort();
+  }, [api, clubId, seasonId, refresh]);
+  const phase: CompetitionPhase = data?.meets.find(meet => meet.id === meetId)?.competition_phase || "regular";
+  const regularComplete = !!data && regularSeasonComplete(data);
+  const showChampionships = regularComplete && view !== "meet" && !locked;
+  const reviewRegular = regularComplete && phase === "regular" && !showChampionships;
+  const selectMeet = (id: string) => { setMeetId(id); setView("meet"); };
+  const clubName = (id: string) => data?.clubs.find(club => club.id === id)?.name || "Club";
+  const when = (iso: string) => new Date(iso).toLocaleString(undefined, { timeZone: data?.season.details.timezone, dateStyle: "medium", timeStyle: "short" });
+  return <main className={styles.page}>
+    <p>{locked ? <span aria-disabled="true">← Interclub leagues</span> : <Link href="/admin/interclub">← Interclub leagues</Link>}</p>
+    <p>{locked ? <span aria-disabled="true">← Season guide · Save or discard score changes first</span> : seasonId && <Link href={`/admin/interclub/season?season=${encodeURIComponent(seasonId)}`}>← Season guide · See the next step</Link>}</p>
+    <header><p className={styles.eyebrow}>{regularComplete ? "Regular season complete" : "Paper courts · One official score submission"}</p><h1>{showChampionships ? "Championships" : reviewRegular ? "Regular-season results" : "Meet operations"}</h1><p>{showChampionships ? "Review the qualified clubs and prepare the season finals." : reviewRegular ? "Review approved meets and final regular-season standings." : "Prepare the pairings, download a PDF to review or print, then bring all official scores back here."}</p></header>
+    <div className={styles.toolbar}><label>Season<select value={seasonId} disabled={locked || !seasons.length} onChange={event => { setSeasonId(event.target.value); setMeetId(""); setView(null); }}>
+      {!seasons.length && <option value="">No accepted seasons</option>}{seasons.map(season => <option key={season.id} value={season.id}>{season.details.name} · {season.details.start_date}</option>)}
+    </select></label><button disabled={loading || locked} onClick={() => setRefresh(value => value + 1)}>Refresh season</button>
+    </div>
+    {error && <p role="alert" className={styles.error}>{error}</p>}
+    {loading && <p role="status">Loading meet operations…</p>}
+    {!loading && !seasons.length && !error && <p>Accept a season invitation first, then prepare the players for your meet.</p>}
+    {data && !meetPlanningOpen && <>
+      <InterclubWorkflow seasonId={seasonId} meetId={meetId} current="pool" meetPlanningOpen={false} />
+      <section className={styles.notice} aria-labelledby="registration-locked-heading">
+        <h2 id="registration-locked-heading">Meet planning opens after registration closes</h2>
+        <p>{data.season.details.name} is still in its season registration phase. The commissioner sets the same opening and closing dates for every club. Availability, lineups, schedules, and scores are locked until registration has closed.</p>
+        <Link className={styles.button} href={workflowHref("pool", seasonId, meetId)}>Go to season player pool</Link>
+      </section>
+    </>}
+    {data && meetPlanningOpen && <>
+      {regularComplete && <nav className={styles.toolbar} aria-label="Season stage"><button className={showChampionships ? styles.primary : undefined} disabled={locked} aria-pressed={showChampionships} onClick={() => setView("championships")}>Championships</button><button disabled={locked} aria-pressed={reviewRegular} onClick={() => selectMeet(data.meets.find(meet => !meet.competition_phase || meet.competition_phase === "regular")!.id)}>Regular-season results</button></nav>}
+      {showChampionships ? <ChampionshipSetup context={data} root={competitionPath(api!, clubId, seasonId)} clubId={clubId} accessToken={accessToken} onSelectMeet={selectMeet} onScheduled={meet => { selectMeet(meet.id); setRefresh(value => value + 1); }} /> : <>
+      <div className={styles.toolbar}><label>Meet<select value={meetId} disabled={locked} onChange={event => selectMeet(event.target.value)}>{data.meets.map(meet => <option key={meet.id} value={meet.id}>{when(meet.starts_at)} · {clubName(meet.host_club_id)}{meet.competition_phase && meet.competition_phase !== "regular" ? ` · ${phaseLabels[meet.competition_phase]}` : ""}</option>)}</select></label>
+        <label>Competition<select value={phase} disabled aria-label="Scheduled competition format">{Object.entries(phaseLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+      </div>
+      {!data.meets.length && <><InterclubWorkflow seasonId={seasonId} current="run" meetPlanningOpen={meetPlanningOpen} /><p>The organizer needs to schedule a meet before score sheets can be prepared.</p></>}
+      {data.is_organizer && <ScheduleMeet root={competitionPath(api!, clubId, seasonId)} clubId={clubId} accessToken={accessToken} context={data} disabled={locked} onScheduled={meet => { selectMeet(meet.id); setRefresh(value => value + 1); }} />}
+      </>}
+      <Standings data={data} clubName={clubName} />
+      {!showChampionships && meetId && <MeetOperations key={`${clubId}:${seasonId}:${meetId}:${phase}:${refresh}`} root={`${competitionPath(api!, clubId, seasonId)}/meets/${encodeURIComponent(meetId)}/${phase}`} clubId={clubId} accessToken={accessToken} phase={phase} context={data} clubName={clubName} onLock={setLocked} onSeasonChange={() => { setLocked(false); setRefresh(value => value + 1); }} />}
+    </>}
+  </main>;
+}
+
+export function MeetOperations({ root, clubId, accessToken, phase, context, clubName, onLock, onSeasonChange }: { root: string; clubId: string; accessToken: string; phase: CompetitionPhase; context: CompetitionContext; clubName: (id: string) => string; onLock: (locked: boolean) => void; onSeasonChange: () => void }) {
+  const [detail, setDetail] = useState<MeetCompetition | null>(null), [draft, setDraft] = useState<CompetitionDocument | null>(null);
+  const [error, setError] = useState(""), [status, setStatus] = useState(""), [loading, setLoading] = useState(true), [busy, setBusy] = useState(false), [blocked, setBlocked] = useState(false), [refresh, setRefresh] = useState(0);
+  const divisions = [...context.season.details.divisions].sort((a, b) => Number.parseFloat(a) - Number.parseFloat(b) || a.localeCompare(b, undefined, { numeric: true }));
+  const [format, setFormat] = useState<CompetitionFormat>(phase === "regular" ? "gender" : "mlp"), [division, setDivision] = useState(divisions[0] || ""), [clubA, setClubA] = useState(""), [clubB, setClubB] = useState("");
+  const [scheduleMode, setScheduleMode] = useState<CompetitionScheduleMode>("staggered");
+  const [scoreDivision, setScoreDivision] = useState("");
+  const [focusGame, setFocusGame] = useState<{ id: string; substitution: boolean; sequence: number } | null>(null);
+  const [undoSubstitution, setUndoSubstitution] = useState<CompetitionDocument | null>(null);
+  const [review, setReview] = useState<"submit" | "approve" | null>(null), [reason, setReason] = useState(""), [startsAt, setStartsAt] = useState(""), [deadline, setDeadline] = useState("");
+  const token = useRef(accessToken); token.current = accessToken;
+  const pending = useRef(false), controller = useRef<AbortController | null>(null);
+  const resultsReview = useRef<HTMLDivElement | null>(null);
+  const saveScores = useRef<HTMLButtonElement | null>(null), reviewScores = useRef<HTMLButtonElement | null>(null);
+  const followedNotification = useRef(false);
+  const [pdfBusy, setPdfBusy] = useState<MeetPdfScope | null>(null);
+  const pdfRequest = useRef<AbortController | null>(null);
+  useEffect(() => () => pdfRequest.current?.abort(), []);
+  const dirty = !!draft && JSON.stringify(draft) !== JSON.stringify(detail?.batch?.document);
+  useEffect(() => { onLock(dirty || busy || !!pdfBusy); return () => onLock(false); }, [dirty, busy, pdfBusy, onLock]);
+  useEffect(() => {
+    if (!dirty) return;
+    const protect = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", protect); return () => window.removeEventListener("beforeunload", protect);
+  }, [dirty]);
+  useEffect(() => {
+    const request = new AbortController(); setLoading(true); setError(""); setBlocked(false);
+    void competitionRequest<MeetCompetition>(root, token.current, request.signal).then(result => { if (!request.signal.aborted) { setDetail(result); setUndoSubstitution(null); setDraft(result.batch ? result.can_manage && result.batch.state === "draft" ? automaticDraftScores(result.batch.document) : result.batch.document : null); } })
+      .catch(cause => { if (!request.signal.aborted) setError(message(cause)); }).finally(() => { if (!request.signal.aborted) setLoading(false); });
+    return () => { request.abort(); controller.current?.abort(); };
+  }, [root, refresh]);
+  useEffect(() => {
+    if (loading || !detail?.batch || followedNotification.current || typeof window === "undefined" ||
+        window.location?.hash !== "#meet-results-review" || !resultsReview.current) return;
+    const linkedMeet = new URLSearchParams(window.location.search).get("meet");
+    if (linkedMeet && linkedMeet !== detail.meet.id) return;
+    followedNotification.current = true;
+    resultsReview.current.scrollIntoView({ block: "start" });
+    resultsReview.current.focus({ preventScroll: true });
+  }, [detail, loading]);
+  async function change(action: string, body: Record<string, unknown> = {}): Promise<boolean> {
+    if (pending.current || blocked || !detail) return false;
+    if (readBrowserWorkspace()?.clubId !== clubId) { setBlocked(true); setError("Your selected club changed in another tab. Reopen meet operations for the current club."); return false; }
+    pending.current = true; setBusy(true); setError(""); setStatus("");
+    const request = new AbortController(); controller.current = request;
+    let received = false;
+    try {
+      const result = await competitionRequest<{ batch: CompetitionBatch }>(action === "save" ? root : `${root}/${action}`, token.current, request.signal, action === "save" ? "PUT" : "POST", { expected_revision: detail.batch?.revision || 0, ...body });
+      received = true;
+      if (request.signal.aborted) return false;
+      if (!result.batch || result.batch.meet_id !== detail.meet.id || result.batch.phase !== phase) { setBlocked(true); throw new Error("Could not confirm the saved meet. Reload before making another change."); }
+      setUndoSubstitution(null); setDetail(old => old ? { ...old, batch: result.batch } : old); setDraft(detail.can_manage && result.batch.state === "draft" ? automaticDraftScores(result.batch.document) : result.batch.document); setReview(null);
+      setStatus(action === "save" ? "All draft scores saved. Submit when every score sheet is entered." : action === "generate" ? "Pairings prepared. Review the players and print the meet packet." : action === "submit" ? `Revision ${result.batch.revision} submitted for organizer approval.` : action === "approve" ? "Official scores approved. Check rating status below before treating updates as complete." : action === "retry-ratings" ? "Rating update status refreshed." : action === "reopen" ? "Correction draft opened. Save, submit and approve the corrected scores again." : action === "refresh-lineups" ? "Eligible lineups refreshed for the unfinished pairings." : "The unfinished pairings are ready for the rescheduled meet. Confirm the new eligible lineup before printing.");
+      if (["approve", "retry-ratings", "reschedule", "refresh-lineups"].includes(action)) onSeasonChange();
+      return true;
+    } catch (cause) {
+      if (!request.signal.aborted) { const code = (cause as { status?: number })?.status; if ((!received && !code) || code && ([401, 403, 409].includes(code) || code >= 500)) setBlocked(true); setError(message(cause));
+        const gameId = draft && gameFromError(draft, message(cause)); if (gameId) goToGame(gameId, /injur|substitut|lineup|player/i.test(message(cause)));
+      }
+      return false;
+    } finally { pending.current = false; if (!request.signal.aborted) setBusy(false); }
+  }
+  function edit(document: CompetitionDocument) { setDraft(automaticDraftScores(document)); setReview(null); setStatus(""); setError(""); setUndoSubstitution(null); }
+  function goToGame(id: string, substitution = true) { setScoreDivision(""); setFocusGame(old => ({ id, substitution, sequence: (old?.sequence || 0) + 1 })); }
+  function repairSubstitution(change: SubstitutionReview) {
+    if (!draft) return;
+    try {
+      const result = substituteForRemainingGames(draft, change, change.reason);
+      edit(result.document); setUndoSubstitution(draft); setStatus(`Substitution applied to ${result.changedGames} games. Scores are unchanged. Save when ready.`);
+    } catch (cause) { setError(message(cause)); }
+  }
+  function finishScoreEntry() {
+    const target = [saveScores.current, reviewScores.current].find(button => button && !button.disabled);
+    if (!target) return false;
+    target.focus(); return true;
+  }
+  async function downloadPdf(scope: MeetPdfScope) {
+    if (!detail?.batch || busy || dirty || blocked || pdfRequest.current) return;
+    const request = new AbortController(); pdfRequest.current = request;
+    setPdfBusy(scope); setError("");
+    try {
+      const { buildInterclubMeetPdf } = await import("@/lib/interclubMeetPdf");
+      const result = await buildInterclubMeetPdf({ document: detail.batch.document, meet: detail.meet,
+        seasonName: context.season.details.name, timezone: context.season.details.timezone,
+        revision: detail.batch.revision, players: competitionPlayers(detail), clubName }, scope);
+      if (request.signal.aborted || readBrowserWorkspace()?.clubId !== clubId) return;
+      await result.pdf.save(result.filename, { returnPromise: true });
+      if (!request.signal.aborted) setStatus(`${scope === "schedule" ? "Schedule" : "Full packet"} PDF downloaded (${result.pdf.getNumberOfPages()} pages).`);
+    } catch {
+      if (!request.signal.aborted) setError("Could not create the PDF. Try downloading again.");
+    } finally {
+      if (!request.signal.aborted) { pdfRequest.current = null; setPdfBusy(null); }
+    }
+  }
+  const disabled = busy || blocked || !!pdfBusy, batch = detail?.batch, editable = detail?.can_manage && batch?.state === "draft" && !disabled;
+  if (loading) return <p role="status">Loading this meet…</p>;
+  if (!detail) return <div className={styles.error}><p role="alert">{error || "This meet could not be loaded."}</p><button onClick={() => setRefresh(value => value + 1)}>Retry loading meet</button></div>;
+  const players = competitionPlayers(detail), count = draft ? gameCount(draft) : null;
+  const substitutionPool = (change: SubstitutionReview) => detail.eligible_players?.[change.row.encounter[`club_${change.side}`]] || detail.teams.find(team => team.club_id === change.row.encounter[`club_${change.side}`] && team.division === change.row.encounter.division)?.roster || [];
+  const substitutionProblems = draft && batch?.state === "draft" ? reviewSubstitutions(draft).filter(change => change.missingReason || change.returningGames.length || substitutionEligibilityProblem(change, substitutionPool(change), players, detail.meet.roster_deadline)) : [];
+  const errorGame = draft && gameFromError(draft, error);
+  const firstMissingOutcome = draft?.encounters.flatMap(encounter => encounter.pairings.flatMap(pairing => pairing.games)).find(game => !gameHasOutcome(game));
+  const canRefreshStartingLineups = phase === "regular" && new Date(detail.meet.starts_at).getTime() > Date.now() && !!draft?.encounters.every(encounter => encounter.pairings.every(pairing => pairing.games.every(game => game.status === "pending" && game.a === null && game.b === null || ["forfeit", "double_forfeit"].includes(game.status) && (!pairing.players_a.length || !pairing.players_b.length))));
+  const qualification = context.standings?.qualification?.[division] || context.qualifying?.[division];
+  const qualifyingClubs = phase === "final" ? qualification?.qualifiers : phase === "qualifier" ? qualification?.playoff_required : null;
+  const finalClubs = qualification?.status === "ready" && qualification.qualifiers.length === 2 ? qualification.qualifiers : [];
+  const candidates = Array.from(new Set(detail.teams.filter(team => team.division === division && (!qualifyingClubs || qualifyingClubs.includes(team.club_id))).map(team => team.club_id)));
+  const alreadyScheduled = phase !== "regular" && !!batch?.document.encounters.some(encounter =>
+    encounter.division === division && (phase === "final" ||
+      [encounter.club_a, encounter.club_b].includes(clubA) && [encounter.club_a, encounter.club_b].includes(clubB)));
+  const hasPlayableLineups = phase === "regular"
+    ? divisions.some(level => new Set(detail.teams.filter(team => team.division === level).map(team => team.club_id)).size >= 2)
+    : phase === "final" ? finalClubs.length === 2 && finalClubs.every(id => candidates.includes(id)) : candidates.length >= 2;
+  const lineupHref = workflowHref("lineups", context.season.id, detail.meet.id);
+  return <section className={styles.section}>
+    <InterclubWorkflow seasonId={context.season.id} meetId={detail.meet.id} meetPlanningOpen={true}
+      current={batch?.state === "submitted" || batch?.state === "approved" ? "approve" : "run"}
+      disabled={dirty || busy} unavailable={batch?.state === "submitted" || batch?.state === "approved" ? [] : ["approve"]}
+      hints={{ run: !batch ? hasPlayableLineups ? "Prepare approved lineups" : "Lineups needed first" : batch.state === "draft" ? "Enter and submit scores" : "Scores submitted", approve: batch?.state === "approved" ? "Official results" : batch?.state === "submitted" ? "Ready for organizer review" : "Submit scores first" }} />
+    {error && <div className={styles.error} role="alert">{error}{errorGame && <button onClick={() => goToGame(errorGame, /injur|substitut|lineup|player/i.test(error))}>Go to this game</button>}</div>}{status && <p className={styles.success} role="status">{status}</p>}
+    {detail.lineups_hidden && <p className={styles.notice}>Opposing lineups become available at the roster deadline. You can still manage your club’s roster.</p>}
+    {blocked && <div className={styles.notice}><p>Reload the latest saved meet before continuing. Your last change may already have been saved.</p><button disabled={busy} onClick={() => { setReview(null); setRefresh(value => value + 1); }}>Reload saved meet</button></div>}
+    {(!batch || phase !== "regular" && batch.state === "draft" && draft?.encounters.every(encounter => encounter.pairings.every(pairing => pairing.games.every(game => game.status === "pending")))) && <div className={styles.card}><h2>{batch ? "Add another skill-level matchup" : `Prepare ${phaseLabels[phase].toLowerCase()} pairings`}</h2>
+      <p>{phase === "regular" ? "The schedule uses the approved meet rosters. Clubs may enter different skill levels at each meet. Each skill level needs two to four clubs." : "Choose a skill level to prepare its matchup from approved meet lineups. Add all skill levels before entering scores."}</p>
+      {detail.can_manage && (phase === "regular" || detail.is_organizer) ? <form onSubmit={event => { event.preventDefault(); if (alreadyScheduled || !hasPlayableLineups) return; void change("generate", { format, ...(phase !== "regular" ? { division, club_a: phase === "final" ? finalClubs[0] : clubA, club_b: phase === "final" ? finalClubs[1] : clubB } : { schedule_mode: scheduleMode }) }); }}>
+        <fieldset className={styles.gameFields} disabled={disabled || dirty}><div className={styles.toolbar}>
+          {phase === "regular" ? <><label>Meet format<select aria-label="Meet format" value={format} onChange={event => setFormat(event.target.value as CompetitionFormat)}><option value="gender">Women’s and men’s doubles</option><option value="mixed">Two mixed doubles pairings</option></select></label>
+            <label>Court schedule<select aria-label="Court schedule" value={scheduleMode} onChange={event => { setScheduleMode(event.target.value as CompetitionScheduleMode); setError(""); }}>
+              <option value="staggered">Staggered — fit {detail.meet.courts} courts</option><option value="simultaneous">All divisions at once</option>
+            </select></label></> : <>
+            <label>Skill level<select value={division} onChange={event => { setDivision(event.target.value); setClubA(""); setClubB(""); }}>{divisions.map(value => <option key={value}>{value}</option>)}</select></label>
+            {phase === "final" ? <p><strong>{finalClubs.length === 2 ? finalClubs.map(clubName).join(" vs ") : "Finalists awaiting qualifying results"}</strong><br />Qualified from season results</p> : <>
+              <label>Club A<select required value={clubA} onChange={event => setClubA(event.target.value)}><option value="">Choose club</option>{candidates.filter(id => id !== clubB).map(id => <option key={id} value={id}>{clubName(id)}</option>)}</select></label>
+              <label>Club B<select required value={clubB} onChange={event => setClubB(event.target.value)}><option value="">Choose club</option>{candidates.filter(id => id !== clubA).map(id => <option key={id} value={id}>{clubName(id)}</option>)}</select></label>
+            </>}
+          </>}
+          <button type="submit" className={styles.primary} disabled={alreadyScheduled || !hasPlayableLineups}>Generate pairings</button>
+        </div></fieldset>
+        {phase === "regular" && <p>{scheduleMode === "staggered" ? `Matchups start in waves using up to ${detail.meet.courts} courts. Each full matchup uses two courts; each doubles pairing stays on its court for all three games before leaving. Review the court schedule after generating, then download the PDF.` : `Each opponent rotation runs all divisions together. Each doubles pairing stays on its court for all three games before leaving. Generation checks that the draw fits the meet’s ${detail.meet.courts} available courts.`}</p>}
+        {phase !== "regular" && <p>Each club fields two women and two men. The server checks current skill eligibility, prior regular-season appearances and championship qualification.</p>}
+        {alreadyScheduled && <p>{phase === "qualifier" ? "This qualifying pair is already in the packet. Choose another pair." : `Skill level ${division} is already in this packet. Choose another skill level to add its matchup.`}</p>}
+        {phase !== "regular" && candidates.length < 2 && <p className={styles.notice}>Two qualifying clubs need approved lineups for this meet and skill level. Check the standings below and prepare their meet rosters first.</p>}
+      </form> : <p>The host or organizer will prepare this meet. Your club can review and print the packet here when it is ready.</p>}
+      {!hasPlayableLineups && <div className={styles.warning}><p>{!detail.teams.length ? "No approved meet teams are available yet." : "At least two clubs need approved lineups at the same skill level before pairings can be prepared."} Each club chooses its lineup from its season player pool.</p>
+        {dirty || busy ? <span aria-disabled="true">Prepare lineups for this meet →</span> : <Link className={styles.button} href={lineupHref}>Prepare lineups for this meet →</Link>}
+      </div>}
+    </div>}
+    {batch && draft && <>
+      {phase === "regular" && <details open={!count?.entered} className={styles.card}><summary>Court schedule</summary><CourtSchedule document={batch.document} clubName={clubName} /></details>}
+      <div id="meet-results-review" ref={resultsReview} tabIndex={-1} className={styles.card} style={{ scrollMarginTop: "1rem" }}>
+        <div className={styles.toolbar}><div><p className={styles.eyebrow}>{phaseLabels[phase]} · Revision {batch.revision}</p><h2>{batch.state === "draft" ? "Meet score draft" : batch.state === "submitted" ? "Awaiting organizer approval" : "Official meet results"}</h2><p>{count?.entered} of {count?.total} game outcomes entered{dirty ? " · Unsaved changes" : " · Saved"}</p></div>
+          <div className={styles.toolbar}>
+            <button onClick={() => void downloadPdf("schedule")} disabled={disabled || dirty}>{pdfBusy === "schedule" ? "Creating schedule PDF…" : "Download schedule PDF"}</button>
+            <button onClick={() => void downloadPdf("packet")} disabled={disabled || dirty}>{pdfBusy === "packet" ? "Creating full packet PDF…" : "Download full packet PDF"}</button>
+            <button onClick={() => window.print()} disabled={disabled || dirty}>Print meet packet</button>
+          </div>
+        </div>
+        <p>Schedule PDF: court assignments only. Full packet PDF: schedule, instructions and a score sheet for every club matchup.</p>
+        {dirty && <p className={styles.notice}>Save your changes before printing or switching meets. <button disabled={busy} onClick={() => { setDraft(batch.document); setReview(null); }}>Discard unsaved changes</button></p>}
+        {batch.state === "approved" && <p className={batch.ratings_status === "failed" ? styles.error : styles.notice}><strong>Rating updates: {batch.ratings_status.replaceAll("_", " ")}</strong>{batch.ratings_error ? ` — ${batch.ratings_error}` : batch.ratings_status === "completed" ? ". Both league and represented-club updates are complete." : ". Standings approval does not mean all rating updates have completed."}</p>}
+        <div className={styles.toolbar}>
+          {editable && <><button className={styles.primary} disabled={!dirty} onClick={() => void change("save", { document: draft })}>Save all draft scores</button><button ref={reviewScores} disabled={dirty || !count?.total} onClick={() => setReview("submit")}>Review and submit meet</button></>}
+          {batch.state === "submitted" && detail.is_organizer && <button className={styles.primary} disabled={disabled} onClick={() => setReview("approve")}>Review official approval</button>}
+          {batch.state === "approved" && detail.is_organizer && ["failed", "pending"].includes(batch.ratings_status) && <button disabled={disabled} onClick={() => void change("retry-ratings")}>Retry rating updates</button>}
+          {draft.weather === "rescheduled" && editable && <button disabled={dirty || disabled} onClick={() => void change("refresh-lineups")}>Refresh eligible replay lineups</button>}
+        </div>
+        {canRefreshStartingLineups && draft.weather !== "rescheduled" && editable && <div className={styles.notice}>
+          <p><strong>Need to replace a player before play begins?</strong> Change the meet roster, then return here and apply the updated rosters to the prepared pairings.</p>
+          <div className={styles.toolbar}>
+            {dirty ? <span aria-disabled="true">Change meet roster</span> : <Link className={styles.button} href={lineupHref}>Change meet roster</Link>}
+            <button disabled={dirty || disabled} onClick={() => void change("refresh-lineups")}>Apply updated meet rosters</button>
+          </div>
+        </div>}
+        {review && <div className={styles.review} role="region" aria-label={review === "submit" ? "Confirm meet submission" : "Confirm official approval"}>
+          <h3>{review === "submit" ? "Submit the complete meet?" : `Approve revision ${batch.revision}?`}</h3>
+          <p>{review === "submit" ? "Check both clubs’ signed sheets, actual players, stopped injury scores and any weather decisions. This sends the whole saved meet to the organizer." : "This exact saved revision becomes official for standings and starts rating updates for completed doubles games. Retirements, unplayed forfeits and rotating singles do not change ratings."}</p>
+          {review === "submit" && firstMissingOutcome && <p className={styles.warning} role="alert">{count!.total - count!.entered} games still need a result. Enter both final scores, or choose an outcome under “No score or injury.” <a href={`#interclub-game-${firstMissingOutcome.id}`} onClick={() => setScoreDivision("")}>Go to the first incomplete game</a></p>}
+          {review === "submit" && !!substitutionProblems.length && <p className={styles.warning}>Resolve the substitutions below before submitting. Your scores can still be saved.</p>}
+          <div className={styles.toolbar}><button className={styles.primary} disabled={disabled || dirty || review === "submit" && (!!firstMissingOutcome || !!substitutionProblems.length)} onClick={() => void change(review)}>{review === "submit" ? "Submit all official scores" : "Approve this revision"}</button><button disabled={busy} onClick={() => setReview(null)}>Keep reviewing</button></div>
+        </div>}
+        {detail.is_organizer && batch.state !== "draft" && <details><summary>Correct submitted or official scores</summary><p>Corrections create a new draft and must be submitted and approved again. The earlier result remains in the audit history.</p><label>Reason for correction<textarea value={reason} onChange={event => setReason(event.target.value)} /></label><button disabled={disabled || !reason.trim()} onClick={() => void change("reopen", { reason: reason.trim() })}>Open correction draft</button></details>}
+      </div>
+      {batch.state === "draft" && <details className={styles.card}><summary>Weather delay, cancellation or reschedule</summary>
+        <p>{phase === "regular" ? "A temporary delay resumes from the stopped score. On a new date, replay every unfinished three-game pairing from the beginning; completed pairings stand. If no reschedule is possible, completed games decide the pairing, 1–1 is a draw, and a wholly unplayed matchup gives one standings point to each club." : "A temporary delay resumes from the stopped score. The organizer arranges completion of the full MLP matchup so the final or qualifying place has an on-court winner."}</p>
+        <label>Weather decision<select disabled={!editable} value={draft.weather} onChange={event => edit({ ...draft, weather: event.target.value as CompetitionDocument["weather"] })}><option value="normal">No weather change</option><option value="delay">Temporary delay — resume where stopped</option>{draft.weather === "rescheduled" && <option value="rescheduled">Rescheduled — unfinished pairings replayed</option>}{phase === "regular" && <option value="finalized_partial">No reschedule — finalize available results</option>}</select></label>
+        {phase === "regular" && detail.is_organizer && batch.state === "draft" && <form onSubmit={event => { event.preventDefault(); void change("reschedule", { starts_at: fromLocalInput(startsAt), roster_deadline: fromLocalInput(deadline), reason: reason.trim() }); }}>
+          <h3>Replay unfinished pairings on a new date</h3><p>Save the stopped scores first. The new roster deadline locks current interclub ratings and permits a new eligible lineup from the approved season pool.</p>
+          <fieldset disabled={disabled || dirty} className={styles.gameFields}><div className={styles.twoColumns}><label>New meet time (your device’s time)<input required type="datetime-local" value={startsAt} onChange={event => setStartsAt(event.target.value)} /></label><label>New roster deadline (your device’s time)<input required type="datetime-local" value={deadline} onChange={event => setDeadline(event.target.value)} /></label></div>
+            <label>Reschedule reason<textarea required value={reason} onChange={event => setReason(event.target.value)} /></label><button type="submit" disabled={!startsAt || !deadline || !reason.trim()}>Reschedule unfinished pairings</button>
+          </fieldset>
+        </form>}
+      </details>}
+      {!!substitutionProblems.length && <section className={styles.warning} aria-label="Substitutions needing attention">
+        <h3>{substitutionProblems.length === 1 ? "One substitution needs attention" : `${substitutionProblems.length} substitutions need attention`}</h3>
+        <p>Your scores are kept. Finish recording each injury once here.</p>
+        {substitutionProblems.map(change => <SubstitutionRepair key={`${change.gameId}:${change.side}`} document={draft} change={change} eligibilityProblem={substitutionEligibilityProblem(change, substitutionPool(change), players, detail.meet.roster_deadline)} options={substitutionPool(change)} players={players} disabled={!editable} onRepair={repairSubstitution} onShow={() => goToGame(change.gameId)} />)}
+      </section>}
+      {undoSubstitution && <p className={styles.notice}>Substitution updated. <button disabled={!editable} onClick={() => edit(undoSubstitution)}>Undo substitution update</button></p>}
+      {batch.state !== "draft" ? <CompetitionResults results={documentResults(draft)} names={Object.fromEntries(draft.encounters.flatMap(row => [row.club_a, row.club_b]).map(id => [id, clubName(id)]))} players={documentResultPlayers(draft, players)} singleMeet /> : <ScoreEditor document={draft} detail={detail} players={players} clubName={clubName} disabled={!editable} onChange={edit} divisionFilter={scoreDivision} onDivisionFilterChange={setScoreDivision} onScoreEntryEnd={finishScoreEntry} focusGame={focusGame} gameError={errorGame ? error : undefined} onSubstitution={document => { edit(document); setUndoSubstitution(draft); setStatus("Substitution applied to the remaining games. Save when ready."); }} />}
+      {editable && <div className={styles.bottomBar}><span>{dirty ? "Unsaved score changes" : "All draft changes saved"}</span><button ref={saveScores} className={styles.primary} disabled={!dirty || disabled} onClick={() => void change("save", { document: draft })}>Save all draft scores</button></div>}
+      <PrintPacket document={batch.document} meet={detail.meet} seasonName={context.season.details.name} timezone={context.season.details.timezone} revision={batch.revision} players={players} clubName={clubName} />
+    </>}
+  </section>;
+}
+
+function message(cause: unknown): string {
+  return cause instanceof Error && !(cause instanceof TypeError) && !(cause instanceof SyntaxError) ? cause.message : "Unable to reach meet operations. Check your connection and reload.";
+}
