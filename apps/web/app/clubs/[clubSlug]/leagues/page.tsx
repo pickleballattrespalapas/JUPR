@@ -1,7 +1,7 @@
 
 import PublicControls from "@/components/PublicControls";
 import Link from "@/components/PublicClubLink";
-import { publicLeagueHomeHref } from "@/components/PublicLeagueNav";
+import { publicLeagueHomeHref, publicLeagueResultsHref } from "@/components/PublicLeagueNav";
 import { getClubLeagueResults } from "@/lib/api";
 import { getPublicTeamLeagues } from "@/lib/teamLeagueApi";
 import TeamLeagueCards from "@/components/TeamLeagueCards";
@@ -133,9 +133,8 @@ export default async function PublicLeaguesPage({ params, searchParams }: Props)
           }}
         >
           {leagues.map((league) => (
-            <Link
+            <article
               key={league.name}
-              href={publicLeagueHomeHref(params.clubSlug, league.name)}
               style={{
                 ...cardStyle,
                 color: "#0f172a",
@@ -143,7 +142,7 @@ export default async function PublicLeaguesPage({ params, searchParams }: Props)
               }}
             >
               <h2 style={{ margin: "0 0 0.45rem", fontSize: "1.12rem" }}>
-                {league.name}
+                <Link href={publicLeagueHomeHref(params.clubSlug, league.name)} style={{ color: "inherit", textDecoration: "none" }}>{league.name}</Link>
               </h2>
               <p style={{ margin: 0, color: "#475569" }}>
                 {league.num_weeks
@@ -154,9 +153,12 @@ export default async function PublicLeaguesPage({ params, searchParams }: Props)
                 Minimum games: {league.min_games ?? 0}
               </p>
               <p style={{ margin: "0.75rem 0 0", fontWeight: 800 }}>
-                {view === "past" ? "View finished league" : "Open League Home"} →
+                <Link href={publicLeagueHomeHref(params.clubSlug, league.name)}>{view === "past" ? "View finished league" : "Open League Home"} →</Link>
               </p>
-            </Link>
+              <p style={{ margin: "0.5rem 0 0" }}>
+                <Link href={publicLeagueResultsHref(params.clubSlug, league.name, "weekly")}>Weekly report →</Link>
+              </p>
+            </article>
           ))}
         </div>
         </section>
