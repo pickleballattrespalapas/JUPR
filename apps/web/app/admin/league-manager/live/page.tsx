@@ -3,7 +3,6 @@ import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import { redirect } from "next/navigation";
 import { getClubPlayerOptions } from "@/lib/api";
 import { getAdminLeagueLiveStatus, getAdminLeagueManagerStatus, getAdminLeagueManagerApiBaseUrl } from "@/lib/adminLeagueManagerApi";
-import { getAdminMatchUploaderStatus } from "@/lib/adminMatchUploaderApi";
 import { readLeagueRouteContext } from "@/lib/leagueRouteContext";
 import LeagueLiveRoundPanel from "./LeagueLiveRoundPanel";
 import LeagueManagerNav from "../LeagueManagerNav";
@@ -17,10 +16,9 @@ export default async function LeagueManagerLivePage({ searchParams }: Props) {
   const leagueName = context.leagueName || context.leagueId;
 
   const { clubId, clubSlug } = requireAdminWorkspace();
-  const [{ data: leagueStatus, error: leagueError }, { data: liveDomainStatus, error: liveDomainError }, { data: uploaderStatus, error: uploaderError }, { data: playersData, error: playersError }] = await Promise.all([
+  const [{ data: leagueStatus, error: leagueError }, { data: liveDomainStatus, error: liveDomainError }, { data: playersData, error: playersError }] = await Promise.all([
     getAdminLeagueManagerStatus(clubId),
     getAdminLeagueLiveStatus(clubId),
-    getAdminMatchUploaderStatus(clubId),
     getClubPlayerOptions(clubSlug, { status: "all", noStore: true })
   ]);
 
@@ -34,10 +32,9 @@ export default async function LeagueManagerLivePage({ searchParams }: Props) {
 
       {leagueError ? <LeagueManagerLoadError error={leagueError} /> : null}
       {liveDomainError ? <LeagueManagerLoadError error={liveDomainError} service="League Live" /> : null}
-      {uploaderError ? <LeagueManagerLoadError error={uploaderError} service="Match Uploader" /> : null}
       {playersError ? <LeagueManagerLoadError error={playersError} service="Player lookup" /> : null}
 
-      {leagueStatus && liveDomainStatus && uploaderStatus ? (
+      {leagueStatus && liveDomainStatus ? (
         <SelectedLeaguePanelScope leagueName={leagueName}>
           <LeagueLiveRoundPanel
             key={leagueName}
@@ -46,7 +43,6 @@ export default async function LeagueManagerLivePage({ searchParams }: Props) {
             selectedLeagueName={leagueName}
             leagueStatus={leagueStatus}
             liveDomainStatus={liveDomainStatus}
-            uploaderStatus={uploaderStatus}
             players={playersData?.players || []}
           />
         </SelectedLeaguePanelScope>

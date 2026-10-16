@@ -5,6 +5,9 @@ const REQUIRED_FLAGS = [
   "JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP",
   "JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS",
   "JUPR_ENABLE_NEXT_ADMIN_JUPR_LIVE",
+  "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_MANAGER",
+  "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_DOMAIN",
+  "JUPR_ENABLE_NEXT_ADMIN_LEAGUE_LIVE_SUBMIT",
 ];
 
 function operationsReady(health) {
@@ -26,6 +29,16 @@ function weeklyReportReady(openapi) {
     && Object.prototype.hasOwnProperty.call(fields, "edits_json");
 }
 
+function leagueLiveReady(openapi) {
+  const prefix = "/admin/clubs/{club_id}/league-manager/live";
+  return [
+    ["post", `${prefix}/round-robin/preview`],
+    ["post", `${prefix}/players`],
+    ["get", `${prefix}/player-operations/{operation_key}`],
+    ["post", `${prefix}/player-operations/{operation_key}/reconcile`],
+  ].every(([method, path]) => Boolean(openapi?.paths?.[path]?.[method]));
+}
+
 async function waitForProductionApi({
   environment = process.env.VERCEL_ENV,
   request = fetch,
@@ -35,7 +48,7 @@ async function waitForProductionApi({
 } = {}) {
   if (environment !== "production") return;
   const deadline = now() + timeoutMs;
-  console.log("Waiting for the production operations and weekly report APIs before building the website.");
+  console.log("Waiting for the production operations, weekly report, and League Live APIs before building the website.");
   while (now() < deadline) {
     try {
       const response = await request("https://api.juprleagues.com/health", {
@@ -45,9 +58,12 @@ async function waitForProductionApi({
         const contract = await request("https://api.juprleagues.com/openapi.json", {
           cache: "no-store", signal: AbortSignal.timeout(10000),
         });
-        if (contract.ok && weeklyReportReady(await contract.json())) {
-          console.log("Production operations and weekly report APIs are ready.");
-          return;
+        if (contract.ok) {
+          const openapi = await contract.json();
+          if (weeklyReportReady(openapi) && leagueLiveReady(openapi)) {
+            console.log("Production operations, weekly report, and League Live APIs are ready.");
+            return;
+          }
         }
       }
     } catch {
@@ -58,7 +74,7 @@ async function waitForProductionApi({
   throw new Error("Production operations API is not ready. The current website remains active; retry after API verification.");
 }
 
-module.exports = { operationsReady, weeklyReportReady, waitForProductionApi, REQUIRED_FLAGS };
+module.exports = { operationsReady, weeklyReportReady, leagueLiveReady, waitForProductionApi, REQUIRED_FLAGS };
 if (require.main === module) {
   waitForProductionApi().catch((error) => { console.error(error.message); process.exitCode = 1; });
 }

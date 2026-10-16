@@ -548,6 +548,13 @@ def build_admin_league_live_status(supabase: Any | None, *, club_id: str) -> dic
     del supabase, club_id
     if not is_admin_league_manager_enabled():
         return {
+            "round_robin_preview_endpoint": None,
+            "round_robin_format_options": ["4-Player", "5-Player"],
+            "round_robin_expected_games": {"4-Player": 3, "5-Player": 5},
+            "player_create_enabled": False,
+            "player_create_endpoint": None,
+            "player_operation_endpoint": None,
+            "player_reconcile_endpoint": None,
             "enabled": False,
             "status": "guarded_off",
             "sessions_endpoint": None,
@@ -566,6 +573,13 @@ def build_admin_league_live_status(supabase: Any | None, *, club_id: str) -> dic
         }
     if not is_admin_league_live_domain_enabled():
         return {
+            "round_robin_preview_endpoint": None,
+            "round_robin_format_options": ["4-Player", "5-Player"],
+            "round_robin_expected_games": {"4-Player": 3, "5-Player": 5},
+            "player_create_enabled": False,
+            "player_create_endpoint": None,
+            "player_operation_endpoint": None,
+            "player_reconcile_endpoint": None,
             "enabled": False,
             "status": "streamlit_fallback",
             "sessions_endpoint": None,
@@ -586,6 +600,13 @@ def build_admin_league_live_status(supabase: Any | None, *, club_id: str) -> dic
         }
     submit_enabled = is_admin_league_live_submit_enabled()
     return {
+        "round_robin_preview_endpoint": "/admin/clubs/{club_id}/league-manager/live/round-robin/preview",
+        "round_robin_format_options": ["4-Player", "5-Player"],
+        "round_robin_expected_games": {"4-Player": 3, "5-Player": 5},
+        "player_create_enabled": submit_enabled,
+        "player_create_endpoint": "/admin/clubs/{club_id}/league-manager/live/players" if submit_enabled else None,
+        "player_operation_endpoint": "/admin/clubs/{club_id}/league-manager/live/player-operations/{operation_key}",
+        "player_reconcile_endpoint": "/admin/clubs/{club_id}/league-manager/live/player-operations/{operation_key}/reconcile" if submit_enabled else None,
         "enabled": True,
         "status": "ready_for_durable_all_match_publish" if submit_enabled else "ready_for_python_authoritative_league_live",
         "sessions_endpoint": "/admin/clubs/{club_id}/league-manager/live-sessions",

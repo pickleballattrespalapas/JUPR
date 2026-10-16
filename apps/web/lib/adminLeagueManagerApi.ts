@@ -25,6 +25,13 @@ export type AdminLeagueLiveStatusResponse = {
   status: string;
   sessions_endpoint?: string | null;
   roster_suggestion_endpoint?: string | null;
+  round_robin_preview_endpoint?: string | null;
+  round_robin_format_options?: string[];
+  round_robin_expected_games?: Record<string, number>;
+  player_create_enabled?: boolean;
+  player_create_endpoint?: string | null;
+  player_operation_endpoint?: string | null;
+  player_reconcile_endpoint?: string | null;
   round_plan_endpoint?: string | null;
   submit_enabled?: boolean;
   round_submit_endpoint?: string | null;
