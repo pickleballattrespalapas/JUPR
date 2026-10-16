@@ -138,6 +138,18 @@ def test_every_unsafe_fastapi_route_has_an_exact_nonstale_wave_classification() 
     assert actual_overlaps == expected_overlaps
 
 
+@pytest.mark.parametrize("method,path", [
+    ("PUT", "/admin/clubs/fixture/sponsors/sponsor-1"),
+    ("POST", "/admin/clubs/fixture/tournaments/setup/tournaments/t1/saved-sponsors/sponsor-1/use"),
+])
+def test_club_sponsor_actions_follow_setup_write_wave(method: str, path: str) -> None:
+    assert wave_allows_request("open", method, path)
+    assert wave_allows_request("tournament-setup", method, path)
+    assert not wave_allows_request(NO_WRITE_WAVE, method, path)
+    assert not wave_allows_request("public-intake-auth", method, path)
+    assert not wave_allows_request("tournament-setup", method, path + "/extra")
+
+
 @pytest.mark.parametrize("action", ["start", "link"])
 def test_event_season_routes_use_exact_admin_history_write_controls(action: str) -> None:
     path = f"/admin/clubs/fixture/event-seasons/{action}"
