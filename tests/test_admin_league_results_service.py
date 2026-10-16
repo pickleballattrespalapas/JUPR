@@ -89,7 +89,7 @@ def test_admin_results_resolve_exact_archived_league_and_inactive_players() -> N
     assert payload["league_id"] == "league-archived-1"
     assert payload["selected_league"] == "Winter 2025"
     assert payload["league_status"] == "archived"
-    assert payload["publicly_visible"] is False
+    assert payload["publicly_visible"] is True
     assert payload["standings"][0]["player_name"] == "Alex"
     assert payload["standings"][0]["rating_jupr"] == 4.1
     assert {row["player_name"] for row in payload["weekly_results"]} == {

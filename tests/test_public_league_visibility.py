@@ -8,7 +8,8 @@ def test_public_league_visibility_is_fail_closed_by_lifecycle() -> None:
         ({"league_name": "Draft", "status": "draft", "is_active": False}, None),
         ({"league_name": "Draft mismatch", "status": "draft", "is_active": True}, None),
         ({"league_name": "Paused", "status": "paused", "is_active": False}, None),
-        ({"league_name": "Archived", "status": "archived", "is_active": False}, None),
+        ({"league_name": "Archived", "status": "archived", "is_active": False}, "past"),
+        ({"league_name": "Archived mismatch", "status": "archived", "is_active": True}, None),
         ({"league_name": "Legacy published", "status": "published", "is_active": True}, None),
         ({"league_name": "Missing lifecycle", "is_active": True}, None),
     ]

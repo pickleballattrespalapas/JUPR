@@ -494,7 +494,7 @@ def _manager_league_status(row: Mapping[str, Any] | None) -> str:
 
 
 def _manager_league_is_public(row: Mapping[str, Any] | None) -> bool:
-    """Keep draft, paused, and archived manager records off public routes."""
+    """Keep draft and paused manager records off public routes."""
 
     return public_league_view(row) is not None
 

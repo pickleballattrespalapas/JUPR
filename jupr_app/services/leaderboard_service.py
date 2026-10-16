@@ -20,6 +20,7 @@ from zoneinfo import ZoneInfo
 
 from jupr_app.services.public_league_visibility import (
     ACTIVE_LEAGUE_VIEW,
+    PAST_LEAGUE_VIEW,
     normalize_public_league_view,
     public_league_view,
 )
@@ -607,6 +608,10 @@ def build_public_leaderboard(
         clean_sort = "rank"
     clean_search = str(search or "").strip()
     clean_league_view = normalize_public_league_view(league_view)
+    # Historical standings retain every participant, including old links that
+    # still request an active/inactive player filter.
+    if clean_league_view == PAST_LEAGUE_VIEW:
+        clean_status = "all"
 
     players = _fetch_players(supabase, cid) if cid else []
     rating_rows = _fetch_league_ratings(supabase, cid) if cid else []
