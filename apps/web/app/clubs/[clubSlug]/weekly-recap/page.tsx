@@ -187,6 +187,7 @@ function RecapBody({ recap, activeSection, clubSlug }: { recap: WeeklyRecapJson;
       <NumberStrip recap={recap} />
       {recap.report?.version === 1 && showSection(activeSection, "around") ? <WeeklyReportEvents report={recap.report} clubSlug={clubSlug} /> : null}
 
+      {recap.report?.version === 1 && activeSection === "tournaments" ? <WeeklyReportEvents report={{ ...recap.report, event_results: recap.report.event_results?.filter(e => e.kind === "Tournament") }} clubSlug={clubSlug} /> : null}
       {showSection(activeSection, "spotlight") && (spotlight.length > 0 || !recap.report) ? (
         <section id="spotlight" data-testid="weekly-recap-section-content-spotlight" style={{ pageBreakInside: "avoid" }}>
           <h2>Spotlight Reel</h2>
@@ -209,7 +210,7 @@ function RecapBody({ recap, activeSection, clubSlug }: { recap: WeeklyRecapJson;
         </section>
       ) : null}
 
-      {showSection(activeSection, "tournaments") && (recap.tournaments?.length > 0 || !recap.report) && (recap.report?.version !== 1 || activeSection === "tournaments" || !recap.report.event_results?.some(e => e.kind === "Tournament")) ? (
+      {showSection(activeSection, "tournaments") && recap.report?.version !== 1 ? (
         <section id="tournaments" data-testid="weekly-recap-section-content-tournaments" style={{ pageBreakInside: "avoid" }}>
           <h2>Tournaments</h2>
           {recap.tournaments?.length ? (

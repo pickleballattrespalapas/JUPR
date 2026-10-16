@@ -122,7 +122,7 @@ def test_new_faces_include_social_only_and_require_complete_history():
     old_events = [{'id':'old','club_id':'club','status':'saved','result_mode':'social_unrated','event_date':'2026-09-01'}]
     people = [{'id':'old-a','event_id':'old','club_person_id':'repeat'}, {'id':'old-b','event_id':'old','linked_player_id':1}]
     old_games = [{'id':'old-game','event_id':'old','t1_p1_participant_id':'old-a','t1_p2_participant_id':'old-b','score_t1':11,'score_t2':7}]
-    social = {'participants':[{'id':'a','club_person_id':'repeat','display_name_snapshot':'Returning'}, {'id':'b','club_person_id':'new','display_name_snapshot':'New Social'}], 'matches':[{'t1_p1_participant_id':'a','t1_p2_participant_id':'b','score_t1':11,'score_t2':7}]}
+    social = {'events':[{'id':'current'}], 'participants':[{'id':'a','club_person_id':'repeat','display_name_snapshot':'Returning'}, {'id':'b','club_person_id':'new','display_name_snapshot':'New Social'}, {'id':'c','linked_player_id':2}, {'id':'d','linked_player_id':3}], 'matches':[{'event_id':'current','t1_p1_participant_id':'a','t1_p2_participant_id':'b','t2_p1_participant_id':'c','t2_p2_participant_id':'d','score_t1':11,'score_t2':7}]}
     result = _new_faces(DB(live_events=old_events,live_event_participants=people,live_event_matches=old_games), 'club',[match(1)],social,'2026-10-12','2026-10-18',{1:'Alex',2:'Bea',3:'Cam',4:'Dee'})
     assert 'New Social' in result and 'Returning' not in result and 'Alex' not in result
 

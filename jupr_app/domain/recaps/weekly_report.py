@@ -298,12 +298,10 @@ def _new_faces(db, club_id, matches, social_data, start, end, names):
             value = m.get(key)
             if value is not None and not pd.isna(value):
                 identities[("player", str(int(value)))] = names.get(int(value), f"Player #{int(value)}")
-    from jupr_app.domain.recaps.weekly_recap import _social_identity_from_row, _social_display_name
-    played = {str(m.get(k)) for m in social_data.get("matches", []) for k in ("t1_p1_participant_id", "t1_p2_participant_id", "t2_p1_participant_id", "t2_p2_participant_id") if m.get("score_t1") != m.get("score_t2")}
-    for p in social_data.get("participants", []):
-        identity = _social_identity_from_row(p)
-        if identity and str(p.get("id")) in played:
-            identities[(identity[0], str(identity[1]))] = _social_display_name(p, names)
+    from jupr_app.domain.recaps.weekly_recap import _social_identity_from_row, _compute_social_stats
+    social_stats, _, _ = _compute_social_stats(social_data, names)
+    for identity, stats in social_stats.items():
+        identities[(identity[0], str(identity[1]))] = stats["display_name"]
     if not identities:
         return []
     # Full history is deliberately paged; a truncated page cannot prove "new".
