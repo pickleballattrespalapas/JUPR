@@ -238,7 +238,7 @@ export default async function ClubLeaderboardPage({ params, searchParams }: Lead
   const { clubSlug } = params;
   const leagueView = normalizeLeagueView(firstParam(searchParams, "league_view"));
   const requestedLeague = firstParam(searchParams, "league") || (leagueView === "past" ? "" : "OVERALL");
-  const selectedStatus = normalizeStatus(firstParam(searchParams, "status"));
+  const selectedStatus = leagueView === "past" ? "all" : normalizeStatus(firstParam(searchParams, "status"));
   const selectedSort = normalizeSort(firstParam(searchParams, "sort"));
   const search = (firstParam(searchParams, "q") || "").trim().slice(0, 120);
   const selectedPlayer = (firstParam(searchParams, "player") || "").trim().slice(0, 120);
@@ -300,7 +300,7 @@ export default async function ClubLeaderboardPage({ params, searchParams }: Lead
       <PublicControls navigation resetKey={JSON.stringify(state)} context={[overall ? "Overall" : selectedLeague, state.leagueView === "past" ? "Past leagues" : "", overall ? selectedPeriod?.name || "All time" : "", state.status === "all" ? "All players" : state.status === "inactive" ? "Inactive players" : "Active players", `Sort: ${state.sort === "win_pct" ? "Win %" : state.sort}`, state.search ? `Search: ${state.search}` : ""].filter(Boolean).join(" · ")}>
 <p style={{ color: "#475569", maxWidth: "780px" }}>
         {state.leagueView === "past"
-          ? "See final standings for finished leagues. Active players are shown by default."
+          ? "See final standings for finished leagues. All participants are included, regardless of current activity."
           : "See overall and league standings, qualification progress, and earned badges. Active players are shown by default."}
       </p>
       <p style={{ color: "#475569" }}><Link href={`/clubs/${encodeURIComponent(clubSlug)}/players`}>Browse all player profiles</Link></p>
@@ -314,6 +314,7 @@ export default async function ClubLeaderboardPage({ params, searchParams }: Lead
               href={pageHref(clubSlug, state, {
                 leagueView: option,
                 league: option === "active" ? "OVERALL" : "",
+                status: option === "past" ? "all" : "active",
                 player: "",
                 page: 1
               })}
@@ -378,7 +379,7 @@ export default async function ClubLeaderboardPage({ params, searchParams }: Lead
           {search ? <Link href={pageHref(clubSlug, state, { search: "", player: "", page: 1 })}>Clear search</Link> : null}
         </form>
 
-        <div style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap", alignItems: "center" }}>
+        {state.leagueView !== "past" ? <div style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap", alignItems: "center" }}>
           <strong>Status:</strong>
           {(["active", "all", "inactive"] as StatusKey[]).map((status) => {
             const active = status === state.status;
@@ -394,7 +395,7 @@ export default async function ClubLeaderboardPage({ params, searchParams }: Lead
               </Link>
             );
           })}
-        </div>
+        </div> : null}
 
         <div style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap", alignItems: "center" }}>
           <strong>Sort:</strong>

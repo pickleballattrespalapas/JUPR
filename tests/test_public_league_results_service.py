@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from jupr_app.services.public_league_results_service import (
     _league_matches,
     _parse_week_num,
@@ -200,7 +202,7 @@ def fake_supabase() -> FakeSupabase:
     )
 
 
-def test_public_league_results_overview_excludes_inactive_leagues() -> None:
+def test_public_league_results_overview_keeps_archived_leagues_in_past() -> None:
     overview = get_public_league_results_overview(fake_supabase(), club_id="club")
 
     assert overview["leagues"] == [
@@ -215,7 +217,7 @@ def test_public_league_results_overview_excludes_inactive_leagues() -> None:
             "num_weeks": None,
         }
     ]
-    assert overview["past_leagues"] == []
+    assert [row["name"] for row in overview["past_leagues"]] == ["Archived"]
 
 
 def test_public_league_results_maps_configured_schedule_weeks() -> None:
@@ -427,22 +429,22 @@ def test_public_league_results_never_substitutes_an_explicit_missing_league() ->
     assert payload["weekly_results"] == []
 
 
-def test_public_league_results_does_not_resolve_exact_archived_deep_link() -> None:
+def test_public_league_results_resolves_exact_archived_deep_link() -> None:
     payload = build_public_league_results(
         fake_supabase(),
         club_id="club",
         league_name="Archived",
     )
 
-    assert payload["selected_league"] is None
-    assert payload["league"] is None
+    assert payload["selected_league"] == "Archived"
+    assert payload["league"]["name"] == "Archived"
     assert payload["standings"] == []
     assert payload["weekly_results"] == []
     assert [row["name"] for row in payload["leagues"]] == ["Open"]
 
 
-def test_public_exact_links_reject_every_historical_lifecycle_status() -> None:
-    for status in ("draft", "paused", "archived"):
+def test_public_exact_links_reject_unpublished_lifecycle_statuses() -> None:
+    for status in ("draft", "paused"):
         league_name = f"Historical {status}"
         payload = build_public_league_results(
             FakeSupabase(
@@ -482,7 +484,8 @@ def test_public_exact_links_reject_every_historical_lifecycle_status() -> None:
         assert payload["standings"] == []
 
 
-def test_ended_league_is_available_only_in_the_past_collection() -> None:
+@pytest.mark.parametrize("status", ["ended", "archived"])
+def test_finished_league_retains_inactive_players_in_the_past_collection(status) -> None:
     league_name = "Finished League"
     payload = build_public_league_results(
         FakeSupabase(
@@ -492,7 +495,7 @@ def test_ended_league_is_available_only_in_the_past_collection() -> None:
                         "club_id": "club",
                         "league_name": league_name,
                         "is_active": False,
-                        "status": "ended",
+                        "status": status,
                     }
                 ],
                 "league_ratings": [
@@ -537,22 +540,22 @@ def test_inactive_metadata_blocks_match_and_rating_fallback_from_public_overview
             "leagues_metadata": [
                 {
                     "club_id": "club",
-                    "league_name": "Archived",
+                    "league_name": "Draft",
                     "is_active": False,
-                    "status": "archived",
+                    "status": "draft",
                 }
             ],
             "league_ratings": [
                 {
                     "club_id": "club",
-                    "league_name": "Archived",
+                    "league_name": "Draft",
                     "is_active": True,
                 }
             ],
             "matches": [
                 {
                     "club_id": "club",
-                    "league": "Archived",
+                    "league": "Draft",
                     "match_type": "Live Match",
                     "score_t1": 11,
                     "score_t2": 7,
@@ -566,3 +569,20 @@ def test_inactive_metadata_blocks_match_and_rating_fallback_from_public_overview
         "leagues": [],
         "past_leagues": [],
     }
+
+
+@pytest.mark.parametrize("status", ["ended", "archived"])
+def test_finished_results_keep_inactive_participants_in_weekly_history(status) -> None:
+    supabase = fake_supabase()
+    supabase._tables["leagues_metadata"][0].update(status=status, is_active=False)
+    for row in supabase._tables["players"]:
+        row.update(active=False, inactive_at="2026-08-01")
+    for row in supabase._tables["league_ratings"]:
+        row.update(is_active=False, inactive_at="2026-08-01")
+
+    payload = build_public_league_results(supabase, club_id="club", league_name="Open")
+
+    assert payload["selected_league"] == "Open"
+    assert {row["player_id"] for row in payload["standings"]} == {1, 2, 3, 4}
+    assert {row["player_id"] for row in payload["weekly_results"]} == {1, 2, 3, 4}
+    assert {row["player_id"] for row in payload["players"]} == {1, 2, 3, 4}

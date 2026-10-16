@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from jupr_app.services.leaderboard_service import LeaderboardDataUnavailable, build_public_leaderboard
 
 
@@ -200,18 +202,46 @@ def test_league_projection_preserves_rank_gap_qualification_badges_and_snapshot(
     _assert_private_fields_absent(payload)
 
 
-def test_past_view_contains_only_ended_leagues_and_never_archived_or_draft() -> None:
+def test_past_view_contains_ended_and_archived_leagues_but_never_drafts() -> None:
     payload = build_public_leaderboard(
         _fixture(),
         club_id="club-1",
         league_view="past",
+        league_name="Past Season",
         status="all",
     )
 
-    assert [scope["name"] for scope in payload["scopes"]] == ["Past Season"]
+    assert [scope["name"] for scope in payload["scopes"]] == ["Archived", "Past Season"]
     assert payload["selected_scope"] == "Past Season"
     assert payload["filters"]["league_view"] == "past"
     assert {row["league_name"] for row in payload["leaderboard"]} == {"Past Season"}
+
+
+@pytest.mark.parametrize("lifecycle", ["ended", "archived"])
+@pytest.mark.parametrize("status", [None, "active", "inactive", "all"])
+def test_past_league_ignores_current_activity_for_standings_and_highlights(lifecycle, status):
+    supabase = _fixture()
+    supabase.store["leagues_metadata"][0].update(status=lifecycle, is_active=False)
+    kwargs = {} if status is None else {"status": status}
+    payload = build_public_leaderboard(
+        supabase, club_id="club-1", league_view="past", league_name="Pro", **kwargs,
+    )
+
+    assert payload["filters"]["status"] == "all"
+    assert [row["player_id"] for row in payload["leaderboard"]] == [1, 2, 3]
+    assert [row["rank"] for row in payload["leaderboard"]] == [1, 2, 3]
+    assert payload["summary"]["filtered_players"] == 3
+    assert payload["highlights"]["most_matches"][0]["player_id"] == 1
+    # A league rating can be inactive even while its player's club profile is active.
+    supabase.store["league_ratings"][0]["is_active"] = False
+    payload = build_public_leaderboard(
+        supabase, club_id="club-1", league_view="past", league_name="Pro",
+        search="Avery", player_id=1, **kwargs,
+    )
+    assert payload["pagination"]["total"] == 1
+    assert payload["snapshot"]["player_name"] == "Avery Ace"
+    assert payload["highlights"]["highest_rating"][0]["player_id"] == 1
+    _assert_private_fields_absent(payload)
 
 
 def test_inactive_filter_and_invalid_scope_are_deterministic():

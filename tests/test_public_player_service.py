@@ -250,8 +250,7 @@ def test_public_player_profile_includes_leagues_and_recent_matches():
 
     assert profile is not None
     assert profile["player"]["name"] == "Alex"
-    assert profile["league_ratings"][0]["league_name"] == "Open"
-    assert [row["league_name"] for row in profile["league_ratings"]] == ["Open"]
+    assert [row["league_name"] for row in profile["league_ratings"]] == ["Archived Test", "Open"]
     assert profile["recent_matches"][0]["team_1"][0]["name"] == "Alex"
     assert profile["recent_matches"][0]["score_t1"] == 11
     assert profile["recent_matches"][0]["match_format_label"] == "Singles"

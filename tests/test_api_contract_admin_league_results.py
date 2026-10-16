@@ -110,7 +110,7 @@ def historical_results_client(monkeypatch) -> TestClient:
     return TestClient(app)
 
 
-def test_archived_results_are_not_available_from_public_route(
+def test_archived_results_include_inactive_players_from_public_route(
     historical_results_client: TestClient,
 ) -> None:
     response = historical_results_client.get(
@@ -119,8 +119,12 @@ def test_archived_results_are_not_available_from_public_route(
     )
 
     assert response.status_code == 200
-    assert response.json()["selected_league"] is None
-    assert response.json()["standings"] == []
+    payload = response.json()
+    assert payload["selected_league"] == "Archived League"
+    assert payload["leagues"] == []
+    assert [row["name"] for row in payload["past_leagues"]] == ["Archived League"]
+    assert {row["player_name"] for row in payload["standings"]} == {"Alex", "Blair", "Casey", "Devon"}
+    assert {row["player_name"] for row in payload["weekly_results"]} == {"Alex", "Blair", "Casey", "Devon"}
 
 
 def test_admin_historical_results_route_requires_bearer_authentication(
@@ -139,5 +143,5 @@ def test_admin_historical_results_route_requires_bearer_authentication(
     payload = allowed.json()
     assert payload["selected_league"] == "Archived League"
     assert payload["league_status"] == "archived"
-    assert payload["publicly_visible"] is False
+    assert payload["publicly_visible"] is True
     assert payload["standings"][0]["player_name"] == "Alex"
