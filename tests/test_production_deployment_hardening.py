@@ -383,7 +383,9 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         ROOT / "supabase/migrations",
     )
 
-    assert len(versions) == 137
+    assert len(versions) == 138
+    assert "tournament_team_division_transfer" in contract["required_ledger_names"]
+    assert "20261109004102" in versions
     assert "20261016152836" in versions
     assert "club_sponsor_directory" in contract["required_ledger_names"]
     assert "reconcile_player_game_activity" in contract["required_ledger_names"]
@@ -397,7 +399,7 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
     assert "tournament_gender_eligibility_reviews" in contract["required_ledger_names"]
     assert {"complete_registration_cancellation", "registration_cancellation_audit_policies"}.issubset(contract["required_ledger_names"])
     assert "20260909203736" in versions
-    assert versions[-39:] == (
+    assert versions[-40:] == (
         "20261030010000",
         "20261101000000",
         "20261102000000",
@@ -437,13 +439,14 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         "20261109004000",
         "20261109004100",
         "20261109004101",
+        "20261109004102",
     )
-    assert len(names) == 137
+    assert len(names) == 138
     assert all("XX" not in version for version in versions)
-    assert len(contract["required_ledger_names"]) == 124
+    assert len(contract["required_ledger_names"]) == 125
     assert "partner_email_invitations" in contract["required_ledger_names"]
-    assert len(contract["deployment_order"]) == 124
-    assert contract["deployment_order"][-1] == "club_sponsor_directory"
+    assert len(contract["deployment_order"]) == 125
+    assert contract["deployment_order"][-2:] == ("club_sponsor_directory", "tournament_team_division_transfer")
     assert set(contract["deployment_order"]) == set(
         contract["required_ledger_names"]
     )
@@ -877,7 +880,7 @@ def test_preflight_accepts_only_matching_protected_project_and_config() -> None:
     )
 
     assert errors == []
-    assert migrations[-1] == "20261109004101"
+    assert migrations[-1] == "20261109004102"
 
     wrong_project_errors, _ = verifier.preflight_errors(
         _production_env(
