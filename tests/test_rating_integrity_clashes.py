@@ -482,6 +482,17 @@ def test_tracked_replay_fences_every_projection_write_batch():
         }
     ]
     heartbeats = []
+    guarded_writes = []
+    original_rpc = sb.rpc
+
+    def guarded_rpc(name, payload):
+        # Verify a fresh lease check at each write, rather than assuming there
+        # are no additional guarded steps after the local projections finish.
+        assert len(heartbeats) > (guarded_writes[-1] if guarded_writes else 0)
+        guarded_writes.append(len(heartbeats))
+        return original_rpc(name, payload)
+
+    sb.rpc = guarded_rpc
     fence = {
         "job_id": "11111111-1111-1111-1111-111111111111",
         "lease_token": "22222222-2222-2222-2222-222222222222",
@@ -513,7 +524,7 @@ def test_tracked_replay_fences_every_projection_write_batch():
         "apply_replay_write_batch_atomic",
         "apply_replay_league_rating_rows_atomic",
     }
-    assert len(heartbeats) == len(sb.rpc_calls)
+    assert len(guarded_writes) == len(sb.rpc_calls)
     for _name, payload in sb.rpc_calls:
         assert payload["p_job_id"] == fence["job_id"]
         assert payload["p_lease_token"] == fence["lease_token"]
