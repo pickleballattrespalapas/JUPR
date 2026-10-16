@@ -50,7 +50,7 @@ AWARD_CATEGORY_CATALOG = (
     {"key": "longest_win_streak", "label": "Longest Win Streak", "recipient_type": "player", "metric": "longest_win_streak", "format": "integer"},
     {"key": "close_game_record", "label": "Best Close-Game Record", "recipient_type": "player", "metric": "close_win_pct", "format": "percent", "minimum_metric": "close_games"},
     {"key": "biggest_upset", "label": "Biggest Upset", "recipient_type": "player", "metric": "largest_upset_jupr", "format": "rating", "minimum_metric": "upset_wins"},
-    {"key": "most_upsets", "label": "Most Upset Wins", "recipient_type": "player", "metric": "upset_wins", "format": "integer", "minimum_metric": "upset_wins"},
+    {"key": "most_upsets", "label": "Most Upset Wins", "recipient_type": "player", "metric": "upset_wins", "format": "integer", "minimum_metric": "games"},
     {"key": "opponent_strength", "label": "Strongest Opposition", "recipient_type": "player", "metric": "average_opponent_jupr", "format": "rating"},
     {"key": "over_performance", "label": "Most Above Expectation", "recipient_type": "player", "metric": "wins_above_expected", "format": "signed_decimal"},
     {"key": "best_partnership", "label": "Best Partnership", "recipient_type": "player", "metric": "best_partnership_win_pct", "format": "percent", "minimum_metric": "best_partnership_games"},
@@ -581,3 +581,4 @@ def award_category_catalog() -> list[dict[str, Any]]:
 
 def build_league_award_catalog() -> list[dict[str, Any]]:
     return award_category_catalog()
+
