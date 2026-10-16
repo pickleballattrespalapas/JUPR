@@ -28,6 +28,7 @@ from jupr_app.services.admin_guarded_write_service import (
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
 MAX_MATCH_UPLOADER_BATCH_ROWS = 200
 MAX_MATCH_UPLOADER_RR_COURTS = 10
+LEAGUE_LIVE_ROUND_ROBIN_FORMATS = ("4-Player", "5-Player")
 
 
 def _truthy_env(name: str) -> bool:
@@ -54,6 +55,26 @@ def is_admin_match_uploader_preview_enabled() -> bool:
 
 def is_api_audit_log_required() -> bool:
     return _truthy_env("JUPR_REQUIRE_API_AUDIT_LOG")
+
+
+def _require_league_live_capability(*, write: bool) -> None:
+    """Authorize internal reuse without opening any Match Uploader route.
+
+    Only server-side League Live callers set this capability; request source
+    strings are audit metadata and must never grant access.
+    """
+    from jupr_app.services.admin_league_live_service import (
+        ensure_admin_league_live_submit_enabled,
+        is_admin_league_live_domain_enabled,
+    )
+    from jupr_app.services.staging_write_guard import staging_write_wave_allows
+
+    if write:
+        ensure_admin_league_live_submit_enabled()
+        if os.getenv("JUPR_ENV", "").strip().lower() == "staging" and not staging_write_wave_allows("league-live-submit"):
+            raise PermissionError("League Live writes require the league-live-submit staging write wave.")
+    elif not is_admin_league_live_domain_enabled():
+        raise PermissionError("Next League Live domain is disabled.")
 
 
 def _safe_rows(resp: Any) -> list[dict[str, Any]]:
@@ -227,11 +248,14 @@ def get_admin_match_uploader_player_operation(
     *,
     club_id: str,
     operation_key: str,
+    allow_league_live: bool = False,
 ) -> dict[str, Any] | None:
+    if allow_league_live:
+        _require_league_live_capability(write=False)
     return get_guarded_operation(
         supabase,
         club_id=str(club_id),
-        workflow="match_uploader_player_batch",
+        workflow="league_live_player_batch" if allow_league_live else "match_uploader_player_batch",
         operation_key=str(operation_key),
     )
 
@@ -261,8 +285,11 @@ def reconcile_admin_match_uploader_player_operation(
     actor_email: str,
     actor_role: str,
     source: str = "next_match_uploader_player_reconcile",
+    allow_league_live: bool = False,
 ) -> dict[str, Any]:
-    if not is_admin_match_uploader_enabled():
+    if allow_league_live:
+        _require_league_live_capability(write=True)
+    elif not is_admin_match_uploader_enabled():
         raise PermissionError("Next Match Uploader is disabled.")
     if _clean_text(confirmation_text, limit=80).upper() != "RECONCILE PLAYER BATCH":
         raise ValueError("Type RECONCILE PLAYER BATCH to reconcile this exact operation.")
@@ -270,6 +297,7 @@ def reconcile_admin_match_uploader_player_operation(
         supabase,
         club_id=str(club_id),
         operation_key=str(operation_key),
+        allow_league_live=allow_league_live,
     )
     if operation is None:
         raise ValueError("Player batch operation was not found.")
@@ -564,6 +592,8 @@ def _validate_private_match_contexts(
     for row in matches:
         context_type = str(row.get("context_type") or "").strip()
         if context_type != "league_live_session":
+            if allow_league_live_context:
+                raise PermissionError("Every League Live published match requires a league_live_session context.")
             continue
         if not allow_league_live_context:
             raise PermissionError(
@@ -752,8 +782,11 @@ def build_admin_match_uploader_round_robin_preview(
     custom_schedule: str = "",
     schedule_mode: str = SCHEDULE_MODE_FULL,
     source: str = "next_match_uploader_round_robin_preview",
+    allow_league_live: bool = False,
 ) -> dict[str, Any]:
-    if not is_admin_match_uploader_preview_enabled():
+    if allow_league_live:
+        _require_league_live_capability(write=False)
+    elif not is_admin_match_uploader_preview_enabled():
         raise PermissionError("Next Match Uploader preview is disabled.")
     if not courts:
         raise ValueError("Add at least one round-robin court.")
@@ -768,6 +801,8 @@ def build_admin_match_uploader_round_robin_preview(
 
     for index, court in enumerate(courts, start=1):
         format_type = _format_type(court.get("format_type"))
+        if allow_league_live and format_type not in LEAGUE_LIVE_ROUND_ROBIN_FORMATS:
+            raise ValueError("League Live supports only 4-Player and 5-Player courts.")
         player_names = _court_player_names(court)
         if not player_names:
             raise ValueError(f"Court {index}: enter player names before generating a schedule.")
@@ -777,6 +812,8 @@ def build_admin_match_uploader_round_robin_preview(
             needed = len(player_names)
         if len(player_names) < needed:
             raise ValueError(f"Court {index}: {format_type} requires {needed} players.")
+        if allow_league_live and len(player_names) != needed:
+            raise ValueError(f"Court {index}: {format_type} requires exactly {needed} players.")
         for name in player_names:
             if _resolve_player(name, exact_by_name, normalized_by_name) is None and name not in seen_missing:
                 missing_names.append(name)
@@ -885,8 +922,11 @@ def create_admin_match_uploader_players(
     idempotency_key: str,
     confirmation_text: str,
     source: str = "next_match_uploader_new_players",
+    allow_league_live: bool = False,
 ) -> dict[str, Any]:
-    if not is_admin_match_uploader_enabled():
+    if allow_league_live:
+        _require_league_live_capability(write=True)
+    elif not is_admin_match_uploader_enabled():
         raise PermissionError("Next Match Uploader is disabled.")
     requested = _normalized_new_player_batch(players)
 
@@ -933,8 +973,8 @@ def create_admin_match_uploader_players(
     operation, idempotent = begin_guarded_operation(
         supabase,
         club_id=str(club_id),
-        workflow="match_uploader_player_batch",
-        action="create_match_uploader_players",
+        workflow="league_live_player_batch" if allow_league_live else "match_uploader_player_batch",
+        action="create_league_live_players" if allow_league_live else "create_match_uploader_players",
         operation_key=str(idempotency_key),
         request_payload={
             **request_payload,
@@ -1138,20 +1178,19 @@ def submit_admin_match_uploader_batch(
     source: str = "next_match_uploader",
     allow_league_live_context: bool = False,
 ) -> dict[str, Any]:
-    if not is_admin_match_uploader_enabled():
+    if allow_league_live_context:
+        _require_league_live_capability(write=True)
+    elif not is_admin_match_uploader_enabled():
         raise PermissionError("Next Match Uploader is disabled.")
     clean_match_format = str(match_format or "").strip().casefold()
     if clean_match_format not in {"singles", "doubles"}:
         raise ValueError("match_format must be singles or doubles.")
-    clean_matches = _apply_event_contexts(
-        supabase,
-        club_id=str(club_id),
-        matches=_normalize_batch(matches),
-    )
+    clean_matches = _normalize_batch(matches)
     _validate_private_match_contexts(
         clean_matches,
         allow_league_live_context=bool(allow_league_live_context),
     )
+    clean_matches = _apply_event_contexts(supabase, club_id=str(club_id), matches=clean_matches)
     (
         df_players_all,
         _df_players_active,

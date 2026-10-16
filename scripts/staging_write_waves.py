@@ -242,6 +242,7 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("PUT", "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/awards/config"),
     ),
     "league-live-domain": (
+        ("POST", "/admin/clubs/{club_id}/league-manager/live/round-robin/preview"),
         ("POST", "/admin/clubs/{club_id}/match-uploader/round-robin/preview"),
         ("POST", "/admin/clubs/{club_id}/league-manager/live/roster-suggestion"),
         ("POST", "/admin/clubs/{club_id}/league-manager/live-sessions"),
@@ -251,6 +252,9 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/admin/clubs/{club_id}/league-manager/live-sessions/{session_id}/rounds/{round_number}"),
     ),
     "league-live-submit": (
+        ("POST", "/admin/clubs/{club_id}/league-manager/live/players"),
+        ("POST", "/admin/clubs/{club_id}/league-manager/live/player-operations/{operation_key}/reconcile"),
+        ("POST", "/admin/clubs/{club_id}/league-manager/live/round-robin/preview"),
         ("POST", "/admin/clubs/{club_id}/match-uploader/round-robin/preview"),
         ("POST", "/admin/clubs/{club_id}/league-manager/live/roster-suggestion"),
         ("POST", "/admin/clubs/{club_id}/league-manager/live-sessions"),

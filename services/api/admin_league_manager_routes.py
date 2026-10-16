@@ -29,6 +29,7 @@ from jupr_app.services.admin_league_live_service import (
     build_admin_league_live_status,
     create_admin_league_live_session,
     get_admin_league_live_session,
+    is_admin_league_live_domain_enabled,
     is_admin_league_live_submit_enabled,
     list_admin_league_live_sessions,
     prepare_admin_league_live_session_create,
@@ -47,6 +48,12 @@ from jupr_app.services.admin_league_live_submit_service import (
     submit_admin_league_live_round_publish,
 )
 from jupr_app.services.admin_league_results_service import build_admin_league_results
+from jupr_app.services.admin_match_uploader_service import (
+    build_admin_match_uploader_round_robin_preview,
+    create_admin_match_uploader_players,
+    get_admin_match_uploader_player_operation,
+    reconcile_admin_match_uploader_player_operation,
+)
 from jupr_app.services.admin_league_manager_create_service import (
     create_admin_league_manager_draft,
     duplicate_admin_league_manager_draft,
@@ -79,6 +86,11 @@ from jupr_app.services.admin_guarded_write_service import (
     update_guarded_operation,
 )
 from services.api.auth import authenticate_bearer, auth_header
+from services.api.admin_match_uploader_routes import (
+    AdminMatchUploaderCreatePlayersRequest,
+    AdminMatchUploaderPlayerReconcileRequest,
+    AdminMatchUploaderRoundRobinPreviewRequest,
+)
 from services.api.staging_write_guard import require_league_manager_write_or_403
 
 
@@ -358,6 +370,15 @@ def _require_league_live_service_role_or_503() -> None:
         )
 
 
+def _require_league_live_setup(*, write: bool = False) -> None:
+    _require_league_live_service_role_or_503()
+    if not is_admin_league_live_domain_enabled():
+        raise HTTPException(status_code=403, detail="Next League Live domain is disabled.")
+    if write:
+        if not is_admin_league_live_submit_enabled():
+            raise HTTPException(status_code=403, detail="Next League Live player creation is disabled.")
+
+
 def _handle_common(exc: Exception) -> None:
     if isinstance(exc, GuardedWriteRecoveryRequired):
         raise HTTPException(
@@ -427,10 +448,102 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
                     "round_compensate_endpoint": None,
                     "guest_endpoint": None,
                     "export_endpoint": None,
+                    "round_robin_preview_endpoint": None,
+                    "player_create_enabled": False,
+                    "player_create_endpoint": None,
+                    "player_operation_endpoint": None,
+                    "player_reconcile_endpoint": None,
                 }
             )
             payload.setdefault("warnings", []).append("SUPABASE_SERVICE_ROLE_KEY is required on FastAPI for League Live.")
         return payload
+
+    @app.post("/admin/clubs/{club_id}/league-manager/live/round-robin/preview")
+    def post_admin_league_live_round_robin_preview(
+        club_id: str,
+        payload: AdminMatchUploaderRoundRobinPreviewRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        _require_league_live_setup()
+        supabase = get_supabase_client()
+        _resolve_league_manager_role_or_403(
+            supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source,
+        )
+        try:
+            return build_admin_match_uploader_round_robin_preview(
+                supabase, club_id=str(club_id), courts=[_dump_model(court) for court in payload.courts],
+                custom_schedule=payload.custom_schedule, schedule_mode=payload.schedule_mode,
+                source=payload.source, allow_league_live=True,
+            )
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.post("/admin/clubs/{club_id}/league-manager/live/players")
+    def post_admin_league_live_players(
+        club_id: str,
+        payload: AdminMatchUploaderCreatePlayersRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        _require_league_live_setup(write=True)
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_league_manager_role_or_403(
+            supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source,
+        )
+        try:
+            return create_admin_match_uploader_players(
+                supabase, club_id=str(club_id), players=[_dump_model(player) for player in payload.players],
+                actor_email=actor_email, actor_role=actor_role, reviewed_fingerprint=payload.reviewed_fingerprint,
+                idempotency_key=payload.idempotency_key, confirmation_text=payload.confirmation_text,
+                source=payload.source, allow_league_live=True,
+            )
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.get("/admin/clubs/{club_id}/league-manager/live/player-operations/{operation_key}")
+    def get_admin_league_live_player_operation(
+        club_id: str,
+        operation_key: str,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        _require_league_live_setup()
+        supabase = get_supabase_client()
+        _resolve_league_manager_role_or_403(
+            supabase=supabase, club_id=str(club_id), authorization=authorization,
+            source="next_league_live_player_operation",
+        )
+        operation = get_admin_match_uploader_player_operation(
+            supabase, club_id=str(club_id), operation_key=str(operation_key), allow_league_live=True,
+        )
+        if operation is None:
+            raise HTTPException(status_code=404, detail="Player batch operation was not found.")
+        result_json = operation.get("result_json") or {}
+        error_text = operation.get("error_text")
+        return {
+            "ok": True, "operation_key": operation.get("operation_key"), "status": operation.get("status"),
+            "result_json": result_json, "error_text": error_text, "result": result_json, "error": error_text,
+            "recovery_required": operation.get("status") in {"intent_recorded", "recovery_required"},
+        }
+
+    @app.post("/admin/clubs/{club_id}/league-manager/live/player-operations/{operation_key}/reconcile")
+    def post_admin_league_live_player_batch_reconcile(
+        club_id: str,
+        operation_key: str,
+        payload: AdminMatchUploaderPlayerReconcileRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        _require_league_live_setup(write=True)
+        supabase = get_supabase_client()
+        actor_email, actor_role = _resolve_league_manager_role_or_403(
+            supabase=supabase, club_id=str(club_id), authorization=authorization, source=payload.source,
+        )
+        try:
+            return reconcile_admin_match_uploader_player_operation(
+                supabase, club_id=str(club_id), operation_key=str(operation_key),
+                confirmation_text=payload.confirmation_text, actor_email=actor_email,
+                actor_role=actor_role, source=payload.source, allow_league_live=True,
+            )
+        except Exception as exc:
+            _handle_common(exc)
 
     @app.post("/admin/clubs/{club_id}/league-manager/live/roster-suggestion")
     def post_admin_league_live_roster_suggestion(

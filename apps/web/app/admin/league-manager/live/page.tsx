@@ -2,7 +2,6 @@ import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import { redirect } from "next/navigation";
 import { getClubPlayerOptions } from "@/lib/api";
 import { getAdminLeagueLiveStatus, getAdminLeagueManagerStatus, getAdminLeagueManagerApiBaseUrl } from "@/lib/adminLeagueManagerApi";
-import { getAdminMatchUploaderStatus } from "@/lib/adminMatchUploaderApi";
 import { readLeagueRouteContext } from "@/lib/leagueRouteContext";
 import LeagueLiveRoundPanel from "./LeagueLiveRoundPanel";
 import LeagueManagerNav from "../LeagueManagerNav";
@@ -16,10 +15,9 @@ export default async function LeagueManagerLivePage({ searchParams }: Props) {
   const leagueName = context.leagueName || context.leagueId;
 
   const { clubId, clubSlug } = requireAdminWorkspace();
-  const [{ data: leagueStatus, error: leagueError }, { data: liveDomainStatus, error: liveDomainError }, { data: uploaderStatus, error: uploaderError }, { data: playersData, error: playersError }] = await Promise.all([
+  const [{ data: leagueStatus, error: leagueError }, { data: liveDomainStatus, error: liveDomainError }, { data: playersData, error: playersError }] = await Promise.all([
     getAdminLeagueManagerStatus(clubId),
     getAdminLeagueLiveStatus(clubId),
-    getAdminMatchUploaderStatus(clubId),
     getClubPlayerOptions(clubSlug, { status: "all", noStore: true })
   ]);
 
@@ -33,10 +31,9 @@ export default async function LeagueManagerLivePage({ searchParams }: Props) {
 
       {leagueError ? <p role="alert" style={{ color: "#b91c1c" }}>League Manager is unavailable. {leagueError}</p> : null}
       {liveDomainError ? <p role="alert" style={{ color: "#b91c1c" }}>League Live is unavailable. {liveDomainError}</p> : null}
-      {uploaderError ? <p role="alert" style={{ color: "#b91c1c" }}>Match Uploader is unavailable. {uploaderError}</p> : null}
       {playersError ? <p role="alert" style={{ color: "#b91c1c" }}>Player lookup is unavailable. {playersError}</p> : null}
 
-      {leagueStatus && liveDomainStatus && uploaderStatus ? (
+      {leagueStatus && liveDomainStatus ? (
         <SelectedLeaguePanelScope leagueName={leagueName}>
           <LeagueLiveRoundPanel
             key={leagueName}
@@ -45,7 +42,6 @@ export default async function LeagueManagerLivePage({ searchParams }: Props) {
             selectedLeagueName={leagueName}
             leagueStatus={leagueStatus}
             liveDomainStatus={liveDomainStatus}
-            uploaderStatus={uploaderStatus}
             players={playersData?.players || []}
           />
         </SelectedLeaguePanelScope>

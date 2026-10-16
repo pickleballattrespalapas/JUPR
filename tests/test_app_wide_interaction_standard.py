@@ -138,19 +138,19 @@ def test_app_wide_standard_and_complete_inventories_are_checked_in() -> None:
     backend_rows = re.findall(r"^\| BE-\d{3}\s+\|.*$", backend, flags=re.MULTILINE)
     backend_ids = [re.match(r"^\| (BE-\d{3})", row).group(1) for row in backend_rows]
     assert frontend_count == 232
-    assert backend_ids == [f"BE-{index:03d}" for index in range(1, 200)]
-    assert frontend_count + len(backend_ids) == 431
+    assert backend_ids == [f"BE-{index:03d}" for index in range(1, 203)]
+    assert frontend_count + len(backend_ids) == 434
 
     method_counts = Counter(re.search(r"`(POST|PATCH|PUT|DELETE) ", row).group(1) for row in backend_rows)
-    assert method_counts == {"POST": 160, "PATCH": 30, "PUT": 8, "DELETE": 1}
-    assert sum("/admin/" in row for row in backend_rows) == 168
+    assert method_counts == {"POST": 163, "PATCH": 30, "PUT": 8, "DELETE": 1}
+    assert sum("/admin/" in row for row in backend_rows) == 171
     assert sum("/admin/" not in row for row in backend_rows) == 31
     wave_assignment_count = sum(
         len(row.rstrip(" |").rsplit("|", 1)[-1].strip().split(",")) for row in backend_rows
     )
-    assert wave_assignment_count - len(backend_rows) == 12
-    assert "| Total audited frontend + backend contracts | **431** |" in report
-    assert "| Staging write-wave coverage | **199 / 199** |" in report
+    assert wave_assignment_count - len(backend_rows) == 13
+    assert "| Total audited frontend + backend contracts | **434** |" in report
+    assert "| Staging write-wave coverage | **202 / 202** |" in report
 
     appended_recovery_rows = (
         "| BE-193 | Match Uploader — `POST /admin/clubs/{club_id}/match-uploader/player-operations/{operation_key}/reconcile` — `post_admin_match_uploader_player_batch_reconcile` | `RECONCILE PLAYER BATCH` | — | — | match-player |",
