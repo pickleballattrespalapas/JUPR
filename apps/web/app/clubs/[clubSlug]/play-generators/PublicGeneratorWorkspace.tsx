@@ -325,8 +325,8 @@ export default function GeneratorWorkspace({
     [participantText]
   );
   const automaticSetup = useMemo(
-    () => recommendedGeneratorSetup(generatorKind, playFormat, targetCount, doublesCourtCount, singlesCourtCount),
-    [generatorKind, playFormat, targetCount, doublesCourtCount, singlesCourtCount]
+    () => recommendedGeneratorSetup(generatorKind, playFormat, targetCount, doublesCourtCount, singlesCourtCount, moneyball),
+    [generatorKind, playFormat, targetCount, doublesCourtCount, singlesCourtCount, moneyball]
   );
   const rosterReady = participantNames.length === targetCount;
   const mixedSetupValid = playFormat !== "doubles_singles" || (
@@ -722,7 +722,7 @@ export default function GeneratorWorkspace({
               setEventFormat(format);
               if (format === "moneyball_expectations") {
                 setPlayFormat("doubles"); setScoringMode("scored");
-                if (targetCount % 4 !== 0 && targetCount % 4 !== 1) setTargetCount(8);
+                if (targetCount !== 6 && targetCount % 4 !== 0 && targetCount % 4 !== 1) setTargetCount(8);
               }
               invalidatePreview();
             }} style={inputStyle}>
@@ -826,7 +826,7 @@ export default function GeneratorWorkspace({
           clubKey={clubId}
           generatorKind={generatorKind}
           playFormat={playFormat}
-          perfectRotationOnly={moneyball}
+          moneyballOnly={moneyball}
           targetCount={targetCount}
           participantText={participantText}
           linkedPlayerIds={linkedPlayerIds}

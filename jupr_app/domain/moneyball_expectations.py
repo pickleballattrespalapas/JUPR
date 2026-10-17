@@ -1,4 +1,4 @@
-"""Frozen perfect-round-robin Moneyball format and provisional/final standings."""
+"""Frozen Moneyball rotations and provisional/final standings."""
 from __future__ import annotations
 
 import copy
@@ -66,6 +66,12 @@ def freeze_moneyball(event: dict[str, Any], ratings: dict[str, float]) -> dict[s
         "ratingsFrozen": True, "experimental": True,
         "tiePolicy": "Tied winners split the pool.",
     }
+    if len(config["players"]) == 6:
+        event["moneyball"]["rotationSummary"] = (
+            "Balanced six-player rotation: 1 court, 6 rounds. Everyone plays 4 games with 4 different partners "
+            "and has 2 byes, one in each three-round block, with no consecutive byes. "
+            "Each opponent is faced once or twice. This is not a perfect round robin."
+        )
     event["previewFingerprint"] = probability.digest({
         "schedule": event["previewFingerprint"], "setup": lock["lock_sha256"],
     })
