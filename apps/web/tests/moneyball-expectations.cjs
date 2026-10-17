@@ -71,6 +71,9 @@ const reply = body => ({ok:true,status:200,json:async()=>body});
       await act(async()=>button(tree,"Add").props.onClick());
     }
     await act(async()=>button(tree,"Preview matchups").props.onClick());
+    const previewBody=text(tree.toJSON());
+    assert.ok(!previewBody.includes("Add more as needed") && !previewBody.includes("Keep adding rounds"));
+    assert.ok(previewBody.includes("Fixed Moneyball schedule") && previewBody.includes("Review all fixed matchups and byes"));
     assert.equal(calls.at(-1).event_format,"moneyball_expectations");
     assert.equal(calls.at(-1).total_rounds,playerCount === 6 ? 6 : 7);
     assert.equal(calls.at(-1).court_count,0); // Server resolves the fixed court count. assert.equal(calls.at(-1).scoring_mode,"scored");

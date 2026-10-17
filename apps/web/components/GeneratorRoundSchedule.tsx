@@ -3,7 +3,7 @@
 type Match = { court?: number; sideA?: string[]; sideB?: string[]; teamA?: string[]; teamB?: string[]; scoreA?: number | null; scoreB?: number | null };
 type Round = { number: number; status: string; matches?: Match[]; courts?: Array<{ matches?: Match[] }>; byeParticipantIds?: string[] };
 
-export default function GeneratorRoundSchedule({ rounds, participants, selectedRound, currentRound, disabled, unsaved, perfect, adaptive, onOpen }: {
+export default function GeneratorRoundSchedule({ rounds, participants, selectedRound, currentRound, disabled, unsaved, perfect, adaptive, moneyball, onOpen }: {
   rounds: Round[];
   participants: Array<{ id: string; name: string }>;
   selectedRound: number;
@@ -12,6 +12,7 @@ export default function GeneratorRoundSchedule({ rounds, participants, selectedR
   unsaved: boolean;
   perfect: boolean;
   adaptive: boolean;
+  moneyball?: boolean;
   onOpen: (number: number) => void;
 }) {
   const names = new Map(participants.map(player => [player.id, player.name]));
@@ -20,7 +21,8 @@ export default function GeneratorRoundSchedule({ rounds, participants, selectedR
     <section aria-label="Round-Robin schedule" style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: 14, padding: "1rem" }}>
       <h2 style={{ marginTop: 0 }}>Round schedule</h2>
       <p style={{ color: "#475569" }}>
-        {adaptive ? "Adaptive rotation: balance assigned byes first, then partner and opponent coverage."
+        {moneyball ? "Fixed Moneyball rotation: complete every scheduled game to decide the winner. Choose any scheduled round; substitutions disqualify both players from winning."
+          : adaptive ? "Adaptive rotation: balance assigned byes first, then partner and opponent coverage."
           : perfect ? "Perfect rotation: partner everyone once and face everyone twice. Compatible roster changes preserve this priority. Choose any round; skipping keeps the scheduled matchups."
           : "Choose any scheduled round. Matchups stay fixed until the roster changes or you add extra rounds."}
       </p>

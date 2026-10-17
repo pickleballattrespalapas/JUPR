@@ -475,7 +475,9 @@ export default function GeneratorWorkspace({
       );
       setPreview(payload.preview);
       setMessage(
-        generatorKind === "round_robin"
+        moneyball
+          ? `Fixed Moneyball schedule: ${payload.preview.rounds.length} rounds. Complete every scheduled game to decide the winner.`
+          : generatorKind === "round_robin"
           ? `Starting schedule: ${payload.preview.rounds.length} rounds. Add more as needed during play.`
           : "Round 1 is ready. Each later round will be based on the saved scores."
       );
@@ -887,7 +889,9 @@ export default function GeneratorWorkspace({
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>2. Preview before starting</h2>
           <p style={{ color: "#475569" }}>
-            {generatorKind === "ladder"
+            {moneyball
+              ? "Review all fixed matchups and byes. Change the starting roster order above and regenerate before starting; every scheduled game must be completed to decide the winner."
+              : generatorKind === "ladder"
               ? "Only Round 1 is shown. Round 2 and later are generated from saved results."
               : scoringMode === "unscored"
                 ? "Review the starting schedule, matchups, and byes. Keep adding rounds for as long as you want. During play, use Mark round played to move directly to the next round."
