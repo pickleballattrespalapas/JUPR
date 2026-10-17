@@ -49,6 +49,8 @@ const button = (tree,label) => tree.root.findAllByType("button").find(node=>text
     await act(async()=>{tree=create(h(load(file).default,{apiBase:"https://api.test",clubId:"club",generatorKind:"round_robin",sessionKey:"s",roundNumber:1}));});
     assert.ok(JSON.stringify(tree.toJSON()).includes("Both the original player and substitute become ineligible"));
     assert.equal(button(tree,"Skip round"),undefined);
+    assert.ok(text(tree.toJSON()).includes("Fixed Moneyball rotation: complete every scheduled game"));
+    assert.ok(!text(tree.toJSON()).includes("you add extra rounds"));
     const change=tree.root.findAllByType("select").find(node=>node.findAllByType("option").some(opt=>opt.props.value==="substitute"));
     assert.deepEqual(change.findAllByType("option").map(opt=>opt.props.value),["substitute"]);
     await act(async()=>tree.root.findAllByType("select").find(node=>node.props["aria-label"]==="Current player").props.onChange({target:{value:"p-1"}}));
