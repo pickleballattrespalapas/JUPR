@@ -1,3 +1,4 @@
+from collections import Counter
 from copy import deepcopy
 
 import pytest
@@ -120,15 +121,18 @@ def test_ties_split_pool_without_rounding_influencing_rank(frozen):
     assert len(payout["winners"]) == 8 and all(w["payoutMxn"] == 100 for w in payout["winners"])
 
 
-def test_public_preview_start_export_hide_ratings_and_freeze_database_values(frozen,monkeypatch):
+@pytest.mark.parametrize("fixture_name", ["frozen", "six_frozen"])
+def test_public_preview_start_export_hide_ratings_and_freeze_database_values(fixture_name, request, monkeypatch):
+    frozen = request.getfixturevalue(fixture_name)
+    count = len(frozen["participants"])
     # Reuse independently prepared synthetic lock while exercising real services.
     monkeypatch.setattr("jupr_app.domain.moneyball_expectations._prepare", lambda _: deepcopy(frozen["moneyballPrivate"]))
     db = FakeSupabase()
-    db.db["players"] = [{"id": i+1, "name": f"Player {i}", "club_id": "club", "rating": (3+i*.15)*400} for i in range(8)]
+    db.db["players"] = [{"id": i+1, "name": f"Player {i}", "club_id": "club", "rating": (3+i*.15)*400} for i in range(count)]
     setup = dict(club_id="club", generator_kind="round_robin", play_format="doubles",title="Moneyball test",
                  participant_names=[p["name"] for p in db.db["players"]],
                  participant_player_ids={p["name"]:p["id"] for p in db.db["players"]},
-                 total_rounds=7,court_count=0,event_format="moneyball_expectations")
+                 total_rounds=frozen["totalRounds"],court_count=0,event_format="moneyball_expectations")
     result = preview_public_play_generator(db,**setup)["preview"]
     assert "moneyballPrivate" not in result
     session = create_public_play_generator_session(db,**setup,preview_fingerprint=result["previewFingerprint"],
@@ -228,3 +232,98 @@ def test_pool_scales_with_starting_lineup_and_no_substitute_contributions():
     event=complete_generator_event(event)
     assert settlement(event,generator_event_standings(event))["totalGames"]==5
     assert sum(w["payoutMxn"] for w in settlement(event,generator_event_standings(event))["winners"])==500
+
+
+@pytest.fixture(scope="module")
+def six_frozen():
+    event = preview(participant_names=[f"Player {i}" for i in range(6)],
+                    player_ids=list(range(1, 7)), total_rounds=6)
+    return freeze_moneyball(event, {p["id"]: 3+i*.15 for i, p in enumerate(event["participants"])})
+
+
+def test_six_player_rotation_geometry_and_bye_spacing(six_frozen):
+    event = six_frozen
+    assert len(event["rounds"]) == 6 and not event["perfectRotation"]
+    assert event["fixedScheduleRoundCount"] == 6
+    ids = [p["id"] for p in event["participants"]]
+    partners, opponents, games, byes = Counter(), Counter(), Counter(), {pid: [] for pid in ids}
+    for row in event["rounds"]:
+        assert len(row["matches"]) == 1 and len(row["byeParticipantIds"]) == 2
+        for pid in row["byeParticipantIds"]:
+            byes[pid].append(row["number"])
+        match = row["matches"][0]
+        a, b = match["sideA"], match["sideB"]
+        games.update(a+b)
+        partners.update(tuple(sorted(team)) for team in (a,b))
+        opponents.update(tuple(sorted((x,y))) for x in a for y in b)
+    assert set(games.values()) == {4}
+    assert len(partners) == 12 and set(partners.values()) == {1}
+    assert len(opponents) == 15 and set(opponents.values()) == {1,2}
+    for pid in ids:
+        assert sum(pid in pair for pair in partners) == 4
+        assert len(byes[pid]) == 2 and byes[pid][0] <= 3 < byes[pid][1]
+        assert byes[pid][1]-byes[pid][0] > 1
+    assert "not a perfect round robin" in event["moneyball"]["rotationSummary"]
+    assert len(event["moneyballPrivate"]["player_total_margin_pmf"][0]) == 89
+    assert event["moneyballPrivate"]["fairness"]["simulation_fairness_check_passed"]
+
+
+@pytest.mark.parametrize("change", ["missing", "duplicate_round", "repeated_partner", "byes"])
+def test_six_player_probability_validation_rejects_unbalanced_rotations(six_frozen, change):
+    config = deepcopy(six_frozen["moneyballPrivate"]["config"])
+    if change == "missing":
+        config["matches"].pop()
+    elif change == "duplicate_round":
+        config["matches"][0]["round"] = 2
+    elif change == "repeated_partner":
+        config["matches"][1]["team1"] = list(config["matches"][0]["team1"])
+    else:
+        config["matches"][2]["round"], config["matches"][3]["round"] = 4, 3
+    with pytest.raises(ValueError, match="Six-player"):
+        moneyball_probability.validate_config(config)
+
+
+@pytest.mark.parametrize("changes", [dict(total_rounds=5), dict(total_rounds=8), dict(court_count=2)])
+def test_six_player_setup_requires_the_full_one_court_rotation(changes):
+    with pytest.raises(ValueError, match="full fixed rotation"):
+        preview(**{**dict(participant_names=[f"P{i}" for i in range(6)],
+                          player_ids=list(range(1,7)), total_rounds=6), **changes})
+
+
+def test_six_player_scoring_completion_correction_and_substitution(six_frozen):
+    event = start_generator_event(six_frozen)
+    with pytest.raises(ValueError, match="all scheduled"):
+        complete_generator_event(event)
+    with pytest.raises(ValueError, match="fixed rotation"):
+        skip_generator_round(event, round_number=1)
+    # Play in the scheduled order, scoring every player exactly four times.
+    for number in range(1,7):
+        event = save(event, number, 11, 7 if number % 2 else 4)
+    event = complete_generator_event(event)
+    rows = generator_event_standings(event)
+    assert all(r["matches"] == 4 and r["moneyballFinal"] for r in rows)
+    lock = six_frozen["moneyballPrivate"]
+    played = deepcopy(lock["config"])
+    for match, row in zip(played["matches"], event["rounds"]):
+        match.update(score1=row["matches"][0]["scoreA"], score2=row["matches"][0]["scoreB"])
+    reference = {r["player_id"]: r for r in moneyball_probability.score(played,lock)["standings"]}
+    for row in rows:
+        assert row["moneyballScore"] == pytest.approx(reference[row["participantId"]]["moneyball_score"])
+        assert row["losses"] == reference[row["participantId"]]["losses"]
+    assert sum(w["payoutMxn"] for w in settlement(event,rows)["winners"]) == 600
+    corrected = save(event,1,11,9)
+    assert corrected["moneyballPrivate"] == lock
+    assert generator_event_standings(corrected) != rows
+    # A replacement inherits only the remaining games; both players are DQ.
+    changed = mutate_generator_roster(start_generator_event(six_frozen), action="substitute",
+        participant_id="p-1", name="Substitute", player_id=99)
+    for number in range(1,7):
+        changed = save(changed,number)
+    changed = complete_generator_event(changed)
+    rows = generator_event_standings(changed)
+    assert changed["moneyballPrivate"] == lock
+    assert {r["participantId"] for r in rows if not r["moneyballEligible"]} == {"p-1","p-sub-1"}
+    result = settlement(changed,rows)
+    assert result["prizePoolMxn"] == 600 and result["totalGames"] == 6
+    assert not {w["participantId"] for w in result["winners"]} & {"p-1","p-sub-1"}
+    assert sum(w["payoutMxn"] for w in result["winners"]) == 600
