@@ -938,7 +938,7 @@ export default function GeneratorRoundRunner({
           selectedRound={roundNumber} currentRound={event.currentRoundNumber}
           disabled={busy || editingScores || (canEditRound && anyDraftScore)}
           unsaved={editingScores || (canEditRound && anyDraftScore)}
-          perfect={Boolean(event.perfectRotation)} adaptive={Boolean(event.adaptiveFromRound)}
+          perfect={Boolean(event.perfectRotation)} adaptive={Boolean(event.adaptiveFromRound)} moneyball={event.eventFormat === "moneyball_expectations"}
           onOpen={number => void openScheduledRound(number)} />
       ) : null}
 
