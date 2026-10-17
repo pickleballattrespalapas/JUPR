@@ -23,6 +23,7 @@ from jupr_app.domain.moneyball_expectations import (
     is_moneyball, validate_score, standings as moneyball_standings, all_games_saved, substitute_moneyball,
 )
 from jupr_app.domain.perfect_round_robin import perfect_doubles_schedule
+from jupr_app.domain.moneyball_rotation import moneyball_doubles_schedule
 from jupr_app.domain.perfect_rotation_completion import find_perfect_completion, game_key, is_perfect_rotation
 
 
@@ -836,7 +837,9 @@ def _perfect_doubles_round(
     round_number: int,
     history: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], list[str], list[str]] | None:
-    """Generate a perfect starting rotation when roster and courts allow it.
+    """Generate a fixed starting rotation when roster and courts allow it.
+
+    Moneyball also supports its balanced, non-perfect six-player rotation.
 
     Prefix verification protects legacy adaptive sessions from an unrelated
     template. Started fixed schedules are preserved without regenerating.
@@ -845,7 +848,7 @@ def _perfect_doubles_round(
     count = len(initial_ids)
     if event.get("playoff") or (event.get("adaptiveFromRound") and round_number >= int(event["adaptiveFromRound"])):
         return None
-    template = perfect_doubles_schedule(initial_ids)
+    template = moneyball_doubles_schedule(initial_ids) if is_moneyball(event) else perfect_doubles_schedule(initial_ids)
     if template is None:
         return None
     cycle_length = len(template)
@@ -1286,11 +1289,11 @@ def create_generator_preview(
     if event_format == "moneyball_expectations":
         if kind != "round_robin" or fmt != "doubles" or scoring != "scored" :
             raise ValueError("Moneyball vs Expectations requires a scored doubles round robin.")
-        perfect = perfect_doubles_schedule([p["id"] for p in participants])
-        if perfect is None:
-            raise ValueError("Choose a supported perfect doubles RR player count for Moneyball.")
-        if resolved_court_count not in {0, len(participants)//4} or int(total_rounds) != len(perfect):
-            raise ValueError("Moneyball must use the full perfect rotation with all required courts.")
+        rotation = moneyball_doubles_schedule([p["id"] for p in participants])
+        if rotation is None:
+            raise ValueError("Choose six players or a supported perfect doubles RR player count for Moneyball.")
+        if resolved_court_count not in {0, len(participants)//4} or int(total_rounds) != len(rotation):
+            raise ValueError("Moneyball must use the full fixed rotation with all required courts.")
         if len(ids) != len(participants) or any(pid is None for pid in ids) or len(set(ids)) != len(participants):
             raise ValueError("Select every Moneyball player from the club player list.")
     event = {
@@ -1473,7 +1476,7 @@ def mark_generator_round_played(event: dict[str, Any], *, round_number: int) -> 
 def skip_generator_round(event: dict[str, Any], *, round_number: int, reason: str = "") -> dict[str, Any]:
     next_event = copy.deepcopy(event)
     if is_moneyball(next_event):
-        raise ValueError("Moneyball requires the complete perfect rotation. Choose another scheduled round instead of skipping.")
+        raise ValueError("Moneyball requires the complete fixed rotation. Choose another scheduled round instead of skipping.")
     row = _get_round(next_event, round_number)
     if row.get("stage") == "playoff":
         raise ValueError("Playoff games need a winning score and cannot be skipped.")

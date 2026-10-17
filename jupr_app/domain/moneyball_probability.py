@@ -25,8 +25,12 @@ def digest(value):
 def validate_config(config):
     players, matches = config['players'], config['matches']
     count = len(players)
-    if not 4 <= count <= 40 or count % 4 not in {0, 1} or len(matches) != count*(count-1)//4:
-        raise ValueError('Use a supported complete perfect doubles round robin.')
+    six_player = count == 6
+    if six_player:
+        if len(matches) != 6 or sorted(m['round'] for m in matches) != list(range(1, 7)):
+            raise ValueError('Six-player Moneyball requires six rounds with one game per round.')
+    elif not 4 <= count <= 40 or count % 4 not in {0, 1} or len(matches) != count*(count-1)//4:
+        raise ValueError('Use six players or a supported complete perfect doubles round robin.')
     ids = [p['id'] for p in players]
     if len(set(ids)) != count:
         raise ValueError('Player IDs must be unique.')
@@ -52,7 +56,15 @@ def validate_config(config):
             for b in t2:
                 pair = tuple(sorted((a,b)))
                 opponents[pair] = opponents.get(pair,0)+1
-    if set(game_count.values()) != {count-1} or len(partners) != count*(count-1)//2 or set(partners.values()) != {1} or len(opponents) != count*(count-1)//2 or set(opponents.values()) != {2}:
+    if six_player:
+        if (set(game_count.values()) != {4} or len(partners) != 12 or set(partners.values()) != {1}
+                or len(opponents) != 15 or set(opponents.values()) != {1, 2}):
+            raise ValueError('Six-player Moneyball requires four games and four distinct partners each, facing every opponent once or twice.')
+        for pid in ids:
+            byes = sorted(m['round'] for m in matches if pid not in m['team1'] + m['team2'])
+            if not (len(byes) == 2 and byes[0] <= 3 < byes[1] and byes[1] - byes[0] > 1):
+                raise ValueError('Six-player Moneyball requires one bye in each three-round block and no consecutive byes.')
+    elif set(game_count.values()) != {count-1} or len(partners) != count*(count-1)//2 or set(partners.values()) != {1} or len(opponents) != count*(count-1)//2 or set(opponents.values()) != {2}:
         raise ValueError('Use a complete perfect RR: everyone plays every partner once, partners once and opposes twice.')
 
 
@@ -93,7 +105,7 @@ def distributions(config,model):
             if a[j,player] < 0:
                 single = single[::-1]
             pmf = np.convolve(pmf,single)
-        assert len(pmf) == 22*(len(ids)-1)+1 and abs(pmf.sum()-1) < 1e-12
+        assert len(pmf) == 22*np.count_nonzero(a[:,player])+1 and abs(pmf.sum()-1) < 1e-12
         cdf = np.cumsum(pmf)
         # Midpoint CDF avoids counting a result's whole discrete probability mass as beaten.
         percentiles.append(cdf-.5*pmf)
@@ -116,7 +128,7 @@ def simulate(a,support,probabilities,percentiles,number,seed):
             wins[:,i] += signed > 0
     u = np.empty((number,count))
     for i in range(count):
-        u[:,i] = percentiles[i,totals[:,i]+11*(count-1)]
+        u[:,i] = percentiles[i,totals[:,i]+11*np.count_nonzero(a[:,i])]
     clipped = np.clip(u,1e-12,1-1e-12)
     z = np.log(clipped)-np.log1p(-clipped)
     return totals,wins,u,z
@@ -230,17 +242,20 @@ def score(event,lock):
     support=np.array(lock['model']['margin_support'])
     team1_win_probability=game_probabilities[:,support>0].sum(axis=1)
     expected_wins=np.zeros(count)
+    games=np.zeros(count,dtype=int)
     for j,m in enumerate(lock['config']['matches']):
+        for pid in m['team1']+m['team2']:
+            games[index[pid]]+=1
         for pid in m['team1']:
             expected_wins[index[pid]]+=team1_win_probability[j]
         for pid in m['team2']:
             expected_wins[index[pid]]+=1-team1_win_probability[j]
     for i,p in enumerate(lock['config']['players']):
-        u=float(percentiles[i,totals[i]+11*(count-1)])
+        u=float(percentiles[i,totals[i]+11*games[i]])
         u=float(np.clip(u,1e-12,1-1e-12))
         z=np.log(u)-np.log1p(-u)+lock['balance_logit_offsets'][i]
         fair_score=float(100/(1+np.exp(-z)))
-        rows.append({'player_id':p['id'],'player':p['name'],'wins':int(wins[i]),'losses':int(count-1-wins[i]),
+        rows.append({'player_id':p['id'],'player':p['name'],'wins':int(wins[i]),'losses':int(games[i]-wins[i]),
                      'expected_wins':float(expected_wins[i]),
                      'actual_point_differential':int(totals[i]),
                      'expected_point_differential':float(lock['expected_point_differentials'][i]),

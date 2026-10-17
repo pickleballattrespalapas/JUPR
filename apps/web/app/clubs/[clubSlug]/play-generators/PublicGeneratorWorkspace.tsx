@@ -325,8 +325,8 @@ export default function GeneratorWorkspace({
     [participantText]
   );
   const automaticSetup = useMemo(
-    () => recommendedGeneratorSetup(generatorKind, playFormat, targetCount, doublesCourtCount, singlesCourtCount),
-    [generatorKind, playFormat, targetCount, doublesCourtCount, singlesCourtCount]
+    () => recommendedGeneratorSetup(generatorKind, playFormat, targetCount, doublesCourtCount, singlesCourtCount, moneyball),
+    [generatorKind, playFormat, targetCount, doublesCourtCount, singlesCourtCount, moneyball]
   );
   const rosterReady = participantNames.length === targetCount;
   const mixedSetupValid = playFormat !== "doubles_singles" || (
@@ -475,7 +475,9 @@ export default function GeneratorWorkspace({
       );
       setPreview(payload.preview);
       setMessage(
-        generatorKind === "round_robin"
+        moneyball
+          ? `Fixed Moneyball schedule: ${payload.preview.rounds.length} rounds. Complete every scheduled game to decide the winner.`
+          : generatorKind === "round_robin"
           ? `Starting schedule: ${payload.preview.rounds.length} rounds. Add more as needed during play.`
           : "Round 1 is ready. Each later round will be based on the saved scores."
       );
@@ -722,7 +724,7 @@ export default function GeneratorWorkspace({
               setEventFormat(format);
               if (format === "moneyball_expectations") {
                 setPlayFormat("doubles"); setScoringMode("scored");
-                if (targetCount % 4 !== 0 && targetCount % 4 !== 1) setTargetCount(8);
+                if (targetCount !== 6 && targetCount % 4 !== 0 && targetCount % 4 !== 1) setTargetCount(8);
               }
               invalidatePreview();
             }} style={inputStyle}>
@@ -826,7 +828,7 @@ export default function GeneratorWorkspace({
           clubKey={clubId}
           generatorKind={generatorKind}
           playFormat={playFormat}
-          perfectRotationOnly={moneyball}
+          moneyballOnly={moneyball}
           targetCount={targetCount}
           participantText={participantText}
           linkedPlayerIds={linkedPlayerIds}
@@ -887,7 +889,9 @@ export default function GeneratorWorkspace({
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0 }}>2. Preview before starting</h2>
           <p style={{ color: "#475569" }}>
-            {generatorKind === "ladder"
+            {moneyball
+              ? "Review all fixed matchups and byes. Change the starting roster order above and regenerate before starting; every scheduled game must be completed to decide the winner."
+              : generatorKind === "ladder"
               ? "Only Round 1 is shown. Round 2 and later are generated from saved results."
               : scoringMode === "unscored"
                 ? "Review the starting schedule, matchups, and byes. Keep adding rounds for as long as you want. During play, use Mark round played to move directly to the next round."
