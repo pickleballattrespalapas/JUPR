@@ -84,13 +84,21 @@ async function change(node, value) {
   assert.notEqual(node.props.disabled, true, `Control must be enabled: ${node.props["aria-label"] || node.type}`);
   await act(async () => node.props.onChange({ target: { value } }));
 }
-async function drag(harness, name, from, to, sourceIndex = 0) {
-  const result = {
-    draggableId: `player:${name.replace(/\s+/gu, " ").trim().toLocaleLowerCase("en-US")}`,
-    source: { droppableId: from, index: sourceIndex },
-    destination: to == null ? null : { droppableId: to, index: 0 },
-    reason: to == null ? "CANCEL" : "DROP", mode: "FLUID", type: "DEFAULT", combine: null
+async function drag(harness, name, from, to, sourceIndex = 0, combineWith = null) {
+  const playerId = value => `player:${value.replace(/\s+/gu, " ").trim().toLocaleLowerCase("en-US")}`;
+  const location = (slot, index = 0) => {
+    const match = /^court:(\d+):slot:(\d+)$/.exec(slot);
+    return match ? { droppableId: `court:${match[1]}`, index: Number(match[2]) } : { droppableId: slot, index };
   };
+  const target = to == null ? null : location(to);
+  const result = {
+    draggableId: playerId(name),
+    source: location(from, sourceIndex),
+    destination: combineWith ? null : target,
+    reason: to == null ? "CANCEL" : "DROP", mode: "FLUID", type: "DEFAULT",
+    combine: combineWith ? { draggableId: playerId(combineWith), droppableId: target.droppableId } : null
+  };
+  await act(async () => harness.tree.root.findByType("mock-dnd-context").props.onDragStart(result));
   await act(async () => harness.tree.root.findByType("mock-dnd-context").props.onDragEnd(result));
 }
 
@@ -251,7 +259,7 @@ async function drag(harness, name, from, to, sourceIndex = 0) {
     const jitkaDraggable = harness.tree.root.findAllByType("mock-draggable").find(node => node.props.draggableId === "player:jitka");
     assert.ok(jitkaDraggable, "Each player has a stable draggable identity independent of court and position");
     assert.equal(jitkaDraggable.props.disableInteractiveElementBlocking, true, "Dragging directly from the player-name button must be enabled");
-    await drag(harness, "Jitka", "court:2:slot:0", "court:1:slot:0");
+    await drag(harness, "Jitka", "court:2:slot:0", "court:1:slot:0", 0, "Jose");
     assert.deepEqual(names(harness.courts), [
       ["Alex", "Blair", "Casey", "Drew"],
       ["Jitka", "Finley", "Gray", "Harper", "Indigo"],
@@ -269,9 +277,14 @@ async function drag(harness, name, from, to, sourceIndex = 0) {
 
   {
     const harness = await mount();
+    await act(async () => harness.tree.root.findByType("mock-dnd-context").props.onDragStart({ draggableId: "player:alex", source: { droppableId: "court:0", index: 0 }, mode: "FLUID", type: "DEFAULT" }));
+    const zones = new Map(harness.tree.root.findAllByType("mock-droppable").map(node => [node.props.droppableId, node.props]));
+    assert.equal(zones.get("court:0").isCombineEnabled, false, "The source court must retain native list reordering");
+    assert.equal(zones.get("court:1").isCombineEnabled, true, "Other courts expose a combine target for a direct player swap");
+    assert.notEqual(zones.get("unassigned").isCombineEnabled, true, "The unassigned list accepts moves rather than player swaps");
     await drag(harness, "Alex", "court:0:slot:0", "court:0:slot:2");
     assert.deepEqual(names(harness.courts)[0], ["Blair", "Casey", "Alex", "Drew"], "Within-court dragging reorders intervening players instead of exchanging two positions");
-    await drag(harness, "Alex", "court:0:slot:2", "court:0:slot:4");
+    await drag(harness, "Alex", "court:0:slot:2", "court:0:slot:3");
     assert.deepEqual(names(harness.courts)[0], ["Blair", "Casey", "Drew", "Alex"], "The empty end slot moves a player to the end of their court");
     assert.deepEqual(names(harness.courts)[1], names(baseCourts())[1]);
     const unchanged = structuredClone(harness.courts), previousChanges = harness.changes;
@@ -279,6 +292,7 @@ async function drag(harness, name, from, to, sourceIndex = 0) {
     await drag(harness, "Alex", "court:0:slot:3", null);
     await drag(harness, "Missing player", "court:0:slot:3", "court:1:slot:0");
     await drag(harness, "Alex", "court:99:slot:3", "court:1:slot:0");
+    await drag(harness, "Alex", "court:0:slot:3", "court:1:slot:0", 0, "Missing target");
     assert.deepEqual(harness.courts, unchanged, "Same-position, cancelled, stale-source and invalid-source drops do not alter assignments");
     assert.equal(harness.changes, previousChanges);
     await harness.close();
@@ -286,6 +300,10 @@ async function drag(harness, name, from, to, sourceIndex = 0) {
 
   {
     const harness = await mount();
+    await drag(harness, "Finley", "court:1:slot:1", "court:0:slot:2");
+    assert.deepEqual(names(harness.courts), [["Alex", "Blair", "Finley", "Casey", "Drew"], ["Emery", "Gray", "Harper", "Indigo"]], "Dropping between cards inserts at the native list destination instead of swapping");
+    assert.deepEqual(harness.courts.map(court => court.formatType), ["5-Player", "4-Player"]);
+    await click(button(harness, "Undo last edit"));
     await drag(harness, "Indigo", "court:1:slot:4", "court:0:slot:4");
     assert.deepEqual(names(harness.courts), [
       ["Alex", "Blair", "Casey", "Drew", "Indigo"],
@@ -301,7 +319,7 @@ async function drag(harness, name, from, to, sourceIndex = 0) {
 
   {
     const harness = await mount({ playerNames: [...names(baseCourts()).flat(), "Jordan"], playerRatings: [{ name: "Jordan", rating: 1400 }, { name: "Alex", rating: 1600 }] });
-    await drag(harness, "Jordan", "unassigned", "court:0:slot:0");
+    await drag(harness, "Jordan", "unassigned", "court:0:slot:0", 0, "Alex");
     assert.deepEqual(names(harness.courts)[0], ["Jordan", "Blair", "Casey", "Drew"], "An unassigned player can replace an occupied court position");
     control(harness, "Assign Alex to court");
     assert.match(text(control(harness, "Select Jordan on Court 1, position 1")), /Rating\s*3\.50/);

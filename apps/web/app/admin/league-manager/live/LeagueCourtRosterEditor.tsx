@@ -30,14 +30,15 @@ function nameKey(value: string): string {
   return value.replace(/\s+/gu, " ").trim().toLocaleLowerCase("en-US");
 }
 
-function courtSlot(value: string): { courtIndex: number; playerIndex: number } | null {
-  const match = /^court:(\d+):slot:(\d+)$/.exec(value);
-  return match ? { courtIndex: Number(match[1]), playerIndex: Number(match[2]) } : null;
+function courtIndexFor(value: string): number | null {
+  const match = /^court:(\d+)$/.exec(value);
+  return match ? Number(match[1]) : null;
 }
 
 export function LeagueCourtRosterEditor({ courts, disabled, formats, playerNames, playerRatings, onChange, onEditRoster }: Props) {
   const instructionsId = useId();
   const [selected, setSelected] = useState<PlayerPosition | null>(null);
+  const [draggingFrom, setDraggingFrom] = useState<string | null>(null);
   const [undo, setUndo] = useState<UndoDraft | null>(null);
   const [bulkDrafts, setBulkDrafts] = useState<Record<number, string>>({});
   const [notice, setNotice] = useState<{ text: string; error?: boolean } | null>(null);
@@ -139,48 +140,46 @@ export function LeagueCourtRosterEditor({ courts, disabled, formats, playerNames
     commit(courts.map((court, index) => index === courtIndex ? withNames(court, names) : court), `Updated Court ${courts[courtIndex].court}.`);
   }
 
-  function handleDragEnd({ source, destination, draggableId, reason }: DropResult) {
-    if (disabled || reason === "CANCEL" || !destination) return;
-    const from = courtSlot(source.droppableId);
-    const to = courtSlot(destination.droppableId);
+  function handleDragEnd({ source, destination, combine, draggableId, reason }: DropResult) {
+    setDraggingFrom(null);
+    if (disabled || reason === "CANCEL" || (!destination && !combine)) return;
+    const fromCourt = courtIndexFor(source.droppableId);
     const fromUnassigned = source.droppableId === "unassigned";
-    const name = fromUnassigned ? unassignedNames[source.index] : from ? namesByCourt[from.courtIndex]?.[from.playerIndex] : undefined;
+    const name = fromUnassigned ? unassignedNames[source.index] : fromCourt != null ? namesByCourt[fromCourt]?.[source.index] : undefined;
     if (!name || draggableId !== `player:${nameKey(name)}`) return;
-    if (destination.droppableId === "unassigned") {
-      if (from) unassign(from.courtIndex, from.playerIndex);
+    if (destination?.droppableId === "unassigned") {
+      if (fromCourt != null) unassign(fromCourt, source.index);
       return;
     }
-    if (!to || !namesByCourt[to.courtIndex] || to.playerIndex > namesByCourt[to.courtIndex].length) return;
+    const toCourt = courtIndexFor(combine?.droppableId ?? destination!.droppableId);
+    if (toCourt == null || !namesByCourt[toCourt]) return;
     const nextNames = namesByCourt.map((names) => [...names]);
-    const targetName = nextNames[to.courtIndex][to.playerIndex];
-    let message = `Moved ${name} to Court ${courts[to.courtIndex].court}, position ${to.playerIndex + 1}.`;
-    if (fromUnassigned) {
-      if (targetName) nextNames[to.courtIndex][to.playerIndex] = name;
-      else nextNames[to.courtIndex].push(name);
-      if (targetName) message = `Assigned ${name} to Court ${courts[to.courtIndex].court}. ${targetName} is now unassigned.`;
-    } else if (from) {
-      if (from.courtIndex === to.courtIndex) {
-        nextNames[from.courtIndex].splice(from.playerIndex, 1);
-        const position = Math.min(to.playerIndex, nextNames[to.courtIndex].length);
-        nextNames[to.courtIndex].splice(position, 0, name);
-        message = `Moved ${name} to position ${position + 1} on Court ${courts[to.courtIndex].court}.`;
-      } else if (targetName) {
-        nextNames[from.courtIndex][from.playerIndex] = targetName;
-        nextNames[to.courtIndex][to.playerIndex] = name;
-        message = `Swapped ${name} and ${targetName} between Courts ${courts[from.courtIndex].court} and ${courts[to.courtIndex].court}.`;
-      } else {
-        nextNames[from.courtIndex].splice(from.playerIndex, 1);
-        nextNames[to.courtIndex].push(name);
-      }
+    let message: string;
+    if (combine) {
+      const targetIndex = nextNames[toCourt].findIndex((target) => `player:${nameKey(target)}` === combine.draggableId);
+      if (targetIndex < 0 || combine.draggableId === draggableId || fromCourt === toCourt) return;
+      const targetName = nextNames[toCourt][targetIndex];
+      nextNames[toCourt][targetIndex] = name;
+      if (fromCourt != null) nextNames[fromCourt][source.index] = targetName;
+      message = fromUnassigned
+        ? `Assigned ${name} to Court ${courts[toCourt].court}. ${targetName} is now unassigned.`
+        : `Swapped ${name} and ${targetName} between Courts ${courts[fromCourt!].court} and ${courts[toCourt].court}.`;
+    } else {
+      const position = destination!.index;
+      if (!Number.isInteger(position) || position < 0 || position > nextNames[toCourt].length) return;
+      if (fromCourt != null) nextNames[fromCourt].splice(source.index, 1);
+      const boundedPosition = Math.min(position, nextNames[toCourt].length);
+      nextNames[toCourt].splice(boundedPosition, 0, name);
+      message = `Moved ${name} to Court ${courts[toCourt].court}, position ${boundedPosition + 1}.`;
     }
     commit(courts.map((court, index) => withNames(court, nextNames[index])), message);
   }
 
   return (
-    <DragDropContext onDragStart={() => setSelected(null)} onDragEnd={handleDragEnd}>
+    <DragDropContext onDragStart={(start) => { setSelected(null); setDraggingFrom(start.source.droppableId); }} onDragEnd={handleDragEnd}>
     <section aria-label="Edit court roster" aria-describedby={instructionsId} style={{ display: "grid", gap: "0.85rem" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.65rem", flexWrap: "wrap" }}>
-        <p id={instructionsId} style={{ margin: 0, color: "#475569", flex: "1 1 280px" }}><strong>Drag players into position.</strong> Drop onto a player on another court to swap, or drag within a court to reorder. You can also click two names to swap. The ↑↓ arrows change order within the same court.</p>
+        <p id={instructionsId} style={{ margin: 0, color: "#475569", flex: "1 1 280px" }}><strong>Drag players into position.</strong> On another court, drop when a player highlights “Swap here” to exchange them. Drop between players to move, or drag within a court to reorder. You can also click two names to swap.</p>
         <button type="button" disabled={disabled || !undo || undo.after !== fingerprint} onClick={() => {
           if (!undo || disabled || undo.after !== fingerprint) return;
           onChange(undo.before.map((court) => ({ ...court })));
@@ -238,38 +237,35 @@ export function LeagueCourtRosterEditor({ courts, disabled, formats, playerNames
                 }} disabled={disabled} style={inputStyle}>{courts.map((_, index) => <option key={index} value={index}>Court {index + 1}</option>)}</select></label>
                 <label>Format<select aria-label={`Format for Court ${court.court}`} value={court.formatType} onChange={(event) => commit(courts.map((row, index) => index === courtIndex ? { ...row, formatType: event.target.value } : row), `Updated Court ${court.court} format.`)} disabled={disabled} style={inputStyle}>{courtFormats.map((format) => <option key={format} value={format}>{format}</option>)}</select></label>
               </div>
-              <ol aria-label={`Player positions on Court ${court.court}`} style={{ display: "grid", gap: "0.4rem", margin: 0, padding: 0, listStyle: "none" }}>
+              <Droppable droppableId={`court:${courtIndex}`} isDropDisabled={disabled} isCombineEnabled={draggingFrom !== `court:${courtIndex}`}>
+                {(provided, snapshot) => <div ref={provided.innerRef} {...provided.droppableProps} style={{ borderRadius: 8, background: snapshot.isDraggingOver ? "#eff6ff" : undefined }}>
+              <ol aria-label={`Player positions on Court ${court.court}`} style={{ margin: 0, padding: 0, listStyle: "none" }}>
                 {names.map((name, playerIndex) => {
                   const isSelected = activeSelection?.courtIndex === courtIndex && activeSelection.playerIndex === playerIndex;
                   const ratingId = `${instructionsId}-rating-${courtIndex}-${playerIndex}`;
-                  return <Droppable key={playerIndex} droppableId={`court:${courtIndex}:slot:${playerIndex}`} isDropDisabled={disabled}>
-                    {(provided, snapshot) => <li ref={provided.innerRef} {...provided.droppableProps} style={{ minHeight: 68, borderRadius: 8, outline: snapshot.isDraggingOver ? "3px solid #60a5fa" : undefined, background: snapshot.isDraggingOver ? "#dbeafe" : undefined }}>
-                    <Draggable key={nameKey(name)} draggableId={`player:${nameKey(name)}`} index={0} isDragDisabled={disabled} disableInteractiveElementBlocking>
-                      {(dragProvided, dragSnapshot) => <div ref={dragProvided.innerRef} {...dragProvided.draggableProps} style={{ ...rowStyle, borderRadius: 8, boxShadow: dragSnapshot.isDragging ? "0 8px 24px #0f172a33" : undefined, ...dragProvided.draggableProps.style }}>
+                  return <Draggable key={nameKey(name)} draggableId={`player:${nameKey(name)}`} index={playerIndex} isDragDisabled={disabled} disableInteractiveElementBlocking>
+                      {(dragProvided, dragSnapshot) => <li ref={dragProvided.innerRef} {...dragProvided.draggableProps} data-court-slot={`court:${courtIndex}:slot:${playerIndex}`} data-swap-target={Boolean(dragSnapshot.combineTargetFor)} style={{ ...rowStyle, minHeight: 68, marginBottom: "0.4rem", borderRadius: 8, outline: dragSnapshot.combineTargetFor ? "3px solid #2563eb" : undefined, boxShadow: dragSnapshot.isDragging ? "0 8px 24px #0f172a33" : undefined, ...dragProvided.draggableProps.style }}>
                     <button type="button" {...dragProvided.dragHandleProps} aria-pressed={isSelected} aria-describedby={[dragProvided.dragHandleProps?.["aria-describedby"], ratingId].filter(Boolean).join(" ")} aria-label={activeSelection && !isSelected ? `Swap ${activeSelection.name} with ${name} on Court ${court.court}` : `Select ${name} on Court ${court.court}, position ${playerIndex + 1}`} onClick={() => selectOrSwap({ courtIndex, playerIndex, name })} disabled={disabled} style={{ ...buttonStyle, flex: "1 1 0", minWidth: 0, minHeight: 68, display: "flex", gap: "0.5rem", alignItems: "center", textAlign: "left", overflowWrap: "anywhere", cursor: disabled ? "default" : dragSnapshot.isDragging ? "grabbing" : "grab", borderColor: isSelected ? "#2563eb" : "#cbd5e1", background: isSelected || dragSnapshot.isDragging ? "#dbeafe" : "white" }}>
                       <span style={{ color: "#64748b", fontSize: "0.85rem" }}>{playerIndex + 1}</span>
                       <span style={{ display: "grid", gap: "0.25rem", flex: 1, minWidth: 0 }}>
                         <span>{name}</span>
                         <span style={{ display: "flex", gap: "0.5rem", justifyContent: "space-between", flexWrap: "wrap", fontSize: "0.75rem" }}>
                           <span id={ratingId} style={{ color: "#475569", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>Rating {ratingLabel(name)}</span>
-                          <span style={{ color: "#1d4ed8" }}>{isSelected ? "Selected" : activeSelection ? "Swap here" : "⠿ Drag"}</span>
+                          <span style={{ color: "#1d4ed8" }}>{isSelected ? "Selected" : activeSelection || dragSnapshot.combineTargetFor ? "Swap here" : "⠿ Drag"}</span>
                         </span>
                       </span>
                     </button>
                     <button type="button" aria-label={`Move ${name} up on Court ${court.court}`} title="Move up one position within this court" onClick={() => reorder(courtIndex, playerIndex, -1)} disabled={disabled || playerIndex === 0} style={{ ...buttonStyle, padding: "0.4rem 0.55rem" }}>↑</button>
                     <button type="button" aria-label={`Move ${name} down on Court ${court.court}`} title="Move down one position within this court" onClick={() => reorder(courtIndex, playerIndex, 1)} disabled={disabled || playerIndex === names.length - 1} style={{ ...buttonStyle, padding: "0.4rem 0.55rem" }}>↓</button>
                     <button type="button" aria-label={`Unassign ${name} from Court ${court.court}`} title="Move to unassigned players" onClick={() => unassign(courtIndex, playerIndex)} disabled={disabled} style={{ ...buttonStyle, padding: "0.4rem 0.55rem" }}>×</button>
-                      </div>}
-                    </Draggable>
-                    {provided.placeholder}
-                    </li>}
-                  </Droppable>;
+                      </li>}
+                    </Draggable>;
                 })}
+                {provided.placeholder}
               </ol>
-              <Droppable droppableId={`court:${courtIndex}:slot:${names.length}`} isDropDisabled={disabled}>
-                {(provided, snapshot) => <div ref={provided.innerRef} {...provided.droppableProps} aria-label={`Add player drop area for Court ${court.court}`} style={{ minHeight: 48, marginTop: "0.5rem", padding: "0.5rem", border: `1px dashed ${snapshot.isDraggingOver ? "#2563eb" : "#cbd5e1"}`, borderRadius: 8, color: "#64748b", background: snapshot.isDraggingOver ? "#dbeafe" : "transparent" }}>
+                <div aria-label={`Add player drop area for Court ${court.court}`} style={{ minHeight: 48, padding: "0.5rem", border: "1px dashed #cbd5e1", borderRadius: 8, color: "#64748b" }}>
                   Drop here to add a player
-                  {provided.placeholder}
+                </div>
                 </div>}
               </Droppable>
               {!validCount ? <p style={{ color: "#92400e", margin: "0.65rem 0 0" }}>Needs 4 or 5 players before preview.</p> : null}
