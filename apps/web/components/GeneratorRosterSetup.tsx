@@ -1,6 +1,6 @@
 "use client";
 
-import { fetchAllPublicPlayers, matchesPlayerSearch } from "@/lib/playerSearch";
+import { fetchAllPublicPlayers, matchesPlayerSearch, playerSearchKey } from "@/lib/playerSearch";
 
 import GeneratorPlayerCreate from "@/app/admin/play-generators/submissions/GeneratorPlayerCreate";
 
@@ -307,10 +307,6 @@ export default function GeneratorRosterSetup({
     () => rosterNamesFromText(participantText),
     [participantText]
   );
-  const participantNameSet = useMemo(
-    () => new Set(participantNames.map(normalizeRosterName)),
-    [participantNames]
-  );
   const minimumPlayers = playFormat === "singles" ? 2 : playFormat === "doubles_singles" ? 6 : 4;
   const participantCounts = useMemo(
     () => Array.from({ length: 40 - minimumPlayers + 1 }, (_, index) => minimumPlayers + index).filter(count => !moneyballOnly || count === 6 || count % 4 === 0 || count % 4 === 1),
@@ -323,7 +319,9 @@ export default function GeneratorRosterSetup({
   const linkedCount = participantNames.filter(
     (name) => Number(linkedPlayerIds[normalizeRosterName(name)] || 0) > 0
   ).length;
-  const manualCount = participantNames.length - linkedCount;
+  const unlinkedNames = participantNames.filter(name => !(Number(linkedPlayerIds[normalizeRosterName(name)] || 0) > 0));
+  const manualCount = unlinkedNames.length;
+  const needsPlayerProfiles = Boolean(moneyballOnly || fixedPlayerCount) && manualCount > 0;
   const exactCount = participantNames.length === targetCount;
   const publicClubSlug = clubKey.replace(/_/g, "-");
   const maximumDoublesCourts = Math.max(1, Math.floor((targetCount - 2) / 4));
@@ -409,27 +407,38 @@ export default function GeneratorRosterSetup({
     setPickerMessage(null);
   }
 
-  function addCurrentPlayer(player: DirectoryPlayer): void {
+  function addCurrentPlayer(player: DirectoryPlayer, lineupName?: string): boolean {
     const name = String(player.name || "").trim().replace(/\s+/g, " ");
     const key = normalizeRosterName(name);
-    if (!name) return;
-    const alreadyListed = participantNameSet.has(key);
-    if (!alreadyListed && participantNames.length >= targetCount) {
-      setPickerMessage(`The roster already has the selected ${targetCount} players. Increase the player count or remove a name first.`);
-      return;
-    }
-    const nextNames = alreadyListed ? participantNames : [...participantNames, name];
     const playerId = Number(player.id);
-    onParticipantTextChange(nextNames.join("\n"));
-    if (Number.isFinite(playerId) && playerId > 0) {
-      onLinkedPlayerIdsChange({ ...linkedPlayerIds, [key]: playerId });
+    if (!name || !Number.isInteger(playerId) || playerId <= 0) return false;
+    const existingName = participantNames.find(entry => normalizeRosterName(entry) === normalizeRosterName(lineupName || ""))
+      || participantNames.find(entry => playerSearchKey(entry) === playerSearchKey(name));
+    const existingKey = normalizeRosterName(existingName || "");
+    const duplicate = participantNames.some(entry => normalizeRosterName(entry) !== existingKey && (
+      normalizeRosterName(entry) === key || Number(linkedPlayerIds[normalizeRosterName(entry)]) === playerId
+    ));
+    if (duplicate) {
+      setPickerMessage(`${name} is already linked to another place in this lineup.`);
+      return false;
     }
+    if (!existingName && participantNames.length >= targetCount) {
+      setPickerMessage(`The roster already has the selected ${targetCount} players. Increase the player count or remove a name first.`);
+      return false;
+    }
+    const nextNames = existingName ? participantNames.map(entry => entry === existingName ? name : entry) : [...participantNames, name];
+    const nextLinks = { ...linkedPlayerIds };
+    if (existingKey) delete nextLinks[existingKey];
+    nextLinks[key] = playerId;
+    onParticipantTextChange(nextNames.join("\n"));
+    onLinkedPlayerIdsChange(nextLinks);
     onInvalidate();
     setPlayerSearch("");
-    setPickerMessage(`${name} added to the roster.`);
+    setPickerMessage(existingName ? `${name} linked to their club profile.` : `${name} added to the roster.`);
+    return true;
   }
 
-  async function selectCreatedPlayer(playerId: number): Promise<void> {
+  async function selectCreatedPlayer(playerId: number, lineupName?: string): Promise<void> {
     const response = await fetch(apiUrl(apiBase!, `/admin/clubs/${encodeURIComponent(creationClubId!)}/players/editor/players/${playerId}`), {
       cache: "no-store", headers: { Authorization: `Bearer ${creationAccessToken}` }
     });
@@ -438,11 +447,11 @@ export default function GeneratorRosterSetup({
     if (!payload.player || Number(payload.player.id) !== playerId) throw new Error("Could not confirm the player's profile.");
     const player = payload.player;
     setDirectoryPlayers(current => [...current.filter(row => Number(row.id) !== playerId), player]);
-    addCurrentPlayer(player);
+    if (!addCurrentPlayer(player, lineupName)) throw new Error("This club profile could not be linked to the lineup. Check the selected name before continuing.");
   }
 
   const countMessage = exactCount
-    ? `Ready with ${targetCount} players.`
+    ? needsPlayerProfiles ? `Link or create club profiles for ${manualCount} player${manualCount === 1 ? "" : "s"} before previewing.` : `Ready with ${targetCount} players.`
     : participantNames.length < targetCount
       ? `Add ${targetCount - participantNames.length} more player${targetCount - participantNames.length === 1 ? "" : "s"}.`
       : `Remove ${participantNames.length - targetCount} player${participantNames.length - targetCount === 1 ? "" : "s"} or increase the selected count.`;
@@ -569,8 +578,10 @@ export default function GeneratorRosterSetup({
         ) : filteredPlayerOptions.length ? (
           <div style={{ display: "grid", gap: "0.4rem" }}>
             {filteredPlayerOptions.map((player) => {
-              const alreadyAdded = participantNameSet.has(normalizeRosterName(player.name));
-              const rosterFull = participantNames.length >= targetCount;
+              const listedName = participantNames.find(name => playerSearchKey(name) === playerSearchKey(player.name));
+              const alreadyAdded = Boolean(listedName && Number(linkedPlayerIds[normalizeRosterName(listedName)]) > 0)
+                || Object.values(linkedPlayerIds).some(id => id === Number(player.id));
+              const rosterFull = participantNames.length >= targetCount && !listedName;
               return (
                 <div
                   key={String(player.id)}
@@ -596,7 +607,7 @@ export default function GeneratorRosterSetup({
                       cursor: alreadyAdded || rosterFull ? "default" : "pointer"
                     }}
                   >
-                    {alreadyAdded ? "Added" : rosterFull ? "Roster full" : "Add"}
+                    {alreadyAdded ? "Added" : listedName ? "Link player" : rosterFull ? "Roster full" : "Add"}
                   </button>
                 </div>
               );
@@ -618,14 +629,18 @@ export default function GeneratorRosterSetup({
         <div style={{ border: "1px solid #cbd5e1", borderRadius: 10, padding: "0.75rem", minWidth: 0 }}>
           {apiBase && creationClubId && creationAccessToken ? <GeneratorPlayerCreate
             context="setup" clubId={creationClubId} sessionKey={creationDraftKey || `setup:${generatorKind}`} participantId="new-player"
+            lineupNames={participantNames.length >= targetCount ? unlinkedNames : undefined}
             participantName="this lineup" apiBase={apiBase} accessToken={creationAccessToken}
             players={directoryPlayers.map(player => ({ id: Number(player.id), name: player.name }))}
-            disabled={disabled || creationBusy || (participantNames.length >= targetCount && !creationPending)} matched={false}
+            disabled={disabled || creationBusy || (participantNames.length >= targetCount && !manualCount && !creationPending)} matched={false}
             onPendingChange={handleCreationPending} onBusyChange={setCreationBusy} onCreated={selectCreatedPlayer}
           /> : <p style={{ margin: 0 }}>
             <a href="/admin/login" target="_blank" rel="noreferrer">Sign in as club staff to create a new player</a>, then return to this lineup.
           </p>}
-          {participantNames.length >= targetCount && !creationPending ? <small style={{ display: "block", marginTop: 6 }}>Remove a player or increase the player count to make room for someone new.</small> : null}
+          {needsPlayerProfiles ? <p style={{ margin: "0.5rem 0 0", color: "#b45309" }}>
+            Still to link: {unlinkedNames.join(", ")}. Search and choose Link player for an existing profile, or use Create new player. These names already have places in your lineup.
+          </p> : null}
+          {participantNames.length >= targetCount && !manualCount && !creationPending ? <small style={{ display: "block", marginTop: 6 }}>Remove a player or increase the player count to make room for someone new.</small> : null}
         </div>
       ) : null}
 
@@ -641,7 +656,7 @@ export default function GeneratorRosterSetup({
         />
       </label>
       <div>
-        <p style={{ margin: 0, color: exactCount ? "#166534" : "#b45309", fontWeight: 700 }}>
+        <p style={{ margin: 0, color: exactCount && !needsPlayerProfiles ? "#166534" : "#b45309", fontWeight: 700 }}>
           {countMessage}
         </p>
         <p style={{ margin: "0.25rem 0 0", color: "#64748b", fontSize: "0.9rem" }}>

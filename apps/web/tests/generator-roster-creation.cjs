@@ -110,6 +110,84 @@ const change = async (node, value) => act(async () => node.props.onChange({targe
       assert.ok(![...storage.keys()].some(k => k.startsWith("jupr-generator-player-create:")));
       await act(async () => tree.unmount());
     }
+    // Reproduce a full five-player lineup: three linked profiles and two typed names.
+    for (const scenario of ["full", "full_lost", "full_duplicate"]) {
+      storage.clear(); authenticated = true;
+      const players = [1,2,3].map(id => ({id, name: `Player ${id}`}));
+      players.push({id: 4, name: "Pláyer Four"});
+      const calls = [], operations = new Map();
+      global.fetch = async (url, options = {}) => {
+        calls.push({url, options});
+        if (url.endsWith("/players/editor/players") && options.method === "POST") {
+          const body = JSON.parse(options.body);
+          assert.equal(body.name, "New Player"); assert.equal(body.starting_jupr, 3.75);
+          const player = {id: 5, name: body.name}; players.push(player);
+          operations.set(body.idempotency_key, {player});
+          if (scenario === "full_lost") throw new TypeError("Response lost");
+          return reply({player});
+        }
+        if (url.includes("/players/editor/operations/")) return reply({status: "completed", result: operations.get(decodeURIComponent(url.split("/operations/")[1]))});
+        if (/\/players\/editor\/players\/[45]$/.test(url)) return reply({player: players.find(p => p.id === Number(url.split("/").at(-1)))});
+        if (url.endsWith("/players/editor/players")) {
+          if (scenario === "full_duplicate" && players.length === 4) players.push({id: 5, name: "New Player"});
+          return reply({players});
+        }
+        if (url.includes("/players?")) return reply({players});
+        if (url.endsWith("/preview")) {
+          const body = JSON.parse(options.body);
+          assert.deepEqual(body.participant_names, ["Player 1", "New Player", "Player 2", "Pláyer Four", "Player 3"]);
+          assert.deepEqual(body.participant_player_ids, {"Player 1":1, "New Player":5, "Player 2":2, "Pláyer Four":4, "Player 3":3});
+          return reply({preview: {participants: [], rounds: [], totalRounds: 5, courtCount: 1}});
+        }
+        return reply({sessions: []});
+      };
+      const props = {apiBase: "https://api.test", clubId: file.includes("Public") ? "club-slug" : "club", generatorKind: "round_robin", status: {enabled: true, writes_enabled: true, club: {id: "club"}}};
+      let tree;
+      const mount = async () => act(async () => {tree = create(React.createElement(Workspace, props));});
+      await mount();
+      await change(tree.root.findByProps({"aria-label": "Event format"}), "moneyball_expectations");
+      await change(tree.root.findAllByType("label").find(node => text(node).startsWith("Number of players")).findByType("select"), "5");
+      for (const player of players.slice(0,3)) {
+        await change(tree.root.findByProps({placeholder: "Type at least 2 letters, then add a player"}), player.name);
+        await act(async () => button(tree, "Add").props.onClick());
+      }
+      const original = ["Player 1", "New Player", "Player 2", "Player Four", "Player 3"].join("\n");
+      await change(tree.root.findByType("textarea"), original);
+      assert.equal(button(tree, "Preview matchups").props.disabled, true);
+      assert.doesNotMatch(text(tree.toJSON()), /Ready with 5 players/);
+      assert.match(text(tree.toJSON()), /Still to link: New Player, Player Four/);
+      assert.equal(button(tree, "Create new player").props.disabled, false, "Typed names can be created in a full lineup");
+      await act(async () => button(tree, "Create new player").props.onClick());
+      assert.equal(tree.root.findByProps({"aria-label":"New player name for this lineup"}).props.value, "New Player");
+      assert.equal(tree.root.findByProps({"aria-label":"New player name for this lineup"}).props.readOnly, true);
+      await change(tree.root.findByProps({"aria-label":"New player starting level for this lineup"}), "3.75");
+      const submit = async () => act(async () => tree.root.findByType("form").props.onSubmit({preventDefault(){}}));
+      await submit();
+      if (scenario === "full_duplicate") await act(async () => button(tree, "Use New Player").props.onClick());
+      if (scenario === "full_lost") {
+        await act(async () => tree.unmount()); await mount();
+        assert.equal(button(tree, "Check player creation").props.disabled, false);
+        await submit();
+      }
+      assert.equal(tree.root.findByType("textarea").props.value, original, "Creation preserves all five names and their order");
+      assert.equal(button(tree, "Preview matchups").props.disabled, true, "The other typed player still needs linking");
+      if (scenario === "full_duplicate") {
+        await act(async () => button(tree, "Create new player").props.onClick());
+        assert.equal(tree.root.findByProps({"aria-label":"New player name for this lineup"}).props.value, "Player Four");
+        await act(async () => button(tree, "Use Pláyer Four").props.onClick());
+      } else {
+        await change(tree.root.findByProps({placeholder: "Type at least 2 letters, then add a player"}), "Player Four");
+        assert.equal(button(tree, "Link player").props.disabled, false);
+        await act(async () => button(tree, "Link player").props.onClick());
+      }
+      assert.equal(button(tree, "Preview matchups").props.disabled, false);
+      assert.equal(button(tree, "Create new player").props.disabled, true, "A fully linked lineup cannot add a sixth player");
+      await act(async () => button(tree, "Preview matchups").props.onClick());
+      assert.equal(calls.filter(c => c.options.method === "POST" && c.url.endsWith("/players/editor/players")).length, scenario === "full_duplicate" ? 0 : 1);
+      assert.equal(calls.filter(c => c.options.method === "PATCH").length, 0, "Existing ratings stay unchanged");
+      assert.ok(![...storage.keys()].some(key => key.startsWith("jupr-generator-player-create:")));
+      await act(async () => tree.unmount());
+    }
     storage.clear(); authenticated = false;
     let signedOut;
     await act(async () => {signedOut = create(React.createElement(Workspace, {apiBase: "https://api.test", clubId: "club", generatorKind: "round_robin", status: {enabled: true, writes_enabled: true}}));});
@@ -118,5 +196,5 @@ const change = async (node, value) => act(async () => node.props.onChange({targe
     assert.match(text(signedOut.toJSON()), /Sign in as club staff/);
     await act(async () => signedOut.unmount());
   }
-  console.log("PASS Moneyball setup: public/staff creation, required starting level, canonical club, roster preservation, duplicate reuse, single-insert refresh recovery, and signed-out guidance.");
+  console.log("PASS Moneyball setup: public/staff creation, required starting level, canonical club, roster preservation, duplicate reuse, single-insert refresh recovery, signed-out guidance, full five-player manual lineups, linking existing profiles, preserved order, and full-roster recovery.");
 })().catch(error => {console.error(error); process.exitCode = 1;});

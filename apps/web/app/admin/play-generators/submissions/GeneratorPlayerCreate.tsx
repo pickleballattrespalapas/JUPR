@@ -7,10 +7,11 @@ type Player = { id: number; name: string };
 type Creation = { version: 1; key: string; name: string; level: number; playerId?: number };
 type Props = {
   context?: "setup" | "submission";
+  lineupNames?: string[];
   clubId: string; sessionKey: string; participantId: string; participantName: string;
   apiBase: string; accessToken: string; players: Player[]; disabled: boolean; matched: boolean;
   onPendingChange: (participantId: string, pending: boolean) => void;
-  onBusyChange: (busy: boolean) => void; onCreated: (playerId: number) => Promise<void>;
+  onBusyChange: (busy: boolean) => void; onCreated: (playerId: number, lineupName?: string) => Promise<void>;
 };
 const field = { padding: "0.6rem", border: "1px solid #cbd5e1", borderRadius: 8, font: "inherit", maxWidth: "100%", boxSizing: "border-box" as const };
 
@@ -18,7 +19,7 @@ class CreationError extends Error {
   constructor(message: string, public status: number, public uncertain: boolean) { super(message); }
 }
 
-export default function GeneratorPlayerCreate({ context = "submission", clubId, sessionKey, participantId, participantName, apiBase, accessToken, players, disabled, matched, onPendingChange, onBusyChange, onCreated }: Props) {
+export default function GeneratorPlayerCreate({ context = "submission", lineupNames, clubId, sessionKey, participantId, participantName, apiBase, accessToken, players, disabled, matched, onPendingChange, onBusyChange, onCreated }: Props) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState(context === "setup" ? "" : participantName);
   const [level, setLevel] = useState("");
@@ -73,7 +74,7 @@ export default function GeneratorPlayerCreate({ context = "submission", clubId, 
     if (!Number.isInteger(playerId) || playerId <= 0) throw new Error("Could not confirm the new player's profile.");
     if (operationRef.current) retain({ ...operationRef.current, playerId });
     if (!mounted.current) return;
-    await onCreated(playerId);
+    await onCreated(playerId, context === "setup" ? name : undefined);
     retain(null);
     if (context === "setup" && mounted.current) { setOpen(false); setName(""); setLevel(""); setFound([]); }
   }
@@ -115,7 +116,7 @@ export default function GeneratorPlayerCreate({ context = "submission", clubId, 
 
   const matching = [...players, ...found].filter((player, index, all) =>
     playerSearchKey(player.name) === playerSearchKey(name) && all.findIndex(p => p.id === player.id) === index);
-  const valid = Boolean(name.trim()) && level.trim() !== "" && Number.isFinite(Number(level)) && Number(level) >= 1 && Number(level) <= 7;
+  const valid = (!lineupNames || lineupNames.includes(name)) && Boolean(name.trim()) && level.trim() !== "" && Number.isFinite(Number(level)) && Number(level) >= 1 && Number(level) <= 7;
 
   async function create() {
     if (running.current || disabled || !accessToken) return;
@@ -147,10 +148,16 @@ export default function GeneratorPlayerCreate({ context = "submission", clubId, 
   }
 
   if (matched && !operation) return null;
-  if (!open) return <button type="button" disabled={disabled} style={field} aria-label={`Create new player for ${participantName}`} onClick={() => setOpen(true)}>Create new player</button>;
+  if (!open) return <button type="button" disabled={disabled} style={field} aria-label={`Create new player for ${participantName}`} onClick={() => { if (lineupNames?.length) setName(lineupNames[0]); setOpen(true); }}>Create new player</button>;
   return <form aria-label={`New club player for ${participantName}`} onSubmit={event => { event.preventDefault(); void create(); }} style={{ display: "grid", gap: "0.6rem", minWidth: 0 }}>
+    {lineupNames?.length && !operation ? <label style={{ display: "grid", gap: 4 }}>Player already in your lineup
+      <select aria-label={`Player already in lineup for ${participantName}`} value={name} disabled={disabled} style={field}
+        onChange={event => { setName(event.target.value); setLevel(""); setFound([]); setMessage(""); }}>
+        {lineupNames.map(playerName => <option key={playerName} value={playerName}>{playerName}</option>)}
+      </select>
+    </label> : null}
     <label style={{ display: "grid", gap: 4 }}>Player name
-      <input aria-label={`New player name for ${participantName}`} value={name} required maxLength={160} disabled={disabled || Boolean(operation)} style={field}
+      <input aria-label={`New player name for ${participantName}`} value={name} readOnly={Boolean(lineupNames)} required maxLength={160} disabled={disabled || Boolean(operation)} style={field}
         onChange={event => { setName(event.target.value); setFound([]); setMessage(""); }} />
     </label>
     <label style={{ display: "grid", gap: 4 }}>Doubles starting level
