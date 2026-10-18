@@ -69,18 +69,21 @@ def normalize_league_live_roster(roster: Iterable[dict[str, Any]] | None) -> lis
         status = _clean_text(raw.get("status"), limit=20).lower() or "active"
         if status not in {"active", "bench"}:
             raise LeagueLiveDomainError(f"Unsupported roster status for player #{player_id}.")
-        normalized.append(
-            {
-                "player_id": int(player_id),
-                "player_name": player_name,
-                "rating": _safe_float(raw.get("rating", raw.get("rating_jupr", 1200.0))),
-                "status": status,
-                "court_number": _safe_int(raw.get("court_number", raw.get("court"))),
-                "slot": _safe_int(raw.get("slot")),
-                "bench_reason": _clean_text(raw.get("bench_reason"), limit=120) or None,
-                "source_order": index,
-            }
-        )
+        row = {
+            "player_id": int(player_id),
+            "player_name": player_name,
+            "rating": _safe_float(raw.get("rating", raw.get("rating_jupr", 1200.0))),
+            "status": status,
+            "court_number": _safe_int(raw.get("court_number", raw.get("court"))),
+            "slot": _safe_int(raw.get("slot")),
+            "bench_reason": _clean_text(raw.get("bench_reason"), limit=120) or None,
+            "source_order": index,
+        }
+        for key in ("last_court_number", "last_slot"):
+            previous = _safe_int(raw.get(key))
+            if previous is not None and previous > 0:
+                row[key] = previous
+        normalized.append(row)
     return normalized
 
 
@@ -367,6 +370,7 @@ def _valid_scored_matches(
     *,
     active_by_id: dict[int, dict[str, Any]],
     court_by_player_id: dict[int, int],
+    roster_by_id: dict[int, dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     valid: list[dict[str, Any]] = []
     warnings: list[str] = []
@@ -392,12 +396,34 @@ def _valid_scored_matches(
         parsed_ids = [int(player_id) for player_id in player_ids if player_id is not None]
         if len(set(parsed_ids)) != 4:
             raise LeagueLiveDomainError(f"Match {index} must contain four distinct players.")
-        if not set(parsed_ids).issubset(active_by_id):
+        scheduled_ids = parsed_ids
+        if "scheduled_player_ids" in raw:
+            scheduled = raw["scheduled_player_ids"]
+            if not isinstance(scheduled, list) or len(scheduled) != 4:
+                raise LeagueLiveDomainError(f"Match {index} requires four scheduled player IDs.")
+            scheduled_ids = [_safe_int(player_id) for player_id in scheduled]
+            if any(player_id is None or player_id <= 0 for player_id in scheduled_ids) or len(set(scheduled_ids)) != 4:
+                raise LeagueLiveDomainError(f"Match {index} requires four distinct scheduled player IDs.")
+            scheduled_ids = [int(player_id) for player_id in scheduled_ids]
+            if scheduled_ids != parsed_ids:
+                if not _clean_text(raw.get("substitution_reason"), limit=500):
+                    raise LeagueLiveDomainError(f"Match {index} requires a reason for its player substitution.")
+                if not set(parsed_ids).issubset(roster_by_id or active_by_id):
+                    raise LeagueLiveDomainError(f"Match {index} contains a substitute outside the authorized session roster.")
+        if not set(scheduled_ids).issubset(active_by_id):
             raise LeagueLiveDomainError(f"Match {index} contains a player outside the active court roster.")
-        player_courts = {court_by_player_id[player_id] for player_id in parsed_ids}
+        player_courts = {court_by_player_id[player_id] for player_id in scheduled_ids}
         match_court = _safe_int(raw.get("court", raw.get("court_number")))
         if len(player_courts) != 1 or (match_court is not None and match_court not in player_courts):
             raise LeagueLiveDomainError(f"Match {index} players must all belong to the same court.")
+        if any(player_id in court_by_player_id and court_by_player_id[player_id] not in player_courts for player_id in parsed_ids):
+            raise LeagueLiveDomainError(f"Match {index} cannot substitute a player assigned to another court.")
+        substitution_metadata = {}
+        if "scheduled_player_ids" in raw:
+            substitution_metadata = {
+                "scheduled_player_ids": scheduled_ids,
+                "substitution_reason": _clean_text(raw.get("substitution_reason"), limit=500) or None,
+            }
         valid.append(
             {
                 **raw,
@@ -410,9 +436,146 @@ def _valid_scored_matches(
                 "s2": int(score_t2),
                 "score_t1": int(score_t1),
                 "score_t2": int(score_t2),
+                **substitution_metadata,
             }
         )
     return valid, warnings
+
+
+def _apply_legacy_roster_change(
+    *,
+    next_active: list[dict[str, Any]],
+    existing_bench: list[dict[str, Any]],
+    active_rows: list[dict[str, Any]],
+    court_count: int,
+    roster_change: dict[str, Any],
+    action: str,
+    bench_player_ids: Iterable[Any] | None,
+    bench_override_reason: str | None,
+    next_round: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    incoming = normalize_league_live_roster([roster_change.get("player") or {}])[0]
+    pool_ids = {int(row["player_id"]) for row in next_active + existing_bench}
+    if int(incoming["player_id"]) in pool_ids:
+        raise LeagueLiveDomainError("Incoming roster-change player is already in this League Live roster.")
+    replaced_player_id = _safe_int(roster_change.get("replaced_player_id"))
+    if action == "substitute":
+        if replaced_player_id is None or replaced_player_id not in {int(row["player_id"]) for row in next_active}:
+            raise LeagueLiveDomainError("Substitution requires an active replaced_player_id.")
+        next_active = [row for row in next_active if int(row["player_id"]) != replaced_player_id]
+    elif replaced_player_id is not None:
+        raise LeagueLiveDomainError("Add-player changes must not include replaced_player_id.")
+    incoming.update({"status": "active", "court_number": None, "slot": None, "bench_reason": None})
+    combined = next_active + existing_bench + [incoming]
+    preserved_ids = {int(row["player_id"]) for row in next_active} | {int(incoming["player_id"])}
+    current_court_sizes = [
+        len([row for row in active_rows if int(row["court_number"]) == court_number])
+        for court_number in range(1, court_count + 1)
+    ]
+    suggested = build_league_live_roster_suggestion(
+        combined,
+        court_sizes=current_court_sizes if action == "substitute" else None,
+        prefer_keep_player_ids=preserved_ids,
+        bench_player_ids=bench_player_ids,
+        bench_override_reason=bench_override_reason,
+        round_number=next_round,
+        preserve_assignment_order=True,
+        require_bench_override_reason=False,
+    )
+    return list(suggested["active_roster"]), list(suggested["bench"]), {
+        "action": action,
+        "replaced_player_id": replaced_player_id,
+        "incoming_player_id": int(incoming["player_id"]),
+        "effective_round": next_round,
+    }
+
+
+def _apply_round_attendance(
+    *,
+    roster_pool: list[dict[str, Any]],
+    proposed_active: list[dict[str, Any]],
+    current_by_id: dict[int, dict[str, Any]],
+    change: dict[str, Any],
+    next_round: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    """Keep session identities while rebuilding only the next round's courts."""
+    raw_players = change.get("players") or []
+    if not isinstance(raw_players, list):
+        raise LeagueLiveDomainError("Attendance players must be a list.")
+    added = normalize_league_live_roster(raw_players)
+    pool_ids = {int(row["player_id"]) for row in roster_pool}
+    if any(int(row["player_id"]) in pool_ids for row in added):
+        raise LeagueLiveDomainError("Attendance additions already belong to the session; select them as returning players.")
+    combined = normalize_league_live_roster([*roster_pool, *added])
+    by_id = {int(row["player_id"]): row for row in combined}
+    raw_active_ids = change.get("active_player_ids")
+    if not isinstance(raw_active_ids, list):
+        raise LeagueLiveDomainError("Attendance requires the complete list of active_player_ids for the next round.")
+    active_ids = [_safe_int(value) for value in raw_active_ids]
+    if any(value is None or value <= 0 for value in active_ids):
+        raise LeagueLiveDomainError("Attendance requires valid active player IDs.")
+    if len(set(active_ids)) != len(active_ids):
+        raise LeagueLiveDomainError("Attendance active player IDs must be unique.")
+    selected = {int(value) for value in active_ids}
+    if not selected.issubset(by_id):
+        raise LeagueLiveDomainError("Attendance includes a player outside the verified session roster.")
+    if len(selected) < 4:
+        raise LeagueLiveDomainError("At least four playing participants are required for the next round.")
+    sizes = _validate_court_sizes(change.get("court_sizes"), roster_count=len(selected))
+    if not sizes:
+        sizes = list(suggest_court_sizes(len(selected)).get("sizes") or [])
+    if sum(sizes) != len(selected):
+        raise LeagueLiveDomainError("Next-round courts must fit every selected player; choose four/five-player courts or select players to sit out.")
+
+    proposed_by_id = {int(row["player_id"]): row for row in proposed_active}
+    ordered: list[dict[str, Any]] = []
+    for player_id in selected:
+        row = dict(proposed_by_id.get(player_id) or by_id[player_id])
+        if player_id not in proposed_by_id:
+            row["court_number"] = row.get("last_court_number")
+            row["slot"] = row.get("last_slot")
+        ordered.append(row)
+    ordered.sort(key=lambda row: (
+        int(row.get("court_number") or 10_000),
+        int(row.get("slot") or 10_000),
+        int(row.get("source_order") or 10_000),
+        int(row["player_id"]),
+    ))
+    active: list[dict[str, Any]] = []
+    cursor = 0
+    for court_number, size in enumerate(sizes, start=1):
+        for slot, row in enumerate(ordered[cursor:cursor + size], start=1):
+            active.append({
+                **{key: value for key, value in row.items() if key != "source_order"},
+                "status": "active", "court_number": court_number, "slot": slot, "bench_reason": None,
+            })
+        cursor += size
+    bench: list[dict[str, Any]] = []
+    for row in combined:
+        player_id = int(row["player_id"])
+        if player_id in selected:
+            continue
+        previous = current_by_id.get(player_id, row)
+        inactive = {
+            **{key: value for key, value in row.items() if key != "source_order"},
+            "status": "bench", "court_number": None, "slot": None, "bench_reason": "not_playing",
+        }
+        previous_court = previous.get("court_number") or previous.get("last_court_number")
+        previous_slot = previous.get("slot") or previous.get("last_slot")
+        if previous_court:
+            inactive["last_court_number"] = int(previous_court)
+        if previous_slot:
+            inactive["last_slot"] = int(previous_slot)
+        bench.append(inactive)
+    payload = {
+        "action": "attendance",
+        "active_player_ids": sorted(selected),
+        "added_player_ids": sorted(int(row["player_id"]) for row in added),
+        "bench_player_ids": sorted(int(row["player_id"]) for row in bench),
+        "court_sizes": sizes,
+        "effective_round": next_round,
+    }
+    return active, bench, payload
 
 
 def build_league_live_round_plan(
@@ -430,6 +593,7 @@ def build_league_live_round_plan(
     bench_player_ids: Iterable[Any] | None = None,
     bench_override_reason: str | None = None,
     comparison_session_updated_at: str | None = None,
+    unplayed_games: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     safe_round = max(1, _safe_int(round_number, 1) or 1)
     safe_total_rounds = max(safe_round, _safe_int(total_rounds, safe_round) or safe_round)
@@ -444,9 +608,16 @@ def build_league_live_round_plan(
         matches,
         active_by_id=active_by_id,
         court_by_player_id=court_by_player_id,
+        roster_by_id={int(row["player_id"]): row for row in roster_pool},
     )
     if not valid_matches:
         raise LeagueLiveDomainError("Enter at least one valid scored match before building the court board.")
+    for court in normalized_courts:
+        court_number = int(court["court_number"])
+        played = sum(int(row["court"]) == court_number for row in valid_matches)
+        expected = 3 if len(court["players_json"]) == 4 else 5
+        if played < expected:
+            warnings.append(f"Court {court_number} has {played} completed game(s); movement uses only recorded results. Review this court before continuing.")
 
     roster_df = pd.DataFrame(
         [
@@ -497,44 +668,28 @@ def build_league_live_round_plan(
         if not isinstance(roster_change, dict):
             raise LeagueLiveDomainError("Roster change must be an object.")
         action = _clean_text(roster_change.get("action"), limit=20).lower()
-        if action not in {"add", "substitute"}:
-            raise LeagueLiveDomainError("Roster change action must be add or substitute.")
-        incoming = normalize_league_live_roster([roster_change.get("player") or {}])[0]
-        pool_ids = {int(row["player_id"]) for row in next_active + existing_bench}
-        if int(incoming["player_id"]) in pool_ids:
-            raise LeagueLiveDomainError("Incoming roster-change player is already in this League Live roster.")
-        replaced_player_id = _safe_int(roster_change.get("replaced_player_id"))
-        if action == "substitute":
-            if replaced_player_id is None or replaced_player_id not in {int(row["player_id"]) for row in next_active}:
-                raise LeagueLiveDomainError("Substitution requires an active replaced_player_id.")
-            next_active = [row for row in next_active if int(row["player_id"]) != replaced_player_id]
-        elif replaced_player_id is not None:
-            raise LeagueLiveDomainError("Add-player changes must not include replaced_player_id.")
-        incoming.update({"status": "active", "court_number": None, "slot": None, "bench_reason": None})
-        combined = next_active + existing_bench + [incoming]
-        preserved_ids = {int(row["player_id"]) for row in next_active} | {int(incoming["player_id"])}
-        current_court_sizes = [
-            len([row for row in active_rows if int(row["court_number"]) == court_number])
-            for court_number in range(1, len(normalized_courts) + 1)
-        ]
-        suggested = build_league_live_roster_suggestion(
-            combined,
-            court_sizes=current_court_sizes if action == "substitute" else None,
-            prefer_keep_player_ids=preserved_ids,
-            bench_player_ids=bench_player_ids,
-            bench_override_reason=bench_override_reason,
-            round_number=next_round,
-            preserve_assignment_order=True,
-            require_bench_override_reason=False,
-        )
-        next_active = list(suggested["active_roster"])
-        existing_bench = list(suggested["bench"])
-        roster_change_payload = {
-            "action": action,
-            "replaced_player_id": replaced_player_id,
-            "incoming_player_id": int(incoming["player_id"]),
-            "effective_round": next_round,
-        }
+        if action not in {"add", "substitute", "attendance"}:
+            raise LeagueLiveDomainError("Roster change action must be add, substitute, or attendance.")
+        if action == "attendance":
+            next_active, existing_bench, roster_change_payload = _apply_round_attendance(
+                roster_pool=roster_pool,
+                proposed_active=next_active,
+                current_by_id=active_by_id,
+                change=roster_change,
+                next_round=next_round,
+            )
+        else:
+            next_active, existing_bench, roster_change_payload = _apply_legacy_roster_change(
+                next_active=next_active,
+                existing_bench=existing_bench,
+                active_rows=active_rows,
+                court_count=len(normalized_courts),
+                roster_change=roster_change,
+                action=action,
+                bench_player_ids=bench_player_ids,
+                bench_override_reason=bench_override_reason,
+                next_round=next_round,
+            )
     else:
         if list(bench_player_ids or []):
             suggested = build_league_live_roster_suggestion(
@@ -712,6 +867,10 @@ def build_league_live_round_plan(
             "t2_p2": int(row["t2_p2"]),
             "score_t1": int(row["score_t1"]),
             "score_t2": int(row["score_t2"]),
+            **({
+                "scheduled_player_ids": list(row["scheduled_player_ids"]),
+                "substitution_reason": row.get("substitution_reason"),
+            } if "scheduled_player_ids" in row else {}),
         }
         for row in valid_matches
     ]
@@ -727,6 +886,8 @@ def build_league_live_round_plan(
         "bench_player_ids": [int(row["player_id"]) for row in existing_bench],
         "bench_override_reason": _clean_text(bench_override_reason, limit=500) or None,
     }
+    if unplayed_games:
+        operation_payload["unplayed_games"] = [dict(row) for row in unplayed_games]
     operation_key = canonical_fingerprint(operation_payload)
     result = {
         "ok": True,

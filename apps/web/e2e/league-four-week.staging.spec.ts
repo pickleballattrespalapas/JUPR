@@ -241,35 +241,26 @@ async function chooseHiddenOption(select: Locator, value: string): Promise<void>
   await expect(select).toHaveValue(value);
 }
 
-async function chooseResettingOption(select: Locator, value: string): Promise<void> {
-  await expect(select).toBeVisible();
-  await expect(select).toBeEnabled();
-  await select.evaluate((element, nextValue) => {
-    if (!(element instanceof HTMLSelectElement)) throw new Error("Expected a select element.");
-    if (![...element.options].some((option) => option.value === nextValue)) {
-      throw new Error(`Option ${nextValue} is unavailable.`);
-    }
-    element.value = nextValue;
-    element.dispatchEvent(new Event("input", { bubbles: true }));
-    element.dispatchEvent(new Event("change", { bubbles: true }));
-  }, value);
-  await expect(select).toHaveValue("");
-}
-
 async function addExistingPlayers(page: Page, playerIds: readonly number[]): Promise<string[]> {
   const selected: string[] = [];
-  const select = page.getByRole("combobox", {
+  const picker = page.getByRole("combobox", {
     name: /Add an existing club player, including a non-roster player/i
   });
+  const sessionOrder = page.getByRole("heading", { name: /^Session player order \(\d+\)$/ }).locator("..");
   for (const playerId of playerIds) {
-    const option = select.locator(`option[value="${playerId}"]`);
+    const previousCount = await sessionOrder.getByRole("listitem").count();
+    await expect(picker).toBeVisible();
+    await expect(picker).toBeEnabled();
+    await picker.fill(String(playerId));
+    const option = page.getByRole("listbox", { name: "Matching players", exact: true })
+      .locator(`[role="option"][data-player-value="${playerId}"]`);
     await expect(option, `Existing staging guest ${playerId} is unavailable`).toHaveCount(1);
-    const value = await option.getAttribute("value");
     const label = String(await option.textContent()).trim();
-    expect(value).toBe(String(playerId));
     expect(label).not.toBe("");
-    await chooseResettingOption(select, String(value));
-    await expect(option, `Existing staging guest ${playerId} was not added`).toHaveCount(0);
+    await option.click();
+    await expect(picker).toHaveValue("");
+    await expect(sessionOrder.getByRole("listitem"), `Existing staging guest ${playerId} was not added`)
+      .toHaveCount(previousCount + 1);
     selected.push(label);
   }
   return selected;
@@ -341,7 +332,7 @@ async function runWeek(
       const createResponse = page.waitForResponse((response) => {
         const url = new URL(response.url());
         return url.origin === expectedApiOrigin
-          && url.pathname === `/admin/clubs/${clubId}/match-uploader/players`
+          && url.pathname === `/admin/clubs/${clubId}/league-manager/live/players`
           && response.request().method() === "POST";
       });
       await page.getByRole("button", { name: "Create missing players", exact: true }).click();
@@ -537,6 +528,25 @@ test("creates, plays, awards, and archives a four-week Flex ladder league", asyn
     }
   );
   await installAdminMutationFirewall(page);
+
+  const workspacesResponse = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return url.origin === expectedApiOrigin
+      && url.pathname === "/admin/auth/workspaces"
+      && response.request().method() === "GET";
+  });
+  await page.goto("/admin/select-club");
+  const workspaceResult = await workspacesResponse;
+  expect(workspaceResult.status()).toBe(200);
+  const { workspaces } = await workspaceResult.json() as {
+    workspaces: Array<{ club_id: string; club_name: string; roles: string[] }>;
+  };
+  const workspace = workspaces.find((entry) => entry.club_id === clubId);
+  expect(workspace, "Acceptance club must be an assigned workspace").toBeDefined();
+  if (workspaces.length > 1 || workspaces.some((entry) => entry.roles.includes("super_admin"))) {
+    await page.getByRole("button", { name: `Open ${workspace!.club_name}`, exact: true }).click();
+  }
+  await expect(page).toHaveURL(`${expectedWebOrigin}/admin`);
 
   const leagueListPath = `/admin/clubs/${clubId}/league-manager/leagues`;
   const before = await apiGet<{ leagues: LeagueSummary[] }>(page, leagueListPath);
