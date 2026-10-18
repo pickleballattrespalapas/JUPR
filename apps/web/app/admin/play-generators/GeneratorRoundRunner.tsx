@@ -889,7 +889,7 @@ export default function GeneratorRoundRunner({
 
       {generatorKind === "round_robin" ? <GeneratorSharing apiBase={apiBase} clubId={clubId} sessionKey={sessionKey} version={session.version} adminToken={accessToken || undefined} locked={resultsLocked} disabled={busy || editingScores || (canEditRound && anyDraftScore)} onChanged={loadSession} /> : null}
 
-      {event.eventFormat === "moneyball_expectations" ? <details style={cardStyle}>
+      {event.eventFormat === "moneyball_expectations" ? <details style={{ ...cardStyle, minWidth: 0 }}>
         <summary style={{ cursor: "pointer", fontWeight: 800 }}>View full-event Moneyball expectations</summary>
         <GeneratorMoneyballExpectations rows={event.moneyballExpectations} locked format={event.moneyball} />
       </details> : null}
