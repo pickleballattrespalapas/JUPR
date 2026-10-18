@@ -12,11 +12,11 @@ const Editor = mod.exports.LeagueLiveRatingEditor;
 const storage = new Map();
 global.sessionStorage = { getItem: key => storage.get(key) || null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) };
 if (!global.crypto) global.crypto = require('node:crypto').webcrypto;
-let tree, requests, saved, failWrite = false;
+let tree, requests, saved, failWrite = false, missingOperation = false;
 const player = { id: 81, name: 'Emi Diaz', rating: 1400, rating_jupr: 3.5, starting_jupr: 3.5, matches_played: 0, state_fingerprint: 'a'.repeat(64) };
 const text = node => node.children.map(child => typeof child === 'string' ? child : text(child)).join('');
 const button = label => tree.root.findAllByType('button').find(node => text(node) === label);
-async function mount(league = false) {
+async function mount(league = false, leagueName = "Ladder") {
   requests = []; saved = [];
   const request = async (url, options = {}) => {
     const body = options.body ? JSON.parse(options.body) : null;
@@ -25,10 +25,11 @@ async function mount(league = false) {
       if (failWrite) throw new Error('Connection lost');
       return league ? { ok: true, league_rating: { id: 9, league_name: 'Ladder', rating: body.rating_jupr * 400 } } : { ok: true, player: { ...player, rating: body.rating_jupr * 400 } };
     }
+    if (url.includes('/operations/') && missingOperation) throw Object.assign(new Error('Not found'), { status: 404 });
     if (url.includes('/operations/')) return { status: 'completed', result: { ok: true, player: { ...player, rating: 1100 } } };
     return { ok: true, player, league_ratings: league ? [{ id: 9, league_name: 'Ladder', rating_jupr: 3.25, matches_played: 6, state_fingerprint: 'b'.repeat(64) }] : [], match_reference_counts: { total: league ? 6 : 0 } };
   };
-  await act(async () => { tree = create(React.createElement(Editor, { clubId: 'club-a', playerId: 81, leagueName: 'Ladder', request, onSaved: (...args) => saved.push(args), onClose() {} })); });
+  await act(async () => { tree = create(React.createElement(Editor, { clubId: 'club-a', playerId: 81, leagueName, request, onSaved: (...args) => saved.push(args), onClose() {} })); });
 }
 (async () => {
   await mount();
@@ -60,11 +61,26 @@ async function mount(league = false) {
   assert.equal(storage.size, 1); assert.equal(button('Save rating'), undefined); assert.deepEqual(saved, []);
   const key = requests.find(row => row.method === 'PATCH').body.idempotency_key;
   await act(async () => tree.unmount());
+  await mount(false, "Different league");
+  assert.ok(button('Save rating'), 'A retained edit must not be applied to another league');
+  assert.equal(button('Check saved rating edit'), undefined);
+  await act(async () => tree.unmount());
   await mount();
   await act(async () => button('Check saved rating edit').props.onClick());
   assert.ok(requests.some(row => row.url.endsWith(`/operations/${encodeURIComponent(key)}`)));
   assert.equal(requests.filter(row => row.method === 'PATCH').length, 0);
   assert.deepEqual(saved, [[81, 1100, 'club']]); assert.equal(storage.size, 0);
+  await act(async () => tree.unmount());
+  await mount();
+  await act(async () => tree.root.findByProps({ 'aria-label': 'Player rating' }).props.onChange({ target: { value: '2.75' } }));
+  await act(async () => button('Save rating').props.onClick());
+  const missingKey = requests.find(row => row.method === 'PATCH').body.idempotency_key;
+  await act(async () => tree.unmount());
+  failWrite = false; missingOperation = true;
+  await mount();
+  await act(async () => button('Check saved rating edit').props.onClick());
+  assert.equal(requests.find(row => row.method === 'PATCH').body.idempotency_key, missingKey);
+  assert.deepEqual(saved, [[81, 1100, 'club']]);
   await act(async () => tree.unmount());
   console.log('PASS Live rating editor: current/starting correction, league scope, validation, exact fingerprints, durable uncertain-write recovery.');
 })().catch(error => { console.error(error); process.exitCode = 1; });
