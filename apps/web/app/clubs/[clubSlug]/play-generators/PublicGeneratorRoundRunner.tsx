@@ -800,6 +800,7 @@ export default function GeneratorRoundRunner({
       );
       if (next.status === "completed") {
         setMessage("Session complete. You can review the saved matches.");
+        if (next.event.eventFormat === "moneyball_expectations") router.push(sessionStandingsPath(clubId, sessionKey));
         router.refresh();
         return;
       }
@@ -936,8 +937,6 @@ export default function GeneratorRoundRunner({
       <PublicControls navigation resetKey={String(roundNumber)} context={`Round ${roundNumber} · ${roundStatusLabel(round.status)}`}>
 {generatorKind === "round_robin" && (shared || editToken) ? <GeneratorSharing apiBase={apiBase} clubId={clubId} sessionKey={sessionKey} version={session.version} ownerToken={shared ? undefined : editToken} shared={shared} locked={resultsLocked} disabled={busy || editingScores || (canEditRound && anyDraftScore)} onChanged={loadSession} /> : null}
 
-      {scoredSession && !shared ? <GeneratorSubmission ratingMode={session.rating_mode || "unrated"} submission={session.submission} canSubmit={session.status === "completed" && Boolean(editToken) && !editingScores} defaultDate={session.created_at} onSubmit={submitResults} /> : null}
-
       {generatorKind === "round_robin" && !event.playoff ? (
         <GeneratorRoundSchedule rounds={event.rounds} participants={event.participants}
           selectedRound={roundNumber} currentRound={event.currentRoundNumber}
@@ -948,6 +947,8 @@ export default function GeneratorRoundRunner({
       ) : null}
 
       </PublicControls>
+
+      {scoredSession && !shared && (session.status === "completed" || session.submission) ? <GeneratorSubmission ratingMode={session.rating_mode || "unrated"} submission={session.submission} canSubmit={session.status === "completed" && Boolean(editToken) && !editingScores} defaultDate={session.created_at} onSubmit={submitResults} /> : null}
 
       {event.eventFormat === "moneyball_expectations" ? <details style={{ ...cardStyle, minWidth: 0 }}>
         <summary style={{ cursor: "pointer", fontWeight: 800 }}>View full-event Moneyball expectations</summary>
@@ -1220,14 +1221,16 @@ export default function GeneratorRoundRunner({
               disabled={busy}
               style={{ ...primaryButton, marginTop: "1rem" }}
             >
-              {generatorKind === "ladder" && roundNumber >= event.totalRounds
+              {event.eventFormat === "moneyball_expectations" && event.rounds.every(row => row.status === "saved")
+                ? "Finish Moneyball & view results"
+                : generatorKind === "ladder" && roundNumber >= event.totalRounds
                 ? "Finish session"
                 : generatorKind === "ladder"
                   ? `Generate Round ${roundNumber + 1}`
                   : "Next scheduled round"}
             </button>
         ) : null}
-        {canFinishSession && !editingScores ? (
+        {canFinishSession && !editingScores && event.eventFormat !== "moneyball_expectations" ? (
           <div style={{ marginTop: "1rem" }}>
             <ConfirmAction
               triggerLabel="Finish session"
