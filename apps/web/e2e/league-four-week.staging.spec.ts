@@ -183,7 +183,9 @@ async function confirmedAction(
   }, { timeout: 90_000 });
   await confirm.click();
   const response = await responsePromise;
-  expect(response.status(), `${options.method} ${options.pathname} failed`).toBe(options.expectedStatus ?? 200);
+  const expectedStatus = options.expectedStatus ?? 200;
+  const failureDetail = response.status() === expectedStatus ? "" : await response.text();
+  expect(response.status(), `${options.method} ${options.pathname} failed: ${failureDetail}`).toBe(expectedStatus);
   await acknowledgeCompletion(page);
   return response;
 }

@@ -9,6 +9,9 @@ from jupr_app.domain.player_visibility import is_merged_player
 
 INACTIVITY_DAYS = 14
 INACTIVITY_THRESHOLD = timedelta(days=INACTIVITY_DAYS)
+# Frame metadata preserves the database value behind the derived display flag.
+# It must not become a player column exposed by API serialization.
+PERSISTED_ACTIVE_BY_PLAYER_ID_ATTR = "persisted_active_by_player_id"
 
 
 def coerce_utc_datetime(value) -> datetime | None:
