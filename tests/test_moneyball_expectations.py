@@ -1,5 +1,6 @@
 from collections import Counter
 from copy import deepcopy
+import json
 
 import pytest
 
@@ -15,6 +16,7 @@ from jupr_app.services.public_play_generator_service import (
     preview_public_play_generator, create_public_play_generator_session,
     public_play_generator_session_payload, build_public_play_generator_export,
 )
+from jupr_app.services.admin_play_generator_service import preview_play_generator
 from test_public_play_generator_service import FakeSupabase
 
 
@@ -63,6 +65,44 @@ def test_fixed_setup_and_interim_expectations(frozen):
                lambda: complete_generator_event(event),
                lambda: start_generator_playoff(event, playoff_format="top_eight")]:
         with pytest.raises(ValueError): fn()
+
+
+@pytest.mark.parametrize("fixture_name,games", [("frozen", 7), ("six_frozen", 4)])
+def test_preview_expectations_cover_full_schedule_and_match_final_standings(fixture_name, games, request):
+    frozen = request.getfixturevalue(fixture_name)
+    before = deepcopy(frozen)
+    public = public_event(frozen)
+    expectations = public["moneyballExpectations"]
+    total_matches = len(frozen["moneyballPrivate"]["config"]["matches"])
+    assert frozen == before
+    assert [r["participantId"] for r in expectations] == [p["id"] for p in frozen["participants"]]
+    assert sum(r["expectedWins"] for r in expectations) == pytest.approx(2 * total_matches)
+    assert sum(r["expectedLosses"] for r in expectations) == pytest.approx(2 * total_matches)
+    assert sum(r["expectedDifferential"] for r in expectations) == pytest.approx(0)
+    for row in expectations:
+        assert row["scheduledGames"] == games
+        assert row["expectedWins"] + row["expectedLosses"] == pytest.approx(games)
+        assert 0 < row["expectedWins"] < games
+    serialized = json.dumps(public)
+    for private in ["moneyballPrivate", '"rating":', "margin_probabilities", "balance_logit_offsets"]:
+        assert private not in serialized
+    event = start_generator_event(frozen)
+    assert all(r["expectedWins"] == 0 for r in generator_event_standings(event))
+    for round_number in range(1, len(event["rounds"]) + 1):
+        event = save(event, round_number)
+        assert public_event(event)["moneyballExpectations"] == expectations
+    final = {r["participantId"]: r for r in generator_event_standings(event)}
+    for expected in expectations:
+        actual = final[expected["participantId"]]
+        assert expected["scheduledGames"] == actual["matches"]
+        assert expected["expectedWins"] == pytest.approx(actual["expectedWins"])
+        assert expected["expectedDifferential"] == pytest.approx(actual["expectedDifferential"])
+
+
+def test_standard_preview_has_no_moneyball_expectations():
+    event = preview(event_format="standard")
+    assert public_event(event) == event
+    assert "moneyballExpectations" not in public_event(event)
 
 
 def test_final_scores_match_prototype_and_score_corrections(frozen):
@@ -135,13 +175,21 @@ def test_public_preview_start_export_hide_ratings_and_freeze_database_values(fix
                  total_rounds=frozen["totalRounds"],court_count=0,event_format="moneyball_expectations")
     result = preview_public_play_generator(db,**setup)["preview"]
     assert "moneyballPrivate" not in result
+    assert result["moneyballExpectations"] == public_event(frozen)["moneyballExpectations"]
+    staff_setup = {key: value for key, value in setup.items() if key != "participant_player_ids"}
+    staff = preview_play_generator(db, **staff_setup, player_ids=list(range(1, count + 1)))["preview"]
+    assert staff["moneyballExpectations"] == result["moneyballExpectations"]
+    assert staff["previewFingerprint"] == result["previewFingerprint"]
+    assert "moneyballPrivate" not in staff
     session = create_public_play_generator_session(db,**setup,preview_fingerprint=result["previewFingerprint"],
         idempotency_key="moneyball-test-0001",requester_hash="a"*64,token_secret="x"*48)["session"]
     stored = db.db["live_sessions"][0]
     assert "moneyballPrivate" in stored["state"]["page_state"]["event"]
     assert "moneyballPrivate" not in session["event"]
+    assert session["event"]["moneyballExpectations"] == result["moneyballExpectations"]
     db.db["players"][0]["rating"] += 200
     assert public_play_generator_session_payload(stored)["standings"] == session["standings"]
+    assert public_play_generator_session_payload(stored)["event"]["moneyballExpectations"] == result["moneyballExpectations"]
     replay = create_public_play_generator_session(db,**setup,preview_fingerprint=result["previewFingerprint"],
         idempotency_key="moneyball-test-0001",requester_hash="a"*64,token_secret="x"*48)
     assert replay["idempotent_replay"] and replay["session"] == session

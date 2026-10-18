@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "@/components/PublicClubLink";
 import { useRouter } from "next/navigation";
+import { useAdminSession } from "@/lib/useAdminSession";
 import GeneratorRosterSetup, { normalizeRosterName, recommendedGeneratorSetup, recommendedMixedCourtSetup, rosterNamesFromText } from "@/components/GeneratorRosterSetup";
+import GeneratorMoneyballExpectations, { type MoneyballExpectation } from "@/components/GeneratorMoneyballExpectations";
 import {
   clearPlayGeneratorDraft,
   closePreparedPdfWindow,
@@ -67,6 +69,7 @@ type PreviewEvent = {
   previewFingerprint: string;
   participants: Participant[];
   rounds: RoundRow[];
+  moneyballExpectations?: MoneyballExpectation[];
 };
 
 type PreviewResponse = {
@@ -101,6 +104,7 @@ type PendingStartPayload = Record<string, unknown> & {
 };
 
 type StatusResponse = {
+  club?: { id: string };
   enabled: boolean;
   writes_enabled?: boolean;
   status: string;
@@ -288,6 +292,10 @@ export default function GeneratorWorkspace({
   status
 }: Props) {
   const router = useRouter();
+  const { accessToken, session: adminSession } = useAdminSession();
+  const creationClubId = status?.club?.id;
+  const canCreatePlayer = adminSession?.capabilities?.assignments.some(assignment => assignment.club_id === creationClubId && assignment.permissions.includes("manage_players"));
+  const [creationPending, setCreationPending] = useState(false);
   const [title, setTitle] = useState(
     `${generatorTitle(generatorKind)} ${new Date().toISOString().slice(0, 10)}`
   );
@@ -465,6 +473,7 @@ export default function GeneratorWorkspace({
   }
 
   async function generatePreview(): Promise<void> {
+    if (creationPending) return;
     setBusy(true);
     setMessage(null);
     try {
@@ -490,6 +499,7 @@ export default function GeneratorWorkspace({
   }
 
   async function startSession(): Promise<void> {
+    if (creationPending) return;
     if (startSucceeded) return;
     let requestPayload = readPendingStartPayload(startOperationStorageKey);
     const isRecoveryAttempt = Boolean(requestPayload);
@@ -826,6 +836,11 @@ export default function GeneratorWorkspace({
         <GeneratorRosterSetup
           apiBase={apiBase}
           clubKey={clubId}
+          creationClubId={creationClubId}
+          creationAccessToken={canCreatePlayer ? accessToken : undefined}
+          creationDraftKey={draftKey}
+          onCreationPendingChange={setCreationPending}
+          disabled={busy || pendingStart || startSucceeded}
           generatorKind={generatorKind}
           playFormat={playFormat}
           moneyballOnly={moneyball}
@@ -845,7 +860,7 @@ export default function GeneratorWorkspace({
           <button
             type="button"
             onClick={() => void generatePreview()}
-            disabled={busy || pendingStart || startSucceeded || !rosterReady || !mixedSetupValid}
+            disabled={busy || creationPending || pendingStart || startSucceeded || !rosterReady || !mixedSetupValid}
             style={primaryButton}
           >
             {busy ? "Generating…" : "Preview matchups"}
@@ -877,7 +892,7 @@ export default function GeneratorWorkspace({
           <button
             type="button"
             onClick={() => void startSession()}
-            disabled={busy || !writesEnabled}
+            disabled={busy || creationPending || !writesEnabled}
             style={primaryButton}
           >
             {busy ? "Trying again…" : "Try starting again"}
@@ -886,7 +901,7 @@ export default function GeneratorWorkspace({
       ) : null}
 
       {preview ? (
-        <article style={cardStyle}>
+        <article style={{ ...cardStyle, minWidth: 0 }}>
           <h2 style={{ marginTop: 0 }}>2. Preview before starting</h2>
           <p style={{ color: "#475569" }}>
             {moneyball
@@ -908,13 +923,15 @@ export default function GeneratorWorkspace({
               <button
                 type="button"
                 onClick={() => void startSession()}
-                disabled={busy || !writesEnabled}
+                disabled={busy || creationPending || !writesEnabled}
                 style={primaryButton}
               >
                 {busy ? "Starting…" : `Start ${ratingMode} session`}
               </button>
             ) : null}
           </div>
+
+          {moneyball ? <GeneratorMoneyballExpectations rows={preview.moneyballExpectations} /> : null}
 
           <div style={{ display: "grid", gap: "0.85rem" }}>
             {preview.rounds.map((round) => {

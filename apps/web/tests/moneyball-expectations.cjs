@@ -31,6 +31,7 @@ const PublicWorkspace = load("@/app/clubs/[clubSlug]/play-generators/PublicGener
 const AdminWorkspace = load("@/app/admin/play-generators/GeneratorWorkspace").default;
 const Table = load("@/components/PlayGeneratorStandingsTable").default;
 const Pool = load("@/components/GeneratorMoneyball").default;
+const Expectations = load("@/components/GeneratorMoneyballExpectations").default;
 const text = node => typeof node === "string" ? node : (node?.children || []).map(text).join("");
 const button = (tree,label) => tree.root.findAllByType("button").find(node => text(node) === label);
 const reply = body => ({ok:true,status:200,json:async()=>body});
@@ -41,12 +42,16 @@ const reply = body => ({ok:true,status:200,json:async()=>body});
     global.sessionStorage = {getItem:key=>storage.get(key)||null,setItem:(key,val)=>storage.set(key,val),removeItem:key=>storage.delete(key)};
     global.window = {sessionStorage};
     const players = Array.from({length:playerCount},(_,i)=>({id:i+1,name:`Player ${i}`}));
+    const games = playerCount === 6 ? 4 : 7;
+    const expectations = players.map((player, i) => ({participantId:`p-${i+1}`,name:player.name,
+      scheduledGames:games,expectedWins:i === 0 ? 2.63 : games/2,expectedLosses:i === 0 ? games-2.63 : games/2,
+      expectedDifferential:i === 0 ? -11.88 : i === 1 ? 11.88 : 0}));
     const calls = [];
     global.fetch = async (url,options={}) => {
       if (url.includes("/players?")) return reply({players});
       if (!options.body) return reply({sessions:[]});
       calls.push(JSON.parse(options.body));
-      return reply({preview:{generatorKind:"round_robin",playFormat:"doubles",eventFormat:"moneyball_expectations",name:"Moneyball",totalRounds:7,courtCount:2,participants:[],rounds:[],previewFingerprint:"frozen"}});
+      return reply({preview:{generatorKind:"round_robin",playFormat:"doubles",eventFormat:"moneyball_expectations",name:"Moneyball",totalRounds:playerCount === 6 ? 6 : 7,courtCount:playerCount === 6 ? 1 : 2,participants:[],rounds:[],previewFingerprint:"frozen",moneyballExpectations:expectations}});
     };
     let tree;
     await act(async()=>{tree=create(React.createElement(Workspace,{apiBase:"https://api.test",clubId:"club",generatorKind:"round_robin",status:{enabled:true,writes_enabled:true}}));});
@@ -74,21 +79,42 @@ const reply = body => ({ok:true,status:200,json:async()=>body});
     const previewBody=text(tree.toJSON());
     assert.ok(!previewBody.includes("Add more as needed") && !previewBody.includes("Keep adding rounds"));
     assert.ok(previewBody.includes("Fixed Moneyball schedule") && previewBody.includes("Review all fixed matchups and byes"));
+    const expectationSection = tree.root.findByProps({"aria-label":"Moneyball player expectations"});
+    const expectationText = text(expectationSection);
+    assert.ok(expectationText.includes("full event") && expectationText.includes("Expected losses"));
+    assert.ok(expectationText.includes("2.63") && expectationText.includes((games-2.63).toFixed(2)));
+    assert.ok(expectationText.includes("-11.88") && expectationText.includes("+11.88"));
+    assert.ok(expectationText.includes("3 wins would beat your win expectation") && expectationText.includes("no separate win bonus"));
+    const expectationRows = expectationSection.findByType("tbody").findAllByType("tr");
+    assert.equal(expectationRows.length, playerCount);
+    for (let i = 0; i < playerCount; i++) {
+      assert.equal(text(expectationRows[i].findByType("th")), players[i].name);
+      assert.equal(text(expectationRows[i].findAllByType("td")[0]), String(games));
+    }
     assert.equal(calls.at(-1).event_format,"moneyball_expectations");
     assert.equal(calls.at(-1).total_rounds,playerCount === 6 ? 6 : 7);
     assert.equal(calls.at(-1).court_count,0); // Server resolves the fixed court count. assert.equal(calls.at(-1).scoring_mode,"scored");
     assert.ok(!Object.hasOwn(calls.at(-1),"ratings"));
     assert.ok([...storage.values()].some(value=>value.includes('"eventFormat":"moneyball_expectations"')));
     await act(async()=>tree.unmount());
+    await act(async()=>{tree=create(React.createElement(Workspace,{apiBase:"https://api.test",clubId:"club",generatorKind:"round_robin",status:{enabled:true,writes_enabled:true}}));});
+    assert.equal(tree.root.findByProps({"aria-label":"Moneyball player expectations"}).findByType("tbody").findAllByType("tr").length, playerCount);
+    await act(async()=>tree.root.findByProps({"aria-label":"Event format"}).props.onChange({target:{value:"standard"}}));
+    assert.equal(tree.root.findAllByProps({"aria-label":"Moneyball player expectations"}).length, 0);
+    await act(async()=>tree.unmount());
     }
   }
   const rows=[{participantId:"p-1",name:"Example",rank:1,matches:7,wins:2,losses:5,differential:-11,expectedWins:2.63,expectedDifferential:-11.88,moneyballScore:54.246,moneyballFinal:true}];
   let tree;
+  await act(async()=>{tree=create(React.createElement(Expectations,{}));});
+  assert.ok(text(tree.toJSON()).includes("Generate a new preview"));
+  assert.equal(tree.root.findAllByType("table").length,0);
+  await act(async()=>tree.unmount());
   await act(async()=>{tree=create(React.createElement(Table,{rows,sortMode:"moneyball_expectations"}));});
   const body=JSON.stringify(tree.toJSON());
   assert.ok(body.includes("54.25") && body.includes("Expected wins") && body.includes("Expected point diff."));
   assert.ok(!body.includes("Prize") && !body.includes("starting order"));
   await act(async()=>{tree=create(React.createElement(Pool,{value:{entryFeeMxn:100,prizePoolMxn:800,completedGames:14,totalGames:14,final:true,winners:[{participantId:"p-1",name:"Example",payoutMxn:800}]}}));});
   assert.ok(JSON.stringify(tree.toJSON()).includes("Example: 800.00 pesos"));
-  console.log("Moneyball: public/staff format selection, perfect player counts, saved draft, request payload, hidden ratings, expectations table and winner settlement passed.");
+  console.log("Moneyball: public/staff full-event preview expectations, six-player byes, restored drafts, standard-format isolation, format selection, live standings and settlement passed.");
 })().catch(error=>{console.error(error);process.exitCode=1;});

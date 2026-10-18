@@ -2,7 +2,9 @@
 
 import { fetchAllPublicPlayers, matchesPlayerSearch } from "@/lib/playerSearch";
 
-import { useEffect, useMemo, useState } from "react";
+import GeneratorPlayerCreate from "@/app/admin/play-generators/submissions/GeneratorPlayerCreate";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 export type GeneratorKind = "round_robin" | "ladder";
 export type PlayFormat = "singles" | "doubles" | "doubles_singles";
@@ -30,6 +32,11 @@ type DirectoryResponse = {
 type Props = {
   apiBase: string | null;
   clubKey: string;
+  creationClubId?: string;
+  creationAccessToken?: string;
+  creationDraftKey?: string;
+  disabled?: boolean;
+  onCreationPendingChange?: (pending: boolean) => void;
   generatorKind: GeneratorKind;
   playFormat: PlayFormat;
   targetCount: number;
@@ -265,6 +272,11 @@ function explanation(
 export default function GeneratorRosterSetup({
   apiBase,
   clubKey,
+  creationClubId,
+  creationAccessToken,
+  creationDraftKey,
+  disabled = false,
+  onCreationPendingChange,
   generatorKind,
   playFormat,
   targetCount,
@@ -281,6 +293,11 @@ export default function GeneratorRosterSetup({
   onLinkedPlayerIdsChange,
   onInvalidate
 }: Props) {
+  const [creationBusy, setCreationBusy] = useState(false);
+  const [creationPending, setCreationPending] = useState(false);
+  const rosterLocked = disabled || creationBusy || creationPending;
+  const handleCreationPending = useCallback((_id: string, pending: boolean) => setCreationPending(pending), []);
+  useEffect(() => { onCreationPendingChange?.(creationBusy || creationPending); }, [creationBusy, creationPending, onCreationPendingChange]);
   const [playerSearch, setPlayerSearch] = useState("");
   const [directoryPlayers, setDirectoryPlayers] = useState<DirectoryPlayer[]>([]);
   const [directoryError, setDirectoryError] = useState<string | null>(null);
@@ -395,12 +412,13 @@ export default function GeneratorRosterSetup({
   function addCurrentPlayer(player: DirectoryPlayer): void {
     const name = String(player.name || "").trim().replace(/\s+/g, " ");
     const key = normalizeRosterName(name);
-    if (!name || participantNameSet.has(key)) return;
-    if (participantNames.length >= targetCount) {
+    if (!name) return;
+    const alreadyListed = participantNameSet.has(key);
+    if (!alreadyListed && participantNames.length >= targetCount) {
       setPickerMessage(`The roster already has the selected ${targetCount} players. Increase the player count or remove a name first.`);
       return;
     }
-    const nextNames = [...participantNames, name];
+    const nextNames = alreadyListed ? participantNames : [...participantNames, name];
     const playerId = Number(player.id);
     onParticipantTextChange(nextNames.join("\n"));
     if (Number.isFinite(playerId) && playerId > 0) {
@@ -409,6 +427,18 @@ export default function GeneratorRosterSetup({
     onInvalidate();
     setPlayerSearch("");
     setPickerMessage(`${name} added to the roster.`);
+  }
+
+  async function selectCreatedPlayer(playerId: number): Promise<void> {
+    const response = await fetch(apiUrl(apiBase!, `/admin/clubs/${encodeURIComponent(creationClubId!)}/players/editor/players/${playerId}`), {
+      cache: "no-store", headers: { Authorization: `Bearer ${creationAccessToken}` }
+    });
+    if (!response.ok) throw new Error("The player could not be loaded. Check player creation to try again.");
+    const payload = await response.json() as { player?: DirectoryPlayer };
+    if (!payload.player || Number(payload.player.id) !== playerId) throw new Error("Could not confirm the player's profile.");
+    const player = payload.player;
+    setDirectoryPlayers(current => [...current.filter(row => Number(row.id) !== playerId), player]);
+    addCurrentPlayer(player);
   }
 
   const countMessage = exactCount
@@ -429,7 +459,7 @@ export default function GeneratorRosterSetup({
         <label style={{ display: "grid", gap: "0.25rem", fontWeight: 700 }}>
           Number of players
           <select
-            disabled={Boolean(fixedPlayerCount)}
+            disabled={rosterLocked || Boolean(fixedPlayerCount)}
             value={targetCount}
             onChange={(event) => changeTargetCount(Number(event.target.value))}
             style={inputStyle}
@@ -444,6 +474,7 @@ export default function GeneratorRosterSetup({
             <label style={{ display: "grid", gap: "0.25rem", fontWeight: 700 }}>
               Doubles courts
               <select
+                disabled={rosterLocked}
                 value={doublesCourtCount}
                 onChange={(event) => changeDoublesCourts(Number(event.target.value))}
                 style={inputStyle}
@@ -462,6 +493,7 @@ export default function GeneratorRosterSetup({
             <label style={{ display: "grid", gap: "0.25rem", fontWeight: 700 }}>
               Singles courts
               <select
+                disabled={rosterLocked}
                 value={singlesCourtCount}
                 onChange={(event) => changeSinglesCourts(Number(event.target.value))}
                 style={inputStyle}
@@ -520,6 +552,7 @@ export default function GeneratorRosterSetup({
         <label style={{ display: "grid", gap: "0.25rem", fontWeight: 700 }}>
           Search club players
           <input
+            disabled={rosterLocked}
             value={playerSearch}
             onChange={(event) => {
               setPlayerSearch(event.target.value);
@@ -531,7 +564,7 @@ export default function GeneratorRosterSetup({
         </label>
         {playerSearch.trim().length < 2 ? (
           <p style={{ margin: 0, color: "#64748b", fontSize: "0.9rem" }}>
-            {moneyballOnly || fixedPlayerCount ? "Choose the complete starting lineup from the club list so ratings can set expectations." : "Search the club player list, or type names directly below."}
+            {moneyballOnly || fixedPlayerCount ? "Choose club players or create a new player with a starting level before previewing Moneyball." : "Search the club player list, or type names directly below."}
           </p>
         ) : filteredPlayerOptions.length ? (
           <div style={{ display: "grid", gap: "0.4rem" }}>
@@ -556,7 +589,7 @@ export default function GeneratorRosterSetup({
                   <button
                     type="button"
                     onClick={() => addCurrentPlayer(player)}
-                    disabled={alreadyAdded || rosterFull}
+                    disabled={rosterLocked || alreadyAdded || rosterFull}
                     style={{
                       ...secondaryButton,
                       background: alreadyAdded || rosterFull ? "#f1f5f9" : "white",
@@ -571,7 +604,7 @@ export default function GeneratorRosterSetup({
           </div>
         ) : (
           <p style={{ margin: 0, color: "#b45309", fontSize: "0.9rem" }}>
-            No club players match “{playerSearch.trim()}”. {moneyballOnly || fixedPlayerCount ? "Add their profile and starting rating before using Moneyball." : "You can type the name below instead."}
+            No club players match “{playerSearch.trim()}”. {moneyballOnly || fixedPlayerCount ? "Use Create new player below to add their profile and starting level." : "You can type the name below instead."}
           </p>
         )}
         {directoryError ? (
@@ -581,9 +614,25 @@ export default function GeneratorRosterSetup({
         ) : null}
       </div>
 
+      {moneyballOnly || fixedPlayerCount ? (
+        <div style={{ border: "1px solid #cbd5e1", borderRadius: 10, padding: "0.75rem", minWidth: 0 }}>
+          {apiBase && creationClubId && creationAccessToken ? <GeneratorPlayerCreate
+            context="setup" clubId={creationClubId} sessionKey={creationDraftKey || `setup:${generatorKind}`} participantId="new-player"
+            participantName="this lineup" apiBase={apiBase} accessToken={creationAccessToken}
+            players={directoryPlayers.map(player => ({ id: Number(player.id), name: player.name }))}
+            disabled={disabled || creationBusy || (participantNames.length >= targetCount && !creationPending)} matched={false}
+            onPendingChange={handleCreationPending} onBusyChange={setCreationBusy} onCreated={selectCreatedPlayer}
+          /> : <p style={{ margin: 0 }}>
+            <a href="/admin/login" target="_blank" rel="noreferrer">Sign in as club staff to create a new player</a>, then return to this lineup.
+          </p>}
+          {participantNames.length >= targetCount && !creationPending ? <small style={{ display: "block", marginTop: 6 }}>Remove a player or increase the player count to make room for someone new.</small> : null}
+        </div>
+      ) : null}
+
       <label style={{ display: "grid", gap: "0.25rem", fontWeight: 700 }}>
         Players ({participantNames.length} of {targetCount})
         <textarea
+          disabled={rosterLocked}
           value={participantText}
           onChange={(event) => changeParticipantText(event.target.value)}
           rows={Math.min(14, Math.max(7, targetCount))}
