@@ -276,23 +276,53 @@ async function keyboardMoveCard(page: Page, card: Locator, direction: "ArrowLeft
   await page.keyboard.press("Space");
 }
 
-async function pointerDragCourtPlayer(page: Page, sourceSlot: Locator, targetSlot: Locator): Promise<void> {
+async function pointerDragCourtPlayer(
+  page: Page,
+  sourceSlot: Locator,
+  targetSlot: Locator,
+  mode: "swap" | "reorder"
+): Promise<void> {
   const handle = sourceSlot.locator("[data-rfd-drag-handle-draggable-id]");
   await expect(handle).toBeVisible();
   await targetSlot.scrollIntoViewIfNeeded();
   await handle.scrollIntoViewIfNeeded();
   const source = await handle.boundingBox();
+  const sourceCard = await sourceSlot.boundingBox();
+  const originalTarget = await targetSlot.boundingBox();
   expect(source, "Court player drag handle must have a visible position").not.toBeNull();
+  expect(sourceCard, "Court player card must have a visible position").not.toBeNull();
+  expect(originalTarget, "Court destination slot must have a visible position").not.toBeNull();
   const x = source!.x + source!.width / 2;
   const y = source!.y + source!.height / 2;
   await page.mouse.move(x, y);
   await page.mouse.down();
-  // Cross the mouse sensor's lift threshold before moving into the destination slot.
-  await page.mouse.move(x + 12, y, { steps: 4 });
-  const target = await targetSlot.boundingBox();
-  expect(target, "Court destination slot must have a visible position").not.toBeNull();
-  await page.mouse.move(target!.x + target!.width / 2, target!.y + target!.height / 2, { steps: 24 });
-  await page.mouse.up();
+  try {
+    // Cross the mouse sensor's lift threshold before moving into the destination list.
+    await page.mouse.move(x + 12, y, { steps: 4 });
+    if (mode === "swap") {
+      // Combining requires a dragged edge, not its center, in the target's middle band.
+      // A displaced target uses the opposite edge, so allow both approaches and only
+      // release after the component identifies this exact player as the swap target.
+      let approach = 0;
+      await expect.poll(async () => {
+        const target = await targetSlot.boundingBox();
+        expect(target, "Court swap target must remain visible during the drag").not.toBeNull();
+        const edgeOffset = y - sourceCard!.y - (approach++ % 2 === 0 ? 0 : sourceCard!.height);
+        await page.mouse.move(target!.x + target!.width / 2, target!.y + target!.height / 2 + edgeOffset, { steps: 12 });
+        return await targetSlot.getAttribute("data-swap-target");
+      }, { message: "The hovered court player must become the visible swap target before dropping", timeout: 8_000 }).toBe("true");
+    } else {
+      // Use the position from before lift: native list displacement moves the target
+      // card while dragging, but the requested destination remains its original slot.
+      await page.mouse.move(
+        originalTarget!.x + originalTarget!.width / 2,
+        originalTarget!.y + originalTarget!.height / 2,
+        { steps: 24 }
+      );
+    }
+  } finally {
+    await page.mouse.up();
+  }
 }
 
 async function verifyCourtSetupDragAndRatings(
@@ -305,7 +335,7 @@ async function verifyCourtSetupDragAndRatings(
   const originalNames = originalCourts.map((value) => value.split("\n").filter(Boolean));
   const originalMembers = originalNames.flat().sort();
   const slot = (courtIndex: number, playerIndex: number) => courtsPanel.locator(
-    `[data-rfd-droppable-id="court:${courtIndex}:slot:${playerIndex}"]`
+    `[data-court-slot="court:${courtIndex}:slot:${playerIndex}"]`
   );
   const undo = courtsPanel.getByRole("button", { name: "Undo last edit", exact: true });
   const ratingsByName = new Map(roster.map((member) => [member.player_name, member.rating]));
@@ -332,7 +362,7 @@ async function verifyCourtSetupDragAndRatings(
   await expect(undo).toBeDisabled();
 
   // Dropping onto an occupied court position exchanges the two players, preserving pod sizes.
-  await pointerDragCourtPlayer(page, slot(0, 0), slot(1, 0));
+  await pointerDragCourtPlayer(page, slot(0, 0), slot(1, 0), "swap");
   const swapped = originalNames.map((names) => [...names]);
   [swapped[0][0], swapped[1][0]] = [swapped[1][0], swapped[0][0]];
   await assertCourts(swapped);
@@ -342,7 +372,7 @@ async function verifyCourtSetupDragAndRatings(
   await expect(undo).toBeDisabled();
 
   // Reordering inside one court shifts the intervening players instead of exchanging endpoints.
-  await pointerDragCourtPlayer(page, slot(0, 0), slot(0, 2));
+  await pointerDragCourtPlayer(page, slot(0, 0), slot(0, 2), "reorder");
   const reordered = originalNames.map((names) => [...names]);
   reordered[0].splice(2, 0, reordered[0].shift()!);
   await assertCourts(reordered);
