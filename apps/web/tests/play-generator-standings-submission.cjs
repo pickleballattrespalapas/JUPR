@@ -20,6 +20,7 @@ const routerCalls = [];
 const router = { push: url => routerCalls.push(url), refresh() {} };
 const Link = ({ children, ...props }) => React.createElement("a", props, children);
 const mocks = {
+  "@/components/GeneratorMoneyballExpectations": load("components/GeneratorMoneyballExpectations.tsx"),
   "next/link": Link,
   "@/components/PublicClubLink": Link,
   "next/navigation": { useRouter: () => router },

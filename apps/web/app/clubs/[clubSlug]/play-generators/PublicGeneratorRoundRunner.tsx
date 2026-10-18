@@ -1,5 +1,8 @@
 "use client";
 
+import GeneratorMoneyballExpectations, { type MoneyballExpectation, type MoneyballExpectationFormat } from "@/components/GeneratorMoneyballExpectations";
+
+
 import PublicControls from "@/components/PublicControls";
 
 import GeneratorSharing from "@/components/GeneratorSharing";
@@ -66,6 +69,8 @@ type RoundRow = {
 };
 
 type GeneratorEvent = {
+  moneyballExpectations?: MoneyballExpectation[];
+  moneyball?: MoneyballExpectationFormat;
   name: string;
   playoff?: { format: string };
   generatorKind: GeneratorKind;
@@ -943,6 +948,11 @@ export default function GeneratorRoundRunner({
       ) : null}
 
       </PublicControls>
+
+      {event.eventFormat === "moneyball_expectations" ? <details style={{ ...cardStyle, minWidth: 0 }}>
+        <summary style={{ cursor: "pointer", fontWeight: 800 }}>View full-event Moneyball expectations</summary>
+        <GeneratorMoneyballExpectations rows={event.moneyballExpectations} locked format={event.moneyball} />
+      </details> : null}
 
       {session.status === "completed" ? (
         <article style={{ ...cardStyle, background: "#ecfdf5", borderColor: "#86efac" }}>

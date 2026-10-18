@@ -47,7 +47,7 @@ const primaryCell = {
 export default function PlayGeneratorStandingsTable({ rows, sortMode, title = "Standings" }: Props) {
   if (sortMode === "moneyball_expectations") return <article style={{ border: "1px solid #e2e8f0", borderRadius: 14, padding: "1rem", background: "white" }}>
     <h2>{title}</h2>
-    <p>Highest Moneyball score wins. Your point performance is compared with expectations from ratings frozen before play. Wins are shown for context, with no separate win bonus.</p>
+    <p>Highest Moneyball score wins. Your point performance is compared with expectations from frozen starting ratings. Wins are shown for context, with no separate win bonus.</p>
     <p>{rows.every(row => row.moneyballFinal) ? "All scheduled rounds are scored. Tied winners split the pool." : "Provisional standings — the winner is decided after the full rotation. Expected figures cover saved games only."}</p>
     <div style={{ overflowX: "auto" }}><table style={{ width: "100%", minWidth: 720, borderCollapse: "collapse" }}>
       <thead><tr>{["Place", "Player", "Wins / Games", "Expected wins", "Point diff.", "Expected point diff.", "Moneyball / 100"].map(label => <th key={label} style={{ padding: ".65rem", textAlign: "left" }}>{label}</th>)}</tr></thead>

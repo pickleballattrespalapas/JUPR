@@ -93,6 +93,7 @@ async function sharedStandingsPollsWithoutOperationAccess() {
     '@/components/GeneratorSharing': Sharing,
     '@/components/GeneratorSubmission': { __esModule: true, default: () => null, generatorResultLabel: () => 'Unrated' },
     '@/components/GeneratorMoneyball': load('components/GeneratorMoneyball.tsx'),
+    '@/components/GeneratorMoneyballExpectations': load('components/GeneratorMoneyballExpectations.tsx'),
     '@/components/GeneratorPlayoff': { __esModule: true, default: () => null },
     '@/components/PlayGeneratorStandingsTable': { __esModule: true, default: ({ rows }) => React.createElement('p', {}, rows[0].wins), standingsSortLabel: () => 'Wins' }
   }).default;
