@@ -361,6 +361,24 @@ async function verifyCourtSetupDragAndRatings(
   await assertRatings(originalNames);
   await expect(undo).toBeDisabled();
 
+  // Save and reload a real rating correction through the court board, then
+  // restore this isolated fixture before the four-week scoring rehearsal.
+  const firstName = originalNames[0][0];
+  const originalRating = (Number(ratingsByName.get(firstName)) / 400).toFixed(2);
+  for (const value of ["2.75", originalRating]) {
+    await slot(0, 0).getByRole("button", { name: `Edit rating for ${firstName}`, exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: `Edit rating · ${firstName}`, exact: true });
+    await expect(dialog).toBeVisible();
+    if (value === originalRating) await expect(dialog.getByRole("spinbutton", { name: "Player rating", exact: true })).toHaveValue("2.75");
+    await dialog.getByRole("spinbutton", { name: "Player rating", exact: true }).fill(value);
+    const confirmation = dialog.getByRole("textbox", { name: "Confirm league rating edit", exact: true });
+    if (await confirmation.count()) await confirmation.fill("SAVE LEAGUE RATING");
+    await dialog.getByRole("button", { name: "Save rating", exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(slot(0, 0).getByText(`Rating ${Number(value).toFixed(2)}`, { exact: true })).toBeVisible();
+    for (const [index, names] of originalNames.entries()) await expect(playerLists.nth(index)).toHaveValue(names.join("\n"));
+  }
+
   // Dropping onto an occupied court position exchanges the two players, preserving pod sizes.
   await pointerDragCourtPlayer(page, slot(0, 0), slot(1, 0), "swap");
   const swapped = originalNames.map((names) => [...names]);
