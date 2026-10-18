@@ -314,9 +314,11 @@ async function pointerDragCourtPlayer(
     } else {
       // Use the position from before lift: native list displacement moves the target
       // card while dragging, but the requested destination remains its original slot.
+      // Preserve the grabbed offset: the name handle is above the full card center
+      // when rating/replacement actions are present. Stop inside the target slot.
       await page.mouse.move(
         originalTarget!.x + originalTarget!.width / 2,
-        originalTarget!.y + originalTarget!.height / 2,
+        originalTarget!.y + originalTarget!.height / 2 + (y - sourceCard!.y - sourceCard!.height / 2) - 2,
         { steps: 24 }
       );
     }
