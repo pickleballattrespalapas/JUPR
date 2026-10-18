@@ -6,7 +6,12 @@ from typing import Any, Callable
 
 import pandas as pd
 
-from jupr_app.domain.player_activity import build_player_activity_update, coerce_utc_datetime, max_activity_time
+from jupr_app.domain.player_activity import (
+    PERSISTED_ACTIVE_BY_PLAYER_ID_ATTR,
+    build_player_activity_update,
+    coerce_utc_datetime,
+    max_activity_time,
+)
 from jupr_app.domain.player_ratings_source import build_seed_rating_maps, current_seed_rating
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
 from jupr_app.domain.gamification.badge_worker import process_badge_eval_queue
@@ -466,6 +471,7 @@ def process_matches(
 
     if build_write_plan_only:
         player_updates: list[dict[str, Any]] = []
+        persisted_active = df_players_all.attrs.get(PERSISTED_ACTIVE_BY_PLAYER_ID_ATTR, {})
         for pid, stats in sorted(overall_updates.items()):
             rows = _frame_rows(df_players_all, id=int(pid))
             if len(rows) != 1:
@@ -473,6 +479,7 @@ def process_matches(
                     f"Official publish requires one existing player snapshot for player {int(pid)}."
                 )
             current = rows[0]
+            stored_active = persisted_active.get(int(pid), current.get("active"))
             latest_match_at = last_game_updates.get(int(pid))
             activity_update = build_player_activity_update(current.get("last_game_at"), latest_match_at)
             expected = {
@@ -482,7 +489,7 @@ def process_matches(
                 "matches_played": int(current.get("matches_played", 0) or 0),
                 "last_game_at": current.get("last_game_at"),
                 "inactive_at": current.get("inactive_at"),
-                "active": bool(current.get("active", True)) if current.get("active") is not None else None,
+                "active": bool(stored_active) if stored_active is not None else None,
             }
             after = {
                 "rating": float(stats["r"]),
