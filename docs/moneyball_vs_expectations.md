@@ -27,3 +27,7 @@ Rated/unrated match publication remains the organizer's pre-event choice and goe
 No schema migration is needed: the private lock lives in the existing session JSON state. Persisted locks keep their included model, so later model versions cannot alter an event already played.
 
 Version 2 prepares calibration and audit simulations in bounded-memory batches for larger lineups. Previously frozen version 1 eight-player sessions retain their original model, distributions, offsets and payout.
+
+### New players during setup
+
+Club staff with player-management permission can use **Create new player** in either Moneyball setup page, enter a name and doubles starting level (1–7), then choose **Create and select player**. The existing guarded player-creation service creates the club profile and adds it to the current lineup before expectations are calculated. Existing matching profiles are reused without changing their ratings. Interrupted creation can be checked after refreshing, and preview/start wait until creation is resolved. Signed-out organizers see a staff sign-in link and keep their saved lineup.

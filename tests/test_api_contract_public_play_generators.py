@@ -62,7 +62,7 @@ def test_public_modules_mirror_generator_functionality_without_official_publish(
     assert "setStartSucceeded(true)" in workspace
     assert "{pendingStart && !startSucceeded ?" in workspace
     assert "{!pendingStart && !startSucceeded ?" in workspace
-    assert "disabled={busy || pendingStart || startSucceeded || !rosterReady || !mixedSetupValid}" in workspace
+    assert "disabled={busy || creationPending || pendingStart || startSucceeded || !rosterReady || !mixedSetupValid}" in workspace
     assert "Try starting again" in workspace
     assert "we'll resend the same setup" in workspace
     assert "Save round scores" in runner

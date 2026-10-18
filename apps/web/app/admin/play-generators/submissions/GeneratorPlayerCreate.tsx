@@ -6,6 +6,7 @@ import { playerSearchKey } from "@/lib/playerSearch";
 type Player = { id: number; name: string };
 type Creation = { version: 1; key: string; name: string; level: number; playerId?: number };
 type Props = {
+  context?: "setup" | "submission";
   clubId: string; sessionKey: string; participantId: string; participantName: string;
   apiBase: string; accessToken: string; players: Player[]; disabled: boolean; matched: boolean;
   onPendingChange: (participantId: string, pending: boolean) => void;
@@ -17,9 +18,9 @@ class CreationError extends Error {
   constructor(message: string, public status: number, public uncertain: boolean) { super(message); }
 }
 
-export default function GeneratorPlayerCreate({ clubId, sessionKey, participantId, participantName, apiBase, accessToken, players, disabled, matched, onPendingChange, onBusyChange, onCreated }: Props) {
+export default function GeneratorPlayerCreate({ context = "submission", clubId, sessionKey, participantId, participantName, apiBase, accessToken, players, disabled, matched, onPendingChange, onBusyChange, onCreated }: Props) {
   const [open, setOpen] = useState(false);
-  const [name, setName] = useState(participantName);
+  const [name, setName] = useState(context === "setup" ? "" : participantName);
   const [level, setLevel] = useState("");
   const [operation, setOperation] = useState<Creation | null>(null);
   const [message, setMessage] = useState("");
@@ -27,6 +28,7 @@ export default function GeneratorPlayerCreate({ clubId, sessionKey, participantI
   const running = useRef(false);
   const mounted = useRef(false);
   const operationRef = useRef<Creation | null>(null);
+  const source = context === "setup" ? "generator_roster_setup" : "generator_submission_review";
   const storageKey = `jupr-generator-player-create:v1:${clubId}:${sessionKey}:${participantId}`;
 
   useEffect(() => {
@@ -73,13 +75,14 @@ export default function GeneratorPlayerCreate({ clubId, sessionKey, participantI
     if (!mounted.current) return;
     await onCreated(playerId);
     retain(null);
+    if (context === "setup" && mounted.current) { setOpen(false); setName(""); setLevel(""); setFound([]); }
   }
 
   async function sendCreation(saved: Creation, newRequest = false) {
     let payload;
     try {
       payload = await request("players/editor/players", {
-        name: saved.name, starting_jupr: saved.level, idempotency_key: saved.key, source: "generator_submission_review",
+        name: saved.name, starting_jupr: saved.level, idempotency_key: saved.key, source,
       });
     } catch (error) {
       if (newRequest && error instanceof CreationError && !error.uncertain && error.status !== 409) retain(null);
@@ -99,7 +102,7 @@ export default function GeneratorPlayerCreate({ clubId, sessionKey, participantI
     }
     if (result.status === "completed") { await finish((result.result || result.result_json)?.player?.id); return; }
     if (result.status !== "failed" || result.recovery_required) {
-      result = await request(`${path}/reconcile`, { confirmation_text: "RECONCILE PLAYER OPERATION", source: "generator_submission_review" });
+      result = await request(`${path}/reconcile`, { confirmation_text: "RECONCILE PLAYER OPERATION", source });
       if (result.ok !== false && result.player?.id) { await finish(result.player.id); return; }
     }
     if (result.status === "failed" && !result.recovery_required) {
@@ -121,7 +124,7 @@ export default function GeneratorPlayerCreate({ clubId, sessionKey, participantI
     try {
       if (operationRef.current) { await recover(operationRef.current); return; }
       // Recheck current club profiles immediately before a new creation request.
-      const latest = await request("play-generators/submissions?status=pending");
+      const latest = await request(context === "setup" ? "players/editor/players" : "play-generators/submissions?status=pending");
       if (!mounted.current) return;
       const existing = (latest.players as Player[]).filter(player => playerSearchKey(player.name) === playerSearchKey(name));
       if (existing.length) { setFound(existing); setMessage("A matching club profile already exists. Select it below."); return; }
@@ -138,7 +141,7 @@ export default function GeneratorPlayerCreate({ clubId, sessionKey, participantI
   async function selectExisting(playerId: number) {
     if (disabled || running.current) return;
     running.current = true; onBusyChange(true); setMessage("");
-    try { await onCreated(playerId); }
+    try { await finish(playerId); }
     catch (error) { if (mounted.current) setMessage(error instanceof Error ? error.message : "Could not load the existing player."); }
     finally { running.current = false; onBusyChange(false); }
   }
@@ -157,7 +160,7 @@ export default function GeneratorPlayerCreate({ clubId, sessionKey, participantI
     {!operation && matching.length ? <div role="status">A matching club profile exists.
       {matching.map(player => <button key={player.id} type="button" disabled={disabled} style={{ ...field, display: "block", width: "100%", marginTop: 4 }} onClick={() => void selectExisting(player.id)}>Use {player.name}</button>)}
     </div> : null}
-    <small>Creates a club profile now. Scores are applied when you approve the results.</small>
+    <small>{context === "setup" ? "Creates a club profile and adds it to your lineup. Moneyball uses this starting level to set expectations." : "Creates a club profile now. Scores are applied when you approve the results."}</small>
     {message ? <p role="status" style={{ margin: 0 }}>{message}</p> : null}
     <button type="submit" style={field} disabled={disabled || (!operation && (!valid || matching.length > 0))}>
       {operation?.playerId ? "Use created player" : operation ? "Check player creation" : "Create and select player"}
