@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import GeneratorRosterSetup, { normalizeRosterName, recommendedGeneratorSetup, recommendedMixedCourtSetup, rosterNamesFromText } from "@/components/GeneratorRosterSetup";
+import GeneratorMoneyballExpectations, { type MoneyballExpectation } from "@/components/GeneratorMoneyballExpectations";
 import {
   clearPlayGeneratorDraft,
   closePreparedPdfWindow,
@@ -68,6 +69,7 @@ type PreviewEvent = {
   previewFingerprint: string;
   participants: Participant[];
   rounds: RoundRow[];
+  moneyballExpectations?: MoneyballExpectation[];
 };
 
 type PreviewResponse = {
@@ -754,7 +756,7 @@ export default function GeneratorWorkspace({
       </article>
 
       {preview ? (
-        <article style={cardStyle}>
+        <article style={{ ...cardStyle, minWidth: 0 }}>
           <h2 style={{ marginTop: 0 }}>2. Preview before starting</h2>
           <p style={{ color: "#475569" }}>
             {moneyball
@@ -781,6 +783,8 @@ export default function GeneratorWorkspace({
               {busy ? "Starting…" : `Start ${ratingMode} session`}
             </button>
           </div>
+
+          {moneyball ? <GeneratorMoneyballExpectations rows={preview.moneyballExpectations} /> : null}
 
           <div style={{ display: "grid", gap: "0.85rem" }}>
             {preview.rounds.map((round) => {

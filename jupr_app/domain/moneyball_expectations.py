@@ -81,6 +81,8 @@ def freeze_moneyball(event: dict[str, Any], ratings: dict[str, float]) -> dict[s
 def public_event(event: dict[str, Any]) -> dict[str, Any]:
     result = copy.deepcopy(event)
     result.pop("moneyballPrivate", None)
+    if is_moneyball(event) and event.get("moneyballPrivate"):
+        result["moneyballExpectations"] = full_event_expectations(event)
     return result
 
 
@@ -102,6 +104,29 @@ def _verified_lock(event: dict[str, Any]) -> dict[str, Any]:
     if probability.digest(current) != lock["config_sha256"]:
         raise ValueError("Moneyball players and matchups must stay fixed after setup.")
     return lock
+
+
+def full_event_expectations(event: dict[str, Any]) -> list[dict[str, Any]]:
+    """Public starting-lineup totals from every frozen game, excluding byes."""
+    lock = _verified_lock(event)
+    support = np.array(lock["model"]["margin_support"], dtype=int)
+    rows = {p["id"]: {
+        "participantId": p["id"], "name": p["name"], "scheduledGames": 0,
+        "expectedWins": 0., "expectedLosses": 0., "expectedDifferential": 0.,
+    } for p in lock["config"]["players"]}
+    for match, probabilities in zip(lock["config"]["matches"], lock["margin_probabilities"]):
+        p = np.array(probabilities)
+        for team, sign in (("team1", 1), ("team2", -1)):
+            wins = float(p[support * sign > 0].sum())
+            differential = float(p @ support) * sign
+            for pid in match[team]:
+                row = rows[pid]
+                row["scheduledGames"] += 1
+                row["expectedWins"] += wins
+                row["expectedDifferential"] += differential
+    for row in rows.values():
+        row["expectedLosses"] = row["scheduledGames"] - row["expectedWins"]
+    return list(rows.values())
 
 
 def all_games_saved(event: dict[str, Any]) -> bool:

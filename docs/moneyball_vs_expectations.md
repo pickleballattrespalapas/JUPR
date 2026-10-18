@@ -14,6 +14,8 @@ Wins and expected wins are displayed for context. There is no separate win bonus
 
 ## Frozen inputs and live results
 
+Before starting, both the public and staff matchup previews show each player's scheduled games, expected wins, expected losses, and expected point differential for the **full event** above the round-by-round matchups. These totals come from the same frozen game probabilities used for scoring, without exposing individual ratings. Byes are excluded (six-player rotations show four games per player). Decimal expectations are averages: three wins beats an expectation of 2.6 wins, but wins do not award a separate bonus or guarantee the prize. An older saved preview without these totals prompts the organizer to generate a new preview.
+
 The server resolves ratings from club-scoped player IDs; clients cannot supply ratings or balancing offsets. Preview fingerprints include the frozen setup, so a rating change between preview and start requires a fresh preview. The persisted session stores its private lock, model version, distributions, and offsets. Starting another event recalculates expectations. Score changes never recalibrate an existing event.
 
 Player ratings, distributions, and offsets are removed from preview/session payloads, public exports, and shared viewing/handoff links. Standings show wins, expected wins, point differential, expected point differential, and Moneyball score. Expected figures cover saved games only. Interim scores are provisional; the full-event balancing audit does not claim equal winning chances for an incomplete event.
