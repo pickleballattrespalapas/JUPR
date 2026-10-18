@@ -1,6 +1,7 @@
 "use client";
 
 import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
+import { LeagueCourtRosterEditor } from "./LeagueCourtRosterEditor";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
@@ -761,7 +762,6 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     () => (detail?.roster || []).filter((row) => row.in_league),
     [detail?.roster]
   );
-  const playerOptions = useMemo(() => knownPlayers.map((player) => player.name).filter(Boolean).sort((a, b) => a.localeCompare(b)), [knownPlayers]);
   const selectedSessionPlayers = useMemo(() => {
     const byId = new Map(knownPlayers.map((player) => [Number(player.id), player]));
     return attendeePlayerIds.flatMap((playerId) => {
@@ -812,6 +812,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     (operation) => Number(operation.round_number) === currentRound && operation.status !== "completed"
   ) || null;
   const hasEnteredRoundScores = Object.values(scores).some(scoreHasValue);
+  const courtEditingLocked = busy || hasEnteredRoundScores || scoresPublished || roundPublished || (sessionIsCurrentLeague && sessionStatus !== "active");
   const hasUnsubmittedRoundWork = Boolean(!scoresPublished && sessionIsCurrentLeague && preview && (hasEnteredRoundScores || scoresReviewed || movementPlan));
 
   useEffect(() => {
@@ -2114,28 +2115,14 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     }
   }
 
-  function updateCourt(index: number, patch: Partial<CourtDraft>) {
-    setCourts((current) => current.map((row, idx) => idx === index ? { ...row, ...patch } : row));
+  function updateCourtAssignments(nextCourts: CourtDraft[]) {
+    if (courtEditingLocked) return;
+    setCourts(nextCourts);
     setPreview(null);
     setScores({});
     invalidateScoreReview();
-    markPlanStale();
-  }
-
-  function addCourt() {
-    setCourts((current) => [...current, { court: String(current.length + 1), formatType: "4-player", playerNames: "" }]);
-    setPreview(null);
-    setScores({});
-    invalidateScoreReview();
-    markPlanStale();
-  }
-
-  function removeCourt(index: number) {
-    setCourts((current) => current.filter((_, idx) => idx !== index).map((row, idx) => ({ ...row, court: String(idx + 1) })));
-    setPreview(null);
-    setScores({});
-    invalidateScoreReview();
-    markPlanStale();
+    createSessionOperationRef.current = null;
+    setMessage(null);
   }
 
   function courtValidationErrors(): string[] {
@@ -2945,33 +2932,51 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.35rem" }}>
                 {rosterSuggestion.roster.map((row) => (
                   <label key={row.player_id} style={{ display: "flex", gap: "0.45rem", alignItems: "center" }}>
-                    <input type="checkbox" checked={benchOverrideIds.includes(Number(row.player_id))} disabled={busy} onChange={(event) => { setBenchOverrideIds((current) => event.target.checked ? [...new Set([...current, Number(row.player_id)])] : current.filter((id) => id !== Number(row.player_id))); setPreview(null); markPlanStale(); }} />
+                    <input type="checkbox" checked={benchOverrideIds.includes(Number(row.player_id))} disabled={courtEditingLocked} onChange={(event) => { setBenchOverrideIds((current) => event.target.checked ? [...new Set([...current, Number(row.player_id)])] : current.filter((id) => id !== Number(row.player_id))); setPreview(null); markPlanStale(); }} />
                     Bench {row.player_name}{row.court_number ? ` (currently Court ${row.court_number})` : ""}
                   </label>
                 ))}
               </div>
               <div data-responsive-bench-controls style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))", gap: "0.75rem", alignItems: "end", marginTop: "0.75rem" }}>
-                <label>Bench override reason<br /><input value={benchOverrideReason} onChange={(event) => { setBenchOverrideReason(event.target.value); setPreview(null); markPlanStale(); }} disabled={busy} placeholder="Required when changing the default bench" style={inputStyle} /></label>
-                <button type="button" onClick={refreshRosterSuggestion} disabled={busy} style={ghostButtonStyle}>Refresh roster suggestion</button>
+                <label>Bench override reason<br /><input value={benchOverrideReason} onChange={(event) => { setBenchOverrideReason(event.target.value); setPreview(null); markPlanStale(); }} disabled={courtEditingLocked} placeholder="Required when changing the default bench" style={inputStyle} /></label>
+                <button type="button" onClick={refreshRosterSuggestion} disabled={courtEditingLocked} style={ghostButtonStyle}>Refresh roster suggestion</button>
               </div>
               <small style={{ color: "#64748b" }}>Roster fingerprint: {rosterSuggestion.fingerprint.slice(0, 16)}…</small>
             </section>
           ) : sessionIsCurrentLeague ? <p style={{ color: "#475569" }}><strong>Saved session roster loaded.</strong> Its persisted player order, bench, and courts are shown below; generate the current-round preview to continue.</p> : <p role="alert" style={{ color: "#b91c1c" }}>Return to Players and build a roster plan first.</p>}
 
-          <datalist id="league-live-players">{playerOptions.map((name) => <option key={name} value={name} />)}</datalist>
           <section style={{ marginTop: "1rem" }}>
             <h3>Court assignments</h3>
-            {courts.map((court, index) => (
-              <div key={`${court.court}-${index}`} style={{ borderTop: index ? "1px solid #e2e8f0" : undefined, paddingTop: index ? "0.75rem" : 0, marginTop: index ? "0.75rem" : 0 }}>
-                <div data-responsive-court-grid style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 180px), 1fr))", gap: "0.75rem", alignItems: "start" }}>
-                  <label>Court<br /><input value={court.court} onChange={(event) => updateCourt(index, { court: event.target.value })} disabled={busy} style={inputStyle} /></label>
-                  <label>Format<br /><select value={court.formatType} onChange={(event) => updateCourt(index, { formatType: event.target.value })} disabled={busy} style={inputStyle}>{liveCourtFormats.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
-                  <label>Players, one per line<br /><textarea value={court.playerNames} onChange={(event) => updateCourt(index, { playerNames: event.target.value })} disabled={busy} rows={5} style={inputStyle} /></label>
-                  <button type="button" onClick={() => removeCourt(index)} disabled={busy || courts.length === 1} style={ghostButtonStyle}>Remove court</button>
-                </div>
+            {hasEnteredRoundScores && !scoresPublished && !roundPublished ? (
+              <div role="status" style={{ padding: "0.75rem", marginBottom: "0.75rem", background: "#fffbeb", borderRadius: "10px" }}>
+                <p>Scores have been entered for this lineup. Clear those draft scores before changing players or court positions.</p>
+                <ConfirmAction
+                  triggerLabel="Clear draft scores to edit courts"
+                  title="Clear the entered draft scores?"
+                  description="Changing the lineup requires a new match preview. This clears the scores entered for this unpublished round."
+                  confirmLabel="Clear draft scores"
+                  confirmationText="CLEAR DRAFT SCORES"
+                  disabled={busy}
+                  busy={busy}
+                  onConfirm={async () => {
+                    setPreview(null);
+                    setScores({});
+                    invalidateScoreReview();
+                    return actionSuccess("Draft scores cleared", "You can now edit the courts and generate a new preview.");
+                  }}
+                />
               </div>
-            ))}
-            <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}><button type="button" onClick={addCourt} disabled={busy} style={ghostButtonStyle}>Add court</button><button type="button" onClick={() => void generatePreview()} disabled={busy || (!rosterSuggestion && !sessionIsCurrentLeague)} style={buttonStyle}>Validate courts and generate preview</button></p>
+            ) : null}
+            <LeagueCourtRosterEditor
+              key={`${loadedSessionId || "draft"}:${leagueName}:${currentRound}`}
+              courts={courts}
+              formats={liveCourtFormats}
+              playerNames={sessionRoster.filter((row) => !benchOverrideIds.includes(Number(row.player_id))).map((row) => row.player_name)}
+              disabled={courtEditingLocked}
+              onChange={updateCourtAssignments}
+              onEditRoster={() => navigateWorkflow(2)}
+            />
+            <p><button type="button" onClick={() => void generatePreview()} disabled={courtEditingLocked || (!rosterSuggestion && !sessionIsCurrentLeague)} style={buttonStyle}>Validate courts and generate preview</button></p>
           </section>
 
           {preview?.courts?.length ? (

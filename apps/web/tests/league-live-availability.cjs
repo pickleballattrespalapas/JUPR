@@ -21,7 +21,10 @@ global.sessionStorage = { getItem: key => storage.get(key) || null, setItem: (ke
 global.addEventListener = () => {};
 global.removeEventListener = () => {};
 const ConfirmAction = () => null;
+const editorModule = load("app/admin/league-manager/live/LeagueCourtRosterEditor.tsx");
+const CourtRosterEditor = editorModule.LeagueCourtRosterEditor;
 const Panel = load("app/admin/league-manager/live/LeagueLiveRoundPanel.tsx", {
+  "./LeagueCourtRosterEditor": editorModule,
   "next/dynamic": { __esModule: true, default: () => () => null },
   "@/components/SearchablePlayerSelect": { __esModule: true, default: props => React.createElement("select", props) },
   "@/components/ConfirmAction": { ConfirmAction },
@@ -54,6 +57,12 @@ async function click(label) {
   assert.equal(found.props.disabled, false, `${label} must be enabled`);
   await act(async () => { await found.props.onClick(); });
 }
+async function clickAria(label) {
+  const found = tree.root.findAllByType("button").find(node => node.props["aria-label"] === label);
+  assert.ok(found, `Expected button with aria-label ${label}`);
+  assert.equal(found.props.disabled, false, `${label} must be enabled`);
+  await act(async () => { await found.props.onClick(); });
+}
 async function mount(overrides = {}) {
   requests = []; published = false;
   await act(async () => { tree = create(React.createElement(Panel, { ...props, ...overrides })); });
@@ -73,6 +82,7 @@ global.fetch = async (url, options = {}) => {
   if (pathname === `${base}/live/player-operations/retained-key`) return response({ ok: true, status: "recovery_required", recovery_required: true });
   if (pathname === `${base}/live/player-operations/retained-key/reconcile`) return response({ ok: true, status: "completed", players: [newPlayer], accepted_count: 1 });
   if (pathname === `${base}/live-sessions`) return response(options.method === "POST" ? { ok: true, session, courts } : { ok: true, sessions: [], count: 0 });
+  if (pathname === `${base}/live-sessions/session-a/snapshot`) return response({ ok: true, session, courts });
   if (pathname === `${base}/live-sessions/session-a/rounds/1/submit`) {
     published = true;
     return response({ ok: true, session, published_match_ids: [101, 102, 103] });
@@ -106,10 +116,52 @@ global.fetch = async (url, options = {}) => {
   await click("Validate courts and generate preview");
   assert.match(rendered(), /Match preview/);
   assert.deepEqual(requests.find(request => request.path.endsWith("/round-robin/preview")).body.courts[0].player_names, players.map(player => player.name));
+
+  // Actual editor interactions invalidate the reviewed lineup and feed the exact
+  // updated order into both the regenerated preview and session creation.
+  await clickAria("Move Casey up on Court 1");
+  assert.doesNotMatch(rendered(), /Match preview ·/);
+  assert.equal(tree.root.findAllByType(ConfirmAction).find(node => node.props.triggerLabel === "Create session and continue").props.disabled, true);
+  await clickAria("Select Alex on Court 1, position 2");
+  await clickAria("Swap Alex with Sam on Court 1");
+  const createdOrder = ["Casey", "Sam", "Jordan", "Alex"];
+  await click("Validate courts and generate preview");
+  assert.deepEqual(requests.filter(request => request.path.endsWith("/round-robin/preview")).at(-1).body.courts[0].player_names, createdOrder);
   let confirm = tree.root.findAllByType(ConfirmAction).find(node => node.props.triggerLabel === "Create session and continue");
   assert.equal(confirm.props.disabled, false);
   await act(async () => { await confirm.props.onConfirm("CREATE LIVE SESSION"); });
+  assert.deepEqual(requests.find(request => request.path === `${base}/live-sessions` && request.method === "POST").body.courts[0].player_names, createdOrder);
   assert.match(rendered(), /4. Score Entry with Review/);
+
+  // Returning to court setup cannot silently discard any entered draft score.
+  const firstScore = tree.root.findAllByType("input").find(node => /Team 1 score/.test(node.props["aria-label"] || ""));
+  await act(async () => firstScore.props.onChange({ target: { value: "11" } }));
+  await click("Back to Courts and Preview");
+  let editor = tree.root.findByType(CourtRosterEditor);
+  assert.equal(editor.props.disabled, true);
+  assert.ok(editor.findAllByType("button").every(node => node.props.disabled), "Every court mutation must remain disabled while draft scores exist");
+  assert.equal(button("Validate courts and generate preview").props.disabled, true);
+  const protectedCourts = structuredClone(editor.props.courts);
+  await act(async () => editor.props.onChange([{ ...protectedCourts[0], playerNames: "Sam\nCasey\nJordan\nAlex" }]));
+  assert.deepEqual(tree.root.findByType(CourtRosterEditor).props.courts, protectedCourts, "The parent guard rejects editing even when a stale callback fires");
+  confirm = tree.root.findAllByType(ConfirmAction).find(node => node.props.triggerLabel === "Clear draft scores to edit courts");
+  assert.equal(confirm.props.disabled, false);
+  await act(async () => { await confirm.props.onConfirm("CLEAR DRAFT SCORES"); });
+  editor = tree.root.findByType(CourtRosterEditor);
+  assert.equal(editor.props.disabled, false);
+  assert.doesNotMatch(rendered(), /Match preview ·/);
+
+  // The mock returns the original saved courts, so edit that returned arrangement
+  // and verify the snapshot request independently of the mocked response.
+  await clickAria("Move Sam up on Court 1");
+  const savedOrder = ["Alex", "Casey", "Sam", "Jordan"];
+  await click("Validate courts and generate preview");
+  assert.deepEqual(requests.filter(request => request.path.endsWith("/round-robin/preview")).at(-1).body.courts[0].player_names, savedOrder);
+  confirm = tree.root.findAllByType(ConfirmAction).find(node => node.props.triggerLabel === "Save preview and continue");
+  assert.equal(confirm.props.disabled, false);
+  await act(async () => { await confirm.props.onConfirm("SAVE SESSION"); });
+  assert.deepEqual(requests.find(request => request.path.endsWith("/snapshot")).body.courts[0].player_names, savedOrder);
+  assert.ok(tree.root.findAllByType("input").filter(node => /Team [12] score/.test(node.props["aria-label"] || "")).every(node => node.props.value === ""), "Regenerated matchups must start without stale scores");
   for (const input of tree.root.findAllByType("input").filter(node => /Team [12] score/.test(node.props["aria-label"] || ""))) {
     await act(async () => input.props.onChange({ target: { value: input.props["aria-label"].includes("Team 1") ? "11" : "7" } }));
   }
@@ -122,6 +174,11 @@ global.fetch = async (url, options = {}) => {
   assert.equal(submit.body.expected_match_count, 3);
   assert.deepEqual(submit.body.matches.map(match => [match.score_t1, match.score_t2]), [[11, 7], [11, 7], [11, 7]]);
   assert.equal(submit.body.confirmation_text, "SUBMIT LEAGUE ROUND");
+  const courtsNavigation = tree.root.findAllByType("button").find(node => /Step 3Courts and Preview/.test(text(node)));
+  assert.ok(courtsNavigation);
+  assert.equal(courtsNavigation.props.disabled, true, "Official rounds must not expose court editing");
+  await act(async () => courtsNavigation.props.onClick());
+  assert.equal(tree.root.findAllByType(CourtRosterEditor).length, 0, "Navigation guards must keep the editor closed after publication");
   await act(async () => tree.unmount());
 
   // Player batch creation uses the Live capability and guarded Live route.
@@ -170,5 +227,5 @@ global.fetch = async (url, options = {}) => {
   assert.equal(button("Create missing players").props.disabled, true);
   assert.equal(requests.filter(request => request.path.endsWith("/live/players")).length, 0);
   await act(async () => tree.unmount());
-  console.log("League Live availability: setup, player creation/recovery, preview, and reviewed scoring work independently of Match Uploader; Live capability restrictions remain enforced.");
+  console.log("League Live availability: setup, player creation/recovery, exact court edits and persistence, guarded draft-score clearing, and reviewed scoring work independently of Match Uploader; official rounds and Live capabilities remain protected.");
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => Object.assign(global, savedGlobals));
