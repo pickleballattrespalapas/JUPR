@@ -23,7 +23,14 @@ global.removeEventListener = () => {};
 const ConfirmAction = () => null;
 const editorModule = load("app/admin/league-manager/live/LeagueCourtRosterEditor.tsx");
 const CourtRosterEditor = editorModule.LeagueCourtRosterEditor;
+const gameEditsModule = load("app/admin/league-manager/live/leagueLiveGameEdits.ts");
+const playerSelectMock = { __esModule: true, default: props => React.createElement("select", props) };
+const gameEditorModule = load("app/admin/league-manager/live/LeagueLiveGameEditor.tsx", { "./leagueLiveGameEdits": gameEditsModule, "@/components/SearchablePlayerSelect": playerSelectMock });
+const attendanceEditorModule = load("app/admin/league-manager/live/LeagueLiveAttendanceEditor.tsx", { "@/components/SearchablePlayerSelect": playerSelectMock });
 const Panel = load("app/admin/league-manager/live/LeagueLiveRoundPanel.tsx", {
+  "./LeagueLiveGameEditor": gameEditorModule,
+  "./LeagueLiveAttendanceEditor": attendanceEditorModule,
+  "./leagueLiveGameEdits": gameEditsModule,
   "./LeagueCourtRosterEditor": editorModule,
   "next/dynamic": { __esModule: true, default: () => () => null },
   "@/components/SearchablePlayerSelect": { __esModule: true, default: props => React.createElement("select", props) },
@@ -181,6 +188,102 @@ global.fetch = async (url, options = {}) => {
   assert.equal(tree.root.findAllByType(CourtRosterEditor).length, 0, "Navigation guards must keep the editor closed after publication");
   await act(async () => tree.unmount());
 
+  // A one-game staff substitution and unfinished game serialize exact people,
+  // preserve the other schedules, clear partial scores, and require reasons.
+  await mount({ players: [...players, newPlayer] });
+  await click("Continue to Players");
+  await click("Build courts from 4 attendees");
+  await click("Validate courts and generate preview");
+  confirm = tree.root.findAllByType(ConfirmAction).find(node => node.props.triggerLabel === "Create session and continue");
+  await act(async () => { await confirm.props.onConfirm("CREATE LIVE SESSION"); });
+  for (const input of tree.root.findAllByType("input").filter(node => /Team [12] score/.test(node.props["aria-label"] || ""))) {
+    await act(async () => input.props.onChange({ target: { value: input.props["aria-label"].includes("Team 1") ? "11" : "7" } }));
+  }
+  let gameEditor = tree.root.findAllByType(gameEditorModule.LeagueLiveGameEditor)[1];
+  await act(async () => gameEditor.findByType("details").props.onToggle({ currentTarget: { open: true } }));
+  const staffSelect = gameEditor.findAllByType("select").find(node => node.props["aria-label"] === "Court 1 Match 2 Game 1 Team 1 player 1");
+  await act(async () => staffSelect.props.onValueChange("5"));
+  assert.equal(button("Review scores").props.disabled, true, "Substitution without a reason cannot be published");
+  let reason = tree.root.findAllByType("input").find(node => node.props["aria-label"] === "Court 1 Match 2 Game 1 Substitution reason");
+  await act(async () => reason.props.onChange({ target: { value: "Staff filled in for this game" } }));
+  assert.equal(tree.root.findAllByType(gameEditorModule.LeagueLiveGameEditor)[0].props.edit, undefined, "Game one keeps its original lineup");
+  assert.equal(tree.root.findAllByType(gameEditorModule.LeagueLiveGameEditor)[2].props.edit, undefined, "Game three keeps its original lineup");
+  const unplayed = tree.root.findAllByType("input").find(node => node.props["aria-label"] === "Court 1 Match 3 Game 1 Not played or unfinished");
+  await act(async () => unplayed.props.onChange({ target: { checked: true } }));
+  assert.equal(button("Review scores").props.disabled, true, "An unfinished game requires a reason");
+  const lastScores = tree.root.findAllByType("input").filter(node => /Match 3 Game 1 Team [12] score/.test(node.props["aria-label"] || ""));
+  assert.ok(lastScores.every(node => node.props.value === "" && node.props.disabled), "Partial scores cannot become an official result");
+  reason = tree.root.findAllByType("input").find(node => node.props["aria-label"] === "Court 1 Match 3 Game 1 Unplayed reason");
+  await act(async () => reason.props.onChange({ target: { value: "Stopped because of heat" } }));
+  const draft = JSON.parse(storage.get("jupr-league-live-round-draft:club-a:session-a:1"));
+  assert.deepEqual(draft.gameEdits["court-1-1:game:1"].playerIds, [5, 3, 2, 4]);
+  assert.equal(draft.gameEdits["court-1-2:game:1"].notPlayed, true);
+  await act(async () => tree.root.findAllByType("button").find(node => /Step 1Setup/.test(text(node))).props.onClick());
+  await click("Retry selected session");
+  assert.equal(tree.root.findAllByType(gameEditorModule.LeagueLiveGameEditor).length, 3, text(tree.root));
+  assert.deepEqual(tree.root.findAllByType(gameEditorModule.LeagueLiveGameEditor)[1].props.edit.playerIds, [5, 3, 2, 4], "Reload restores the one-game substitution");
+  assert.equal(tree.root.findAllByType(gameEditorModule.LeagueLiveGameEditor)[2].props.edit.notPlayed, true, "Reload restores explicit unfinished games");
+  await click("Review scores");
+  assert.match(rendered(), /Taylor/);
+  assert.match(rendered(), /Stopped because of heat/);
+  confirm = tree.root.findAllByType(ConfirmAction).find(node => node.props.triggerLabel === "Publish reviewed scores");
+  await act(async () => { await confirm.props.onConfirm("SUBMIT LEAGUE ROUND"); });
+  const flexSubmit = requests.find(request => request.path.endsWith("/rounds/1/submit")).body;
+  assert.equal(flexSubmit.expected_match_count, 3);
+  assert.equal(flexSubmit.matches.length, 2);
+  assert.equal(flexSubmit.matches[0].t1_p1, 1);
+  assert.equal(flexSubmit.matches[1].t1_p1, 5);
+  assert.deepEqual(flexSubmit.matches[1].scheduled_player_ids, [1, 3, 2, 4]);
+  assert.equal(flexSubmit.matches[1].substitution_reason, "Staff filled in for this game");
+  assert.deepEqual(flexSubmit.unplayed_games, [{ series_key: "court-1-2", game_number: 1, court: 1, reason: "Stopped because of heat" }]);
+  const out = tree.root.findAllByType("input").find(node => node.props["aria-label"] === "Playing next round: Sam");
+  await act(async () => out.props.onChange({ target: { checked: false } }));
+  let attendance = tree.root.findByType(attendanceEditorModule.LeagueLiveAttendanceEditor);
+  assert.deepEqual(attendance.props.activePlayerIds, [1, 2, 3]);
+  const lateArrival = attendance.findAllByType("select").find(node => node.props["aria-label"] === "Add next-round player");
+  await act(async () => lateArrival.props.onValueChange("5"));
+  await click("Add player");
+  await click("Load court board");
+  const attendanceRequest = requests.filter(request => request.path.endsWith("/rounds/1/plan")).at(-1).body;
+  assert.deepEqual(attendanceRequest.roster_change.active_player_ids, [1, 2, 3, 5]);
+  assert.deepEqual(attendanceRequest.roster_change.players, [{ player_id: 5, player_name: "Taylor", rating: 1300 }]);
+  assert.equal(attendanceRequest.roster_change.action, "attendance");
+  assert.equal(tree.root.findByType(attendanceEditorModule.LeagueLiveAttendanceEditor).props.roster.length, 4, "Sitting out must not delete historical roster players");
+  assert.ok(storage.has("jupr-league-live-attendance-draft:club-a:session-a:1"));
+  await act(async () => tree.root.findAllByType("button").find(node => /Step 1Setup/.test(text(node))).props.onClick());
+  await click("Retry selected session");
+  assert.deepEqual(tree.root.findByType(attendanceEditorModule.LeagueLiveAttendanceEditor).props.activePlayerIds, [1, 2, 3, 5], "Reload restores pending attendance after scores are official");
+  assert.match(rendered(), /Recovered next-round attendance/);
+  await act(async () => tree.unmount());
+  storage.clear();
+
+  // Rehearse the actual 36 -> 32 -> 28 attendance controls, with two
+  // first-round sit-outs returning for the third round.
+  const dayPlayers = Array.from({ length: 36 }, (_, index) => ({ id: index + 1, name: `Player ${index + 1}` }));
+  let selectedDayPlayers;
+  function AttendanceHarness() {
+    const [active, setActive] = React.useState(dayPlayers.map(player => player.id));
+    const [sizes, setSizes] = React.useState("");
+    selectedDayPlayers = active;
+    return React.createElement(attendanceEditorModule.LeagueLiveAttendanceEditor, { roster: dayPlayers, availablePlayers: dayPlayers, activePlayerIds: active, courtSizes: sizes, disabled: false, onActivePlayersChange: setActive, onCourtSizesChange: setSizes });
+  }
+  await act(async () => { tree = create(React.createElement(AttendanceHarness)); });
+  async function attend(id, checked) {
+    const input = tree.root.findAllByType("input").find(node => node.props["aria-label"] === `Playing next round: Player ${id}`);
+    assert.ok(input, `Returning player ${id} must remain selectable`);
+    await act(async () => input.props.onChange({ target: { checked } }));
+  }
+  for (const id of [33, 34, 35, 36]) await attend(id, false);
+  assert.equal(selectedDayPlayers.length, 32);
+  assert.match(rendered(), /32/);
+  for (const id of [27, 28, 29, 30, 31, 32]) await attend(id, false);
+  for (const id of [33, 34]) await attend(id, true);
+  assert.equal(selectedDayPlayers.length, 28);
+  assert.ok(selectedDayPlayers.includes(33) && selectedDayPlayers.includes(34));
+  assert.ok(!selectedDayPlayers.includes(27) && !selectedDayPlayers.includes(36));
+  assert.equal(tree.root.findAllByType("input").filter(node => node.props.type === "checkbox").length, 36, "Every historical player remains available to return");
+  await act(async () => tree.unmount());
+
   // Player batch creation uses the Live capability and guarded Live route.
   await mount();
   await click("Continue to Players");
@@ -227,5 +330,5 @@ global.fetch = async (url, options = {}) => {
   assert.equal(button("Create missing players").props.disabled, true);
   assert.equal(requests.filter(request => request.path.endsWith("/live/players")).length, 0);
   await act(async () => tree.unmount());
-  console.log("League Live availability: setup, player creation/recovery, exact court edits and persistence, guarded draft-score clearing, and reviewed scoring work independently of Match Uploader; official rounds and Live capabilities remain protected.");
+  console.log("League Live availability: setup, player creation/recovery, exact court edits and persistence, guarded draft-score clearing, one-game staff substitutions, explicit unfinished games, 36-to-32-to-28 attendance with returning players, and reviewed scoring work independently of Match Uploader; official rounds and Live capabilities remain protected.");
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => Object.assign(global, savedGlobals));
