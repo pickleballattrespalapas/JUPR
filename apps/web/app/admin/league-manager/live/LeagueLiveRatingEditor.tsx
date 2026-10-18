@@ -28,7 +28,7 @@ export function LeagueLiveRatingEditor({ playerId, clubId, leagueName, request, 
   const latest = useRef({ request, onSaved });
   latest.current = { request, onSaved };
   const base = `/admin/clubs/${encodeURIComponent(clubId)}/players/editor`;
-  const storageKey = `live-rating-edit:${clubId}:${playerId}`;
+  const storageKey = `live-rating-edit:${clubId}:${leagueName}:${playerId}`;
   const leagueRating = detail?.league_ratings.find(row => row.league_name === leagueName);
   const scope = leagueRating ? "league" : "club";
   const row = leagueRating ?? detail?.player;
@@ -97,7 +97,17 @@ export function LeagueLiveRatingEditor({ playerId, clubId, leagueName, request, 
         const payload = await request<AdminPlayerEditorWriteResponse>(`${base}/operations/${encodeURIComponent(pending.key)}/reconcile`, { method: "POST", body: JSON.stringify({ confirmation_text: "RECONCILE PLAYER OPERATION", source: "next_live_court_rating" }) });
         if (mounted.current) finish(payload, pending.scope);
       }
-    } catch (reason) { if (mounted.current) setError(reason instanceof Error ? reason.message : "Unable to verify the saved edit."); }
+    } catch (reason) {
+      if (!mounted.current) return;
+      if ((reason as { status?: number }).status === 404) {
+        // If the first request never reached the server, retry only the exact
+        // retained request/key. The server also safely replays completed writes.
+        try {
+          const payload = await request<AdminPlayerEditorWriteResponse>(pending.path, { method: "PATCH", body: JSON.stringify({ ...pending.body, idempotency_key: pending.key }) });
+          if (mounted.current) finish(payload, pending.scope);
+        } catch (retryError) { if (mounted.current) setError(retryError instanceof Error ? retryError.message : "Unable to confirm the saved edit."); }
+      } else setError(reason instanceof Error ? reason.message : "Unable to verify the saved edit.");
+    }
     finally { if (mounted.current) setBusy(false); }
   }
 
