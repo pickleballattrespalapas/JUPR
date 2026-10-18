@@ -21,7 +21,12 @@ global.sessionStorage = { getItem: key => storage.get(key) || null, setItem: (ke
 global.addEventListener = () => {};
 global.removeEventListener = () => {};
 const ConfirmAction = () => null;
-const editorModule = load("app/admin/league-manager/live/LeagueCourtRosterEditor.tsx");
+const dndMock = {
+  DragDropContext: ({ children, ...props }) => React.createElement("mock-dnd-context", props, children),
+  Droppable: ({ children, ...props }) => React.createElement("mock-droppable", props, children({ innerRef() {}, droppableProps: {}, placeholder: null }, { isDraggingOver: false })),
+  Draggable: ({ children, ...props }) => React.createElement("mock-draggable", props, children({ innerRef() {}, draggableProps: { style: {} }, dragHandleProps: {} }, { isDragging: false }))
+};
+const editorModule = load("app/admin/league-manager/live/LeagueCourtRosterEditor.tsx", { "@hello-pangea/dnd": dndMock });
 const CourtRosterEditor = editorModule.LeagueCourtRosterEditor;
 const gameEditsModule = load("app/admin/league-manager/live/leagueLiveGameEdits.ts");
 const playerSelectMock = { __esModule: true, default: props => React.createElement("select", props) };
@@ -32,7 +37,7 @@ const Panel = load("app/admin/league-manager/live/LeagueLiveRoundPanel.tsx", {
   "./LeagueLiveAttendanceEditor": attendanceEditorModule,
   "./leagueLiveGameEdits": gameEditsModule,
   "./LeagueCourtRosterEditor": editorModule,
-  "next/dynamic": { __esModule: true, default: () => () => null },
+  "next/dynamic": { __esModule: true, default: factory => String(factory).includes("LeagueCourtRosterEditor") ? CourtRosterEditor : () => null },
   "@/components/SearchablePlayerSelect": { __esModule: true, default: props => React.createElement("select", props) },
   "@/components/ConfirmAction": { ConfirmAction },
   "@/components/interaction": load("components/interaction/types.ts"),
@@ -120,6 +125,9 @@ global.fetch = async (url, options = {}) => {
   assert.equal(button("Continue to Players").props.disabled, false);
   await click("Continue to Players");
   await click("Build courts from 4 attendees");
+  const alexCard = tree.root.findAllByType("button").find(node => node.props["aria-label"] === "Select Alex on Court 1, position 1");
+  assert.ok(alexCard);
+  assert.match(text(alexCard), /Rating\s*3\.00/, "The parent supplies the session roster rating to each court card on the displayed JUPR scale");
   await click("Validate courts and generate preview");
   assert.match(rendered(), /Match preview/);
   assert.deepEqual(requests.find(request => request.path.endsWith("/round-robin/preview")).body.courts[0].player_names, players.map(player => player.name));
