@@ -2,6 +2,9 @@
 
 import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
 import { LeagueCourtRosterEditor } from "./LeagueCourtRosterEditor";
+import { LeagueLiveGameEditor } from "./LeagueLiveGameEditor";
+import { LeagueLiveAttendanceEditor } from "./LeagueLiveAttendanceEditor";
+import { actualGamePlayers, gameEditError, gameHasSubstitution, scheduledGamePlayers, type LeagueLiveGameEdits, type LeagueLiveGameEdit } from "./leagueLiveGameEdits";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
@@ -106,6 +109,9 @@ type StoredLeagueLiveRoundDraft = {
   roundLabel: string;
   preview: AdminMatchUploaderRoundRobinPreview;
   scores: Record<string, ScoreDraft>;
+  gameEdits?: LeagueLiveGameEdits;
+  nextActivePlayerIds?: number[] | null;
+  nextCourtSizes?: string;
   scoreReviewMode: boolean;
   scoresReviewed: boolean;
   unusualScoresAcknowledged: boolean;
@@ -114,9 +120,6 @@ type StoredLeagueLiveRoundDraft = {
   movementOverrides: Record<number, string>;
   movementSlots: Record<number, string>;
   overrideReason: string;
-  rosterAction: "none" | "add" | "substitute";
-  incomingPlayerId: string;
-  replacedPlayerId: string;
   guestPlayers: Array<{ id: number; name: string; rating?: number | null }>;
   benchOverrideIds: number[];
   benchOverrideReason: string;
@@ -290,7 +293,21 @@ function scoreHasValue(score: ScoreDraft | undefined): boolean {
   return Boolean(score && (score.scoreT1.trim() || score.scoreT2.trim()));
 }
 
-function seriesScoreState(rowId: string, scores: Record<string, ScoreDraft>, structure: MatchStructure): SeriesScoreState {
+function seriesScoreState(rowId: string, scores: Record<string, ScoreDraft>, structure: MatchStructure, edits: LeagueLiveGameEdits = {}): SeriesScoreState {
+  if (structure.kind === "fixed_games") {
+    let playedGames = 0;
+    let accountedGames = 0;
+    for (let gameNumber = 1; gameNumber <= structure.games; gameNumber += 1) {
+      const key = scoreKey(rowId, gameNumber);
+      if (edits[key]?.notPlayed) {
+        if (edits[key].unplayedReason?.trim() && !scoreHasValue(scores[key])) accountedGames += 1;
+      } else if (scoreIsValid(scores[key] || { scoreT1: "", scoreT2: "" })) {
+        playedGames += 1;
+        accountedGames += 1;
+      }
+    }
+    return { playedGames, clinchedAt: null, hasGap: false, hasScoreAfterClinch: false, complete: accountedGames === structure.games };
+  }
   let teamOneWins = 0;
   let teamTwoWins = 0;
   let playedGames = 0;
@@ -325,9 +342,7 @@ function seriesScoreState(rowId: string, scores: Record<string, ScoreDraft>, str
     clinchedAt,
     hasGap,
     hasScoreAfterClinch,
-    complete: structure.kind === "fixed_games"
-      ? playedGames === structure.games && !hasGap
-      : clinchedAt != null && !hasGap && !hasScoreAfterClinch
+    complete: clinchedAt != null && !hasGap && !hasScoreAfterClinch
   };
 }
 
@@ -563,6 +578,9 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
   const [courts, setCourts] = useState<CourtDraft[]>([{ court: "1", formatType: "4-player", playerNames: "" }]);
   const [preview, setPreview] = useState<AdminMatchUploaderRoundRobinPreview | null>(null);
   const [scores, setScores] = useState<Record<string, ScoreDraft>>({});
+  const [gameEdits, setGameEdits] = useState<LeagueLiveGameEdits>({});
+  const [nextActivePlayerIds, setNextActivePlayerIds] = useState<number[] | null>(null);
+  const [nextCourtSizes, setNextCourtSizes] = useState("");
   const [scoreReviewMode, setScoreReviewMode] = useState(false);
   const [scoresReviewed, setScoresReviewed] = useState(false);
   const [unusualScoresAcknowledged, setUnusualScoresAcknowledged] = useState(false);
@@ -574,9 +592,6 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
   const [movementOverrides, setMovementOverrides] = useState<Record<number, string>>({});
   const [movementSlots, setMovementSlots] = useState<Record<number, string>>({});
   const [overrideReason, setOverrideReason] = useState("");
-  const [rosterAction, setRosterAction] = useState<"none" | "add" | "substitute">("none");
-  const [incomingPlayerId, setIncomingPlayerId] = useState("");
-  const [replacedPlayerId, setReplacedPlayerId] = useState("");
   const [guestPlayers, setGuestPlayers] = useState<Array<{ id: number; name: string; rating?: number | null }>>([]);
   const [guestName, setGuestName] = useState("");
   const [guestJupr, setGuestJupr] = useState("");
@@ -592,6 +607,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
   const [checkingCreateRecovery, setCheckingCreateRecovery] = useState(false);
   const [roundPublished, setRoundPublished] = useState(false);
   const [lastPublishedRound, setLastPublishedRound] = useState<number | null>(null);
+  const restoringRoundDraftRef = useRef(false);
   const createSessionOperationRef = useRef<{ fingerprint: string; key: string } | null>(null);
   const createPlayersOperationRef = useRef<{ fingerprint: string; key: string } | null>(null);
   const leagueListRequest = useLatestRequestGuard(accessToken, clearProtectedLiveWorkspace);
@@ -716,6 +732,9 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       }
       setPreview(stored.preview as AdminMatchUploaderRoundRobinPreview);
       setScores(stored.scores as Record<string, ScoreDraft>);
+      setGameEdits(stored.gameEdits || {});
+      setNextActivePlayerIds(Array.isArray(stored.nextActivePlayerIds) ? stored.nextActivePlayerIds.map(Number) : null);
+      setNextCourtSizes(String(stored.nextCourtSizes || ""));
       setScoreReviewMode(stored.scoreReviewMode === true);
       setScoresReviewed(stored.scoresReviewed === true);
       setUnusualScoresAcknowledged(stored.unusualScoresAcknowledged === true);
@@ -724,9 +743,6 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       setMovementOverrides((stored.movementOverrides as Record<number, string> | undefined) || {});
       setMovementSlots((stored.movementSlots as Record<number, string> | undefined) || {});
       setOverrideReason(String(stored.overrideReason || ""));
-      setRosterAction(["add", "substitute"].includes(String(stored.rosterAction)) ? stored.rosterAction as "add" | "substitute" : "none");
-      setIncomingPlayerId(String(stored.incomingPlayerId || ""));
-      setReplacedPlayerId(String(stored.replacedPlayerId || ""));
       setGuestPlayers(Array.isArray(stored.guestPlayers) ? stored.guestPlayers.map((player) => ({ id: Number(player.id), name: String(player.name), rating: player.rating == null ? null : Number(player.rating) })) : []);
       setBenchOverrideIds(Array.isArray(stored.benchOverrideIds) ? stored.benchOverrideIds.map(Number) : []);
       setBenchOverrideReason(String(stored.benchOverrideReason || ""));
@@ -770,34 +786,47 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     });
   }, [knownPlayers, attendeePlayerIds]);
   const rosterPlayerIds = useMemo(() => new Set(sessionRoster.map((row) => Number(row.player_id))), [sessionRoster]);
-  const incomingPlayerOptions = useMemo(
-    () => [
-      ...knownPlayers.map((player) => ({ id: Number(player.id), name: player.name, rating: player.rating })),
-      ...guestPlayers
-    ].filter((player, index, rows) => !rosterPlayerIds.has(Number(player.id)) && rows.findIndex((candidate) => Number(candidate.id) === Number(player.id)) === index).sort((a, b) => a.name.localeCompare(b.name)),
-    [knownPlayers, guestPlayers, rosterPlayerIds]
-  );
-  const activeSessionRoster = useMemo(() => sessionRoster.filter((row) => row.status === "active"), [sessionRoster]);
+  const nextRoundPlayerIds = nextActivePlayerIds ?? sessionRoster.filter(row => row.status === "active").map(row => Number(row.player_id));
+  const gamePlayerOptions = useMemo(() => {
+    const byId = new Map(knownPlayers.map(player => [Number(player.id), { id: Number(player.id), name: player.name, rating: player.rating }]));
+    for (const row of sessionRoster) byId.set(Number(row.player_id), { id: Number(row.player_id), name: row.player_name, rating: row.rating });
+    for (const player of guestPlayers) byId.set(player.id, { ...player, rating: player.rating });
+    return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }, [knownPlayers, sessionRoster, guestPlayers]);
+  const playerNamesById = new Map(gamePlayerOptions.map(player => [player.id, player.name]));
   const allPreviewMatches = (preview?.courts || []).flatMap((court) => court.matches || []);
-  const seriesStates = allPreviewMatches.map((match) => seriesScoreState(match.row_id, scores, matchStructure));
+  const assignedCourtByPlayer = new Map<number, number>();
+  for (const match of allPreviewMatches) for (const id of scheduledGamePlayers(match)) assignedCourtByPlayer.set(id, match.court);
+  const seriesStates = allPreviewMatches.map((match) => seriesScoreState(match.row_id, scores, matchStructure, gameEdits));
   const completeSeriesCount = seriesStates.filter((state) => state.complete).length;
   const validScoreCount = seriesStates.reduce((total, state) => total + state.playedGames, 0);
-  const allSeriesComplete = allPreviewMatches.length > 0 && completeSeriesCount === allPreviewMatches.length;
+  const gameEditErrors = allPreviewMatches.flatMap(match => Array.from({ length: matchStructure.games }, (_, index) => {
+    const key = scoreKey(match.row_id, index + 1);
+    const state = seriesScoreState(match.row_id, scores, matchStructure, gameEdits);
+    if (state.clinchedAt != null && index + 1 > state.clinchedAt) return null;
+    return gameEditError(match, gameEdits[key]);
+  }).filter(Boolean));
+  const allSeriesComplete = allPreviewMatches.length > 0 && completeSeriesCount === allPreviewMatches.length && !gameEditErrors.length && validScoreCount > 0;
   const scoreReviewRows = allPreviewMatches.flatMap((match) => {
-    const state = seriesScoreState(match.row_id, scores, matchStructure);
-    return Array.from({ length: state.playedGames }, (_, index) => {
+    const state = seriesScoreState(match.row_id, scores, matchStructure, gameEdits);
+    return Array.from({ length: matchStructure.games }, (_, index) => {
       const gameNumber = index + 1;
-      const score = scores[scoreKey(match.row_id, gameNumber)] || { scoreT1: "", scoreT2: "" };
-      return {
-        key: scoreKey(match.row_id, gameNumber),
-        court: match.court,
-        game: gameNumber,
-        teamOne: match.t1.map((player) => player.name).join(" / "),
-        score: `${score.scoreT1}-${score.scoreT2}`,
-        teamTwo: match.t2.map((player) => player.name).join(" / "),
-        unusualReason: unusualScoreReason(score)
-      };
-    });
+      const key = scoreKey(match.row_id, gameNumber);
+      const edit = gameEdits[key];
+      if (state.clinchedAt != null && gameNumber > state.clinchedAt) return [];
+      const score = scores[key] || { scoreT1: "", scoreT2: "" };
+      if (!edit?.notPlayed && !scoreIsValid(score)) return [];
+      const actualIds = actualGamePlayers(match, edit);
+      const names = (ids: number[]) => ids.map(id => playerNamesById.get(id) || `Player ${id}`).join(" / ");
+      return [{
+        key, court: match.court, game: gameNumber, gameLabel: `${match.label}${matchStructure.games > 1 ? ` · Game ${gameNumber}` : ""}`,
+        teamOne: names(actualIds.slice(0, 2)),
+        score: edit?.notPlayed ? "Not played / unfinished" : `${score.scoreT1}-${score.scoreT2}`,
+        teamTwo: names(actualIds.slice(2)),
+        note: edit?.notPlayed ? edit.unplayedReason : gameHasSubstitution(match, edit) ? `Substitution: ${edit?.substitutionReason}` : "",
+        unusualReason: edit?.notPlayed ? null : unusualScoreReason(score)
+      }];
+    }).flat();
   });
   const unusualScoreRows = scoreReviewRows.filter((row) => row.unusualReason);
   const sessionIsCurrentLeague = Boolean(
@@ -811,12 +840,12 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
   const blockingCurrentRoundPublishOperation = publishOperations.find(
     (operation) => Number(operation.round_number) === currentRound && operation.status !== "completed"
   ) || null;
-  const hasEnteredRoundScores = Object.values(scores).some(scoreHasValue);
+  const hasEnteredRoundScores = Object.values(scores).some(scoreHasValue) || Object.keys(gameEdits).length > 0;
   const courtEditingLocked = busy || hasEnteredRoundScores || scoresPublished || roundPublished || (sessionIsCurrentLeague && sessionStatus !== "active");
   const hasUnsubmittedRoundWork = Boolean(!scoresPublished && sessionIsCurrentLeague && preview && (hasEnteredRoundScores || scoresReviewed || movementPlan));
 
   useEffect(() => {
-    if (!sessionIsCurrentLeague || !loadedSessionId || !sessionUpdatedAt) return;
+    if (restoringRoundDraftRef.current || !sessionIsCurrentLeague || !loadedSessionId || !sessionUpdatedAt) return;
     const key = `jupr-league-live-round-draft:${clubId}:${loadedSessionId}:${currentRound}`;
     try {
       if (roundPublished || scoresPublished) {
@@ -839,6 +868,9 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
         roundLabel,
         preview,
         scores,
+        gameEdits,
+        nextActivePlayerIds,
+        nextCourtSizes,
         scoreReviewMode,
         scoresReviewed,
         unusualScoresAcknowledged,
@@ -847,9 +879,6 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
         movementOverrides,
         movementSlots,
         overrideReason,
-        rosterAction,
-        incomingPlayerId,
-        replacedPlayerId,
         guestPlayers,
         benchOverrideIds,
         benchOverrideReason
@@ -858,7 +887,20 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     } catch {
       // The in-memory workflow remains usable when browser storage is unavailable.
     }
-  }, [benchOverrideIds, benchOverrideReason, clubId, courts, currentRound, guestPlayers, incomingPlayerId, loadedSessionId, matchDate, movementOverrides, movementPlan, movementPlanStale, movementSlots, overrideReason, preview, replacedPlayerId, rosterAction, roundLabel, roundPublished, scoreReviewMode, scores, scoresPublished, scoresReviewed, sessionIsCurrentLeague, sessionUpdatedAt, unusualScoresAcknowledged, weekTag, workflowStep]);
+  }, [benchOverrideIds, benchOverrideReason, clubId, courts, currentRound, gameEdits, guestPlayers, nextActivePlayerIds, nextCourtSizes, loadedSessionId, matchDate, movementOverrides, movementPlan, movementPlanStale, movementSlots, overrideReason, preview, roundLabel, roundPublished, scoreReviewMode, scores, scoresPublished, scoresReviewed, sessionIsCurrentLeague, sessionUpdatedAt, unusualScoresAcknowledged, weekTag, workflowStep]);
+
+  useEffect(() => {
+    if (restoringRoundDraftRef.current || !sessionIsCurrentLeague || !scoresPublished || !loadedSessionId || !sessionUpdatedAt) return;
+    const key = `jupr-league-live-attendance-draft:${clubId}:${loadedSessionId}:${currentRound}`;
+    try {
+      if (roundPublished) globalThis.sessionStorage?.removeItem(key);
+      else if (nextActivePlayerIds != null || nextCourtSizes.trim()) {
+        globalThis.sessionStorage?.setItem(key, JSON.stringify({ version: 1, sessionUpdatedAt, nextActivePlayerIds, nextCourtSizes, movementOverrides, movementSlots, guestPlayers }));
+      }
+    } catch {
+      // Pending attendance remains available in this page when browser storage is blocked.
+    }
+  }, [clubId, currentRound, guestPlayers, loadedSessionId, movementOverrides, movementSlots, nextActivePlayerIds, nextCourtSizes, roundPublished, scoresPublished, sessionIsCurrentLeague, sessionUpdatedAt]);
 
   useEffect(() => {
     if (!hasUnsubmittedRoundWork) return;
@@ -925,6 +967,8 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     setRoundLabel(`Round ${sessionRow.current_round || 1}`);
     setSessionNotes(sessionRow.notes || "");
     setSessionRoster((sessionRow.roster_json || []) as LeagueLiveRosterRow[]);
+    setNextActivePlayerIds(null);
+    setNextCourtSizes("");
     setAttendeePlayerIds(((sessionRow.roster_json || []) as LeagueLiveRosterRow[]).map((row) => Number(row.player_id)));
     setPastedPlayerText("");
     setPastedPlayerResolutions([]);
@@ -937,6 +981,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     setCourts(courtsFromPersisted(courtsRows, sessionRow.current_round || 1, sessionRow.current_court_state_json || []));
     setPreview(null);
     setScores({});
+    setGameEdits({});
     setScoreReviewMode(false);
     setScoresReviewed(false);
     setUnusualScoresAcknowledged(false);
@@ -969,6 +1014,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     setCourts([{ court: "1", formatType: "4-player", playerNames: "" }]);
     setPreview(null);
     setScores({});
+    setGameEdits({});
     setScoreReviewMode(false);
     setScoresReviewed(false);
     setUnusualScoresAcknowledged(false);
@@ -982,9 +1028,8 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     setRatingReview(null);
     setBenchOverrideIds([]);
     setBenchOverrideReason("");
-    setRosterAction("none");
-    setIncomingPlayerId("");
-    setReplacedPlayerId("");
+    setNextActivePlayerIds(null);
+    setNextCourtSizes("");
     setGuestPlayers([]);
     setGuestName("");
     setGuestJupr("");
@@ -1014,6 +1059,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
   }
 
   function clearProtectedLiveWorkspace() {
+    restoringRoundDraftRef.current = false;
     leagueDetailRequest.invalidate();
     sessionListRequest.invalidate();
     sessionDetailRequest.invalidate();
@@ -1051,6 +1097,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
   }
 
   function updateScore(key: string, side: keyof ScoreDraft, value: string) {
+    if (busy || scoresPublished || roundPublished || sessionStatus !== "active" || gameEdits[key]?.notPlayed) return;
     setScores((current) => ({
       ...current,
       [key]: { ...(current[key] || { scoreT1: "", scoreT2: "" }), [side]: value }
@@ -1063,9 +1110,26 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     setMovementSlots({});
   }
 
+  function updateGameEdit(key: string, edit: LeagueLiveGameEdit) {
+    if (busy || scoresPublished || roundPublished || sessionStatus !== "active") return;
+    setGameEdits(current => ({ ...current, [key]: edit }));
+    if (edit.notPlayed) setScores(current => ({ ...current, [key]: { scoreT1: "", scoreT2: "" } }));
+    invalidateScoreReview();
+  }
+
+  function changeNextAttendance(ids: number[], sizes = nextCourtSizes) {
+    setNextActivePlayerIds([...new Set(ids)]);
+    setNextCourtSizes(sizes);
+    setMovementPlan(null);
+    setMovementPlanStale(true);
+    setMovementOverrides({});
+    setMovementSlots({});
+  }
+
   function invalidateRoundDraft(message: string) {
     setPreview(null);
     setScores({});
+    setGameEdits({});
     invalidateScoreReview();
     setRoundPublished(false);
     setScoresPublished(false);
@@ -1091,6 +1155,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     setCourts([{ court: "1", formatType: "4-player", playerNames: "" }]);
     setPreview(null);
     setScores({});
+    setGameEdits({});
     setScoreReviewMode(false);
     setScoresReviewed(false);
     setUnusualScoresAcknowledged(false);
@@ -1376,6 +1441,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     setCourts(courtsFromPersisted(payload.courts || [], currentRound));
     setPreview(null);
     setScores({});
+    setGameEdits({});
     setMovementPlan(null);
     setMovementPlanStale(false);
     setMovementOverrides({});
@@ -1698,6 +1764,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     const generation = actionRequest.begin();
     const retainedPreview = preview;
     const retainedScores = scores;
+    const retainedGameEdits = gameEdits;
     const request = {
       league_name: leagueName,
       week_tag: weekTag,
@@ -1728,6 +1795,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       applySession(payload.session, payload.courts || [], [], [], detail);
       setPreview(retainedPreview);
       setScores(retainedScores);
+      setGameEdits(retainedGameEdits);
       if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before League Live sessions could be refreshed.");
       await loadSessions();
       if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the created session was confirmed.");
@@ -1759,10 +1827,12 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
   }
 
   async function loadSessionDetail(selectedSessionId = sessionId, prepareAdvancedRound = true) {
+    restoringRoundDraftRef.current = true;
     const generation = sessionDetailRequest.begin();
     leagueDetailRequest.invalidate();
     clearPersistedSessionBinding(selectedSessionId);
     if (!selectedSessionId) {
+      restoringRoundDraftRef.current = false;
       setMessage("Select a persisted session first.");
       return;
     }
@@ -1803,7 +1873,28 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
         setScoresReviewed(true);
         setScoreReviewMode(false);
         setWorkflowStep(5);
-        if (!officialMatches.length) {
+        let restoredAttendance = false;
+        try {
+          const key = `jupr-league-live-attendance-draft:${clubId}:${payload.session.id}:${sessionCurrentRound}`;
+          const raw = globalThis.sessionStorage?.getItem(key);
+          if (raw) {
+            const pending = JSON.parse(raw);
+            if (pending.version === 1 && pending.sessionUpdatedAt === String(payload.session.updated_at || "") && Array.isArray(pending.nextActivePlayerIds)) {
+              setNextActivePlayerIds(pending.nextActivePlayerIds.map(Number));
+              setNextCourtSizes(String(pending.nextCourtSizes || ""));
+              setMovementOverrides(pending.movementOverrides || {});
+              setMovementSlots(pending.movementSlots || {});
+              setGuestPlayers(Array.isArray(pending.guestPlayers) ? pending.guestPlayers : []);
+              setMovementPlanStale(true);
+              restoredAttendance = true;
+            } else globalThis.sessionStorage?.removeItem(key);
+          }
+        } catch {
+          // Ignore a corrupt or unavailable attendance draft.
+        }
+        if (restoredAttendance) {
+          setMessage("Recovered next-round attendance and court edits. Load and validate the court board before applying them.");
+        } else if (!officialMatches.length) {
           setMessage(`Round ${scorePublishedRoundNumber} scores are official, but the court board cannot be generated until the official matches are reloaded.`);
         } else {
           try {
@@ -1851,6 +1942,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
             } else {
               setPreview(preparedPreview);
               setScores(emptyScoresForPreview(preparedPreview, loadedMatchStructure));
+              setGameEdits({});
               setWorkflowStep(4);
               setMessage(`Round ${sessionCurrentRound} resumed with the approved movement, saved roster, courts, and date. Enter scores when play begins.`);
             }
@@ -1869,7 +1961,10 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     } catch (error) {
       if (sessionDetailRequest.isCurrent(generation)) setMessage(error instanceof Error ? error.message : "Unable to load persisted session.");
     } finally {
-      if (sessionDetailRequest.isCurrent(generation)) setBusy(false);
+      if (sessionDetailRequest.isCurrent(generation)) {
+        restoringRoundDraftRef.current = false;
+        setBusy(false);
+      }
     }
   }
 
@@ -1877,6 +1972,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     if (selectedSessionId) void loadSessionDetail(selectedSessionId);
     else {
       sessionDetailRequest.invalidate();
+      restoringRoundDraftRef.current = false;
       clearPersistedSessionBinding();
     }
   }
@@ -1887,6 +1983,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     const requestedSessionId = loadedSessionId;
     const retainedPreview = preview;
     const retainedScores = scores;
+    const retainedGameEdits = gameEdits;
     const retainedReviewMode = scoreReviewMode;
     const retainedScoresReviewed = scoresReviewed;
     setBusy(true);
@@ -1913,6 +2010,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       applySession(payload.session, payload.courts || [], roundHistory, publishOperations, detail);
       setPreview(retainedPreview);
       setScores(retainedScores);
+      setGameEdits(retainedGameEdits);
       setScoreReviewMode(retainedReviewMode);
       setScoresReviewed(retainedScoresReviewed);
       setMessage("League Live session snapshot saved.");
@@ -2097,14 +2195,14 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       setUnusualScoresAcknowledged(false);
       setPreview(payload);
       setScores(emptyScoresForPreview(payload, matchStructure));
+      setGameEdits({});
       setMovementPlan(null);
       setMovementPlanStale(false);
       setMovementOverrides({});
       setMovementSlots({});
       setOverrideReason("");
-      setRosterAction("none");
-      setIncomingPlayerId("");
-      setReplacedPlayerId("");
+      setNextActivePlayerIds(null);
+      setNextCourtSizes("");
       setRatingReview(null);
       setWorkflowStep(4);
       setMessage(`Round ${nextRound} is ready with the approved movement, saved roster, courts, and date. Enter scores when play begins.`);
@@ -2120,6 +2218,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     setCourts(nextCourts);
     setPreview(null);
     setScores({});
+    setGameEdits({});
     invalidateScoreReview();
     createSessionOperationRef.current = null;
     setMessage(null);
@@ -2239,6 +2338,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       }
       setPreview(payload);
       setScores(emptyScoresForPreview(payload, matchStructure));
+      setGameEdits({});
       setMovementPlan(null);
       setMovementPlanStale(false);
       setMovementOverrides({});
@@ -2255,30 +2355,36 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
 
   function buildScoredMatches(): Array<Record<string, unknown>> {
     return allPreviewMatches.flatMap((match) => {
-      const state = seriesScoreState(match.row_id, scores, matchStructure);
+      const state = seriesScoreState(match.row_id, scores, matchStructure, gameEdits);
       if (!state.complete) return [];
-      return Array.from({ length: state.playedGames }, (_, index) => {
+      return Array.from({ length: matchStructure.games }, (_, index) => {
         const gameNumber = index + 1;
-        const score = scores[scoreKey(match.row_id, gameNumber)] || { scoreT1: "", scoreT2: "" };
-        return {
-          date: matchDate,
-          league: leagueName,
-          week_tag: weekTag,
-          match_type: "League Manager Live",
-          court: match.court,
-          t1_p1: match.t1_p1,
-          t1_p2: match.t1_p2,
-          t2_p1: match.t2_p1,
-          t2_p2: match.t2_p2,
-          score_t1: Number(score.scoreT1),
-          score_t2: Number(score.scoreT2),
-          series_key: match.row_id,
-          series_kind: matchStructure.kind,
-          series_games: matchStructure.games,
-          game_number: gameNumber
-        };
-      });
+        const key = scoreKey(match.row_id, gameNumber);
+        const edit = gameEdits[key];
+        if (edit?.notPlayed || (state.clinchedAt != null && gameNumber > state.clinchedAt)) return [];
+        const score = scores[key] || { scoreT1: "", scoreT2: "" };
+        const ids = actualGamePlayers(match, edit);
+        return [{
+          date: matchDate, league: leagueName, week_tag: weekTag,
+          match_type: "League Manager Live", court: match.court,
+          t1_p1: ids[0], t1_p2: ids[1], t2_p1: ids[2], t2_p2: ids[3],
+          scheduled_player_ids: scheduledGamePlayers(match),
+          substitution_reason: gameHasSubstitution(match, edit) ? edit?.substitutionReason?.trim() : null,
+          score_t1: Number(score.scoreT1), score_t2: Number(score.scoreT2),
+          series_key: match.row_id, series_kind: matchStructure.kind,
+          series_games: matchStructure.games, game_number: gameNumber
+        }];
+      }).flat();
     });
+  }
+
+  function buildUnplayedGames(): Array<Record<string, unknown>> {
+    if (matchStructure.kind !== "fixed_games") return [];
+    return allPreviewMatches.flatMap(match => Array.from({ length: matchStructure.games }, (_, index) => {
+      const gameNumber = index + 1;
+      const edit = gameEdits[scoreKey(match.row_id, gameNumber)];
+      return edit?.notPlayed ? [{ series_key: match.row_id, game_number: gameNumber, court: match.court, reason: edit.unplayedReason?.trim() || "" }] : [];
+    }).flat());
   }
 
   function movementOverridePayload(): Array<{ player_id: number; to_court: number; to_slot?: number }> {
@@ -2309,19 +2415,27 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     setMovementOverrides(nextCourts);
     setMovementSlots(nextSlots);
     setBenchOverrideIds(nextBench);
+    setNextActivePlayerIds(assignments.filter(assignment => assignment.toCourt != null).map(assignment => assignment.playerId));
     setMovementPlanStale(true);
   }
 
   function rosterChangePayload(): Record<string, unknown> | null {
-    if (rosterAction === "none") return null;
-    const player = incomingPlayerOptions.find((row) => Number(row.id) === Number(incomingPlayerId));
-    if (!player) throw new Error("Select a valid incoming player before refreshing the court board.");
-    if (rosterAction === "substitute" && !replacedPlayerId) throw new Error("Select the player being replaced before refreshing the court board.");
-    return {
-      action: rosterAction,
-      replaced_player_id: rosterAction === "substitute" ? Number(replacedPlayerId) : null,
-      player: { player_id: Number(player.id), player_name: player.name, rating: player.rating ?? 1200 }
-    };
+    if (nextActivePlayerIds == null && !nextCourtSizes.trim()) return null;
+    const selectedIds = [...new Set(nextRoundPlayerIds.map(Number))];
+    if (selectedIds.length < 4) throw new Error("Choose at least four players for the next round.");
+    const additions = selectedIds.filter(id => !rosterPlayerIds.has(id)).map(id => {
+      const player = gamePlayerOptions.find(row => row.id === id);
+      if (!player) throw new Error("A selected player could not be found. Reload the session before continuing.");
+      return { player_id: id, player_name: player.name, rating: player.rating ?? 1200 };
+    });
+    let sizes: number[] | undefined;
+    if (nextCourtSizes.trim()) {
+      const parts = nextCourtSizes.trim().split(/[\s,]+/);
+      if (parts.some(value => !/^[45]$/.test(value))) throw new Error("Enter one 4 or 5 for each next-round court, separated by commas.");
+      sizes = parts.map(Number);
+      if (sizes.reduce((sum, size) => sum + size, 0) !== selectedIds.length) throw new Error(`The court sizes must fit all ${selectedIds.length} selected players exactly.`);
+    }
+    return { action: "attendance", active_player_ids: selectedIds, players: additions, ...(sizes ? { court_sizes: sizes } : {}) };
   }
 
   async function previewPythonMovement() {
@@ -2387,8 +2501,9 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       throw error;
     }
     const matches = buildScoredMatches();
+    const unplayedGames = buildUnplayedGames();
     if (!allSeriesComplete || !matches.length) {
-      const error = new Error(`Complete every generated matchup before publishing (${completeSeriesCount} of ${allPreviewMatches.length} complete; ${matches.length} game result(s) ready).`);
+      const error = new Error(`Enter a score or explicitly mark every unfinished game before publishing (${completeSeriesCount} of ${allPreviewMatches.length} complete; ${matches.length} game result(s) ready).`);
       setMessage(error.message);
       throw error;
     }
@@ -2411,7 +2526,8 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
           match_date: matchDate,
           preview: preview || {},
           matches,
-          expected_match_count: matches.length,
+          unplayed_games: unplayedGames,
+          expected_match_count: matches.length + unplayedGames.length,
           expected_updated_at: sessionUpdatedAt,
           idempotency_key: idempotencyKey,
           unusual_score_acknowledgement: unusualScoresAcknowledged,
@@ -2540,11 +2656,11 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the guest response was applied.");
       const guest = { id: Number(payload.player.id), name: payload.player.name, rating: payload.player.rating };
       setGuestPlayers((current) => current.some((row) => row.id === guest.id) ? current : [...current, guest]);
-      setIncomingPlayerId(String(guest.id));
+      changeNextAttendance([...nextRoundPlayerIds, guest.id]);
       setGuestName("");
       setGuestReason("");
       markPlanStale();
-      const successMessage = `${payload.idempotent_replay ? "Recovered" : "Created"} guest ${guest.name}. Select add or substitute, then refresh the court board.`;
+      const successMessage = `${payload.idempotent_replay ? "Recovered" : "Created"} guest ${guest.name}. They are selected for the next round. Refresh the court board to place them.`;
       setMessage(successMessage);
       return actionSuccess(payload.idempotent_replay ? "Guest recovered" : "Guest created", successMessage);
     } catch (error) {
@@ -2961,6 +3077,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
                   onConfirm={async () => {
                     setPreview(null);
                     setScores({});
+                    setGameEdits({});
                     invalidateScoreReview();
                     return actionSuccess("Draft scores cleared", "You can now edit the courts and generate a new preview.");
                   }}
@@ -3007,7 +3124,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       {workflowStep === 4 ? (
         <article style={cardStyle} aria-labelledby="league-live-scores-heading">
           <h2 id="league-live-scores-heading" style={{ marginTop: 0 }}>4. Score Entry with Review</h2>
-          <p style={{ color: "#475569" }}><strong>Configured format: {matchStructureLabel(matchStructure)}.</strong> Review and publish every score first. The next-round court board opens automatically afterward.</p>
+          <p style={{ color: "#475569" }}><strong>Configured format: {matchStructureLabel(matchStructure)}.</strong> Record the actual players for each game, and mark unfinished games with a reason. Review and publish completed scores first. The next-round court board opens automatically afterward.</p>
           {!scoreReviewMode ? (
             <>
               <div style={{ display: "grid", gap: "0.75rem" }}>
@@ -3015,36 +3132,40 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
                   <section key={court.court} style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem" }}>
                     <h3 style={{ marginTop: 0 }}>Court {court.court} · {court.format_type}</h3>
                     {(court.matches || []).map((match) => {
-                      const state = seriesScoreState(match.row_id, scores, matchStructure);
+                      const state = seriesScoreState(match.row_id, scores, matchStructure, gameEdits);
                       return (
                         <section key={match.row_id} style={{ borderTop: "1px solid #f1f5f9", padding: "0.75rem 0" }}>
-                          <div><strong>{match.label}</strong><br />{match.t1.map((player) => player.name).join(" / ")} vs {match.t2.map((player) => player.name).join(" / ")}</div>
+                          <div><strong>{match.label}</strong><br /><small>Scheduled: {match.t1.map((player) => player.name).join(" / ")} vs {match.t2.map((player) => player.name).join(" / ")}</small></div>
                           <div style={{ display: "grid", gap: "0.45rem", marginTop: "0.5rem" }}>
                             {Array.from({ length: matchStructure.games }, (_, gameIndex) => {
                               const gameNumber = gameIndex + 1;
                               const key = scoreKey(match.row_id, gameNumber);
                               const score = scores[key] || { scoreT1: "", scoreT2: "" };
-                              const unusualReason = unusualScoreReason(score);
+                              const edit = gameEdits[key];
+                              const unusualReason = edit?.notPlayed ? null : unusualScoreReason(score);
                               const afterClinch = state.clinchedAt != null && gameNumber > state.clinchedAt;
                               const canClearUnexpectedScore = afterClinch && scoreHasValue(score);
                               return (
                                 <div key={key} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 140px), 1fr))", gap: "0.6rem", alignItems: "center" }}>
                                   <strong>Game {gameNumber}</strong>
-                                  <input aria-label={`${match.label} Game ${gameNumber} Team 1 score`} value={score.scoreT1} onChange={(event) => updateScore(key, "scoreT1", event.target.value)} disabled={busy || (afterClinch && !canClearUnexpectedScore)} inputMode="numeric" placeholder="Team 1" style={{ ...inputStyle, borderColor: unusualReason ? "#f59e0b" : "#cbd5e1" }} />
-                                  <input aria-label={`${match.label} Game ${gameNumber} Team 2 score`} value={score.scoreT2} onChange={(event) => updateScore(key, "scoreT2", event.target.value)} disabled={busy || (afterClinch && !canClearUnexpectedScore)} inputMode="numeric" placeholder="Team 2" style={{ ...inputStyle, borderColor: unusualReason ? "#f59e0b" : "#cbd5e1" }} />
-                                  <small role={unusualReason ? "alert" : undefined} style={{ color: unusualReason ? "#b45309" : afterClinch ? "#64748b" : scoreIsValid(score) ? "#166534" : "#64748b", fontWeight: unusualReason ? 700 : 400 }}>{afterClinch && !canClearUnexpectedScore ? "Not played — series already clinched" : unusualReason ? `Unusual score — verify before publish. ${unusualReason}` : scoreIsValid(score) ? "Complete" : "Enter a non-tied final score"}</small>
+                                  <input aria-label={`${match.label} Game ${gameNumber} Team 1 score`} value={score.scoreT1} onChange={(event) => updateScore(key, "scoreT1", event.target.value)} disabled={busy || scoresPublished || roundPublished || sessionStatus !== "active" || edit?.notPlayed || (afterClinch && !canClearUnexpectedScore)} inputMode="numeric" placeholder="Team 1" style={{ ...inputStyle, borderColor: unusualReason ? "#f59e0b" : "#cbd5e1" }} />
+                                  <input aria-label={`${match.label} Game ${gameNumber} Team 2 score`} value={score.scoreT2} onChange={(event) => updateScore(key, "scoreT2", event.target.value)} disabled={busy || scoresPublished || roundPublished || sessionStatus !== "active" || edit?.notPlayed || (afterClinch && !canClearUnexpectedScore)} inputMode="numeric" placeholder="Team 2" style={{ ...inputStyle, borderColor: unusualReason ? "#f59e0b" : "#cbd5e1" }} />
+                                  <small role={unusualReason ? "alert" : undefined} style={{ color: unusualReason ? "#b45309" : afterClinch ? "#64748b" : scoreIsValid(score) ? "#166534" : "#64748b", fontWeight: unusualReason ? 700 : 400 }}>{afterClinch && !canClearUnexpectedScore ? "Not played — series already clinched" : unusualReason ? `Unusual score — verify before publish. ${unusualReason}` : edit?.notPlayed ? "Excluded from official results" : scoreIsValid(score) ? "Complete" : "Enter a non-tied final score"}</small>
+                                  {!afterClinch ? <LeagueLiveGameEditor match={match} gameNumber={gameNumber} edit={edit} players={gamePlayerOptions.filter(player => !assignedCourtByPlayer.has(player.id) || assignedCourtByPlayer.get(player.id) === match.court)} disabled={busy || scoresPublished || roundPublished || sessionStatus !== "active"} allowUnplayed={matchStructure.kind === "fixed_games"} onChange={nextEdit => updateGameEdit(key, nextEdit)} /> : null}
                                 </div>
                               );
                             })}
                           </div>
-                          <p style={{ marginBottom: 0, color: state.complete ? "#166534" : "#92400e" }}>{state.complete ? `Matchup complete · ${state.playedGames} official game${state.playedGames === 1 ? "" : "s"}` : state.hasScoreAfterClinch ? "Clear any score entered after the series was clinched." : state.hasGap ? "Complete games in order without leaving a gap." : `Matchup incomplete · ${state.playedGames} game${state.playedGames === 1 ? "" : "s"} entered`}</p>
+                          <p style={{ marginBottom: 0, color: state.complete ? "#166534" : "#92400e" }}>{state.complete ? `Matchup accounted for · ${state.playedGames} completed game${state.playedGames === 1 ? "" : "s"}` : state.hasScoreAfterClinch ? "Clear any score entered after the series was clinched." : state.hasGap ? "Complete games in order without leaving a gap." : `Matchup incomplete · ${state.playedGames} game${state.playedGames === 1 ? "" : "s"} entered`}</p>
                         </section>
                       );
                     })}
                   </section>
                 ))}
               </div>
-              <p style={{ color: "#475569" }}>Completed matchups: {completeSeriesCount} / {allPreviewMatches.length} · Official game results ready: {validScoreCount}</p>
+              {gameEditErrors.length ? <p role="alert" style={{ color: "#b45309" }}>Complete every substitution or unfinished-game reason before review.</p> : null}
+              {validScoreCount === 0 ? <p style={{ color: "#475569" }}>At least one completed game is required to publish this round.</p> : null}
+              <p style={{ color: "#475569" }}>Accounted-for matchups: {completeSeriesCount} / {allPreviewMatches.length} · Official game results ready: {validScoreCount}</p>
               <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", justifyContent: "space-between" }}>
                 <button type="button" onClick={() => setWorkflowStep(3)} disabled={busy} style={ghostButtonStyle}>Back to Courts and Preview</button>
                 <button type="button" onClick={reviewEnteredScores} disabled={busy || !allSeriesComplete || !roundContextValid || !matchDateValid || sessionStatus !== "active"} style={buttonStyle}>Review scores</button>
@@ -3055,7 +3176,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
               <h3 style={{ marginTop: 0 }}>Review entered scores</h3>
               <p style={{ color: "#92400e" }}><strong>Nothing has been submitted.</strong> Verify court, teams, and score for every game.</p>
               <p><strong>{roundLabel || `Round ${currentRound}`}</strong> · {weekTag || "No week label"} · {matchDate}</p>
-              <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr><th align="left">Court</th><th align="left">Team 1</th><th align="center">Score</th><th align="left">Team 2</th></tr></thead><tbody>{scoreReviewRows.map((row) => <tr key={row.key} style={{ background: row.unusualReason ? "#fef3c7" : undefined }}><td>{row.court}</td><td>{row.teamOne}</td><td align="center"><strong>{row.score}{row.unusualReason ? " ⚠" : ""}</strong></td><td>{row.teamTwo}</td></tr>)}</tbody></table></div>
+              <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr><th align="left">Court</th><th align="left">Game</th><th align="left">Team 1</th><th align="center">Score</th><th align="left">Team 2</th></tr></thead><tbody>{scoreReviewRows.map((row) => <tr key={row.key} style={{ background: row.unusualReason ? "#fef3c7" : undefined }}><td>{row.court}</td><td>{row.gameLabel}</td><td>{row.teamOne}</td><td align="center"><strong>{row.score}{row.unusualReason ? " ⚠" : ""}</strong></td><td>{row.teamTwo}{row.note ? <small style={{ display: "block" }}>{row.note}</small> : null}</td></tr>)}</tbody></table></div>
               {unusualScoreRows.length ? <section role="alert" style={{ marginTop: "0.75rem", padding: "0.75rem", border: "1px solid #f59e0b", borderRadius: "10px", background: "#fff7ed", color: "#9a3412" }}><strong>Unusual score{unusualScoreRows.length === 1 ? " requires" : "s require"} review.</strong><ul>{unusualScoreRows.map((row) => <li key={`unusual-${row.key}`}>Court {row.court}: {row.score}. {row.unusualReason}</li>)}</ul><label><input type="checkbox" checked={unusualScoresAcknowledged} onChange={(event) => setUnusualScoresAcknowledged(event.target.checked)} disabled={busy} /> I verified {unusualScoreRows.length === 1 ? "this score is" : "these scores are"} correct.</label></section> : null}
               <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", justifyContent: "space-between", marginTop: "0.75rem" }}>
                 <button type="button" onClick={editReviewedScores} disabled={busy} style={ghostButtonStyle}>Edit scores</button>
@@ -3071,13 +3192,15 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
           <h2 id="league-live-movement-heading" style={{ marginTop: 0 }}>5. Movement</h2>
           <p style={{ color: "#166534" }}><strong>The round scores are official.</strong> The server-generated court board opens automatically. Drag any changes, validate the board, then apply it. Applying movement never republishes scores.</p>
           <section style={{ padding: "0.75rem", border: "1px solid #e2e8f0", borderRadius: "12px", marginBottom: "0.75rem" }}>
-            <h3 style={{ marginTop: 0 }}>Next-round player change</h3>
-            <p style={{ color: "#475569" }}>A late arrival appends to the live order. A substitution replaces the selected ordered player. Completed rounds never change.</p>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "0.75rem" }}>
-              <label>Action<br /><select value={rosterAction} onChange={(event) => { setRosterAction(event.target.value as "none" | "add" | "substitute"); markPlanStale(); }} disabled={busy} style={inputStyle}><option value="none">No roster change</option><option value="add">Add late arrival</option><option value="substitute">Substitute player</option></select></label>
-              {rosterAction !== "none" ? <label>Incoming player<br /><SearchablePlayerSelect aria-label="Incoming player" value={incomingPlayerId} onValueChange={playerValue => { setIncomingPlayerId(playerValue); markPlanStale(); }} disabled={busy} style={inputStyle}><option value="">Select player…</option>{incomingPlayerOptions.map((player) => <option key={String(player.id)} value={String(player.id)}>{player.name}</option>)}</SearchablePlayerSelect></label> : null}
-              {rosterAction === "substitute" ? <label>Replace active player<br /><SearchablePlayerSelect aria-label="Replace active player" value={replacedPlayerId} onValueChange={playerValue => { setReplacedPlayerId(playerValue); markPlanStale(); }} disabled={busy} style={inputStyle}><option value="">Select player…</option>{activeSessionRoster.map((player) => <option key={player.player_id} value={String(player.player_id)}>{player.player_name}</option>)}</SearchablePlayerSelect></label> : null}
-            </div>
+            <LeagueLiveAttendanceEditor
+              roster={sessionRoster.map(row => ({ id: Number(row.player_id), name: row.player_name }))}
+              availablePlayers={gamePlayerOptions}
+              activePlayerIds={nextRoundPlayerIds}
+              courtSizes={nextCourtSizes}
+              disabled={busy || sessionStatus !== "active" || roundPublished}
+              onActivePlayersChange={ids => changeNextAttendance(ids)}
+              onCourtSizesChange={sizes => changeNextAttendance(nextRoundPlayerIds, sizes)}
+            />
             {liveDomainStatus.submit_enabled ? (
               <details style={{ marginTop: "0.75rem" }}>
                 <summary>Create a new non-roster player for a late arrival</summary>
@@ -3090,15 +3213,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
                 </div>
               </details>
             ) : null}
-            {sessionRoster.length && !movementPlan ? (
-              <details style={{ marginTop: "0.75rem" }}>
-                <summary>Choose Bench while the court board is unavailable</summary>
-                <p style={{ color: "#475569" }}>Once the board loads, exchange players with Bench directly on the cards.</p>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.35rem", marginTop: "0.5rem" }}>
-                  {sessionRoster.map((row) => <label key={row.player_id}><input type="checkbox" checked={benchOverrideIds.includes(Number(row.player_id))} onChange={(event) => { setBenchOverrideIds((current) => event.target.checked ? [...new Set([...current, Number(row.player_id)])] : current.filter((id) => id !== Number(row.player_id))); markPlanStale(); }} disabled={busy} /> Bench {row.player_name}</label>)}
-                </div>
-              </details>
-            ) : null}
+
           </section>
 
           {movementPlan ? (
@@ -3133,7 +3248,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
               <p style={{ color: "#92400e" }}><strong>Movement is not applied yet.</strong> Return to Movement, preview the current authoritative plan, and apply it before repeating or finishing.</p>
               <section style={{ padding: "0.75rem", border: "1px solid #e2e8f0", borderRadius: "12px" }}>
                 <h3 style={{ marginTop: 0 }}>Reviewed round</h3>
-                <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr><th align="left">Court</th><th align="left">Team 1</th><th align="center">Score</th><th align="left">Team 2</th></tr></thead><tbody>{scoreReviewRows.map((row) => <tr key={row.key}><td>{row.court}</td><td>{row.teamOne}</td><td align="center"><strong>{row.score}</strong></td><td>{row.teamTwo}</td></tr>)}</tbody></table></div>
+                <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr><th align="left">Court</th><th align="left">Game</th><th align="left">Team 1</th><th align="center">Score</th><th align="left">Team 2</th></tr></thead><tbody>{scoreReviewRows.map((row) => <tr key={row.key}><td>{row.court}</td><td>{row.gameLabel}</td><td>{row.teamOne}</td><td align="center"><strong>{row.score}</strong></td><td>{row.teamTwo}{row.note ? <small style={{ display: "block" }}>{row.note}</small> : null}</td></tr>)}</tbody></table></div>
               </section>
               {movementPlan ? <section style={{ marginTop: "0.75rem", padding: "0.75rem", border: "1px solid #86efac", borderRadius: "12px", background: "#f0fdf4" }}><h3 style={{ marginTop: 0 }}>Approved next-round roster and courts</h3><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: "0.75rem" }}>{movementPlan.next_courts.map((court) => <div key={court.court_number}><strong>Court {court.court_number}</strong><ol>{court.player_names.map((playerName, index) => <li key={`${court.court_number}-${index}-${playerName}`}>{playerName}</li>)}</ol></div>)}</div><p><strong>Bench:</strong> {movementPlan.bench.length ? movementPlan.bench.map((player) => player.player_name).join(", ") : "None"}.</p></section> : null}
               <p style={{ color: "#166534" }}>The scores shown above are already official. This step never republishes them.</p>

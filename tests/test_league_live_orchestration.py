@@ -301,3 +301,118 @@ def test_round_plan_rejects_cross_court_match() -> None:
             courts=suggestion["courts"],
             matches=invalid,
         )
+
+
+def test_attendance_preserves_people_who_sit_out_and_accepts_their_return() -> None:
+    suggestion = build_league_live_roster_suggestion(_roster())
+    first = build_league_live_round_plan(
+        session_id="attendance", round_number=1, total_rounds=3, session_updated_at="v1",
+        roster=suggestion["roster"], courts=suggestion["courts"], matches=_matches(),
+        roster_change={"action": "attendance", "active_player_ids": [1, 2, 3, 4], "court_sizes": [4]},
+    )
+    assert len(first["next_courts"]) == 1
+    assert {row["player_id"] for row in first["next_roster"]} == set(range(1, 9))
+    assert first["bench_player_ids"] == [5, 6, 7, 8]
+    assert all(row["bench_reason"] == "not_playing" for row in first["bench"])
+    assert {row["last_court_number"] for row in first["bench"]} == {2}
+
+    second = build_league_live_round_plan(
+        session_id="attendance", round_number=2, total_rounds=3, session_updated_at="v2",
+        roster=first["next_roster"], courts=first["next_courts"], matches=[_matches()[0]],
+        roster_change={"action": "attendance", "active_player_ids": [1, 2, 5, 6]},
+    )
+    assert {row["player_id"] for row in second["next_courts"][0]["players_json"]} == {1, 2, 5, 6}
+    assert {row["player_id"] for row in second["next_roster"]} == set(range(1, 9))
+    assert set(second["bench_player_ids"]) == {3, 4, 7, 8}
+    assert [row["player_id"] for row in suggestion["roster"]] == list(range(1, 9))
+
+
+def test_attendance_can_add_multiple_new_players_and_preserve_exact_board_order() -> None:
+    suggestion = build_league_live_roster_suggestion(_roster())
+    common = dict(
+        session_id="attendance", round_number=1, total_rounds=3, session_updated_at="v1",
+        roster=suggestion["roster"], courts=suggestion["courts"], matches=_matches(),
+        roster_change={
+            "action": "attendance", "active_player_ids": [1, 2, 9, 10],
+            "players": _roster(10)[-2:], "court_sizes": [4],
+        },
+    )
+    overrides = [
+        {"player_id": player_id, "to_court": 1, "to_slot": slot}
+        for slot, player_id in enumerate([10, 9, 2, 1], start=1)
+    ] + [{"player_id": player_id, "to_court": 0} for player_id in range(3, 9)]
+    planned = build_league_live_round_plan(**common, movement_overrides=overrides)
+    assert [row["player_id"] for row in planned["next_courts"][0]["players_json"]] == [10, 9, 2, 1]
+    assert len(planned["next_roster"]) == 10
+    assert planned["roster_change"]["added_player_ids"] == [9, 10]
+    assert planned["operation_key"] != build_league_live_round_plan(**common)["operation_key"]
+
+
+@pytest.mark.parametrize("change,message", [
+    ({"active_player_ids": [1, 1, 2, 3]}, "must be unique"),
+    ({"active_player_ids": [1, 2, 3, 9]}, "outside the verified session roster"),
+    ({"active_player_ids": [1, 2, 3, 4], "players": [_roster()[0]]}, "already belong"),
+    ({"active_player_ids": list(range(1, 7))}, "fit every selected player"),
+    ({"active_player_ids": list(range(1, 9)), "court_sizes": [4]}, "fit every selected player"),
+])
+def test_attendance_rejects_duplicate_unknown_and_unassigned_players(change: dict, message: str) -> None:
+    suggestion = build_league_live_roster_suggestion(_roster())
+    with pytest.raises(LeagueLiveDomainError, match=message):
+        build_league_live_round_plan(
+            session_id="attendance", round_number=1, total_rounds=3, session_updated_at="v1",
+            roster=suggestion["roster"], courts=suggestion["courts"], matches=_matches(),
+            roster_change={"action": "attendance", **change},
+        )
+
+
+def test_game_substitute_receives_own_result_without_borrowing_seat_owners_wins() -> None:
+    suggestion = build_league_live_roster_suggestion(_roster(4))
+    roster = suggestion["roster"] + [{**_roster(5)[-1], "status": "bench", "bench_reason": "not_playing"}]
+    matches = [
+        {**_matches()[0], "score_t2": 6},
+        {**_matches()[0], "t1_p1": 5, "scheduled_player_ids": [1, 2, 3, 4], "substitution_reason": "Staff covered the second game."},
+        {**_matches()[0], "score_t2": 8},
+    ]
+    common = dict(
+        session_id="game-sub", round_number=1, total_rounds=3, session_updated_at="v1",
+        roster=roster, courts=suggestion["courts"], matches=matches,
+    )
+    planned = build_league_live_round_plan(**common)
+    results = {row["player_id"]: row for row in planned["movement"]["rows"]}
+    assert results[1]["wins"] == 2
+    assert results[2]["wins"] == 3
+    assert planned["bench_player_ids"] == [5]
+    assert planned["next_courts"][0]["players_json"][0]["player_id"] == 2
+    changed_reason = [dict(row) for row in matches]
+    changed_reason[1]["substitution_reason"] = "Player requested a break."
+    assert planned["operation_key"] != build_league_live_round_plan(**{**common, "matches": changed_reason})["operation_key"]
+
+
+@pytest.mark.parametrize("match,message", [
+    ({"t1_p1": 9}, "outside the active court roster"),
+    ({"t1_p1": 9, "scheduled_player_ids": [1, 2, 3, 4]}, "requires a reason"),
+    ({"t1_p1": 10, "scheduled_player_ids": [1, 2, 3, 4], "substitution_reason": "Break"}, "outside the authorized"),
+    ({"t1_p1": 5, "scheduled_player_ids": [1, 2, 3, 4], "substitution_reason": "Break"}, "another court"),
+    ({"t1_p1": 9, "scheduled_player_ids": [1, 2, 3, 3], "substitution_reason": "Break"}, "distinct scheduled"),
+])
+def test_game_substitution_requires_authorized_identity_and_original_court(match: dict, message: str) -> None:
+    suggestion = build_league_live_roster_suggestion(_roster())
+    roster = suggestion["roster"] + [{**_roster(9)[-1], "status": "bench"}]
+    with pytest.raises(LeagueLiveDomainError, match=message):
+        build_league_live_round_plan(
+            session_id="game-sub", round_number=1, total_rounds=3, session_updated_at="v1",
+            roster=roster, courts=suggestion["courts"], matches=[{**_matches()[0], **match}, _matches()[1]],
+        )
+
+
+def test_unplayed_game_record_changes_operation_key_and_incomplete_courts_warn() -> None:
+    suggestion = build_league_live_roster_suggestion(_roster())
+    common = dict(
+        session_id="partial", round_number=1, total_rounds=3, session_updated_at="v1",
+        roster=suggestion["roster"], courts=suggestion["courts"], matches=[_matches()[0]],
+    )
+    first = build_league_live_round_plan(**common)
+    second = build_league_live_round_plan(**common, unplayed_games=[{"row_id": "rr-2-1", "reason": "Court stopped for heat."}])
+    assert first["operation_key"] != second["operation_key"]
+    assert any("Court 2 has 0 completed" in warning for warning in second["warnings"])
+    assert len(second["next_courts"]) == 2

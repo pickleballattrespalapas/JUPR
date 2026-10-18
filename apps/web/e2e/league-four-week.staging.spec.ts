@@ -341,7 +341,7 @@ async function runWeek(
       const createResponse = page.waitForResponse((response) => {
         const url = new URL(response.url());
         return url.origin === expectedApiOrigin
-          && url.pathname === `/admin/clubs/${clubId}/match-uploader/players`
+          && url.pathname === `/admin/clubs/${clubId}/league-manager/live/players`
           && response.request().method() === "POST";
       });
       await page.getByRole("button", { name: "Create missing players", exact: true }).click();
@@ -537,6 +537,25 @@ test("creates, plays, awards, and archives a four-week Flex ladder league", asyn
     }
   );
   await installAdminMutationFirewall(page);
+
+  const workspacesResponse = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return url.origin === expectedApiOrigin
+      && url.pathname === "/admin/auth/workspaces"
+      && response.request().method() === "GET";
+  });
+  await page.goto("/admin/select-club");
+  const workspaceResult = await workspacesResponse;
+  expect(workspaceResult.status()).toBe(200);
+  const { workspaces } = await workspaceResult.json() as {
+    workspaces: Array<{ club_id: string; club_name: string; roles: string[] }>;
+  };
+  const workspace = workspaces.find((entry) => entry.club_id === clubId);
+  expect(workspace, "Acceptance club must be an assigned workspace").toBeDefined();
+  if (workspaces.length > 1 || workspaces.some((entry) => entry.roles.includes("super_admin"))) {
+    await page.getByRole("button", { name: `Open ${workspace!.club_name}`, exact: true }).click();
+  }
+  await expect(page).toHaveURL(`${expectedWebOrigin}/admin`);
 
   const leagueListPath = `/admin/clubs/${clubId}/league-manager/leagues`;
   const before = await apiGet<{ leagues: LeagueSummary[] }>(page, leagueListPath);
