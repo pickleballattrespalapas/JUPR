@@ -800,6 +800,7 @@ export default function GeneratorRoundRunner({
       );
       if (next.status === "completed") {
         setMessage("Session complete. You can review the saved matches.");
+        if (next.event.eventFormat === "moneyball_expectations") router.push(sessionStandingsPath(clubId, sessionKey));
         router.refresh();
         return;
       }
