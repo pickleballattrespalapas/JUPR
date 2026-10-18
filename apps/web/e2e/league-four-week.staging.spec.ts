@@ -62,7 +62,7 @@ type LeagueSummary = {
 };
 type LeagueDetail = {
   league: LeagueSummary;
-  roster?: Array<{ player_id: number; player_name: string; in_league: boolean }>;
+  roster?: Array<{ player_id: number; player_name: string; in_league: boolean; rating?: number | null }>;
   schedule_preview?: Array<{ session: number; date: string }>;
 };
 type LiveSession = {
@@ -276,6 +276,82 @@ async function keyboardMoveCard(page: Page, card: Locator, direction: "ArrowLeft
   await page.keyboard.press("Space");
 }
 
+async function pointerDragCourtPlayer(page: Page, sourceSlot: Locator, targetSlot: Locator): Promise<void> {
+  const handle = sourceSlot.locator("[data-rfd-drag-handle-draggable-id]");
+  await expect(handle).toBeVisible();
+  await targetSlot.scrollIntoViewIfNeeded();
+  await handle.scrollIntoViewIfNeeded();
+  const source = await handle.boundingBox();
+  expect(source, "Court player drag handle must have a visible position").not.toBeNull();
+  const x = source!.x + source!.width / 2;
+  const y = source!.y + source!.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  // Cross the mouse sensor's lift threshold before moving into the destination slot.
+  await page.mouse.move(x + 12, y, { steps: 4 });
+  const target = await targetSlot.boundingBox();
+  expect(target, "Court destination slot must have a visible position").not.toBeNull();
+  await page.mouse.move(target!.x + target!.width / 2, target!.y + target!.height / 2, { steps: 24 });
+  await page.mouse.up();
+}
+
+async function verifyCourtSetupDragAndRatings(
+  page: Page,
+  courtsPanel: Locator,
+  playerLists: Locator,
+  roster: NonNullable<LeagueDetail["roster"]>
+): Promise<void> {
+  const originalCourts = await playerLists.evaluateAll((nodes) => nodes.map((node) => (node as HTMLTextAreaElement).value));
+  const originalNames = originalCourts.map((value) => value.split("\n").filter(Boolean));
+  const originalMembers = originalNames.flat().sort();
+  const slot = (courtIndex: number, playerIndex: number) => courtsPanel.locator(
+    `[data-rfd-droppable-id="court:${courtIndex}:slot:${playerIndex}"]`
+  );
+  const undo = courtsPanel.getByRole("button", { name: "Undo last edit", exact: true });
+  const ratingsByName = new Map(roster.map((member) => [member.player_name, member.rating]));
+  const assertRatings = async (courts: string[][]) => {
+    for (const [courtIndex, names] of courts.entries()) {
+      for (const [playerIndex, name] of names.entries()) {
+        const rating = ratingsByName.get(name);
+        expect(rating, `${name} must have a seeded league rating`).not.toBeNull();
+        expect(Number.isFinite(rating), `${name} must have a numeric seeded league rating`).toBe(true);
+        await expect(slot(courtIndex, playerIndex).getByText(`Rating ${(Number(rating) / 400).toFixed(2)}`, { exact: true })).toBeVisible();
+      }
+    }
+  };
+  const assertCourts = async (courts: string[][]) => {
+    for (const [index, names] of courts.entries()) {
+      await expect(playerLists.nth(index)).toHaveValue(names.join("\n"));
+    }
+    const actualNames = await playerLists.evaluateAll((nodes) => nodes.flatMap((node) => (node as HTMLTextAreaElement).value.split("\n").filter(Boolean)));
+    expect(actualNames.sort(), "Dragging must preserve every attendee exactly once").toEqual(originalMembers);
+    await assertRatings(courts);
+  };
+
+  await assertRatings(originalNames);
+  await expect(undo).toBeDisabled();
+
+  // Dropping onto an occupied court position exchanges the two players, preserving pod sizes.
+  await pointerDragCourtPlayer(page, slot(0, 0), slot(1, 0));
+  const swapped = originalNames.map((names) => [...names]);
+  [swapped[0][0], swapped[1][0]] = [swapped[1][0], swapped[0][0]];
+  await assertCourts(swapped);
+  await expect(undo).toBeEnabled();
+  await undo.click();
+  await assertCourts(originalNames);
+  await expect(undo).toBeDisabled();
+
+  // Reordering inside one court shifts the intervening players instead of exchanging endpoints.
+  await pointerDragCourtPlayer(page, slot(0, 0), slot(0, 2));
+  const reordered = originalNames.map((names) => [...names]);
+  reordered[0].splice(2, 0, reordered[0].shift()!);
+  await assertCourts(reordered);
+  await expect(undo).toBeEnabled();
+  await undo.click();
+  await assertCourts(originalNames);
+  await expect(undo).toBeDisabled();
+}
+
 async function runWeek(
   page: Page,
   leagueId: string,
@@ -360,6 +436,9 @@ async function runWeek(
   for (let index = 0; index < plan.courtSizes.length; index += 1) {
     expect((await formatSelects.nth(index).inputValue()).toLowerCase()).toContain(`${plan.courtSizes[index]}-player`);
     expect((await playerLists.nth(index).inputValue()).split("\n").filter(Boolean)).toHaveLength(plan.courtSizes[index]);
+  }
+  if (plan.week === 1) {
+    await verifyCourtSetupDragAndRatings(page, courtsPanel, playerLists, [...baseMembers.values()]);
   }
   await courtsPanel.getByRole("button", { name: "Validate courts and generate preview", exact: true }).click();
   await expect(courtsPanel.getByRole("heading", { name: `Match preview · ${plan.matchCount} slots`, exact: true })).toBeVisible();
