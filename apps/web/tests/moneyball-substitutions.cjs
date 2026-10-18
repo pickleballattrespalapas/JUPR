@@ -73,6 +73,30 @@ const button = (tree,label) => tree.root.findAllByType("button").find(node=>text
     assert.equal(requests.length,1);
     assert.ok(JSON.stringify(tree.toJSON()).includes("Both players are ineligible to win; expectations remain fixed"));
     await act(async()=>tree.unmount());
+
+    session.event.rounds.forEach(round => {
+      round.status = "saved";
+      round.matches.forEach(match => { match.scoreA = 15; match.scoreB = 8; });
+    });
+    navigation.length = 0;
+    const completionRequests = [];
+    global.fetch = async (url, options = {}) => {
+      if (options.body) {
+        completionRequests.push(url);
+        assert.ok(url.endsWith("/advance"));
+        session.status = "completed";
+        session.version++;
+      }
+      return { ok: true, status: 200, json: async () => ({ session: structuredClone(session) }) };
+    };
+    await act(async()=>{tree=create(h(load(file).default,{apiBase:"https://api.test",clubId:"club",generatorKind:"round_robin",sessionKey:"s",roundNumber:1}));});
+    assert.equal(button(tree, "Finish session"), undefined, "Moneyball has one completion action");
+    await act(async () => button(tree, "Finish Moneyball & view results").props.onClick());
+    assert.equal(completionRequests.length, 1);
+    assert.deepEqual(navigation, [file.includes("/admin/")
+      ? "/admin/round-robin-generator/sessions/s/standings"
+      : "/clubs/club/round-robin-generator/sessions/s/standings"], "Finishing opens final results, where approval remains visible");
+    await act(async()=>tree.unmount());
   }
   console.log("Moneyball public/staff substitutions: restricted actions, both-player DQ explanation, current-round scope, draft protection and request payload passed.");
 })().catch(e=>{console.error(e);process.exitCode=1;});

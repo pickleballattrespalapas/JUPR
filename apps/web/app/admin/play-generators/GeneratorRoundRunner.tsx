@@ -753,6 +753,7 @@ export default function GeneratorRoundRunner({
       );
       if (next.status === "completed") {
         setMessage("Session completed. You can submit the saved matches for approval.");
+        if (next.event.eventFormat === "moneyball_expectations") router.push(standingsPath(sessionKey));
         router.refresh();
         return;
       }
