@@ -385,6 +385,8 @@ async function runWeek(
   const teamTwoScores = page.locator('input[aria-label$="Team 2 score"]:enabled');
   await expect(teamOneScores).toHaveCount(plan.matchCount);
   await expect(teamTwoScores).toHaveCount(plan.matchCount);
+  await expect(page.getByRole("checkbox", { name: /Not played or unfinished$/ })).toHaveCount(plan.matchCount);
+  await expect(page.locator("summary").filter({ hasText: "Who played this game?" })).toHaveCount(plan.matchCount);
   for (let index = 0; index < plan.matchCount; index += 1) {
     const teamOneWins = index % 2 === 0;
     await teamOneScores.nth(index).fill(teamOneWins ? "11" : "7");
@@ -399,6 +401,8 @@ async function runWeek(
     pathname: `${createPath}/${sessionId}/rounds/1/submit`
   });
   await expect(page.getByRole("heading", { name: "5. Movement", exact: true })).toBeVisible();
+  await expect(page.getByRole("checkbox", { name: /^Playing next round:/ })).toHaveCount(plan.attendance);
+  await expect(page.getByRole("textbox", { name: "Next-round court sizes", exact: true })).toBeVisible();
   await expect(page.getByText(/Verified operation key/i)).toBeVisible();
   if (plan.week === 1) {
     const courtOne = page.getByTestId("movement-column-court-1");
