@@ -2,6 +2,7 @@ from pathlib import Path
 
 
 PANEL = Path("apps/web/app/admin/league-manager/live/LeagueLiveRoundPanel.tsx")
+COURT_EDITOR = Path("apps/web/app/admin/league-manager/live/LeagueCourtRosterEditor.tsx")
 PAGE = Path("apps/web/app/admin/league-manager/live/page.tsx")
 ROUTES = Path("services/api/admin_league_manager_routes.py")
 SERVICE = Path("jupr_app/services/admin_league_live_service.py")
@@ -76,11 +77,13 @@ def test_resume_loader_only_lists_unfinished_sessions_for_the_route_league() -> 
 
 def test_league_live_court_and_bench_controls_are_phone_responsive() -> None:
     panel = PANEL.read_text(encoding="utf-8")
-    assert "data-responsive-court-grid" in panel
+    court_editor = COURT_EDITOR.read_text(encoding="utf-8")
+    assert "data-responsive-court-grid" in court_editor
     assert "data-responsive-bench-controls" in panel
-    assert 'minmax(min(100%, 180px), 1fr)' in panel
+    assert 'minmax(min(100%, 290px), 1fr)' in court_editor
     assert 'minmax(min(100%, 240px), 1fr)' in panel
     assert 'gridTemplateColumns: "120px 180px 1fr auto"' not in panel
+    assert 'gridTemplateColumns: "120px 180px 1fr auto"' not in court_editor
 
 
 def test_page_fetches_python_domain_readiness_and_fails_closed() -> None:
