@@ -1,7 +1,7 @@
 import time
 import pandas as pd
 
-from jupr_app.domain.player_activity import add_activity_columns
+from jupr_app.domain.player_activity import PERSISTED_ACTIVE_BY_PLAYER_ID_ATTR, add_activity_columns
 from jupr_app.domain.gamification.badge_descriptions import BADGE_DESCRIPTIONS_MD
 from jupr_app.domain.gamification.badge_registry import badge_schema_by_id
 from jupr_app.domain.gamification.requirements import load_requirements_map
@@ -169,6 +169,13 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
                 .execute()
             )
             df_players_all = pd.DataFrame(p_resp.data or [])
+            # Atomic match writes compare against stored state, while active in
+            # the returned rows remains the leaderboard eligibility projection.
+            df_players_all.attrs[PERSISTED_ACTIVE_BY_PLAYER_ID_ATTR] = {
+                int(row["id"]): row["active"]
+                for row in (p_resp.data or [])
+                if row.get("id") is not None and "active" in row
+            }
 
             df_players_all = add_activity_columns(df_players_all)
             df_players_all = _drop_merged_players(df_players_all)

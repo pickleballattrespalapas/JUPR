@@ -16,6 +16,8 @@ from jupr_app.domain.league_match_structure import (
     normalize_league_match_structure,
     validate_league_series_matches,
 )
+from jupr_app.domain.league_live_publish import validate_league_live_game_slots
+from jupr_app.domain.schedule import get_match_schedule
 from jupr_app.services.admin_guarded_write_service import (
     GuardedWriteRecoveryRequired,
     canonical_fingerprint,
@@ -397,6 +399,87 @@ def _verified_club_roster(supabase: Any, *, club_id: str, roster: list[dict[str,
     ]
 
 
+def canonical_league_live_game_preview(session_row: dict[str, Any]) -> dict[str, Any]:
+    """Rebuild generated slots from the saved court order, never a client preview."""
+    roster = normalize_league_live_roster(_as_list(session_row.get("roster_json")))
+    by_id = {int(row["player_id"]): row for row in roster}
+    by_name = {str(row["player_name"]).casefold(): row for row in roster}
+    preview_courts: list[dict[str, Any]] = []
+    for index, court in enumerate(_as_list(session_row.get("current_court_state_json")), start=1):
+        number = _safe_int(court.get("court_number", court.get("court")), index) or index
+        court_players = _as_list(court.get("players_json", court.get("players")))
+        if court_players:
+            ids = [_safe_int(row.get("player_id", row.get("id"))) for row in court_players]
+        else:
+            ids = [
+                _safe_int(by_name.get(str(name).strip().casefold(), {}).get("player_id"))
+                for name in _as_list(court.get("player_names"))
+            ]
+        if len(ids) not in {4, 5} or any(player_id not in by_id for player_id in ids):
+            raise LeagueLiveDomainError("Saved court assignments must resolve to four or five session players.")
+        schedule = get_match_schedule(f"{len(ids)}-Player", ids, schedule_mode="full")
+        matches = []
+        for match_index, match in enumerate(schedule, start=1):
+            participants = list(match["t1"]) + list(match["t2"])
+            participant_rows = [
+                {"id": player_id, "name": by_id[player_id]["player_name"], "rating": by_id[player_id]["rating"]}
+                for player_id in participants
+            ]
+            matches.append({
+                "row_id": f"rr-{number}-{match_index}",
+                "court": number,
+                "match_index": match_index,
+                "label": _clean_text(match.get("desc"), limit=120) or f"Game {match_index}",
+                "t1": participant_rows[:2],
+                "t2": participant_rows[2:],
+                **dict(zip(("t1_p1", "t1_p2", "t2_p1", "t2_p2"), participants)),
+            })
+        preview_courts.append({
+            "court": number,
+            "format_type": f"{len(ids)}-Player",
+            "expected_games": len(matches),
+            "player_names": [by_id[player_id]["player_name"] for player_id in ids],
+            "matches": matches,
+        })
+    return {
+        "ok": True,
+        "mode": "round_robin_preview",
+        "courts": preview_courts,
+        "missing_players": [],
+        "match_count": sum(len(court["matches"]) for court in preview_courts),
+    }
+
+
+def _roster_with_actual_game_players(
+    supabase: Any,
+    *,
+    club_id: str,
+    roster: list[dict[str, Any]],
+    matches: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Retain verified one-game substitutes without putting them on a later court."""
+    normalized = normalize_league_live_roster(roster)
+    roster_ids = {int(row["player_id"]) for row in normalized}
+    actual_ids = {
+        int(player_id)
+        for row in matches
+        for key in ("t1_p1", "t1_p2", "t2_p1", "t2_p2")
+        if (player_id := _safe_int(row.get(key))) is not None and player_id > 0
+    }
+    new_ids = sorted(actual_ids - roster_ids)
+    if not new_ids:
+        return normalized
+    verified = _verified_club_roster(
+        supabase,
+        club_id=club_id,
+        roster=[{"player_id": player_id, "player_name": f"Player {player_id}", "status": "bench"} for player_id in new_ids],
+    )
+    return normalized + [
+        {**row, "status": "bench", "court_number": None, "slot": None, "bench_reason": "not_playing"}
+        for row in verified
+    ]
+
+
 def _fetch_session_row(supabase: Any, *, club_id: str, session_id: str) -> dict[str, Any] | None:
     try:
         return _first_row(
@@ -741,6 +824,7 @@ def build_admin_league_live_round_plan(
     bench_player_ids: list[Any] | None = None,
     bench_override_reason: str | None = None,
     comparison_session_updated_at: str | None = None,
+    unplayed_games: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     _ensure_live_domain_enabled()
     session_row = _fetch_session_row(supabase, club_id=str(club_id), session_id=str(session_id))
@@ -754,7 +838,15 @@ def build_admin_league_live_round_plan(
         raise LeagueLiveConflictError("League Live movement is available only for an active session.")
 
     resolved_roster_change = dict(roster_change or {}) or None
-    if resolved_roster_change:
+    if resolved_roster_change and resolved_roster_change.get("action") == "attendance":
+        incoming_players = resolved_roster_change.get("players", [])
+        if not isinstance(incoming_players, list):
+            raise LeagueLiveDomainError("Attendance players must be a list of club player profiles.")
+        resolved_roster_change["players"] = (
+            _verified_club_roster(supabase, club_id=club_id, roster=incoming_players)
+            if incoming_players else []
+        )
+    elif resolved_roster_change:
         incoming = resolved_roster_change.get("player")
         if not isinstance(incoming, dict):
             raise LeagueLiveDomainError("Roster change requires a player.")
@@ -782,22 +874,43 @@ def build_admin_league_live_round_plan(
             else verified.get("rating_jupr", 1200.0),
         }
 
-    effective_courts = list(courts or _as_list(session_row.get("current_court_state_json")))
+    effective_unplayed = list(unplayed_games or [])
+    if not effective_unplayed:
+        existing_round = _first_row(
+            supabase.table("league_live_rounds").select("preview_json")
+            .eq("club_id", str(club_id)).eq("session_id", str(session_id))
+            .eq("round_number", safe_round).limit(1).execute()
+        )
+        effective_unplayed = _as_list(_as_dict((existing_round or {}).get("preview_json")).get("unplayed_games"))
+    explicit_games = unplayed_games is not None or bool(effective_unplayed) or any("scheduled_player_ids" in row for row in matches)
+    effective_courts = list(
+        _as_list(session_row.get("current_court_state_json"))
+        if explicit_games else courts or _as_list(session_row.get("current_court_state_json"))
+    )
     match_structure = _league_match_structure(
         supabase,
         club_id=str(club_id),
         league_name=str(session_row.get("league_name") or ""),
     )
-    series_matches = validate_league_series_matches(
-        matches,
-        match_structure=match_structure,
+    if explicit_games:
+        series_matches, effective_unplayed = validate_league_live_game_slots(
+            matches,
+            preview=canonical_league_live_game_preview(session_row),
+            match_structure=match_structure,
+            unplayed_games=effective_unplayed,
+            require_complete=False,
+        )
+    else:
+        series_matches = validate_league_series_matches(matches, match_structure=match_structure)
+    planning_roster = _roster_with_actual_game_players(
+        supabase, club_id=club_id, roster=_as_list(session_row.get("roster_json")), matches=series_matches,
     )
     result = build_league_live_round_plan(
         session_id=str(session_id),
         round_number=safe_round,
         total_rounds=_safe_int(session_row.get("total_rounds"), safe_round) or safe_round,
         session_updated_at=str(session_row.get("updated_at") or ""),
-        roster=_as_list(session_row.get("roster_json")),
+        roster=planning_roster,
         courts=effective_courts,
         matches=series_matches,
         movement_overrides=movement_overrides,
@@ -806,6 +919,7 @@ def build_admin_league_live_round_plan(
         bench_player_ids=bench_player_ids,
         bench_override_reason=bench_override_reason,
         comparison_session_updated_at=comparison_session_updated_at,
+        unplayed_games=effective_unplayed,
     )
     result["match_structure"] = match_structure
     return result
@@ -1561,8 +1675,12 @@ def save_admin_league_live_published_scores(
         session_id=str(session_id),
         round_number=safe_round,
     )
+    retained_roster = _roster_with_actual_game_players(
+        supabase, club_id=club_id, roster=_as_list(session_row.get("roster_json")), matches=matches_list,
+    )
     session_patch = {
         "status": "active",
+        "roster_json": retained_roster,
         "updated_by": str(actor_email or ""),
         "updated_at": now,
     }

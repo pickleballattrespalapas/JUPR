@@ -54,7 +54,9 @@ jobs:
             tests/test_admin_match_uploader_service.py \
             tests/test_league_live_*static*.py \
             tests/test_league_live_orchestration.py \
-            tests/test_league_live_publish_domain.py
+            tests/test_league_live_publish_domain.py \
+            tests/test_league_live_flexible_day.py \
+            tests/test_direct_match_activity_snapshot.py
 
       - name: Verify league award eligibility
         run: |

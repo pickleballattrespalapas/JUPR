@@ -268,6 +268,7 @@ class AdminLeagueLiveRoundPlanRequest(BaseModel):
     roster_change: dict[str, Any] | None = None
     bench_player_ids: list[int] = Field(default_factory=list)
     bench_override_reason: str | None = Field(default=None, max_length=500)
+    unplayed_games: list[dict[str, Any]] | None = Field(default=None, max_length=200)
 
 
 class AdminLeagueLiveRoundPublishRequest(BaseModel):
@@ -285,6 +286,7 @@ class AdminLeagueLiveRoundPublishRequest(BaseModel):
     expected_operation_key: str | None = Field(default=None, min_length=64, max_length=64)
     idempotency_key: str = Field(min_length=8, max_length=160)
     unusual_score_acknowledgement: bool = False
+    unplayed_games: list[dict[str, Any]] | None = Field(default=None, max_length=200)
     courts: list[dict[str, Any]] = Field(default_factory=list)
     confirmation_text: str = Field(default="", max_length=80)
     source: str = Field(default="next_league_live_round_submit", max_length=120)
@@ -889,6 +891,7 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
                 roster_change=payload.roster_change,
                 bench_player_ids=payload.bench_player_ids,
                 bench_override_reason=payload.bench_override_reason,
+                unplayed_games=payload.unplayed_games,
             )
         except Exception as exc:
             _handle_common(exc)
@@ -969,6 +972,7 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
                 expected_operation_key=payload.expected_operation_key or "",
                 idempotency_key=payload.idempotency_key,
                 unusual_score_acknowledgement=payload.unusual_score_acknowledgement,
+                unplayed_games=payload.unplayed_games,
                 courts=payload.courts,
                 actor_email=actor_email,
                 actor_role=actor_role,

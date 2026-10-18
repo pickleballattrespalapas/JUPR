@@ -31,7 +31,11 @@ function weeklyReportReady(openapi) {
 
 function leagueLiveReady(openapi) {
   const prefix = "/admin/clubs/{club_id}/league-manager/live";
-  return [
+  const gameEditsReady = ["AdminLeagueLiveRoundPublishRequest", "AdminLeagueLiveRoundPlanRequest"].every((name) => {
+    const field = openapi?.components?.schemas?.[name]?.properties?.unplayed_games;
+    return field?.type === "array" || field?.anyOf?.some((variant) => variant.type === "array") === true;
+  });
+  return gameEditsReady && [
     ["post", `${prefix}/round-robin/preview`],
     ["post", `${prefix}/players`],
     ["get", `${prefix}/player-operations/{operation_key}`],

@@ -27,6 +27,7 @@ from jupr_app.services.admin_league_live_service import (
     _safe_int,
     _safe_rows,
     build_admin_league_live_round_plan,
+    canonical_league_live_game_preview,
     ensure_admin_league_live_submit_enabled,
     get_admin_league_live_session,
     save_admin_league_live_published_scores,
@@ -510,6 +511,7 @@ def submit_admin_league_live_round_publish(
     bench_player_ids: list[Any] | None = None,
     bench_override_reason: str | None = None,
     unusual_score_acknowledgement: bool = False,
+    unplayed_games: list[dict[str, Any]] | None = None,
     source: str = "next_league_live_round_submit",
 ) -> dict[str, Any]:
     ensure_admin_league_live_submit_enabled()
@@ -541,6 +543,13 @@ def submit_admin_league_live_round_publish(
         club_id=str(club_id),
         league_name=str(session.get("league_name") or ""),
     )
+    explicit_games = unplayed_games is not None or any("scheduled_player_ids" in row for row in matches)
+    effective_preview = preview
+    if explicit_games:
+        # A retained canonical schedule remains authoritative on response replay,
+        # including after this session has moved on to its next round.
+        retained_preview = _as_dict(_as_dict((operation or {}).get("request_json")).get("preview"))
+        effective_preview = retained_preview or canonical_league_live_game_preview(session)
     resolved_operation_key = str(expected_operation_key or "")
     if not resolved_operation_key and operation:
         resolved_operation_key = str(
@@ -562,6 +571,7 @@ def submit_admin_league_live_round_publish(
             roster_change=roster_change,
             bench_player_ids=list(bench_player_ids or []),
             bench_override_reason=bench_override_reason,
+            unplayed_games=unplayed_games,
         )
         resolved_operation_key = str(score_plan.get("operation_key") or "")
     request = build_league_live_publish_request(
@@ -576,7 +586,7 @@ def submit_admin_league_live_round_publish(
         expected_operation_key=resolved_operation_key,
         unusual_score_acknowledgement=bool(unusual_score_acknowledgement),
         round_label=round_label,
-        preview=preview,
+        preview=effective_preview,
         courts=courts,
         movement_overrides=movement_overrides,
         override_reason=override_reason,
@@ -584,6 +594,7 @@ def submit_admin_league_live_round_publish(
         bench_player_ids=bench_player_ids,
         bench_override_reason=bench_override_reason,
         match_structure=match_structure,
+        unplayed_games=unplayed_games,
     )
     if operation:
         if str(operation.get("idempotency_key")) != key:
@@ -650,6 +661,7 @@ def submit_admin_league_live_round_publish(
         roster_change=_as_dict(effective_request.get("roster_change")) or None,
         bench_player_ids=_as_list(effective_request.get("bench_player_ids")),
         bench_override_reason=effective_request.get("bench_override_reason"),
+        unplayed_games=effective_request.get("unplayed_games"),
     )
     if str(verified_plan.get("operation_key") or "") != str(effective_request["expected_operation_key"]):
         raise LeagueLiveConflictError("League Live score context changed. Reload and review the scores before publishing.")
@@ -1029,6 +1041,7 @@ def retry_admin_league_live_round_publish(
             bench_player_ids=_as_list(request.get("bench_player_ids")),
             bench_override_reason=request.get("bench_override_reason"),
             comparison_session_updated_at=retained_updated_at,
+            unplayed_games=request.get("unplayed_games"),
         )
         if str(plan.get("comparison_operation_key") or "") != retained_operation_key:
             raise LeagueLiveConflictError(
@@ -1105,6 +1118,7 @@ def retry_admin_league_live_round_publish(
         bench_player_ids=_as_list(request.get("bench_player_ids")),
         bench_override_reason=request.get("bench_override_reason"),
         unusual_score_acknowledgement=bool(request.get("unusual_score_acknowledgement")),
+        unplayed_games=request.get("unplayed_games"),
         source=source,
     )
 

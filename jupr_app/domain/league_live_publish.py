@@ -19,6 +19,7 @@ class LeagueLivePublishError(ValueError):
 
 UNUSUAL_SCORE_POINT_THRESHOLD = 30
 UNUSUAL_SCORE_MARGIN_THRESHOLD = 20
+PLAYER_KEYS = ("t1_p1", "t1_p2", "t2_p1", "t2_p2")
 
 
 def _safe_int(value: Any, default: int | None = None) -> int | None:
@@ -58,6 +59,145 @@ def league_live_unusual_score_reason(score_t1: Any, score_t2: Any) -> str | None
     return None
 
 
+def _positive_integer(value: Any, label: str) -> int:
+    try:
+        number = int(value)
+        if isinstance(value, bool) or float(value) != number or number < 1:
+            raise ValueError
+        return number
+    except (TypeError, ValueError, OverflowError):
+        raise LeagueLivePublishError(f"{label} must be a positive whole number.") from None
+
+
+def _player_ids(values: Any, label: str) -> list[int]:
+    if not isinstance(values, (list, tuple)) or len(values) != 4:
+        raise LeagueLivePublishError(f"{label} must contain four ordered player IDs.")
+    ids = [_positive_integer(value, label) for value in values]
+    if len(set(ids)) != 4:
+        raise LeagueLivePublishError(f"{label} must contain four distinct players.")
+    return ids
+
+
+def _normalize_unplayed_games(games: Iterable[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    normalized = []
+    for index, raw in enumerate(games or [], start=1):
+        if not isinstance(raw, dict):
+            raise LeagueLivePublishError(f"Unplayed game {index} is invalid.")
+        series_key = str(raw.get("series_key") or "").strip()
+        if not series_key or len(series_key) > 160:
+            raise LeagueLivePublishError(f"Unplayed game {index} needs its generated series reference.")
+        reason = _clean_text(raw.get("reason"), limit=500)
+        if not reason:
+            raise LeagueLivePublishError(f"Unplayed game {index} needs a reason.")
+        if any(raw.get(key) not in (None, "") for key in ("score_t1", "score_t2", "s1", "s2")):
+            raise LeagueLivePublishError("Unplayed games cannot have scores or be published as forfeits.")
+        normalized.append({
+            "series_key": series_key,
+            "game_number": _positive_integer(raw.get("game_number"), "Unplayed game number"),
+            "court": _positive_integer(raw.get("court"), "Unplayed game court"),
+            "reason": reason,
+        })
+    return normalized
+
+
+def validate_league_live_game_slots(
+    matches: Iterable[dict[str, Any]] | None,
+    *,
+    preview: dict[str, Any] | None,
+    match_structure: Any = None,
+    unplayed_games: Iterable[dict[str, Any]] | None = None,
+    require_complete: bool = True,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Check actual participants and exclusions against a server-generated schedule.
+
+    The caller must supply an authoritative preview, regenerated from the saved
+    court assignments. Scheduled IDs identify a slot for movement only; actual
+    IDs remain the scored participants used by ratings and player history.
+    """
+    structure = normalize_league_match_structure(match_structure)
+    skipped = _normalize_unplayed_games(unplayed_games)
+    if skipped and structure["kind"] == "best_of":
+        raise LeagueLivePublishError("Best-of series must finish normally; unplayed game exclusions are supported for fixed-game rounds.")
+    generated: dict[str, dict[str, Any]] = {}
+    for court in (preview or {}).get("courts") or []:
+        if not isinstance(court, dict):
+            raise LeagueLivePublishError("The generated court preview is invalid. Regenerate the round.")
+        for raw in court.get("matches") or []:
+            if not isinstance(raw, dict):
+                raise LeagueLivePublishError("The generated match preview is invalid. Regenerate the round.")
+            series_key = str(raw.get("row_id") or raw.get("series_key") or "").strip()
+            if not series_key or len(series_key) > 160 or series_key in generated:
+                raise LeagueLivePublishError("The generated preview has missing or duplicate series references.")
+            generated[series_key] = {
+                "court": _positive_integer(raw.get("court", court.get("court")), "Generated court"),
+                "player_ids": _player_ids([raw.get(key) for key in PLAYER_KEYS], "Generated players"),
+            }
+    if not generated:
+        raise LeagueLivePublishError("A verified generated preview is required for substitutions or unplayed games.")
+
+    seen: set[tuple[str, int]] = set()
+
+    def validate_slot(raw: dict[str, Any]) -> tuple[str, int, dict[str, Any]]:
+        series_key = str(raw.get("series_key") or raw.get("row_id") or "").strip()
+        game_number = _positive_integer(raw.get("game_number", 1), "Game number")
+        slot = (series_key, game_number)
+        if series_key not in generated or game_number > int(structure["games"]):
+            raise LeagueLivePublishError("A game does not match a generated slot. Regenerate the round.")
+        if slot in seen:
+            raise LeagueLivePublishError("A generated game slot is duplicated or marked both scored and unplayed.")
+        expected = generated[series_key]
+        if _positive_integer(raw.get("court"), "Game court") != expected["court"]:
+            raise LeagueLivePublishError(f"Series {series_key} does not match its generated court.")
+        seen.add(slot)
+        return series_key, game_number, expected
+
+    scored: list[dict[str, Any]] = []
+    for raw in matches or []:
+        if not isinstance(raw, dict):
+            raise LeagueLivePublishError("Each scored game must be a match row.")
+        series_key, game_number, expected = validate_slot(raw)
+        supplied_kind = str(raw.get("series_kind") or structure["kind"]).strip().lower()
+        supplied_games = _positive_integer(raw.get("series_games", structure["games"]), "Series game count")
+        if supplied_kind != structure["kind"] or supplied_games != int(structure["games"]):
+            raise LeagueLivePublishError("The scored series does not match the league settings. Reload the league.")
+        actual = _player_ids([raw.get(key) for key in PLAYER_KEYS], "Actual players")
+        has_scheduled = "scheduled_player_ids" in raw
+        scheduled = _player_ids(raw.get("scheduled_player_ids"), "Scheduled players") if has_scheduled else actual
+        if scheduled != expected["player_ids"]:
+            raise LeagueLivePublishError(f"Series {series_key} does not match its generated scheduled players.")
+        reason = _clean_text(raw.get("substitution_reason"), limit=500)
+        if actual != scheduled and not reason:
+            raise LeagueLivePublishError(f"Series {series_key}, Game {game_number} needs a substitution reason.")
+        row = {
+            **raw,
+            "series_key": series_key,
+            "series_kind": structure["kind"],
+            "series_games": int(structure["games"]),
+            "game_number": game_number,
+        }
+        if has_scheduled:
+            row["scheduled_player_ids"] = scheduled
+            row["substitution_reason"] = reason or None
+        scored.append(row)
+    for raw in skipped:
+        validate_slot(raw)
+    if require_complete:
+        if structure["kind"] == "fixed_games":
+            expected_slots = {
+                (series_key, number)
+                for series_key in generated
+                for number in range(1, int(structure["games"]) + 1)
+            }
+            if seen != expected_slots:
+                raise LeagueLivePublishError("Every generated game must have a final score or an explicit unplayed reason.")
+        elif {key for key, _ in seen} != set(generated):
+            raise LeagueLivePublishError("Every generated best-of series must be completed before publishing.")
+    order = {key: index for index, key in enumerate(generated)}
+    scored.sort(key=lambda row: (order[row["series_key"]], row["game_number"]))
+    skipped.sort(key=lambda row: (order[row["series_key"]], row["game_number"]))
+    return scored, skipped
+
+
 def normalize_league_live_publish_matches(
     matches: Iterable[dict[str, Any]] | None,
     *,
@@ -68,16 +208,35 @@ def normalize_league_live_publish_matches(
     match_date: str,
     expected_match_count: int,
     match_structure: Any = None,
+    preview: dict[str, Any] | None = None,
+    unplayed_games: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     structure = normalize_league_match_structure(match_structure)
-    raw_rows = validate_league_series_matches(matches, match_structure=structure)
+    source_rows = list(matches or [])
+    skipped = _normalize_unplayed_games(unplayed_games)
+    flexible_games = unplayed_games is not None or any(isinstance(row, dict) and "scheduled_player_ids" in row for row in source_rows)
+    if flexible_games:
+        raw_rows, skipped = validate_league_live_game_slots(
+            source_rows, preview=preview, match_structure=structure, unplayed_games=skipped,
+        )
+        if structure["kind"] == "best_of":
+            # Validate the scheduled teams' series outcome, while keeping the
+            # actual game participants in the official rows below.
+            validate_league_series_matches(
+                [{**row, **dict(zip(PLAYER_KEYS, row.get("scheduled_player_ids") or [row.get(key) for key in PLAYER_KEYS]))} for row in raw_rows],
+                match_structure=structure,
+            )
+    else:
+        raw_rows = validate_league_series_matches(source_rows, match_structure=structure)
     expected = int(expected_match_count or 0)
     if expected < 1:
         raise LeagueLivePublishError("expected_match_count must include every generated match slot.")
-    if len(raw_rows) != expected:
+    if len(raw_rows) + len(skipped) != expected:
         raise LeagueLivePublishError(
-            f"All generated matches must be scored before publish ({len(raw_rows)} of {expected} supplied)."
+            f"All generated matches must be scored or explicitly unplayed before publish ({len(raw_rows) + len(skipped)} of {expected} supplied)."
         )
+    if not raw_rows:
+        raise LeagueLivePublishError("At least one completed game is required; cancel an entirely unplayed round instead.")
     if expected > 200:
         raise LeagueLivePublishError("A League Live round cannot publish more than 200 matches.")
 
@@ -137,6 +296,9 @@ def normalize_league_live_publish_matches(
                     "game_number": int(game_number or 0),
                 }
             )
+        if "scheduled_player_ids" in raw:
+            normalized_row["scheduled_player_ids"] = list(raw["scheduled_player_ids"])
+            normalized_row["substitution_reason"] = raw.get("substitution_reason")
         normalized.append(normalized_row)
     return normalized
 
@@ -162,6 +324,7 @@ def build_league_live_publish_request(
     bench_player_ids: list[Any] | None = None,
     bench_override_reason: str | None = None,
     match_structure: Any = None,
+    unplayed_games: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     structure = normalize_league_match_structure(match_structure)
     normalized_matches = normalize_league_live_publish_matches(
@@ -173,6 +336,8 @@ def build_league_live_publish_request(
         match_date=str(match_date),
         expected_match_count=int(expected_match_count),
         match_structure=structure,
+        preview=preview,
+        unplayed_games=unplayed_games,
     )
     request = {
         "session_id": str(session_id),
@@ -192,6 +357,9 @@ def build_league_live_publish_request(
         "bench_override_reason": _clean_text(bench_override_reason, limit=500) or None,
         "match_structure": structure,
     }
+    if unplayed_games is not None:
+        request["unplayed_games"] = _normalize_unplayed_games(unplayed_games)
+        request["preview"]["unplayed_games"] = request["unplayed_games"]
     if not request["expected_updated_at"]:
         raise LeagueLivePublishError("expected_updated_at is required; reload the session before publish.")
     if len(str(request["expected_operation_key"])) != 64:
