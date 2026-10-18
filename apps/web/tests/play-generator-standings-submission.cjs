@@ -86,6 +86,10 @@ async function organizerFinishesAndSubmitsWithoutAccount() {
   assert.equal(JSON.parse(finish.options.body).expected_version, 4);
   assert.equal(calls.some(call => call.url.endsWith("/advance")), false, "Finishing is separate from advancing");
   assert.ok(button(tree, "Submit for approval"), "Finishing reveals submission on the same page");
+  assert.equal(button(tree, "Submit for approval").findAllByType("details").length, 0);
+  for (let parent = button(tree, "Submit for approval").parent; parent; parent = parent.parent) {
+    assert.notEqual(parent.type, "details", "Submission must remain visible with navigation collapsed");
+  }
   assert.equal(routerCalls.length, 0, "Organizer does not have to return to the round page");
   assert.ok(content(tree).indexOf("Submit for approval") < content(tree).indexOf("Standings"), "Submission is prominent above the table");
   await fillAndSubmit(tree);
@@ -250,6 +254,51 @@ async function cannotFinishWithReopenedRound(Component) {
   await act(async () => tree.unmount());
 }
 
+async function moneyballFinishesAndSubmits(Component) {
+  publicEnvironment({ storedToken: "organizer-secret" });
+  routerCalls.length = 0;
+  let current = { ...baseline, moneyball: { completedGames: 5, totalGames: 5, rows: [], winners: [], prizePool: 500, payout: [] } };
+  const calls = [];
+  global.fetch = async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url.endsWith("/advance")) current = { ...current, status: "completed", version: "5" };
+    if (url.endsWith("/submit")) current = { ...current, version: "6", submission: { status: "pending", rating_mode: "rated" } };
+    return reply({ session: current });
+  };
+  let tree;
+  await act(async () => { tree = create(React.createElement(Component, props)); });
+  assert.ok(button(tree, "Finish Moneyball"));
+  assert.equal(button(tree, "Finish session"), undefined, "Moneyball has one finish action");
+  await act(async () => button(tree, "Finish Moneyball").props.onClick());
+  const submit = button(tree, "Submit for approval");
+  assert.ok(submit, "Finishing Moneyball reveals approval without leaving final results");
+  for (let parent = submit.parent; parent; parent = parent.parent) {
+    assert.notEqual(parent.type, "details", "Moneyball approval must remain outside collapsed controls");
+  }
+  await fillAndSubmit(tree);
+  assert.equal(calls.filter(call => call.url.endsWith("/submit")).length, 1);
+  assert.ok(content(tree).includes("Awaiting admin approval"));
+  assert.equal(button(tree, "Finish Moneyball"), undefined);
+  assert.equal(button(tree, "Submit for approval"), undefined);
+  assert.equal(routerCalls.length, 0, "Completion and submission preserve the final-results page");
+  await act(async () => tree.unmount());
+}
+
+async function localDatePlayed() {
+  const previous = process.env.TZ;
+  process.env.TZ = "America/Mazatlan";
+  let tree;
+  try {
+    await act(async () => { tree = create(React.createElement(submission.default, {
+      canSubmit: true, ratingMode: "rated", defaultDate: "2026-10-18T01:03:03Z", onSubmit: async () => {}
+    })); });
+    assert.equal(tree.root.findByProps({ type: "date" }).props.value, "2026-10-17", "Evening sessions use the local date played");
+  } finally {
+    await act(async () => tree?.unmount());
+    if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous;
+  }
+}
+
 (async () => {
   await organizerFinishesAndSubmitsWithoutAccount();
   await organizerFragmentAndFailedSubmission();
@@ -258,8 +307,10 @@ async function cannotFinishWithReopenedRound(Component) {
   await standingsCanContinueBeyondSchedule(PublicStandings, true);
   await standingsCanContinueBeyondSchedule(AdminStandings, false);
   for (const Component of [PublicStandings, AdminStandings]) {
+    await moneyballFinishesAndSubmits(Component);
     await completedSessionsCanResumeUntilSubmitted(Component);
     await cannotFinishWithReopenedRound(Component);
   }
+  await localDatePlayed();
   console.log("Round-Robin standings submission behavior passed.");
 })().catch(error => { console.error(error); process.exitCode = 1; });

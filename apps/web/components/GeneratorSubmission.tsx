@@ -24,7 +24,10 @@ export default function GeneratorSubmission({ submission, canSubmit, defaultDate
   onSubmit: (organizerName: string, matchDate: string) => Promise<void>;
 }) {
   const [organizerName, setOrganizerName] = useState("");
-  const [matchDate, setMatchDate] = useState(() => (defaultDate || new Date().toISOString()).slice(0, 10));
+  const [matchDate, setMatchDate] = useState(() => {
+    const played = new Date(defaultDate || Date.now());
+    return `${played.getFullYear()}-${String(played.getMonth() + 1).padStart(2, "0")}-${String(played.getDate()).padStart(2, "0")}`;
+  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const field = { padding: "0.6rem", border: "1px solid #cbd5e1", borderRadius: 8, font: "inherit", maxWidth: "100%" };
