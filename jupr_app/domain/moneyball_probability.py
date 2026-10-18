@@ -1,6 +1,7 @@
 """Versioned Moneyball probability and pre-event calibration engine."""
 import hashlib
 import json
+import math
 from pathlib import Path
 
 import numpy as np
@@ -15,7 +16,11 @@ def read_json(path):
 def canonical_config(event):
     players = [{k:p[k] for k in ('id','name','rating')} for p in event['players']]
     matches = [{k:m[k] for k in ('id','round','team1','team2')} for m in event['matches']]
-    return {'name':event['name'],'players':players,'matches':matches}
+    config = {'name':event['name'],'players':players,'matches':matches}
+    # Preserve the hashes of existing 11-point locks.
+    if event.get('goal_points', 11) != 11:
+        config['goal_points'] = event['goal_points']
+    return config
 
 
 def digest(value):
@@ -23,6 +28,8 @@ def digest(value):
 
 
 def validate_config(config):
+    if type(config.get('goal_points', 11)) is not int or config.get('goal_points', 11) not in {11, 15}:
+        raise ValueError('Moneyball supports games to 11 or 15, win by two.')
     players, matches = config['players'], config['matches']
     count = len(players)
     six_player = count == 6
@@ -68,7 +75,59 @@ def validate_config(config):
         raise ValueError('Use a complete perfect RR: everyone plays every partner once, partners once and opposes twice.')
 
 
+def scoring_point_margins(goal, point_probability):
+    """Exact win-by-two margins for independent scoring points, including deuce.
+
+    This models awarded points, not service exchanges or rally scoring rules.
+    """
+    q = np.asarray(point_probability, dtype=float)
+    if q.ndim != 1 or np.any(~np.isfinite(q)) or np.any((q <= 0) | (q >= 1)):
+        raise ValueError('Scoring-point probabilities must be strictly between zero and one.')
+    support = np.array(list(range(-goal, -1)) + list(range(2, goal + 1)))
+    p = np.empty((len(q), len(support)))
+    deuce = math.comb(2*goal-2, goal-1) * (q*(1-q))**(goal-1)
+    for j, margin in enumerate(support):
+        winner = q if margin > 0 else 1-q
+        loser_points = goal-abs(int(margin))
+        p[:, j] = math.comb(goal+loser_points-1, loser_points) * winner**goal * (1-winner)**loser_points
+        if abs(margin) == 2:
+            p[:, j] += deuce * winner**2 / (q*q+(1-q)**2)
+    return p / p.sum(axis=1)[:, None]
+
+
+def model_for_target(base_model, goal):
+    if type(goal) is not int or goal not in {11, 15}:
+        raise ValueError('Moneyball supports games to 11 or 15, win by two.')
+    if goal == 11:
+        return base_model
+    return {
+        'version': 'fair-moneyball-15-point-extension-v1',
+        'kind': 'scoring_point_extension', 'goal_points': 15, 'win_by_two': True,
+        'margin_support': list(range(-15, -1)) + list(range(2, 16)),
+        'source_model': base_model,
+        'validation': {'historical_15_point_validation': False,
+                       'interpretation': 'Experimental extension of the 11-point model; not fitted or validated on 15-point results.'},
+        'assumptions': [
+            'Independent awarded scoring points conditional on frozen team ratings.',
+            'Per-point probability is calibrated to the original model\'s 11-point win probability, then used for games to 15.',
+            'No outcomes from this event are used to prepare expectations or balance offsets.',
+        ],
+    }
+
+
 def match_probabilities(model, differences):
+    if model.get('kind') == 'scoring_point_extension':
+        source = model['source_model']
+        reference = match_probabilities(source, differences)
+        wins = reference[:, np.array(source['margin_support']) > 0].sum(axis=1)
+        low, high = np.full(len(wins), 1e-12), np.full(len(wins), 1-1e-12)
+        source_support = np.array(source['margin_support'])
+        for _ in range(48):
+            mid = (low+high)/2
+            predicted = scoring_point_margins(source['goal_points'], mid)[:, source_support > 0].sum(axis=1)
+            low = np.where(predicted < wins, mid, low)
+            high = np.where(predicted >= wins, mid, high)
+        return scoring_point_margins(model['goal_points'], (low+high)/2)
     support = np.array(model['margin_support'],dtype=int)
     mag = np.abs(support)-2
     a = np.array(model['log_magnitude_weights'])[mag]
@@ -93,6 +152,7 @@ def distributions(config,model):
         for pid in m['team2']:
             a[j,index[pid]] = -1
     support = np.array(model['margin_support'],dtype=np.int16)
+    bound = int(np.max(np.abs(support)))
     probabilities = match_probabilities(model,differences)
     game_means = probabilities@support
     expected_pd = game_means@a
@@ -100,12 +160,12 @@ def distributions(config,model):
     for player in range(len(ids)):
         pmf = np.array([1.])
         for j in np.flatnonzero(a[:,player]):
-            single = np.zeros(23)
-            single[support+11] = probabilities[j]
+            single = np.zeros(2*bound+1)
+            single[support+bound] = probabilities[j]
             if a[j,player] < 0:
                 single = single[::-1]
             pmf = np.convolve(pmf,single)
-        assert len(pmf) == 22*np.count_nonzero(a[:,player])+1 and abs(pmf.sum()-1) < 1e-12
+        assert len(pmf) == 2*bound*np.count_nonzero(a[:,player])+1 and abs(pmf.sum()-1) < 1e-12
         cdf = np.cumsum(pmf)
         # Midpoint CDF avoids counting a result's whole discrete probability mass as beaten.
         percentiles.append(cdf-.5*pmf)
@@ -128,7 +188,7 @@ def simulate(a,support,probabilities,percentiles,number,seed):
             wins[:,i] += signed > 0
     u = np.empty((number,count))
     for i in range(count):
-        u[:,i] = percentiles[i,totals[:,i]+11*np.count_nonzero(a[:,i])]
+        u[:,i] = percentiles[i,totals[:,i]+int(np.max(np.abs(support)))*np.count_nonzero(a[:,i])]
     clipped = np.clip(u,1e-12,1-1e-12)
     z = np.log(clipped)-np.log1p(-clipped)
     return totals,wins,u,z
@@ -167,6 +227,8 @@ def prepare(event,model,calibration_sims=200000,audit_sims=300000,seed=202610140
     if calibration_sims < 10000 or audit_sims < 10000:
         raise ValueError('Use at least 10,000 calibration and audit simulations.')
     config = canonical_config(event)
+    if config.get('goal_points', 11) != model['goal_points']:
+        raise ValueError('The scoring model must match the event target score.')
     a,support,p,pct,pmfs,expected_pd = distributions(config,model)
     count = len(config['players'])
     batch_size = 20000
@@ -224,13 +286,14 @@ def score(event,lock):
     count = len(ids)
     totals = np.zeros(count,dtype=int)
     wins = np.zeros(count,dtype=int)
+    goal = lock['model']['goal_points']
     for m in event['matches']:
         s1,s2 = m.get('score1'),m.get('score2')
-        if isinstance(s1,bool) or isinstance(s2,bool) or not isinstance(s1,int) or not isinstance(s2,int) or min(s1,s2) < 0 or abs(s1-s2) < 2 or max(s1,s2) < 11 or (max(s1,s2) > 11 and abs(s1-s2) != 2):
-            raise ValueError('All games need completed scores to 11, win by two; extended games must finish two points apart.')
+        if isinstance(s1,bool) or isinstance(s2,bool) or not isinstance(s1,int) or not isinstance(s2,int) or min(s1,s2) < 0 or abs(s1-s2) < 2 or max(s1,s2) < goal or (max(s1,s2) > goal and abs(s1-s2) != 2):
+            raise ValueError(f'All games need completed scores to {goal}, win by two; extended games must finish two points apart.')
         margin = s1-s2
-        if abs(margin)>11:
-            raise ValueError('A finished game to 11 cannot have a margin above 11.')
+        if abs(margin)>goal:
+            raise ValueError(f'A finished game to {goal} cannot have a margin above {goal}.')
         for team,sign in [(m['team1'],1),(m['team2'],-1)]:
             for pid in team:
                 i=index[pid]
@@ -251,7 +314,7 @@ def score(event,lock):
         for pid in m['team2']:
             expected_wins[index[pid]]+=1-team1_win_probability[j]
     for i,p in enumerate(lock['config']['players']):
-        u=float(percentiles[i,totals[i]+11*games[i]])
+        u=float(percentiles[i,totals[i]+goal*games[i]])
         u=float(np.clip(u,1e-12,1-1e-12))
         z=np.log(u)-np.log1p(-u)+lock['balance_logit_offsets'][i]
         fair_score=float(100/(1+np.exp(-z)))

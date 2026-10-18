@@ -16,6 +16,8 @@ Wins and expected wins are displayed for context. There is no separate win bonus
 
 Before starting, both the public and staff matchup previews show each player's scheduled games, expected wins, expected losses, and expected point differential for the **full event** above the round-by-round matchups. These totals come from the same frozen game probabilities used for scoring, without exposing individual ratings. Byes are excluded (six-player rotations show four games per player). Decimal expectations are averages: three wins beats an expectation of 2.6 wins, but wins do not award a separate bonus or guarantee the prize. An older saved preview without these totals prompts the organizer to generate a new preview.
 
+The same full-event expectations remain available on both round runners under **View full-event Moneyball expectations**, and on the public and staff standings pages. They include saved and unplayed games; the standings' expected figures still cover saved games only.
+
 The server resolves ratings from club-scoped player IDs; clients cannot supply ratings or balancing offsets. Preview fingerprints include the frozen setup, so a rating change between preview and start requires a fresh preview. The persisted session stores its private lock, model version, distributions, and offsets. Starting another event recalculates expectations. Score changes never recalibrate an existing event.
 
 Player ratings, distributions, and offsets are removed from preview/session payloads, public exports, and shared viewing/handoff links. Standings show wins, expected wins, point differential, expected point differential, and Moneyball score. Expected figures cover saved games only. Interim scores are provisional; the full-event balancing audit does not claim equal winning chances for an incomplete event.
@@ -25,6 +27,14 @@ All scheduled games must be saved before the session can finish or display a fin
 Rated/unrated match publication remains the organizer's pre-event choice and goes through the existing submission/approval workflow. Moneyball expectations do not change that workflow or silently update club ratings. Existing standard round robins retain their flexible roster, open-ended play, scoring modes, and playoffs.
 
 No schema migration is needed: the private lock lives in the existing session JSON state. Persisted locks keep their included model, so later model versions cannot alter an event already played.
+
+### Converting an existing round robin and games to 15
+
+The domain conversion helper supports an explicitly authorized, unpublished fixed doubles round robin with its original lineup. It validates the existing schedule and saved scores without regenerating rounds or changing event identity, dates, rating mode, current round, match IDs, or scores. Every player must have a distinct verified club profile and a supplied starting rating; no default rating is invented. The operator must also check the session-level submission/publication state and persist only against the exact inspected version with no pending operation, preserving organizer access and other session state. Conversion records when it happened and how many games had already been saved. Existing results never enter model preparation or calibration.
+
+Conversions can freeze a target of 11 or 15, win by two. Ordinary generator setup continues to default to 11. The target is included in the frozen configuration and cannot change afterward. A game to 15 accepts 15–11 and 15–0, rejects unfinished 11–7 and 15–14, and accepts extended finishes such as 17–15.
+
+The 15-point model is an **experimental extension**, not a fit to historical 15-point games. For each matchup it infers an independent scoring-point probability that reproduces the original model's 11-point win probability, then calculates the exact margin distribution for a first-to-15, win-by-two game. Negative-binomial paths cover regulation finishes; the probability of reaching deuce is resolved analytically. These are awarded scoring points, not a claim about independent rallies or side-out sequences. Calibration and the independent whole-event balance audit then use that 15-point distribution. All raw scores, point differences, win expectations, and percentile supports use the 15-point target. The UI discloses the extension's lack of historical 15-point validation. Existing 11-point models, probabilities, and lock hashes remain unchanged.
 
 Version 2 prepares calibration and audit simulations in bounded-memory batches for larger lineups. Previously frozen version 1 eight-player sessions retain their original model, distributions, offsets and payout.
 

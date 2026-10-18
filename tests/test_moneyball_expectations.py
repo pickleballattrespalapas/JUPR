@@ -10,7 +10,8 @@ from jupr_app.domain.adaptive_play_engine import (
     advance_generator_event, complete_generator_event, generator_event_standings,
     mutate_generator_roster, skip_generator_round, select_generator_round,
 )
-from jupr_app.domain.moneyball_expectations import freeze_moneyball, public_event, settlement
+from jupr_app.domain.moneyball_expectations import freeze_moneyball, public_event, settlement, convert_existing_moneyball, validate_score
+import numpy as np
 from jupr_app.domain.generator_playoffs import start_generator_playoff
 from jupr_app.services.public_play_generator_service import (
     preview_public_play_generator, create_public_play_generator_session,
@@ -103,6 +104,96 @@ def test_standard_preview_has_no_moneyball_expectations():
     event = preview(event_format="standard")
     assert public_event(event) == event
     assert "moneyballExpectations" not in public_event(event)
+
+
+def test_fifteen_point_distribution_is_symmetric_normalized_and_target_aware():
+    from pathlib import Path
+    base = json.loads(Path(moneyball_probability.__file__).with_name("moneyball_model_v1.json").read_text())
+    assert moneyball_probability.model_for_target(base, 11) is base
+    model = moneyball_probability.model_for_target(base, 15)
+    differences = [-.8, 0, .8]
+    probabilities = moneyball_probability.match_probabilities(model, differences)
+    support = np.array(model["margin_support"])
+    wins = probabilities[:, support > 0].sum(axis=1)
+    original = moneyball_probability.match_probabilities(base, differences)
+    original_wins = original[:, np.array(base["margin_support"]) > 0].sum(axis=1)
+    assert probabilities.sum(axis=1) == pytest.approx([1, 1, 1])
+    assert probabilities[0] == pytest.approx(probabilities[2][::-1])
+    assert wins[1] == pytest.approx(.5)
+    assert wins[0] < original_wins[0] < .5 < original_wins[2] < wins[2]
+    assert np.all(probabilities > 0) and max(support) == 15 and min(support) == -15
+    # Independently count fair scoring-point paths to 15-0 and to deuce.
+    assert probabilities[1, -1] == pytest.approx(.5**15)
+    assert probabilities @ support == pytest.approx([-(probabilities[2] @ support), 0, probabilities[2] @ support])
+    assert model["validation"]["historical_15_point_validation"] is False
+
+
+@pytest.fixture(scope="module")
+def converted_fifteen():
+    event = start_generator_event(preview(event_format="standard", participant_names=[f"Player {i}" for i in range(5)],
+                                          player_ids=list(range(1, 6)), total_rounds=5))
+    event = advance_generator_event(save(event, 1, 11, 15))
+    original = deepcopy(event)
+    ratings = {p["id"]: 3+i*.15 for i, p in enumerate(event["participants"])}
+    player_ids = {p["id"]: p["player_id"] for p in event["participants"]}
+    result = convert_existing_moneyball(event, ratings, player_ids=player_ids,
+                                       target_score=15, converted_at="2026-10-18T01:45:00+00:00")
+    assert event == original
+    for key in ["rounds", "participants", "status", "createdAt", "startedAt", "currentRoundNumber", "sourceEventUid", "ratingMode"]:
+        assert result[key] == original[key]
+    return result
+
+
+def test_live_fifteen_conversion_keeps_games_and_matches_full_reference(converted_fifteen):
+    event = deepcopy(converted_fifteen)
+    expected = public_event(event)["moneyballExpectations"]
+    assert event["moneyball"]["targetScore"] == 15 and event["moneyball"]["convertedAfterGames"] == 1
+    assert event["moneyballPrivate"]["fairness"]["simulation_fairness_check_passed"]
+    assert all(r["scheduledGames"] == 4 for r in expected)
+    assert sum(r["expectedWins"] for r in expected) == pytest.approx(10)
+    first = event["rounds"][0]
+    assert (first["matches"][0]["scoreA"], first["matches"][0]["scoreB"]) == (11, 15)
+    lock = deepcopy(event["moneyballPrivate"])
+    for number, a, b in [(2, 15, 0), (3, 0, 15), (4, 17, 15), (5, 15, 13)]:
+        event = advance_generator_event(save(event, number, a, b))
+    assert event["status"] == "completed"
+    assert public_event(event)["moneyballExpectations"] == expected
+    assert event["moneyballPrivate"] == lock
+    by_id = {m["id"]: m for r in event["rounds"] for m in r["matches"]}
+    scored = deepcopy(lock["config"])
+    for m in scored["matches"]:
+        m.update(score1=by_id[m["id"]]["scoreA"], score2=by_id[m["id"]]["scoreB"])
+    reference = moneyball_probability.score(scored, lock)["standings"]
+    rows = generator_event_standings(event)
+    assert [r["participantId"] for r in rows] == [r["player_id"] for r in reference]
+    for row, ref in zip(rows, reference):
+        assert row["moneyballScore"] == pytest.approx(ref["moneyball_score"])
+        assert row["expectedDifferential"] == pytest.approx(ref["expected_point_differential"])
+    assert sum(w["payoutMxn"] for w in settlement(event, rows)["winners"]) == 500
+    event["moneyball"]["targetScore"] = 11
+    with pytest.raises(ValueError, match="matchups"):
+        generator_event_standings(event)
+
+
+@pytest.mark.parametrize("a,b,valid", [(15, 0, True), (11, 15, True), (17, 15, True), (15, 13, True),
+                                      (11, 7, False), (15, 14, False), (16, 12, False), (14, 12, False), (True, 15, False)])
+def test_fifteen_score_rules(a, b, valid):
+    if valid:
+        validate_score(a, b, 15)
+    else:
+        with pytest.raises(ValueError): validate_score(a, b, 15)
+
+
+def test_conversion_rejects_changed_profiles_incomplete_ratings_and_incompatible_scores():
+    event = start_generator_event(preview(event_format="standard", participant_names=[f"P{i}" for i in range(5)],
+                                          player_ids=list(range(1, 6)), total_rounds=5))
+    event = save(event, 1, 15, 11)
+    ratings = {p["id"]: 3.5 for p in event["participants"]}
+    ids = {p["id"]: p["player_id"] for p in event["participants"]}
+    for level, links, goal in [(ratings, ids, 11), ({}, ids, 15), (ratings, {**ids, "p-1": 99}, 15),
+                               (ratings, {**ids, "p-1": 2}, 15), (ratings, ids, 21)]:
+        with pytest.raises(ValueError):
+            convert_existing_moneyball(event, level, player_ids=links, target_score=goal, converted_at="now")
 
 
 def test_final_scores_match_prototype_and_score_corrections(frozen):
