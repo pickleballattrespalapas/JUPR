@@ -7,17 +7,28 @@ export type MoneyballExpectation = {
   expectedDifferential: number;
 };
 
+export type MoneyballExpectationFormat = {
+  targetScore?: number;
+  modelNote?: string;
+  conversionNote?: string;
+};
+
 function signed(value: number): string {
   const rounded = value.toFixed(2);
   return Number(rounded) === 0 ? "0.00" : value > 0 ? `+${rounded}` : rounded;
 }
 
-export default function GeneratorMoneyballExpectations({ rows }: { rows?: MoneyballExpectation[] }) {
+export default function GeneratorMoneyballExpectations({ rows, locked = false, format }: {
+  rows?: MoneyballExpectation[]; locked?: boolean; format?: MoneyballExpectationFormat;
+}) {
   return (
     <section aria-label="Moneyball player expectations" style={{ border: "1px solid #86efac", borderRadius: 12, padding: "1rem", marginBottom: "1rem", background: "#f0fdf4", minWidth: 0 }}>
       <h3 style={{ marginTop: 0 }}>Your expectations for the full event</h3>
       {rows?.length ? <>
-        <p>Based on this starting lineup, its ratings and every scheduled matchup. Byes do not count as games. Expectations lock when you start.</p>
+        <p>Based on this starting lineup, its ratings and every scheduled matchup. Byes do not count as games. {locked ? "These expectations are locked for the full event, including games already played." : "Expectations lock when you start."}</p>
+        {format?.targetScore ? <p>Games to {format.targetScore}, win by two.</p> : null}
+        {format?.modelNote ? <p>{format.modelNote}</p> : null}
+        {format?.conversionNote ? <p>{format.conversionNote}</p> : null}
         <div role="region" aria-label="Full-event expectations table" tabIndex={0} style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", minWidth: 520, borderCollapse: "collapse", fontVariantNumeric: "tabular-nums" }}>
             <thead>

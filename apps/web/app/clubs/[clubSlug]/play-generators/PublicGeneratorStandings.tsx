@@ -8,6 +8,7 @@ import Link from "@/components/PublicClubLink";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import GeneratorSubmission, { GeneratorSubmissionStatus, generatorResultLabel } from "@/components/GeneratorSubmission";
+import GeneratorMoneyballExpectations, { type MoneyballExpectation, type MoneyballExpectationFormat } from "@/components/GeneratorMoneyballExpectations";
 import GeneratorMoneyball, { type MoneyballSettlement } from "@/components/GeneratorMoneyball";
 import GeneratorPlayoff, { type PlayoffFormat, type GeneratorPlayoffEvent, type GeneratorPlayoffOptions } from "@/components/GeneratorPlayoff";
 import PlayGeneratorStandingsTable, {
@@ -37,6 +38,8 @@ type Session = {
   standings?: PlayGeneratorStanding[];
   playoff_options?: GeneratorPlayoffOptions | null;
   event: GeneratorPlayoffEvent & {
+    moneyballExpectations?: MoneyballExpectation[];
+    moneyball?: MoneyballExpectationFormat;
     scoringMode?: ScoringMode;
     standingsSort?: StandingsSort;
     currentRoundNumber?: number;
@@ -268,6 +271,7 @@ export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey, 
 
       <PlayGeneratorStandingsTable rows={session.standings || []} sortMode={sortMode} title={session.event.playoff ? "Round-robin standings" : undefined} />
       <GeneratorMoneyball value={session.moneyball} />
+      {moneyball ? <GeneratorMoneyballExpectations rows={session.event.moneyballExpectations} locked format={session.event.moneyball} /> : null}
       {session.status === "completed" ? (
         <article style={{ ...cardStyle, background: "#ecfdf5", borderColor: "#86efac" }}>
           <h2 style={{ marginTop: 0 }}>Final standings</h2>

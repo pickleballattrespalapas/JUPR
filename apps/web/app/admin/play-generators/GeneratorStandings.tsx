@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import GeneratorSubmission, { GeneratorSubmissionStatus, generatorResultLabel } from "@/components/GeneratorSubmission";
+import GeneratorMoneyballExpectations, { type MoneyballExpectation, type MoneyballExpectationFormat } from "@/components/GeneratorMoneyballExpectations";
 import GeneratorMoneyball, { type MoneyballSettlement } from "@/components/GeneratorMoneyball";
 import GeneratorPlayoff, { type PlayoffFormat, type GeneratorPlayoffEvent, type GeneratorPlayoffOptions } from "@/components/GeneratorPlayoff";
 import PlayGeneratorStandingsTable, {
@@ -36,6 +37,8 @@ type Session = {
   playoff_options?: GeneratorPlayoffOptions | null;
   official_publish?: { published_at?: string | null; published_match_ids?: number[] };
   event: GeneratorPlayoffEvent & {
+    moneyballExpectations?: MoneyballExpectation[];
+    moneyball?: MoneyballExpectationFormat;
     scoringMode?: ScoringMode;
     standingsSort?: StandingsSort;
     currentRoundNumber?: number;
@@ -201,6 +204,7 @@ export default function AdminGeneratorStandings({ apiBase, clubId, sessionKey }:
       ) : null}
       {!moneyball ? <GeneratorPlayoff event={session.event} options={session.playoff_options} canManage={Boolean(accessToken)} locked={Boolean(session.submission) || Boolean(session.official_publish?.published_at) || Boolean(session.official_publish?.published_match_ids?.length)} busy={busy} onStart={startPlayoff} roundHref={round => `/admin/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${round}`} /> : null}
       <GeneratorMoneyball value={session.moneyball} />
+      {moneyball ? <GeneratorMoneyballExpectations rows={session.event.moneyballExpectations} locked format={session.event.moneyball} /> : null}
       <PlayGeneratorStandingsTable rows={session.standings || []} sortMode={sortMode} title={session.event.playoff ? "Round-robin standings" : undefined} />
       {session.status === "completed" ? (
         <article style={{ ...cardStyle, background: "#ecfdf5", borderColor: "#86efac" }}>

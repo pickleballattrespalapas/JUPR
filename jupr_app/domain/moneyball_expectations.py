@@ -21,37 +21,48 @@ def is_moneyball(event: dict[str, Any]) -> bool:
     return event.get("eventFormat") == FORMAT
 
 
-def validate_score(a: Any, b: Any) -> None:
+def validate_score(a: Any, b: Any, target_score: int = 11) -> None:
+    if type(target_score) is not int or target_score not in {11, 15}:
+        raise ValueError("Moneyball supports games to 11 or 15, win by two.")
     if (isinstance(a, bool) or isinstance(b, bool) or not isinstance(a, int)
             or not isinstance(b, int) or min(a, b) < 0 or abs(a-b) < 2
-            or max(a, b) < 11 or (max(a, b) > 11 and abs(a-b) != 2)
-            or abs(a-b) > 11):
-        raise ValueError("Moneyball games are to 11, win by two. Enter a completed game score.")
+            or max(a, b) < target_score or (max(a, b) > target_score and abs(a-b) != 2)
+            or abs(a-b) > target_score):
+        raise ValueError(f"Moneyball games are to {target_score}, win by two. Enter a completed game score.")
 
 
 def config_from_event(event: dict[str, Any], ratings: dict[str, float]) -> dict[str, Any]:
     slots = {p["id"]: p.get("moneyballSlot", p["id"]) for p in event["participants"]}
-    return {"name": event["name"], "players": [
+    config = {"name": event["name"], "players": [
         {"id": p["id"], "name": p["name"], "rating": ratings[p["id"]]}
         for p in event["participants"] if p["id"] in ratings
     ], "matches": [
         {"id": m["id"], "round": r["number"], "team1": [slots[pid] for pid in m["sideA"]], "team2": [slots[pid] for pid in m["sideB"]]}
         for r in event["rounds"] for m in r["matches"]
     ]}
+    goal = (event.get("moneyball") or {}).get("targetScore", 11)
+    if goal != 11:
+        config["goal_points"] = goal
+    return config
 
 
 @lru_cache(maxsize=32)
 def _prepare(config_json: str) -> dict[str, Any]:
     model = json.loads(Path(__file__).with_name("moneyball_model_v1.json").read_text())
-    lock = probability.prepare(json.loads(config_json), model,
+    config = json.loads(config_json)
+    model = probability.model_for_target(model, config.get("goal_points", 11))
+    lock = probability.prepare(config, model,
                                calibration_sims=500000, audit_sims=1000000)
     if not lock["fairness"]["simulation_fairness_check_passed"]:
         raise ValueError("This Moneyball setup did not pass the balance check. Please use a standard round robin.")
     return lock
 
 
-def freeze_moneyball(event: dict[str, Any], ratings: dict[str, float]) -> dict[str, Any]:
+def freeze_moneyball(event: dict[str, Any], ratings: dict[str, float], *, target_score: int = 11) -> dict[str, Any]:
     event = copy.deepcopy(event)
+    if type(target_score) is not int or target_score not in {11, 15}:
+        raise ValueError("Moneyball supports games to 11 or 15, win by two.")
+    event["moneyball"] = {"targetScore": target_score}
     config = config_from_event(event, ratings)
     probability.validate_config(config)
     # Bound simulation memory when several organizers preview concurrently.
@@ -62,10 +73,15 @@ def freeze_moneyball(event: dict[str, Any], ratings: dict[str, float]) -> dict[s
     event["moneyball"] = {
         "label": "Moneyball vs Expectations", "version": lock["version"],
         "entryFeeMxn": 100, "prizePoolMxn": 100*len(config["players"]),
-        "targetScore": 11, "winBy": 2, "requiredRounds": len(event["rounds"]), "startingPlayers": len(config["players"]),
+        "targetScore": target_score, "winBy": 2, "requiredRounds": len(event["rounds"]), "startingPlayers": len(config["players"]),
         "ratingsFrozen": True, "experimental": True,
         "tiePolicy": "Tied winners split the pool.",
     }
+    if target_score == 15:
+        event["moneyball"]["modelNote"] = (
+            "Games to 15 use an experimental extension of the 11-point expectation model. "
+            "It has not been validated against historical 15-point results."
+        )
     if len(config["players"]) == 6:
         event["moneyball"]["rotationSummary"] = (
             "Balanced six-player rotation: 1 court, 6 rounds. Everyone plays 4 games with 4 different partners "
@@ -76,6 +92,49 @@ def freeze_moneyball(event: dict[str, Any], ratings: dict[str, float]) -> dict[s
         "schedule": event["previewFingerprint"], "setup": lock["lock_sha256"],
     })
     return event
+
+
+def convert_existing_moneyball(event: dict[str, Any], ratings: dict[str, float], *,
+                              player_ids: dict[str, int], target_score: int,
+                              converted_at: str) -> dict[str, Any]:
+    """Prepare an in-place conversion; persistence must compare the session version.
+
+    Caller supplies verified club-scoped player IDs and starting ratings. This
+    function never regenerates a round or changes scores, dates, or event identity.
+    """
+    if (is_moneyball(event) or event.get("moneyballPrivate") or event.get("playoff")
+            or event.get("rosterRevisions") or event.get("publishedMatchIds")
+            or event.get("generatorKind") != "round_robin" or event.get("playFormat") != "doubles"
+            or event.get("scoringMode") != "scored" or event.get("status") not in {"active", "completed"}):
+        raise ValueError("Convert only an unpublished, fixed doubles round robin with its original lineup.")
+    participants = event.get("participants", [])
+    ids = {p["id"] for p in participants}
+    if (set(ratings) != ids or set(player_ids) != ids
+            or any(type(v) is not int or v <= 0 for v in player_ids.values())
+            or len(set(player_ids.values())) != len(ids)):
+        raise ValueError("Every starting player needs a distinct club profile and a verified starting rating.")
+    result = copy.deepcopy(event)
+    for p in result["participants"]:
+        if p.get("player_id") not in (None, player_ids[p["id"]]):
+            raise ValueError("Conversion cannot replace an existing player profile.")
+        p["player_id"] = player_ids[p["id"]]
+    for row in result["rounds"]:
+        if row.get("status") not in {"saved", "active", "preview"}:
+            raise ValueError("Every scheduled game must remain playable; skipped rounds cannot be converted.")
+        for match in row["matches"]:
+            a, b = match.get("scoreA"), match.get("scoreB")
+            if row["status"] == "saved" or a is not None or b is not None:
+                validate_score(a, b, target_score)
+    result["eventFormat"] = FORMAT
+    result = freeze_moneyball(result, ratings, target_score=target_score)
+    result["moneyball"]["convertedAt"] = converted_at
+    result["moneyball"]["convertedAfterGames"] = sum(len(r["matches"]) for r in event["rounds"] if r["status"] == "saved")
+    result["moneyball"]["conversionNote"] = (
+        "Converted from the existing round robin. Matchups and saved scores were preserved. "
+        "Starting ratings were supplied at conversion; played results were not used to set expectations."
+    )
+    standings(result)
+    return result
 
 
 def public_event(event: dict[str, Any]) -> dict[str, Any]:
@@ -103,6 +162,8 @@ def _verified_lock(event: dict[str, Any]) -> dict[str, Any]:
     current["name"] = lock["config"]["name"]
     if probability.digest(current) != lock["config_sha256"]:
         raise ValueError("Moneyball players and matchups must stay fixed after setup.")
+    if lock["model"]["goal_points"] != current.get("goal_points", 11):
+        raise ValueError("Moneyball scoring target must match its frozen model.")
     return lock
 
 
@@ -138,6 +199,7 @@ def standings(event: dict[str, Any]) -> list[dict[str, Any]]:
     lock = _verified_lock(event)
     config, model = lock["config"], lock["model"]
     support = np.array(model["margin_support"], dtype=int)
+    bound = int(np.max(np.abs(support)))
     probabilities = np.array(lock["margin_probabilities"])
     matches = {m["id"]: (r, m) for r in event["rounds"] for m in r["matches"]}
     final = all_games_saved(event)
@@ -156,7 +218,7 @@ def standings(event: dict[str, Any]) -> list[dict[str, Any]]:
             if r.get("status") != "saved" or pid not in m["sideA"]+m["sideB"]:
                 continue
             a, b = m.get("scoreA"), m.get("scoreB")
-            validate_score(a, b)
+            validate_score(a, b, model["goal_points"])
             sign = 1 if pid in frozen["team1"] else -1
             scored, conceded = (a, b) if sign == 1 else (b, a)
             row["matches"] += 1
@@ -168,11 +230,11 @@ def standings(event: dict[str, Any]) -> list[dict[str, Any]]:
             p = probabilities[j]
             row["expectedWins"] += float(p[support*sign > 0].sum())
             row["expectedDifferential"] += float(p @ support)*sign
-            single = np.zeros(23)
-            single[support*sign+11] = p
+            single = np.zeros(2*bound+1)
+            single[support*sign+bound] = p
             pmf = np.convolve(pmf, single)
         if row["matches"] and row["moneyballEligible"]:
-            position = row["differential"]+11*row["matches"]
+            position = row["differential"]+bound*row["matches"]
             u = float(np.clip(pmf[:position].sum()+.5*pmf[position], 1e-12, 1-1e-12))
             z = math.log(u)-math.log1p(-u)+lock["balance_logit_offsets"][i]
             row["moneyballScore"] = 100/(1+math.exp(-z))
