@@ -260,15 +260,15 @@ export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey, 
         <Link href={`/clubs/${clubId}/round-robin-generator/${sessionSegment}/${encodeURIComponent(sessionKey)}/rounds/${currentRound}`} style={linkButton}>Current round</Link>
         {visibleRounds.map((row) => <Link key={row.number} href={`/clubs/${clubId}/round-robin-generator/${sessionSegment}/${encodeURIComponent(sessionKey)}/rounds/${row.number}`} style={linkButton}>{row.label || `Round ${row.number}`}{row.status === "skipped" ? " · Skipped" : ""}</Link>)}
       </nav>
+      {!moneyball ? <GeneratorPlayoff event={session.event} options={session.playoff_options} canManage={Boolean(editToken)} locked={resultsLocked} busy={busy} onStart={startPlayoff} roundHref={round => `/clubs/${clubId}/round-robin-generator/${sessionSegment}/${encodeURIComponent(sessionKey)}/rounds/${round}`} /> : null}
+      </PublicControls>
+
       {session.status === "completed" || session.submission ? (
         <div style={{ display: "grid", gap: "0.5rem" }}>
           <GeneratorSubmission ratingMode={session.rating_mode || "unrated"} submission={session.submission} canSubmit={!shared && !resultsLocked && session.status === "completed" && Boolean(editToken)} defaultDate={session.created_at} onSubmit={submitResults} />
           {session.submission ? <button type="button" onClick={() => void loadSession()} style={{ ...linkButton, cursor: "pointer", justifySelf: "start", background: "white" }}>Refresh approval status</button> : null}
         </div>
       ) : null}
-      {!moneyball ? <GeneratorPlayoff event={session.event} options={session.playoff_options} canManage={Boolean(editToken)} locked={resultsLocked} busy={busy} onStart={startPlayoff} roundHref={round => `/clubs/${clubId}/round-robin-generator/${sessionSegment}/${encodeURIComponent(sessionKey)}/rounds/${round}`} /> : null}
-      </PublicControls>
-
       <PlayGeneratorStandingsTable rows={session.standings || []} sortMode={sortMode} title={session.event.playoff ? "Round-robin standings" : undefined} />
       <GeneratorMoneyball value={session.moneyball} />
       {moneyball ? <GeneratorMoneyballExpectations rows={session.event.moneyballExpectations} locked format={session.event.moneyball} /> : null}
@@ -286,7 +286,7 @@ export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey, 
           <p style={{ color: "#475569" }}>{session.event.playoff ? "Save each playoff game, then continue to the final or finish the session." : moneyball ? "Play the complete fixed rotation, then finish Moneyball to confirm the payout." : "Play as many rounds as you like. Finish the session when you’re ready to submit results."}</p>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
             <button type="button" onClick={() => void updateSession("advance")} disabled={busy} style={primaryButton}>{busy ? "Working…" : continueLabel}</button>
-            {canFinish ? <button type="button" onClick={() => void updateSession("complete")} disabled={busy} style={{ ...linkButton, cursor: "pointer", background: "white" }}>Finish session</button> : null}
+            {canFinish && !moneyball ? <button type="button" onClick={() => void updateSession("complete")} disabled={busy} style={{ ...linkButton, cursor: "pointer", background: "white" }}>Finish session</button> : null}
           </div>
         </article>
       ) : null}

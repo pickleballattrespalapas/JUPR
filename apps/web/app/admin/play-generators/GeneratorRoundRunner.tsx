@@ -1169,14 +1169,16 @@ export default function GeneratorRoundRunner({
               disabled={busy}
               style={{ ...primaryButton, marginTop: "1rem" }}
             >
-              {generatorKind === "ladder" && roundNumber >= event.totalRounds
+              {event.eventFormat === "moneyball_expectations" && event.rounds.every(row => row.status === "saved")
+                ? "Finish Moneyball & view results"
+                : generatorKind === "ladder" && roundNumber >= event.totalRounds
                 ? "Finish session"
                 : generatorKind === "ladder"
                   ? `Generate Round ${roundNumber + 1}`
                   : "Next scheduled round"}
             </button>
         ) : null}
-        {canFinishSession && !editingScores ? (
+        {canFinishSession && !editingScores && event.eventFormat !== "moneyball_expectations" ? (
           <div style={{ marginTop: "1rem" }}>
             <ConfirmAction
               triggerLabel="Finish session"
