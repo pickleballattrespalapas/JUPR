@@ -241,35 +241,26 @@ async function chooseHiddenOption(select: Locator, value: string): Promise<void>
   await expect(select).toHaveValue(value);
 }
 
-async function chooseResettingOption(select: Locator, value: string): Promise<void> {
-  await expect(select).toBeVisible();
-  await expect(select).toBeEnabled();
-  await select.evaluate((element, nextValue) => {
-    if (!(element instanceof HTMLSelectElement)) throw new Error("Expected a select element.");
-    if (![...element.options].some((option) => option.value === nextValue)) {
-      throw new Error(`Option ${nextValue} is unavailable.`);
-    }
-    element.value = nextValue;
-    element.dispatchEvent(new Event("input", { bubbles: true }));
-    element.dispatchEvent(new Event("change", { bubbles: true }));
-  }, value);
-  await expect(select).toHaveValue("");
-}
-
 async function addExistingPlayers(page: Page, playerIds: readonly number[]): Promise<string[]> {
   const selected: string[] = [];
-  const select = page.getByRole("combobox", {
+  const picker = page.getByRole("combobox", {
     name: /Add an existing club player, including a non-roster player/i
   });
+  const sessionOrder = page.getByRole("heading", { name: /^Session player order \(\d+\)$/ }).locator("..");
   for (const playerId of playerIds) {
-    const option = select.locator(`option[value="${playerId}"]`);
+    const previousCount = await sessionOrder.getByRole("listitem").count();
+    await expect(picker).toBeVisible();
+    await expect(picker).toBeEnabled();
+    await picker.fill(String(playerId));
+    const option = page.getByRole("listbox", { name: "Matching players", exact: true })
+      .locator(`[role="option"][data-player-value="${playerId}"]`);
     await expect(option, `Existing staging guest ${playerId} is unavailable`).toHaveCount(1);
-    const value = await option.getAttribute("value");
     const label = String(await option.textContent()).trim();
-    expect(value).toBe(String(playerId));
     expect(label).not.toBe("");
-    await chooseResettingOption(select, String(value));
-    await expect(option, `Existing staging guest ${playerId} was not added`).toHaveCount(0);
+    await option.click();
+    await expect(picker).toHaveValue("");
+    await expect(sessionOrder.getByRole("listitem"), `Existing staging guest ${playerId} was not added`)
+      .toHaveCount(previousCount + 1);
     selected.push(label);
   }
   return selected;
