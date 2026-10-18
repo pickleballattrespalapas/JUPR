@@ -13,6 +13,9 @@ type Props = {
   playerRatings?: Array<{ name: string; rating?: number | null }>;
   onChange: (courts: LeagueCourtRosterDraft[]) => void;
   onEditRoster?: () => void;
+  onEditPlayerRating?: (name: string) => void;
+  onReplacePlayer?: (name: string, replacementId: number) => void;
+  replacementPlayers?: Array<{ id: number; name: string; rating?: number | null }>;
 };
 
 type PlayerPosition = { courtIndex: number; playerIndex: number; name: string };
@@ -35,9 +38,10 @@ function courtIndexFor(value: string): number | null {
   return match ? Number(match[1]) : null;
 }
 
-export function LeagueCourtRosterEditor({ courts, disabled, formats, playerNames, playerRatings, onChange, onEditRoster }: Props) {
+export function LeagueCourtRosterEditor({ courts, disabled, formats, playerNames, playerRatings, onChange, onEditRoster, onEditPlayerRating, onReplacePlayer, replacementPlayers = [] }: Props) {
   const instructionsId = useId();
   const [selected, setSelected] = useState<PlayerPosition | null>(null);
+  const [replacingName, setReplacingName] = useState<string | null>(null);
   const [draggingFrom, setDraggingFrom] = useState<string | null>(null);
   const [undo, setUndo] = useState<UndoDraft | null>(null);
   const [bulkDrafts, setBulkDrafts] = useState<Record<number, string>>({});
@@ -60,6 +64,7 @@ export function LeagueCourtRosterEditor({ courts, disabled, formats, playerNames
   // Discard position-based controls when the parent loads a new court arrangement.
   useEffect(() => {
     setSelected(null);
+    setReplacingName(null);
     setBulkDrafts({});
   }, [fingerprint]);
 
@@ -244,7 +249,7 @@ export function LeagueCourtRosterEditor({ courts, disabled, formats, playerNames
                   const isSelected = activeSelection?.courtIndex === courtIndex && activeSelection.playerIndex === playerIndex;
                   const ratingId = `${instructionsId}-rating-${courtIndex}-${playerIndex}`;
                   return <Draggable key={nameKey(name)} draggableId={`player:${nameKey(name)}`} index={playerIndex} isDragDisabled={disabled} disableInteractiveElementBlocking>
-                      {(dragProvided, dragSnapshot) => <li ref={dragProvided.innerRef} {...dragProvided.draggableProps} data-court-slot={`court:${courtIndex}:slot:${playerIndex}`} data-swap-target={Boolean(dragSnapshot.combineTargetFor)} style={{ ...rowStyle, minHeight: 68, marginBottom: "0.4rem", borderRadius: 8, outline: dragSnapshot.combineTargetFor ? "3px solid #2563eb" : undefined, boxShadow: dragSnapshot.isDragging ? "0 8px 24px #0f172a33" : undefined, ...dragProvided.draggableProps.style }}>
+                      {(dragProvided, dragSnapshot) => <li ref={dragProvided.innerRef} {...dragProvided.draggableProps} data-court-slot={`court:${courtIndex}:slot:${playerIndex}`} data-swap-target={Boolean(dragSnapshot.combineTargetFor)} style={{ ...rowStyle, flexWrap: "wrap", minHeight: 68, marginBottom: "0.4rem", borderRadius: 8, outline: dragSnapshot.combineTargetFor ? "3px solid #2563eb" : undefined, boxShadow: dragSnapshot.isDragging ? "0 8px 24px #0f172a33" : undefined, ...dragProvided.draggableProps.style }}>
                     <button type="button" {...dragProvided.dragHandleProps} aria-pressed={isSelected} aria-describedby={[dragProvided.dragHandleProps?.["aria-describedby"], ratingId].filter(Boolean).join(" ")} aria-label={activeSelection && !isSelected ? `Swap ${activeSelection.name} with ${name} on Court ${court.court}` : `Select ${name} on Court ${court.court}, position ${playerIndex + 1}`} onClick={() => selectOrSwap({ courtIndex, playerIndex, name })} disabled={disabled} style={{ ...buttonStyle, flex: "1 1 0", minWidth: 0, minHeight: 68, display: "flex", gap: "0.5rem", alignItems: "center", textAlign: "left", overflowWrap: "anywhere", cursor: disabled ? "default" : dragSnapshot.isDragging ? "grabbing" : "grab", borderColor: isSelected ? "#2563eb" : "#cbd5e1", background: isSelected || dragSnapshot.isDragging ? "#dbeafe" : "white" }}>
                       <span style={{ color: "#64748b", fontSize: "0.85rem" }}>{playerIndex + 1}</span>
                       <span style={{ display: "grid", gap: "0.25rem", flex: 1, minWidth: 0 }}>
@@ -258,6 +263,16 @@ export function LeagueCourtRosterEditor({ courts, disabled, formats, playerNames
                     <button type="button" aria-label={`Move ${name} up on Court ${court.court}`} title="Move up one position within this court" onClick={() => reorder(courtIndex, playerIndex, -1)} disabled={disabled || playerIndex === 0} style={{ ...buttonStyle, padding: "0.4rem 0.55rem" }}>↑</button>
                     <button type="button" aria-label={`Move ${name} down on Court ${court.court}`} title="Move down one position within this court" onClick={() => reorder(courtIndex, playerIndex, 1)} disabled={disabled || playerIndex === names.length - 1} style={{ ...buttonStyle, padding: "0.4rem 0.55rem" }}>↓</button>
                     <button type="button" aria-label={`Unassign ${name} from Court ${court.court}`} title="Move to unassigned players" onClick={() => unassign(courtIndex, playerIndex)} disabled={disabled} style={{ ...buttonStyle, padding: "0.4rem 0.55rem" }}>×</button>
+                    {onEditPlayerRating || onReplacePlayer ? <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem", width: "100%", paddingBottom: "0.3rem" }}>
+                      {onEditPlayerRating ? <button type="button" aria-label={`Edit rating for ${name}`} disabled={disabled} onClick={() => onEditPlayerRating(name)} style={{ ...buttonStyle, minHeight: 32, padding: "0.2rem 0.5rem", fontSize: "0.8rem" }}>Edit rating</button> : null}
+                      {onReplacePlayer ? <button type="button" aria-label={`Replace ${name}`} disabled={disabled} onClick={() => setReplacingName(replacingName === name ? null : name)} style={{ ...buttonStyle, minHeight: 32, padding: "0.2rem 0.5rem", fontSize: "0.8rem" }}>Replace player</button> : null}
+                      {onReplacePlayer && replacingName === name ? <label style={{ width: "100%" }}>Replace {name} with
+                        <select aria-label={`Replacement for ${name}`} value="" disabled={disabled} style={inputStyle} onChange={event => { if (event.target.value) { onReplacePlayer(name, Number(event.target.value)); setReplacingName(null); } }}>
+                          <option value="">Choose player…</option>
+                          {[...replacementPlayers].sort((a, b) => a.name.localeCompare(b.name)).map(player => <option key={player.id} value={player.id}>{player.name} · {player.rating == null ? "—" : (player.rating / 400).toFixed(2)}</option>)}
+                        </select>
+                      </label> : null}
+                    </div> : null}
                       </li>}
                     </Draggable>;
                 })}

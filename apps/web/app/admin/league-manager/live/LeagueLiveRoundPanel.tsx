@@ -16,6 +16,11 @@ import type { PublicPlayer } from "@/lib/api";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 
+const LeagueLiveRatingEditor = dynamic(
+  () => import("./LeagueLiveRatingEditor").then(module => module.LeagueLiveRatingEditor),
+  { ssr: false },
+);
+
 const LeagueMovementCourtBoard = dynamic(
   () => import("./LeagueMovementCourtBoard").then((module) => module.LeagueMovementCourtBoard),
   { ssr: false, loading: () => <p aria-live="polite">Loading the next-round court board…</p> },
@@ -559,6 +564,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
   const [matchStructure, setMatchStructure] = useState<MatchStructure>(DEFAULT_MATCH_STRUCTURE);
   const [sessionRoster, setSessionRoster] = useState<LeagueLiveRosterRow[]>([]);
   const [attendeePlayerIds, setAttendeePlayerIds] = useState<number[]>([]);
+  const [editingRatingPlayerId, setEditingRatingPlayerId] = useState<number | null>(null);
   const [knownPlayers, setKnownPlayers] = useState<PublicPlayer[]>(players);
   const [pastedPlayerText, setPastedPlayerText] = useState("");
   const [pastedPlayerResolutions, setPastedPlayerResolutions] = useState<PastedPlayerResolution[]>([]);
@@ -1063,6 +1069,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
   }
 
   function clearProtectedLiveWorkspace() {
+    setEditingRatingPlayerId(null);
     restoringRoundDraftRef.current = false;
     leagueDetailRequest.invalidate();
     sessionListRequest.invalidate();
@@ -2217,6 +2224,36 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     }
   }
 
+  function replaceSetupPlayer(name: string, replacementId: number) {
+    if (courtEditingLocked || sessionIsCurrentLeague) return;
+    const outgoing = sessionRoster.find(row => playerNameKey(row.player_name) === playerNameKey(name));
+    const incoming = knownPlayers.find(player => Number(player.id) === replacementId);
+    if (!outgoing || !incoming || sessionRoster.some(row => Number(row.player_id) === replacementId)) return;
+    const matchingNames = knownPlayers.filter(player => playerNameKey(player.name) === playerNameKey(incoming.name));
+    if (matchingNames.length !== 1) { setMessage("This name matches multiple players. Resolve the duplicate in Players first."); return; }
+    const leagueRow = detail?.roster?.find(row => Number(row.player_id) === replacementId);
+    const replacement = { ...outgoing, player_id: replacementId, player_name: incoming.name, rating: leagueRow?.rating ?? incoming.rating };
+    const replace = (rows: LeagueLiveRosterRow[]) => rows.map(row => Number(row.player_id) === Number(outgoing.player_id) ? replacement : row);
+    setSessionRoster(replace);
+    setAttendeePlayerIds(ids => ids.map(id => id === Number(outgoing.player_id) ? replacementId : id));
+    setPastedSelectedPlayerIds(ids => ids.map(id => id === Number(outgoing.player_id) ? replacementId : id));
+    setPastedPlayerText(""); setPastedPlayerResolutions([]); setPasteDuplicateNames([]); setPasteResolutionCurrent(true);
+    setRosterSuggestion(current => current ? { ...current, roster: replace(current.roster), active_roster: replace(current.active_roster) } : current);
+    updateCourtAssignments(courts.map(court => ({ ...court, playerNames: splitNames(court.playerNames).map(playerName => playerNameKey(playerName) === playerNameKey(name) ? incoming.name : playerName).join("\n") })));
+    setMessage(`Replaced ${name} with ${incoming.name} in the same court position. Review the preview before saving the session.`);
+  }
+
+  function applyEditedRating(playerId: number, rating: number, scope: "club" | "league") {
+    if (scope === "club") setKnownPlayers(current => current.map(player => Number(player.id) === playerId ? { ...player, rating, rating_jupr: rating / 400 } : player));
+    setDetail(current => current ? { ...current, roster: (current.roster || []).map(row => Number(row.player_id) === playerId ? { ...row, rating, rating_jupr: rating / 400 } : row) } : current);
+    const update = (rows: LeagueLiveRosterRow[]) => rows.map(row => Number(row.player_id) === playerId ? { ...row, rating } : row);
+    setSessionRoster(update);
+    setRosterSuggestion(current => current ? { ...current, roster: update(current.roster), active_roster: update(current.active_roster), bench: update(current.bench) } : current);
+    setPreview(null); createSessionOperationRef.current = null;
+    setEditingRatingPlayerId(null);
+    setMessage(`Rating saved at ${(rating / 400).toFixed(2)}. Court positions are preserved. Generate a fresh preview.`);
+  }
+
   function updateCourtAssignments(nextCourts: CourtDraft[]) {
     if (courtEditingLocked) return;
     setCourts(nextCourts);
@@ -3095,9 +3132,13 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
               playerNames={sessionRoster.filter((row) => !benchOverrideIds.includes(Number(row.player_id))).map((row) => row.player_name)}
               playerRatings={sessionRoster.map((row) => ({ name: row.player_name, rating: row.rating }))}
               disabled={courtEditingLocked}
+              onEditPlayerRating={name => { const row = sessionRoster.find(player => playerNameKey(player.player_name) === playerNameKey(name)); if (row) setEditingRatingPlayerId(Number(row.player_id)); }}
+              replacementPlayers={knownPlayers.filter(player => !rosterPlayerIds.has(Number(player.id))).map(player => ({ id: Number(player.id), name: player.name, rating: detail?.roster?.find(row => Number(row.player_id) === Number(player.id))?.rating ?? player.rating }))}
+              onReplacePlayer={sessionIsCurrentLeague ? undefined : replaceSetupPlayer}
               onChange={updateCourtAssignments}
               onEditRoster={() => navigateWorkflow(2)}
             />
+            {editingRatingPlayerId != null ? <LeagueLiveRatingEditor key={`${clubId}:${leagueName}:${editingRatingPlayerId}:${accessToken ? "signed-in" : "signed-out"}`} playerId={editingRatingPlayerId} clubId={clubId} leagueName={leagueName} request={requestJson} onSaved={applyEditedRating} onClose={() => setEditingRatingPlayerId(null)} /> : null}
             <p><button type="button" onClick={() => void generatePreview()} disabled={courtEditingLocked || (!rosterSuggestion && !sessionIsCurrentLeague)} style={buttonStyle}>Validate courts and generate preview</button></p>
           </section>
 

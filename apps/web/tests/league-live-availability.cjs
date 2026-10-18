@@ -323,6 +323,25 @@ global.fetch = async (url, options = {}) => {
   assert.equal(storage.has("jupr-league-live-player-create-recovery:club-a"), false);
   await act(async () => tree.unmount());
 
+  await mount({ players: [...players, { id: 677, name: "Lily Lee", rating: 1460, rating_jupr: 3.65 }] });
+  await click("Continue to Players");
+  await click("Build courts from 4 attendees");
+  await clickAria("Replace Casey");
+  const replacementSelect = tree.root.findAllByType("select").find(node => node.props["aria-label"] === "Replacement for Casey");
+  assert.match(text(replacementSelect), /Lily Lee.*3.65/);
+  await act(async () => replacementSelect.props.onChange({ target: { value: "677" } }));
+  assert.deepEqual(tree.root.findByType(CourtRosterEditor).props.courts[0].playerNames.split("\n"), ["Alex", "Lily Lee", "Jordan", "Sam"]);
+  assert.deepEqual(tree.root.findByType(CourtRosterEditor).props.playerNames, ["Alex", "Lily Lee", "Jordan", "Sam"]);
+  assert.ok(tree.root.findAllByType("button").find(node => node.props["aria-label"] === "Edit rating for Lily Lee"));
+  await click("Validate courts and generate preview");
+  confirm = tree.root.findAllByType(ConfirmAction).find(node => node.props.triggerLabel === "Create session and continue");
+  await act(async () => { await confirm.props.onConfirm("CREATE LIVE SESSION"); });
+  const replacedWrite = requests.find(request => request.path === `${base}/live-sessions` && request.method === "POST").body;
+  assert.deepEqual(replacedWrite.courts[0].player_names, ["Alex", "Lily Lee", "Jordan", "Sam"]);
+  assert.deepEqual(replacedWrite.roster.map(row => row.player_id), [1, 677, 3, 4]);
+  assert.equal(replacedWrite.roster[1].rating, 1460);
+  await act(async () => tree.unmount());
+
   await mount({ liveDomainStatus: { ...liveStatus, enabled: false } });
   assert.match(rendered(), /Live league operations are disabled on this site/);
   assert.doesNotMatch(rendered(), /this build|existing League Manager scoring/);
