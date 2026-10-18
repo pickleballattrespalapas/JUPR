@@ -949,7 +949,7 @@ export default function GeneratorRoundRunner({
 
       </PublicControls>
 
-      {event.eventFormat === "moneyball_expectations" ? <details style={cardStyle}>
+      {event.eventFormat === "moneyball_expectations" ? <details style={{ ...cardStyle, minWidth: 0 }}>
         <summary style={{ cursor: "pointer", fontWeight: 800 }}>View full-event Moneyball expectations</summary>
         <GeneratorMoneyballExpectations rows={event.moneyballExpectations} locked format={event.moneyball} />
       </details> : null}
