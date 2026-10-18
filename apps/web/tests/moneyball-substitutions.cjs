@@ -40,6 +40,8 @@ const button = (tree,label) => tree.root.findAllByType("button").find(node=>text
     global.window={location:{hash:"",pathname:"/test",search:""},history:{replaceState(){}}};
     const session={session_key:"s",title:"Moneyball",status:"active",version:1,generator_kind:"round_robin",play_format:"doubles",scoring_mode:"scored",rating_mode:"unrated",current_round_number:1,total_rounds:3,
       event:{eventFormat:"moneyball_expectations",generatorKind:"round_robin",playFormat:"doubles",currentRoundNumber:1,totalRounds:3,courtCount:1,status:"active",participants:Array.from({length:4},(_,i)=>({id:`p-${i+1}`,name:`Player ${i+1}`,roster_order:i+1})),rounds:[1,2,3].map(number=>({number,status:number===1?"active":"preview",byeParticipantIds:[],matches:[{id:`r${number}-c1`,court:1,sideA:["p-1","p-2"],sideB:["p-3","p-4"],scoreA:null,scoreB:null}]}))}};
+    session.event.moneyball = {targetScore:15,modelNote:"Experimental 15-point extension",conversionNote:"Matchups and saved scores were preserved."};
+    session.event.moneyballExpectations = session.event.participants.map(p=>({participantId:p.id,name:p.name,scheduledGames:3,expectedWins:1.5,expectedLosses:1.5,expectedDifferential:0}));
     const requests=[];
     global.fetch=async(url,options={})=>{
       if(options.body){const body=JSON.parse(options.body);requests.push(body);assert.equal(body.action,"substitute");assert.equal(body.participant_id,"p-1");assert.equal(body.name,"Replacement");assert.equal(body.substitute_scope,"rest");session.version++;}
@@ -49,6 +51,11 @@ const button = (tree,label) => tree.root.findAllByType("button").find(node=>text
     await act(async()=>{tree=create(h(load(file).default,{apiBase:"https://api.test",clubId:"club",generatorKind:"round_robin",sessionKey:"s",roundNumber:1}));});
     assert.ok(JSON.stringify(tree.toJSON()).includes("Both the original player and substitute become ineligible"));
     assert.equal(button(tree,"Skip round"),undefined);
+    const expectations=tree.root.findByProps({"aria-label":"Moneyball player expectations"});
+    assert.equal(expectations.findByType("tbody").findAllByType("tr").length,4);
+    assert.ok(text(expectations).includes("Games to 15, win by two") && text(expectations).includes("including games already played"));
+    assert.ok(text(expectations).includes("Experimental 15-point extension"));
+    assert.ok(!text(expectations).includes("Expectations lock when you start"));
     assert.ok(text(tree.toJSON()).includes("Fixed Moneyball rotation: complete every scheduled game"));
     assert.ok(!text(tree.toJSON()).includes("you add extra rounds"));
     const change=tree.root.findAllByType("select").find(node=>node.findAllByType("option").some(opt=>opt.props.value==="substitute"));

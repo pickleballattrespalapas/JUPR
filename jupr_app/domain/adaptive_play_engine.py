@@ -1422,7 +1422,7 @@ def save_generator_round(
         if a in (None, "") or b in (None, ""):
             raise ValueError("Enter every score before saving the round, or skip the round.")
         if is_moneyball(next_event):
-            validate_score(a, b)
+            validate_score(a, b, (next_event.get("moneyball") or {}).get("targetScore", 11))
         a = int(a)
         b = int(b)
         if a < 0 or b < 0 or a > 99 or b > 99:
