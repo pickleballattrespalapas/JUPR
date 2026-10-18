@@ -1,0 +1,70 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const ts = require('typescript');
+const React = require('react');
+const { create, act } = require('react-test-renderer');
+const code = ts.transpileModule(fs.readFileSync(path.join(__dirname, '../app/admin/league-manager/live/LeagueLiveRatingEditor.tsx'), 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true } }).outputText;
+const mod = { exports: {} };
+const Dialog = ({ children, actions }) => React.createElement('section', null, children, actions);
+new Function('require', 'module', 'exports', code)(name => name === '@/components/interaction' ? { InteractionDialog: Dialog } : require(name), mod, mod.exports);
+const Editor = mod.exports.LeagueLiveRatingEditor;
+const storage = new Map();
+global.sessionStorage = { getItem: key => storage.get(key) || null, setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) };
+if (!global.crypto) global.crypto = require('node:crypto').webcrypto;
+let tree, requests, saved, failWrite = false;
+const player = { id: 81, name: 'Emi Diaz', rating: 1400, rating_jupr: 3.5, starting_jupr: 3.5, matches_played: 0, state_fingerprint: 'a'.repeat(64) };
+const text = node => node.children.map(child => typeof child === 'string' ? child : text(child)).join('');
+const button = label => tree.root.findAllByType('button').find(node => text(node) === label);
+async function mount(league = false) {
+  requests = []; saved = [];
+  const request = async (url, options = {}) => {
+    const body = options.body ? JSON.parse(options.body) : null;
+    requests.push({ url, body, method: options.method || 'GET' });
+    if (options.method === 'PATCH') {
+      if (failWrite) throw new Error('Connection lost');
+      return league ? { ok: true, league_rating: { id: 9, league_name: 'Ladder', rating: body.rating_jupr * 400 } } : { ok: true, player: { ...player, rating: body.rating_jupr * 400 } };
+    }
+    if (url.includes('/operations/')) return { status: 'completed', result: { ok: true, player: { ...player, rating: 1100 } } };
+    return { ok: true, player, league_ratings: league ? [{ id: 9, league_name: 'Ladder', rating_jupr: 3.25, matches_played: 6, state_fingerprint: 'b'.repeat(64) }] : [], match_reference_counts: { total: league ? 6 : 0 } };
+  };
+  await act(async () => { tree = create(React.createElement(Editor, { clubId: 'club-a', playerId: 81, leagueName: 'Ladder', request, onSaved: (...args) => saved.push(args), onClose() {} })); });
+}
+(async () => {
+  await mount();
+  assert.equal(tree.root.findByProps({ 'aria-label': 'Player rating' }).props.value, '3.5');
+  assert.equal(tree.root.findByProps({ type: 'checkbox' }).props.checked, true);
+  await act(async () => tree.root.findByProps({ 'aria-label': 'Player rating' }).props.onChange({ target: { value: '' } }));
+  assert.equal(button('Save rating').props.disabled, true);
+  await act(async () => tree.root.findByProps({ 'aria-label': 'Player rating' }).props.onChange({ target: { value: '2.75' } }));
+  await act(async () => button('Save rating').props.onClick());
+  const write = requests.find(row => row.method === 'PATCH');
+  assert.equal(write.body.rating_jupr, 2.75); assert.equal(write.body.starting_jupr, 2.75);
+  assert.equal(write.body.expected_state_fingerprint, player.state_fingerprint);
+  assert.equal(write.body.name, undefined); assert.equal(write.body.active, undefined);
+  assert.deepEqual(saved, [[81, 1100, 'club']]); assert.equal(storage.size, 0);
+  await act(async () => tree.unmount());
+  await mount(true);
+  assert.equal(tree.root.findByProps({ type: 'checkbox' }).props.checked, false);
+  assert.equal(button('Save rating').props.disabled, true);
+  await act(async () => tree.root.findByProps({ 'aria-label': 'Confirm league rating edit' }).props.onChange({ target: { value: 'SAVE LEAGUE RATING' } }));
+  await act(async () => button('Save rating').props.onClick());
+  const leagueWrite = requests.find(row => row.method === 'PATCH');
+  assert.match(leagueWrite.url, /league-ratings\/9$/); assert.equal(leagueWrite.body.starting_jupr, undefined);
+  assert.deepEqual(saved, [[81, 1300, 'league']]);
+  await act(async () => tree.unmount());
+  failWrite = true;
+  await mount();
+  await act(async () => tree.root.findByProps({ 'aria-label': 'Player rating' }).props.onChange({ target: { value: '2.75' } }));
+  await act(async () => button('Save rating').props.onClick());
+  assert.equal(storage.size, 1); assert.equal(button('Save rating'), undefined); assert.deepEqual(saved, []);
+  const key = requests.find(row => row.method === 'PATCH').body.idempotency_key;
+  await act(async () => tree.unmount());
+  await mount();
+  await act(async () => button('Check saved rating edit').props.onClick());
+  assert.ok(requests.some(row => row.url.endsWith(`/operations/${encodeURIComponent(key)}`)));
+  assert.equal(requests.filter(row => row.method === 'PATCH').length, 0);
+  assert.deepEqual(saved, [[81, 1100, 'club']]); assert.equal(storage.size, 0);
+  await act(async () => tree.unmount());
+  console.log('PASS Live rating editor: current/starting correction, league scope, validation, exact fingerprints, durable uncertain-write recovery.');
+})().catch(error => { console.error(error); process.exitCode = 1; });
