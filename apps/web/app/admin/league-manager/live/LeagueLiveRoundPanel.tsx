@@ -1,7 +1,6 @@
 "use client";
 
 import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
-import { LeagueCourtRosterEditor } from "./LeagueCourtRosterEditor";
 import { LeagueLiveGameEditor } from "./LeagueLiveGameEditor";
 import { LeagueLiveAttendanceEditor } from "./LeagueLiveAttendanceEditor";
 import { actualGamePlayers, gameEditError, gameHasSubstitution, scheduledGamePlayers, type LeagueLiveGameEdits, type LeagueLiveGameEdit } from "./leagueLiveGameEdits";
@@ -20,6 +19,11 @@ import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
 const LeagueMovementCourtBoard = dynamic(
   () => import("./LeagueMovementCourtBoard").then((module) => module.LeagueMovementCourtBoard),
   { ssr: false, loading: () => <p aria-live="polite">Loading the next-round court board…</p> },
+);
+
+const LeagueCourtRosterEditor = dynamic(
+  () => import("./LeagueCourtRosterEditor").then((module) => module.LeagueCourtRosterEditor),
+  { ssr: false, loading: () => <p aria-live="polite">Loading the court editor…</p> },
 );
 
 type Props = {
@@ -3049,7 +3053,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
                 {rosterSuggestion.roster.map((row) => (
                   <label key={row.player_id} style={{ display: "flex", gap: "0.45rem", alignItems: "center" }}>
                     <input type="checkbox" checked={benchOverrideIds.includes(Number(row.player_id))} disabled={courtEditingLocked} onChange={(event) => { setBenchOverrideIds((current) => event.target.checked ? [...new Set([...current, Number(row.player_id)])] : current.filter((id) => id !== Number(row.player_id))); setPreview(null); markPlanStale(); }} />
-                    Bench {row.player_name}{row.court_number ? ` (currently Court ${row.court_number})` : ""}
+                    Bench {row.player_name} · {playerJuprLabel({ id: row.player_id, name: row.player_name, rating: row.rating })}{row.court_number ? ` (currently Court ${row.court_number})` : ""}
                   </label>
                 ))}
               </div>
@@ -3089,6 +3093,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
               courts={courts}
               formats={liveCourtFormats}
               playerNames={sessionRoster.filter((row) => !benchOverrideIds.includes(Number(row.player_id))).map((row) => row.player_name)}
+              playerRatings={sessionRoster.map((row) => ({ name: row.player_name, rating: row.rating }))}
               disabled={courtEditingLocked}
               onChange={updateCourtAssignments}
               onEditRoster={() => navigateWorkflow(2)}
