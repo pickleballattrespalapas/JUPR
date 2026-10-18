@@ -276,7 +276,7 @@ export default function GeneratorWorkspace({
     () => recommendedGeneratorSetup(generatorKind, playFormat, targetCount, doublesCourtCount, singlesCourtCount, moneyball),
     [generatorKind, playFormat, targetCount, doublesCourtCount, singlesCourtCount, moneyball]
   );
-  const rosterReady = participantNames.length === targetCount;
+  const rosterReady = participantNames.length === targetCount && (!moneyball || participantNames.every(name => Number(linkedPlayerIds[normalizeRosterName(name)] || 0) > 0));
   const mixedSetupValid = playFormat !== "doubles_singles" || (
     doublesCourtCount >= 1 &&
     singlesCourtCount >= 1 &&
@@ -382,7 +382,7 @@ export default function GeneratorWorkspace({
 
   function requestBody(): Record<string, unknown> {
     if (!rosterReady) {
-      throw new Error(`Add exactly ${targetCount} unique players before previewing.`);
+      throw new Error(participantNames.length === targetCount && moneyball ? "Link or create a club profile for every Moneyball player before previewing." : `Add exactly ${targetCount} unique players before previewing.`);
     }
     if (!mixedSetupValid) {
       throw new Error("Choose a doubles and singles court mix that fits the selected player count.");
