@@ -34,6 +34,9 @@ def report_href(value):
 def sanitize_report(raw):
     if not isinstance(raw, dict):
         return {}
+    if isinstance(raw.get("edition"), list):
+        from .recap_builder import public_edition_report
+        return public_edition_report(raw)
     result = {k: text(raw.get(k), 3000 if k in {"opening", "event_notes"} else 160) for k in ("club_name", "club_slug", "headline", "opening", "event_notes")}
     result["version"] = 1 if raw.get("version") == 1 else 0
     result["event_results"] = [{**{k: text(e.get(k), 600) for k in ("id", "title", "kind", "date", "summary")}, "details": [text(line, 600) for line in e.get("details", [])[:30]], "href": report_href(e.get("href"))} for e in raw.get("event_results", [])[:100] if isinstance(e, dict)]

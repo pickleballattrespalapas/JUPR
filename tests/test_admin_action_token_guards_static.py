@@ -195,7 +195,7 @@ def test_existing_shared_action_guards_remain_token_scoped() -> None:
         (
             "apps/web/app/admin/weekly-recap/WeeklyRecapAdminPanel.tsx",
             "writeRequest",
-            ("generateDraft", "saveDraft", "publishAction", "deleteDraft"),
+                ("operation", "saveDraft", "saveTemplate"),
         ),
         (
             "apps/web/app/admin/league-manager/awards/LeagueAwardsPanel.tsx",

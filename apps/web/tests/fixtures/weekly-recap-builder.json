@@ -1,0 +1,845 @@
+{
+  "catalog": {
+    "opening": [
+      {
+        "id": "opening-2b3fdf05c4dda4549989",
+        "title": "",
+        "text": "EXAMPLE DATA — These names and results illustrate the new report; they are not actual Tres results.\n\nA little competition, some new faces, and plenty of good games. Here’s a look at the week on the courts.\n\nOnly cards with a public results page include a results link. The league links open the existing staging league.",
+        "kind": "",
+        "lines": [],
+        "href": "",
+        "url": "",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": []
+      }
+    ],
+    "numbers": [
+      {
+        "id": "numbers-a54084383e3cf7c24630",
+        "title": "Games",
+        "text": "96",
+        "kind": "",
+        "lines": [],
+        "href": "",
+        "url": "",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": []
+      },
+      {
+        "id": "numbers-afc0d772a2bbe700da33",
+        "title": "Players",
+        "text": "48",
+        "kind": "",
+        "lines": [],
+        "href": "",
+        "url": "",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": []
+      },
+      {
+        "id": "numbers-25806431a4f147d4aac3",
+        "title": "New faces",
+        "text": "6",
+        "kind": "",
+        "lines": [],
+        "href": "",
+        "url": "",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": []
+      }
+    ],
+    "events": [
+      {
+        "id": "events-d933c3d76e6d05c4e59a",
+        "title": "Tuesday Moneyball",
+        "text": "Winner: Alex — the strongest finish against expectations.",
+        "kind": "Moneyball",
+        "lines": [
+          "8 players · 14 games",
+          "5 wins vs 2.9 expected",
+          "Point difference: +17 vs −3.4 expected"
+        ],
+        "href": "",
+        "url": "",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": []
+      },
+      {
+        "id": "events-698ea430c47acb9d15fd",
+        "title": "Thursday Social Round Robin",
+        "text": "Winner: Cam (5–1)",
+        "kind": "Social play",
+        "lines": [
+          "24 players · 36 games · Unrated",
+          "1. Cam — 5–1 · point difference +28",
+          "2. Alex — 4–2 · point difference +19",
+          "3. Bea — 4–2 · point difference +12"
+        ],
+        "href": "",
+        "url": "",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": []
+      },
+      {
+        "id": "events-bbf30521a92b9156da90",
+        "title": "Summer Social",
+        "text": "Weekly highlights and player records.",
+        "kind": "League",
+        "lines": [
+          "Open a recorded league week below."
+        ],
+        "href": "leagues/Summer%20Social/standings",
+        "url": "",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": [
+          {
+            "label": "Weekly report · Week 7",
+            "href": "leagues/Summer%20Social/weekly-history?week=7"
+          }
+        ]
+      },
+      {
+        "id": "events-7389a0a37038b1883706",
+        "title": "Baja League · 4.0",
+        "text": "Tres Palapas vs Guest Club",
+        "kind": "Interclub",
+        "lines": [
+          "Points: 3–1",
+          "Games won: 7–5"
+        ],
+        "href": "",
+        "url": "",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": []
+      },
+      {
+        "id": "events-f553a8c338aa1dc8d5c0",
+        "title": "Example Tournament · Mixed 3.5",
+        "text": "Division podium",
+        "kind": "Tournament",
+        "lines": [
+          "1. Cam + Dee",
+          "2. Eli + Fran",
+          "3. Gus + Hana"
+        ],
+        "href": "",
+        "url": "",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": []
+      }
+    ],
+    "spotlight": [
+      {
+        "id": "spotlight-ABOVE_EXPECTATIONS_WEEK",
+        "title": "Above Expectations",
+        "text": "Rated games only; minimum 4 rated games.",
+        "kind": "ABOVE_EXPECTATIONS_WEEK",
+        "lines": [
+          "Alex — +2.1 wins above expected"
+        ],
+        "href": "",
+        "url": "",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": []
+      },
+      {
+        "id": "spotlight-TOP_PERFORMER_WEEK",
+        "title": "Top Performer",
+        "text": "Most wins minus losses; minimum 4 games.",
+        "kind": "TOP_PERFORMER_WEEK",
+        "lines": [
+          "Bea — 7–1"
+        ],
+        "href": "",
+        "url": "",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": []
+      }
+    ],
+    "races": [
+      {
+        "id": "races-ea9f2b8cb0af55b24270",
+        "title": "Fall Ladder · Most Wins",
+        "text": "",
+        "kind": "",
+        "lines": [
+          "1. Bea — 18 wins · up 1",
+          "2. Alex — 16 wins"
+        ],
+        "href": "",
+        "url": "",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": []
+      },
+      {
+        "id": "races-47c4e21635d0336cdd67",
+        "title": "Fall Ladder · Most Upset Wins",
+        "text": "",
+        "kind": "",
+        "lines": [
+          "Cam: 24 of 32 games to qualify",
+          "Dee: 20 of 32 games to qualify"
+        ],
+        "href": "",
+        "url": "",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": []
+      }
+    ],
+    "achievements": [
+      {
+        "id": "achievements-9bef8abb5af0c59bf1f8",
+        "title": "",
+        "text": "Alex — first round-robin win",
+        "kind": "",
+        "lines": [],
+        "href": "",
+        "url": "",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": []
+      },
+      {
+        "id": "achievements-2e7f1e37f9052048aaa3",
+        "title": "",
+        "text": "Bea — a new participation milestone",
+        "kind": "",
+        "lines": [],
+        "href": "",
+        "url": "",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": []
+      }
+    ],
+    "welcome": [
+      {
+        "id": "welcome-8d6d4f52ee2db64142fa",
+        "title": "",
+        "text": "Eli",
+        "kind": "",
+        "lines": [],
+        "href": "",
+        "url": "",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": []
+      },
+      {
+        "id": "welcome-e7be6c6f309a16f2315c",
+        "title": "",
+        "text": "Fran",
+        "kind": "",
+        "lines": [],
+        "href": "",
+        "url": "",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": []
+      },
+      {
+        "id": "welcome-62128be42907c0866965",
+        "title": "",
+        "text": "Gus",
+        "kind": "",
+        "lines": [],
+        "href": "",
+        "url": "",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": []
+      },
+      {
+        "id": "welcome-78b5b5558f2c83de7c6e",
+        "title": "",
+        "text": "Hana",
+        "kind": "",
+        "lines": [],
+        "href": "",
+        "url": "",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": []
+      },
+      {
+        "id": "welcome-452a1b8587bb3a142d2f",
+        "title": "",
+        "text": "Ira",
+        "kind": "",
+        "lines": [],
+        "href": "",
+        "url": "",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": []
+      },
+      {
+        "id": "welcome-9e9619793cc0e002c588",
+        "title": "",
+        "text": "Jules",
+        "kind": "",
+        "lines": [],
+        "href": "",
+        "url": "",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": []
+      }
+    ],
+    "notes": [
+      {
+        "id": "notes-ab5aa97074c454a06320",
+        "title": "",
+        "text": "Thanks to everyone who helped welcome the new players this week. Keep bringing your friends along!",
+        "kind": "",
+        "lines": [],
+        "href": "",
+        "url": "",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": []
+      }
+    ],
+    "custom": [],
+    "upcoming": [
+      {
+        "id": "upcoming-c3170f16e8a3ecc69fc1",
+        "title": "",
+        "text": "Register for Moneyball",
+        "kind": "",
+        "lines": [],
+        "href": "",
+        "url": "https://app.courtreserve.com/Online/Events/Public/8043/2308082",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Register for Moneyball",
+        "links": []
+      }
+    ]
+  },
+  "config": {
+    "version": 1,
+    "order": [
+      "custom",
+      "events",
+      "numbers",
+      "opening",
+      "spotlight",
+      "races",
+      "achievements",
+      "welcome",
+      "notes",
+      "upcoming"
+    ],
+    "sections": {
+      "opening": {
+        "enabled": true,
+        "email_enabled": true,
+        "title": "From the courts",
+        "detail": "full"
+      },
+      "numbers": {
+        "enabled": false,
+        "email_enabled": true,
+        "title": "The week in numbers",
+        "detail": "full"
+      },
+      "events": {
+        "enabled": true,
+        "email_enabled": true,
+        "title": "Event results",
+        "detail": "brief",
+        "item_ids": [
+          "events-f553a8c338aa1dc8d5c0",
+          "events-d933c3d76e6d05c4e59a"
+        ],
+        "email_item_ids": [
+          "events-f553a8c338aa1dc8d5c0"
+        ]
+      },
+      "spotlight": {
+        "enabled": true,
+        "email_enabled": true,
+        "title": "Player highlights",
+        "detail": "full"
+      },
+      "races": {
+        "enabled": true,
+        "email_enabled": false,
+        "title": "Season awards race",
+        "detail": "full"
+      },
+      "achievements": {
+        "enabled": true,
+        "email_enabled": true,
+        "title": "New achievements",
+        "detail": "full"
+      },
+      "welcome": {
+        "enabled": true,
+        "email_enabled": true,
+        "title": "Welcome to the courts",
+        "detail": "full",
+        "item_ids": []
+      },
+      "notes": {
+        "enabled": true,
+        "email_enabled": true,
+        "title": "Around the club",
+        "detail": "full"
+      },
+      "custom": {
+        "enabled": true,
+        "email_enabled": true,
+        "title": "Club stories",
+        "detail": "full"
+      },
+      "upcoming": {
+        "enabled": true,
+        "email_enabled": true,
+        "title": "Coming up",
+        "detail": "full"
+      }
+    },
+    "custom_blocks": [
+      {
+        "id": "coach-1",
+        "title": "Coach’s tip",
+        "text": "Stay patient & balanced.",
+        "kind": "",
+        "lines": [],
+        "href": "",
+        "url": "https://example.invalid/coaching",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": []
+      }
+    ],
+    "step": 0
+  },
+  "expected": {
+    "edition": [
+      {
+        "key": "custom",
+        "title": "Club stories",
+        "items": [
+          {
+            "id": "coach-1",
+            "title": "Coach’s tip",
+            "text": "Stay patient & balanced.",
+            "kind": "",
+            "lines": [],
+            "href": "",
+            "url": "https://example.invalid/coaching",
+            "image_url": "",
+            "alt": "",
+            "link_label": "Learn more",
+            "links": []
+          }
+        ]
+      },
+      {
+        "key": "events",
+        "title": "Event results",
+        "items": [
+          {
+            "id": "events-f553a8c338aa1dc8d5c0",
+            "title": "Example Tournament · Mixed 3.5",
+            "text": "Division podium",
+            "kind": "Tournament",
+            "lines": [
+              "1. Cam + Dee"
+            ],
+            "href": "",
+            "url": "",
+            "image_url": "",
+            "alt": "",
+            "link_label": "Learn more",
+            "links": []
+          },
+          {
+            "id": "events-d933c3d76e6d05c4e59a",
+            "title": "Tuesday Moneyball",
+            "text": "Winner: Alex — the strongest finish against expectations.",
+            "kind": "Moneyball",
+            "lines": [
+              "8 players · 14 games"
+            ],
+            "href": "",
+            "url": "",
+            "image_url": "",
+            "alt": "",
+            "link_label": "Learn more",
+            "links": []
+          }
+        ]
+      },
+      {
+        "key": "opening",
+        "title": "From the courts",
+        "items": [
+          {
+            "id": "opening-2b3fdf05c4dda4549989",
+            "title": "",
+            "text": "EXAMPLE DATA — These names and results illustrate the new report; they are not actual Tres results.\n\nA little competition, some new faces, and plenty of good games. Here’s a look at the week on the courts.\n\nOnly cards with a public results page include a results link. The league links open the existing staging league.",
+            "kind": "",
+            "lines": [],
+            "href": "",
+            "url": "",
+            "image_url": "",
+            "alt": "",
+            "link_label": "Learn more",
+            "links": []
+          }
+        ]
+      },
+      {
+        "key": "spotlight",
+        "title": "Player highlights",
+        "items": [
+          {
+            "id": "spotlight-ABOVE_EXPECTATIONS_WEEK",
+            "title": "Above Expectations",
+            "text": "Rated games only; minimum 4 rated games.",
+            "kind": "ABOVE_EXPECTATIONS_WEEK",
+            "lines": [
+              "Alex — +2.1 wins above expected"
+            ],
+            "href": "",
+            "url": "",
+            "image_url": "",
+            "alt": "",
+            "link_label": "Learn more",
+            "links": []
+          },
+          {
+            "id": "spotlight-TOP_PERFORMER_WEEK",
+            "title": "Top Performer",
+            "text": "Most wins minus losses; minimum 4 games.",
+            "kind": "TOP_PERFORMER_WEEK",
+            "lines": [
+              "Bea — 7–1"
+            ],
+            "href": "",
+            "url": "",
+            "image_url": "",
+            "alt": "",
+            "link_label": "Learn more",
+            "links": []
+          }
+        ]
+      },
+      {
+        "key": "races",
+        "title": "Season awards race",
+        "items": [
+          {
+            "id": "races-ea9f2b8cb0af55b24270",
+            "title": "Fall Ladder · Most Wins",
+            "text": "",
+            "kind": "",
+            "lines": [
+              "1. Bea — 18 wins · up 1",
+              "2. Alex — 16 wins"
+            ],
+            "href": "",
+            "url": "",
+            "image_url": "",
+            "alt": "",
+            "link_label": "Learn more",
+            "links": []
+          },
+          {
+            "id": "races-47c4e21635d0336cdd67",
+            "title": "Fall Ladder · Most Upset Wins",
+            "text": "",
+            "kind": "",
+            "lines": [
+              "Cam: 24 of 32 games to qualify",
+              "Dee: 20 of 32 games to qualify"
+            ],
+            "href": "",
+            "url": "",
+            "image_url": "",
+            "alt": "",
+            "link_label": "Learn more",
+            "links": []
+          }
+        ]
+      },
+      {
+        "key": "achievements",
+        "title": "New achievements",
+        "items": [
+          {
+            "id": "achievements-9bef8abb5af0c59bf1f8",
+            "title": "",
+            "text": "Alex — first round-robin win",
+            "kind": "",
+            "lines": [],
+            "href": "",
+            "url": "",
+            "image_url": "",
+            "alt": "",
+            "link_label": "Learn more",
+            "links": []
+          },
+          {
+            "id": "achievements-2e7f1e37f9052048aaa3",
+            "title": "",
+            "text": "Bea — a new participation milestone",
+            "kind": "",
+            "lines": [],
+            "href": "",
+            "url": "",
+            "image_url": "",
+            "alt": "",
+            "link_label": "Learn more",
+            "links": []
+          }
+        ]
+      },
+      {
+        "key": "notes",
+        "title": "Around the club",
+        "items": [
+          {
+            "id": "notes-ab5aa97074c454a06320",
+            "title": "",
+            "text": "Thanks to everyone who helped welcome the new players this week. Keep bringing your friends along!",
+            "kind": "",
+            "lines": [],
+            "href": "",
+            "url": "",
+            "image_url": "",
+            "alt": "",
+            "link_label": "Learn more",
+            "links": []
+          }
+        ]
+      },
+      {
+        "key": "upcoming",
+        "title": "Coming up",
+        "items": [
+          {
+            "id": "upcoming-c3170f16e8a3ecc69fc1",
+            "title": "",
+            "text": "Register for Moneyball",
+            "kind": "",
+            "lines": [],
+            "href": "",
+            "url": "https://app.courtreserve.com/Online/Events/Public/8043/2308082",
+            "image_url": "",
+            "alt": "",
+            "link_label": "Register for Moneyball",
+            "links": []
+          }
+        ]
+      }
+    ],
+    "email_edition": [
+      {
+        "key": "custom",
+        "title": "Club stories",
+        "items": [
+          {
+            "id": "coach-1",
+            "title": "Coach’s tip",
+            "text": "Stay patient & balanced.",
+            "kind": "",
+            "lines": [],
+            "href": "",
+            "url": "https://example.invalid/coaching",
+            "image_url": "",
+            "alt": "",
+            "link_label": "Learn more",
+            "links": []
+          }
+        ]
+      },
+      {
+        "key": "events",
+        "title": "Event results",
+        "items": [
+          {
+            "id": "events-f553a8c338aa1dc8d5c0",
+            "title": "Example Tournament · Mixed 3.5",
+            "text": "Division podium",
+            "kind": "Tournament",
+            "lines": [
+              "1. Cam + Dee"
+            ],
+            "href": "",
+            "url": "",
+            "image_url": "",
+            "alt": "",
+            "link_label": "Learn more",
+            "links": []
+          }
+        ]
+      },
+      {
+        "key": "opening",
+        "title": "From the courts",
+        "items": [
+          {
+            "id": "opening-2b3fdf05c4dda4549989",
+            "title": "",
+            "text": "EXAMPLE DATA — These names and results illustrate the new report; they are not actual Tres results.\n\nA little competition, some new faces, and plenty of good games. Here’s a look at the week on the courts.\n\nOnly cards with a public results page include a results link. The league links open the existing staging league.",
+            "kind": "",
+            "lines": [],
+            "href": "",
+            "url": "",
+            "image_url": "",
+            "alt": "",
+            "link_label": "Learn more",
+            "links": []
+          }
+        ]
+      },
+      {
+        "key": "spotlight",
+        "title": "Player highlights",
+        "items": [
+          {
+            "id": "spotlight-ABOVE_EXPECTATIONS_WEEK",
+            "title": "Above Expectations",
+            "text": "Rated games only; minimum 4 rated games.",
+            "kind": "ABOVE_EXPECTATIONS_WEEK",
+            "lines": [
+              "Alex — +2.1 wins above expected"
+            ],
+            "href": "",
+            "url": "",
+            "image_url": "",
+            "alt": "",
+            "link_label": "Learn more",
+            "links": []
+          },
+          {
+            "id": "spotlight-TOP_PERFORMER_WEEK",
+            "title": "Top Performer",
+            "text": "Most wins minus losses; minimum 4 games.",
+            "kind": "TOP_PERFORMER_WEEK",
+            "lines": [
+              "Bea — 7–1"
+            ],
+            "href": "",
+            "url": "",
+            "image_url": "",
+            "alt": "",
+            "link_label": "Learn more",
+            "links": []
+          }
+        ]
+      },
+      {
+        "key": "achievements",
+        "title": "New achievements",
+        "items": [
+          {
+            "id": "achievements-9bef8abb5af0c59bf1f8",
+            "title": "",
+            "text": "Alex — first round-robin win",
+            "kind": "",
+            "lines": [],
+            "href": "",
+            "url": "",
+            "image_url": "",
+            "alt": "",
+            "link_label": "Learn more",
+            "links": []
+          },
+          {
+            "id": "achievements-2e7f1e37f9052048aaa3",
+            "title": "",
+            "text": "Bea — a new participation milestone",
+            "kind": "",
+            "lines": [],
+            "href": "",
+            "url": "",
+            "image_url": "",
+            "alt": "",
+            "link_label": "Learn more",
+            "links": []
+          }
+        ]
+      },
+      {
+        "key": "notes",
+        "title": "Around the club",
+        "items": [
+          {
+            "id": "notes-ab5aa97074c454a06320",
+            "title": "",
+            "text": "Thanks to everyone who helped welcome the new players this week. Keep bringing your friends along!",
+            "kind": "",
+            "lines": [],
+            "href": "",
+            "url": "",
+            "image_url": "",
+            "alt": "",
+            "link_label": "Learn more",
+            "links": []
+          }
+        ]
+      },
+      {
+        "key": "upcoming",
+        "title": "Coming up",
+        "items": [
+          {
+            "id": "upcoming-c3170f16e8a3ecc69fc1",
+            "title": "",
+            "text": "Register for Moneyball",
+            "kind": "",
+            "lines": [],
+            "href": "",
+            "url": "https://app.courtreserve.com/Online/Events/Public/8043/2308082",
+            "image_url": "",
+            "alt": "",
+            "link_label": "Register for Moneyball",
+            "links": []
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -277,6 +277,24 @@ def render_tournament_podium(tournament: dict) -> None:
 
 
 def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | None = None) -> None:
+    if isinstance((recap.get("report") or {}).get("edition"), list):
+        from jupr_app.domain.recaps.recap_builder import public_edition_report
+        report = public_edition_report(recap["report"])
+        st.header(title_override or report.get("headline") or "Weekly Recap")
+        st.caption(f"{recap.get('start_date', '')} – {recap.get('end_date', '')}")
+        for block in report["edition"]:
+            st.subheader(block["title"])
+            for item in block["items"]:
+                if item["title"]:
+                    st.subheader(item["title"])
+                if item["image_url"]:
+                    st.image(item["image_url"], caption=item["alt"])
+                for value in [item["text"], *item["lines"]]:
+                    if value:
+                        st.text(value)
+                if item["url"]:
+                    st.link_button(item["link_label"], item["url"])
+        return
     week_start = recap.get("week_start") or recap.get("start_date")
     week_end = recap.get("week_end") or recap.get("end_date")
     title = title_override or "Tres Palapas Weekly Recap"

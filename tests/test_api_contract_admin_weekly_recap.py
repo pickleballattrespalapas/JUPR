@@ -61,6 +61,36 @@ def test_admin_weekly_recap_status_disabled_contract(monkeypatch):
     assert payload["list_endpoint"] is None
 
 
+def test_recap_preferences_are_club_authorized_and_revision_guarded(monkeypatch):
+    db = FakeSupabase({**weekly_recap_tables(), "club_recap_preferences": [], "leagues_metadata": []})
+    _install_env(monkeypatch, db)
+    monkeypatch.setattr("services.api.admin_weekly_recap_routes.resolve_admin_role", lambda **kw: SimpleNamespace(role="club_owner" if kw["club_id"] == "club" else "viewer"))
+    client = TestClient(app)
+    path = "/admin/clubs/club/weekly-recap/preferences"
+    payload = {"revision": 0, "settings": {"templates": [{"id": "member", "name": "Member email", "builder": {"sections": {"numbers": {"enabled": False}}}}], "default_template_id": "member"}}
+    response = client.put(path, json=payload)
+    assert response.status_code == 200
+    assert response.json()["revision"] == 1
+    assert client.get(path).json()["settings"]["templates"][0]["builder"]["sections"]["numbers"]["enabled"] is False
+    assert client.put(path, json={**payload, "revision": 99}).status_code == 409
+    assert client.get("/admin/clubs/other/weekly-recap/preferences").status_code == 403
+    assert client.put("/admin/clubs/other/weekly-recap/preferences", json=payload).status_code == 403
+    assert [r["club_id"] for r in db.tables["club_recap_preferences"]] == ["club"]
+
+
+def test_recap_preferences_respect_staging_write_guard(monkeypatch):
+    db = FakeSupabase({**weekly_recap_tables(), "club_recap_preferences": [], "leagues_metadata": []})
+    _install_env(monkeypatch, db)
+    monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "none")
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS", "0")
+    client = TestClient(app)
+    path = "/admin/clubs/club/weekly-recap/preferences"
+    assert client.get(path).status_code == 200
+    assert client.put(path, json={"revision": 0, "settings": {}}).status_code == 403
+    assert db.tables["club_recap_preferences"] == []
+
+
 def test_weekly_recap_public_status_has_no_counts_or_secret_readiness(monkeypatch) -> None:
     supabase = FakeSupabase(weekly_recap_tables())
     _install_env(monkeypatch, supabase)

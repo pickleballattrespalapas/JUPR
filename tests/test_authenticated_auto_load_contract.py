@@ -143,8 +143,11 @@ def test_selection_changes_clear_old_records_and_ignore_late_responses() -> None
     assert select_draw.index("boardRequest.invalidate();") < select_draw.index("setSnapshot(null);") < select_draw.index("loadLiveBoard(drawId)")
 
     weekly = _read("apps/web/app/admin/weekly-recap/WeeklyRecapAdminPanel.tsx")
-    assert "selectRecap(event.target.value)" in weekly
-    assert "setSelectedRecap(null);" in weekly
+    assert "chooseRecap(e.target.value)" in weekly
+    assert "setRow(null);" in weekly
+    loader = weekly.split("async function load(target: string)", 1)[1].split("function clearProtectedRecapState", 1)[0]
+    assert loader.index("setRow(null);") < loader.index("await request<")
+    assert "detailRequest.isCurrent(generation)" in loader
 
 
 def test_refresh_preserves_valid_tournament_selections_and_reloads_current_detail() -> None:
@@ -301,7 +304,9 @@ def test_secondary_reports_actions_and_recap_writes_ignore_old_token_responses()
     assert 'const requestScope = `${clubId}\\u0000${accessToken}`;' in recap
     assert "const writeRequest = useLatestRequestGuard(requestScope);" in recap
     assert recap.count("const generation = writeRequest.begin();") >= 3
-    assert recap.count("if (!writeRequest.isCurrent(generation)) return") >= 5
+    assert recap.count("writeRequest.isCurrent(generation)") >= 8
+    assert "scope !== latest.current.scope" in recap
+    assert "setEdits(blankEdits());" in recap
 
 
 def test_league_awards_browser_flow_uses_accessible_confirmation_dialogs() -> None:
