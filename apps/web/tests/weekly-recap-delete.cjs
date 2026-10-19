@@ -16,11 +16,13 @@ function load(relative, mocks = {}) {
 }
 
 const ConfirmAction = props => React.createElement("confirm-action", props);
+const LayoutManager = props => React.createElement("layout-manager", props);
 let canDelete = true;
 let requests = [];
 let recaps;
 let deleteError = null;
 let accessToken = "local-token";
+let preferenceWrite = null;
 const draft = { id: "recap-1", club_id: "alpha", week_start: "2026-07-06", week_end: "2026-07-12", status: "draft", row_version: 7, generated_json: {}, final_json: {}, edits_json: {} };
 const other = { ...draft, id: "recap-2", week_start: "2026-06-29", week_end: "2026-07-05" };
 const Panel = load("app/admin/weekly-recap/WeeklyRecapAdminPanel.tsx", {
@@ -29,6 +31,13 @@ const Panel = load("app/admin/weekly-recap/WeeklyRecapAdminPanel.tsx", {
   "@/lib/useAuthenticatedAutoLoad": load("lib/useAuthenticatedAutoLoad.ts"),
   "@/lib/useAdminSession": { useAdminSession: () => ({ accessToken, loading: false, session: { user: { email: "admin@example.com" } } }), adminSessionLabel: () => "Admin" },
   "./WeeklyReportExport": () => null,
+  "./RecapLayoutManager": LayoutManager,
+  "@/lib/recapBuilder": load("lib/recapBuilder.ts"),
+  "@/lib/weeklyReportEmail": load("lib/weeklyReportEmail.ts"),
+  "./RecapEvidencePicker": () => null,
+  "./RecapTextEditor": () => null,
+  "./RecapContentEditor": { RecapContentEditor: () => null, RecapStoryEditor: () => null },
+  "./recap-builder.module.css": {},
   "@/lib/clubDate": { weeklyReportDatePreset: () => ({ start: draft.week_start, end: draft.week_end }), clubWeekStartIso: () => draft.week_start, clubTodayIso: () => draft.week_end },
   "./AdminWeeklyRecapPreview": () => React.createElement("div", null, "Recap preview")
 }).default;
@@ -46,6 +55,10 @@ global.fetch = async (url, options = {}) => {
     assert.ok(current, "Mutation identifies the exact loaded recap");
     return { ok: true, json: async () => ({ ok: true, recap: current, candidates: {} }) };
   }
+  if (url.endsWith("/preferences")) {
+    if (options.method === "PUT" && preferenceWrite) return preferenceWrite(url, options);
+    return {ok: true, json: async () => ({ revision:0, settings: {templates:[],default_template_id:""}, leagues:[] })};
+  }
   if (url.includes("?limit=")) return { ok: true, json: async () => ({ ok: true, recaps, count: recaps.length, can_delete_drafts: canDelete }) };
   const week = new URL(url).pathname.split("/").at(-1);
   return { ok: true, json: async () => ({ ok: true, recap: recaps.find(row => row.week_start === week), candidates: {} }) };
@@ -58,7 +71,7 @@ async function mount(overrides = {}) {
   await act(async () => { tree = create(React.createElement(Panel, { ...props, ...overrides })); });
   return tree;
 }
-function reset() { canDelete = true; accessToken = "local-token"; requests = []; recaps = [{ ...draft }, { ...other }]; deleteError = null; }
+function reset() { canDelete = true; accessToken = "local-token"; requests = []; recaps = [{ ...draft }, { ...other }]; deleteError = null; preferenceWrite = null; }
 
 (async () => {
   reset();
@@ -80,7 +93,7 @@ function reset() { canDelete = true; accessToken = "local-token"; requests = [];
   assert.equal(requests.filter(request => request.url.includes("?limit=")).length, 2, "Deletion refreshes saved recap list");
   await act(async () => tree.unmount());
 
-  for (const label of ["Refresh results", "Save draft edits", "Publish recap", "Unpublish recap"]) {
+  for (const label of ["Refresh results", "Publish recap", "Unpublish recap"]) {
     reset();
     if (label === "Unpublish recap") recaps[0].status = "published";
     tree = await mount();
@@ -116,4 +129,41 @@ function reset() { canDelete = true; accessToken = "local-token"; requests = [];
   assert.equal(deletion(tree).props.disabled, true, "Read-only mode disables deletion");
   await act(async () => tree.unmount());
   console.log("weekly recap deletion component behavior: passed");
+  reset();
+  tree = await mount();
+  const oldConfirmation = deletion(tree).props;
+  accessToken = "replacement-token";
+  await act(async () => tree.update(React.createElement(Panel, props)));
+  const writesBefore = requests.filter(r => r.method === "DELETE").length;
+  await assert.rejects(async () => act(async () => oldConfirmation.onConfirm("DELETE RECAP")), /sign-in or club changed/);
+  assert.equal(requests.filter(r => r.method === "DELETE").length, writesBefore, "A confirmation from the old session cannot send a write");
+  await act(async () => tree.unmount());
+
+  for (const transition of ["sign out", "change club"]) {
+    reset();
+    tree = await mount();
+    const oldManager = tree.root.findByType(LayoutManager).props;
+    let release, pending, failure;
+    preferenceWrite = () => new Promise(resolve => { release = resolve; });
+    const privateSettings = { templates: [{ id: "old-layout", name: "Old club layout", builder: {} }], default_template_id: "old-layout" };
+    await act(async () => {
+      pending = oldManager.onSave(privateSettings, 0, "Old club saved.").catch(error => { failure = error; });
+    });
+    assert.equal(requests.filter(r => r.method === "PUT").length, 1);
+    if (transition === "sign out") accessToken = "";
+    await act(async () => tree.update(React.createElement(Panel, {
+      ...props, initialWeekStart: "", clubId: transition === "change club" ? "beta" : "alpha"
+    })));
+    await act(async () => {
+      release({ ok: true, json: async () => ({ revision: 1, settings: privateSettings, leagues: [] }) });
+      await pending;
+    });
+    assert.match(failure.message, /sign-in or club changed/, `${transition}: a late save is rejected`);
+    assert.deepEqual(tree.root.findByType(LayoutManager).props.preferences.settings.templates, [], `${transition}: old club layouts cannot repopulate the editor`);
+    assert(!text(tree.toJSON()).includes("Old club saved."), `${transition}: no stale success message`);
+    await act(async () => assert.rejects(oldManager.onSave(privateSettings, 0, "Old club saved."), /sign-in or club changed/));
+    assert.equal(requests.filter(r => r.method === "PUT").length, 1, `${transition}: old callbacks cannot issue another write`);
+    await act(async () => tree.unmount());
+  }
+  console.log("weekly recap layouts: sign-out and club-change request isolation passed");
 })().catch(error => { console.error(error); process.exitCode = 1; });

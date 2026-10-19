@@ -1,549 +1,1222 @@
 "use client";
-
-import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
-
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useAuthenticatedAutoLoad,
+  useLatestRequestGuard,
+} from "@/lib/useAuthenticatedAutoLoad";
+import { ConfirmAction } from "@/components/ConfirmAction";
+import { actionSuccess } from "@/components/interaction";
+import { useAdminSession } from "@/lib/useAdminSession";
+import { weeklyReportDatePreset } from "@/lib/clubDate";
 import type {
   AdminWeeklyRecapCandidate,
-  AdminWeeklyRecapDeleteResponse,
   AdminWeeklyRecapDetailResponse,
   AdminWeeklyRecapListResponse,
   AdminWeeklyRecapRow,
   AdminWeeklyRecapStatusResponse,
-  AdminWeeklyRecapWriteResponse
 } from "@/lib/adminWeeklyRecapApi";
-import { ConfirmAction } from "@/components/ConfirmAction";
-import { actionSuccess } from "@/components/interaction";
-import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
-import { useAdminSession } from "@/lib/useAdminSession";
-import WeeklyReportExport from "./WeeklyReportExport";
 import type { WeeklyRecapJson } from "@/lib/weeklyRecapApi";
+import {
+  layoutTemplate,
+  normalizeBuilder,
+  previewRecap,
+  type BuilderConfig,
+  type Editorial,
+  type RecapCatalog,
+  type RecapEdits,
+  type RecapPreferences,
+} from "@/lib/recapBuilder";
+import { buildWeeklyReportEmail, emailUrl } from "@/lib/weeklyReportEmail";
+import { RecapContentEditor, RecapStoryEditor } from "./RecapContentEditor";
 import AdminWeeklyRecapPreview from "./AdminWeeklyRecapPreview";
-import { weeklyReportDatePreset } from "@/lib/clubDate";
+import WeeklyReportExport from "./WeeklyReportExport";
+import RecapLayoutManager from "./RecapLayoutManager";
+import RecapEvidencePicker from "./RecapEvidencePicker";
+import RecapTextEditor from "./RecapTextEditor";
+import styles from "./recap-builder.module.css";
 
-type Props = { apiBase: string | null; clubId: string; clubSlug?: string; status: AdminWeeklyRecapStatusResponse; initialWeekStart?: string; printMode?: boolean };
-type SpotlightEdit = { include: boolean; order: string; description: string; players: string[] };
-
-const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
-const inputStyle = { width: "100%", padding: "0.55rem", border: "1px solid #cbd5e1", borderRadius: "8px", font: "inherit" };
-const buttonStyle = { padding: "0.6rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "#0f172a", color: "white", fontWeight: 800 };
-const ghostButtonStyle = { ...buttonStyle, background: "white", color: "#0f172a" };
-
-function apiUrl(apiBase: string, path: string): string {
-  return `${apiBase.replace(/\/$/, "")}${path}`;
-}
-
-function shortValue(value: unknown): string {
-  if (value == null || value === "") return "—";
-  if (typeof value === "object") return JSON.stringify(value).slice(0, 220);
-  return String(value);
-}
-
-function numbersFromRecap(recap: AdminWeeklyRecapRow | null): Record<string, unknown> {
-  const finalJson = recap?.final_json || {};
-  const numbers = (finalJson as Record<string, unknown>).numbers;
-  return numbers && typeof numbers === "object" ? numbers as Record<string, unknown> : {};
-}
-
-function finalSpotlight(recap: AdminWeeklyRecapRow | null): Array<Record<string, unknown>> {
-  const finalJson = recap?.final_json || {};
-  const spotlight = (finalJson as Record<string, unknown>).spotlight;
-  return Array.isArray(spotlight) ? spotlight.filter((item) => item && typeof item === "object") as Array<Record<string, unknown>> : [];
-}
-
-function normalizeCandidateKeys(candidates: Record<string, AdminWeeklyRecapCandidate[]>): string[] {
-  return Object.keys(candidates || {}).filter((key) => (candidates[key] || []).length > 0);
-}
-
-function buildSpotlightEdits(recap: AdminWeeklyRecapRow | null, candidates: Record<string, AdminWeeklyRecapCandidate[]>): Record<string, SpotlightEdit> {
-  const generated = Array.isArray(recap?.generated_json?.spotlight) ? recap?.generated_json?.spotlight as Array<Record<string, unknown>> : [];
-  const currentOverrides = (recap?.edits_json?.spotlight_overrides && typeof recap.edits_json.spotlight_overrides === "object")
-    ? recap.edits_json.spotlight_overrides as Record<string, Record<string, unknown>>
-    : {};
-  const result: Record<string, SpotlightEdit> = {};
-  normalizeCandidateKeys(candidates).forEach((key, idx) => {
-    const generatedRow = generated.find((item) => String(item.key || "") === key) || {};
-    const override = currentOverrides[key] || {};
-    const fallbackCandidateIds = (candidates[key] || []).slice(0, 1).map((candidate) => candidate.candidate_id);
-    const rawPlayers = Array.isArray(override.players) ? override.players : Array.isArray(generatedRow.candidate_ids) ? generatedRow.candidate_ids : fallbackCandidateIds;
-    result[key] = {
-      include: override.include == null ? Boolean(generatedRow.include ?? true) : Boolean(override.include),
-      order: String(override.order || generatedRow.order || idx + 1),
-      description: String(override.description || generatedRow.description || ""),
-      players: rawPlayers.map(String).slice(0, 3)
-    };
-  });
-  return result;
-}
-
-type Editorial = { headline: string; opening: string; event_notes: string; upcoming: Array<{ text: string; url: string }> };
-const emptyEditorial: Editorial = { headline: "This week on the courts", opening: "", event_notes: "", upcoming: [] };
-
-function buildEditsPayload(lookingAhead: string[], spotlightEdits: Record<string, SpotlightEdit>, editorial: Editorial) {
-  const spotlight_overrides: Record<string, { include: boolean; order: number; description: string; players: string[] }> = {};
-  Object.entries(spotlightEdits).forEach(([key, value]) => {
-    spotlight_overrides[key] = {
-      include: Boolean(value.include),
-      order: Number(value.order) || 999,
-      description: value.description || "",
-      players: (value.players || []).filter(Boolean).slice(0, 3)
-    };
-  });
+type Props = {
+  apiBase: string | null;
+  clubId: string;
+  clubSlug?: string;
+  status: AdminWeeklyRecapStatusResponse;
+  initialWeekStart?: string;
+  printMode?: boolean;
+};
+const steps = ["Setup", "Content", "Personalize", "Preview", "Publish & share"];
+const emptyEditorial: Editorial = {
+  headline: "This week on the courts",
+  opening: "",
+  event_notes: "",
+  upcoming: [],
+};
+const emptyPreferences: RecapPreferences = {
+  revision: 0,
+  settings: { templates: [], default_template_id: "" },
+  leagues: [],
+};
+const blankEdits = (): RecapEdits => ({
+  editorial: emptyEditorial,
+  spotlight_overrides: {},
+  looking_ahead: [],
+  builder: normalizeBuilder(),
+  scope: { league_names: [] },
+});
+function rowEdits(
+  row: AdminWeeklyRecapRow,
+  candidates: Record<string, AdminWeeklyRecapCandidate[]>,
+): RecapEdits {
+  const raw = row.edits_json || {};
+  const report = (raw.editorial ||
+    row.generated_json?.report ||
+    {}) as Partial<Editorial>;
+  const generated = (row.generated_json?.spotlight || []) as Array<{
+    key: string;
+    candidate_ids?: string[];
+    description?: string;
+    order?: number;
+  }>;
+  const overrides = (raw.spotlight_overrides || {}) as Partial<
+    RecapEdits["spotlight_overrides"]
+  >;
+  const spotlight = Object.fromEntries(
+    Object.entries(candidates).map(([key, items], index) => {
+      const original = generated.find((item) => item.key === key);
+      return [
+        key,
+        {
+          include: !key.startsWith("METRIC_"),
+          order: original?.order || index + 1,
+          description: original?.description || "",
+          players:
+            original?.candidate_ids ||
+            (key.startsWith("METRIC_")
+              ? []
+              : items.slice(0, 1).map((i) => i.candidate_id)),
+          ...overrides[key],
+        },
+      ];
+    }),
+  );
   return {
-    looking_ahead: lookingAhead.map((item) => item.trim()).filter(Boolean),
-    spotlight_overrides,
-    editorial
+    editorial: {
+      headline: report.headline ?? emptyEditorial.headline,
+      opening: report.opening || "",
+      event_notes: report.event_notes || "",
+      upcoming: report.upcoming || [],
+    },
+    spotlight_overrides: spotlight,
+    looking_ahead: Array.isArray(raw.looking_ahead)
+      ? (raw.looking_ahead as string[])
+      : ((row.generated_json?.looking_ahead || []) as string[]),
+    builder: normalizeBuilder(raw.builder as BuilderConfig),
+    scope: (raw.scope || { league_names: [] }) as RecapEdits["scope"],
   };
 }
-
-export default function WeeklyRecapAdminPanel({ apiBase, clubId, clubSlug = "", status, initialWeekStart = "", printMode = false }: Props) {
-  const { accessToken, loading: sessionLoading, message: sessionMessage } = useAdminSession();
-  const [weekStart, setWeekStart] = useState(() => weeklyReportDatePreset("last_week").start);
-  const [weekEnd, setWeekEnd] = useState(() => weeklyReportDatePreset("last_week").end);
-  const [recaps, setRecaps] = useState<AdminWeeklyRecapRow[]>([]);
-  const [canDeleteDrafts, setCanDeleteDrafts] = useState(false);
-  const [selectedWeekStart, setSelectedWeekStart] = useState(initialWeekStart);
-  const [selectedRecap, setSelectedRecap] = useState<AdminWeeklyRecapRow | null>(null);
-  const [candidates, setCandidates] = useState<Record<string, AdminWeeklyRecapCandidate[]>>({});
-  const [lookingAhead, setLookingAhead] = useState<string[]>(["", "", ""]);
-  const [spotlightEdits, setSpotlightEdits] = useState<Record<string, SpotlightEdit>>({});
-  const [editorial, setEditorial] = useState<Editorial>(emptyEditorial);
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-  const [messageSeverity, setMessageSeverity] = useState<"success" | "error" | null>(null);
+export default function WeeklyRecapAdminPanel({
+  apiBase,
+  clubId,
+  clubSlug = "",
+  status,
+  initialWeekStart = "",
+  printMode = false,
+}: Props) {
+  const { accessToken, loading: sessionLoading } = useAdminSession();
+  const [range, setRange] = useState(() => weeklyReportDatePreset("last_week"));
+  const [rows, setRows] = useState<AdminWeeklyRecapRow[]>([]),
+    [row, setRow] = useState<AdminWeeklyRecapRow | null>(null);
+  const [candidates, setCandidates] = useState<
+    Record<string, AdminWeeklyRecapCandidate[]>
+  >({});
+  const [edits, setEdits] = useState<RecapEdits>(blankEdits),
+    [lastSaved, setLastSaved] = useState("");
+  const [preferences, setPreferences] =
+      useState<RecapPreferences>(emptyPreferences),
+    [preferencesReady, setPreferencesReady] = useState(false);
+  const [templateName, setTemplateName] = useState(""),
+    [step, setStep] = useState(0),
+    [previewMode, setPreviewMode] = useState("website");
+  const [editingText, setEditingText] = useState(false);
+  const [revisionOpen, setRevisionOpen] = useState(true),
+    [busy, setBusy] = useState(false),
+    [saving, setSaving] = useState(false);
+  const [saveFailed, setSaveFailed] = useState(false),
+    [canDelete, setCanDelete] = useState(false);
+  const [message, setMessage] = useState(""),
+    [error, setError] = useState(""),
+    [origin, setOrigin] = useState("");
   const requestScope = `${clubId}\u0000${accessToken}`;
-  const listRequest = useLatestRequestGuard(requestScope, clearProtectedRecapState);
-  const recapRequest = useLatestRequestGuard(requestScope);
+  const scope = requestScope;
+  const workspaceRequest = useLatestRequestGuard(
+    requestScope,
+    clearProtectedRecapState,
+  );
+  const detailRequest = useLatestRequestGuard(requestScope);
   const writeRequest = useLatestRequestGuard(requestScope);
-
-  const candidateKeys = useMemo(() => normalizeCandidateKeys(candidates), [candidates]);
-  const mutationControlsDisabled = busy || !status.mutations_enabled;
-  const recapNumbers = numbersFromRecap(selectedRecap);
-  const spotlightPreview = finalSpotlight(selectedRecap);
-  const targetExistingRecap = recaps.find((recap) => recap.week_start === weekStart) || (selectedRecap?.week_start === weekStart ? selectedRecap : null);
-
-  async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
-    if (!apiBase) throw new Error("API base URL is not configured.");
-    if (!accessToken) throw new Error("Sign in at /admin/login before using Weekly Recap Admin.");
-    const headers = new Headers(options?.headers);
-    headers.set("Authorization", `Bearer ${accessToken}`);
-    if (options?.body) headers.set("Content-Type", "application/json");
-    const response = await fetch(apiUrl(apiBase, path), { ...options, headers });
-    const payload = await response.json().catch(() => null);
-    if (!response.ok) {
-      const detail = String(payload?.detail || `API error (${response.status})`);
-      if (response.status === 409) throw new Error(`${detail} Reload the recap before trying again.`);
-      throw new Error(detail);
-    }
-    return payload as T;
+  const saveLock = useRef(false);
+  const latest = useRef({ row, edits, scope });
+  latest.current = { row, edits, scope };
+  const serialized = JSON.stringify(edits),
+    dirty = Boolean(row && serialized !== lastSaved);
+  const disabled =
+    !status.mutations_enabled || busy || !accessToken || !revisionOpen;
+  const preview = useMemo(
+    () =>
+      previewRecap(
+        (row?.generated_json || {}) as Partial<WeeklyRecapJson>,
+        edits,
+        candidates,
+      ),
+    [row?.generated_json, edits, candidates],
+  );
+  const generatedCatalog = (preview.builder_catalog || {}) as RecapCatalog;
+  const coverage = (row?.generated_json as Partial<WeeklyRecapJson>)?.report
+    ?.coverage;
+  const isLive = row?.status === "published",
+    hasChanges = dirty || Boolean(row?.has_unpublished_changes);
+  const publicReady = Boolean(
+    isLive && !hasChanges && row?.edits_json?.builder,
+  );
+  const emailHtml = buildWeeklyReportEmail(preview, {
+    origin,
+    clubSlug,
+    published: publicReady,
+    compact: true,
+    document: true,
+  });
+  const invalidLinks = [
+    ...edits.editorial.upcoming.map((v) => v.url),
+    ...edits.builder.custom_blocks.flatMap((v) => [v.url || ""]),
+  ].filter((url) => url && !emailUrl(url));
+  invalidLinks.push(
+    ...edits.builder.custom_blocks
+      .map((v) => v.image_url || "")
+      .filter((url) => url && !/^https:\/\//i.test(url)),
+  );
+  async function request<T>(
+    path: string,
+    method = "GET",
+    body?: unknown,
+  ): Promise<T> {
+    if (scope !== latest.current.scope)
+      throw new Error(
+        "Your sign-in or club changed. Reload before continuing.",
+      );
+    if (!apiBase || !accessToken)
+      throw new Error("Sign in before editing recaps.");
+    const headers = new Headers({ Authorization: `Bearer ${accessToken}` });
+    if (body) headers.set("Content-Type", "application/json");
+    const response = await fetch(
+      `${apiBase.replace(/\/$/, "")}/admin/clubs/${encodeURIComponent(clubId)}/weekly-recap${path}`,
+      { method, headers, ...(body ? { body: JSON.stringify(body) } : {}) },
+    );
+    const payload = await response.json();
+    if (!response.ok)
+      throw new Error(
+        typeof payload.detail === "string"
+          ? payload.detail
+          : "Could not complete this action. Reload and try again.",
+      );
+    return payload;
   }
-
-  function applyDetail(payload: AdminWeeklyRecapDetailResponse) {
-    setSelectedRecap(payload.recap);
-    setSelectedWeekStart(payload.recap.week_start);
-    setWeekStart(payload.recap.week_start);
-    setWeekEnd(payload.recap.week_end);
-    const nextCandidates = payload.candidates || {};
+  function apply(payload: AdminWeeklyRecapDetailResponse) {
+    setEditingText(false);
+    const nextCandidates = payload.candidates || {},
+      next = rowEdits(payload.recap, nextCandidates);
+    setRow(payload.recap);
     setCandidates(nextCandidates);
-    const edits = payload.recap.edits_json || {};
-    const looking = Array.isArray(edits.looking_ahead)
-      ? edits.looking_ahead.map(String)
-      : Array.isArray(payload.recap.generated_json?.looking_ahead)
-        ? (payload.recap.generated_json?.looking_ahead as unknown[]).map(String)
-        : [];
-    setLookingAhead([looking[0] || "", looking[1] || "", looking[2] || ""]);
-    setSpotlightEdits(buildSpotlightEdits(payload.recap, nextCandidates));
-    const report = (payload.recap.final_json?.report || payload.recap.generated_json?.report || {}) as Partial<Editorial>;
-    setEditorial({ headline: String(report.headline || emptyEditorial.headline), opening: String(report.opening || ""), event_notes: String(report.event_notes || ""), upcoming: Array.isArray(report.upcoming) ? report.upcoming.map(item => ({ text: String(item.text || ""), url: String(item.url || "") })) : [] });
+    setEdits(next);
+    setLastSaved(JSON.stringify(next));
+    setRange({ start: payload.recap.week_start, end: payload.recap.week_end });
+    setRevisionOpen(payload.recap.status !== "published");
+    setStep(payload.recap.status === "published" ? 3 : next.builder.step);
+    setSaveFailed(false);
   }
-
-  function clearProtectedRecapState() {
-    recapRequest.invalidate();
-    writeRequest.invalidate();
-    setBusy(false); setMessage(null); setMessageSeverity(null);
-    setCanDeleteDrafts(false);
-    setRecaps([]); setSelectedWeekStart(""); setSelectedRecap(null); setCandidates({}); setSpotlightEdits({}); setEditorial(emptyEditorial); setLookingAhead(["", "", ""]);
-  }
-
-  async function loadRecaps() {
-    const generation = listRequest.begin();
+  async function load(target: string) {
+    const generation = detailRequest.begin();
+    setRow(null);
+    setLastSaved("");
     setBusy(true);
-    setMessage(null);
-    setMessageSeverity(null);
+    setError("");
     try {
-      const payload = await requestJson<AdminWeeklyRecapListResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/weekly-recap/recaps?limit=100`);
-      if (!listRequest.isCurrent(generation)) return;
-      const nextRecaps = payload.recaps || [];
-      setRecaps(nextRecaps);
-      setCanDeleteDrafts(Boolean(payload.can_delete_drafts));
-      if (selectedWeekStart && !nextRecaps.some((recap) => recap.week_start === selectedWeekStart)) {
-        recapRequest.invalidate();
-        setSelectedWeekStart("");
-        setSelectedRecap(null);
-        setCandidates({});
-      }
-      setMessage(nextRecaps.length ? `Loaded ${payload.count ?? nextRecaps.length} recap(s).` : "No saved recaps are available.");
-      setMessageSeverity("success");
-    } catch (error) {
-      if (listRequest.isCurrent(generation)) {
-        setMessage(error instanceof Error ? error.message : "Unable to load weekly recaps.");
-        setMessageSeverity("error");
-      }
+      const payload = await request<AdminWeeklyRecapDetailResponse>(
+        `/recaps/${encodeURIComponent(target)}?include_candidates=true`,
+      );
+      if (!detailRequest.isCurrent(generation)) return;
+      apply(payload);
+    } catch (e) {
+      if (detailRequest.isCurrent(generation))
+        setError(e instanceof Error ? e.message : "Unable to load recap.");
     } finally {
-      if (listRequest.isCurrent(generation)) setBusy(false);
+      if (detailRequest.isCurrent(generation)) setBusy(false);
     }
   }
-
-  async function loadSelectedRecap(explicitWeekStart?: string) {
-    const generation = recapRequest.begin();
-    const target = explicitWeekStart || selectedWeekStart || weekStart;
-    if (!target) {
-      setMessage("Select a recap first.");
-      setMessageSeverity("error");
+  function clearProtectedRecapState() {
+    setEditingText(false);
+    detailRequest.invalidate();
+    setRow(null);
+    setRows([]);
+    setCandidates({});
+    setEdits(blankEdits());
+    setLastSaved("");
+    setPreferences(emptyPreferences);
+    setPreferencesReady(false);
+    setStep(0);
+    setError("");
+    setMessage("");
+    setSaving(false);
+    saveLock.current = false;
+    setCanDelete(false);
+    setBusy(false);
+  }
+  async function loadWorkspace() {
+    const generation = workspaceRequest.begin();
+    clearProtectedRecapState();
+    if (!accessToken || !status.enabled) return;
+    setBusy(true);
+    const [list, prefs] = await Promise.allSettled([
+      request<AdminWeeklyRecapListResponse>("/recaps?limit=100"),
+      request<RecapPreferences>("/preferences"),
+    ]);
+    if (!workspaceRequest.isCurrent(generation)) return;
+    if (list.status === "fulfilled") {
+      setRows(list.value.recaps);
+      setCanDelete(Boolean(list.value.can_delete_drafts));
+    } else setError(String(list.reason?.message || "Could not load recaps."));
+    if (prefs.status === "fulfilled") {
+      setPreferences(prefs.value);
+      setPreferencesReady(true);
+      const saved = prefs.value.settings.templates.find(
+        (t) => t.id === prefs.value.settings.default_template_id,
+      );
+      setEdits({ ...blankEdits(), builder: normalizeBuilder(saved?.builder) });
+    } else
+      setError(
+        "Club templates could not be loaded. Reload the workspace before saving defaults.",
+      );
+    setBusy(false);
+    if (initialWeekStart) await load(initialWeekStart);
+  }
+  useAuthenticatedAutoLoad(
+    status.enabled ? accessToken : "",
+    loadWorkspace,
+    `${clubId}:${initialWeekStart}`,
+  );
+  useEffect(() => {
+    if (typeof window !== "undefined") setOrigin(window.location.origin);
+  }, []);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const warn = (event: BeforeUnloadEvent) => {
+      if (dirty) {
+        event.preventDefault();
+        event.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
+  async function saveDraft() {
+    if (saveLock.current) throw new Error("A save is still in progress.");
+    const target = latest.current.row,
+      snapshot = latest.current.edits;
+    if (!target) throw new Error("Generate or load a recap first.");
+    const generation = writeRequest.begin();
+    saveLock.current = true;
+    setSaving(true);
+    setError("");
+    try {
+      const payload = await request<AdminWeeklyRecapDetailResponse>(
+        `/recaps/${target.week_start}`,
+        "PATCH",
+        {
+          edits_json: snapshot,
+          confirmation_text: "SAVE RECAP",
+          expected_recap_id: target.id,
+          expected_row_version: target.row_version,
+        },
+      );
+      if (!writeRequest.isCurrent(generation)) return;
+      setRow(payload.recap);
+      setLastSaved(JSON.stringify(snapshot));
+      setSaveFailed(false);
+      setMessage("Draft saved.");
+      setRows((current) =>
+        current.map((r) => (r.id === payload.recap.id ? payload.recap : r)),
+      );
+    } catch (e) {
+      if (writeRequest.isCurrent(generation)) {
+        setSaveFailed(true);
+        setError(e instanceof Error ? e.message : "Draft could not be saved.");
+      }
+      throw e;
+    } finally {
+      if (writeRequest.isCurrent(generation)) {
+        saveLock.current = false;
+        setSaving(false);
+      }
+    }
+  }
+  useEffect(() => {
+    if (
+      !dirty ||
+      !revisionOpen ||
+      !status.mutations_enabled ||
+      busy ||
+      saving ||
+      saveFailed ||
+      invalidLinks.length
+    )
+      return;
+    const timer = setTimeout(() => {
+      void saveDraft().catch(() => undefined);
+    }, 1400);
+    return () => clearTimeout(timer);
+    // Serialize each edit snapshot; a failed save requires an explicit retry.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    serialized,
+    dirty,
+    busy,
+    saving,
+    saveFailed,
+    revisionOpen,
+    status.mutations_enabled,
+    scope,
+  ]);
+  async function operation(
+    action: "generate" | "publish" | "unpublish" | "delete",
+    confirmationText: string,
+  ) {
+    if (saveLock.current)
+      throw new Error("The draft is still saving. Try again in a moment.");
+    const generation = writeRequest.begin();
+    setBusy(true);
+    setError("");
+    try {
+      const current = latest.current;
+      if (row?.id !== current.row?.id)
+        throw new Error(
+          "The selected recap changed. Close this dialog and review it again.",
+        );
+      const target =
+        action === "generate"
+          ? current.row?.week_start === range.start
+            ? current.row
+            : rows.find((r) => r.week_start === range.start)
+          : current.row;
+      if (action === "generate" && target && target.id !== row?.id) {
+        await load(target.week_start);
+        return actionSuccess(
+          "Recap loaded",
+          "Review the existing edition before refreshing it.",
+        );
+      }
+      if (action !== "generate" && !target)
+        throw new Error("Load a recap first.");
+      const identity = {
+        expected_recap_id: target?.id || null,
+        expected_row_version: target?.row_version || null,
+        confirmation_text: confirmationText,
+      };
+      const path =
+        action === "generate"
+          ? "/generate"
+          : `/recaps/${target!.week_start}${action === "publish" || action === "unpublish" ? "/publish" : ""}`;
+      const body =
+        action === "generate"
+          ? {
+              ...identity,
+              week_start: range.start,
+              week_end: range.end,
+              preserve_edits: true,
+              edits_json: current.edits,
+            }
+          : action === "delete"
+            ? identity
+            : { ...identity, action, edits_json: current.edits };
+      const payload = await request<AdminWeeklyRecapDetailResponse>(
+        path,
+        action === "delete" ? "DELETE" : "POST",
+        body,
+      );
+      if (!writeRequest.isCurrent(generation))
+        return actionSuccess("Action complete", "");
+      if (action === "delete") {
+        setRow(null);
+        setLastSaved("");
+        setStep(0);
+      } else {
+        apply(payload);
+        if (action === "generate") {
+          setStep(1);
+          setRevisionOpen(true);
+        }
+        if (action === "publish") setStep(4);
+      }
+      const list =
+        await request<AdminWeeklyRecapListResponse>("/recaps?limit=100");
+      if (writeRequest.isCurrent(generation)) {
+        setRows(list.recaps);
+        setMessage(
+          action === "publish"
+            ? "Recap published."
+            : action === "unpublish"
+              ? "Recap returned to draft."
+              : action === "delete"
+                ? "Draft deleted."
+                : "Results refreshed; your selections and stories were preserved.",
+        );
+      }
+      return actionSuccess(
+        "Recap updated",
+        "The requested action is complete.",
+      );
+    } catch (e) {
+      if (writeRequest.isCurrent(generation))
+        setError(e instanceof Error ? e.message : "Unable to update recap.");
+      throw e;
+    } finally {
+      if (writeRequest.isCurrent(generation)) setBusy(false);
+    }
+  }
+  async function chooseRecap(value: string) {
+    try {
+      if (dirty && revisionOpen) await saveDraft();
+      if (value) await load(value);
+      else {
+        setRow(null);
+        setStep(0);
+        setLastSaved("");
+        setRevisionOpen(true);
+        setEdits({
+          ...blankEdits(),
+          builder: normalizeBuilder(
+            preferences.settings.templates.find(
+              (t) => t.id === preferences.settings.default_template_id,
+            )?.builder,
+          ),
+        });
+      }
+    } catch {
+      /* Keep the current draft and its error. */
+    }
+  }
+  function changeBuilder(builder: BuilderConfig) {
+    setEdits((current) => ({ ...current, builder }));
+  }
+  function go(next: number) {
+    setStep(next);
+    if (revisionOpen && row)
+      setEdits((current) => ({
+        ...current,
+        builder: { ...current.builder, step: next },
+      }));
+  }
+  function editorial(patch: Partial<Editorial>) {
+    setEdits((current) => ({
+      ...current,
+      editorial: { ...current.editorial, ...patch },
+    }));
+  }
+  function spotlight(
+    key: string,
+    patch: Partial<RecapEdits["spotlight_overrides"][string]>,
+  ) {
+    setEdits((current) => ({
+      ...current,
+      spotlight_overrides: {
+        ...current.spotlight_overrides,
+        [key]: { ...current.spotlight_overrides[key], ...patch },
+      },
+    }));
+  }
+  async function saveTemplate(asDefault: boolean) {
+    if (saveLock.current) return;
+    const name = templateName.trim();
+    if (!name) {
+      setError("Give the layout a name.");
       return;
     }
-    setBusy(true);
-    setMessage(null);
-    setMessageSeverity(null);
-    setSelectedRecap(null);
-    setCandidates({});
     try {
-      const payload = await requestJson<AdminWeeklyRecapDetailResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/weekly-recap/recaps/${encodeURIComponent(target)}?include_candidates=true`);
-      if (!recapRequest.isCurrent(generation)) return;
-      applyDetail(payload);
-      setMessage("Weekly recap loaded.");
-      setMessageSeverity("success");
-    } catch (error) {
-      if (recapRequest.isCurrent(generation)) {
-        setMessage(error instanceof Error ? error.message : "Unable to load weekly recap.");
-        setMessageSeverity("error");
-      }
-    } finally {
-      if (recapRequest.isCurrent(generation)) setBusy(false);
+      const prior = preferences.settings.templates.find(
+        (t) => t.name.toLowerCase() === name.toLowerCase(),
+      );
+      const template = {
+        id: prior?.id || crypto.randomUUID(),
+        name,
+        builder: layoutTemplate(edits.builder),
+      };
+      const settings = {
+        templates: [
+          ...preferences.settings.templates.filter((t) => t.id !== template.id),
+          template,
+        ],
+        default_template_id: asDefault
+          ? template.id
+          : preferences.settings.default_template_id,
+      };
+      await updateLayouts(
+        settings,
+        preferences.revision,
+        asDefault ? "Club default layout saved." : "Layout template saved.",
+      );
+      setTemplateName("");
+    } catch {
+      /* updateLayouts keeps the error visible. */
     }
   }
-
-  function selectRecap(target: string) {
-    setSelectedWeekStart(target);
-    setSelectedRecap(null);
-    setCandidates({});
-    if (target) void loadSelectedRecap(target);
-    else recapRequest.invalidate();
-  }
-
-  async function loadInitialRecapWorkspace() {
-    await loadRecaps();
-    if (initialWeekStart) await loadSelectedRecap(initialWeekStart);
-  }
-
-  async function generateDraft(confirmationText: string) {
+  async function updateLayouts(
+    settings?: RecapPreferences["settings"],
+    revision?: number,
+    success = "Saved layouts reloaded.",
+  ) {
+    if (scope !== latest.current.scope)
+      throw new Error(
+        "Your sign-in or club changed. Reload before continuing.",
+      );
+    if (saveLock.current)
+      throw new Error(
+        "A save is still in progress. Try again when it finishes.",
+      );
     const generation = writeRequest.begin();
+    saveLock.current = true;
     setBusy(true);
-    setMessage(null);
-    setMessageSeverity(null);
+    setError("");
     try {
-      const payload = await requestJson<AdminWeeklyRecapWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/weekly-recap/generate`, {
-        method: "POST",
-        body: JSON.stringify({ week_start: weekStart, week_end: weekEnd, preserve_edits: true, edits_json: selectedRecap?.week_start === weekStart ? buildEditsPayload(lookingAhead, spotlightEdits, editorial) : undefined, confirmation_text: confirmationText, expected_recap_id: selectedRecap?.week_start === weekStart ? selectedRecap.id : null, expected_row_version: selectedRecap?.week_start === weekStart ? selectedRecap.row_version : null, source: "next_weekly_recap_generate" })
-      });
-      const completion = actionSuccess("Weekly recap draft generated", "The draft was generated from current match, social, and tournament data.");
-      if (!writeRequest.isCurrent(generation)) return completion;
-      applyDetail(payload);
-      await loadRecaps();
-      if (!writeRequest.isCurrent(generation)) return completion;
-      setMessage("Draft generated from current match, social, and tournament data.");
-      setMessageSeverity("success");
-      return completion;
-    } catch (error) {
-      if (writeRequest.isCurrent(generation)) {
-        setMessage(error instanceof Error ? error.message : "Unable to generate weekly recap draft.");
-        setMessageSeverity("error");
-      }
-      throw error;
+      const result = await request<RecapPreferences>(
+        "/preferences",
+        settings ? "PUT" : "GET",
+        settings ? { revision, settings } : undefined,
+      );
+      if (!writeRequest.isCurrent(generation))
+        throw new Error(
+          "Your sign-in or club changed. Reload before continuing.",
+        );
+      setPreferences(result);
+      setPreferencesReady(true);
+      setMessage(success);
+    } catch (e) {
+      if (writeRequest.isCurrent(generation))
+        setError(
+          e instanceof Error ? e.message : "Could not update saved layouts.",
+        );
+      throw e;
     } finally {
-      if (writeRequest.isCurrent(generation)) setBusy(false);
-    }
-  }
-
-  async function saveDraft(confirmationText: string) {
-    if (!selectedRecap) {
-      setMessage("Load or generate a recap before saving edits.");
-      setMessageSeverity("error");
-      throw new Error("Load or generate a recap before saving edits.");
-    }
-    const generation = writeRequest.begin();
-    setBusy(true);
-    setMessage(null);
-    setMessageSeverity(null);
-    try {
-      const payload = await requestJson<AdminWeeklyRecapWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/weekly-recap/recaps/${encodeURIComponent(selectedRecap.week_start)}`, {
-        method: "PATCH",
-        body: JSON.stringify({ edits_json: buildEditsPayload(lookingAhead, spotlightEdits, editorial), confirmation_text: confirmationText, expected_recap_id: selectedRecap.id, expected_row_version: selectedRecap.row_version, source: "next_weekly_recap_save" })
-      });
-      const completion = actionSuccess("Weekly recap draft saved", "The looking-ahead and spotlight edits were saved to the draft.");
-      if (!writeRequest.isCurrent(generation)) return completion;
-      applyDetail(payload);
-      setMessage("Draft edits saved.");
-      setMessageSeverity("success");
-      return completion;
-    } catch (error) {
       if (writeRequest.isCurrent(generation)) {
-        setMessage(error instanceof Error ? error.message : "Unable to save weekly recap draft.");
-        setMessageSeverity("error");
+        saveLock.current = false;
+        setBusy(false);
       }
-      throw error;
-    } finally {
-      if (writeRequest.isCurrent(generation)) setBusy(false);
     }
   }
-
-  async function publishAction(action: "publish" | "unpublish", confirmationText: string) {
-    if (!selectedRecap) {
-      setMessage("Load or generate a recap before publishing.");
-      setMessageSeverity("error");
-      throw new Error("Load or generate a recap before publishing.");
-    }
-    const generation = writeRequest.begin();
-    setBusy(true);
-    setMessage(null);
-    setMessageSeverity(null);
-    try {
-      const payload = await requestJson<AdminWeeklyRecapWriteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/weekly-recap/recaps/${encodeURIComponent(selectedRecap.week_start)}/publish`, {
-        method: "POST",
-        body: JSON.stringify({ action, edits_json: buildEditsPayload(lookingAhead, spotlightEdits, editorial), confirmation_text: confirmationText, expected_recap_id: selectedRecap.id, expected_row_version: selectedRecap.row_version, source: action === "publish" ? "next_weekly_recap_publish" : "next_weekly_recap_unpublish" })
-      });
-      const completion = actionSuccess(action === "publish" ? "Weekly recap published" : "Weekly recap unpublished", action === "publish" ? "The recap is now visible on the public Weekly Recap page." : "The recap was removed from the public page and returned to draft.");
-      if (!writeRequest.isCurrent(generation)) return completion;
-      applyDetail(payload);
-      await loadRecaps();
-      if (!writeRequest.isCurrent(generation)) return completion;
-      setMessage(action === "publish" ? "Weekly recap published." : "Weekly recap unpublished and returned to draft.");
-      setMessageSeverity("success");
-      return completion;
-    } catch (error) {
-      if (writeRequest.isCurrent(generation)) {
-        setMessage(error instanceof Error ? error.message : `Unable to ${action} weekly recap.`);
-        setMessageSeverity("error");
-      }
-      throw error;
-    } finally {
-      if (writeRequest.isCurrent(generation)) setBusy(false);
-    }
-  }
-
-  async function deleteDraft(confirmationText: string) {
-    if (!selectedRecap?.id || selectedRecap.status !== "draft" || !canDeleteDrafts) {
-      throw new Error("Load a draft before deleting it.");
-    }
-    const target = selectedRecap;
-    const generation = writeRequest.begin();
-    setBusy(true);
-    setMessage(null);
-    setMessageSeverity(null);
-    try {
-      const payload = await requestJson<AdminWeeklyRecapDeleteResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/weekly-recap/recaps/${encodeURIComponent(target.week_start)}`, {
-        method: "DELETE",
-        body: JSON.stringify({ expected_recap_id: target.id, expected_row_version: target.row_version, confirmation_text: confirmationText })
-      });
-      const completion = actionSuccess("Weekly recap draft deleted", `The draft for ${target.week_start} through ${target.week_end} was deleted. Recorded games and player results are unchanged.`);
-      if (!writeRequest.isCurrent(generation)) return completion;
-      recapRequest.invalidate();
-      listRequest.invalidate();
-      setRecaps((current) => current.filter((recap) => recap.id !== payload.deleted_recap_id));
-      setSelectedWeekStart("");
-      setSelectedRecap(null);
-      setCandidates({});
-      setLookingAhead(["", "", ""]);
-      setSpotlightEdits({});
-      setEditorial(emptyEditorial);
-      await loadRecaps();
-      if (!writeRequest.isCurrent(generation)) return completion;
-      setMessage(`Draft deleted. ${(payload.warnings || []).join(" ")}`.trim());
-      setMessageSeverity("success");
-      return completion;
-    } catch (error) {
-      if (writeRequest.isCurrent(generation)) {
-        setMessage(error instanceof Error ? error.message : "Unable to delete weekly recap draft.");
-        setMessageSeverity("error");
-      }
-      throw error;
-    } finally {
-      if (writeRequest.isCurrent(generation)) setBusy(false);
-    }
-  }
-
-  function updateSpotlight(key: string, patch: Partial<SpotlightEdit>) {
-    setSpotlightEdits((current) => ({ ...current, [key]: { ...(current[key] || { include: true, order: "999", description: "", players: [] }), ...patch } }));
-  }
-
-  function updateSpotlightPlayer(key: string, index: number, value: string) {
-    const current = spotlightEdits[key] || { include: true, order: "999", description: "", players: [] };
-    const nextPlayers = [...(current.players || [])];
-    nextPlayers[index] = value;
-    updateSpotlight(key, { players: nextPlayers });
-  }
-
-  useAuthenticatedAutoLoad(status.enabled ? accessToken : "", loadInitialRecapWorkspace, `${clubId}\u0000${initialWeekStart}`);
-
-  if (!status.enabled) {
-    return (
-      <article style={{ ...cardStyle, background: "#f8fafc" }}>
-        <h2 style={{ marginTop: 0 }}>Weekly recaps are unavailable</h2>
-        <p style={{ color: "#475569" }}>Weekly recaps have not been enabled for this site yet.</p>
-      </article>
-    );
-  }
-
+  if (!status.enabled) return <p>Weekly recaps are unavailable.</p>;
   return (
-    <div style={{ display: "grid", gap: "1rem" }}>
-      {!status.mutations_enabled ? <p role="status" style={{ color: "#92400e" }}><strong>Read-only:</strong> saved recaps and unpublished previews remain available, while generate, save, publish, unpublish, and delete actions stay disabled.</p> : null}
-      {sessionLoading ? <p>Checking sign-in…</p> : null}
-      {sessionMessage ? <p style={{ color: "#64748b" }}>{sessionMessage}</p> : null}
-
-      <article style={cardStyle}>
-        <h2 style={{ marginTop: 0 }}>1. Generate or load a recap</h2>
-        <div style={{ display: "flex", gap: ".5rem", flexWrap: "wrap", marginBottom: "1rem" }}>
-          {(["last_week", "this_week", "last_seven"] as const).map(preset => <button key={preset} type="button" disabled={busy} onClick={() => { const range = weeklyReportDatePreset(preset); setWeekStart(range.start); setWeekEnd(range.end); }} style={ghostButtonStyle}>{({ last_week: "Last completed week", this_week: "This week so far", last_seven: "Last 7 days" })[preset]}</button>)}
+    <div className={styles.builder} data-testid="recap-builder">
+      <div className={styles.toolbar}>
+        <div>
+          <strong>Weekly Recap Builder</strong>
+          <div role="status">
+            {saving
+              ? "Saving draft…"
+              : dirty
+                ? "Unsaved changes"
+                : row
+                  ? "Draft saved"
+                  : "Start a new edition"}
+            {isLive
+              ? hasChanges
+                ? " · Published version remains live"
+                : " · Published"
+              : ""}
+          </div>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
-          <label>Start date<br /><input type="date" value={weekStart} onChange={(event) => setWeekStart(event.target.value)} style={inputStyle} /></label>
-          <label>End date<br /><input type="date" value={weekEnd} onChange={(event) => setWeekEnd(event.target.value)} style={inputStyle} /></label>
-          <ConfirmAction
-            triggerLabel={targetExistingRecap ? "Refresh results" : "Generate draft"}
-            title={targetExistingRecap ? "Regenerate this weekly recap draft?" : "Generate this weekly recap draft?"}
-            description={targetExistingRecap ? `This rebuilds the recap for ${weekStart} through ${weekEnd} from current club results while preserving your opening message, event notes, registration links, and spotlight choices that remain available.` : `This generates a new recap for ${weekStart} through ${weekEnd} from current club results.`}
-            confirmLabel={targetExistingRecap ? "Yes, refresh results" : "Yes, generate draft"}
-            confirmationText="GENERATE RECAP"
-            tone={targetExistingRecap ? "danger" : "default"}
-            disabled={mutationControlsDisabled || !accessToken || targetExistingRecap?.status === "published"}
-            busy={busy}
-            onConfirm={generateDraft}
-          />
-        </div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", marginTop: "0.75rem", alignItems: "end" }}>
-          <label>Existing recaps<br />
-            <select value={selectedWeekStart} onChange={(event) => selectRecap(event.target.value)} disabled={busy} style={inputStyle}>
-              <option value="">Select recap…</option>
-              {recaps.map((row) => <option key={row.week_start} value={row.week_start}>{row.week_start} → {row.week_end} · {row.status}</option>)}
-            </select>
-          </label>
-          <button type="button" onClick={loadRecaps} disabled={busy || !accessToken} style={ghostButtonStyle}>{busy ? "Refreshing…" : "Refresh recaps"}</button>
-          <button type="button" onClick={() => loadSelectedRecap()} disabled={busy || !selectedWeekStart} style={ghostButtonStyle}>Retry selected recap</button>
-          {canDeleteDrafts && selectedRecap?.status === "draft" ? (
-            <ConfirmAction
-              triggerLabel="Delete draft"
-              title="Delete this recap draft?"
-              description={`Permanently delete the draft for ${selectedRecap.week_start} through ${selectedRecap.week_end}? Recorded games, ratings, and player results will stay as they are.`}
-              confirmLabel="Delete draft"
-              confirmationText="DELETE RECAP"
-              tone="danger"
-              disabled={mutationControlsDisabled || !selectedRecap.id}
-              busy={busy}
-              onConfirm={deleteDraft}
-            />
+        <div className={styles.actions}>
+          {row && !revisionOpen ? (
+            <button
+              disabled={!status.mutations_enabled || busy}
+              onClick={() => {
+                setRevisionOpen(true);
+                setMessage(
+                  "Editing a draft revision. The published edition stays live.",
+                );
+              }}
+            >
+              Edit draft revision
+            </button>
+          ) : null}
+          {row && revisionOpen ? (
+            <button
+              disabled={disabled || saving || !dirty || !!invalidLinks.length}
+              onClick={() => void saveDraft().catch(() => undefined)}
+            >
+              {saveFailed ? "Retry save" : "Save draft"}
+            </button>
+          ) : null}
+          {!row ? (
+            <button disabled={busy} onClick={() => void loadWorkspace()}>
+              Refresh workspace
+            </button>
+          ) : null}
+          {row ? (
+            <button
+              disabled={busy || saving || (dirty && !saveFailed)}
+              onClick={() => void load(row.week_start)}
+            >
+              {saveFailed
+                ? "Reload latest (discard unsaved edits)"
+                : "Reload saved recap"}
+            </button>
           ) : null}
         </div>
-        {message ? <p role={messageSeverity === "error" ? "alert" : "status"} style={{ color: messageSeverity === "error" ? "#b91c1c" : "#166534" }}>{message}</p> : null}
-      </article>
-
-      {selectedRecap ? (
+      </div>
+      {!status.mutations_enabled ? (
+        <p>Read-only: you can review saved recaps.</p>
+      ) : null}
+      {sessionLoading ? <p>Checking sign-in…</p> : null}
+      {error ? (
+        <p role="alert">{error}</p>
+      ) : message ? (
+        <p role="status">{message}</p>
+      ) : null}
+      <nav className={styles.nav} aria-label="Recap steps">
+        {steps.map((label, index) => (
+          <button
+            key={label}
+            aria-current={step === index ? "step" : undefined}
+            disabled={busy || (index > 0 && !row)}
+            onClick={() => go(index)}
+          >
+            {index + 1}. {label}
+          </button>
+        ))}
+      </nav>
+      <section hidden={step !== 0} className={styles.section}>
+        <h2>Set up your edition</h2>
+        {!busy && !rows.length ? (
+          <p>No saved recaps yet. Generate your first edition below.</p>
+        ) : null}
+        <label>
+          Existing recaps
+          <select
+            disabled={busy || saving}
+            value={row?.week_start || ""}
+            onChange={(e) => void chooseRecap(e.target.value)}
+          >
+            <option value="">New edition</option>
+            {rows.map((r) => (
+              <option key={r.id || r.week_start} value={r.week_start}>
+                {r.week_start} → {r.week_end} · {r.status}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className={styles.actions}>
+          {(["last_week", "this_week", "last_seven"] as const).map((preset) => (
+            <button
+              key={preset}
+              disabled={disabled || Boolean(row)}
+              onClick={() => setRange(weeklyReportDatePreset(preset))}
+            >
+              {
+                {
+                  last_week: "Last completed week",
+                  this_week: "This week so far",
+                  last_seven: "Last 7 days",
+                }[preset]
+              }
+            </button>
+          ))}
+        </div>
+        <div className={styles.fields}>
+          <label>
+            Start date
+            <input
+              type="date"
+              value={range.start}
+              disabled={disabled || Boolean(row)}
+              onChange={(e) =>
+                setRange((current) => ({ ...current, start: e.target.value }))
+              }
+            />
+          </label>
+          <label>
+            End date
+            <input
+              type="date"
+              value={range.end}
+              disabled={disabled}
+              onChange={(e) =>
+                setRange((current) => ({ ...current, end: e.target.value }))
+              }
+            />
+          </label>
+        </div>
+        <label>
+          Report scope
+          <select
+            disabled={disabled || Boolean(row)}
+            value={edits.scope.league_names.length ? "league" : "club"}
+            onChange={(e) =>
+              setEdits((current) => ({
+                ...current,
+                scope: {
+                  league_names:
+                    e.target.value === "league"
+                      ? [preferences.leagues[0] || ""]
+                      : [],
+                },
+              }))
+            }
+          >
+            <option value="club">Whole club</option>
+            <option value="league" disabled={!preferences.leagues.length}>
+              One league
+            </option>
+          </select>
+        </label>
+        {edits.scope.league_names.length ? (
+          <label>
+            League
+            <select
+              disabled={disabled || Boolean(row)}
+              value={edits.scope.league_names[0]}
+              onChange={(e) =>
+                setEdits((current) => ({
+                  ...current,
+                  scope: { league_names: [e.target.value] },
+                }))
+              }
+            >
+              {preferences.leagues.map((name) => (
+                <option key={name}>{name}</option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+        <p className={styles.muted}>
+          Scope determines games, totals, and eligible highlights. Content
+          controls choose which stories appear. Choose New edition to change the
+          start date or scope.
+        </p>
+        <label>
+          Layout template
+          <select
+            defaultValue=""
+            disabled={disabled}
+            onChange={(e) =>
+              changeBuilder({
+                ...normalizeBuilder(
+                  preferences.settings.templates.find(
+                    (t) => t.id === e.target.value,
+                  )?.builder,
+                ),
+                custom_blocks: edits.builder.custom_blocks,
+              })
+            }
+          >
+            <option value="">Standard recap</option>
+            {preferences.settings.templates.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+                {t.id === preferences.settings.default_template_id
+                  ? " · Club default"
+                  : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+        <RecapLayoutManager
+          key={`${scope}:${preferences.revision}`}
+          preferences={preferences}
+          disabled={
+            !status.mutations_enabled ||
+            busy ||
+            saving ||
+            !accessToken ||
+            !preferencesReady
+          }
+          onSave={updateLayouts}
+          onReload={() => updateLayouts()}
+        />
+        <ConfirmAction
+          triggerLabel={
+            rows.some((r) => r.week_start === range.start)
+              ? "Refresh results"
+              : "Generate draft"
+          }
+          title="Generate this recap?"
+          description="Load recorded results for this period while preserving your selections and editorial work."
+          confirmationText="GENERATE RECAP"
+          confirmLabel="Generate draft"
+          disabled={
+            disabled || saving || !range.start || range.end < range.start
+          }
+          busy={busy}
+          onConfirm={(confirmation) => operation("generate", confirmation)}
+        />
+        {canDelete && row?.status === "draft" ? (
+          <ConfirmAction
+            triggerLabel="Delete draft"
+            title="Delete this recap draft?"
+            description={`Permanently delete the draft for ${row.week_start} through ${row.week_end}? Recorded games and player results stay as they are.`}
+            confirmationText="DELETE RECAP"
+            confirmLabel="Delete draft"
+            tone="danger"
+            disabled={disabled || saving}
+            busy={busy}
+            onConfirm={(confirmation) => operation("delete", confirmation)}
+          />
+        ) : null}
+      </section>
+      {row ? (
         <>
-          <article style={cardStyle} className="admin-recap-no-print">
-            <h2 style={{ marginTop: 0 }}>2. Edit draft</h2>
-            <p style={{ color: "#475569" }}><strong>Recap:</strong> {selectedRecap.week_start} → {selectedRecap.week_end} · <strong>Status:</strong> {selectedRecap.status}</p>
-            <div style={{ display: "grid", gap: ".8rem", marginBottom: "1rem" }}>
-              <label>Report headline<input maxLength={160} value={editorial.headline} disabled={mutationControlsDisabled || selectedRecap.status === "published"} onChange={e => setEditorial(current => ({ ...current, headline: e.target.value }))} style={inputStyle} /></label>
-              <label>Opening message<textarea maxLength={3000} value={editorial.opening} disabled={mutationControlsDisabled || selectedRecap.status === "published"} onChange={e => setEditorial(current => ({ ...current, opening: e.target.value }))} style={{ ...inputStyle, minHeight: 100 }} /></label>
-              <label>Event notes / club news<textarea maxLength={3000} value={editorial.event_notes} disabled={mutationControlsDisabled || selectedRecap.status === "published"} onChange={e => setEditorial(current => ({ ...current, event_notes: e.target.value }))} style={{ ...inputStyle, minHeight: 100 }} /></label>
-              <h3>Registration and upcoming-event links</h3>
-              {editorial.upcoming.map((item, idx) => <div key={idx} style={{ display: "grid", gap: ".5rem", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))" }}>
-                <label>Event {idx + 1}<input value={item.text} maxLength={240} disabled={mutationControlsDisabled || selectedRecap.status === "published"} onChange={e => setEditorial(current => ({ ...current, upcoming: current.upcoming.map((v, i) => i === idx ? { ...v, text: e.target.value } : v) }))} style={inputStyle} /></label>
-                <label>Registration URL {idx + 1}<input type="url" value={item.url} disabled={mutationControlsDisabled || selectedRecap.status === "published"} onChange={e => setEditorial(current => ({ ...current, upcoming: current.upcoming.map((v, i) => i === idx ? { ...v, url: e.target.value } : v) }))} style={inputStyle} /></label>
-                <button type="button" disabled={mutationControlsDisabled || selectedRecap.status === "published"} onClick={() => setEditorial(current => ({ ...current, upcoming: current.upcoming.filter((_, i) => i !== idx) }))}>Remove event {idx + 1}</button>
-              </div>)}
-              <button type="button" disabled={mutationControlsDisabled || selectedRecap.status === "published" || editorial.upcoming.length >= 10} onClick={() => setEditorial(current => ({ ...current, upcoming: [...current.upcoming, { text: "", url: "" }] }))}>Add an event link</button>
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
-              {[0, 1, 2].map((idx) => (
-                <label key={idx}>Looking ahead #{idx + 1}<br />
-                  <input value={lookingAhead[idx] || ""} onChange={(event) => setLookingAhead((current) => current.map((item, itemIdx) => itemIdx === idx ? event.target.value : item))} disabled={mutationControlsDisabled || selectedRecap.status === "published"} style={inputStyle} />
-                </label>
+          <section hidden={step !== 1}>
+            <h2>Choose and arrange content</h2>
+            <div className={styles.section}>
+              <div className={styles.row}>
+                <p>
+                  Results from{" "}
+                  <strong>
+                    {row.week_start} through {row.week_end}
+                  </strong>{" "}
+                  · {preview.report?.scope_label || "Whole club"}
+                </p>
+                <button type="button" onClick={() => go(0)}>
+                  Update dates or refresh results
+                </button>
+              </div>
+              <p className={styles.muted}>
+                These choices come from this draft’s results snapshot. Refresh
+                results in Setup to include newly recorded games.
+              </p>
+              {coverage?.pending?.map((item, index) => (
+                <p key={`pending-${index}`}>
+                  Awaiting approval: {item.title}. These results are not yet
+                  available to select.
+                </p>
+              ))}
+              {coverage?.warnings?.map((warning, index) => (
+                <p key={`warning-${index}`} role="status">
+                  {warning}
+                </p>
               ))}
             </div>
-          </article>
-
-          {(selectedRecap.final_json as Partial<WeeklyRecapJson>)?.report?.coverage ? <article style={cardStyle}>
-            <h2>Results included in this report</h2>
-            <p>{(selectedRecap.final_json as Partial<WeeklyRecapJson>).report?.coverage?.games ?? 0} games · {(selectedRecap.final_json as Partial<WeeklyRecapJson>).report?.coverage?.players ?? 0} players. Games are counted from saved results, including everyone who played.</p>
-            <ul>{(selectedRecap.final_json as Partial<WeeklyRecapJson>).report?.coverage?.included?.map((item, idx) => <li key={idx}>{item.title} · {item.date} · {item.status}</li>)}</ul>
-            {(selectedRecap.final_json as Partial<WeeklyRecapJson>).report?.coverage?.pending?.map((item, idx) => <p key={idx} style={{ color: "#92400e" }}>Awaiting approval: {item.title} ({item.date}). These games are excluded until approved.</p>)}
-            {(selectedRecap.final_json as Partial<WeeklyRecapJson>).report?.coverage?.warnings?.map((warning, idx) => <p key={idx} role="status" style={{ color: "#92400e" }}>{warning}</p>)}
-          </article> : null}
-          <article style={cardStyle} className="admin-recap-no-print">
-            <h2 style={{ marginTop: 0 }}>Spotlight reel</h2>
-            <p style={{ color: "#475569" }}>Choose up to three candidates per spotlight category. Leave a slot blank to omit it.</p>
-            {candidateKeys.length ? candidateKeys.map((key, idx) => {
-              const edit = spotlightEdits[key] || { include: true, order: String(idx + 1), description: "", players: [] };
-              const options = candidates[key] || [];
-              const label = options[0]?.label || key;
-              return (
-                <section key={key} style={{ borderTop: idx ? "1px solid #e2e8f0" : undefined, paddingTop: idx ? "0.75rem" : 0, marginTop: idx ? "0.75rem" : 0 }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "120px 90px 1fr", gap: "0.75rem", alignItems: "end" }}>
-                    <label><input type="checkbox" checked={edit.include} onChange={(event) => updateSpotlight(key, { include: event.target.checked })} disabled={mutationControlsDisabled || selectedRecap.status === "published"} /> Include<br /><strong>{label}</strong></label>
-                    <label>Order<br /><input value={edit.order} onChange={(event) => updateSpotlight(key, { order: event.target.value })} disabled={mutationControlsDisabled || selectedRecap.status === "published"} style={inputStyle} /></label>
-                    <label>Description<br /><input value={edit.description} onChange={(event) => updateSpotlight(key, { description: event.target.value })} disabled={mutationControlsDisabled || selectedRecap.status === "published"} style={inputStyle} /></label>
-                  </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem", marginTop: "0.75rem" }}>
-                    {[0, 1, 2].map((slot) => (
-                      <label key={slot}>Candidate {slot + 1}<br />
-                        <SearchablePlayerSelect aria-label={["Candidate",String(slot + 1)].join(" ")} value={edit.players?.[slot] || ""} onValueChange={playerValue => updateSpotlightPlayer(key, slot, playerValue)} disabled={mutationControlsDisabled || selectedRecap.status === "published"} style={inputStyle}>
-                          <option value="">None</option>
-                          {options.map((candidate) => <option key={candidate.candidate_id} value={candidate.candidate_id}>{candidate.display}</option>)}
-                        </SearchablePlayerSelect>
-                      </label>
-                    ))}
-                  </div>
-                </section>
-              );
-            }) : <p style={{ color: "#92400e" }}>No spotlight candidates are available for this date range.</p>}
-            <div style={{ marginTop: "1rem" }}>
-              <ConfirmAction
-                triggerLabel="Save draft edits"
-                title="Save these weekly recap edits?"
-                description="This saves the current looking-ahead and spotlight edits to the selected draft."
-                confirmLabel="Yes, save edits"
-                confirmationText="SAVE RECAP"
-                disabled={mutationControlsDisabled || selectedRecap.status === "published"}
-                busy={busy}
-                onConfirm={saveDraft}
+            <RecapEvidencePicker
+              builder={edits.builder}
+              catalog={generatedCatalog}
+              candidates={candidates}
+              spotlights={edits.spotlight_overrides}
+              disabled={disabled}
+              onBuilderChange={changeBuilder}
+              onSpotlightChange={spotlight}
+            />
+            <details
+              className={styles.section}
+              data-testid="recap-layout-options"
+            >
+              <summary>Section layout, headings and email order</summary>
+              <RecapContentEditor
+                builder={edits.builder}
+                catalog={generatedCatalog}
+                disabled={disabled}
+                onChange={changeBuilder}
               />
+            </details>
+          </section>
+          <section hidden={step !== 2} className={styles.section}>
+            <h2>Make it your club’s recap</h2>
+            <label>
+              Report headline
+              <input
+                maxLength={160}
+                value={edits.editorial.headline}
+                disabled={disabled}
+                onChange={(e) => editorial({ headline: e.target.value })}
+              />
+            </label>
+            <label>
+              Opening message
+              <textarea
+                maxLength={3000}
+                value={edits.editorial.opening}
+                disabled={disabled}
+                onChange={(e) => editorial({ opening: e.target.value })}
+              />
+            </label>
+            <label>
+              Club news
+              <textarea
+                maxLength={3000}
+                value={edits.editorial.event_notes}
+                disabled={disabled}
+                onChange={(e) => editorial({ event_notes: e.target.value })}
+              />
+            </label>
+            <RecapStoryEditor
+              builder={edits.builder}
+              disabled={disabled}
+              onChange={changeBuilder}
+            />
+            <h3>Coming up</h3>
+            {edits.editorial.upcoming.map((item, index) => (
+              <div key={index} className={styles.fields}>
+                <label>
+                  Event or announcement
+                  <input
+                    value={item.text}
+                    maxLength={240}
+                    disabled={disabled}
+                    onChange={(e) =>
+                      editorial({
+                        upcoming: edits.editorial.upcoming.map((v, i) =>
+                          i === index ? { ...v, text: e.target.value } : v,
+                        ),
+                      })
+                    }
+                  />
+                </label>
+                <label>
+                  Registration URL
+                  <input
+                    type="url"
+                    value={item.url}
+                    disabled={disabled}
+                    onChange={(e) =>
+                      editorial({
+                        upcoming: edits.editorial.upcoming.map((v, i) =>
+                          i === index ? { ...v, url: e.target.value } : v,
+                        ),
+                      })
+                    }
+                  />
+                </label>
+                <button
+                  disabled={disabled}
+                  onClick={() =>
+                    editorial({
+                      upcoming: edits.editorial.upcoming.filter(
+                        (_, i) => i !== index,
+                      ),
+                    })
+                  }
+                >
+                  Remove event {index + 1}
+                </button>
+              </div>
+            ))}
+            <button
+              disabled={disabled || edits.editorial.upcoming.length >= 10}
+              onClick={() =>
+                editorial({
+                  upcoming: [
+                    ...edits.editorial.upcoming,
+                    { text: "", url: "" },
+                  ],
+                })
+              }
+            >
+              Add event link
+            </button>
+            {edits.looking_ahead.map((line, index) => (
+              <label key={index}>
+                Looking ahead {index + 1}
+                <input
+                  value={line}
+                  disabled={disabled}
+                  onChange={(e) =>
+                    setEdits((current) => ({
+                      ...current,
+                      looking_ahead: current.looking_ahead.map((v, i) =>
+                        i === index ? e.target.value : v,
+                      ),
+                    }))
+                  }
+                />
+              </label>
+            ))}
+          </section>
+          <section hidden={step !== 3}>
+            <h2>Preview your edition</h2>
+            {invalidLinks.length ? (
+              <p role="alert">
+                Fix {invalidLinks.length} invalid link(s) in Personalize before
+                saving or publishing. Photo URLs must use HTTPS.
+              </p>
+            ) : null}
+            {coverage ? (
+              <details>
+                <summary>
+                  Results coverage · {coverage.games || 0} games ·{" "}
+                  {coverage.players || 0} players
+                </summary>
+                <ul>
+                  {coverage.included?.map((v, i) => (
+                    <li key={i}>
+                      {v.title} · {v.date} · {v.status}
+                    </li>
+                  ))}
+                </ul>
+                {coverage.pending?.map((v, i) => (
+                  <p key={i}>
+                    Awaiting approval: {v.title}. These games are excluded until
+                    approved.
+                  </p>
+                ))}
+                {coverage.warnings?.map((v, i) => (
+                  <p key={i}>{v}</p>
+                ))}
+              </details>
+            ) : null}
+            <div className={styles.previewTabs}>
+              {["website", "email", "print"].map((view) => (
+                <button
+                  key={view}
+                  aria-pressed={previewMode === view}
+                  onClick={() => setPreviewMode(view)}
+                >
+                  {view === "website"
+                    ? "Website"
+                    : view === "email"
+                      ? "Member email"
+                      : "Print / PDF"}
+                </button>
+              ))}
+              <button
+                type="button"
+                disabled={disabled && !editingText}
+                aria-pressed={editingText}
+                onClick={() => setEditingText(!editingText)}
+              >
+                {editingText ? "Done editing text" : "Edit text"}
+              </button>
             </div>
-          </article>
-
-          <article style={cardStyle} className="admin-recap-no-print">
-            <h2 style={{ marginTop: 0 }}>3. Preview summary</h2>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "0.75rem" }}>
-              {Object.entries(recapNumbers).slice(0, 8).map(([key, value]) => <div key={key} style={{ border: "1px solid #e2e8f0", borderRadius: "12px", padding: "0.75rem" }}><strong>{key.replace(/_/g, " ")}</strong><br />{shortValue(value)}</div>)}
+            {editingText ? (
+              <RecapTextEditor
+                catalog={generatedCatalog}
+                edits={edits}
+                channel={previewMode === "email" ? "email_edition" : "edition"}
+                disabled={disabled}
+                weekStart={row.week_start}
+                weekEnd={row.week_end}
+                scopeLabel={preview.report?.scope_label}
+                generatedHeadline={
+                  (row.generated_json as Partial<WeeklyRecapJson>)?.report
+                    ?.headline || emptyEditorial.headline
+                }
+                onChange={setEdits}
+              />
+            ) : previewMode === "email" ? (
+              <iframe
+                title="Live member email preview"
+                sandbox="allow-same-origin"
+                srcDoc={emailHtml}
+                style={{ width: "100%", height: 650, border: 0 }}
+              />
+            ) : (
+              <AdminWeeklyRecapPreview
+                recap={{
+                  ...row,
+                  status: publicReady ? "published" : "draft",
+                  final_json: preview as Record<string, unknown>,
+                }}
+                printMode={printMode}
+              />
+            )}
+            {previewMode === "print" && !editingText ? (
+              <button onClick={() => window.print()}>Print / save PDF</button>
+            ) : null}
+          </section>
+          <section hidden={step !== 4} className={styles.section}>
+            <h2>Publish and share</h2>
+            <p>
+              {isLive && hasChanges
+                ? "Your published edition stays live until you publish this revision."
+                : "Publish the reviewed edition to your club website."}
+            </p>
+            <ConfirmAction
+              triggerLabel="Publish recap"
+              title={isLive ? "Publish this revision?" : "Publish this recap?"}
+              description="Publish the content selected in Preview, including your email selections."
+              confirmationText="PUBLISH RECAP"
+              confirmLabel="Publish recap"
+              disabled={
+                disabled ||
+                saving ||
+                !!invalidLinks.length ||
+                (isLive && !hasChanges)
+              }
+              busy={busy}
+              onConfirm={(confirmation) => operation("publish", confirmation)}
+            />
+            {isLive ? (
+              <ConfirmAction
+                triggerLabel="Unpublish recap"
+                title="Unpublish this recap?"
+                description="Remove this edition from the public page and keep its draft."
+                confirmationText="UNPUBLISH RECAP"
+                confirmLabel="Unpublish recap"
+                tone="danger"
+                disabled={busy || saving || !status.mutations_enabled}
+                busy={busy}
+                onConfirm={(confirmation) =>
+                  operation("unpublish", confirmation)
+                }
+              />
+            ) : null}
+            <WeeklyReportExport
+              recap={preview}
+              clubSlug={clubSlug}
+              published={publicReady}
+            />
+            <h3>Save this layout for future weeks</h3>
+            <p className={styles.muted}>
+              Saves section headings, order, detail, and email settings. New
+              weeks get fresh results and stories.
+            </p>
+            <label>
+              Layout name
+              <input
+                maxLength={80}
+                value={templateName}
+                disabled={busy}
+                onChange={(e) => setTemplateName(e.target.value)}
+              />
+            </label>
+            <div className={styles.actions}>
+              <button
+                disabled={
+                  busy ||
+                  saving ||
+                  !status.mutations_enabled ||
+                  !preferencesReady
+                }
+                onClick={() => void saveTemplate(false)}
+              >
+                Save template
+              </button>
+              <button
+                disabled={
+                  busy ||
+                  saving ||
+                  !status.mutations_enabled ||
+                  !preferencesReady
+                }
+                onClick={() => void saveTemplate(true)}
+              >
+                Save as club default
+              </button>
             </div>
-            <h3>Spotlight preview</h3>
-            {spotlightPreview.length ? <ul>{spotlightPreview.map((item, idx) => <li key={`${item.key}-${idx}`}><strong>{shortValue(item.label || item.key)}</strong>: {Array.isArray(item.players) ? item.players.join(", ") : "—"}<br /><span style={{ color: "#475569" }}>{shortValue(item.description)}</span></li>)}</ul> : <p style={{ color: "#64748b" }}>Save draft edits to refresh the final spotlight preview.</p>}
-          </article>
-
-          <article style={cardStyle} className="admin-recap-no-print">
-            <h2 style={{ marginTop: 0 }}>4. Publish control</h2>
-            <p style={{ color: "#475569" }}>Publishing makes this recap visible on the public Weekly Recap page. Unpublishing returns it to draft.</p>
-            <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", marginTop: "0.75rem" }}>
-              <ConfirmAction triggerLabel="Publish recap" title="Publish this weekly recap?" description="This saves the current looking-ahead and spotlight edits into the final recap, then makes that result visible on the public Weekly Recap page." confirmLabel="Yes, publish recap" confirmationText="PUBLISH RECAP" disabled={mutationControlsDisabled || selectedRecap.status === "published"} busy={busy} onConfirm={(confirmationText) => publishAction("publish", confirmationText)} />
-              <ConfirmAction triggerLabel="Unpublish recap" title="Unpublish this weekly recap?" description="This removes the recap from the public page and returns it to draft status." confirmLabel="Yes, unpublish recap" confirmationText="UNPUBLISH RECAP" tone="danger" disabled={mutationControlsDisabled || selectedRecap.status !== "published"} busy={busy} onConfirm={(confirmationText) => publishAction("unpublish", confirmationText)} />
-            </div>
-          </article>
-
-          <WeeklyReportExport recap={(selectedRecap.final_json || selectedRecap.generated_json || {}) as Partial<WeeklyRecapJson>} clubSlug={clubSlug} published={selectedRecap.status === "published"} />
-          <article style={cardStyle}>
-            <h2 className="admin-recap-no-print" style={{ marginTop: 0 }}>5. Full preview and print</h2>
-            <p className="admin-recap-no-print" style={{ color: "#475569" }}>Preview the saved recap below. Drafts stay private until you publish them.</p>
-            <AdminWeeklyRecapPreview recap={selectedRecap} printMode={printMode} />
-          </article>
+          </section>
+          <div className={styles.actions} style={{ marginTop: "1rem" }}>
+            <button disabled={step === 0 || busy} onClick={() => go(step - 1)}>
+              Back
+            </button>
+            {step < 4 ? (
+              <button disabled={busy} onClick={() => go(step + 1)}>
+                Next: {steps[step + 1]}
+              </button>
+            ) : null}
+          </div>
         </>
       ) : null}
     </div>

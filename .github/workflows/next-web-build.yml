@@ -5,6 +5,7 @@ on:
     paths:
       - "apps/web/**"
       - "tests/e2e/generator_submission_api.py"
+      - "tests/e2e/recap_builder_api.py"
       - ".github/workflows/next-web-build.yml"
   workflow_dispatch:
 
@@ -34,12 +35,17 @@ jobs:
       - name: Verify full round schedule and navigation
         working-directory: apps/web
         run: node tests/rr-schedule-navigation-browser.cjs
+      - name: Verify recap builder, drafts, publishing and mobile editing
+        working-directory: apps/web
+        env:
+          RECAP_BROWSER_ARTIFACTS: test-results/recap-builder
+        run: node tests/recap-builder-browser.cjs
       - name: Upload round navigation browser evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: rr-navigation-ui-${{ github.sha }}
-          path: apps/web/test-results/rr-navigation/
+          path: apps/web/test-results/
           retention-days: 7
   build:
     runs-on: ubuntu-latest

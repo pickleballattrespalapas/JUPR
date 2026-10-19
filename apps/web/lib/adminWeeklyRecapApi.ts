@@ -16,6 +16,8 @@ export type AdminWeeklyRecapRow = {
   generated_json?: Record<string, unknown>;
   edits_json?: Record<string, unknown>;
   final_json?: Record<string, unknown>;
+  published_json?: Record<string, unknown> | null;
+  has_unpublished_changes?: boolean;
   published_at?: string | null;
   published_by?: string | null;
   created_at?: string | null;

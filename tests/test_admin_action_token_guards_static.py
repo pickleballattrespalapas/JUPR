@@ -195,7 +195,7 @@ def test_existing_shared_action_guards_remain_token_scoped() -> None:
         (
             "apps/web/app/admin/weekly-recap/WeeklyRecapAdminPanel.tsx",
             "writeRequest",
-            ("generateDraft", "saveDraft", "publishAction", "deleteDraft"),
+            ("operation", "saveDraft", "updateLayouts"),
         ),
         (
             "apps/web/app/admin/league-manager/awards/LeagueAwardsPanel.tsx",
@@ -219,6 +219,12 @@ def test_existing_shared_action_guards_remain_token_scoped() -> None:
         if relative.endswith("WeeklyRecapAdminPanel.tsx"):
             assert 'const requestScope = `${clubId}\\u0000${accessToken}`;' in source
             assert "const writeRequest = useLatestRequestGuard(requestScope);" in source
+            # Creating a template and managing saved layouts share one guarded
+            # request path. Keep the wrapper delegation and its guard covered.
+            save_template = _async_function_body(source, "saveTemplate")
+            assert "await updateLayouts(" in save_template
+            assert "await request<" not in save_template
+            assert "scope !== latest.current.scope" in _async_function_body(source, "updateLayouts")
         elif relative.endswith("AdminToolsPanel.tsx"):
             assert "const actionRequest = useLatestRequestGuard(`${clubId}:${accessToken}`);" in source
         else:

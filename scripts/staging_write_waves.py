@@ -177,6 +177,7 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/admin/clubs/{club_id}/player-updates/subscriptions/{subscription_id}/deactivate"),
         ("PATCH", "/admin/clubs/{club_id}/verified-updates/requests/{subscription_id}"),
         ("POST", "/admin/clubs/{club_id}/weekly-recap/generate"),
+        ("PUT", "/admin/clubs/{club_id}/weekly-recap/preferences"),
         ("PATCH", "/admin/clubs/{club_id}/weekly-recap/recaps/{week_start}"),
         ("DELETE", "/admin/clubs/{club_id}/weekly-recap/recaps/{week_start}"),
         ("POST", "/admin/clubs/{club_id}/weekly-recap/recaps/{week_start}/publish"),

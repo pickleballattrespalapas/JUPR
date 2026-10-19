@@ -134,6 +134,9 @@ def _load_debug_matches(supabase, club_id: str, start_dt_utc: datetime, end_dt_u
 
 
 def _apply_edits(generated_json: dict, edits_json: dict, candidates: dict[str, list[dict]]) -> dict:
+    if isinstance(edits_json.get("builder"), dict):
+        from jupr_app.services.admin_weekly_recap_service import apply_weekly_recap_edits
+        return apply_weekly_recap_edits(generated_json, edits_json, candidates)
     recap = deepcopy(generated_json or {})
     if not recap:
         return recap
@@ -383,6 +386,7 @@ def render(ctx):
             "generated_json": generated_json,
             "edits_json": edits_json,
             "final_json": final_json,
+            "published_json": final_json,
             "published_at": datetime.now(timezone.utc).isoformat(),
             "published_by": "admin",
         }

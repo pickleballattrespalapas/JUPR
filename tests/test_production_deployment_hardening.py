@@ -24,7 +24,7 @@ IMMUTABLE_IMAGE_REF = (
     f"registry.fly.io/{verifier.PRODUCTION_FLY_APP}@{IMAGE_DIGEST}"
 )
 FLY_CONFIG_SHA = "4" * 64
-MIGRATION_PROFILE = "tres-connected-event-histories-2026-10-16"
+MIGRATION_PROFILE = "tres-weekly-recap-builder-2026-10-19"
 MIGRATION_CONTRACT = verifier.load_migration_contract(
     ROOT / "config/production_migration_contract.json",
     ROOT / "supabase/migrations",
@@ -383,7 +383,9 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         ROOT / "supabase/migrations",
     )
 
-    assert len(versions) == 168
+    assert len(versions) == 169
+    assert "weekly_recap_builder" in contract["required_ledger_names"]
+    assert "20261019053313" in versions
     assert "tournament_team_division_transfer" in contract["required_ledger_names"]
     assert "20261109004102" in versions
     assert "20261016152836" in versions
@@ -441,12 +443,12 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         "20261109004101",
         "20261109004102",
     )
-    assert len(names) == 168
+    assert len(names) == 169
     assert all("XX" not in version for version in versions)
-    assert len(contract["required_ledger_names"]) == 155
+    assert len(contract["required_ledger_names"]) == 156
     assert "partner_email_invitations" in contract["required_ledger_names"]
-    assert len(contract["deployment_order"]) == 155
-    assert contract["deployment_order"][-2:] == ("event_season_deleted_draft_cleanup", "interclub_player_identity_availability")
+    assert len(contract["deployment_order"]) == 156
+    assert contract["deployment_order"][-3:] == ("event_season_deleted_draft_cleanup", "interclub_player_identity_availability", "weekly_recap_builder")
     assert {"interclub_season_trophies", "event_season_history"}.issubset(contract["required_ledger_names"])
     assert set(contract["deployment_order"]) == set(
         contract["required_ledger_names"]

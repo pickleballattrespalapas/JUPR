@@ -84,6 +84,19 @@ jobs:
       - name: Verify interclub season lifecycle
         run: python -m pytest -q tests/test_interclub*.py tests/test_event_season*.py tests/test_rating_integrity_clashes.py
 
+      - name: Verify weekly recap builder and publication
+        run: |
+          python -m pytest -q \
+            tests/test_admin_weekly_recap_delete.py \
+            tests/test_recap_builder.py \
+            tests/test_recap_evidence.py \
+            tests/test_weekly_recap_pdf.py \
+            tests/test_weekly_report.py \
+            tests/test_public_weekly_recap_service.py \
+            tests/test_weekly_recap_delta.py \
+            tests/test_weekly_recap_categories.py \
+            tests/test_weekly_recap_range_driven.py
+
       - name: Run deployment and admin UX safety contracts
         run: |
           python -m pytest -q \
