@@ -7,6 +7,7 @@ import type {
   SectionSetting,
 } from "@/lib/recapBuilder";
 import { RECAP_SECTIONS } from "@/lib/recapBuilder";
+import RecapEdition from "@/components/RecapEdition";
 import styles from "./recap-builder.module.css";
 
 const itemSections = new Set([
@@ -15,6 +16,7 @@ const itemSections = new Set([
   "races",
   "achievements",
   "welcome",
+  "custom",
 ]);
 export function RecapContentEditor({
   builder,
@@ -217,13 +219,6 @@ export function RecapContentEditor({
                                 ];
                                 section(key, {
                                   item_ids: ids,
-                                  ...(config.email_item_ids
-                                    ? {
-                                        email_item_ids: ids.filter((id) =>
-                                          config.email_item_ids!.includes(id),
-                                        ),
-                                      }
-                                    : {}),
                                 });
                               }}
                             >
@@ -249,7 +244,176 @@ export function RecapContentEditor({
           </section>
         );
       })}
+      <RecapEmailOrder
+        builder={builder}
+        catalog={catalog}
+        onChange={onChange}
+        disabled={disabled}
+      />
     </div>
+  );
+}
+
+function move<T>(values: T[], index: number, delta: number): T[] {
+  const result = [...values];
+  if (index + delta < 0 || index + delta >= result.length) return result;
+  [result[index], result[index + delta]] = [
+    result[index + delta],
+    result[index],
+  ];
+  return result;
+}
+
+function RecapEmailOrder({
+  builder,
+  catalog,
+  onChange,
+  disabled,
+}: {
+  builder: BuilderConfig;
+  catalog: RecapCatalog;
+  onChange: (value: BuilderConfig) => void;
+  disabled: boolean;
+}) {
+  const order = builder.email_order || builder.order;
+  function selected(key: SectionKey) {
+    const section = builder.sections[key];
+    const available = (catalog[key] || []).filter(
+      (i) => i.title || i.text || i.lines?.length || i.image_url,
+    );
+    const included = section.item_ids || available.map((i) => i.id);
+    const ids =
+      section.email_item_ids ||
+      included.slice(
+        0,
+        (
+          { events: 3, spotlight: 2, races: 2, achievements: 3 } as Record<
+            string,
+            number
+          >
+        )[key] || 150,
+      );
+    return ids.flatMap((id) =>
+      included.includes(id) ? available.filter((i) => i.id === id) : [],
+    );
+  }
+  const visible = order.filter(
+    (key) =>
+      builder.sections[key].enabled &&
+      builder.sections[key].email_enabled &&
+      selected(key).length,
+  );
+  return (
+    <details className={styles.section} data-testid="recap-email-order">
+      <summary>
+        <strong>Arrange your email</strong>
+      </summary>
+      <p>
+        Choose email items above, then arrange them here. Website ordering stays
+        separate once you customize this order.
+      </p>
+      {!visible.length ? <p>No email content selected yet.</p> : null}
+      {visible.map((key, index) => (
+        <section key={key} className={styles.section}>
+          <div className={styles.row}>
+            <strong>{builder.sections[key].title}</strong>
+            <div className={styles.actions}>
+              {[-1, 1].map((delta) => (
+                <button
+                  key={delta}
+                  type="button"
+                  disabled={
+                    disabled ||
+                    (delta < 0 ? index === 0 : index === visible.length - 1)
+                  }
+                  aria-label={`Move ${RECAP_SECTIONS[key]} ${delta < 0 ? "up" : "down"} in email`}
+                  onClick={() =>
+                    onChange({
+                      ...builder,
+                      email_order: [
+                        ...move(visible, index, delta),
+                        ...order.filter((k) => !visible.includes(k)),
+                      ],
+                    })
+                  }
+                >
+                  {delta < 0 ? "↑" : "↓"}
+                </button>
+              ))}
+            </div>
+          </div>
+          {selected(key).map((item, position, items) => (
+            <div key={item.id} className={styles.item}>
+              <span>{item.title || item.text}</span>
+              <div className={styles.actions}>
+                {[-1, 1].map((delta) => (
+                  <button
+                    key={delta}
+                    type="button"
+                    disabled={
+                      disabled ||
+                      (delta < 0
+                        ? position === 0
+                        : position === items.length - 1)
+                    }
+                    aria-label={`Move ${item.title || item.text} ${delta < 0 ? "earlier" : "later"} in email`}
+                    onClick={() =>
+                      onChange({
+                        ...builder,
+                        sections: {
+                          ...builder.sections,
+                          [key]: {
+                            ...builder.sections[key],
+                            email_item_ids: move(
+                              items.map((i) => i.id),
+                              position,
+                              delta,
+                            ),
+                          },
+                        },
+                      })
+                    }
+                  >
+                    {delta < 0 ? "↑" : "↓"}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </section>
+      ))}
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() =>
+          onChange({
+            ...builder,
+            email_order: undefined,
+            sections: Object.fromEntries(
+              builder.order.map((key) => {
+                const config = builder.sections[key];
+                return [
+                  key,
+                  {
+                    ...config,
+                    ...(config.email_item_ids
+                      ? {
+                          email_item_ids: (
+                            config.item_ids ||
+                            (catalog[key] || []).map((i) => i.id)
+                          ).filter((id) => config.email_item_ids!.includes(id)),
+                        }
+                      : {}),
+                  },
+                ];
+              }),
+            ) as BuilderConfig["sections"],
+          })
+        }
+      >
+        Use website order for email
+      </button>
+    </details>
   );
 }
 
@@ -271,12 +435,24 @@ export function RecapStoryEditor({
     });
   }
   function add(kind: string) {
+    const id = crypto.randomUUID();
+    const config = builder.sections.custom;
     onChange({
       ...builder,
+      sections: {
+        ...builder.sections,
+        custom: {
+          ...config,
+          ...(config.item_ids ? { item_ids: [...config.item_ids, id] } : {}),
+          ...(config.email_item_ids
+            ? { email_item_ids: [...config.email_item_ids, id] }
+            : {}),
+        },
+      },
       custom_blocks: [
         ...builder.custom_blocks,
         {
-          id: crypto.randomUUID(),
+          id,
           kind,
           title: kind,
           text: "",
@@ -284,9 +460,55 @@ export function RecapStoryEditor({
           image_url: "",
           alt: "",
           url: "",
-          link_label: "",
+          link_label: kind === "Featured event" ? "Register now" : "Learn more",
+          layout:
+            kind === "Photo of the week"
+              ? "photo"
+              : ["Featured event", "Sponsor thank-you"].includes(kind)
+                ? "promotion"
+                : "callout",
+          image_fit: "contain",
         },
       ],
+    });
+  }
+  function visibility(id: string, checked: boolean, email: boolean) {
+    const config = builder.sections.custom;
+    const all = builder.custom_blocks.map((item) => item.id);
+    const prop = email ? "email_item_ids" : "item_ids";
+    const current = config[prop] || (email ? config.item_ids || all : all);
+    onChange({
+      ...builder,
+      sections: {
+        ...builder.sections,
+        custom: {
+          ...config,
+          [prop]: checked
+            ? [...current.filter((v) => v !== id), id]
+            : current.filter((v) => v !== id),
+        },
+      },
+    });
+  }
+  function reorder(index: number, delta: number) {
+    const blocks = move(builder.custom_blocks, index, delta);
+    const config = builder.sections.custom;
+    onChange({
+      ...builder,
+      custom_blocks: blocks,
+      sections: {
+        ...builder.sections,
+        custom: {
+          ...config,
+          ...(config.item_ids
+            ? {
+                item_ids: blocks
+                  .filter((item) => config.item_ids!.includes(item.id))
+                  .map((item) => item.id),
+              }
+            : {}),
+        },
+      },
     });
   }
   return (
@@ -298,6 +520,7 @@ export function RecapStoryEditor({
           "Coach’s tip",
           "Community recognition",
           "Sponsor thank-you",
+          "Featured event",
           "Club announcement",
         ].map((kind) => (
           <button
@@ -310,9 +533,62 @@ export function RecapStoryEditor({
           </button>
         ))}
       </div>
+      {!builder.sections.custom.enabled ? (
+        <p>
+          Club stories are hidden. Enable the Club stories section in Content to
+          show these cards.
+        </p>
+      ) : null}
       {builder.custom_blocks.map((item, index) => (
         <fieldset className={styles.section} key={item.id} disabled={disabled}>
           <legend>{item.kind}</legend>
+          <div className={styles.actions}>
+            <label className={styles.check}>
+              <input
+                type="checkbox"
+                checked={
+                  !builder.sections.custom.item_ids ||
+                  builder.sections.custom.item_ids.includes(item.id)
+                }
+                onChange={(e) => visibility(item.id, e.target.checked, false)}
+              />
+              Include this story in recap
+            </label>
+            <label className={styles.check}>
+              <input
+                type="checkbox"
+                disabled={Boolean(
+                  builder.sections.custom.item_ids &&
+                  !builder.sections.custom.item_ids.includes(item.id),
+                )}
+                checked={
+                  (!builder.sections.custom.item_ids ||
+                    builder.sections.custom.item_ids.includes(item.id)) &&
+                  (!builder.sections.custom.email_item_ids ||
+                    builder.sections.custom.email_item_ids.includes(item.id))
+                }
+                onChange={(e) => visibility(item.id, e.target.checked, true)}
+              />
+              Include this story in email
+            </label>
+          </div>
+          <label>
+            Card style
+            <select
+              aria-label="Card style"
+              value={item.layout || "plain"}
+              onChange={(e) =>
+                update(item.id, {
+                  layout: e.target.value as RecapItem["layout"],
+                })
+              }
+            >
+              <option value="plain">Simple story</option>
+              <option value="photo">Photo feature</option>
+              <option value="callout">Highlighted note</option>
+              <option value="promotion">Promotion with button</option>
+            </select>
+          </label>
           <label>
             Heading
             <input
@@ -328,6 +604,39 @@ export function RecapStoryEditor({
               value={item.text}
               maxLength={3000}
               onChange={(e) => update(item.id, { text: e.target.value })}
+            />
+          </label>
+          <div className={styles.fields}>
+            <label>
+              Photo presentation
+              <select
+                aria-label="Photo presentation"
+                value={item.image_fit || "contain"}
+                onChange={(e) =>
+                  update(item.id, {
+                    image_fit: e.target.value as RecapItem["image_fit"],
+                  })
+                }
+              >
+                <option value="contain">Show the whole image</option>
+                <option value="cover">Crop to a wide banner</option>
+              </select>
+            </label>
+            <label>
+              Photo credit
+              <input
+                value={item.credit || ""}
+                maxLength={160}
+                onChange={(e) => update(item.id, { credit: e.target.value })}
+              />
+            </label>
+          </div>
+          <label>
+            Photo caption
+            <input
+              value={item.caption || ""}
+              maxLength={600}
+              onChange={(e) => update(item.id, { caption: e.target.value })}
             />
           </label>
           <div className={styles.fields}>
@@ -374,16 +683,16 @@ export function RecapStoryEditor({
             <button
               type="button"
               disabled={index === 0}
-              onClick={() => {
-                const blocks = [...builder.custom_blocks];
-                [blocks[index - 1], blocks[index]] = [
-                  blocks[index],
-                  blocks[index - 1],
-                ];
-                onChange({ ...builder, custom_blocks: blocks });
-              }}
+              onClick={() => reorder(index, -1)}
             >
               Move up
+            </button>
+            <button
+              type="button"
+              disabled={index === builder.custom_blocks.length - 1}
+              onClick={() => reorder(index, 1)}
+            >
+              Move down
             </button>
             <button
               type="button"
@@ -399,6 +708,13 @@ export function RecapStoryEditor({
               Remove story
             </button>
           </div>
+          <details>
+            <summary>Preview this card</summary>
+            <RecapEdition
+              clubSlug=""
+              blocks={[{ key: "custom", title: "", items: [item] }]}
+            />
+          </details>
         </fieldset>
       ))}
     </section>

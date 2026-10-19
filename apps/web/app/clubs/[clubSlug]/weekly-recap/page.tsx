@@ -1,4 +1,5 @@
 import RecapEdition from "@/components/RecapEdition";
+import WeeklyRecapPdfDownload from "@/components/WeeklyRecapPdfDownload";
 
 import { WeeklyReportIntro, WeeklyReportEvents, WeeklyReportProgress, WeeklyReportUpcoming } from "@/components/WeeklyReportSections";
 import PublicControls from "@/components/PublicControls";
@@ -338,7 +339,8 @@ export default async function WeeklyRecapPage({ params, searchParams }: WeeklyRe
                   {selected.summary.headline ? <p style={{ margin: "0.35rem 0 0", color: "#475569" }}>{selected.summary.headline}</p> : null}
                 </div>
                 <div className="no-print" style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-                  {pdfUrl ? <a data-testid="weekly-recap-pdf-link" href={pdfUrl}>Download PDF</a> : null}
+                  {selected.recap.report?.edition ? <WeeklyRecapPdfDownload recap={selected.recap} clubSlug={clubSlug} /> : null}
+                  {pdfUrl ? <a data-testid="weekly-recap-pdf-link" href={pdfUrl}>{selected.recap.report?.edition ? "Text-only PDF" : "Download PDF"}</a> : null}
                   <a href={pageHref({ clubSlug, week: selected.week_start, section: activeSection, print: true, page: activePage })}>Print-friendly view</a>
                 </div>
               </div>

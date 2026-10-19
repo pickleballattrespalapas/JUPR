@@ -1,0 +1,149 @@
+{
+  "config": {
+    "version": 1,
+    "order": [
+      "custom",
+      "events",
+      "numbers",
+      "opening",
+      "spotlight",
+      "races",
+      "achievements",
+      "welcome",
+      "notes",
+      "upcoming"
+    ],
+    "sections": {
+      "opening": {
+        "enabled": true,
+        "email_enabled": true,
+        "title": "From the courts",
+        "detail": "full"
+      },
+      "numbers": {
+        "enabled": false,
+        "email_enabled": true,
+        "title": "The week in numbers",
+        "detail": "full"
+      },
+      "events": {
+        "enabled": true,
+        "email_enabled": true,
+        "title": "Event results",
+        "detail": "brief",
+        "item_ids": [
+          "events-f553a8c338aa1dc8d5c0",
+          "events-d933c3d76e6d05c4e59a"
+        ],
+        "email_item_ids": [
+          "events-f553a8c338aa1dc8d5c0"
+        ]
+      },
+      "spotlight": {
+        "enabled": true,
+        "email_enabled": true,
+        "title": "Player highlights",
+        "detail": "full"
+      },
+      "races": {
+        "enabled": true,
+        "email_enabled": false,
+        "title": "Season awards race",
+        "detail": "full"
+      },
+      "achievements": {
+        "enabled": true,
+        "email_enabled": true,
+        "title": "New achievements",
+        "detail": "full"
+      },
+      "welcome": {
+        "enabled": true,
+        "email_enabled": true,
+        "title": "Welcome to the courts",
+        "detail": "full",
+        "item_ids": []
+      },
+      "notes": {
+        "enabled": true,
+        "email_enabled": true,
+        "title": "Around the club",
+        "detail": "full"
+      },
+      "custom": {
+        "enabled": true,
+        "email_enabled": true,
+        "title": "Club stories",
+        "detail": "full",
+        "item_ids": [
+          "photo",
+          "register"
+        ],
+        "email_item_ids": [
+          "register",
+          "photo",
+          "hidden"
+        ]
+      },
+      "upcoming": {
+        "enabled": true,
+        "email_enabled": true,
+        "title": "Coming up",
+        "detail": "full"
+      }
+    },
+    "custom_blocks": [
+      {
+        "id": "photo",
+        "title": "Saturday smiles",
+        "text": "A day on the courts.",
+        "kind": "Photo of the week",
+        "lines": [],
+        "href": "",
+        "url": "",
+        "image_url": "https://photos.example.invalid/week.png",
+        "alt": "Players on court",
+        "link_label": "Learn more",
+        "links": [],
+        "layout": "photo",
+        "image_fit": "cover",
+        "caption": "Saturday at the club",
+        "credit": "Club volunteer"
+      },
+      {
+        "id": "register",
+        "title": "Autumn social",
+        "text": "Join us next Saturday.",
+        "kind": "Featured event",
+        "lines": [],
+        "href": "",
+        "url": "https://events.example.invalid/register",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Register now",
+        "links": [],
+        "layout": "promotion",
+        "image_fit": "contain"
+      },
+      {
+        "id": "hidden",
+        "title": "Next week draft",
+        "text": "Not yet ready",
+        "kind": "Club announcement",
+        "lines": [],
+        "href": "",
+        "url": "",
+        "image_url": "",
+        "alt": "",
+        "link_label": "Learn more",
+        "links": [],
+        "layout": "callout"
+      }
+    ],
+    "step": 0,
+    "email_order": [
+      "events",
+      "custom"
+    ]
+  }
+}

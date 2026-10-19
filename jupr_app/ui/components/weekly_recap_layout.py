@@ -288,7 +288,8 @@ def render_weekly_recap(recap: dict, *, print_view: bool, title_override: str | 
                 if item["title"]:
                     st.subheader(item["title"])
                 if item["image_url"]:
-                    st.image(item["image_url"], caption=item["alt"])
+                    caption = " · ".join(filter(None, [item.get("caption"), f"Photo: {item['credit']}" if item.get("credit") else ""]))
+                    st.image(item["image_url"], caption=caption or item["alt"])
                 for value in [item["text"], *item["lines"]]:
                     if value:
                         st.text(value)

@@ -25,6 +25,10 @@ export type RecapItem = {
   image_url?: string;
   alt?: string;
   link_label?: string;
+  layout?: "plain" | "photo" | "callout" | "promotion";
+  image_fit?: "contain" | "cover";
+  caption?: string;
+  credit?: string;
   links?: Array<{ label: string; href: string }>;
 };
 export type RecapBlock = { key: SectionKey; title: string; items: RecapItem[] };
@@ -40,6 +44,7 @@ export type SectionSetting = {
 export type BuilderConfig = {
   version: 1;
   order: SectionKey[];
+  email_order?: SectionKey[];
   sections: Record<SectionKey, SectionSetting>;
   custom_blocks: RecapItem[];
   step: number;
@@ -86,14 +91,25 @@ export function normalizeBuilder(
   value?: Partial<BuilderConfig> | null,
 ): BuilderConfig {
   const keys = Object.keys(RECAP_SECTIONS) as SectionKey[];
+  const order = [
+    ...new Set([
+      ...(value?.order || []).filter((k) => keys.includes(k)),
+      ...keys,
+    ]),
+  ];
   return {
     version: 1,
-    order: [
-      ...new Set([
-        ...(value?.order || []).filter((k) => keys.includes(k)),
-        ...keys,
-      ]),
-    ],
+    order,
+    ...(Array.isArray(value?.email_order)
+      ? {
+          email_order: [
+            ...new Set([
+              ...value.email_order.filter((k) => keys.includes(k)),
+              ...order,
+            ]),
+          ],
+        }
+      : {}),
     sections: Object.fromEntries(
       keys.map((key) => [
         key,
@@ -137,7 +153,9 @@ export function projectEditions(
     email_edition: [] as RecapBlock[],
   };
   for (const channel of ["edition", "email_edition"] as const)
-    for (const key of builder.order) {
+    for (const key of channel === "email_edition"
+      ? builder.email_order || builder.order
+      : builder.order) {
       const setting = builder.sections[key];
       if (
         !setting.enabled ||
@@ -236,6 +254,7 @@ export function previewRecap(
   ];
   return {
     ...generated,
+    builder_catalog: groups,
     report: {
       ...generated.report,
       ...edits.editorial,

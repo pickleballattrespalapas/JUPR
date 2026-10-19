@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
-from jupr_app.domain.recaps.recap_builder import catalog, apply_builder, normalize_config, build_editions
+from jupr_app.domain.recaps.recap_builder import catalog, apply_builder, normalize_config, build_editions, clean_item
 from jupr_app.services import admin_weekly_recap_service as service
 from jupr_app.services.public_weekly_recap_service import _public_recap_row, sanitize_public_recap_json, _weekly_recap_pdf_lines
 from jupr_app.services.recap_preferences_service import save_preferences
@@ -117,3 +117,49 @@ def test_custom_links_and_images_are_sanitized():
     final = apply_builder(fixture(), {'custom_blocks':[{'id':'note','title':'Coach tip','text':'Stay patient','url':'javascript:alert(1)','image_url':'data:image/svg+xml,<svg onload=evil />'}]})
     block = next(b for b in final['report']['edition'] if b['key']=='custom')
     assert block['items'][0]['url'] == '' and block['items'][0]['image_url'] == ''
+
+
+def test_rich_stories_keep_selection_email_order_and_photo_details_in_public_projection():
+    config = json.loads(Path('apps/web/tests/fixtures/weekly-recap-stories.json').read_text())['config']
+    final = apply_builder(fixture(), config)
+    public = sanitize_public_recap_json(final, week_start='2026-10-05', week_end='2026-10-11')
+    report = public['report']
+    assert [b['key'] for b in report['edition']][:2] == ['custom', 'events']
+    assert [b['key'] for b in report['email_edition']][:2] == ['events', 'custom']
+    full = report['edition'][0]['items']; email = report['email_edition'][1]['items']
+    assert [i['id'] for i in full] == ['photo', 'register']
+    assert [i['id'] for i in email] == ['register', 'photo']
+    assert full[0]['caption'] == 'Saturday at the club'
+    assert full[0]['credit'] == 'Club volunteer'
+    assert full[0]['layout'] == 'photo' and full[0]['image_fit'] == 'cover'
+    assert full[1]['layout'] == 'promotion'
+    assert 'Next week draft' not in json.dumps(public)
+    pdf = '\n'.join(_weekly_recap_pdf_lines(public, week_start='2026-10-05', week_end='2026-10-11'))
+    assert 'Saturday at the club' in pdf and 'Photo: Club volunteer' in pdf
+    template = normalize_config(config, template=True)
+    assert template['email_order'][:2] == ['events', 'custom']
+    assert template['custom_blocks'] == [] and 'item_ids' not in template['sections']['custom']
+
+
+@pytest.mark.parametrize('value', ['url(evil)', [], {}, 42, None])
+def test_unsupported_card_styles_cannot_inject_styles_or_break_normalization(value):
+    item = clean_item({'layout': value, 'image_fit': value, 'caption': 'x' * 800, 'credit': 'y' * 300})
+    assert 'layout' not in item and 'image_fit' not in item
+    assert len(item['caption']) == 600 and len(item['credit']) == 160
+
+
+def test_layout_management_preserves_identity_and_rejects_stale_or_duplicate_changes():
+    settings = {'templates': [{'id': 'a', 'name': 'Weekly', 'builder': {}}, {'id': 'b', 'name': 'Social', 'builder': {}}], 'default_template_id': 'a'}
+    db = FakeSupabase({'club_recap_preferences': [{'club_id': 'club', 'revision': 1, 'settings': settings}], 'leagues_metadata': []})
+    renamed = deepcopy(settings); renamed['templates'][0]['name'] = 'Member update'
+    result = save_preferences(db, 'club', 1, renamed)
+    assert result['revision'] == 2 and result['settings']['default_template_id'] == 'a'
+    with pytest.raises(service.StaleWeeklyRecapStateError):
+        save_preferences(db, 'club', 1, settings)
+    duplicate = deepcopy(renamed); duplicate['templates'][1]['name'] = ' MEMBER UPDATE '
+    with pytest.raises(ValueError, match='already exists'):
+        save_preferences(db, 'club', 2, duplicate)
+    with pytest.raises(ValueError, match='saved default'):
+        save_preferences(db, 'club', 2, {'templates': renamed['templates'][1:], 'default_template_id': 'a'})
+    result = save_preferences(db, 'club', 2, {'templates': renamed['templates'][1:], 'default_template_id': ''})
+    assert result['revision'] == 3 and [t['id'] for t in result['settings']['templates']] == ['b']

@@ -34,7 +34,7 @@ def image_url(value):
 def clean_item(raw):
     if not isinstance(raw, dict):
         return {}
-    return {
+    result = {
         "id": text(raw.get("id"), 120), "title": text(raw.get("title"), 240),
         "text": text(raw.get("text")), "kind": text(raw.get("kind"), 80),
         "lines": [text(line, 600) for line in (raw.get("lines") or [])[:30]],
@@ -44,6 +44,15 @@ def clean_item(raw):
         "links": [{"label": text(link.get("label"), 80), "href": report_href(link.get("href"))}
                   for link in (raw.get("links") or [])[:20] if isinstance(link, dict) and report_href(link.get("href"))],
     }
+    # Optional fields leave saved legacy editions unchanged.
+    for key, limit in (("caption", 600), ("credit", 160)):
+        if raw.get(key):
+            result[key] = text(raw[key], limit)
+    if isinstance(raw.get("layout"), str) and raw["layout"] in {"plain", "photo", "callout", "promotion"}:
+        result["layout"] = raw["layout"]
+    if isinstance(raw.get("image_fit"), str) and raw["image_fit"] in {"contain", "cover"}:
+        result["image_fit"] = raw["image_fit"]
+    return result
 
 
 def catalog(recap):
@@ -93,8 +102,11 @@ def normalize_config(raw, *, template=False):
         sections[key] = section
     custom = raw.get("custom_blocks") if isinstance(raw.get("custom_blocks"), list) else []
     blocks = [] if template else [clean_item(item) for item in custom[:12] if isinstance(item, dict)]
-    return {"version": 1, "order": order, "sections": sections, "custom_blocks": blocks,
-            "step": 0 if template else max(0, min(4, int(raw.get("step", 0) or 0)))}
+    result = {"version": 1, "order": order, "sections": sections, "custom_blocks": blocks,
+              "step": 0 if template else max(0, min(4, int(raw.get("step", 0) or 0)))}
+    if isinstance(raw.get("email_order"), list):
+        result["email_order"] = list(dict.fromkeys([key for key in raw["email_order"] if isinstance(key, str) and key in SECTIONS] + order))
+    return result
 
 
 def build_editions(recap, raw):
@@ -104,7 +116,7 @@ def build_editions(recap, raw):
     editions = {}
     for channel in ("edition", "email_edition"):
         blocks = []
-        for key in config["order"]:
+        for key in (config.get("email_order", config["order"]) if channel == "email_edition" else config["order"]):
             settings = config["sections"][key]
             if not settings["enabled"] or (channel == "email_edition" and not settings["email_enabled"]):
                 continue
@@ -158,4 +170,8 @@ def edition_lines(report):
                 lines.append(item["url"])
             if item["image_url"] and item["alt"]:
                 lines.append(item["alt"])
+            if item.get("caption"):
+                lines.append(item["caption"])
+            if item.get("credit"):
+                lines.append(f"Photo: {item['credit']}")
     return lines
