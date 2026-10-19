@@ -220,6 +220,7 @@ const text = (node) =>
     "app/admin/weekly-recap/RecapEvidencePicker.tsx",
     {
       "@/lib/clubSite": load("lib/clubSite.ts"),
+      "@/lib/recapBuilder": builderLib,
       "./recap-builder.module.css": {},
     },
   ).default;
@@ -232,6 +233,8 @@ const text = (node) =>
       display: `Player ${i} — ${12 - i} wins`,
     })),
   };
+  const courts = require("./fixtures/weekly-recap-courts.json");
+  const evidenceCatalog = { ...fixture.catalog, events: [...fixture.catalog.events, ...courts.events.filter(i => i.kind === "Ladder court")] };
   let highlights = {
     [key]: { include: false, players: [], description: "", order: 1 },
   };
@@ -241,7 +244,7 @@ const text = (node) =>
   let preview;
   const renderEvidence = () => {
     preview = builderLib.previewRecap(
-      { builder_catalog: fixture.catalog },
+      { builder_catalog: evidenceCatalog },
       {
         builder,
         spotlight_overrides: highlights,
@@ -291,6 +294,28 @@ const text = (node) =>
     selectedEvents.some((item) => /tournament/i.test(item.kind)),
     "Other categories are preserved",
   );
+  assert.equal(tree.root.findAllByProps({ "data-testid": "recap-evidence-rr" }).length, 0);
+  await act(async () => checkbox("Include Round-robin winners").props.onChange({ target: { checked: true } }));
+  assert.equal(tree.root.findAllByProps({ "data-testid": "recap-evidence-rr" }).length, 1);
+  await act(async () => checkbox("Include New achievements").props.onChange({ target: { checked: false } }));
+  assert.equal(tree.root.findAllByProps({ "data-testid": "recap-evidence-achievements" }).length, 0);
+  await act(async () => checkbox("Include New achievements").props.onChange({ target: { checked: true } }));
+  assert.equal(tree.root.findAllByProps({ "data-testid": "recap-evidence-achievements" }).length, 1);
+  const courtPicker = () => tree.root.findByProps({ "data-testid": "recap-evidence-courts" });
+  assert(text(courtPicker()).includes("Alex ×3"));
+  assert(!text(courtPicker()).includes("point difference"));
+  await act(async () => checkbox("Include Alex ×3").props.onChange({ target: { checked: false } }));
+  assert(!builder.sections.events.item_ids.includes("a1") && !builder.sections.events.item_ids.includes("a3"));
+  await act(async () => checkbox("Include Alex ×3").props.onChange({ target: { checked: true } }));
+  await act(async () => checkbox("Feature Alex ×3 in email").props.onChange({ target: { checked: true } }));
+  assert(["a1", "a2", "a3"].every(id => builder.sections.events.email_item_ids.includes(id)));
+  await act(async () => checkbox("Include Ladder court winners").props.onChange({ target: { checked: false } }));
+  assert.equal(tree.root.findAllByProps({ "data-testid": "recap-evidence-courts" }).length, 0);
+  await act(async () => tree.root.findByProps({ type: "search" }).props.onChange({ target: { value: "Taylor" } }));
+  assert.match(text(tree.toJSON()), /No results match/);
+  await act(async () => tree.root.findByProps({ type: "search" }).props.onChange({ target: { value: "" } }));
+  await act(async () => checkbox("Include Ladder court winners").props.onChange({ target: { checked: true } }));
+  assert.equal(tree.root.findAllByProps({ "data-testid": "recap-evidence-courts" }).length, 1);
   await act(async () =>
     checkbox("Include Most wins").props.onChange({ target: { checked: true } }),
   );

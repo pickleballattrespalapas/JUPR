@@ -105,6 +105,7 @@ def court_result(*, identity, title, day, round_number, court_number, games, nam
     label = ("Winner" if len(leaders) == 1 else "Tied for first") if final else "Leader from recorded games"
     return {"id": identity, "kind": "Ladder court", "title": f"{title} · Round {round_number} · Court {court_number}",
             "date": day, "summary": f"{label}: " + ", ".join(row["name"] for row in leaders),
+            "court_players": [{"id": f"{'league' if identity.startswith('league:') else identity.rsplit(':', 2)[0]}:{row['participantId']}", "name": row["name"]} for row in leaders],
             "details": [f"{row['name']} — {row['wins']}–{row['losses']} · point difference {row['differential']:+d}" for row in leaders]
                        + [f"{len(valid)} recorded games" + ("" if final else " · incomplete court results")], "href": href}
 

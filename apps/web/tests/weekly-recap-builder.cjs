@@ -247,3 +247,23 @@ assert(!JSON.stringify(projectEditions(movedUpcoming, textConfig)).includes("Nex
 console.log(
   "Preview text: shared source-bound edits, captions, links, email wording, reset, refresh and template isolation passed",
 );
+
+const courts = require("./fixtures/weekly-recap-courts.json");
+const courtConfig = normalizeBuilder({ sections: { events: { detail: "brief", email_item_ids: courts.email_ids } } });
+const courtEditions = projectEditions({ events: courts.events }, courtConfig);
+assert.deepEqual(courtEditions.edition[0].items.map(i => i.id), ["ladder-court-winners", "rr"]);
+assert.deepEqual(courtEditions.edition[0].items[0].lines, courts.expected_lines);
+assert.deepEqual(courtEditions.email_edition[0].items[0].lines, courts.expected_email_lines);
+const courtEmail = buildWeeklyReportEmail({ report: courtEditions }, { origin: "", clubSlug: "test" });
+assert(courtEmail.includes("Alex ×2"));
+assert(!/point difference|recorded games|Round 1/.test(courtEmail));
+const editedCourt = projectEditions({ events: courts.events }, {
+  ...courtConfig, text_overrides: { "ladder-court-winners": { title: "Our court champions", lines: { "Alex ×3": "Alex — three court wins!" } } },
+});
+assert.equal(editedCourt.edition[0].items[0].title, "Our court champions");
+assert.equal(editedCourt.edition[0].items[0].lines[0], "Alex — three court wins!");
+courtConfig.sections.events.item_ids = ["a1", "a3"];
+const selectedCourts = projectEditions({ events: courts.events }, courtConfig);
+assert.deepEqual(selectedCourts.edition[0].items[0].lines, ["Alex ×2"]);
+assert.deepEqual(selectedCourts.email_edition[0].items[0].lines, ["Alex"]);
+console.log("Ladder recognition: compact list, repeat counts, ties, incomplete courts, saved drafts and exact email selection passed");

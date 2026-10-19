@@ -171,13 +171,21 @@ async function confirm(page, label, text) {
         exact: true,
       })
       .uncheck();
+    assert.equal(await evidence.getByTestId("recap-evidence-numbers").count(), 0);
+    const achievements = evidence.getByLabel("Include New achievements", { exact: true });
+    await achievements.uncheck();
+    assert.equal(await evidence.getByTestId("recap-evidence-achievements").count(), 0);
+    await achievements.check();
+    await evidence.getByTestId("recap-evidence-achievements").waitFor();
+    await achievements.uncheck();
     const events = evidence;
     await events
       .getByTestId("recap-evidence-rr")
       .locator("label")
       .filter({ hasText: "Tuesday Moneyball" })
       .getByRole("checkbox")
-      .uncheck();
+      .click();
+    await events.getByTestId("recap-evidence-rr").waitFor({ state: "detached" });
     await events
       .getByLabel("Feature Thursday Social Round Robin in email", {
         exact: true,
@@ -189,10 +197,18 @@ async function confirm(page, label, text) {
       })
       .check();
     await events
-      .getByLabel("Feature Fall Ladder · Round 1 · Court 2 in email", {
+      .getByLabel("Feature Ellis ×3 in email", {
         exact: true,
       })
       .check();
+    const courtList = evidence.getByTestId("recap-evidence-courts");
+    assert(!(await courtList.innerText()).includes("point difference"));
+    assert.equal(await courtList.getByLabel("Include Ellis ×3", { exact: true }).count(), 1);
+    await courtList.screenshot({ path: path.join(output, "compact-courts-desktop.png") });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await courtList.screenshot({ path: path.join(output, "compact-courts-mobile.png") });
+    assert(await courtList.evaluate(el => el.scrollWidth <= el.clientWidth + 1));
+    await page.setViewportSize({ width: 1280, height: 900 });
     await events
       .getByLabel("Feature Summer Social in email", { exact: true })
       .check();
@@ -408,7 +424,10 @@ async function confirm(page, label, text) {
       assert(serialized.includes("Blair — +0.18 JUPR"));
       assert(serialized.includes("Casey — +0.17 JUPR"));
       assert(serialized.includes("Drew — 6 wins"));
-      assert(serialized.includes("Winner: Ellis"));
+      assert(serialized.includes("Ellis ×3"));
+      const courts = live.selected_recap.recap.report[channel].flatMap(b => b.items).filter(i => i.id === "ladder-court-winners");
+      assert.equal(courts.length, 1);
+      assert.deepEqual(courts[0].lines, ["Ellis ×3"]);
       assert(!serialized.includes("Arden —"));
     }
     const compactTitles =

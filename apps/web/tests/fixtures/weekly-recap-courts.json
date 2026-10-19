@@ -1,0 +1,16 @@
+{
+  "events": [
+    {"id":"a1","kind":"Ladder court","title":"Fall Ladder · Round 1 · Court 1","text":"Winner: Alex","lines":["Alex — 3–0 · point difference +18"],"court_players":[{"id":"league:1","name":"Alex"}]},
+    {"id":"rr","kind":"Round robin","title":"Social winners","text":"Winner: Robin","lines":["Robin — 3–0 · point difference +14"]},
+    {"id":"a2","kind":"Ladder court","title":"Fall Ladder · Round 2 · Court 1","text":"Winner: Alex","lines":["Alex — 2–1 · point difference +8"],"court_players":[{"id":"league:1","name":"Alex"}]},
+    {"id":"a3","kind":"Ladder court","title":"Fall Ladder · Round 3 · Court 1","text":"Winner: Alex","lines":["Alex — 3–0 · point difference +20"],"court_players":[{"id":"league:1","name":"Alex"}]},
+    {"id":"tie","kind":"Ladder court","title":"Fall Ladder · Round 1 · Court 2","text":"Tied for first: Bea, Cam","lines":["Bea — 2–1 · point difference +2","Cam — 2–1 · point difference +2"],"court_players":[{"id":"league:2","name":"Bea"},{"id":"league:3","name":"Cam"}]},
+    {"id":"partial","kind":"Ladder court","title":"Fall Ladder · Round 2 · Court 2","text":"Leader from recorded games: Alex","lines":["Alex — 1–0 · point difference +6","1 recorded games · incomplete court results"],"court_players":[{"id":"league:1","name":"Alex"}]},
+    {"id":"namesake","kind":"Ladder court","title":"Fall Ladder · Round 3 · Court 2","text":"Winner: Alex","lines":["Alex — 3–0 · point difference +12"],"court_players":[{"id":"league:4","name":"Alex"}]},
+    {"id":"legacy1","kind":"Ladder court","title":"Saved Ladder · Round 1 · Court 3","text":"Winner: Taylor, Jr.","lines":["Taylor, Jr. — 3–0 · point difference +9","3 recorded games"]},
+    {"id":"legacy2","kind":"Ladder court","title":"Saved Ladder · Round 2 · Court 3","text":"Winner: Taylor, Jr.","lines":["Taylor, Jr. — 2–1 · point difference +7","3 recorded games"]}
+  ],
+  "email_ids": ["a1", "a2", "tie"],
+  "expected_lines": ["Alex ×3", "Bea (tied for first)", "Cam (tied for first)", "Alex (incomplete court leader)", "Alex", "Taylor, Jr. ×2"],
+  "expected_email_lines": ["Alex ×2", "Bea (tied for first)", "Cam (tied for first)"]
+}
