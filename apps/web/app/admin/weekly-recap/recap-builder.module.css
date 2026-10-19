@@ -137,6 +137,73 @@
   font-size: 0.9rem;
   margin: 0;
 }
+.textEditor {
+  border: 0;
+  padding: 0;
+  margin: 1rem 0;
+  min-width: 0;
+  display: grid;
+  gap: 1rem;
+}
+.textEditor > legend {
+  font-size: 1.2rem;
+  font-weight: 700;
+  margin-bottom: 0.6rem;
+}
+.textCard {
+  border: 1px solid var(--recap-line);
+  border-radius: 10px;
+  padding: 1rem;
+  margin: 0;
+  min-width: 0;
+  display: grid;
+  gap: 0.8rem;
+}
+.textCard legend {
+  padding: 0 0.4rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.textField {
+  display: grid;
+  gap: 0.3rem;
+  min-width: 0;
+}
+.textFieldHeading {
+  display: flex;
+  gap: 0.6rem;
+  justify-content: space-between;
+  align-items: center;
+}
+.textFieldLabel {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: 0.9rem;
+}
+.builder .textFieldHeading button {
+  font-size: 0.8rem;
+  padding: 0.25rem 0.5rem;
+}
+.builder .textField textarea {
+  min-height: 70px;
+  resize: vertical;
+}
+.editedBadge {
+  color: #1d4ed8;
+  background: #eff6ff;
+  font-size: 0.75rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+}
+.editorPhoto {
+  width: 100%;
+  max-width: 420px;
+  max-height: 220px;
+  object-fit: contain;
+  border-radius: 8px;
+}
 .choiceGroup {
   border: 0;
   padding: 0;
@@ -166,6 +233,33 @@
 }
 .choiceCard small {
   color: #475569;
+}
+.builder .choiceCard[data-unavailable="true"] {
+  border-style: dashed;
+  background: #f1f5f9;
+  cursor: not-allowed;
+}
+.availabilityNote {
+  margin: 0;
+  padding: 0.8rem;
+  border-left: 3px solid #2563eb;
+  background: #eff6ff;
+  color: #334155;
+  line-height: 1.5;
+}
+.unavailableMessage {
+  display: grid;
+  gap: 0.5rem;
+  color: #334155;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+.unavailableStatus {
+  width: fit-content;
+  padding: 0.25rem 0.5rem;
+  border-radius: 6px;
+  color: #9a3412;
+  background: #ffedd5;
 }
 .section h3 {
   margin: 0;

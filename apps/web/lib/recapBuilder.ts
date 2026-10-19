@@ -30,8 +30,73 @@ export type RecapItem = {
   image_fit?: "contain" | "cover";
   caption?: string;
   credit?: string;
+  credit_label?: string;
+  results_label?: string;
   links?: Array<{ label: string; href: string }>;
 };
+export const RECAP_TEXT_LIMITS = {
+  title: 240,
+  text: 3000,
+  kind: 80,
+  caption: 600,
+  credit: 160,
+  credit_label: 80,
+  results_label: 100,
+  link_label: 100,
+  alt: 240,
+} as const;
+export type RecapTextField = keyof typeof RECAP_TEXT_LIMITS;
+export type RecapTextOverride = Partial<Record<RecapTextField, string>> & {
+  lines?: Record<string, string>;
+  link_labels?: Record<string, string>;
+};
+export type RecapDisplayText = Partial<
+  Record<"date" | "scope" | "footer_title" | "footer_link", string>
+>;
+const cleanText = (value: string, limit: number) =>
+  value.replace(/[<>]/g, "").trim().slice(0, limit);
+// Authored notes lack a source ID shared by the client and server; bind their
+// edits to the original text/link so deleting or moving a note cannot swap edits.
+// Generated evidence always retains its stable source ID.
+export function textOverrideKey(section: SectionKey, item: RecapItem) {
+  return section === "upcoming"
+    ? `upcoming:${JSON.stringify([cleanText(item.text, 240), (item.url || "").trim()])}`
+    : item.id;
+}
+export function applyTextOverride(
+  item: RecapItem,
+  patch?: RecapTextOverride,
+): RecapItem {
+  if (!patch) return item;
+  const fields = Object.fromEntries(
+    Object.entries(RECAP_TEXT_LIMITS).flatMap(([field, limit]) => {
+      const value = patch[field as RecapTextField];
+      return typeof value === "string"
+        ? [[field, cleanText(value, limit)]]
+        : [];
+    }),
+  );
+  return {
+    ...item,
+    ...fields,
+    lines: item.lines.map((line) =>
+      typeof patch.lines?.[line] === "string"
+        ? cleanText(patch.lines[line], 600)
+        : line,
+    ),
+    ...(item.links
+      ? {
+          links: item.links.map((link) => ({
+            ...link,
+            label:
+              typeof patch.link_labels?.[link.href] === "string"
+                ? cleanText(patch.link_labels[link.href], 80)
+                : link.label,
+          })),
+        }
+      : {}),
+  };
+}
 export type RecapBlock = { key: SectionKey; title: string; items: RecapItem[] };
 export type RecapCatalog = Record<SectionKey, RecapItem[]>;
 export type SectionSetting = {
@@ -49,6 +114,8 @@ export type BuilderConfig = {
   sections: Record<SectionKey, SectionSetting>;
   custom_blocks: RecapItem[];
   step: number;
+  text_overrides?: Record<string, RecapTextOverride>;
+  display_text?: RecapDisplayText;
 };
 export type RecapTemplate = {
   id: string;
@@ -124,12 +191,15 @@ export function normalizeBuilder(
       ]),
     ) as Record<SectionKey, SectionSetting>,
     custom_blocks: value?.custom_blocks || [],
+    ...(value?.text_overrides ? { text_overrides: value.text_overrides } : {}),
+    ...(value?.display_text ? { display_text: value.display_text } : {}),
     step: Math.min(4, Math.max(0, value?.step || 0)),
   };
 }
 export function layoutTemplate(config: BuilderConfig): BuilderConfig {
+  const { text_overrides, display_text, ...layout } = config;
   return {
-    ...config,
+    ...layout,
     step: 0,
     custom_blocks: [],
     sections: Object.fromEntries(
@@ -164,7 +234,13 @@ export function projectEditions(
       )
         continue;
       const available = new Map(
-        (groups[key] || []).map((item) => [item.id, item]),
+        (groups[key] || []).map((item) => [
+          item.id,
+          applyTextOverride(
+            item,
+            builder.text_overrides?.[textOverrideKey(key, item)],
+          ),
+        ]),
       );
       let ids = setting.item_ids || [...available.keys()];
       if (channel === "email_edition") {
@@ -176,10 +252,11 @@ export function projectEditions(
       const items = ids.flatMap((id) => {
         const item = available.get(id);
         if (!item) return [];
-        const lines =
+        const lines = (
           setting.detail === "brief" && key !== "spotlight"
             ? item.lines.slice(0, 1)
-            : item.lines;
+            : item.lines
+        ).filter(Boolean);
         return item.title || item.text || lines.length || item.image_url
           ? [{ ...item, lines }]
           : [];
@@ -187,7 +264,7 @@ export function projectEditions(
       if (items.length)
         result[channel].push({
           key,
-          title: setting.title || RECAP_SECTIONS[key],
+          title: setting.title ?? RECAP_SECTIONS[key],
           items,
         });
     }
@@ -241,16 +318,19 @@ export function previewRecap(
     });
   groups.custom = edits.builder.custom_blocks;
   groups.upcoming = [
-    ...edits.editorial.upcoming.map((v, i) => ({
-      id: `link-${i}`,
-      title: "",
-      text: v.text,
-      url: v.url,
-      link_label: v.text,
-      lines: [],
-    })),
+    ...edits.editorial.upcoming
+      .slice(0, 10)
+      .filter((v) => v.text.trim())
+      .map((v, i) => ({
+        id: `link-${i}`,
+        title: "",
+        text: v.text,
+        url: v.url,
+        link_label: v.text,
+        lines: [],
+      })),
     ...edits.looking_ahead
-      .filter(Boolean)
+      .filter((v) => v.trim())
       .map((v, i) => ({ id: `ahead-${i}`, title: "", text: v, lines: [] })),
   ];
   return {
@@ -259,6 +339,16 @@ export function previewRecap(
     report: {
       ...generated.report,
       ...edits.editorial,
+      ...(edits.builder.display_text
+        ? {
+            display_text: Object.fromEntries(
+              Object.entries(edits.builder.display_text).map(([key, value]) => [
+                key,
+                cleanText(value, 160),
+              ]),
+            ),
+          }
+        : {}),
       ...projectEditions(groups, edits.builder),
     },
   };

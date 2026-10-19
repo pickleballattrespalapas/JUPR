@@ -60,7 +60,7 @@ function section(label: string, content: string, sand = false) {
   return `<tr data-recap-block><td bgcolor="${sand ? "#f8f3e9" : "#ffffff"}" style="padding:24px;border-top:1px solid #e6e8e1;"><h2 style="${font}font-size:12px;line-height:18px;font-weight:bold;letter-spacing:1.7px;color:#17665c;margin:0 0 14px;">${esc(label)}</h2>${content}</td></tr>`;
 }
 function button(label: string, url: string) {
-  return url
+  return url && label
     ? `<table role="presentation" border="0" cellspacing="0" cellpadding="0"><tr><td bgcolor="#17665c" style="border-radius:4px;mso-padding-alt:13px 16px;"><a href="${esc(url)}" style="${font}display:inline-block;padding:13px 16px;font-size:15px;line-height:21px;font-weight:bold;text-decoration:none;color:#ffffff;">${esc(label)}</a></td></tr></table>`
     : "";
 }
@@ -85,14 +85,17 @@ function story(item: RecapItem, options: WeeklyEmailOptions) {
     ? `padding:18px;border:1px solid #e6e8e1;border-radius:10px;background:${item.layout === "callout" ? "#f8f3e9" : "#ffffff"};${item.layout === "callout" ? "border-left:4px solid #cb794f;" : item.layout === "promotion" ? "border-top:4px solid #17665c;" : ""}`
     : "";
   const width = styled ? 532 : 572;
-  const caption = [item.caption, item.credit ? `Photo: ${item.credit}` : ""]
+  const caption = [
+    item.caption,
+    item.credit ? `${item.credit_label ?? "Photo:"} ${item.credit}`.trim() : "",
+  ]
     .filter(Boolean)
     .join(" · ");
   const photo = image
-    ? `<img src="${esc(image)}" alt="${esc(item.alt || item.title)}" width="${width}" style="display:block;width:100%;max-width:${width}px;${item.image_fit === "cover" ? `height:${Math.round((width * 9) / 16)}px;object-fit:cover;` : "height:auto;"}border-radius:8px;margin:0 0 8px;" />${caption ? `<p style="${font}font-size:13px;line-height:19px;color:#526762;margin:0 0 12px;">${esc(caption)}</p>` : ""}`
+    ? `<img src="${esc(image)}" alt="${esc(item.alt ?? item.title)}" width="${width}" style="display:block;width:100%;max-width:${width}px;${item.image_fit === "cover" ? `height:${Math.round((width * 9) / 16)}px;object-fit:cover;` : "height:auto;"}border-radius:8px;margin:0 0 8px;" />${caption ? `<p style="${font}font-size:13px;line-height:19px;color:#526762;margin:0 0 12px;">${esc(caption)}</p>` : ""}`
     : "";
   const url = emailUrl(item.url);
-  return `<div data-recap-item="${esc(item.id)}" data-card-style="${esc(item.layout || "plain")}" style="${decoration}margin:0 0 16px;overflow-wrap:anywhere;">${styled && item.kind ? `<p style="${font}font-size:12px;line-height:18px;color:#17665c;margin:0 0 6px;">${esc(item.kind)}</p>` : ""}${item.title ? `<h3 style="${h}">${esc(item.title)}</h3>` : ""}${photo}${item.text ? p(item.text) : ""}${item.lines?.length ? list(item.lines) : ""}${options.published && reportPath(options.clubSlug, item.href) ? pLink("View results", reportLink(options.origin, options.clubSlug, item.href!)) : ""}${options.published ? (item.links || []).map((link) => pLink(link.label, reportLink(options.origin, options.clubSlug, link.href))).join("") : ""}${url ? (item.layout === "promotion" ? button(item.link_label || "Learn more", url) : pLink(item.link_label || "Learn more", url)) : ""}</div>`;
+  return `<div data-recap-item="${esc(item.id)}" data-card-style="${esc(item.layout || "plain")}" style="${decoration}margin:0 0 16px;overflow-wrap:anywhere;">${styled && item.kind ? `<p style="${font}font-size:12px;line-height:18px;color:#17665c;margin:0 0 6px;">${esc(item.kind)}</p>` : ""}${item.title ? `<h3 style="${h}">${esc(item.title)}</h3>` : ""}${photo}${item.text ? p(item.text) : ""}${item.lines?.length ? list(item.lines) : ""}${options.published && reportPath(options.clubSlug, item.href) ? pLink(item.results_label ?? "View results", reportLink(options.origin, options.clubSlug, item.href!)) : ""}${options.published ? (item.links || []).map((link) => pLink(link.label, reportLink(options.origin, options.clubSlug, link.href))).join("") : ""}${url ? (item.layout === "promotion" ? button(item.link_label ?? "Learn more", url) : pLink(item.link_label ?? "Learn more", url)) : ""}</div>`;
 }
 /** Self-contained table fragment fits inside the Tres 620px newsletter. No footer/signoff duplication. */
 export function buildWeeklyReportEmail(
@@ -104,7 +107,7 @@ export function buildWeeklyReportEmail(
   const published = Boolean(options.published);
   const week = recap.week_start || recap.start_date || "";
   const end = recap.week_end || recap.end_date || "";
-  const title = report.headline || "This week on the courts";
+  const title = report.headline ?? "This week on the courts";
   const fullUrl = published
     ? reportLink(
         options.origin,
@@ -112,8 +115,12 @@ export function buildWeeklyReportEmail(
         `weekly-recap?week=${encodeURIComponent(week)}`,
       )
     : "";
-  let rows = `<tr><td bgcolor="#f8f3e9" style="padding:24px;border-top:4px solid #cb794f;">${!published ? p("DRAFT PREVIEW · Review before sharing") : ""}<h2 style="${h}font-size:26px;line-height:32px;">${esc(title)}</h2><p style="${font}font-size:14px;line-height:21px;color:#17665c;margin:0;">${esc(week)} – ${esc(end)}</p></td></tr>`;
-  if (report.scope_label && report.scope_label !== "Whole club")
+  const display = report.display_text || {};
+  const dateLabel = display.date ?? `${week} – ${end}`;
+  let rows = `<tr><td bgcolor="#f8f3e9" style="padding:24px;border-top:4px solid #cb794f;">${!published ? p("DRAFT PREVIEW · Review before sharing") : ""}<h2 style="${h}font-size:26px;line-height:32px;">${esc(title)}</h2>${dateLabel ? `<p style="${font}font-size:14px;line-height:21px;color:#17665c;margin:0;">${esc(dateLabel)}</p>` : ""}</td></tr>`;
+  if (typeof display.scope === "string") {
+    if (display.scope) rows += section("", p(display.scope));
+  } else if (report.scope_label && report.scope_label !== "Whole club")
     rows += section("LEAGUE", p(report.scope_label));
   if (report.edition) {
     const blocks = compact
@@ -129,8 +136,8 @@ export function buildWeeklyReportEmail(
     }
     if (fullUrl)
       rows += section(
-        "KEEP UP WITH THE CLUB",
-        button("View the full weekly report", fullUrl),
+        display.footer_title ?? "KEEP UP WITH THE CLUB",
+        button(display.footer_link ?? "View the full weekly report", fullUrl),
       );
     return wrapEmail(rows, title, options.document);
   }
@@ -234,6 +241,7 @@ function wrapEmail(rows: string, title: string, document?: boolean): string {
     : fragment;
 }
 function pLink(label: string, url: string) {
+  if (!label) return "";
   return url
     ? `<p style="${body}margin:0 0 12px;"><a href="${esc(url)}" style="color:#17665c;text-decoration:underline;">${esc(label)}</a></p>`
     : p(label);

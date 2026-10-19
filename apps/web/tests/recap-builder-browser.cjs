@@ -193,6 +193,9 @@ async function confirm(page, label, text) {
         exact: true,
       })
       .check();
+    await events
+      .getByLabel("Feature Summer Social in email", { exact: true })
+      .check();
     const ratings = evidence.getByTestId("recap-evidence-BIGGEST_JUMP_WEEK");
     await ratings.getByRole("checkbox", { name: /Arden/ }).uncheck();
     await ratings.getByRole("checkbox", { name: /Blair/ }).check();
@@ -281,6 +284,83 @@ async function confirm(page, label, text) {
         "Stay grounded through your attack.",
       ),
     );
+    await page.getByRole("button", { name: "Edit text", exact: true }).click();
+    const textEditor = page.getByTestId("recap-text-editor");
+    const tournamentText = textEditor.locator("[data-edit-item]").filter({
+      has: page.locator("legend", {
+        hasText: "Example Tournament · Mixed 3.5",
+      }),
+    });
+    await tournamentText
+      .getByLabel("Title", { exact: true })
+      .fill("Temporary title");
+    await tournamentText
+      .getByRole("button", { name: "Reset Title", exact: true })
+      .click();
+    assert.equal(
+      await tournamentText.getByLabel("Title", { exact: true }).inputValue(),
+      "Example Tournament · Mixed 3.5",
+    );
+    await tournamentText
+      .getByLabel("Title", { exact: true })
+      .fill("Club tournament champions");
+    await tournamentText
+      .getByLabel("Summary", { exact: true })
+      .fill("Celebrating our division winners");
+    await tournamentText
+      .getByLabel("Detail 1", { exact: true })
+      .fill("Gold: Alex and Bea — well played!");
+    const leagueText = textEditor
+      .locator("[data-edit-item]")
+      .filter({ has: page.locator("legend", { hasText: "Summer Social" }) });
+    await leagueText
+      .getByLabel("Results link label", { exact: true })
+      .fill("Explore the league results");
+    await textEditor
+      .getByLabel("Recap headline", { exact: true })
+      .fill("Club weekly highlights");
+    await textEditor
+      .getByLabel("Date wording", { exact: true })
+      .fill("October · Our week on court");
+    const photoText = textEditor
+      .locator("[data-edit-item]")
+      .filter({ has: page.locator("legend", { hasText: "Saturday smiles" }) });
+    await photoText
+      .getByLabel("Photo caption", { exact: true })
+      .fill("Friends enjoying Saturday play");
+    await page.screenshot({
+      path: path.join(output, "text-editor-desktop.png"),
+      fullPage: true,
+    });
+    await page
+      .getByRole("button", { name: "Done editing text", exact: true })
+      .click();
+    assert((await preview.innerText()).includes("Club tournament champions"));
+    assert(
+      (await preview.innerText()).includes("Gold: Alex and Bea — well played!"),
+    );
+    assert((await preview.innerText()).includes("Explore the league results"));
+    await page
+      .getByRole("button", { name: "Member email", exact: true })
+      .click();
+    const emailFrame = page.frameLocator(
+      'iframe[title="Live member email preview"]',
+    );
+    await emailFrame
+      .getByText("Club tournament champions", { exact: true })
+      .waitFor();
+    await page.getByRole("button", { name: "Edit text", exact: true }).click();
+    assert.equal(
+      await tournamentText.getByLabel("Title", { exact: true }).inputValue(),
+      "Club tournament champions",
+    );
+    await textEditor
+      .getByLabel("Full recap link label", { exact: true })
+      .fill("Open this week’s recap");
+    await page
+      .getByRole("button", { name: "Done editing text", exact: true })
+      .click();
+    await page.getByRole("button", { name: "Website", exact: true }).click();
     await page.waitForFunction(
       () =>
         document.body.innerText.includes("Draft saved") &&
@@ -318,7 +398,7 @@ async function confirm(page, label, text) {
     ).json();
     assert.equal(
       live.selected_recap.recap.report.headline,
-      "This week on the courts",
+      "Club weekly highlights",
     );
     assert(!JSON.stringify(live).includes("Tuesday Moneyball"));
     for (const channel of ["edition", "email_edition"]) {
@@ -336,7 +416,17 @@ async function confirm(page, label, text) {
         b.items.map((i) => i.title),
       );
     assert(!compactTitles.includes("Thursday Social Round Robin"));
-    assert(compactTitles.includes("Example Tournament · Mixed 3.5"));
+    assert(compactTitles.includes("Club tournament champions"));
+    assert.equal(
+      live.selected_recap.recap.report.display_text.date,
+      "October · Our week on court",
+    );
+    for (const channel of ["edition", "email_edition"]) {
+      const content = JSON.stringify(live.selected_recap.recap.report[channel]);
+      assert(content.includes("Gold: Alex and Bea — well played!"));
+      assert(content.includes("Friends enjoying Saturday play"));
+      assert(content.includes("Explore the league results"));
+    }
     const publicStories = live.selected_recap.recap.report.edition.find(
       (b) => b.key === "custom",
     ).items;
@@ -356,6 +446,9 @@ async function confirm(page, label, text) {
     const publicPage = await context.newPage();
     await publicPage.goto(origin + "/clubs/test/weekly-recap");
     await publicPage.getByTestId("recap-edition").waitFor();
+    await publicPage
+      .getByRole("heading", { name: "Club tournament champions", exact: true })
+      .waitFor();
     assert(
       (await publicPage.getByTestId("recap-edition").innerText()).includes(
         "Photo: Club volunteer",
@@ -393,7 +486,7 @@ async function confirm(page, label, text) {
     live = await (await fetch(apiOrigin + "/clubs/test/weekly-recaps")).json();
     assert.equal(
       live.selected_recap.recap.report.headline,
-      "This week on the courts",
+      "Club weekly highlights",
     );
     await page.reload();
     await page.getByRole("button", { name: "1. Setup", exact: true }).click();
@@ -434,6 +527,26 @@ async function confirm(page, label, text) {
       path: path.join(output, "mobile-content.png"),
       fullPage: true,
     });
+    await page.getByRole("button", { name: "4. Preview", exact: true }).click();
+    await page.getByRole("button", { name: "Edit text", exact: true }).click();
+    assert.equal(
+      await tournamentText.getByLabel("Title", { exact: true }).inputValue(),
+      "Club tournament champions",
+      "Saved text survives reload",
+    );
+    assert(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+      "Text editor fits mobile",
+    );
+    await page.screenshot({
+      path: path.join(output, "text-editor-mobile.png"),
+      fullPage: true,
+    });
+    await page
+      .getByRole("button", { name: "Done editing text", exact: true })
+      .click();
     await page.getByRole("button", { name: "1. Setup", exact: true }).click();
     await page.waitForFunction(
       () =>
@@ -455,8 +568,19 @@ async function confirm(page, label, text) {
     live = await (await fetch(apiOrigin + "/clubs/test/weekly-recaps")).json();
     assert.equal(
       live.selected_recap.recap.report.headline,
-      "This week on the courts",
+      "Club weekly highlights",
     );
+    const refreshedDraft = (await state()).weekly_recaps[0];
+    assert(
+      JSON.stringify(refreshedDraft.final_json.report.edition).includes(
+        "Club tournament champions",
+      ),
+      "Refresh preserves text for the same source result",
+    );
+    const savedLayout = (await state()).club_recap_preferences[0].settings
+      .templates[0].builder;
+    assert.equal(savedLayout.text_overrides, undefined);
+    assert.equal(savedLayout.display_text, undefined);
     await page.getByRole("button", { name: "1. Setup", exact: true }).click();
     await page.waitForFunction(
       () =>

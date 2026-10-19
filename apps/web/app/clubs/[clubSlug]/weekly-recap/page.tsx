@@ -173,7 +173,7 @@ function Podium({ tournament }: { tournament: WeeklyRecapTournament }) {
 }
 
 function RecapBody({ recap, activeSection, clubSlug }: { recap: WeeklyRecapJson; activeSection: RecapSection; clubSlug: string }) {
-  if (recap.report?.edition) return <><h2>{recap.report.headline}</h2><RecapEdition scopeLabel={recap.report.scope_label} blocks={recap.report.edition} clubSlug={clubSlug} /></>;
+  if (recap.report?.edition) return <><h2>{recap.report.headline}</h2>{recap.report.display_text?.date ? <p>{recap.report.display_text.date}</p> : null}<RecapEdition scopeText={recap.report.display_text?.scope} scopeLabel={recap.report.scope_label} blocks={recap.report.edition} clubSlug={clubSlug} /></>;
   const spotlight = (recap.spotlight || []).filter((item) => item.include !== false).sort((a, b) => Number(a.order ?? 999) - Number(b.order ?? 999));
   const aroundCards: Array<{ title: string; rows: string[]; tone: "league" | "round_robin" | "community" }> = [];
   for (const item of recap.around_club?.leagues || []) aroundCards.push({ title: item.league_name, rows: (item.highlights || []).map((row) => row.display).filter(Boolean), tone: "league" });

@@ -1,4 +1,4 @@
-import type { RecapBlock, RecapCatalog } from "./recapBuilder";
+import type { RecapBlock, RecapCatalog, RecapDisplayText } from "./recapBuilder";
 export type WeeklyRecapNumbers = Record<string, string | number | null>;
 
 export type WeeklyRecapSpotlight = {
@@ -109,6 +109,7 @@ export function getWeeklyRecapPdfUrl(clubSlug: string, weekStart: string): strin
 }
 
 export type WeeklyReport = {
+  display_text?: RecapDisplayText;
   edition?: RecapBlock[];
   email_edition?: RecapBlock[];
   scope_label?: string;

@@ -367,7 +367,8 @@ def _pdf_escape(text: str) -> str:
 def _weekly_recap_pdf_lines(recap: dict[str, Any], *, week_start: str, week_end: str) -> list[str]:
     if "edition" in (recap.get("report") or {}):
         from jupr_app.domain.recaps.recap_builder import edition_lines
-        lines = [f"Week: {week_start} to {week_end}", *edition_lines(recap["report"])]
+        date_label = recap["report"].get("display_text", {}).get("date", f"Week: {week_start} to {week_end}")
+        lines = [date_label, *edition_lines(recap["report"])]
         return [wrapped for line in lines for wrapped in (textwrap.wrap(line, width=82) or [""])]
     lines = ["JUPR Weekly Recap", f"Week: {week_start} to {week_end}", ""]
 

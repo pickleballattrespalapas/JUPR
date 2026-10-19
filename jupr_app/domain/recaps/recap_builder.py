@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from hashlib import sha256
+import json
 import re
 
 from .weekly_report_public import safe_url, report_href, text
@@ -15,6 +16,40 @@ SECTIONS = {
     "custom": "Club stories", "upcoming": "Coming up",
 }
 EMAIL_LIMITS = {"events": 3, "spotlight": 2, "races": 2, "achievements": 3}
+TEXT_LIMITS = {"title": 240, "text": 3000, "kind": 80, "caption": 600, "credit": 160,
+               "credit_label": 80, "results_label": 100, "link_label": 100, "alt": 240}
+DISPLAY_FIELDS = ("date", "scope", "footer_title", "footer_link")
+
+
+def text_override_key(section, item):
+    if section == "upcoming":
+        return "upcoming:" + json.dumps([text(item["text"], 240), item.get("url", "").strip()], ensure_ascii=False, separators=(",", ":"))
+    return item["id"]
+
+
+def clean_text_override(raw):
+    raw = raw if isinstance(raw, dict) else {}
+    patch = {key: text(raw[key], limit) for key, limit in TEXT_LIMITS.items() if isinstance(raw.get(key), str)}
+    for field, count, limit in (("lines", 30, 600), ("link_labels", 20, 80)):
+        values = raw.get(field)
+        if isinstance(values, dict):
+            patch[field] = {text(key, 600): text(value, limit) for key, value in list(values.items())[:count] if isinstance(value, str)}
+    return patch
+
+
+def clean_display_text(raw):
+    return {key: text(raw[key], 160) for key in DISPLAY_FIELDS if isinstance(raw.get(key), str)} if isinstance(raw, dict) else {}
+
+
+def apply_text_override(item, patch):
+    item = deepcopy(item)
+    item.update({key: value for key, value in patch.items() if key in TEXT_LIMITS})
+    # Bind detail edits to their source text so selecting a different winner
+    # or refreshing changed standings cannot transfer an old player's wording.
+    item["lines"] = [patch.get("lines", {}).get(line, line) for line in item["lines"]]
+    for link in item.get("links", []):
+        link["label"] = patch.get("link_labels", {}).get(link["href"], link["label"])
+    return item
 
 
 def stable_id(kind, identity):
@@ -40,7 +75,7 @@ def clean_item(raw):
         "lines": [text(line, 600) for line in (raw.get("lines") or [])[:30]],
         "href": report_href(raw.get("href")), "url": safe_url(raw.get("url")),
         "image_url": image_url(raw.get("image_url")), "alt": text(raw.get("alt"), 240),
-        "link_label": text(raw.get("link_label"), 100) or "Learn more",
+        "link_label": text(raw.get("link_label"), 100) if isinstance(raw.get("link_label"), str) else "Learn more",
         "links": [{"label": text(link.get("label"), 80), "href": report_href(link.get("href"))}
                   for link in (raw.get("links") or [])[:20] if isinstance(link, dict) and report_href(link.get("href"))],
     }
@@ -50,6 +85,9 @@ def clean_item(raw):
     for key, limit in (("caption", 600), ("credit", 160)):
         if raw.get(key):
             result[key] = text(raw[key], limit)
+    for key in ("credit_label", "results_label"):
+        if isinstance(raw.get(key), str):
+            result[key] = text(raw[key], TEXT_LIMITS[key])
     if isinstance(raw.get("layout"), str) and raw["layout"] in {"plain", "photo", "callout", "promotion"}:
         result["layout"] = raw["layout"]
     if isinstance(raw.get("image_fit"), str) and raw["image_fit"] in {"contain", "cover"}:
@@ -97,7 +135,7 @@ def normalize_config(raw, *, template=False):
     for key in SECTIONS:
         src = configs.get(key) if isinstance(configs.get(key), dict) else {}
         section = {"enabled": src.get("enabled") is not False, "email_enabled": src.get("email_enabled") is not False,
-                   "title": text(src.get("title"), 100) or SECTIONS[key], "detail": "brief" if src.get("detail") == "brief" else "full"}
+                   "title": text(src["title"], 100) if isinstance(src.get("title"), str) else SECTIONS[key], "detail": "brief" if src.get("detail") == "brief" else "full"}
         for selection in ("item_ids", "email_item_ids"):
             if (not template or key in {"numbers", "spotlight"}) and isinstance(src.get(selection), list):
                 section[selection] = list(dict.fromkeys(text(v, 120) for v in src[selection][:150]))
@@ -108,6 +146,11 @@ def normalize_config(raw, *, template=False):
               "step": 0 if template else max(0, min(4, int(raw.get("step", 0) or 0)))}
     if isinstance(raw.get("email_order"), list):
         result["email_order"] = list(dict.fromkeys([key for key in raw["email_order"] if isinstance(key, str) and key in SECTIONS] + order))
+    if not template:
+        if isinstance(raw.get("text_overrides"), dict):
+            result["text_overrides"] = {key: clean_text_override(patch) for key, patch in list(raw["text_overrides"].items())[:1500] if isinstance(key, str) and len(key) <= 5000 and isinstance(patch, dict)}
+        if isinstance(raw.get("display_text"), dict):
+            result["display_text"] = clean_display_text(raw["display_text"])
     return result
 
 
@@ -122,7 +165,7 @@ def build_editions(recap, raw):
             settings = config["sections"][key]
             if not settings["enabled"] or (channel == "email_edition" and not settings["email_enabled"]):
                 continue
-            available = {item["id"]: item for item in groups[key]}
+            available = {item["id"]: apply_text_override(item, config.get("text_overrides", {}).get(text_override_key(key, item), {})) for item in groups[key]}
             ids = settings.get("item_ids", list(available))
             if channel == "email_edition":
                 selected = set(ids)
@@ -132,6 +175,7 @@ def build_editions(recap, raw):
                 if settings["detail"] == "brief" and key != "spotlight":
                     # League results often live entirely in details; retain the winner.
                     item["lines"] = item["lines"][:1]
+                item["lines"] = [line for line in item["lines"] if line]
             items = [i for i in items if i["title"] or i["text"] or i["lines"] or i["image_url"]]
             if items:
                 blocks.append({"key": key, "title": settings["title"], "items": items})
@@ -141,12 +185,16 @@ def build_editions(recap, raw):
 
 def apply_builder(recap, config):
     recap.setdefault("report", {}).update(build_editions(recap, config))
+    if isinstance(config.get("display_text"), dict):
+        recap["report"]["display_text"] = clean_display_text(config["display_text"])
     return recap
 
 
 def public_edition_report(raw):
     result = {key: text(raw.get(key), 160) for key in ("headline", "club_name", "club_slug", "scope_label")}
     result["version"] = 1
+    if isinstance(raw.get("display_text"), dict):
+        result["display_text"] = clean_display_text(raw["display_text"])
     for channel in ("edition", "email_edition"):
         result[channel] = [{"key": block["key"], "title": text(block.get("title"), 100),
                             "items": [clean_item(item) for item in block.get("items", [])[:150]]}
@@ -155,9 +203,11 @@ def public_edition_report(raw):
 
 
 def edition_lines(report):
-    lines = [report.get("headline") or "This week on the courts"]
-    if report.get("scope_label") and report["scope_label"] != "Whole club":
-        lines.append(f"League: {report['scope_label']}")
+    lines = [report.get("headline", "This week on the courts")]
+    display = report.get("display_text", {})
+    scope = display.get("scope", f"League: {report['scope_label']}" if report.get("scope_label") and report["scope_label"] != "Whole club" else "")
+    if scope:
+        lines.append(scope)
     for block in report.get("edition", []):
         lines.extend(["", block["title"]])
         for item in block["items"]:
@@ -173,5 +223,5 @@ def edition_lines(report):
             if item.get("caption"):
                 lines.append(item["caption"])
             if item.get("credit"):
-                lines.append(f"Photo: {item['credit']}")
+                lines.append(f"{item.get('credit_label', 'Photo:')} {item['credit']}".strip())
     return lines
