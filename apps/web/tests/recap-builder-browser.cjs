@@ -164,25 +164,20 @@ async function confirm(page, label, text) {
     await page
       .getByRole("heading", { name: "Choose and arrange content" })
       .waitFor();
-    const numbers = page
-      .locator("section")
-      .filter({
-        has: page.locator("strong", { hasText: "The week in numbers" }),
+    const evidence = page.getByTestId("recap-evidence-picker");
+    await evidence
+      .getByRole("checkbox", {
+        name: "Include The week in numbers",
+        exact: true,
       })
-      .filter({ has: page.getByRole("checkbox") })
-      .last();
-    await numbers.getByRole("checkbox").first().uncheck();
-    const events = page
-      .locator("section")
-      .filter({ has: page.locator("strong", { hasText: "Event results" }) })
-      .filter({ has: page.getByRole("checkbox") })
-      .last();
-    await events.locator("summary").click();
-    const exclude = events
+      .uncheck();
+    const events = evidence;
+    await events
+      .getByTestId("recap-evidence-rr")
       .locator("label")
       .filter({ hasText: "Tuesday Moneyball" })
-      .first();
-    await exclude.getByRole("checkbox").uncheck();
+      .getByRole("checkbox")
+      .uncheck();
     await events
       .getByLabel("Feature Thursday Social Round Robin in email", {
         exact: true,
@@ -193,6 +188,26 @@ async function confirm(page, label, text) {
         exact: true,
       })
       .check();
+    await events
+      .getByLabel("Feature Fall Ladder · Round 1 · Court 2 in email", {
+        exact: true,
+      })
+      .check();
+    const ratings = evidence.getByTestId("recap-evidence-BIGGEST_JUMP_WEEK");
+    await ratings.getByRole("checkbox", { name: /Arden/ }).uncheck();
+    await ratings.getByRole("checkbox", { name: /Blair/ }).check();
+    await ratings.getByRole("checkbox", { name: /Casey/ }).check();
+    await ratings
+      .getByLabel("Include Rating increases in email", { exact: true })
+      .check();
+    await evidence.getByLabel("Include Most wins", { exact: true }).check();
+    await evidence
+      .getByLabel("Include Most wins in email", { exact: true })
+      .check();
+    await page.screenshot({
+      path: path.join(output, "content-evidence.png"),
+      fullPage: true,
+    });
     await page
       .getByRole("button", { name: "3. Personalize", exact: true })
       .click();
@@ -243,6 +258,11 @@ async function confirm(page, label, text) {
       .getByLabel("Link URL", { exact: true })
       .fill("https://events.example.invalid/register");
     await page.getByRole("button", { name: "2. Content", exact: true }).click();
+    await page
+      .getByTestId("recap-layout-options")
+      .locator("summary")
+      .first()
+      .click();
     const emailOrder = page.getByTestId("recap-email-order");
     await emailOrder.locator("summary").click();
     await emailOrder
@@ -301,6 +321,16 @@ async function confirm(page, label, text) {
       "This week on the courts",
     );
     assert(!JSON.stringify(live).includes("Tuesday Moneyball"));
+    for (const channel of ["edition", "email_edition"]) {
+      const serialized = JSON.stringify(
+        live.selected_recap.recap.report[channel],
+      );
+      assert(serialized.includes("Blair — +0.18 JUPR"));
+      assert(serialized.includes("Casey — +0.17 JUPR"));
+      assert(serialized.includes("Drew — 6 wins"));
+      assert(serialized.includes("Winner: Ellis"));
+      assert(!serialized.includes("Arden —"));
+    }
     const compactTitles =
       live.selected_recap.recap.report.email_edition.flatMap((b) =>
         b.items.map((i) => i.title),
@@ -387,6 +417,19 @@ async function confirm(page, label, text) {
       ),
       "No horizontal overflow on mobile",
     );
+    assert(
+      await page
+        .getByTestId("recap-evidence-BIGGEST_JUMP_WEEK")
+        .getByRole("checkbox", { name: /Blair/ })
+        .isChecked(),
+      "Saved player selection survives reload",
+    );
+    assert(
+      !(await page
+        .getByTestId("recap-evidence-BIGGEST_JUMP_WEEK")
+        .getByRole("checkbox", { name: /Arden/ })
+        .isChecked()),
+    );
     await page.screenshot({
       path: path.join(output, "mobile-content.png"),
       fullPage: true,
@@ -425,7 +468,12 @@ async function confirm(page, label, text) {
     await page.getByLabel("End date").fill("2026-10-04");
     await confirm(page, "Generate draft", "GENERATE RECAP");
     assert.equal(
-      await numbers.getByRole("checkbox").first().isChecked(),
+      await evidence
+        .getByRole("checkbox", {
+          name: "Include The week in numbers",
+          exact: true,
+        })
+        .isChecked(),
       false,
       "Saved club default applies next week",
     );

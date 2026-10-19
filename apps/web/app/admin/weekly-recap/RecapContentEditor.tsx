@@ -235,7 +235,7 @@ export function RecapContentEditor({
                 ) : (
                   <p className={styles.muted}>
                     {key === "spotlight"
-                      ? "Choose players and email highlights in Personalize."
+                      ? "Choose players and email highlights in the content choices above."
                       : "Edit this content in Personalize."}
                   </p>
                 )}

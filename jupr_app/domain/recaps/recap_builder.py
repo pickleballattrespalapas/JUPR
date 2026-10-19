@@ -45,6 +45,8 @@ def clean_item(raw):
                   for link in (raw.get("links") or [])[:20] if isinstance(link, dict) and report_href(link.get("href"))],
     }
     # Optional fields leave saved legacy editions unchanged.
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(raw.get("date") or "")):
+        result["date"] = str(raw["date"])
     for key, limit in (("caption", 600), ("credit", 160)):
         if raw.get(key):
             result[key] = text(raw[key], limit)
@@ -67,7 +69,7 @@ def catalog(recap):
     for e in report.get("event_results") or []:
         add("events", (e.get("kind"), e.get("id") or (e.get("title"), e.get("date"))),
             title=e.get("title"), text=e.get("summary"), lines=e.get("details"), href=e.get("href"),
-            kind=e.get("kind"), links=e.get("weekly_reports"))
+            kind=e.get("kind"), date=e.get("date"), links=e.get("weekly_reports"))
     for s in recap.get("spotlight") or []:
         if s.get("include", True) and s.get("players"):
             add("spotlight", s.get("key") or s.get("label"), title=s.get("label"), text=s.get("description"), lines=s.get("players"), kind=s.get("key"))
@@ -127,10 +129,8 @@ def build_editions(recap, raw):
                 ids = [i for i in settings.get("email_item_ids", ids[:EMAIL_LIMITS.get(key, 150)]) if i in selected]
             items = [deepcopy(available[i]) for i in ids if i in available]
             for item in items:
-                if settings["detail"] == "brief":
+                if settings["detail"] == "brief" and key != "spotlight":
                     # League results often live entirely in details; retain the winner.
-                    item["lines"] = item["lines"][:1]
-                if channel == "email_edition" and key == "spotlight":
                     item["lines"] = item["lines"][:1]
             items = [i for i in items if i["title"] or i["text"] or i["lines"] or i["image_url"]]
             if items:

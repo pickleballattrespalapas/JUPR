@@ -34,6 +34,7 @@ const Panel = load("app/admin/weekly-recap/WeeklyRecapAdminPanel.tsx", {
   "./RecapLayoutManager": LayoutManager,
   "@/lib/recapBuilder": load("lib/recapBuilder.ts"),
   "@/lib/weeklyReportEmail": load("lib/weeklyReportEmail.ts"),
+  "./RecapEvidencePicker": () => null,
   "./RecapContentEditor": { RecapContentEditor: () => null, RecapStoryEditor: () => null },
   "./recap-builder.module.css": {},
   "@/lib/clubDate": { weeklyReportDatePreset: () => ({ start: draft.week_start, end: draft.week_end }), clubWeekStartIso: () => draft.week_start, clubTodayIso: () => draft.week_end },
