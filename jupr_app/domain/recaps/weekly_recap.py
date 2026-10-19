@@ -605,8 +605,10 @@ def _load_matches(
         .select(",".join(select_cols)).eq("club_id", club_id)
         .is_("deleted_at", None)
         .gte("date", start_dt.isoformat()).lte("date", end_dt.isoformat()))
-    frames.append(pd.DataFrame(loaded))
-    combined = pd.concat([df for df in frames if not df.empty], ignore_index=True) if frames else pd.DataFrame()
+    if loaded:
+        frames.append(pd.DataFrame(loaded))
+    # A quiet period is valid: concatenate only when a source has actual rows.
+    combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     return _dedupe_matches(combined)
 
 
