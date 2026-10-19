@@ -215,6 +215,162 @@ const text = (node) =>
     "Deleting the selected default restores Standard",
   );
   await act(async () => tree.unmount());
+  // The Content picker must preserve exact evidence and explicit email choices.
+  const EvidencePicker = load(
+    "app/admin/weekly-recap/RecapEvidencePicker.tsx",
+    {
+      "@/lib/clubSite": load("lib/clubSite.ts"),
+      "./recap-builder.module.css": {},
+    },
+  ).default;
+  const key = "METRIC_most_wins",
+    categoryId = `spotlight-${key}`;
+  const candidates = {
+    [key]: Array.from({ length: 10 }, (_, i) => ({
+      candidate_id: `player:${i}`,
+      label: "Most wins",
+      display: `Player ${i} — ${12 - i} wins`,
+    })),
+  };
+  let highlights = {
+    [key]: { include: false, players: [], description: "", order: 1 },
+  };
+  builder = builderLib.normalizeBuilder({
+    sections: { spotlight: { item_ids: [], detail: "brief" } },
+  });
+  let preview;
+  const renderEvidence = () => {
+    preview = builderLib.previewRecap(
+      { builder_catalog: fixture.catalog },
+      {
+        builder,
+        spotlight_overrides: highlights,
+        looking_ahead: [],
+        scope: { league_names: [] },
+        editorial: {
+          headline: "Test",
+          opening: "",
+          event_notes: "",
+          upcoming: [],
+        },
+      },
+      candidates,
+    );
+    return React.createElement(EvidencePicker, {
+      builder,
+      catalog: preview.builder_catalog,
+      candidates,
+      spotlights: highlights,
+      disabled: false,
+      onBuilderChange: (value) => {
+        builder = value;
+        tree.update(renderEvidence());
+      },
+      onSpotlightChange: (key, patch) => {
+        highlights = { ...highlights, [key]: { ...highlights[key], ...patch } };
+        tree.update(renderEvidence());
+      },
+    });
+  };
+  await act(async () => {
+    tree = create(renderEvidence());
+  });
+  const checkbox = (label) => tree.root.findByProps({ "aria-label": label });
+  await act(async () =>
+    checkbox("Include Round-robin winners").props.onChange({
+      target: { checked: false },
+    }),
+  );
+  const selectedEvents = preview.report.edition.find(
+    (b) => b.key === "events",
+  ).items;
+  assert(
+    !selectedEvents.some((item) => /round robin|moneyball/i.test(item.kind)),
+  );
+  assert(
+    selectedEvents.some((item) => /tournament/i.test(item.kind)),
+    "Other categories are preserved",
+  );
+  await act(async () =>
+    checkbox("Include Most wins").props.onChange({ target: { checked: true } }),
+  );
+  assert(
+    builder.sections.spotlight.item_ids.includes(categoryId),
+    "Enabling restores a category previously excluded by layout",
+  );
+  const players = () =>
+    tree.root
+      .findByProps({ "data-testid": `recap-evidence-${key}` })
+      .findAllByType("input")
+      .filter((n) => !n.props["aria-label"] && n.props.type === "checkbox");
+  await act(async () =>
+    players()[0].props.onChange({ target: { checked: false } }),
+  );
+  await act(async () =>
+    players()[5].props.onChange({ target: { checked: true } }),
+  );
+  await act(async () =>
+    checkbox("Include Most wins in email").props.onChange({
+      target: { checked: true },
+    }),
+  );
+  for (const channel of ["edition", "email_edition"]) {
+    const block = preview.report[channel].find((b) => b.key === "spotlight");
+    assert.deepEqual(
+      block.items[0].lines,
+      [1, 2, 5].map((i) => candidates[key][i].display),
+      "Every explicitly selected player survives compact layout and email",
+    );
+  }
+  await act(async () =>
+    tree.root
+      .findByProps({ type: "search" })
+      .props.onChange({ target: { value: "Player 5" } }),
+  );
+  assert.equal(players().length, 1);
+  assert.equal(
+    players()[0].props.checked,
+    true,
+    "Search does not alter selections",
+  );
+  await act(async () =>
+    tree.root
+      .findByProps({ type: "search" })
+      .props.onChange({ target: { value: "Missing person" } }),
+  );
+  assert.match(text(tree.toJSON()), /No results match/);
+  await act(async () =>
+    tree.root
+      .findByProps({ type: "search" })
+      .props.onChange({ target: { value: "" } }),
+  );
+  for (let index = 0; index < 10; index++) {
+    if (!players()[index].props.checked)
+      await act(async () =>
+        players()[index].props.onChange({ target: { checked: true } }),
+      );
+  }
+  assert.equal(highlights[key].players.length, 10);
+  for (let index = 0; index < 10; index++) {
+    await act(async () =>
+      players()[index].props.onChange({ target: { checked: false } }),
+    );
+  }
+  assert.equal(highlights[key].players.length, 0);
+  assert.equal(
+    players().length,
+    10,
+    "Clearing selections keeps all choices available",
+  );
+  assert(checkbox("Include Most wins").props.checked);
+
+  await act(async () =>
+    checkbox("Include Most wins").props.onChange({
+      target: { checked: false },
+    }),
+  );
+  assert(!preview.report.edition.some((b) => b.key === "spotlight"));
+  await act(async () => tree.unmount());
   console.log(
     "Recap customization controls: independent ordering, story inclusion, promotions, layout management and conflicts passed",
   );

@@ -4,7 +4,6 @@ import {
   useAuthenticatedAutoLoad,
   useLatestRequestGuard,
 } from "@/lib/useAuthenticatedAutoLoad";
-import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import { actionSuccess } from "@/components/interaction";
 import { useAdminSession } from "@/lib/useAdminSession";
@@ -32,6 +31,7 @@ import { RecapContentEditor, RecapStoryEditor } from "./RecapContentEditor";
 import AdminWeeklyRecapPreview from "./AdminWeeklyRecapPreview";
 import WeeklyReportExport from "./WeeklyReportExport";
 import RecapLayoutManager from "./RecapLayoutManager";
+import RecapEvidencePicker from "./RecapEvidencePicker";
 import styles from "./recap-builder.module.css";
 
 type Props = {
@@ -84,12 +84,14 @@ function rowEdits(
       return [
         key,
         {
-          include: true,
+          include: !key.startsWith("METRIC_"),
           order: original?.order || index + 1,
           description: original?.description || "",
           players:
             original?.candidate_ids ||
-            items.slice(0, 1).map((i) => i.candidate_id),
+            (key.startsWith("METRIC_")
+              ? []
+              : items.slice(0, 1).map((i) => i.candidate_id)),
           ...overrides[key],
         },
       ];
@@ -866,12 +868,56 @@ export default function WeeklyRecapAdminPanel({
         <>
           <section hidden={step !== 1}>
             <h2>Choose and arrange content</h2>
-            <RecapContentEditor
+            <div className={styles.section}>
+              <div className={styles.row}>
+                <p>
+                  Results from{" "}
+                  <strong>
+                    {row.week_start} through {row.week_end}
+                  </strong>{" "}
+                  · {preview.report?.scope_label || "Whole club"}
+                </p>
+                <button type="button" onClick={() => go(0)}>
+                  Update dates or refresh results
+                </button>
+              </div>
+              <p className={styles.muted}>
+                These choices come from this draft’s results snapshot. Refresh
+                results in Setup to include newly recorded games.
+              </p>
+              {coverage?.pending?.map((item, index) => (
+                <p key={`pending-${index}`}>
+                  Awaiting approval: {item.title}. These results are not yet
+                  available to select.
+                </p>
+              ))}
+              {coverage?.warnings?.map((warning, index) => (
+                <p key={`warning-${index}`} role="status">
+                  {warning}
+                </p>
+              ))}
+            </div>
+            <RecapEvidencePicker
               builder={edits.builder}
               catalog={generatedCatalog}
+              candidates={candidates}
+              spotlights={edits.spotlight_overrides}
               disabled={disabled}
-              onChange={changeBuilder}
+              onBuilderChange={changeBuilder}
+              onSpotlightChange={spotlight}
             />
+            <details
+              className={styles.section}
+              data-testid="recap-layout-options"
+            >
+              <summary>Section layout, headings and email order</summary>
+              <RecapContentEditor
+                builder={edits.builder}
+                catalog={generatedCatalog}
+                disabled={disabled}
+                onChange={changeBuilder}
+              />
+            </details>
           </section>
           <section hidden={step !== 2} className={styles.section}>
             <h2>Make it your club’s recap</h2>
@@ -902,124 +948,6 @@ export default function WeeklyRecapAdminPanel({
                 onChange={(e) => editorial({ event_notes: e.target.value })}
               />
             </label>
-            <details>
-              <summary>Player spotlights</summary>
-              {Object.entries(edits.spotlight_overrides).map(
-                ([key, config]) => (
-                  <fieldset
-                    key={key}
-                    className={styles.section}
-                    disabled={disabled}
-                  >
-                    <legend>{candidates[key]?.[0]?.label || key}</legend>
-                    <label className={styles.check}>
-                      <input
-                        type="checkbox"
-                        checked={config.include}
-                        onChange={(e) =>
-                          spotlight(key, { include: e.target.checked })
-                        }
-                      />
-                      Include this spotlight
-                    </label>
-                    <div className={styles.fields}>
-                      <label>
-                        Order
-                        <input
-                          type="number"
-                          min={1}
-                          max={99}
-                          value={config.order}
-                          onChange={(e) =>
-                            spotlight(key, {
-                              order: Number(e.target.value) || 1,
-                            })
-                          }
-                        />
-                      </label>
-                      <label>
-                        Description
-                        <input
-                          value={config.description}
-                          maxLength={1000}
-                          onChange={(e) =>
-                            spotlight(key, { description: e.target.value })
-                          }
-                        />
-                      </label>
-                    </div>
-                    {[0, 1, 2].map((index) => (
-                      <label key={index}>
-                        Candidate {index + 1}
-                        <SearchablePlayerSelect
-                          aria-label={`Candidate ${index + 1} for ${key}`}
-                          value={config.players[index] || ""}
-                          onValueChange={(value) => {
-                            const players = [...config.players];
-                            players[index] = value;
-                            spotlight(key, { players });
-                          }}
-                        >
-                          <option value="">None</option>
-                          {(candidates[key] || []).map((c) => (
-                            <option key={c.candidate_id} value={c.candidate_id}>
-                              {c.display}
-                            </option>
-                          ))}
-                        </SearchablePlayerSelect>
-                      </label>
-                    ))}
-                    <label className={styles.check}>
-                      <input
-                        type="checkbox"
-                        checked={(
-                          edits.builder.sections.spotlight.email_item_ids ||
-                          (
-                            preview.report?.edition?.find(
-                              (b) => b.key === "spotlight",
-                            )?.items || []
-                          )
-                            .slice(0, 2)
-                            .map((i) => i.id)
-                        ).includes(
-                          generatedCatalog.spotlight?.find(
-                            (i) => i.kind === key,
-                          )?.id || `spotlight-${key}`,
-                        )}
-                        onChange={(e) => {
-                          const id =
-                            generatedCatalog.spotlight?.find(
-                              (i) => i.kind === key,
-                            )?.id || `spotlight-${key}`;
-                          const current =
-                            edits.builder.sections.spotlight.email_item_ids ||
-                            (
-                              preview.report?.edition?.find(
-                                (b) => b.key === "spotlight",
-                              )?.items || []
-                            )
-                              .slice(0, 2)
-                              .map((i) => i.id);
-                          changeBuilder({
-                            ...edits.builder,
-                            sections: {
-                              ...edits.builder.sections,
-                              spotlight: {
-                                ...edits.builder.sections.spotlight,
-                                email_item_ids: e.target.checked
-                                  ? [...current.filter((v) => v !== id), id]
-                                  : current.filter((v) => v !== id),
-                              },
-                            },
-                          });
-                        }}
-                      />
-                      Feature this spotlight in email
-                    </label>
-                  </fieldset>
-                ),
-              )}
-            </details>
             <RecapStoryEditor
               builder={edits.builder}
               disabled={disabled}

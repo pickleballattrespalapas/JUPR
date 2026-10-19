@@ -96,7 +96,10 @@ def _default_award(award_key: str, order: int) -> dict[str, Any]:
 
 
 def normalize_spotlight_overrides(overrides: dict[str, Any] | None, generated_spotlight: list[dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
+    from jupr_app.domain.recaps.recap_evidence import METRIC_KEYS
     normalized = {key: _default_award(key, idx + 1) for idx, key in enumerate(SPOTLIGHT_DEFAULT_ORDER)}
+    normalized.update({key: {**_default_award(key, len(normalized) + idx + 1), "include": False}
+                       for idx, key in enumerate(METRIC_KEYS)})
     for idx, item in enumerate(generated_spotlight or []):
         if not isinstance(item, dict):
             continue
@@ -158,7 +161,7 @@ def apply_weekly_recap_edits(generated_json: dict[str, Any] | None, edits_json: 
     for key, config in overrides.items():
         if not config.get("include", True):
             continue
-        selected_ids = list(config.get("players") or [])[:3]
+        selected_ids = list(config.get("players") or [])[:10]
         has_explicit_override = key in raw_overrides
         if has_explicit_override and not selected_ids:
             # The admin UI defines an explicit blank selection as omission.

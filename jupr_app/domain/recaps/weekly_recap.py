@@ -211,6 +211,9 @@ def _compute_weekly_recap_payload(
         stats, giant_slayer_candidates, id_to_name
     )
     spotlight_candidates.update(_build_social_spotlight_candidates(social_stats))
+    from jupr_app.domain.recaps.recap_evidence import metric_candidates
+    spotlight_candidates.update({key: [SpotlightCandidate(**item) for item in items]
+                                 for key, items in metric_candidates(df_week, id_to_name, tz_name).items()})
     spotlight = _select_spotlight_items(spotlight_candidates)
 
     numbers = _build_numbers(

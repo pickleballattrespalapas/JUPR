@@ -72,7 +72,8 @@
         "image_url": "",
         "alt": "",
         "link_label": "Learn more",
-        "links": []
+        "links": [],
+        "date": "2026-10-06"
       },
       {
         "id": "events-698ea430c47acb9d15fd",
@@ -90,7 +91,8 @@
         "image_url": "",
         "alt": "",
         "link_label": "Learn more",
-        "links": []
+        "links": [],
+        "date": "2026-10-08"
       },
       {
         "id": "events-bbf30521a92b9156da90",
@@ -110,7 +112,8 @@
             "label": "Weekly report · Week 7",
             "href": "leagues/Summer%20Social/weekly-history?week=7"
           }
-        ]
+        ],
+        "date": "2026-10-11"
       },
       {
         "id": "events-7389a0a37038b1883706",
@@ -126,7 +129,8 @@
         "image_url": "",
         "alt": "",
         "link_label": "Learn more",
-        "links": []
+        "links": [],
+        "date": "2026-10-10"
       },
       {
         "id": "events-f553a8c338aa1dc8d5c0",
@@ -506,7 +510,8 @@
             "image_url": "",
             "alt": "",
             "link_label": "Learn more",
-            "links": []
+            "links": [],
+            "date": "2026-10-06"
           }
         ]
       },

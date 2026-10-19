@@ -20,6 +20,7 @@ export type RecapItem = {
   text: string;
   lines: string[];
   kind?: string;
+  date?: string;
   href?: string;
   url?: string;
   image_url?: string;
@@ -175,10 +176,10 @@ export function projectEditions(
       const items = ids.flatMap((id) => {
         const item = available.get(id);
         if (!item) return [];
-        let lines =
-          setting.detail === "brief" ? item.lines.slice(0, 1) : item.lines;
-        if (channel === "email_edition" && key === "spotlight")
-          lines = lines.slice(0, 1);
+        const lines =
+          setting.detail === "brief" && key !== "spotlight"
+            ? item.lines.slice(0, 1)
+            : item.lines;
         return item.title || item.text || lines.length || item.image_url
           ? [{ ...item, lines }]
           : [];

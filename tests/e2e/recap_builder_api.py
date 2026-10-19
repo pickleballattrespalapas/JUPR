@@ -38,7 +38,16 @@ def generate(ctx, start_date, end_date, **kw):
     return value
 service._recap_context = lambda *a, **kw: SimpleNamespace()
 service.compute_weekly_recap = generate
-service.get_spotlight_candidates = lambda *a, **kw: {}
+choices = {
+    'BIGGEST_JUMP_WEEK': [{'candidate_id': f'player:{i}', 'key': 'BIGGEST_JUMP_WEEK', 'label': 'Rating increases',
+                           'display': f'{name} — +0.{20-i} JUPR · 4 games', 'player_ids': [i], 'value_json': {}}
+                          for i, name in enumerate(['Arden', 'Blair', 'Casey'], 1)],
+    'METRIC_most_wins': [{'candidate_id': 'player:4', 'key': 'METRIC_most_wins', 'label': 'Most wins',
+                          'display': 'Drew — 6 wins · 7 games', 'player_ids': [4], 'value_json': {}}],
+}
+source['report']['event_results'].append({'id': 'court-1', 'kind': 'Ladder court', 'title': 'Fall Ladder · Round 1 · Court 2',
+    'date': '2026-10-07', 'summary': 'Winner: Ellis', 'details': ['Ellis — 3–0 · point difference +18'], 'href': ''})
+service.get_spotlight_candidates = lambda *a, **kw: deepcopy(choices)
 def authenticate(value):
     if value != 'Bearer local-reviewer':
         raise HTTPException(401, 'Local test session required')
