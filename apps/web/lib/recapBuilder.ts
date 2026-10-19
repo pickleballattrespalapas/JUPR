@@ -33,7 +33,69 @@ export type RecapItem = {
   credit_label?: string;
   results_label?: string;
   links?: Array<{ label: string; href: string }>;
+  court_players?: Array<{ id: string; name: string }>;
 };
+
+export type CourtRecognition = {
+  key: string;
+  name: string;
+  status: "winner" | "tie" | "leader";
+  ids: string[];
+  label: string;
+};
+
+/** Read saved court evidence too, so existing drafts need no regeneration. */
+export function ladderRecognitions(items: RecapItem[]): CourtRecognition[] {
+  const rows = new Map<string, CourtRecognition>();
+  for (const item of items) {
+    if (item.kind !== "Ladder court") continue;
+    const status = item.text.startsWith("Winner:")
+      ? "winner"
+      : item.text.startsWith("Tied for first:")
+        ? "tie"
+        : "leader";
+    const players = item.court_players?.length
+      ? item.court_players
+      : item.lines.flatMap((line) => {
+          const match = line.match(/^(.*) — \d+–\d+ · point difference [+-]\d+$/);
+          return match ? [{ id: "", name: match[1] }] : [];
+        });
+    // The summary is a safe fallback for old single-winner snapshots.
+    if (!players.length && status === "winner")
+      players.push({ id: "", name: item.text.slice("Winner:".length).trim() });
+    for (const player of players) {
+      if (!player.name) continue;
+      const key = `${status}:${player.id || player.name}`;
+      const row = rows.get(key) || {
+        key, name: player.name, status, ids: [], label: "",
+      };
+      if (!row.ids.includes(item.id)) row.ids.push(item.id);
+      row.label = `${row.name}${row.ids.length > 1 ? ` ×${row.ids.length}` : ""}${
+        status === "tie" ? " (tied for first)" : status === "leader" ? " (incomplete court leader)" : ""
+      }`;
+      rows.set(key, row);
+    }
+  }
+  return [...rows.values()];
+}
+
+export function compactLadderCourts(items: RecapItem[]): RecapItem[] {
+  const courts = items.filter((item) => item.kind === "Ladder court");
+  if (!courts.length) return items;
+  const rows = ladderRecognitions(courts);
+  // Unrecognized legacy evidence stays visible without displaying score lines.
+  const recognized = new Set(rows.flatMap((row) => row.ids));
+  const lines = [
+    ...rows.map((row) => row.label),
+    ...courts.filter((item) => !recognized.has(item.id)).map((item) => item.text || item.title),
+  ];
+  const summary: RecapItem = {
+    id: "ladder-court-winners", title: "Ladder court winners", text: "", lines,
+  };
+  return items.flatMap((item) =>
+    item.kind !== "Ladder court" ? [item] : item.id === courts[0].id ? [summary] : [],
+  );
+}
 export const RECAP_TEXT_LIMITS = {
   title: 240,
   text: 3000,
@@ -236,7 +298,7 @@ export function projectEditions(
       const available = new Map(
         (groups[key] || []).map((item) => [
           item.id,
-          applyTextOverride(
+          item.kind === "Ladder court" ? item : applyTextOverride(
             item,
             builder.text_overrides?.[textOverrideKey(key, item)],
           ),
@@ -249,11 +311,11 @@ export function projectEditions(
           setting.email_item_ids || ids.slice(0, emailLimits[key] || 150)
         ).filter((id) => allowed.has(id));
       }
-      const items = ids.flatMap((id) => {
+      const selectedItems = ids.flatMap((id) => {
         const item = available.get(id);
         if (!item) return [];
         const lines = (
-          setting.detail === "brief" && key !== "spotlight"
+          setting.detail === "brief" && key !== "spotlight" && item.kind !== "Ladder court"
             ? item.lines.slice(0, 1)
             : item.lines
         ).filter(Boolean);
@@ -261,6 +323,13 @@ export function projectEditions(
           ? [{ ...item, lines }]
           : [];
       });
+      const items = key === "events"
+        ? compactLadderCourts(selectedItems).map((item) =>
+            item.id === "ladder-court-winners"
+              ? applyTextOverride(item, builder.text_overrides?.[item.id])
+              : item,
+          )
+        : selectedItems;
       if (items.length)
         result[channel].push({
           key,

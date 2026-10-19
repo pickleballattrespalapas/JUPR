@@ -276,6 +276,30 @@
   margin: 0.5rem 0;
   padding-left: 1.25rem;
 }
+.courtList {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  column-gap: 1.5rem;
+}
+.courtRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--recap-line);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.courtRow > label:last-child {
+  flex-shrink: 0;
+  font-size: 0.85rem;
+}
+.courtContext {
+  display: block;
+  color: #475569;
+  margin-top: 0.2rem;
+}
 .builder .evidenceChoice {
   display: flex;
   align-items: flex-start;
