@@ -9,6 +9,7 @@ import type {
   RecapItem,
   SectionKey,
 } from "@/lib/recapBuilder";
+import { ladderRecognitions } from "@/lib/recapBuilder";
 import {
   LEADERBOARD_CARD_DETAILS,
   LEADERBOARD_CARD_LABELS,
@@ -75,7 +76,7 @@ const eventGroups = [
     id: "courts",
     label: "Ladder court winners",
     description:
-      "Individual courts and rounds, with names, records, and point differences.",
+      "A compact winner list. Repeat court wins are marked ×2, ×3, and so on.",
     match: (item: RecapItem) => item.kind === "Ladder court",
   },
   {
@@ -225,6 +226,10 @@ export default function RecapEvidencePicker({
       selected(section).slice(0, emailLimits[section] || 150)
     );
   }
+  const activeGroups = groups.filter((group) =>
+    builder.sections[group.section].enabled &&
+    group.items.some((item) => selected(group.section).includes(item.id)),
+  );
   function choose(
     section: SectionKey,
     ids: string[],
@@ -417,8 +422,7 @@ export default function RecapEvidencePicker({
           placeholder="Search names, events, courts, or results"
         />
       </label>
-      {groups
-        .filter((group) => group.items.length)
+      {activeGroups
         .map((group) => {
           const visible = group.items.filter((item) =>
             [item.title, item.text, item.kind, item.date, ...item.lines]
@@ -428,6 +432,66 @@ export default function RecapEvidencePicker({
           );
           if (!visible.length) return null;
           const included = builder.sections[group.section].enabled;
+          if (group.id === "courts") {
+            const selectedIds = selected("events");
+            const emailIds = emailSelected("events");
+            const rows = ladderRecognitions(group.items).filter((row) =>
+              row.ids.some((id) => visible.some((item) => item.id === id)),
+            );
+            const choice = (ids: string[], label: string, email = false) => {
+              const allowed = email ? ids.filter((id) => selectedIds.includes(id)) : ids;
+              const current = email ? emailIds : selectedIds;
+              const count = allowed.filter((id) => current.includes(id)).length;
+              const enabled = !email || builder.sections.events.email_enabled;
+              const checked = enabled && allowed.length > 0 && count === allowed.length;
+              const mixed = enabled && count > 0 && count < allowed.length;
+              return <input
+                type="checkbox"
+                aria-label={`${email ? "Feature" : "Include"} ${label}${email ? " in email" : ""}`}
+                aria-checked={mixed ? "mixed" : checked}
+                ref={(input) => { if (input) input.indeterminate = mixed; }}
+                checked={checked}
+                disabled={disabled || !allowed.length}
+                onChange={(e) => choose("events", allowed, e.target.checked, email)}
+              />;
+            };
+            return (
+              <section className={styles.section} key={group.id} data-testid="recap-evidence-courts">
+                <h3>{group.label}</h3>
+                <p className={styles.muted}>Choose players to recognize. ×2 or ×3 means multiple court wins. Ties and incomplete courts are labeled separately.</p>
+                <div className={styles.courtList}>
+                  {rows.map((row) => (
+                    <div className={styles.courtRow} key={row.key}>
+                      <label className={styles.check}>
+                        {choice(row.ids, row.label)}
+                        <span>{row.label}</span>
+                      </label>
+                      <label className={styles.check}>
+                        {choice(row.ids, row.label, true)}
+                        Email
+                      </label>
+                    </div>
+                  ))}
+                </div>
+                <details>
+                  <summary>Choose individual courts</summary>
+                  <p className={styles.muted}>Selecting a tied court includes everyone tied for first on that court.</p>
+                  {visible.map((item) => (
+                    <div className={styles.courtRow} key={item.id} data-testid={`recap-evidence-item-${item.id}`}>
+                      <label className={styles.check}>
+                        {choice([item.id], item.title)}
+                        <span>{item.text}<small className={styles.courtContext}>{item.title} · {item.date}</small></span>
+                      </label>
+                      <label className={styles.check}>
+                        {choice([item.id], item.title, true)}
+                        Email
+                      </label>
+                    </div>
+                  ))}
+                </details>
+              </section>
+            );
+          }
           return (
             <section
               className={styles.section}
@@ -611,7 +675,7 @@ export default function RecapEvidencePicker({
           );
         })}
       {needle &&
-      !groups.some((group) =>
+      !activeGroups.some((group) =>
         group.items.some((item) =>
           [item.title, item.text, item.kind, item.date, ...item.lines]
             .join(" ")

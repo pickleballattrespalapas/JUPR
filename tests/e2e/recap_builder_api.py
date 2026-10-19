@@ -47,6 +47,9 @@ choices = {
 }
 source['report']['event_results'].append({'id': 'court-1', 'kind': 'Ladder court', 'title': 'Fall Ladder · Round 1 · Court 2',
     'date': '2026-10-07', 'summary': 'Winner: Ellis', 'details': ['Ellis — 3–0 · point difference +18'], 'href': ''})
+for number in (2, 3):
+    source['report']['event_results'].append({'id': f'court-{number}', 'kind': 'Ladder court', 'title': f'Fall Ladder · Round {number} · Court 2',
+        'date': '2026-10-07', 'summary': 'Winner: Ellis', 'details': ['Ellis — 3–0 · point difference +12'], 'href': ''})
 service.get_spotlight_candidates = lambda *a, **kw: deepcopy(choices)
 def authenticate(value):
     if value != 'Bearer local-reviewer':

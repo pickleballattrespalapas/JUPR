@@ -72,13 +72,16 @@ def clean_item(raw):
     result = {
         "id": text(raw.get("id"), 120), "title": text(raw.get("title"), 240),
         "text": text(raw.get("text")), "kind": text(raw.get("kind"), 80),
-        "lines": [text(line, 600) for line in (raw.get("lines") or [])[:30]],
+        "lines": [text(line, 600) for line in (raw.get("lines") or [])[:(600 if raw.get("id") == "ladder-court-winners" else 30)]],
         "href": report_href(raw.get("href")), "url": safe_url(raw.get("url")),
         "image_url": image_url(raw.get("image_url")), "alt": text(raw.get("alt"), 240),
         "link_label": text(raw.get("link_label"), 100) if isinstance(raw.get("link_label"), str) else "Learn more",
         "links": [{"label": text(link.get("label"), 80), "href": report_href(link.get("href"))}
                   for link in (raw.get("links") or [])[:20] if isinstance(link, dict) and report_href(link.get("href"))],
     }
+    if raw.get("kind") == "Ladder court" and isinstance(raw.get("court_players"), list):
+        result["court_players"] = [{"id": text(p.get("id"), 120), "name": text(p.get("name"), 240)}
+                                   for p in raw["court_players"][:5] if isinstance(p, dict) and p.get("name")]
     # Optional fields leave saved legacy editions unchanged.
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(raw.get("date") or "")):
         result["date"] = str(raw["date"])
@@ -107,7 +110,7 @@ def catalog(recap):
     for e in report.get("event_results") or []:
         add("events", (e.get("kind"), e.get("id") or (e.get("title"), e.get("date"))),
             title=e.get("title"), text=e.get("summary"), lines=e.get("details"), href=e.get("href"),
-            kind=e.get("kind"), date=e.get("date"), links=e.get("weekly_reports"))
+            kind=e.get("kind"), date=e.get("date"), links=e.get("weekly_reports"), court_players=e.get("court_players"))
     for s in recap.get("spotlight") or []:
         if s.get("include", True) and s.get("players"):
             add("spotlight", s.get("key") or s.get("label"), title=s.get("label"), text=s.get("description"), lines=s.get("players"), kind=s.get("key"))
@@ -154,6 +157,35 @@ def normalize_config(raw, *, template=False):
     return result
 
 
+def compact_ladder_courts(items):
+    courts = [item for item in items if item.get("kind") == "Ladder court"]
+    if not courts:
+        return items
+    rows, recognized = {}, set()
+    for item in courts:
+        status = "winner" if item["text"].startswith("Winner:") else "tie" if item["text"].startswith("Tied for first:") else "leader"
+        players = item.get("court_players") or [
+            {"id": "", "name": match.group(1)} for line in item["lines"]
+            if (match := re.fullmatch(r"(.*) — \d+–\d+ · point difference [+-]\d+", line))]
+        if not players and status == "winner":
+            players = [{"id": "", "name": item["text"][len("Winner:"):].strip()}]
+        for player in players:
+            if not player["name"]:
+                continue
+            key = (status, player.get("id") or player["name"])
+            row = rows.setdefault(key, {"name": player["name"], "status": status, "ids": set()})
+            row["ids"].add(item["id"])
+            recognized.add(item["id"])
+    lines = []
+    for row in rows.values():
+        count = len(row["ids"])
+        suffix = " (tied for first)" if row["status"] == "tie" else " (incomplete court leader)" if row["status"] == "leader" else ""
+        lines.append(row["name"] + (f" ×{count}" if count > 1 else "") + suffix)
+    lines.extend(item["text"] or item["title"] for item in courts if item["id"] not in recognized)
+    summary = clean_item({"id": "ladder-court-winners", "title": "Ladder court winners", "lines": lines})
+    return [summary if item is courts[0] else item for item in items if item.get("kind") != "Ladder court" or item is courts[0]]
+
+
 def build_editions(recap, raw):
     config = normalize_config(raw)
     groups = catalog(recap)
@@ -165,18 +197,21 @@ def build_editions(recap, raw):
             settings = config["sections"][key]
             if not settings["enabled"] or (channel == "email_edition" and not settings["email_enabled"]):
                 continue
-            available = {item["id"]: apply_text_override(item, config.get("text_overrides", {}).get(text_override_key(key, item), {})) for item in groups[key]}
+            available = {item["id"]: item if item.get("kind") == "Ladder court" else apply_text_override(item, config.get("text_overrides", {}).get(text_override_key(key, item), {})) for item in groups[key]}
             ids = settings.get("item_ids", list(available))
             if channel == "email_edition":
                 selected = set(ids)
                 ids = [i for i in settings.get("email_item_ids", ids[:EMAIL_LIMITS.get(key, 150)]) if i in selected]
             items = [deepcopy(available[i]) for i in ids if i in available]
             for item in items:
-                if settings["detail"] == "brief" and key != "spotlight":
+                if settings["detail"] == "brief" and key != "spotlight" and item.get("kind") != "Ladder court":
                     # League results often live entirely in details; retain the winner.
                     item["lines"] = item["lines"][:1]
                 item["lines"] = [line for line in item["lines"] if line]
             items = [i for i in items if i["title"] or i["text"] or i["lines"] or i["image_url"]]
+            if key == "events":
+                items = [apply_text_override(item, config.get("text_overrides", {}).get(item["id"], {}))
+                         if item["id"] == "ladder-court-winners" else item for item in compact_ladder_courts(items)]
             if items:
                 blocks.append({"key": key, "title": settings["title"], "items": items})
         editions[channel] = blocks

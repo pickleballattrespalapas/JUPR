@@ -64,6 +64,33 @@ def test_shared_client_server_projection_fixture():
     assert build_editions(fixture(), shared['config']) == shared['expected']
 
 
+def test_compact_ladder_recognition_uses_selected_courts_and_retains_every_name():
+    shared = json.loads(Path('apps/web/tests/fixtures/weekly-recap-courts.json').read_text())
+    recap = {'report': {'event_results': [{**item, 'summary': item['text'], 'details': item['lines']} for item in shared['events']]}}
+    groups = catalog(recap)
+    by_source = dict(zip([i['id'] for i in shared['events']], [i['id'] for i in groups['events']]))
+    config = {'sections': {'events': {'detail': 'brief', 'email_item_ids': [by_source[i] for i in shared['email_ids']]}}}
+    report = build_editions(recap, config)
+    assert report['edition'][0]['items'][0]['lines'] == shared['expected_lines']
+    assert report['email_edition'][0]['items'][0]['lines'] == shared['expected_email_lines']
+    assert len(report['edition'][0]['items']) == 2
+    assert report['edition'][0]['items'][1]['title'] == 'Social winners'
+    config['sections']['events']['item_ids'] = [by_source['a1'], by_source['a3']]
+    selected = build_editions(recap, config)
+    assert selected['edition'][0]['items'][0]['lines'] == ['Alex ×2']
+    assert selected['email_edition'][0]['items'][0]['lines'] == ['Alex']
+    config['text_overrides'] = {'ladder-court-winners': {'title': 'Our court champions', 'lines': {'Alex ×2': 'Alex — two court wins!'}}}
+    assert build_editions(recap, config)['edition'][0]['items'][0]['lines'] == ['Alex — two court wins!']
+    # A whole-club week can have more players than the old per-card 30-line cap.
+    recap['report']['event_results'] = [
+        {'id': str(i), 'kind': 'Ladder court', 'title': f'Court {i}', 'summary': f'Winner: Player {i}',
+         'details': [f'Player {i} — 3–0 · point difference +9']} for i in range(40)]
+    final = apply_builder(recap, {})
+    public = sanitize_public_recap_json(final, week_start='2026-10-12', week_end='2026-10-18')
+    assert len(public['report']['edition'][0]['items'][0]['lines']) == 40
+    assert 'Player 39' in '\n'.join(_weekly_recap_pdf_lines(public, week_start='2026-10-12', week_end='2026-10-18'))
+
+
 def test_scope_cannot_change_without_regenerating_results():
     with pytest.raises(ValueError, match='scope changed'):
         service.apply_weekly_recap_edits(fixture(), {'scope': {'league_names': ['Other league']}}, {})
