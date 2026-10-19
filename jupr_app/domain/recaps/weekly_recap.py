@@ -194,19 +194,26 @@ def _compute_weekly_recap_payload(
     )
     df_week = _filter_matches(df_week, include_tournaments=include_tournaments)
 
+    scoped_leagues = getattr(ctx, "recap_leagues", []) or []
+    if scoped_leagues:
+        df_week = df_week[df_week["league"].isin(scoped_leagues)] if "league" in df_week else df_week.iloc[0:0]
+
     rating_map = _build_rating_map(df_players_all)
 
     stats, event_stats, event_meta, giant_slayer_candidates = _compute_stats(
         df_week, rating_map
     )
 
-    social_data = _load_social_live_data(supabase, club_id, start_date, end_date)
+    social_data = {} if scoped_leagues else _load_social_live_data(supabase, club_id, start_date, end_date)
     social_stats, social_skill_stats, social_meta = _compute_social_stats(social_data, id_to_name)
 
     spotlight_candidates = _build_spotlight_candidates(
         stats, giant_slayer_candidates, id_to_name
     )
     spotlight_candidates.update(_build_social_spotlight_candidates(social_stats))
+    from jupr_app.domain.recaps.recap_evidence import metric_candidates
+    spotlight_candidates.update({key: [SpotlightCandidate(**item) for item in items]
+                                 for key, items in metric_candidates(df_week, id_to_name, tz_name).items()})
     spotlight = _select_spotlight_items(spotlight_candidates)
 
     numbers = _build_numbers(
@@ -232,7 +239,7 @@ def _compute_weekly_recap_payload(
     around_club["community_events"] = community_events
     around_club["social_round_robins"] = community_events
 
-    tournaments_section = _build_tournament_section(
+    tournaments_section = [] if scoped_leagues else _build_tournament_section(
         supabase,
         club_id,
         start_dt_utc,
@@ -254,6 +261,7 @@ def _compute_weekly_recap_payload(
         "tournaments": tournaments_section,
         "looking_ahead": ["", "", ""],
         "meta": {
+            "league_names": scoped_leagues,
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "tz_name": tz_name,
         },
@@ -600,8 +608,10 @@ def _load_matches(
         .select(",".join(select_cols)).eq("club_id", club_id)
         .is_("deleted_at", None)
         .gte("date", start_dt.isoformat()).lte("date", end_dt.isoformat()))
-    frames.append(pd.DataFrame(loaded))
-    combined = pd.concat([df for df in frames if not df.empty], ignore_index=True) if frames else pd.DataFrame()
+    if loaded:
+        frames.append(pd.DataFrame(loaded))
+    # A quiet period is valid: concatenate only when a source has actual rows.
+    combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     return _dedupe_matches(combined)
 
 

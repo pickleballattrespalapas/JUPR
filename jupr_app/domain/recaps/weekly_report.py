@@ -235,9 +235,12 @@ def _achievements(ctx, matches):
 
 def build_weekly_report(ctx, recap, df_week, social_data, start_date, end_date):
     """Optional sections fail visibly in admin coverage, never fabricate results."""
+    from jupr_app.domain.recaps.recap_evidence import generator_courts, league_courts, social_courts
     start, end = start_date.isoformat(), end_date.isoformat()
     db, club_id = getattr(ctx, "supabase", None), str(ctx.club_id)
     report = {"version": 1, "club_name": "Your club", "club_slug": "", "start_date": start, "end_date": end, "timezone": (recap.get("meta") or {}).get("tz_name", "America/Mazatlan"), "headline": "This week on the courts", "opening": "", "event_notes": "", "upcoming": [], "event_results": [], "season_races": [], "achievements": [], "new_faces": [], "coverage": {"included": [], "pending": [], "warnings": []}}
+    scoped_leagues = getattr(ctx, "recap_leagues", []) or []
+    report["scope_label"] = ", ".join(scoped_leagues) if scoped_leagues else "Whole club"
     coverage = report["coverage"]
     matches = records(df_week)
     if db is not None:
@@ -250,11 +253,12 @@ def build_weekly_report(ctx, recap, df_week, social_data, start_date, end_date):
         try:
             sessions = read_all_rows(lambda: db.table("live_sessions").select("session_key,title,state,status,expires_at")
                 .eq("club_id", club_id).in_("state->>mode", ["admin_play_generator", "public_play_generator"]), order="session_key")
-            for row in sessions:
+            for row in ([] if scoped_leagues else sessions):
                 try:
                     result, source = generator_result(row, start, end, matches)
                     if result:
                         report["event_results"].append(result)
+                        report["event_results"].extend(generator_courts(row, result))
                         coverage["included"].append(source)
                     elif source and source["status"] in {"pending", "processing"}:
                         coverage["pending"].append(source)
@@ -262,6 +266,12 @@ def build_weekly_report(ctx, recap, df_week, social_data, start_date, end_date):
                     coverage["warnings"].append(f"The result for {clean(row.get('title')) or 'a generator session'} could not be verified.")
         except Exception:
             coverage["warnings"].append("Generator session coverage could not be verified. Check results before publishing.")
+        try:
+            courts, warnings = league_courts(ctx, matches, start, end)
+            report["event_results"].extend(courts)
+            coverage["warnings"].extend(warnings)
+        except Exception:
+            coverage["warnings"].append("Ladder court results could not be verified.")
         try:
             report["season_races"] = _season_races(ctx, start, end)
         except Exception:
@@ -271,11 +281,13 @@ def build_weekly_report(ctx, recap, df_week, social_data, start_date, end_date):
         except Exception:
             coverage["warnings"].append("New achievements could not be verified.")
         try:
-            _add_tournament_draws(db, club_id, matches, report, getattr(ctx, "id_to_name", {}) or {})
+            if not scoped_leagues:
+                _add_tournament_draws(db, club_id, matches, report, getattr(ctx, "id_to_name", {}) or {})
         except Exception:
             coverage["warnings"].append("Tournament division podiums could not be verified.")
         try:
-            _add_interclub(db, club_id, start, end, report)
+            if not scoped_leagues:
+                _add_interclub(db, club_id, start, end, report)
         except Exception:
             coverage["warnings"].append("Published interclub results could not be verified.")
         try:
@@ -300,6 +312,10 @@ def build_weekly_report(ctx, recap, df_week, social_data, start_date, end_date):
         if not result:
             continue
         report["event_results"].append(result)
+        try:
+            report["event_results"].extend(social_courts(event, result))
+        except Exception:
+            coverage["warnings"].append(f"Court results for {clean(event.get('name')) or 'a social event'} could not be verified.")
         coverage["included"].append({"title": event.get("name") or "Social play", "date": event.get("event_date"), "status": "saved"})
     report["event_results"].sort(key=lambda e: (e.get("date") or "", e["title"]))
     coverage["games"] = int(recap.get("numbers", {}).get("matches", 0))

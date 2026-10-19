@@ -1,5 +1,6 @@
 "use client";
 
+import RecapEdition from "@/components/RecapEdition";
 import { WeeklyReportIntro, WeeklyReportEvents, WeeklyReportProgress, WeeklyReportUpcoming } from "@/components/WeeklyReportSections";
 import type { AdminWeeklyRecapRow } from "@/lib/adminWeeklyRecapApi";
 import type { WeeklyRecapJson, WeeklyRecapSpotlight, WeeklyRecapTournament } from "@/lib/weeklyRecapApi";
@@ -49,10 +50,11 @@ export default function AdminWeeklyRecapPreview({ recap: row, printMode = false 
       `}</style>
       <header style={{ borderBottom: "2px solid #0f172a", paddingBottom: "0.75rem" }}>
         <p style={{ color: row.status === "published" ? "#166534" : "#92400e", textTransform: "uppercase", fontWeight: 900, letterSpacing: "0.08em" }}>{row.status === "published" ? "Published recap preview" : "Draft preview · Not published"}</p>
-        <h1 style={{ marginBottom: "0.25rem" }}>{recap.report?.headline || "Weekly Recap"} · {row.week_start} to {row.week_end}</h1>
+        <h1 style={{ marginBottom: "0.25rem" }}>{recap.report?.headline ?? "Weekly Recap"}{(recap.report?.display_text?.date ?? `${row.week_start} – ${row.week_end}`) ? ` · ${recap.report?.display_text?.date ?? `${row.week_start} – ${row.week_end}`}` : ""}</h1>
         <p style={{ color: "#475569" }}>Version {row.row_version || 1} · Loaded {String(row.updated_at || "unknown update time")}</p>
         {!printMode ? <button type="button" className="admin-recap-no-print" onClick={() => window.print()} style={{ padding: "0.55rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "white", fontWeight: 800 }}>Print / save preview</button> : null}
       </header>
+      {recap.report?.edition ? <RecapEdition scopeText={recap.report.display_text?.scope} scopeLabel={recap.report.scope_label} blocks={recap.report.edition} clubSlug={recap.report.club_slug || ""} /> : <>
       {recap.report?.version === 1 ? <WeeklyReportIntro report={recap.report} /> : null}
       <NumberStrip recap={recap} />
       {recap.report?.version === 1 ? <WeeklyReportEvents report={recap.report} clubSlug={recap.report.club_slug || ""} /> : null}
@@ -62,6 +64,7 @@ export default function AdminWeeklyRecapPreview({ recap: row, printMode = false 
       {(recap.report?.version !== 1 || !recap.report.event_results?.some(e => e.kind === "Tournament")) && recap.tournaments?.length ? <section><h2>Tournaments</h2><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))", gap: "1rem" }}>{recap.tournaments.map((item) => <Podium key={item.tournament_name} tournament={item} />)}</div></section> : null}
       {recap.report?.version === 1 ? <WeeklyReportUpcoming report={recap.report} /> : null}
       {recap.looking_ahead?.length ? <section><h2>Looking Ahead</h2>{recap.looking_ahead?.length ? <article style={cardStyle}><ul>{recap.looking_ahead.map((item) => <li key={item}>{item}</li>)}</ul></article> : <p>No looking-ahead notes in this draft.</p>}</section> : null}
+      </>}
     </section>
   );
 }

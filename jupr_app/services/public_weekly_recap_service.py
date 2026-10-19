@@ -5,7 +5,7 @@ import textwrap
 from datetime import date, datetime
 from typing import Any
 
-WEEKLY_RECAP_SELECT = "club_id,week_start,week_end,status,final_json"
+WEEKLY_RECAP_SELECT = "club_id,week_start,week_end,status,final_json,published_json"
 DEFAULT_RECAP_PAGE_SIZE = 8
 MAX_RECAP_PAGE_SIZE = 12
 PUBLIC_NUMBER_KEYS = {
@@ -229,6 +229,9 @@ def sanitize_public_recap_json(raw: Any, *, week_start: str | None = None, week_
     if "report" in source:
         from jupr_app.domain.recaps.weekly_report_public import sanitize_report
         recap["report"] = sanitize_report(source["report"])
+        if "edition" in recap["report"]:
+            # Do not expose deselected content in legacy fields or public JSON.
+            recap.update(numbers={}, numbers_cards=[], spotlight=[], around_club={}, tournaments=[], looking_ahead=[], highlights=[])
     return recap
 
 
@@ -236,6 +239,9 @@ def _recap_summary(recap: dict[str, Any]) -> dict[str, Any]:
     numbers = recap.get("numbers") if isinstance(recap.get("numbers"), dict) else {}
     spotlight = [item for item in (recap.get("spotlight") or []) if isinstance(item, dict) and item.get("include", True)]
     headline = (recap.get("report") or {}).get("headline") or None
+    if isinstance((recap.get("report") or {}).get("edition"), list):
+        # Omitted totals are unknown to the public, not zero.
+        return {"headline": headline}
     if not headline and spotlight:
         players = spotlight[0].get("players") or []
         headline = f"{spotlight[0].get('label', 'Spotlight')}: {', '.join(players[:3])}" if players else str(spotlight[0].get("label") or "Spotlight")
@@ -292,7 +298,9 @@ def _published_row(supabase: Any, *, club_id: str, week_start: str) -> dict[str,
 def _public_recap_row(row: dict[str, Any], *, include_recap: bool) -> dict[str, Any]:
     start = str(row.get("week_start") or "").strip()
     end = str(row.get("week_end") or "").strip()
-    recap = sanitize_public_recap_json(row.get("final_json"), week_start=start, week_end=end)
+    snapshot = row.get("published_json") if isinstance(row.get("published_json"), dict) else row.get("final_json")
+    end = str((snapshot or {}).get("end_date") or end)
+    recap = sanitize_public_recap_json(snapshot, week_start=start, week_end=end)
     result = {
         "week_start": start,
         "week_end": end,
@@ -357,6 +365,11 @@ def _pdf_escape(text: str) -> str:
 
 
 def _weekly_recap_pdf_lines(recap: dict[str, Any], *, week_start: str, week_end: str) -> list[str]:
+    if "edition" in (recap.get("report") or {}):
+        from jupr_app.domain.recaps.recap_builder import edition_lines
+        date_label = recap["report"].get("display_text", {}).get("date", f"Week: {week_start} to {week_end}")
+        lines = [date_label, *edition_lines(recap["report"])]
+        return [wrapped for line in lines for wrapped in (textwrap.wrap(line, width=82) or [""])]
     lines = ["JUPR Weekly Recap", f"Week: {week_start} to {week_end}", ""]
 
     lines.append("Weekly Numbers")

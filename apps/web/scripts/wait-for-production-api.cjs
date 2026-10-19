@@ -24,9 +24,12 @@ function operationsReady(health) {
 
 function weeklyReportReady(openapi) {
   const fields = openapi?.components?.schemas?.AdminWeeklyRecapGenerateRequest?.properties;
+  const preferences = openapi?.paths?.["/admin/clubs/{club_id}/weekly-recap/preferences"];
   return fields?.preserve_edits?.type === "boolean"
     && fields.preserve_edits.default === true
-    && Object.prototype.hasOwnProperty.call(fields, "edits_json");
+    && Object.prototype.hasOwnProperty.call(fields, "edits_json")
+    && Boolean(preferences?.get && preferences?.put)
+    && Boolean(openapi?.components?.schemas?.AdminWeeklyRecapPublishRequest?.properties?.edits_json);
 }
 
 function leagueLiveReady(openapi) {

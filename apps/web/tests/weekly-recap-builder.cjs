@@ -1,0 +1,249 @@
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const ts = require("typescript");
+function load(file) {
+  const code = ts.transpileModule(
+    fs.readFileSync(path.join(__dirname, "..", file), "utf8"),
+    {
+      compilerOptions: {
+        target: ts.ScriptTarget.ES2020,
+        module: ts.ModuleKind.CommonJS,
+      },
+    },
+  ).outputText;
+  const module = { exports: {} };
+  new Function("module", "exports", code)(module, module.exports);
+  return module.exports;
+}
+const { projectEditions, normalizeBuilder, layoutTemplate, previewRecap } =
+  load("lib/recapBuilder.ts");
+const { buildWeeklyReportEmail } = load("lib/weeklyReportEmail.ts");
+// The Python suite independently verifies this shared projection fixture.
+const fixture = require("./fixtures/weekly-recap-builder.json");
+const groups = { ...fixture.catalog, custom: fixture.config.custom_blocks };
+assert.deepEqual(
+  projectEditions(groups, normalizeBuilder(fixture.config)),
+  fixture.expected,
+);
+const report = { headline: "Club recap", ...fixture.expected };
+const html = buildWeeklyReportEmail(
+  { report },
+  {
+    origin: "https://staging.example.invalid",
+    clubSlug: "test",
+    published: true,
+  },
+);
+assert(!html.includes("Tuesday Moneyball"));
+assert(html.includes("Example Tournament") && html.includes("Coach’s tip"));
+assert(!html.includes("Fall Ladder") && !html.includes("The week in numbers"));
+assert(html.indexOf("Coach’s tip") < html.indexOf("Event results"));
+const template = layoutTemplate(fixture.config);
+assert.deepEqual(template.custom_blocks, []);
+assert.equal(template.sections.events.item_ids, undefined);
+assert.equal(template.sections.numbers.enabled, false);
+const preview = previewRecap(
+  { builder_catalog: fixture.catalog },
+  {
+    editorial: { headline: "Test", opening: "", event_notes: "", upcoming: [] },
+    looking_ahead: [],
+    scope: { league_names: [] },
+    builder: normalizeBuilder(),
+    spotlight_overrides: {
+      new_category: {
+        include: true,
+        order: 1,
+        description: "",
+        players: ["player", "player"],
+      },
+    },
+  },
+  {
+    new_category: [
+      { candidate_id: "player", label: "New category", display: "Alex" },
+    ],
+  },
+);
+const spotlight = preview.report.edition.find((b) => b.key === "spotlight");
+assert.equal(spotlight.items[0].id, "spotlight-new_category");
+assert.deepEqual(spotlight.items[0].lines, ["Alex"]);
+console.log(
+  "Recap builder: server/client projection, exact email selections, templates and spotlight identity passed",
+);
+const rich = normalizeBuilder(
+  require("./fixtures/weekly-recap-stories.json").config,
+);
+const richEditions = projectEditions(
+  { ...fixture.catalog, custom: rich.custom_blocks },
+  rich,
+);
+assert.deepEqual(
+  richEditions.edition.slice(0, 2).map((b) => b.key),
+  ["custom", "events"],
+);
+assert.deepEqual(
+  richEditions.email_edition.slice(0, 2).map((b) => b.key),
+  ["events", "custom"],
+);
+assert.deepEqual(
+  richEditions.edition[0].items.map((i) => i.id),
+  ["photo", "register"],
+);
+assert.deepEqual(
+  richEditions.email_edition[1].items.map((i) => i.id),
+  ["register", "photo"],
+);
+const richHtml = buildWeeklyReportEmail(
+  { report: { headline: "Club recap", ...richEditions } },
+  {
+    origin: "https://staging.example.invalid",
+    clubSlug: "test",
+    published: true,
+  },
+);
+assert(richHtml.indexOf("Autumn social") < richHtml.indexOf("Saturday smiles"));
+assert(!richHtml.includes("Next week draft"));
+assert(
+  richHtml.includes("Photo: Club volunteer") &&
+    richHtml.includes("Saturday at the club"),
+);
+assert(
+  richHtml.includes('data-card-style="promotion"') &&
+    richHtml.includes("Register now"),
+);
+const injectionHtml = buildWeeklyReportEmail(
+  {
+    report: {
+      edition: [
+        {
+          key: "custom",
+          title: "Stories",
+          items: [
+            {
+              id: "x",
+              title: "Safe",
+              text: "",
+              lines: [],
+              caption: "<script>alert(1)</script>",
+              credit: "<b>Joe</b>",
+              image_url: "https://images.example.invalid/x.png",
+              layout: "photo",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  { origin: "", clubSlug: "test" },
+);
+assert(
+  !injectionHtml.includes("<script>") &&
+    injectionHtml.includes("&lt;script&gt;"),
+);
+assert(!injectionHtml.includes("<b>Joe</b>"));
+assert.deepEqual(layoutTemplate(rich).email_order.slice(0, 2), [
+  "events",
+  "custom",
+]);
+const { recapPageBreaks } = load("lib/weeklyRecapExport.ts");
+const pages = recapPageBreaks(2400, 900, [
+  { top: 700, bottom: 1100 },
+  { top: 1550, bottom: 1900 },
+]);
+assert.deepEqual(pages, [
+  { top: 0, bottom: 700 },
+  { top: 700, bottom: 1550 },
+  { top: 1550, bottom: 2400 },
+]);
+assert.deepEqual(recapPageBreaks(1800, 900, [{ top: 0, bottom: 1800 }]), [
+  { top: 0, bottom: 900 },
+  { top: 900, bottom: 1800 },
+]);
+assert.deepEqual(recapPageBreaks(100, 0, []), []);
+console.log(
+  "Rich stories: independent email order, selection, captions, safe HTML, reusable layouts and PDF pagination passed",
+);
+
+const textConfig = normalizeBuilder(
+  require("./fixtures/weekly-recap-text.json"),
+);
+const sourceGroups = { ...fixture.catalog, custom: textConfig.custom_blocks };
+const originalGroups = JSON.stringify(sourceGroups);
+const editedEditions = projectEditions(sourceGroups, textConfig);
+assert.equal(
+  JSON.stringify(sourceGroups),
+  originalGroups,
+  "Presentation edits never mutate source results",
+);
+for (const channel of ["edition", "email_edition"]) {
+  const blocks = Object.fromEntries(
+    editedEditions[channel].map((b) => [b.key, b]),
+  );
+  const event = blocks.events.items.find(
+    (i) => i.title === "Thursday champions",
+  );
+  assert.equal(blocks.events.title, "This week’s results");
+  assert.equal(event.text, "Congratulations, Cam!");
+  assert.deepEqual(event.lines.slice(0, 2), [
+    "A lively day on the courts",
+    "1. Cam — first place",
+  ]);
+  assert.equal(event.results_label, "See the final standings");
+  assert.equal(blocks.numbers.items[0].text, "Ninety-six");
+  assert.equal(blocks.upcoming.items[0].text, "Next week’s Moneyball");
+}
+const editedHtml = buildWeeklyReportEmail(
+  {
+    week_start: "2026-10-05",
+    week_end: "2026-10-11",
+    report: { ...editedEditions, display_text: textConfig.display_text },
+  },
+  {
+    origin: "https://staging.example.invalid",
+    clubSlug: "test",
+    published: true,
+  },
+);
+for (const copy of [
+  "Thursday champions",
+  "Congratulations, Cam!",
+  "See our recorded league week",
+  "Courtesy of Morgan",
+  "Friends on court",
+  "Members celebrating",
+  "Reserve your place",
+  "Sign up for next week",
+  "October 5–11 · A week to remember",
+  "Read the entire recap",
+])
+  assert(editedHtml.includes(copy), copy);
+assert(!editedHtml.includes("Must never appear"));
+assert.equal(layoutTemplate(textConfig).text_overrides, undefined);
+assert.equal(layoutTemplate(textConfig).display_text, undefined);
+const changedSources = structuredClone(sourceGroups);
+changedSources.events.reverse();
+changedSources.spotlight[0].lines = ["New winner — new result"];
+const refreshed = projectEditions(changedSources, textConfig);
+assert(JSON.stringify(refreshed).includes("Thursday champions"));
+assert(!JSON.stringify(refreshed).includes("Alex — a standout performance"));
+changedSources.events = [];
+assert(
+  !JSON.stringify(projectEditions(changedSources, textConfig)).includes(
+    "Thursday champions",
+  ),
+);
+const reset = { ...textConfig, text_overrides: undefined };
+assert(
+  JSON.stringify(projectEditions(sourceGroups, reset)).includes(
+    "Thursday Social Round Robin",
+  ),
+);
+const movedUpcoming = structuredClone(sourceGroups);
+movedUpcoming.upcoming.unshift({ id: "new", title: "", text: "A different event", url: "https://example.invalid/new", lines: [] });
+assert.deepEqual(projectEditions(movedUpcoming, textConfig).edition.find(b => b.key === "upcoming").items.slice(0, 2).map(i => i.text), ["A different event", "Next week’s Moneyball"]);
+movedUpcoming.upcoming.pop();
+assert(!JSON.stringify(projectEditions(movedUpcoming, textConfig)).includes("Next week’s Moneyball"));
+console.log(
+  "Preview text: shared source-bound edits, captions, links, email wording, reset, refresh and template isolation passed",
+);

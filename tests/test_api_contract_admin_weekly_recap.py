@@ -52,6 +52,55 @@ def _install_env(monkeypatch, supabase) -> None:
     )
 
 
+@pytest.mark.parametrize("cached_date", [None, "2026-10-05T12:00:00Z"])
+def test_quiet_week_generates_a_draft_with_real_calculation(monkeypatch, cached_date):
+    import httpx
+    import pandas as pd
+    from supabase import ClientOptions, create_client
+
+    db = FakeSupabase({"weekly_recaps": [], "admin_activity_log": []})
+    _install_env(monkeypatch, db)
+    reads = []
+
+    def read_empty_period(request):
+        assert request.method == "GET"
+        reads.append(request.url.path)
+        if request.url.path == "/rest/v1/clubs":
+            return httpx.Response(200, json=[{"name": "Test club", "slug": "test"}])
+        return httpx.Response(200, json=[])
+
+    with httpx.Client(transport=httpx.MockTransport(read_empty_period)) as transport:
+        source_db = create_client("https://fixture.supabase.co", "test-key", options=ClientOptions(httpx_client=transport))
+        context = SimpleNamespace(
+            club_id="club", supabase=source_db,
+            df_matches=pd.DataFrame([{"id": 1, "date": cached_date}] if cached_date else []),
+        )
+        # Supply the source connection/cache, but run the real loader, report,
+        # candidate selection, builder projection and draft persistence.
+        monkeypatch.setattr(recap_service, "_recap_context", lambda *_a, **_kw: context)
+        response = TestClient(app).post("/admin/clubs/club/weekly-recap/generate", json={
+            "week_start": "2026-10-12", "week_end": "2026-10-18",
+            "confirmation_text": "GENERATE RECAP",
+            "edits_json": {"builder": {"custom_blocks": [{
+                "id": "club-note", "title": "Next week", "text": "Join our clinic on Tuesday.",
+            }]}},
+        })
+
+    assert response.status_code == 200, response.json()
+    payload = response.json()
+    row = payload["recap"]
+    assert row["status"] == "draft" and row["row_version"] == 1
+    assert row["generated_json"]["numbers"]["matches"] == 0
+    assert row["generated_json"]["numbers"]["players"] == 0
+    assert row["generated_json"]["report"]["event_results"] == []
+    assert row["generated_json"]["report"]["coverage"]["warnings"] == []
+    assert all(not candidates for candidates in payload["candidates"].values())
+    custom = next(block for block in row["final_json"]["report"]["edition"] if block["key"] == "custom")
+    assert custom["items"][0]["text"] == "Join our clinic on Tuesday."
+    assert len(db.tables["weekly_recaps"]) == 1
+    assert "/rest/v1/matches" in reads and "/rest/v1/live_events" in reads
+
+
 def test_admin_weekly_recap_status_disabled_contract(monkeypatch):
     monkeypatch.delenv("JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP", raising=False)
     response = TestClient(app).get("/admin/clubs/club/weekly-recap/status")
@@ -59,6 +108,36 @@ def test_admin_weekly_recap_status_disabled_contract(monkeypatch):
     payload = response.json()
     assert payload["enabled"] is False
     assert payload["list_endpoint"] is None
+
+
+def test_recap_preferences_are_club_authorized_and_revision_guarded(monkeypatch):
+    db = FakeSupabase({**weekly_recap_tables(), "club_recap_preferences": [], "leagues_metadata": []})
+    _install_env(monkeypatch, db)
+    monkeypatch.setattr("services.api.admin_weekly_recap_routes.resolve_admin_role", lambda **kw: SimpleNamespace(role="club_owner" if kw["club_id"] == "club" else "viewer"))
+    client = TestClient(app)
+    path = "/admin/clubs/club/weekly-recap/preferences"
+    payload = {"revision": 0, "settings": {"templates": [{"id": "member", "name": "Member email", "builder": {"sections": {"numbers": {"enabled": False}}}}], "default_template_id": "member"}}
+    response = client.put(path, json=payload)
+    assert response.status_code == 200
+    assert response.json()["revision"] == 1
+    assert client.get(path).json()["settings"]["templates"][0]["builder"]["sections"]["numbers"]["enabled"] is False
+    assert client.put(path, json={**payload, "revision": 99}).status_code == 409
+    assert client.get("/admin/clubs/other/weekly-recap/preferences").status_code == 403
+    assert client.put("/admin/clubs/other/weekly-recap/preferences", json=payload).status_code == 403
+    assert [r["club_id"] for r in db.tables["club_recap_preferences"]] == ["club"]
+
+
+def test_recap_preferences_respect_staging_write_guard(monkeypatch):
+    db = FakeSupabase({**weekly_recap_tables(), "club_recap_preferences": [], "leagues_metadata": []})
+    _install_env(monkeypatch, db)
+    monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "none")
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS", "0")
+    client = TestClient(app)
+    path = "/admin/clubs/club/weekly-recap/preferences"
+    assert client.get(path).status_code == 200
+    assert client.put(path, json={"revision": 0, "settings": {}}).status_code == 403
+    assert db.tables["club_recap_preferences"] == []
 
 
 def test_weekly_recap_public_status_has_no_counts_or_secret_readiness(monkeypatch) -> None:

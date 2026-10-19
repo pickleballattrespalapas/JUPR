@@ -1,0 +1,309 @@
+.builder {
+  /* Match the PCS admin shell even when the device prefers dark mode. */
+  color-scheme: light;
+  --recap-surface: #fff;
+  --recap-ink: #0f172a;
+  --recap-line: #cbd5e1;
+  --recap-soft: #f8fafc;
+  color: var(--recap-ink);
+}
+.builder input,
+.builder textarea,
+.builder select {
+  font: inherit;
+  color: var(--recap-ink);
+  background: var(--recap-surface);
+  border: 1px solid #94a3b8;
+  border-radius: 8px;
+  padding: 0.6rem;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.builder input:not([type="checkbox"]),
+.builder textarea,
+.builder select {
+  width: 100%;
+}
+.builder textarea {
+  min-height: 100px;
+}
+.builder button {
+  font: inherit;
+  font-weight: 600;
+  padding: 0.55rem 0.8rem;
+  border-radius: 8px;
+  border: 1px solid var(--recap-line);
+  color: var(--recap-ink);
+  background: var(--recap-surface);
+  cursor: pointer;
+}
+.builder button:hover:not(:disabled) {
+  background: var(--recap-soft);
+  border-color: #64748b;
+}
+.builder button:disabled {
+  background: var(--recap-soft);
+  color: #64748b;
+  cursor: not-allowed;
+}
+.builder :is(button, input, textarea, select, summary, a):focus-visible {
+  outline: 3px solid #60a5fa;
+  outline-offset: 2px;
+}
+.builder label {
+  display: grid;
+  gap: 0.3rem;
+}
+.builder .check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.builder input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  accent-color: #2563eb;
+}
+.nav {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  padding: 0.8rem 0;
+}
+.nav button[aria-current="step"],
+.previewTabs button[aria-pressed="true"] {
+  color: #fff;
+  background: #2563eb;
+  border-color: #2563eb;
+}
+.nav button[aria-current="step"]:hover:not(:disabled),
+.previewTabs button[aria-pressed="true"]:hover:not(:disabled) {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+}
+.toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.8rem;
+  background: var(--recap-surface);
+  border: 1px solid var(--recap-line);
+  border-radius: 12px;
+}
+.sections {
+  display: grid;
+  gap: 0.8rem;
+}
+.section {
+  border: 1px solid var(--recap-line);
+  border-radius: 12px;
+  background: var(--recap-surface);
+  padding: 1rem;
+  display: grid;
+  gap: 0.8rem;
+  min-width: 0;
+}
+.row,
+.item {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.item {
+  padding: 0.8rem 0;
+  border-bottom: 1px solid var(--recap-line);
+}
+.fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
+  gap: 0.8rem;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+.muted {
+  color: #475569;
+  font-size: 0.9rem;
+  margin: 0;
+}
+.textEditor {
+  border: 0;
+  padding: 0;
+  margin: 1rem 0;
+  min-width: 0;
+  display: grid;
+  gap: 1rem;
+}
+.textEditor > legend {
+  font-size: 1.2rem;
+  font-weight: 700;
+  margin-bottom: 0.6rem;
+}
+.textCard {
+  border: 1px solid var(--recap-line);
+  border-radius: 10px;
+  padding: 1rem;
+  margin: 0;
+  min-width: 0;
+  display: grid;
+  gap: 0.8rem;
+}
+.textCard legend {
+  padding: 0 0.4rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.textField {
+  display: grid;
+  gap: 0.3rem;
+  min-width: 0;
+}
+.textFieldHeading {
+  display: flex;
+  gap: 0.6rem;
+  justify-content: space-between;
+  align-items: center;
+}
+.textFieldLabel {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: 0.9rem;
+}
+.builder .textFieldHeading button {
+  font-size: 0.8rem;
+  padding: 0.25rem 0.5rem;
+}
+.builder .textField textarea {
+  min-height: 70px;
+  resize: vertical;
+}
+.editedBadge {
+  color: #1d4ed8;
+  background: #eff6ff;
+  font-size: 0.75rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+}
+.editorPhoto {
+  width: 100%;
+  max-width: 420px;
+  max-height: 220px;
+  object-fit: contain;
+  border-radius: 8px;
+}
+.choiceGroup {
+  border: 0;
+  padding: 0;
+  margin: 0.5rem 0;
+  min-width: 0;
+}
+.choiceGroup legend {
+  font-weight: 600;
+  margin-bottom: 0.7rem;
+}
+.choiceGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 0.75rem;
+}
+.builder .choiceCard {
+  align-content: start;
+  gap: 0.5rem;
+  padding: 1rem;
+  border: 1px solid var(--recap-line);
+  border-radius: 10px;
+  background: var(--recap-soft);
+}
+.choiceCard[data-selected="true"] {
+  background: #eff6ff;
+  border-color: #93c5fd;
+}
+.choiceCard small {
+  color: #475569;
+}
+.builder .choiceCard[data-unavailable="true"] {
+  border-style: dashed;
+  background: #f1f5f9;
+  cursor: not-allowed;
+}
+.availabilityNote {
+  margin: 0;
+  padding: 0.8rem;
+  border-left: 3px solid #2563eb;
+  background: #eff6ff;
+  color: #334155;
+  line-height: 1.5;
+}
+.unavailableMessage {
+  display: grid;
+  gap: 0.5rem;
+  color: #334155;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+.unavailableStatus {
+  width: fit-content;
+  padding: 0.25rem 0.5rem;
+  border-radius: 6px;
+  color: #9a3412;
+  background: #ffedd5;
+}
+.section h3 {
+  margin: 0;
+}
+.evidenceText {
+  flex: 1 1 24rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.resultSummary {
+  margin: 0.5rem 0;
+}
+.evidenceLines {
+  margin: 0.5rem 0;
+  padding-left: 1.25rem;
+}
+.builder .evidenceChoice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--recap-line);
+  border-radius: 8px;
+}
+.previewTabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 1rem 0;
+}
+@media (pointer: coarse) {
+  .builder button,
+  .builder .check {
+    min-height: 44px;
+  }
+}
+@media print {
+  .toolbar,
+  .nav,
+  .previewTabs {
+    display: none;
+  }
+}
+
+.builder [hidden] {
+  display: none !important;
+}

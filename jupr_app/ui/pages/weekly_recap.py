@@ -14,6 +14,9 @@ def _pdf_escape(text: str) -> str:
 
 
 def _build_recap_pdf(recap: dict, week_start: str, week_end: str) -> bytes:
+    if isinstance((recap.get("report") or {}).get("edition"), list):
+        from jupr_app.services.public_weekly_recap_service import build_weekly_recap_pdf_bytes
+        return build_weekly_recap_pdf_bytes(recap, week_start=week_start, week_end=week_end)
     lines = [
         "JUPR Weekly Recap",
         f"Week: {week_start} to {week_end}",
@@ -111,7 +114,7 @@ def render(ctx):
     try:
         response = (
             supabase.table("weekly_recaps")
-            .select("week_start,week_end,status,final_json")
+            .select("week_start,week_end,status,final_json,published_json")
             .eq("club_id", club_id)
             .eq("status", "published")
             .order("week_start", desc=True)
@@ -132,7 +135,9 @@ def render(ctx):
         selected_week = st.selectbox("Select week", options=week_options, format_func=str)
         selected_row = next((row for row in published if row["week_start"] == selected_week), published[0])
 
-    recap = selected_row.get("final_json") or {}
+    from jupr_app.services.public_weekly_recap_service import sanitize_public_recap_json
+    snapshot = selected_row.get("published_json")
+    recap = sanitize_public_recap_json(snapshot if isinstance(snapshot, dict) else selected_row.get("final_json"), week_start=selected_row.get("week_start"), week_end=selected_row.get("week_end"))
     render_weekly_recap(recap, print_view=print_mode)
 
     if not print_mode:

@@ -14,6 +14,9 @@ contract.paths = Object.fromEntries([
   ["player-operations/{operation_key}", "get"],
   ["player-operations/{operation_key}/reconcile", "post"],
 ].map(([suffix, method]) => [`/admin/clubs/{club_id}/league-manager/live/${suffix}`, { [method]: {} }]));
+const preferencesPath = "/admin/clubs/{club_id}/weekly-recap/preferences";
+contract.paths[preferencesPath] = { get: {}, put: {} };
+contract.components.schemas.AdminWeeklyRecapPublishRequest = { properties: { edits_json: { type: "object" } } };
 
 (async () => {
   assert.equal(operationsReady(ready), true);
@@ -34,7 +37,7 @@ contract.paths = Object.fromEntries([
     missingGameEdits.components.schemas[name].properties.unplayed_games = { type: "boolean" };
     assert.equal(leagueLiveReady(missingGameEdits), false);
   }
-  for (const path of Object.keys(contract.paths)) {
+  for (const path of Object.keys(contract.paths).filter((path) => path !== preferencesPath)) {
     const missingRoute = structuredClone(contract);
     delete missingRoute.paths[path];
     assert.equal(leagueLiveReady(missingRoute), false);
@@ -43,6 +46,17 @@ contract.paths = Object.fromEntries([
   const oldContract = structuredClone(contract);
   delete oldContract.components.schemas.AdminWeeklyRecapGenerateRequest.properties.edits_json;
   assert.equal(weeklyReportReady(oldContract), false);
+  const oldBuilderContract = structuredClone(contract);
+  delete oldBuilderContract.paths[preferencesPath];
+  assert.equal(weeklyReportReady(oldBuilderContract), false);
+  for (const method of ["get", "put"]) {
+    const missingPreferences = structuredClone(contract);
+    delete missingPreferences.paths[preferencesPath][method];
+    assert.equal(weeklyReportReady(missingPreferences), false);
+  }
+  const missingDraftPublication = structuredClone(contract);
+  delete missingDraftPublication.components.schemas.AdminWeeklyRecapPublishRequest.properties.edits_json;
+  assert.equal(weeklyReportReady(missingDraftPublication), false);
   let calls = 0, clock = 0;
   await waitForProductionApi({ environment: "preview", request: async () => { throw new Error("Preview must not contact production"); } });
   await waitForProductionApi({ environment: "production", now: () => clock,
@@ -55,6 +69,12 @@ contract.paths = Object.fromEntries([
     pause: async () => { clock += 10000; }, request: async (url) => ({ ok: true,
       json: async () => url.endsWith('/openapi.json') ? (++contracts === 1 ? oldContract : contract) : ready }) });
   assert.equal(contracts, 2, "The website waits while a healthy API still lacks edit-preserving recap refresh");
+  clock = 0;
+  contracts = 0;
+  await waitForProductionApi({ environment: "production", now: () => clock,
+    pause: async () => { clock += 10000; }, request: async (url) => ({ ok: true,
+      json: async () => url.endsWith('/openapi.json') ? (++contracts === 1 ? oldBuilderContract : contract) : ready }) });
+  assert.equal(contracts, 2, "The website waits for recap preferences and draft revision publishing before exposing the builder");
   clock = 0;
   contracts = 0;
   await waitForProductionApi({ environment: "production", now: () => clock,
