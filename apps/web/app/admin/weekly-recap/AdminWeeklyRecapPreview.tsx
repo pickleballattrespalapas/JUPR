@@ -1,5 +1,6 @@
 "use client";
 
+import RecapEdition from "@/components/RecapEdition";
 import { WeeklyReportIntro, WeeklyReportEvents, WeeklyReportProgress, WeeklyReportUpcoming } from "@/components/WeeklyReportSections";
 import type { AdminWeeklyRecapRow } from "@/lib/adminWeeklyRecapApi";
 import type { WeeklyRecapJson, WeeklyRecapSpotlight, WeeklyRecapTournament } from "@/lib/weeklyRecapApi";
@@ -53,6 +54,7 @@ export default function AdminWeeklyRecapPreview({ recap: row, printMode = false 
         <p style={{ color: "#475569" }}>Version {row.row_version || 1} · Loaded {String(row.updated_at || "unknown update time")}</p>
         {!printMode ? <button type="button" className="admin-recap-no-print" onClick={() => window.print()} style={{ padding: "0.55rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "white", fontWeight: 800 }}>Print / save preview</button> : null}
       </header>
+      {recap.report?.edition ? <RecapEdition scopeLabel={recap.report.scope_label} blocks={recap.report.edition} clubSlug={recap.report.club_slug || ""} /> : <>
       {recap.report?.version === 1 ? <WeeklyReportIntro report={recap.report} /> : null}
       <NumberStrip recap={recap} />
       {recap.report?.version === 1 ? <WeeklyReportEvents report={recap.report} clubSlug={recap.report.club_slug || ""} /> : null}
@@ -62,6 +64,7 @@ export default function AdminWeeklyRecapPreview({ recap: row, printMode = false 
       {(recap.report?.version !== 1 || !recap.report.event_results?.some(e => e.kind === "Tournament")) && recap.tournaments?.length ? <section><h2>Tournaments</h2><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))", gap: "1rem" }}>{recap.tournaments.map((item) => <Podium key={item.tournament_name} tournament={item} />)}</div></section> : null}
       {recap.report?.version === 1 ? <WeeklyReportUpcoming report={recap.report} /> : null}
       {recap.looking_ahead?.length ? <section><h2>Looking Ahead</h2>{recap.looking_ahead?.length ? <article style={cardStyle}><ul>{recap.looking_ahead.map((item) => <li key={item}>{item}</li>)}</ul></article> : <p>No looking-ahead notes in this draft.</p>}</section> : null}
+      </>}
     </section>
   );
 }

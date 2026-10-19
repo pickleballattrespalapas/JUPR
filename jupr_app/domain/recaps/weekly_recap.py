@@ -194,13 +194,17 @@ def _compute_weekly_recap_payload(
     )
     df_week = _filter_matches(df_week, include_tournaments=include_tournaments)
 
+    scoped_leagues = getattr(ctx, "recap_leagues", []) or []
+    if scoped_leagues:
+        df_week = df_week[df_week["league"].isin(scoped_leagues)] if "league" in df_week else df_week.iloc[0:0]
+
     rating_map = _build_rating_map(df_players_all)
 
     stats, event_stats, event_meta, giant_slayer_candidates = _compute_stats(
         df_week, rating_map
     )
 
-    social_data = _load_social_live_data(supabase, club_id, start_date, end_date)
+    social_data = {} if scoped_leagues else _load_social_live_data(supabase, club_id, start_date, end_date)
     social_stats, social_skill_stats, social_meta = _compute_social_stats(social_data, id_to_name)
 
     spotlight_candidates = _build_spotlight_candidates(
@@ -232,7 +236,7 @@ def _compute_weekly_recap_payload(
     around_club["community_events"] = community_events
     around_club["social_round_robins"] = community_events
 
-    tournaments_section = _build_tournament_section(
+    tournaments_section = [] if scoped_leagues else _build_tournament_section(
         supabase,
         club_id,
         start_dt_utc,
@@ -254,6 +258,7 @@ def _compute_weekly_recap_payload(
         "tournaments": tournaments_section,
         "looking_ahead": ["", "", ""],
         "meta": {
+            "league_names": scoped_leagues,
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "tz_name": tz_name,
         },

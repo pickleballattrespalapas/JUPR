@@ -1,3 +1,4 @@
+import RecapEdition from "@/components/RecapEdition";
 
 import { WeeklyReportIntro, WeeklyReportEvents, WeeklyReportProgress, WeeklyReportUpcoming } from "@/components/WeeklyReportSections";
 import PublicControls from "@/components/PublicControls";
@@ -171,6 +172,7 @@ function Podium({ tournament }: { tournament: WeeklyRecapTournament }) {
 }
 
 function RecapBody({ recap, activeSection, clubSlug }: { recap: WeeklyRecapJson; activeSection: RecapSection; clubSlug: string }) {
+  if (recap.report?.edition) return <><h2>{recap.report.headline}</h2><RecapEdition scopeLabel={recap.report.scope_label} blocks={recap.report.edition} clubSlug={clubSlug} /></>;
   const spotlight = (recap.spotlight || []).filter((item) => item.include !== false).sort((a, b) => Number(a.order ?? 999) - Number(b.order ?? 999));
   const aroundCards: Array<{ title: string; rows: string[]; tone: "league" | "round_robin" | "community" }> = [];
   for (const item of recap.around_club?.leagues || []) aroundCards.push({ title: item.league_name, rows: (item.highlights || []).map((row) => row.display).filter(Boolean), tone: "league" });
@@ -297,7 +299,7 @@ export default async function WeeklyRecapPage({ params, searchParams }: WeeklyRe
             })}
           </div>
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
-            {(Object.keys(sectionLabels) as RecapSection[]).map((section) => {
+            {!selected?.recap.report?.edition && (Object.keys(sectionLabels) as RecapSection[]).map((section) => {
               const active = section === activeSection;
               return (
                 <Link data-testid={`weekly-recap-section-${section}`} key={section} href={pageHref({ clubSlug, week: selected?.week_start, section, page: activePage })} style={{ border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.45rem 0.75rem", background: active ? "#dcfce7" : "white", color: "#0f172a", textDecoration: "none", fontWeight: active ? 800 : 600 }}>

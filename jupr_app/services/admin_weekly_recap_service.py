@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
+from jupr_app.domain.recaps.recap_builder import apply_builder, catalog
 from jupr_app.data.load import load_data
 from jupr_app.domain.admin.roles import PERMISSION_DELETE_MATCHES, has_permission
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
@@ -114,7 +115,7 @@ def normalize_spotlight_overrides(overrides: dict[str, Any] | None, generated_sp
         if "players" in value and isinstance(value.get("players"), list):
             # An explicit empty list means "omit this spotlight". Do not
             # silently restore the generated selection via truthiness.
-            normalized[key]["players"] = list(value["players"])
+            normalized[key]["players"] = list(dict.fromkeys(str(v) for v in value["players"] if v))
         normalized[key]["description"] = _clean_text(value.get("description", normalized[key]["description"]), limit=1000)
         normalized[key]["order"] = int(value.get("order") or normalized[key]["order"])
         normalized[key]["include"] = bool(value.get("include", normalized[key]["include"]))
@@ -126,6 +127,14 @@ def apply_weekly_recap_edits(generated_json: dict[str, Any] | None, edits_json: 
     if not recap:
         return recap
     edits = dict(edits_json or {})
+    if "scope" in edits:
+        selected_scope = edits["scope"]
+        if not isinstance(selected_scope, dict) or not isinstance(selected_scope.get("league_names", []), list):
+            raise ValueError("Choose the recap scope before generating results.")
+        selected_names = selected_scope.get("league_names", [])
+        generated_names = (recap.get("meta") or {}).get("league_names") or []
+        if selected_names != generated_names:
+            raise ValueError("The recap scope changed. Generate results for that scope before saving or publishing.")
     editorial = edits.get("editorial") or {}
     if isinstance(editorial, dict) and editorial:
         report = recap.setdefault("report", {})
@@ -178,6 +187,8 @@ def apply_weekly_recap_edits(generated_json: dict[str, Any] | None, edits_json: 
         )
     updated.sort(key=lambda item: int(item.get("order", 999)))
     recap["spotlight"] = updated
+    if isinstance(edits.get("builder"), dict):
+        apply_builder(recap, edits["builder"])
     return recap
 
 
@@ -190,9 +201,11 @@ def _row_payload(row: dict[str, Any] | None) -> dict[str, Any] | None:
         "week_start": str(row.get("week_start") or ""),
         "week_end": str(row.get("week_end") or ""),
         "status": str(row.get("status") or "draft"),
-        "generated_json": row.get("generated_json") or {},
+        "generated_json": {**(row.get("generated_json") or {}), "builder_catalog": catalog(row.get("generated_json") or {})},
         "edits_json": row.get("edits_json") or {},
         "final_json": row.get("final_json") or {},
+        "published_json": row.get("published_json"),
+        "has_unpublished_changes": row.get("status") == "published" and row.get("published_json") != row.get("final_json"),
         "published_at": row.get("published_at"),
         "published_by": row.get("published_by"),
         "created_at": row.get("created_at"),
@@ -403,10 +416,34 @@ def _recap_context(supabase: Any, *, club_id: str) -> SimpleNamespace:
     )
 
 
-def _candidates_for_row(supabase: Any, *, club_id: str, week_start: str, week_end: str, tz_name: str) -> dict[str, list[dict[str, Any]]]:
+def _scope_context(ctx, league_names):
+    import pandas as pd
+    names = [str(name) for name in league_names[:30]] if isinstance(league_names, list) else []
+    if names:
+        ctx.recap_leagues = names
+        meta = getattr(ctx, "df_meta", pd.DataFrame())
+        known = set(meta["league_name"].dropna().astype(str)) if "league_name" in meta else set()
+        if any(name not in known for name in names):
+            raise ValueError("A selected league is no longer available in this club.")
+        for attribute, column in (("df_matches", "league"), ("df_meta", "league_name"), ("df_leagues", "league_name")):
+            frame = getattr(ctx, attribute, pd.DataFrame())
+            if column in frame:
+                setattr(ctx, attribute, frame[frame[column].isin(names)].copy())
+
+
+def _candidates_for_row(supabase: Any, *, club_id: str, week_start: str, week_end: str, tz_name: str, league_names=None) -> dict[str, list[dict[str, Any]]]:
     start_date, end_date = _date_range(week_start, week_end)
     ctx = _recap_context(supabase, club_id=str(club_id))
+    _scope_context(ctx, league_names or [])
     return get_spotlight_candidates(ctx, start_date=start_date, end_date=end_date, include_tournaments=True, tz_name=tz_name)
+
+
+def _saved_candidates(db, row, tz_name):
+    generated = row.get("generated_json") or {}
+    snapshot = generated.get("spotlight_candidates_snapshot")
+    if isinstance(snapshot, dict):
+        return deepcopy(snapshot)
+    return _candidates_for_row(db, club_id=str(row["club_id"]), week_start=str(row["week_start"]), week_end=str(row["week_end"]), tz_name=tz_name, league_names=(generated.get("meta") or {}).get("league_names"))
 
 
 def build_admin_weekly_recap_status(supabase: Any | None, *, club_id: str) -> dict[str, Any]:
@@ -461,7 +498,7 @@ def get_admin_weekly_recap(supabase: Any, *, club_id: str, week_start: str, incl
     candidates = {}
     if include_candidates:
         try:
-            candidates = _candidates_for_row(supabase, club_id=str(club_id), week_start=str(row.get("week_start")), week_end=str(row.get("week_end")), tz_name=tz_name)
+            candidates = _saved_candidates(supabase, row, tz_name)
         except Exception:
             candidates = {}
     return {"ok": True, "mode": "weekly_recap_detail", "recap": _row_payload(row), "candidates": candidates}
@@ -586,11 +623,12 @@ def generate_admin_weekly_recap(
     start_date, end_date = _date_range(week_start, week_end)
     before = _fetch_recap_row(supabase, club_id=str(club_id), week_start=start_date.isoformat())
     _require_reviewed_recap(before, expected_recap_id=expected_recap_id, expected_row_version=expected_row_version, allow_new=True)
-    if before and str(before.get("status") or "") == "published":
-        raise ValueError("Published recaps must be explicitly unpublished before regeneration.")
     ctx = _recap_context(supabase, club_id=str(club_id))
+    scope_edits = edits_json if edits_json is not None else (before or {}).get("edits_json") or {}
+    _scope_context(ctx, (scope_edits.get("scope") or {}).get("league_names", []))
     recap = compute_weekly_recap(ctx, start_date=start_date, end_date=end_date, include_tournaments=True, tz_name=tz_name)
     candidates = get_spotlight_candidates(ctx, start_date=start_date, end_date=end_date, include_tournaments=True, tz_name=tz_name)
+    recap["spotlight_candidates_snapshot"] = deepcopy(candidates)
     preserved = deepcopy(edits_json if edits_json is not None else (before or {}).get("edits_json") or {}) if preserve_edits else {}
     # Preserve editorial work; stale selections are omitted rather than replaced with a different winner.
     for key, override in (preserved.get("spotlight_overrides") or {}).items():
@@ -603,12 +641,13 @@ def generate_admin_weekly_recap(
         "club_id": str(club_id),
         "week_start": start_date.isoformat(),
         "week_end": str(recap.get("end_date") or end_date.isoformat()),
-        "status": "draft",
+        "status": (before or {}).get("status") or "draft",
+        "published_json": ((before or {}).get("published_json") or (before or {}).get("final_json")) if (before or {}).get("status") == "published" else None,
         "generated_json": recap,
         "edits_json": preserved,
         "final_json": final,
-        "published_at": None,
-        "published_by": None,
+        "published_at": (before or {}).get("published_at"),
+        "published_by": (before or {}).get("published_by"),
     }
     reviewed_scope = {
         "week_start": start_date.isoformat(),
@@ -683,23 +722,22 @@ def save_admin_weekly_recap(
         raise ValueError(f"Type {CONFIRM_SAVE} to save the weekly recap draft.")
     before = _fetch_recap_row(supabase, club_id=str(club_id), week_start=str(week_start))
     _require_reviewed_recap(before, expected_recap_id=expected_recap_id, expected_row_version=expected_row_version)
-    if str(before.get("status") or "") == "published":
-        raise ValueError("Published recaps must be explicitly unpublished before saving draft edits.")
     if expected_row_version is None:
         raise StaleWeeklyRecapStateError("Weekly recap version is required. Reload before saving.")
     edits = dict(edits_json or {})
-    candidates = _candidates_for_row(supabase, club_id=str(club_id), week_start=str(before.get("week_start")), week_end=str(before.get("week_end")), tz_name=tz_name)
+    candidates = _saved_candidates(supabase, before, tz_name)
     final_json = apply_weekly_recap_edits(before.get("generated_json") or {}, edits, candidates)
     payload = {
         "club_id": str(club_id),
         "week_start": str(before.get("week_start")),
         "week_end": str(before.get("week_end")),
-        "status": "draft",
+        "status": before.get("status") or "draft",
+        "published_json": (before.get("published_json") or before.get("final_json")) if before.get("status") == "published" else None,
         "generated_json": before.get("generated_json") or {},
         "edits_json": edits,
         "final_json": final_json,
-        "published_at": None,
-        "published_by": None,
+        "published_at": (before or {}).get("published_at"),
+        "published_by": (before or {}).get("published_by"),
     }
     reviewed_scope = {
         "week_start": str(before.get("week_start")),
@@ -782,16 +820,8 @@ def publish_admin_weekly_recap(
     if expected_row_version is None:
         raise StaleWeeklyRecapStateError("Weekly recap version is required. Reload before publishing.")
     is_publish = clean_action == "publish"
-    if is_publish and str(before.get("status") or "") == "published":
-        raise StaleWeeklyRecapStateError("This recap is already published. Unpublish it before changing content.")
     if is_publish:
-        candidates = _candidates_for_row(
-            supabase,
-            club_id=str(club_id),
-            week_start=str(before.get("week_start")),
-            week_end=str(before.get("week_end")),
-            tz_name=tz_name,
-        )
+        candidates = _saved_candidates(supabase, before, tz_name)
         edits = dict(edits_json if edits_json is not None else (before.get("edits_json") or {}))
         final_json = apply_weekly_recap_edits(before.get("generated_json") or {}, edits, candidates)
         payload = {
@@ -802,6 +832,7 @@ def publish_admin_weekly_recap(
             "generated_json": before.get("generated_json") or {},
             "edits_json": edits,
             "final_json": final_json,
+            "published_json": final_json,
             "published_at": _now_iso(),
             "published_by": str(actor_email or ""),
         }

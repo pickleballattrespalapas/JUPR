@@ -37,6 +37,11 @@ class AdminWeeklyRecapGenerateRequest(BaseModel):
     expected_recap_id: str | None = Field(default=None, min_length=1, max_length=100)
 
 
+class RecapPreferencesRequest(BaseModel):
+    revision: int = Field(ge=0)
+    settings: dict[str, Any]
+
+
 class AdminWeeklyRecapSaveRequest(BaseModel):
     edits_json: dict[str, Any] = Field(default_factory=dict)
     tz_name: str = "America/Mazatlan"
@@ -122,6 +127,32 @@ def install_admin_weekly_recap_routes(app, *, get_supabase_client) -> None:
     def get_weekly_recap_status(club_id: str) -> dict[str, Any]:
         supabase = get_supabase_client() if is_admin_weekly_recap_enabled() else None
         return build_admin_weekly_recap_status(supabase, club_id=str(club_id))
+
+    @app.get("/admin/clubs/{club_id}/weekly-recap/preferences")
+    def read_preferences(club_id: str, authorization: str | None = auth_header()):
+        if not is_admin_weekly_recap_enabled():
+            raise HTTPException(status_code=403, detail="Next Weekly Recap Admin is disabled.")
+        _require_service_role()
+        db = get_supabase_client()
+        _resolve_weekly_recap_role_or_403(supabase=db, club_id=club_id, authorization=authorization, source="recap_preferences")
+        from jupr_app.services.recap_preferences_service import get_preferences
+        return get_preferences(db, club_id)
+
+    @app.put("/admin/clubs/{club_id}/weekly-recap/preferences")
+    def write_preferences(club_id: str, payload: RecapPreferencesRequest, authorization: str | None = auth_header()):
+        if not is_admin_weekly_recap_enabled():
+            raise HTTPException(status_code=403, detail="Next Weekly Recap Admin is disabled.")
+        _require_communications_mutations()
+        _require_service_role()
+        db = get_supabase_client()
+        email, role = _resolve_weekly_recap_role_or_403(supabase=db, club_id=club_id, authorization=authorization, source="recap_preferences")
+        from jupr_app.services.recap_preferences_service import save_preferences
+        from jupr_app.services.admin_weekly_recap_service import _required_audit_intent
+        try:
+            _required_audit_intent(db, club_id=club_id, actor_email=email, actor_role=role, action_type="save_recap_preferences", week_start="templates", reviewed_scope={"revision": payload.revision}, source="recap_preferences")
+            return save_preferences(db, club_id, payload.revision, payload.settings)
+        except Exception as exc:
+            _handle_common(exc)
 
     @app.get("/admin/clubs/{club_id}/weekly-recap/recaps")
     def get_weekly_recap_list(

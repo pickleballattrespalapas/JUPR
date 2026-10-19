@@ -48,9 +48,9 @@ export default function WeeklyReportExport({ recap, clubSlug, published }: { rec
   }
   return <section data-testid="weekly-report-export" style={{ border: "1px solid #e6e8e1", borderRadius: 14, padding: "1rem", background: "#f8f3e9" }}>
     <h2 style={{ marginTop: 0, color: "#123e37" }}>Add to your member email</h2>
-    <p>A newsletter section in the Tres Palapas colors and 620-pixel layout. Exports use the saved report shown below.</p>
+    <p>A newsletter section in the Tres Palapas colors and 620-pixel layout. Exports use the content selected in your current preview.</p>
     <label>Content size <select value={compact ? "compact" : "full"} onChange={e => setCompact(e.target.value === "compact")}><option value="compact">Compact newsletter section</option><option value="full">Full weekly report</option></select></label>
-    <p style={{ fontSize: 14 }}>The compact section features three events, two player highlights, and two award races. Published reports include a link to the complete report.</p>
+    <p style={{ fontSize: 14 }}>The compact section uses your email selections. Published reports include a link to the complete report.</p>
     <div style={{ display: "flex", flexWrap: "wrap", gap: ".6rem" }}>
       <button type="button" onClick={copyHtml}>Copy email HTML</button>
       <button type="button" onClick={() => download(new Blob([fragment], { type: "text/html;charset=utf-8" }), `weekly-report-${week}-email-section.html`)}>Download email section</button>

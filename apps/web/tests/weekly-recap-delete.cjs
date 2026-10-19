@@ -29,6 +29,10 @@ const Panel = load("app/admin/weekly-recap/WeeklyRecapAdminPanel.tsx", {
   "@/lib/useAuthenticatedAutoLoad": load("lib/useAuthenticatedAutoLoad.ts"),
   "@/lib/useAdminSession": { useAdminSession: () => ({ accessToken, loading: false, session: { user: { email: "admin@example.com" } } }), adminSessionLabel: () => "Admin" },
   "./WeeklyReportExport": () => null,
+  "@/lib/recapBuilder": load("lib/recapBuilder.ts"),
+  "@/lib/weeklyReportEmail": load("lib/weeklyReportEmail.ts"),
+  "./RecapContentEditor": { RecapContentEditor: () => null, RecapStoryEditor: () => null },
+  "./recap-builder.module.css": {},
   "@/lib/clubDate": { weeklyReportDatePreset: () => ({ start: draft.week_start, end: draft.week_end }), clubWeekStartIso: () => draft.week_start, clubTodayIso: () => draft.week_end },
   "./AdminWeeklyRecapPreview": () => React.createElement("div", null, "Recap preview")
 }).default;
@@ -46,6 +50,7 @@ global.fetch = async (url, options = {}) => {
     assert.ok(current, "Mutation identifies the exact loaded recap");
     return { ok: true, json: async () => ({ ok: true, recap: current, candidates: {} }) };
   }
+  if (url.endsWith("/preferences")) return {ok: true, json: async () => ({ revision:0, settings: {templates:[],default_template_id:""}, leagues:[] })};
   if (url.includes("?limit=")) return { ok: true, json: async () => ({ ok: true, recaps, count: recaps.length, can_delete_drafts: canDelete }) };
   const week = new URL(url).pathname.split("/").at(-1);
   return { ok: true, json: async () => ({ ok: true, recap: recaps.find(row => row.week_start === week), candidates: {} }) };
@@ -80,7 +85,7 @@ function reset() { canDelete = true; accessToken = "local-token"; requests = [];
   assert.equal(requests.filter(request => request.url.includes("?limit=")).length, 2, "Deletion refreshes saved recap list");
   await act(async () => tree.unmount());
 
-  for (const label of ["Refresh results", "Save draft edits", "Publish recap", "Unpublish recap"]) {
+  for (const label of ["Refresh results", "Publish recap", "Unpublish recap"]) {
     reset();
     if (label === "Unpublish recap") recaps[0].status = "published";
     tree = await mount();
@@ -116,4 +121,13 @@ function reset() { canDelete = true; accessToken = "local-token"; requests = [];
   assert.equal(deletion(tree).props.disabled, true, "Read-only mode disables deletion");
   await act(async () => tree.unmount());
   console.log("weekly recap deletion component behavior: passed");
+  reset();
+  tree = await mount();
+  const oldConfirmation = deletion(tree).props;
+  accessToken = "replacement-token";
+  await act(async () => tree.update(React.createElement(Panel, props)));
+  const writesBefore = requests.filter(r => r.method === "DELETE").length;
+  await assert.rejects(async () => act(async () => oldConfirmation.onConfirm("DELETE RECAP")), /sign-in or club changed/);
+  assert.equal(requests.filter(r => r.method === "DELETE").length, writesBefore, "A confirmation from the old session cannot send a write");
+  await act(async () => tree.unmount());
 })().catch(error => { console.error(error); process.exitCode = 1; });
