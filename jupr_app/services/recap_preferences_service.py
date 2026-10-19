@@ -24,6 +24,8 @@ def save_preferences(db, club_id, revision, settings):
         templates.append({"id": text(item["id"], 100), "name": text(item["name"], 80), "builder": normalize_config(item.get("builder"), template=True)})
     if len({t["id"] for t in templates}) != len(templates):
         raise ValueError("Template IDs must be unique.")
+    if len({t["name"].casefold() for t in templates}) != len(templates):
+        raise ValueError("Choose a different name. A layout with that name already exists.")
     default_id = text(settings.get("default_template_id"), 100)
     if default_id and default_id not in {t["id"] for t in templates}:
         raise ValueError("Choose a saved default template.")

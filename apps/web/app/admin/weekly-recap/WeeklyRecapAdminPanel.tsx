@@ -31,6 +31,7 @@ import { buildWeeklyReportEmail, emailUrl } from "@/lib/weeklyReportEmail";
 import { RecapContentEditor, RecapStoryEditor } from "./RecapContentEditor";
 import AdminWeeklyRecapPreview from "./AdminWeeklyRecapPreview";
 import WeeklyReportExport from "./WeeklyReportExport";
+import RecapLayoutManager from "./RecapLayoutManager";
 import styles from "./recap-builder.module.css";
 
 type Props = {
@@ -164,8 +165,7 @@ export default function WeeklyRecapAdminPanel({
       ),
     [row?.generated_json, edits, candidates],
   );
-  const generatedCatalog = ((row?.generated_json || {}).builder_catalog ||
-    {}) as RecapCatalog;
+  const generatedCatalog = (preview.builder_catalog || {}) as RecapCatalog;
   const coverage = (row?.generated_json as Partial<WeeklyRecapJson>)?.report
     ?.coverage;
   const isLive = row?.status === "published",
@@ -532,9 +532,6 @@ export default function WeeklyRecapAdminPanel({
       setError("Give the layout a name.");
       return;
     }
-    const generation = writeRequest.begin();
-    setBusy(true);
-    setError("");
     try {
       const prior = preferences.settings.templates.find(
         (t) => t.name.toLowerCase() === name.toLowerCase(),
@@ -553,22 +550,57 @@ export default function WeeklyRecapAdminPanel({
           ? template.id
           : preferences.settings.default_template_id,
       };
-      const result = await request<RecapPreferences>("/preferences", "PUT", {
-        revision: preferences.revision,
+      await updateLayouts(
         settings,
-      });
-      if (writeRequest.isCurrent(generation)) {
-        setPreferences(result);
-        setMessage(
-          asDefault ? "Club default layout saved." : "Layout template saved.",
+        preferences.revision,
+        asDefault ? "Club default layout saved." : "Layout template saved.",
+      );
+      setTemplateName("");
+    } catch {
+      /* updateLayouts keeps the error visible. */
+    }
+  }
+  async function updateLayouts(
+    settings?: RecapPreferences["settings"],
+    revision?: number,
+    success = "Saved layouts reloaded.",
+  ) {
+    if (scope !== latest.current.scope)
+      throw new Error(
+        "Your sign-in or club changed. Reload before continuing.",
+      );
+    if (saveLock.current)
+      throw new Error(
+        "A save is still in progress. Try again when it finishes.",
+      );
+    const generation = writeRequest.begin();
+    saveLock.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await request<RecapPreferences>(
+        "/preferences",
+        settings ? "PUT" : "GET",
+        settings ? { revision, settings } : undefined,
+      );
+      if (!writeRequest.isCurrent(generation))
+        throw new Error(
+          "Your sign-in or club changed. Reload before continuing.",
         );
-        setTemplateName("");
-      }
+      setPreferences(result);
+      setPreferencesReady(true);
+      setMessage(success);
     } catch (e) {
       if (writeRequest.isCurrent(generation))
-        setError(e instanceof Error ? e.message : "Could not save layout.");
+        setError(
+          e instanceof Error ? e.message : "Could not update saved layouts.",
+        );
+      throw e;
     } finally {
-      if (writeRequest.isCurrent(generation)) setBusy(false);
+      if (writeRequest.isCurrent(generation)) {
+        saveLock.current = false;
+        setBusy(false);
+      }
     }
   }
   if (!status.enabled) return <p>Weekly recaps are unavailable.</p>;
@@ -757,8 +789,8 @@ export default function WeeklyRecapAdminPanel({
         ) : null}
         <p className={styles.muted}>
           Scope determines games, totals, and eligible highlights. Content
-          controls choose which stories appear. Choose New edition to change
-          the start date or scope.
+          controls choose which stories appear. Choose New edition to change the
+          start date or scope.
         </p>
         <label>
           Layout template
@@ -787,6 +819,19 @@ export default function WeeklyRecapAdminPanel({
             ))}
           </select>
         </label>
+        <RecapLayoutManager
+          key={`${scope}:${preferences.revision}`}
+          preferences={preferences}
+          disabled={
+            !status.mutations_enabled ||
+            busy ||
+            saving ||
+            !accessToken ||
+            !preferencesReady
+          }
+          onSave={updateLayouts}
+          onReload={() => updateLayouts()}
+        />
         <ConfirmAction
           triggerLabel={
             rows.some((r) => r.week_start === range.start)

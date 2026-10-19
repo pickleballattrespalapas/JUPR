@@ -29,6 +29,7 @@ const Panel = load("app/admin/weekly-recap/WeeklyRecapAdminPanel.tsx", {
   "@/lib/useAuthenticatedAutoLoad": load("lib/useAuthenticatedAutoLoad.ts"),
   "@/lib/useAdminSession": { useAdminSession: () => ({ accessToken, loading: false, session: { user: { email: "admin@example.com" } } }), adminSessionLabel: () => "Admin" },
   "./WeeklyReportExport": () => null,
+  "./RecapLayoutManager": () => null,
   "@/lib/recapBuilder": load("lib/recapBuilder.ts"),
   "@/lib/weeklyReportEmail": load("lib/weeklyReportEmail.ts"),
   "./RecapContentEditor": { RecapContentEditor: () => null, RecapStoryEditor: () => null },

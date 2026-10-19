@@ -41,7 +41,7 @@ async function confirm(page, label, text) {
   if (await input.count()) await input.fill(text);
   await dialog
     .getByRole("button", {
-      name: /^(Generate draft|Publish recap|Delete draft|Unpublish recap)$/,
+      name: /^(Generate draft|Publish recap|Delete draft|Unpublish recap|Delete layout)$/,
     })
     .click();
   await dialog.getByRole("button", { name: "OK", exact: true }).click();
@@ -104,6 +104,18 @@ async function confirm(page, label, text) {
         ? route.continue()
         : route.abort(),
     );
+    // Local synthetic photo; all other external requests remain blocked.
+    await context.route("https://photos.example.invalid/week.png", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "image/png",
+        headers: { "access-control-allow-origin": "*" },
+        body: Buffer.from(
+          require("./fixtures/recap-photo.json").base64,
+          "base64",
+        ),
+      }),
+    );
     await context.addCookies([
       {
         name: "jupr_admin_workspace_v1",
@@ -157,11 +169,13 @@ async function confirm(page, label, text) {
       .filter({
         has: page.locator("strong", { hasText: "The week in numbers" }),
       })
+      .filter({ has: page.getByRole("checkbox") })
       .last();
     await numbers.getByRole("checkbox").first().uncheck();
     const events = page
       .locator("section")
       .filter({ has: page.locator("strong", { hasText: "Event results" }) })
+      .filter({ has: page.getByRole("checkbox") })
       .last();
     await events.locator("summary").click();
     const exclude = events
@@ -191,8 +205,54 @@ async function confirm(page, label, text) {
     await page
       .getByLabel("Story", { exact: true })
       .fill("Stay grounded through your attack.");
+    await page
+      .getByRole("button", { name: "+ Photo of the week", exact: true })
+      .click();
+    const photo = page.locator("fieldset").filter({
+      has: page.locator("legend", { hasText: "Photo of the week" }),
+    });
+    await photo.getByLabel("Heading", { exact: true }).fill("Saturday smiles");
+    await photo
+      .getByLabel("Photo URL", { exact: true })
+      .fill("https://photos.example.invalid/week.png");
+    await photo
+      .getByLabel("Photo description", { exact: true })
+      .fill("A colorful local test photo");
+    await photo
+      .getByLabel("Photo caption", { exact: true })
+      .fill("Saturday at the club");
+    await photo
+      .getByLabel("Photo credit", { exact: true })
+      .fill("Club volunteer");
+    await photo
+      .getByLabel("Photo presentation", { exact: true })
+      .selectOption("cover");
+    await page
+      .getByRole("button", { name: "+ Featured event", exact: true })
+      .click();
+    const promotion = page
+      .locator("fieldset")
+      .filter({ has: page.locator("legend", { hasText: "Featured event" }) });
+    await promotion
+      .getByLabel("Heading", { exact: true })
+      .fill("Autumn social");
+    await promotion
+      .getByLabel("Story", { exact: true })
+      .fill("Join us next Saturday.");
+    await promotion
+      .getByLabel("Link URL", { exact: true })
+      .fill("https://events.example.invalid/register");
+    await page.getByRole("button", { name: "2. Content", exact: true }).click();
+    const emailOrder = page.getByTestId("recap-email-order");
+    await emailOrder.locator("summary").click();
+    await emailOrder
+      .getByLabel("Move Autumn social earlier in email", { exact: true })
+      .click();
+    await emailOrder
+      .getByLabel("Move Club stories up in email", { exact: true })
+      .click();
     await page.getByRole("button", { name: "4. Preview", exact: true }).click();
-    const preview = page.getByTestId("recap-edition");
+    const preview = page.getByTestId("recap-edition").filter({ visible: true });
     await preview.waitFor();
     assert(!(await preview.innerText()).includes("Tuesday Moneyball"));
     assert(!(await preview.innerText()).includes("The week in numbers"));
@@ -220,6 +280,18 @@ async function confirm(page, label, text) {
     await page
       .getByText("Club default layout saved.", { exact: true })
       .waitFor();
+    const exported = page.getByTestId("weekly-report-export");
+    await exported.getByRole("combobox").selectOption("full");
+    const pdfDownload = page.waitForEvent("download");
+    await exported
+      .getByRole("button", { name: "Download styled PDF", exact: true })
+      .click();
+    await (await pdfDownload).saveAs(path.join(output, "styled-recap.pdf"));
+    const pngDownload = page.waitForEvent("download");
+    await exported
+      .getByRole("button", { name: "Download PNG", exact: true })
+      .click();
+    await (await pngDownload).saveAs(path.join(output, "styled-recap.png"));
     await confirm(page, "Publish recap", "PUBLISH RECAP");
     let live = await (
       await fetch(apiOrigin + "/clubs/test/weekly-recaps")
@@ -235,6 +307,47 @@ async function confirm(page, label, text) {
       );
     assert(!compactTitles.includes("Thursday Social Round Robin"));
     assert(compactTitles.includes("Example Tournament · Mixed 3.5"));
+    const publicStories = live.selected_recap.recap.report.edition.find(
+      (b) => b.key === "custom",
+    ).items;
+    assert.deepEqual(
+      publicStories.map((i) => i.title),
+      ["Coach’s tip", "Saturday smiles", "Autumn social"],
+    );
+    const emailStories = live.selected_recap.recap.report.email_edition.find(
+      (b) => b.key === "custom",
+    ).items;
+    assert.deepEqual(
+      emailStories.map((i) => i.title),
+      ["Coach’s tip", "Autumn social", "Saturday smiles"],
+    );
+    assert.equal(publicStories[1].credit, "Club volunteer");
+    assert.equal(publicStories[2].layout, "promotion");
+    const publicPage = await context.newPage();
+    await publicPage.goto(origin + "/clubs/test/weekly-recap");
+    await publicPage.getByTestId("recap-edition").waitFor();
+    assert(
+      (await publicPage.getByTestId("recap-edition").innerText()).includes(
+        "Photo: Club volunteer",
+      ),
+    );
+    const publicPdf = publicPage.waitForEvent("download");
+    await publicPage.getByTestId("weekly-recap-styled-pdf").click();
+    await (await publicPdf).saveAs(path.join(output, "published-recap.pdf"));
+    // Block the photo download while keeping the page readable: export must
+    // show a recoverable error, not hand the reader a PDF with missing photos.
+    const blockPhoto = (route) => route.abort();
+    await context.route("https://photos.example.invalid/week.png", blockPhoto);
+    await publicPage.getByTestId("weekly-recap-styled-pdf").click();
+    await publicPage
+      .getByRole("alert")
+      .filter({ hasText: "A photo could not be included" })
+      .waitFor();
+    await context.unroute(
+      "https://photos.example.invalid/week.png",
+      blockPhoto,
+    );
+    await publicPage.close();
     await page
       .getByRole("button", { name: "Edit draft revision", exact: true })
       .click();
@@ -293,7 +406,7 @@ async function confirm(page, label, text) {
       "Private revision headline",
     );
     assert.equal(
-      await page.getByLabel("Story", { exact: true }).inputValue(),
+      await page.getByLabel("Story", { exact: true }).first().inputValue(),
       "Stay grounded through your attack.",
     );
     live = await (await fetch(apiOrigin + "/clubs/test/weekly-recaps")).json();
@@ -326,8 +439,45 @@ async function confirm(page, label, text) {
     );
     assert.deepEqual(errors, []);
     assert.equal((await state()).club_recap_preferences.length, 1);
+    await page.getByRole("button", { name: "1. Setup", exact: true }).click();
+    await page.waitForFunction(
+      () =>
+        !document.body.innerText.includes("Saving draft…") &&
+        !document.body.innerText.includes("Unsaved changes"),
+    );
+    let manager = page.getByTestId("recap-layout-manager");
+    await manager.locator("summary").click();
+    await manager
+      .getByLabel("Rename layout", { exact: true })
+      .fill("Club highlights");
+    await manager
+      .getByRole("button", { name: "Rename saved layout", exact: true })
+      .click();
+    await page.getByText("Layout renamed.", { exact: true }).waitFor();
+    assert.equal(
+      (await state()).club_recap_preferences[0].settings.templates[0].name,
+      "Club highlights",
+    );
+    await manager.locator("summary").click();
+    await manager
+      .getByLabel("Default for new recaps", { exact: true })
+      .selectOption("");
+    await page
+      .getByText("New recaps will use the standard layout.", { exact: true })
+      .waitFor();
+    await manager.locator("summary").click();
+    await confirm(page, "Delete saved layout", "DELETE LAYOUT");
+    assert.equal(
+      (await state()).club_recap_preferences[0].settings.templates.length,
+      0,
+    );
+    assert.equal(
+      (await state()).weekly_recaps.length,
+      2,
+      "Layout deletion preserves both recap editions",
+    );
     console.log(
-      "PASS: generate, exact email selections, autosave, live preview, reusable default, publish, private revision, refresh, reload, desktop/mobile.",
+      "PASS: generate, independent email ordering, photo/promotion cards, PDF/PNG export, autosave, live preview, reusable default, publish, private revision, refresh, reload, layout rename/default/delete, desktop/mobile.",
     );
   } catch (e) {
     if (page) {
