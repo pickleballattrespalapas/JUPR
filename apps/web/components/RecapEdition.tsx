@@ -6,16 +6,19 @@ export default function RecapEdition({
   blocks,
   clubSlug,
   scopeLabel,
+  scopeText,
 }: {
   blocks: RecapBlock[];
   clubSlug: string;
   scopeLabel?: string;
+  scopeText?: string;
 }) {
+  const scope =
+    scopeText ??
+    (scopeLabel && scopeLabel !== "Whole club" ? `League: ${scopeLabel}` : "");
   return (
     <div className="recap-edition" data-testid="recap-edition">
-      {scopeLabel && scopeLabel !== "Whole club" ? (
-        <p>League: {scopeLabel}</p>
-      ) : null}
+      {scope ? <p>{scope}</p> : null}
       {blocks.map((block) => (
         <section
           key={block.key}
@@ -92,7 +95,7 @@ export default function RecapEdition({
                   <figure style={{ margin: "0 0 .8rem" }}>
                     <img
                       src={item.image_url}
-                      alt={item.alt || item.title}
+                      alt={item.alt ?? item.title}
                       style={{
                         width: "100%",
                         maxWidth: 620,
@@ -110,7 +113,9 @@ export default function RecapEdition({
                       >
                         {item.caption}
                         {item.caption && item.credit ? " · " : ""}
-                        {item.credit ? `Photo: ${item.credit}` : ""}
+                        {item.credit
+                          ? `${item.credit_label ?? "Photo:"} ${item.credit}`.trim()
+                          : ""}
                       </figcaption>
                     ) : null}
                   </figure>
@@ -133,13 +138,14 @@ export default function RecapEdition({
                     ))}
                   </ul>
                 ) : null}
-                {reportPath(clubSlug, item.href) ? (
+                {reportPath(clubSlug, item.href) &&
+                (item.results_label ?? "View results") ? (
                   <Link href={reportPath(clubSlug, item.href)}>
-                    View results
+                    {item.results_label ?? "View results"}
                   </Link>
                 ) : null}
                 {item.links?.map((link, i) =>
-                  reportPath(clubSlug, link.href) ? (
+                  reportPath(clubSlug, link.href) && link.label ? (
                     <p key={i}>
                       <Link href={reportPath(clubSlug, link.href)}>
                         {link.label}
@@ -147,7 +153,7 @@ export default function RecapEdition({
                     </p>
                   ) : null,
                 )}
-                {emailUrl(item.url) ? (
+                {emailUrl(item.url) && (item.link_label ?? "Learn more") ? (
                   <p>
                     <a
                       href={emailUrl(item.url)}
@@ -165,7 +171,7 @@ export default function RecapEdition({
                           : undefined
                       }
                     >
-                      {item.link_label || "Learn more"}
+                      {item.link_label ?? "Learn more"}
                     </a>
                   </p>
                 ) : null}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import type { AdminWeeklyRecapCandidate } from "@/lib/adminWeeklyRecapApi";
 import type {
   BuilderConfig,
@@ -155,6 +155,7 @@ export default function RecapEvidencePicker({
   onSpotlightChange: (key: string, patch: Partial<Spotlight>) => void;
 }) {
   const [search, setSearch] = useState("");
+  const availabilityId = useId();
   const needle = search.trim().toLocaleLowerCase();
   const events = catalog.events || [];
   const groups = [
@@ -267,6 +268,15 @@ export default function RecapEvidencePicker({
           results and players below. Your choices are saved with this draft.
         </p>
         <a href="#recap-results">Choose individual results and players ↓</a>
+        {groups.some((group) => !group.items.length) ||
+        playerGroups.some((group) => !group.items.length) ? (
+          <p className={styles.availabilityNote}>
+            <strong>Why can’t I select some categories?</strong> Categories
+            marked Unavailable have no matching results in this draft. Check
+            your dates or use <strong>Setup → Refresh results</strong> to check
+            for newly recorded results.
+          </p>
+        ) : null}
         <fieldset className={styles.choiceGroup}>
           <legend>Event results & club activity</legend>
           <div className={styles.choiceGrid}>
@@ -284,6 +294,7 @@ export default function RecapEvidencePicker({
                   <label
                     className={styles.choiceCard}
                     data-selected={included}
+                    data-unavailable={!group.items.length}
                     key={group.id}
                   >
                     <span className={styles.check}>
@@ -292,6 +303,11 @@ export default function RecapEvidencePicker({
                         checked={included}
                         disabled={disabled || !group.items.length}
                         aria-label={`Include ${group.label}`}
+                        aria-describedby={
+                          !group.items.length
+                            ? `${availabilityId}-${group.id}`
+                            : undefined
+                        }
                         onChange={(e) =>
                           choose(
                             group.section,
@@ -303,11 +319,25 @@ export default function RecapEvidencePicker({
                       <strong>{group.label}</strong>
                     </span>
                     <span className={styles.muted}>{group.description}</span>
-                    <small>
-                      {group.items.length
-                        ? `${included ? count : 0} of ${group.items.length} selected`
-                        : "No verified results in this draft"}
-                    </small>
+                    {group.items.length ? (
+                      <small>
+                        {included ? count : 0} of {group.items.length} selected
+                      </small>
+                    ) : (
+                      <span
+                        id={`${availabilityId}-${group.id}`}
+                        className={styles.unavailableMessage}
+                      >
+                        <strong className={styles.unavailableStatus}>
+                          Unavailable — no results to select
+                        </strong>
+                        <span>
+                          {group.id === "courts"
+                            ? "No ladder court results are available in this draft for the selected dates."
+                            : "No results are available for this category in this draft for the selected dates."}
+                        </span>
+                      </span>
+                    )}
                   </label>
                 );
               })}
@@ -327,6 +357,7 @@ export default function RecapEvidencePicker({
                     <label
                       className={styles.choiceCard}
                       data-selected={included}
+                      data-unavailable={!group.items.length}
                       key={group.key}
                     >
                       <span className={styles.check}>
@@ -335,6 +366,11 @@ export default function RecapEvidencePicker({
                           checked={included}
                           disabled={disabled || !group.items.length}
                           aria-label={`Include ${group.label}`}
+                          aria-describedby={
+                            !group.items.length
+                              ? `${availabilityId}-${group.key}`
+                              : undefined
+                          }
                           onChange={(e) =>
                             togglePlayers(group.key, e.target.checked)
                           }
@@ -342,11 +378,23 @@ export default function RecapEvidencePicker({
                         <strong>{group.label}</strong>
                       </span>
                       <span className={styles.muted}>{group.description}</span>
-                      <small>
-                        {group.items.length
-                          ? `${group.items.length} available`
-                          : "No qualifying results in this draft"}
-                      </small>
+                      {group.items.length ? (
+                        <small>{group.items.length} available</small>
+                      ) : (
+                        <span
+                          id={`${availabilityId}-${group.key}`}
+                          className={styles.unavailableMessage}
+                        >
+                          <strong className={styles.unavailableStatus}>
+                            Unavailable — no results to select
+                          </strong>
+                          <span>
+                            No qualifying player performances are available in
+                            this draft for the selected dates. Check the
+                            requirements above.
+                          </span>
+                        </span>
+                      )}
                     </label>
                   );
                 })}

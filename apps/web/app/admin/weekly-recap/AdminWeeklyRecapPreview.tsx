@@ -50,11 +50,11 @@ export default function AdminWeeklyRecapPreview({ recap: row, printMode = false 
       `}</style>
       <header style={{ borderBottom: "2px solid #0f172a", paddingBottom: "0.75rem" }}>
         <p style={{ color: row.status === "published" ? "#166534" : "#92400e", textTransform: "uppercase", fontWeight: 900, letterSpacing: "0.08em" }}>{row.status === "published" ? "Published recap preview" : "Draft preview · Not published"}</p>
-        <h1 style={{ marginBottom: "0.25rem" }}>{recap.report?.headline || "Weekly Recap"} · {row.week_start} to {row.week_end}</h1>
+        <h1 style={{ marginBottom: "0.25rem" }}>{recap.report?.headline ?? "Weekly Recap"}{(recap.report?.display_text?.date ?? `${row.week_start} – ${row.week_end}`) ? ` · ${recap.report?.display_text?.date ?? `${row.week_start} – ${row.week_end}`}` : ""}</h1>
         <p style={{ color: "#475569" }}>Version {row.row_version || 1} · Loaded {String(row.updated_at || "unknown update time")}</p>
         {!printMode ? <button type="button" className="admin-recap-no-print" onClick={() => window.print()} style={{ padding: "0.55rem 0.9rem", borderRadius: "999px", border: "1px solid #0f172a", background: "white", fontWeight: 800 }}>Print / save preview</button> : null}
       </header>
-      {recap.report?.edition ? <RecapEdition scopeLabel={recap.report.scope_label} blocks={recap.report.edition} clubSlug={recap.report.club_slug || ""} /> : <>
+      {recap.report?.edition ? <RecapEdition scopeText={recap.report.display_text?.scope} scopeLabel={recap.report.scope_label} blocks={recap.report.edition} clubSlug={recap.report.club_slug || ""} /> : <>
       {recap.report?.version === 1 ? <WeeklyReportIntro report={recap.report} /> : null}
       <NumberStrip recap={recap} />
       {recap.report?.version === 1 ? <WeeklyReportEvents report={recap.report} clubSlug={recap.report.club_slug || ""} /> : null}

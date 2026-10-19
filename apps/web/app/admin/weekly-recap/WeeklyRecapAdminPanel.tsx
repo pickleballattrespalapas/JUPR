@@ -32,6 +32,7 @@ import AdminWeeklyRecapPreview from "./AdminWeeklyRecapPreview";
 import WeeklyReportExport from "./WeeklyReportExport";
 import RecapLayoutManager from "./RecapLayoutManager";
 import RecapEvidencePicker from "./RecapEvidencePicker";
+import RecapTextEditor from "./RecapTextEditor";
 import styles from "./recap-builder.module.css";
 
 type Props = {
@@ -99,7 +100,7 @@ function rowEdits(
   );
   return {
     editorial: {
-      headline: report.headline || emptyEditorial.headline,
+      headline: report.headline ?? emptyEditorial.headline,
       opening: report.opening || "",
       event_notes: report.event_notes || "",
       upcoming: report.upcoming || [],
@@ -135,6 +136,7 @@ export default function WeeklyRecapAdminPanel({
   const [templateName, setTemplateName] = useState(""),
     [step, setStep] = useState(0),
     [previewMode, setPreviewMode] = useState("website");
+  const [editingText, setEditingText] = useState(false);
   const [revisionOpen, setRevisionOpen] = useState(true),
     [busy, setBusy] = useState(false),
     [saving, setSaving] = useState(false);
@@ -218,6 +220,7 @@ export default function WeeklyRecapAdminPanel({
     return payload;
   }
   function apply(payload: AdminWeeklyRecapDetailResponse) {
+    setEditingText(false);
     const nextCandidates = payload.candidates || {},
       next = rowEdits(payload.recap, nextCandidates);
     setRow(payload.recap);
@@ -249,6 +252,7 @@ export default function WeeklyRecapAdminPanel({
     }
   }
   function clearProtectedRecapState() {
+    setEditingText(false);
     detailRequest.invalidate();
     setRow(null);
     setRows([]);
@@ -1077,8 +1081,31 @@ export default function WeeklyRecapAdminPanel({
                       : "Print / PDF"}
                 </button>
               ))}
+              <button
+                type="button"
+                disabled={disabled && !editingText}
+                aria-pressed={editingText}
+                onClick={() => setEditingText(!editingText)}
+              >
+                {editingText ? "Done editing text" : "Edit text"}
+              </button>
             </div>
-            {previewMode === "email" ? (
+            {editingText ? (
+              <RecapTextEditor
+                catalog={generatedCatalog}
+                edits={edits}
+                channel={previewMode === "email" ? "email_edition" : "edition"}
+                disabled={disabled}
+                weekStart={row.week_start}
+                weekEnd={row.week_end}
+                scopeLabel={preview.report?.scope_label}
+                generatedHeadline={
+                  (row.generated_json as Partial<WeeklyRecapJson>)?.report
+                    ?.headline || emptyEditorial.headline
+                }
+                onChange={setEdits}
+              />
+            ) : previewMode === "email" ? (
               <iframe
                 title="Live member email preview"
                 sandbox="allow-same-origin"
@@ -1095,7 +1122,7 @@ export default function WeeklyRecapAdminPanel({
                 printMode={printMode}
               />
             )}
-            {previewMode === "print" ? (
+            {previewMode === "print" && !editingText ? (
               <button onClick={() => window.print()}>Print / save PDF</button>
             ) : null}
           </section>

@@ -163,3 +163,68 @@ def test_layout_management_preserves_identity_and_rejects_stale_or_duplicate_cha
         save_preferences(db, 'club', 2, {'templates': renamed['templates'][1:], 'default_template_id': 'a'})
     result = save_preferences(db, 'club', 2, {'templates': renamed['templates'][1:], 'default_template_id': ''})
     assert result['revision'] == 3 and [t['id'] for t in result['settings']['templates']] == ['b']
+
+
+def test_preview_text_edits_are_shared_by_public_email_pdf_and_preserve_sources():
+    config = json.loads(Path('apps/web/tests/fixtures/weekly-recap-text.json').read_text())
+    source = fixture(); original = deepcopy(source)
+    final = service.apply_weekly_recap_edits(source, {'builder': config}, {})
+    assert source == original
+    public = sanitize_public_recap_json(final, week_start='2026-10-05', week_end='2026-10-11')
+    for channel in ('edition', 'email_edition'):
+        blocks = {b['key']: b for b in public['report'][channel]}
+        assert blocks['events']['title'] == 'This week’s results'
+        event = next(i for i in blocks['events']['items'] if i['title'] == 'Thursday champions')
+        assert event['kind'] == 'Social play' and event['text'] == 'Congratulations, Cam!'
+        assert event['lines'][:2] == ['A lively day on the courts', '1. Cam — first place']
+        assert event['results_label'] == 'See the final standings'
+        league = next(i for i in blocks['events']['items'] if i['links'])
+        assert league['links'][0]['label'] == 'See our recorded league week'
+        assert blocks['numbers']['items'][0]['text'] == 'Ninety-six'
+        assert blocks['upcoming']['items'][0]['text'] == 'Next week’s Moneyball'
+        photo = next(i for i in blocks['custom']['items'] if i['id'] == 'photo')
+        assert photo['caption'] == 'Friends on court' and photo['credit_label'] == 'Courtesy of'
+        assert photo['credit'] == 'Morgan' and photo['alt'] == 'Members celebrating'
+    assert public['report']['display_text'] == config['display_text']
+    serialized = json.dumps(public)
+    assert 'text_overrides' not in serialized and 'Must never appear' not in serialized
+    pdf = '\n'.join(_weekly_recap_pdf_lines(public, week_start='2026-10-05', week_end='2026-10-11'))
+    assert 'Courtesy of Morgan' in pdf and 'October 5–11 · A week to remember' in pdf and 'Around our club' in pdf
+    template = normalize_config(config, template=True)
+    assert 'text_overrides' not in template and 'display_text' not in template
+
+
+def test_text_overrides_follow_source_ids_and_do_not_move_player_edits_to_a_new_winner():
+    source = fixture(); config = json.loads(Path('apps/web/tests/fixtures/weekly-recap-text.json').read_text())
+    source['report']['event_results'].reverse()
+    projected = build_editions(source, config)
+    assert 'Thursday champions' in json.dumps(projected)
+    player = source['spotlight'][0]
+    player['players'] = ['New winner — new result']
+    assert 'Alex — a standout performance' not in json.dumps(build_editions(source, config))
+    source['report']['event_results'] = []
+    assert 'Thursday champions' not in json.dumps(build_editions(source, config))
+    event = catalog(fixture())['events'][1]
+    config['text_overrides'].pop(event['id'])
+    assert event['title'] in json.dumps(build_editions(fixture(), config))
+    source['report']['upcoming'].insert(0, {'text': 'A different event', 'url': 'https://example.invalid/new'})
+    upcoming = next(b for b in build_editions(source, config)['edition'] if b['key'] == 'upcoming')['items']
+    assert [i['text'] for i in upcoming][:2] == ['A different event', 'Next week’s Moneyball']
+    source['report']['upcoming'].pop(1)
+    assert 'Next week’s Moneyball' not in json.dumps(build_editions(source, config))
+
+
+def test_text_overrides_allow_blank_text_but_cannot_change_identity_or_urls():
+    source = fixture(); event = catalog(source)['events'][1]
+    config = {'sections': {'events': {'title': ''}}, 'text_overrides': {event['id']: {
+        'title': '', 'text': '<b>Editorial wording</b>', 'results_label': '',
+        'lines': {event['lines'][0]: ''}, 'id': 'other', 'href': 'javascript:evil', 'image_url': 'https://untrusted.invalid/tracker',
+    }}, 'display_text': {'date': '', 'scope': '', 'footer_link': '', 'unknown': 'secret'}}
+    public = sanitize_public_recap_json(apply_builder(source, config), week_start='2026-10-05', week_end='2026-10-11')
+    block = next(b for b in public['report']['edition'] if b['key'] == 'events')
+    item = next(i for i in block['items'] if i['id'] == event['id'])
+    assert block['title'] == '' and item['title'] == '' and item['results_label'] == ''
+    assert item['text'] == 'bEditorial wording/b' and event['lines'][0] not in item['lines']
+    assert item['href'] == event['href'] and item['image_url'] == event['image_url']
+    assert public['report']['display_text'] == {'date': '', 'scope': '', 'footer_link': ''}
+    assert normalize_config({'text_overrides': {'item': {'lines': ['bad'], 'title': {}, 'link_labels': 5}}})['text_overrides'] == {'item': {}}

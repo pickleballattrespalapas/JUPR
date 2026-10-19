@@ -1,0 +1,128 @@
+{
+  "sections": {
+    "events": {
+      "title": "This week’s results",
+      "item_ids": [
+        "events-698ea430c47acb9d15fd",
+        "events-bbf30521a92b9156da90"
+      ],
+      "email_item_ids": [
+        "events-bbf30521a92b9156da90",
+        "events-698ea430c47acb9d15fd"
+      ]
+    },
+    "custom": {
+      "item_ids": [
+        "photo",
+        "register"
+      ],
+      "email_item_ids": [
+        "register",
+        "photo"
+      ]
+    }
+  },
+  "custom_blocks": [
+    {
+      "id": "photo",
+      "title": "Saturday smiles",
+      "text": "A day on the courts.",
+      "kind": "Photo of the week",
+      "lines": [],
+      "href": "",
+      "url": "",
+      "image_url": "https://photos.example.invalid/week.png",
+      "alt": "Players on court",
+      "link_label": "Learn more",
+      "links": [],
+      "layout": "photo",
+      "image_fit": "cover",
+      "caption": "Saturday at the club",
+      "credit": "Club volunteer"
+    },
+    {
+      "id": "register",
+      "title": "Autumn social",
+      "text": "Join us next Saturday.",
+      "kind": "Featured event",
+      "lines": [],
+      "href": "",
+      "url": "https://events.example.invalid/register",
+      "image_url": "",
+      "alt": "",
+      "link_label": "Register now",
+      "links": [],
+      "layout": "promotion",
+      "image_fit": "contain"
+    },
+    {
+      "id": "hidden",
+      "title": "Next week draft",
+      "text": "Not yet ready",
+      "kind": "Club announcement",
+      "lines": [],
+      "href": "",
+      "url": "",
+      "image_url": "",
+      "alt": "",
+      "link_label": "Learn more",
+      "links": [],
+      "layout": "callout"
+    }
+  ],
+  "text_overrides": {
+    "events-698ea430c47acb9d15fd": {
+      "kind": "Social play",
+      "title": "Thursday champions",
+      "text": "Congratulations, Cam!",
+      "lines": {
+        "24 players · 36 games · Unrated": "A lively day on the courts",
+        "1. Cam — 5–1 · point difference +28": "1. Cam — first place"
+      },
+      "results_label": "See the final standings"
+    },
+    "events-bbf30521a92b9156da90": {
+      "link_labels": {
+        "leagues/Summer%20Social/weekly-history?week=7": "See our recorded league week"
+      }
+    },
+    "numbers-a54084383e3cf7c24630": {
+      "title": "Games played",
+      "text": "Ninety-six"
+    },
+    "spotlight-ABOVE_EXPECTATIONS_WEEK": {
+      "lines": {
+        "Alex — +2.1 wins above expected": "Alex — a standout performance"
+      }
+    },
+    "achievements-9bef8abb5af0c59bf1f8": {
+      "text": "Congratulations on your first win, Alex"
+    },
+    "welcome-8d6d4f52ee2db64142fa": {
+      "text": "Welcome, Eli!"
+    },
+    "photo": {
+      "caption": "Friends on court",
+      "credit": "Morgan",
+      "credit_label": "Courtesy of",
+      "alt": "Members celebrating",
+      "title": "Our club in pictures"
+    },
+    "register": {
+      "link_label": "Reserve your place"
+    },
+    "missing-source": {
+      "title": "Must never appear"
+    },
+    "upcoming:[\"Register for Moneyball\",\"https://app.courtreserve.com/Online/Events/Public/8043/2308082\"]": {
+      "text": "Next week’s Moneyball",
+      "link_label": "Sign up for next week"
+    }
+  },
+  "display_text": {
+    "date": "October 5–11 · A week to remember",
+    "scope": "Around our club",
+    "footer_title": "Join the next chapter",
+    "footer_link": "Read the entire recap"
+  }
+}
