@@ -2,6 +2,7 @@
 from datetime import datetime, timezone
 from jupr_app.domain.recaps.recap_builder import normalize_config
 from jupr_app.domain.recaps.weekly_report_public import text
+from jupr_app.services.staging_write_guard import require_staging_communications_mutations
 
 
 def get_preferences(db, club_id):
@@ -12,6 +13,7 @@ def get_preferences(db, club_id):
 
 
 def save_preferences(db, club_id, revision, settings):
+    require_staging_communications_mutations()
     from jupr_app.services.admin_weekly_recap_service import StaleWeeklyRecapStateError
     if len(settings.get("templates") or []) > 12:
         raise ValueError("A club can save up to 12 recap layouts.")
