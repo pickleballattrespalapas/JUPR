@@ -94,9 +94,22 @@ const responses = {
     assert.equal((await resolve('/live/live1', '', fixture)).share.title, 'Wednesday Ladder | Tres Palapas');
   });
   await check('profiles use only the public display identity, not contact details', async () => {
-    const fixture = { [`${prefix}/players/5?recent_limit=1&history_limit=1`]: { player: { id: 5, name: 'Internal name', email: 'private@example.com' }, identity: { display_name: 'Public Player' } } };
-    const { share } = await resolve('/players/5', '', fixture);
-    assert.match(share.title, /Public Player/); assert.doesNotMatch(JSON.stringify(share), /private@example|Internal name/);
+    const fixture = { [`${prefix}/players/5?recent_limit=1&history_limit=12`]: { player: { id: 5, name: 'Internal name', email: 'private@example.com', is_active: false }, identity: { display_name: 'Public Player' } } };
+    for (const [suffix, label] of [['', 'Player Profile'], ['/matches', 'Match History']]) {
+      const { share } = await resolve(`/players/5${suffix}`, '', fixture);
+      assert.equal(share.title, `Public Player — ${label} | Tres Palapas`);
+      assert.equal(share.noindex, false);
+      assert.doesNotMatch(JSON.stringify(share), /private@example|Internal name/);
+    }
+  });
+  await check('missing, mismatched and other-club players never advertise an unrelated profile', async () => {
+    for (const data of [null, { player: { id: 6, name: 'Other Player' } }, { club: { slug: 'other-club' }, player: { id: 5, name: 'Other Player' } }]) {
+      const fixture = { [`${prefix}/players/5?recent_limit=1&history_limit=12`]: data };
+      const { share } = await resolve('/players/5', '', fixture);
+      assert.equal(share.title, 'Player unavailable | Tres Palapas');
+      assert.equal(share.noindex, true);
+      assert.doesNotMatch(JSON.stringify(share), /Other Player/);
+    }
   });
   await check('each club uses its own identity and logo', async () => {
     const other = { name: 'Other Club', slug: 'other-club', image: 'https://images.example.com/other.png' };

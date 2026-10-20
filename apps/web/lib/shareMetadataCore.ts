@@ -181,7 +181,8 @@ export async function resolveClubShare(input: {
   }
   if (section === "leagues" && subpage === "past") return { ...base, title: `Past Leagues at ${name}`, description: `Explore completed pickleball leagues and results at ${name}.` };
   if (section === "players" && parts[3]) {
-    const data = await scopedRead(`${prefix}/players/${encodeURIComponent(parts[3])}?recent_limit=1&history_limit=1`);
+    // The public profile API requires history_limit >= 12, even for previews.
+    const data = await scopedRead(`${prefix}/players/${encodeURIComponent(parts[3])}?recent_limit=1&history_limit=12`);
     const player = record(data?.player), identity = record(data?.identity);
     if (String(player.id ?? "") !== parts[3]) return missing("Player");
     const playerName = plainText(identity.display_name || player.display_name || player.name, 110);

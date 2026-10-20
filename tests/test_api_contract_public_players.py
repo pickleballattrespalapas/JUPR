@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from pathlib import Path
+import re
+
 import pytest
 
 from tests.conftest import require_api_dependency
@@ -101,6 +104,22 @@ def test_unknown_player_is_a_stable_404(client, monkeypatch):
 
     assert response.status_code == 404
     assert response.json() == {"detail": "player not found"}
+
+
+def test_player_share_preview_query_satisfies_profile_route_validation(client, monkeypatch):
+    """Exercise the frontend preview's actual query against FastAPI validation."""
+    source = (Path(__file__).resolve().parents[1] / "apps/web/lib/shareMetadataCore.ts").read_text()
+    query = re.search(r"/players/\$\{encodeURIComponent\(parts\[3\]\)\}(\?[^`]+)", source)
+    assert query, "Locate the player preview request so its API contract stays covered."
+    monkeypatch.setattr(
+        "services.api.main.get_public_player_profile",
+        lambda *_args, **_kwargs: {"player": {"id": 1}, "identity": {"display_name": "Public Alias"}},
+    )
+
+    response = client.get(f"/clubs/tres-palapas/players/1{query.group(1)}")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["identity"]["display_name"] == "Public Alias"
 
 
 def test_player_match_endpoint_forwards_pagination(client, monkeypatch):
