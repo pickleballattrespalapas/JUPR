@@ -1,7 +1,8 @@
 /*
  * Loopback-only E2E: actual Next UI -> FastAPI routes -> generator/hub services
  * -> transactional RPC double. Starts without sessions; all creation and hub
- * changes use the UI. Covers the hub-first Create round robin return flow.
+ * changes use the UI. Covers hub-first creation, cached-back navigation without
+ * duplicate creation, and an injected local 503 followed by an exact retry.
  * Does not test real authentication, RLS or PostgreSQL locks.
  * Run from apps/web: node tests/round-robin-hub-start-browser.cjs
  * GENERATOR_BROWSER_{PYTHON,EXECUTABLE,ARGS,ARTIFACTS,WEB_PORT,API_PORT,NEXT_MODE}
@@ -22,7 +23,9 @@ const webOrigin = `http://127.0.0.1:${webPort}`;
 const apiOrigin = `http://127.0.0.1:${apiPort}`;
 const output = process.env.GENERATOR_BROWSER_ARTIFACTS || path.join(webRoot, 'test-results', 'round-robin-hub-start');
 fs.mkdirSync(output, {recursive:true});
-const logs = [], errors = [], evidence = [];
+const logs = [], errors = [], evidence = [], creationRequests = [], creationDrafts = [];
+const sessionCreateUrl = `${apiOrigin}/admin/clubs/club/play-generators/sessions`;
+let injectedFailures = 0;
 function start(command, args, env, cwd) {
   const child = spawn(command, args, {env, cwd, stdio:['ignore', 'pipe', 'pipe']});
   child.stdout.on('data', data => logs.push(data.toString()));
@@ -79,7 +82,11 @@ async function main() {
     await context.route('**/*', route => ['127.0.0.1','localhost'].includes(new URL(route.request().url()).hostname) ? route.continue() : route.abort());
     context.on('page', p => {
       p.on('pageerror', error => errors.push({type:'pageerror',message:error.message}));
-      p.on('console', message => { if (message.type() === 'error') errors.push({type:'console',message:message.text()}); });
+      p.on('console', message => { if (message.type() === 'error') errors.push({type:'console',message:message.text(),url:message.location().url}); });
+      p.on('request', request => {
+        if (request.method() === 'POST' && request.url() === sessionCreateUrl)
+          creationRequests.push(request.postDataJSON());
+      });
     });
     await context.addCookies([{name:'jupr_admin_workspace_v1',value:encodeURIComponent(JSON.stringify({clubId:'club',clubSlug:'test'})),url:webOrigin}]);
     await context.addInitScript(origin => {
@@ -97,20 +104,58 @@ async function main() {
       await page.getByLabel('Number of courts',{exact:true}).fill('2');
       return clickRequest(page,page.getByRole('button',{name:'Create event',exact:true}),'/round-robin-hubs');
     }
-    async function createFromHub(hub, title, expectedGroups) {
+    async function createFromHub(hub, title, expectedGroups, failFirstAttempt = false) {
       await page.getByRole('tab',{name:'Round robins',exact:true}).click();
       const createLink = page.getByRole('link',{name:'Create round robin',exact:true});
       assert.equal(new URL(await createLink.getAttribute('href'),webOrigin).searchParams.get('hub'),hub.hub.id);
       await createLink.click();
       await page.waitForURL(url=>url.pathname === '/admin/round-robin-generator' && url.searchParams.get('hub') === hub.hub.id);
+      const builderUrl = page.url();
+      const draftToken = new URL(builderUrl).searchParams.get('draft');
+      assert(draftToken && !creationDrafts.includes(draftToken),'Create round robin must open a fresh draft, separate from previous success receipts');
+      creationDrafts.push(draftToken);
+      const rosterText = Array.from({length:4},(_,i)=>`${title} Player ${i+1}`).join('\n');
       await page.getByLabel('Session title',{exact:true}).fill(title);
       await page.getByLabel('Event format',{exact:true}).selectOption('standard');
       await page.getByRole('combobox',{name:/^Play format/}).selectOption('doubles');
       await page.getByRole('combobox',{name:/^Number of players/}).selectOption('4');
       await page.getByLabel('Match rating',{exact:true}).selectOption('unrated');
-      await page.getByRole('textbox',{name:/^Players \(/}).fill(Array.from({length:4},(_,i)=>`${title} Player ${i+1}`).join('\n'));
+      await page.getByRole('textbox',{name:/^Players \(/}).fill(rosterText);
       await clickRequest(page,page.getByRole('button',{name:'Preview matchups',exact:true}),'/preview');
-      const started = await clickRequest(page,page.getByRole('button',{name:'Start and add to hub',exact:true}),'/sessions');
+      let failedPayload;
+      if (failFirstAttempt) {
+        const before = await fixture();
+        const failStart = async route => {
+          if (route.request().method() !== 'POST') return route.continue();
+          failedPayload = route.request().postDataJSON();
+          injectedFailures += 1;
+          await route.fulfill({status:503,contentType:'application/json',headers:{'access-control-allow-origin':webOrigin},
+            body:JSON.stringify({detail:'The durable operation intent could not be persisted.'})});
+        };
+        await page.route(sessionCreateUrl,failStart);
+        const failure = page.waitForResponse(response=>response.url() === sessionCreateUrl && response.request().method() === 'POST');
+        const [response] = await Promise.all([failure,page.getByRole('button',{name:'Start and add to hub',exact:true}).click()]);
+        assert.equal(response.status(),503);
+        await page.unroute(sessionCreateUrl,failStart);
+        const alert = page.getByRole('alert').filter({hasText:/start|persist/i});
+        await alert.waitFor();
+        const color = await alert.evaluate(element=>getComputedStyle(element).color);
+        const channels = color.match(/[\d.]+/g)?.map(Number) || [];
+        assert(channels[0] > channels[1] && channels[0] > channels[2],`Creation failure must use error styling, received ${color}`);
+        assert.equal(await page.getByLabel('Session title',{exact:true}).inputValue(),title);
+        assert.equal(await page.getByRole('textbox',{name:/^Players \(/}).inputValue(),rosterText);
+        assert.equal((await fixture()).sessions.length,before.sessions.length,'Rejected local request must not create a session');
+        await snapshot(page,'creation-error-draft-retained.png');
+        await page.reload();
+        await page.getByRole('button',{name:'Retry this start',exact:true}).waitFor();
+        assert.equal(await page.getByLabel('Session title',{exact:true}).inputValue(),title);
+        assert.equal(await page.getByRole('textbox',{name:/^Players \(/}).inputValue(),rosterText);
+      }
+      const started = await clickRequest(page,page.getByRole('button',{name:failFirstAttempt ? 'Retry this start' : 'Start and add to hub',exact:true}),'/sessions');
+      if (failFirstAttempt) {
+        assert.deepEqual(creationRequests.at(-1),failedPayload,'Retry after reload must preserve the exact creation payload and idempotency key');
+        record('A failed start shows an error, keeps the draft across reload, and retries the identical creation request');
+      }
       assert.equal(started.session.event.rounds[0].matches.length,1);
       await page.waitForURL(url=>url.pathname === '/admin/round-robin-hub' && url.searchParams.get('hub') === hub.hub.id);
       let state, result;
@@ -135,14 +180,35 @@ async function main() {
       assert.equal(await page.getByLabel('Select hub',{exact:true}).inputValue(),hub.hub.id);
       record(`${title}: created from hub, attached exactly once, returned to correct court board with first queued match`);
       await snapshot(page,`${title.toLowerCase().replaceAll(' ','-')}-returned.png`);
-      return started.session;
+      return {...started.session,builderUrl};
+    }
+    async function runExistingAfterBack(hub, session, reload = false) {
+      const before = await fixture();
+      const requestsBefore = creationRequests.length;
+      await page.goBack();
+      await page.waitForURL(session.builderUrl);
+      const run = page.getByRole('button',{name:'Run this round robin in the hub',exact:true});
+      await run.waitFor();
+      if (reload) { await page.reload(); await run.waitFor(); }
+      await snapshot(page,reload ? 'created-session-receipt-reloaded.png' : 'cached-created-session-receipt.png');
+      await run.click();
+      await page.waitForURL(url=>url.pathname === '/admin/round-robin-hub' && url.searchParams.get('hub') === hub.hub.id);
+      await page.getByRole('tabpanel',{name:'Court board',exact:true}).waitFor();
+      await page.getByRole('listitem').filter({hasText:session.title}).getByRole('button',{name:'Next open court',exact:true}).waitFor();
+      const after = await fixture();
+      assert.equal(creationRequests.length,requestsBefore,'Run an existing round robin must navigate without POSTing another session');
+      assert.equal(after.sessions.length,before.sessions.length,'Returning to a created session must not duplicate it');
+      assert(after.hubs.find(item=>item.hub.id === hub.hub.id).workspace.groups.some(group=>group.session_key === session.session_key));
+      record(`${reload ? 'Reloaded' : 'Cached-back'} success receipt runs the exact existing round robin without another creation POST`);
     }
     const first = await createHub('Friday Hub');
     assert.equal(first.workspace.groups.length,0);
     assert.equal((await fixture()).sessions.length,0,'The hub must exist before any sessions');
     await page.getByText('No other active round robins are available.',{exact:false}).waitFor();
     const firstSession = await createFromHub(first,'First group',1);
-    const secondSession = await createFromHub(first,'Second group',2);
+    await runExistingAfterBack(first,firstSession);
+    const secondSession = await createFromHub(first,'Second group',2,true);
+    await runExistingAfterBack(first,secondSession,true);
     const second = await createHub('Saturday Hub');
     await page.getByLabel('Select hub',{exact:true}).selectOption(first.hub.id);
     await page.getByRole('heading',{name:'Friday Hub',exact:true}).waitFor();
@@ -160,8 +226,14 @@ async function main() {
     await snapshot(page,'mobile-created-group-return.png');
     assert(await page.evaluate(()=>document.documentElement.scrollWidth <= window.innerWidth),'Mobile page must not overflow horizontally');
     record('Repeated creation and switching cached event pages preserves correct membership after refresh');
-    assert.deepEqual(errors,[],'No browser console errors or uncaught exceptions');
-    fs.writeFileSync(path.join(output,'evidence.json'),JSON.stringify({passed:true,evidence,errors,rpcCalls:state.rpc_calls},null,2));
+    const expectedNetworkErrors = errors.filter(error=>error.type === 'console' && error.url === sessionCreateUrl && /503/.test(error.message));
+    const unexpectedErrors = errors.filter(error=>!expectedNetworkErrors.includes(error));
+    assert.equal(injectedFailures,1,'Exactly one local creation failure should be injected');
+    assert(expectedNetworkErrors.length <= 1,'Only the injected 503 may produce a console network error');
+    assert.deepEqual(unexpectedErrors,[],'No unexpected browser console errors or uncaught exceptions');
+    assert.equal(creationRequests.length,4,'Three sessions plus one failed attempt must be the only creation requests');
+    fs.writeFileSync(path.join(output,'evidence.json'),JSON.stringify({passed:true,evidence,errors:unexpectedErrors,expectedNetworkErrors,
+      injectedFailures,creationRequests:creationRequests.length,rpcCalls:state.rpc_calls},null,2));
     console.log(`Hub-first browser regression passed. Artifacts: ${output}`);
   } catch (error) {
     if (page) await snapshot(page,'failure.png').catch(()=>{});

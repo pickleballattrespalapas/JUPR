@@ -126,27 +126,112 @@ function embeddedClick(href) {
 
   const rosterModule = load('@/components/GeneratorRosterSetup');
   stubs['@/components/GeneratorRosterSetup'] = {...rosterModule,__esModule:true,default:()=>null};
-  let clearedDrafts=0;
+  const recoveryStorage=new Map(),drafts=new Map();
+  global.window={sessionStorage:{getItem:key=>recoveryStorage.get(key)||null,setItem:(key,value)=>recoveryStorage.set(key,value),removeItem:key=>recoveryStorage.delete(key)}};
+  const baseDraft='admin-play-generator-draft:club:round_robin';
+  const savedDraft=()=>({title:'New group',playFormat:'doubles',ratingMode:'unrated',targetCount:4,
+    participantText:'One\nTwo\nThree\nFour',linkedPlayerIds:{},preview:{...clone(fixture.event),previewFingerprint:'preview'}});
   stubs['@/lib/playGeneratorDraft'] = {
-    readPlayGeneratorDraft:()=>({title:'New group',playFormat:'doubles',ratingMode:'unrated',targetCount:4,
-      participantText:'One\nTwo\nThree\nFour',linkedPlayerIds:{},preview:{...clone(fixture.event),previewFingerprint:'preview'}}),
-    writePlayGeneratorDraft(){},clearPlayGeneratorDraft(){clearedDrafts++;}
+    readPlayGeneratorDraft:key=>drafts.get(key)||null,
+    writePlayGeneratorDraft:(key,value)=>drafts.set(key,clone(value)),clearPlayGeneratorDraft:key=>drafts.delete(key)
   };
   const Workspace = load('@/app/admin/play-generators/GeneratorWorkspace').default;
+  const workspaceProps=(hub,draft)=>({apiBase:'https://api.invalid',clubId:'club',generatorKind:'round_robin',status:{enabled:true,writes_enabled:true},returnHubId:hub,draftToken:draft});
+  const scopedKey=(hub,draft)=>hub||draft?`${baseDraft}:hub:${encodeURIComponent(hub||'')}:draft:${encodeURIComponent(draft||'legacy')}`:baseDraft;
+  const resetDraft=(hub,draft)=>{recoveryStorage.clear();drafts.clear();drafts.set(scopedKey(hub,draft),savedDraft());navigation.length=0;};
+  const response=(body,status=200)=>({ok:status<400,status,json:async()=>clone(body)});
   for (const hub of ['hub/2',undefined]) {
-    navigation.length=0;const creates=[];
+    resetDraft(hub);const creates=[];
     global.fetch=async(url,options={})=>{
       if(options.method==='POST') creates.push({url,body:JSON.parse(options.body)});
-      return {ok:true,status:200,json:async()=>options.method==='POST'?{session:{session_key:'new/rr',current_round_number:1}}:{sessions:[]}};
+      return response(options.method==='POST'?{session:{session_key:'new/rr',current_round_number:1}}:{sessions:[{session_key:'old',title:'Existing group',round_robin_hub_id:'known-hub',current_round_number:1,status:'active'}]});
     };
-    await act(async()=>{tree=create(h(Workspace,{apiBase:'https://api.invalid',clubId:'club',generatorKind:'round_robin',status:{enabled:true,writes_enabled:true},returnHubId:hub}));});
+    const props=workspaceProps(hub);
+    await act(async()=>{tree=create(h(Workspace,props));});
+    assert.ok(tree.root.findAllByType('a').some(link=>link.props.href==='/admin/round-robin-hub?hub=known-hub'),'Previously created linked sessions have a direct hub link');
     await act(async()=>button(tree,hub?'Start and add to hub':'Start unrated session').props.onClick());
     assert.equal(creates.length,1,'Starting creates exactly one round robin');
     assert.equal(creates[0].body.rating_mode,'unrated');
     assert.equal(creates[0].body.preview_fingerprint,'preview');
     assert.deepEqual(navigation,[hub?'/admin/round-robin-hub?hub=hub%2F2&add_session=new%2Frr':'/admin/round-robin-generator/sessions/new%2Frr/rounds/1']);
+    const runLabel=hub?'Run this round robin in the hub':'Run this session';
+    await act(async()=>button(tree,runLabel).props.onClick());
+    assert.equal(creates.length,1,'Cached success navigates without creating again');
+    assert.equal(button(tree,'Preview matchups'),undefined,'Known success cannot be silently recreated by editing');
+    await act(async()=>tree.unmount());
+    await act(async()=>{tree=create(h(Workspace,props));});
+    await act(async()=>button(tree,runLabel).props.onClick());
+    assert.equal(creates.length,1,'Reloaded success receipt navigates without POST');
+    await act(async()=>button(tree,'Create another round robin').props.onClick());
+    const nextToken=new URL(navigation.at(-1),'https://test.local').searchParams.get('draft');
+    assert.ok(nextToken);
+    await act(async()=>tree.update(h(Workspace,workspaceProps(hub,nextToken))));
+    assert.equal(button(tree,runLabel),undefined);
+    assert.equal(drafts.get(scopedKey(hub,nextToken)).participantText,'','Explicit new token starts a fresh roster');
+    assert.equal(drafts.get(scopedKey(hub,nextToken)).preview,null);
     await act(async()=>tree.unmount());
   }
-  assert.equal(clearedDrafts,2);
+
+  for (const failure of ['intent503','lost','uncertain409','rejected422']) {
+    const hub='retry-hub',token=failure;resetDraft(hub,token);const creates=[];
+    global.fetch=async(url,options={})=>{
+      if(options.method!=='POST') return response({sessions:[]});
+      creates.push(JSON.parse(options.body));
+      if(creates.length===1) {
+        if(failure==='lost') throw new TypeError('Response lost');
+        return response({detail:failure==='intent503'?'The durable operation intent could not be persisted. No domain mutation was attempted.':failure==='uncertain409'?'The outcome is uncertain.':'Review the roster.'},failure==='intent503'?503:failure==='uncertain409'?409:422);
+      }
+      return response({session:{session_key:'confirmed',current_round_number:1}});
+    };
+    const props=workspaceProps(hub,token),key=scopedKey(hub,token);
+    await act(async()=>{tree=create(h(Workspace,props));});
+    await act(async()=>button(tree,'Start and add to hub').props.onClick());
+    const alert=tree.root.findByProps({role:'alert'});
+    assert.equal(alert.props.style.color,'#b91c1c','Failed starts show an explicit error regardless of wording');
+    assert.ok(text(alert).includes('draft'));
+    assert.equal(drafts.get(key).participantText,'One\nTwo\nThree\nFour');
+    assert.ok(drafts.get(key).preview,'Failed starts preserve the preview');
+    if(failure==='rejected422') {
+      assert.equal(recoveryStorage.has(`${key}:start`),false,'An initially rejected request can be corrected');
+      assert.ok(button(tree,'Start and add to hub'));
+    } else {
+      assert.equal(button(tree,'Create another round robin'),undefined);
+      assert.equal(tree.root.findByType('fieldset').props.disabled,true);
+      await act(async()=>tree.unmount());
+      await act(async()=>{tree=create(h(Workspace,props));});
+      await act(async()=>button(tree,'Retry this start').props.onClick());
+      assert.deepEqual(creates[1],creates[0],'Reloaded retry retains exact body and key');
+      assert.ok(button(tree,'Run this round robin in the hub'));
+    }
+    await act(async()=>tree.unmount());
+  }
+
+  resetDraft('auth-hub','auth-retry');const authRequests=[];
+  global.fetch=async(url,options={})=>{
+    if(options.method!=='POST') return response({sessions:[]});
+    authRequests.push(JSON.parse(options.body));
+    if(authRequests.length===1) throw new TypeError('Response lost after commit');
+    if(authRequests.length===2) return response({detail:'Sign in again.'},401);
+    return response({session:{session_key:'original-created',current_round_number:1}});
+  };
+  await act(async()=>{tree=create(h(Workspace,workspaceProps('auth-hub','auth-retry')));});
+  await act(async()=>button(tree,'Start and add to hub').props.onClick());
+  await act(async()=>button(tree,'Retry this start').props.onClick());
+  assert.ok(button(tree,'Retry this start'),'Rejected retry cannot discard earlier uncertainty');
+  assert.equal(button(tree,'Start and add to hub'),undefined);
+  await act(async()=>button(tree,'Retry this start').props.onClick());
+  assert.deepEqual(authRequests[1],authRequests[0]);assert.deepEqual(authRequests[2],authRequests[0]);
+  assert.equal(navigation.at(-1),'/admin/round-robin-hub?hub=auth-hub&add_session=original-created');
+  await act(async()=>tree.unmount());
+
+  resetDraft('old-hub','old-preview');let resolvePreview;
+  global.fetch=async(url)=>url.endsWith('/preview')?new Promise(resolve=>{resolvePreview=()=>resolve(response({preview:savedDraft().preview}));}):response({sessions:[]});
+  await act(async()=>{tree=create(h(Workspace,workspaceProps('old-hub','old-preview')));});
+  await act(async()=>button(tree,'Preview matchups').props.onClick());
+  await act(async()=>tree.update(h(Workspace,workspaceProps('new-hub','new-preview'))));
+  await act(async()=>resolvePreview());
+  assert.equal(button(tree,'Start and add to hub'),undefined,'Old preview response cannot populate a new draft');
+  assert.equal(drafts.get(scopedKey('new-hub','new-preview')).preview,null);
+  await act(async()=>tree.unmount());
   console.log('PASS hub generator integration: embedded controls, sequential standings, safe refresh, roster controls, and hub/standalone creation destinations.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
