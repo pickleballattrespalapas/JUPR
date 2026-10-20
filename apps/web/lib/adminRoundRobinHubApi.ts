@@ -1,5 +1,5 @@
 export type HubCourtConfig = { id: string; label: string; dedicated_session_key: string | null; open: boolean };
-export type HubPlayer = { id: string; name: string; identity: string };
+export type HubPlayer = { id: string; name: string; display_name?: string; identity: string };
 export type HubMatch = {
   session_key: string; match_id: string; round_number: number; side_a: HubPlayer[]; side_b: HubPlayer[];
   label: string; wait_seconds: number; allowed_court_ids: string[]; blockers: string[]; status: string;
@@ -12,12 +12,21 @@ export type HubGroup = {
   total_rounds?: number; advance_label?: string; rating_mode?: string; status?: string; dedicated_court_ids?: string[];
 };
 export type HubWaitingPlayer = {
-  identity: string; name: string; paused: boolean; wait_seconds: number; session_keys: string[];
+  identity: string; name: string; display_name?: string; paused: boolean; wait_seconds: number; session_keys: string[];
   participant_ids: string[] | Record<string, string>;
+};
+export type HubIdentityParticipant = {
+  name: string; display_name: string; session_key: string; group_title: string; participant_id: string;
+  identity: string; profile_id: number | null;
+};
+export type HubIdentityReview = {
+  id: string; name: string; status: "pending" | "same" | "different" | "mixed";
+  can_merge: boolean; assigned: boolean; participants: HubIdentityParticipant[];
 };
 export type HubWorkspace = {
   courts: HubCourt[]; groups: HubGroup[]; eligible_queue: HubMatch[]; blocked_queue: HubMatch[];
   reserved_queue: HubMatch[]; players: HubWaitingPlayer[];
+  identity_review?: HubIdentityReview[]; identity_pending_count?: number;
 };
 export type HubSummary = { id: string; title: string; status: string; version: string | number; updated_at?: string };
 export type HubSessionSummary = {
@@ -28,7 +37,8 @@ export type HubListResponse = { ok: boolean; hubs: HubSummary[]; sessions: HubSe
 export type HubDetailResponse = { ok: boolean; hub: HubSummary; workspace: HubWorkspace };
 export type HubCommandAction = "add_group" | "remove_group" | "configure_courts" | "assign_next_court" |
   "assign_game" | "reserve_game_for_court" | "cancel_reservation" | "move_game" | "release_game" |
-  "score_and_release" | "mark_played" | "pause_player" | "resume_player" | "advance_round" | "finish_hub" | "auto_fill_courts";
+  "score_and_release" | "mark_played" | "pause_player" | "resume_player" | "advance_round" | "finish_hub" | "auto_fill_courts" |
+  "resolve_identities";
 export type HubCommand = {
   action: HubCommandAction; payload: Record<string, unknown>; expected_version: string | number; idempotency_key: string;
 };
@@ -68,8 +78,12 @@ export function hubWaitLabel(seconds: number): string {
   return minutes < 1 ? "Under 1 min" : `${minutes} min`;
 }
 
+export function hubPlayerLabel(player: { name: string; display_name?: string }): string {
+  return player.display_name || player.name;
+}
+
 export function hubMatchLabel(match: HubMatch): string {
-  return `${match.side_a.map(player => player.name).join(" / ")} vs ${match.side_b.map(player => player.name).join(" / ")}`;
+  return `${match.side_a.map(hubPlayerLabel).join(" / ")} vs ${match.side_b.map(hubPlayerLabel).join(" / ")}`;
 }
 
 export function isUncertainHubError(error: unknown): boolean {

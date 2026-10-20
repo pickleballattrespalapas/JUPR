@@ -419,10 +419,12 @@ export default function GeneratorWorkspace({
     if (!mixedSetupValid) {
       throw new Error("Choose a doubles and singles court mix that fits the selected player count.");
     }
-    const orderedIds = participantNames.map((name) =>
-      Number(linkedPlayerIds[normalizeRosterName(name)] || 0)
+    const participantPlayerIds = Object.fromEntries(
+      participantNames.flatMap((name) => {
+        const playerId = Number(linkedPlayerIds[normalizeRosterName(name)] || 0);
+        return playerId > 0 ? [[name, playerId]] : [];
+      })
     );
-    const allLinked = orderedIds.every((playerId) => playerId > 0);
     return {
       generator_kind: generatorKind,
       event_format: generatorKind === "round_robin" ? eventFormat : "standard",
@@ -432,7 +434,7 @@ export default function GeneratorWorkspace({
       rating_mode: ratingMode,
       title: title.trim(),
       participant_names: participantNames,
-      player_ids: allLinked ? orderedIds : [],
+      participant_player_ids: participantPlayerIds,
       total_rounds: automaticSetup.totalRounds,
       // Zero lets the engine recalculate courts as late arrivals join later rounds.
       court_count: generatorKind === "round_robin" && playFormat !== "doubles_singles"

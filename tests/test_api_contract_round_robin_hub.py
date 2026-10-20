@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 from services.api import admin_play_generator_routes as generator_routes
 from services.api import admin_round_robin_hub_routes as routes
-from tests.test_admin_round_robin_hub_service import TransactionalHubDB, command, create, session
+from tests.test_admin_round_robin_hub_service import TransactionalHubDB, command, create, session, guest_identity_hub
 
 
 @pytest.fixture
@@ -177,3 +177,22 @@ def test_tournament_style_auto_fill_action_is_reachable(api):
     })
     assert response.status_code == 200
     assert all(court["current"] is not None for court in response.json()["workspace"]["courts"])
+
+
+def test_identity_batch_resolution_uses_authenticated_cas_and_exact_retry(api):
+    client, db = api
+    hub = guest_identity_hub(db)
+    path = f"{BASE}/{hub['hub']['id']}/commands"
+    body = {"action": "resolve_identities", "payload": {"resolution": "all_different"},
+        "expected_version": hub["hub"]["version"], "idempotency_key": "identity-batch-once"}
+    before = deepcopy(db.storage)
+    assert client.post(path, json=body).status_code == 401
+    assert db.storage == before
+    first = client.post(path, headers=HEADERS, json=body)
+    assert first.status_code == 200
+    assert len(first.json()["workspace"]["eligible_queue"]) == 2
+    second = client.post(path, headers=HEADERS, json=body)
+    assert second.status_code == 200
+    assert second.json()["replayed"] is True
+    assert second.json()["hub"]["version"] == first.json()["hub"]["version"]
+    assert client.post(path, headers=HEADERS, json={**body, "idempotency_key": "stale-resolution"}).status_code == 409

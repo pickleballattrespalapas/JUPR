@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from copy import deepcopy
+import pytest
 
 from jupr_app.services.admin_play_generator_service import (
     advance_play_generator_session,
@@ -95,6 +96,79 @@ class FakeSupabase:
 
     def table(self, name):
         return FakeQuery(self.storage, name)
+
+
+@pytest.mark.parametrize("linked_indices", [(), (1, 3), (0, 1, 2, 3, 4)])
+@pytest.mark.parametrize("rating_mode", ["rated", "unrated"])
+def test_sparse_profiles_preserve_guest_positions_through_preview_start_and_reload(linked_indices, rating_mode):
+    db = FakeSupabase()
+    names = ["Manuel", "Jose", "Victor", "Chay", "Beto"]
+    db.storage["players"] = [{"id": 101 + index, "club_id": "club", "name": name} for index, name in enumerate(names)]
+    links = {names[index]: 101 + index for index in linked_indices}
+    setup = dict(club_id="club", generator_kind="round_robin", play_format="doubles", title="Mixed roster",
+                 participant_names=names, player_ids=[], participant_player_ids=links,
+                 total_rounds=3, court_count=1, rating_mode=rating_mode)
+    preview = preview_play_generator(db, **setup)["preview"]
+    expected = [links.get(name) for name in names]
+    assert [p.get("player_id") for p in preview["participants"]] == expected
+    session = create_play_generator_session(db, **setup, preview_fingerprint=preview["previewFingerprint"],
+        actor_email="admin@example.invalid", actor_role="administrator", source="test")["session"]
+    restored = get_play_generator_session(db, club_id="club", session_key=session["session_key"])["session"]
+    assert [p.get("player_id") for p in restored["event"]["participants"]] == expected
+    assert restored["event"]["ratingMode"] == rating_mode
+
+
+def test_sparse_links_preserve_explicit_ids_with_identical_names_in_different_groups():
+    db = FakeSupabase()
+    db.storage["players"] = [{"id": number, "club_id": "club", "name": "Alex Same"} for number in (101, 102)]
+    setup = dict(club_id="club", generator_kind="round_robin", play_format="doubles", title="Group",
+        participant_names=["Alex Same", "Guest B", "Guest C", "Guest D"], player_ids=[], total_rounds=3, court_count=1)
+    first = preview_play_generator(db, **setup, participant_player_ids={"Alex Same": 101})["preview"]
+    second = preview_play_generator(db, **setup, participant_player_ids={"Alex Same": 102})["preview"]
+    assert first["participants"][0]["player_id"] == 101
+    assert second["participants"][0]["player_id"] == 102
+    assert first["previewFingerprint"] != second["previewFingerprint"]
+    with pytest.raises(ValueError, match="changed after preview"):
+        create_play_generator_session(db, **setup, participant_player_ids={"Alex Same": 102},
+            preview_fingerprint=first["previewFingerprint"], actor_email="admin@example.invalid", actor_role="administrator", source="test")
+    assert db.storage["live_sessions"] == []
+
+
+@pytest.mark.parametrize("links,message", [
+    ({"A": 999}, "not found in this club"),
+    ({"Unknown name": 1}, "not in this roster"),
+    ({"A": 1, "B": 1}, "two places"),
+    ({"A": 1, " a ": 2}, "one club profile"),
+])
+def test_sparse_links_reject_foreign_or_ambiguous_profiles(links, message):
+    db = FakeSupabase()
+    db.storage["players"] = [{"id": 1, "club_id": "club", "name": "A"},
+        {"id": 2, "club_id": "club", "name": "Other"}, {"id": 999, "club_id": "other-club", "name": "A"}]
+    with pytest.raises(ValueError, match=message):
+        preview_play_generator(db, club_id="club", generator_kind="round_robin", play_format="doubles", title="Group",
+            participant_names=["A", "B", "C", "D"], player_ids=[], participant_player_ids=links, total_rounds=3, court_count=1)
+
+
+def test_legacy_complete_id_list_remains_compatible_with_sparse_links():
+    db = FakeSupabase()
+    names = ["A", "B", "C", "D"]
+    db.storage["players"] = [{"id": index, "club_id": "club", "name": name} for index, name in enumerate(names, 1)]
+    setup = dict(club_id="club", generator_kind="round_robin", play_format="doubles", title="Group",
+                 participant_names=names, total_rounds=3, court_count=1)
+    legacy = preview_play_generator(db, **setup, player_ids=[1, 2, 3, 4])["preview"]
+    sparse = preview_play_generator(db, **setup, player_ids=[], participant_player_ids=dict(zip(names, [1, 2, 3, 4])))["preview"]
+    assert legacy["previewFingerprint"] == sparse["previewFingerprint"]
+    with pytest.raises(ValueError, match="not both"):
+        preview_play_generator(db, **setup, player_ids=[1, 2, 3, 4], participant_player_ids={"A": 1})
+
+
+def test_moneyball_still_requires_all_profiles_with_sparse_input():
+    db = FakeSupabase()
+    db.storage["players"] = [{"id": 1, "club_id": "club", "name": "A"}]
+    with pytest.raises(ValueError, match="club|player|profile"):
+        preview_play_generator(db, club_id="club", generator_kind="round_robin", play_format="doubles", title="Moneyball",
+            participant_names=["A", "B", "C", "D"], player_ids=[], participant_player_ids={"A": 1},
+            total_rounds=3, court_count=1, event_format="moneyball_expectations")
 
 
 def test_admin_eight_plus_four_preserves_active_games_and_persists_spare_court():
