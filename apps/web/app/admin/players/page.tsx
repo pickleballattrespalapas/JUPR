@@ -6,7 +6,7 @@ import PlayerEditorPanel from "./PlayerEditorPanel";
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 
 export default async function AdminPlayersPage() {
-  const { clubId } = requireAdminWorkspace();
+  const { clubId } = await requireAdminWorkspace();
   const { data: status, error } = await getAdminPlayerEditorStatus(clubId);
 
   return (

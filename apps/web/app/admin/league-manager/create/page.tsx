@@ -5,7 +5,7 @@ import LeagueManagerNav from "../LeagueManagerNav";
 import LeagueCreatePanel from "./LeagueCreatePanel";
 
 export default async function AdminLeagueCreatePage() {
-  const { clubId } = requireAdminWorkspace();
+  const { clubId } = await requireAdminWorkspace();
   const { data: status, error } = await getAdminLeagueManagerStatus(clubId);
 
   return (

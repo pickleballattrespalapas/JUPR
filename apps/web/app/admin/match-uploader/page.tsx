@@ -7,7 +7,7 @@ import MatchUploaderForm from "./MatchUploaderForm";
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 
 export default async function AdminMatchUploaderPage() {
-  const { clubId, clubSlug } = requireAdminWorkspace();
+  const { clubId, clubSlug } = await requireAdminWorkspace();
   const [{ data: playersData, error: playersError }, { data: status, error: statusError }] = await Promise.all([
     getClubPlayerOptions(clubSlug),
     getAdminMatchUploaderStatus(clubId)

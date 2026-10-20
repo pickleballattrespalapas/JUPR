@@ -7,13 +7,14 @@ import {
 import { readTournamentRouteContext } from "@/lib/tournamentRouteContext";
 import TournamentLifecycleOverviewPanel from "../TournamentLifecycleOverviewPanel";
 
-type Props = { searchParams?: Record<string, string | string[] | undefined> };
+type Props = { searchParams?: Promise<Record<string, string | string[] | undefined>> };
 
-export default async function TournamentRegistrationPhasePage({ searchParams }: Props) {
+export default async function TournamentRegistrationPhasePage(props: Props) {
+  const searchParams = await props.searchParams;
   const context = readTournamentRouteContext(searchParams);
   if (!context.tournamentId) redirect("/admin/tournaments");
 
-  const { clubId } = requireAdminWorkspace();
+  const { clubId } = await requireAdminWorkspace();
   const { data, error } = await getAdminTournamentStatus(clubId);
   return (
     <section>

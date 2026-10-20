@@ -9,8 +9,8 @@ import {
 } from "@/lib/tournamentRegistrationApi";
 
 type Props = {
-  params: { clubSlug: string };
-  searchParams?: Record<string, string | string[] | undefined>;
+  params: Promise<{ clubSlug: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
 const cardStyle = {
@@ -22,7 +22,7 @@ const cardStyle = {
 };
 
 function firstParam(
-  searchParams: Props["searchParams"],
+  searchParams: Awaited<Props["searchParams"]>,
   key: string
 ): string | null {
   const value = searchParams?.[key];
@@ -117,10 +117,9 @@ function memberLabel(member: PublicTournamentRosterMember): string {
     : member.display_name;
 }
 
-export default async function TournamentRosterPage({
-  params,
-  searchParams
-}: Props) {
+export default async function TournamentRosterPage(props: Props) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   const registrationSlug = firstParam(searchParams, "tournament");
   const tournamentId = firstParam(searchParams, "tournament_id");
   if (!registrationSlug && !tournamentId) {

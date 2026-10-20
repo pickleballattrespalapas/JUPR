@@ -7,6 +7,7 @@ export const metadata: Metadata = {
   referrer: "no-referrer",
 };
 
-export default function SeasonSignupPage({ params }: { params: { shareId: string } }) {
+export default async function SeasonSignupPage(props: { params: Promise<{ shareId: string }> }) {
+  const params = await props.params;
   return <SeasonSignup key={params.shareId} shareId={params.shareId} />;
 }

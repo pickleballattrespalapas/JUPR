@@ -86,7 +86,7 @@ export function sharingMetadata(share: PageShare, origin: string): Metadata {
   };
 }
 export async function requestShareMetadata(fallbackPath = '/', root = false): Promise<Metadata> {
-  const h = headers();
+  const h = await headers();
   const path = h.get('x-pcs-club-path') || fallbackPath;
   // The club layout owns club metadata; avoid a duplicate metadata/API traversal.
   if (root && /^\/clubs\/[^/]+/.test(path)) return {};

@@ -11,8 +11,8 @@ import type {
 } from "@/lib/badgeApi";
 
 type BadgeCodexPageProps = {
-  params: { clubSlug: string };
-  searchParams?: Record<string, string | string[] | undefined>;
+  params: Promise<{ clubSlug: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
 const CATEGORY_ORDER = ["Participation", "Improvement", "Partnerships", "Match Achievements", "Trophies"];
@@ -51,7 +51,7 @@ const badgeIcons: Record<string, string> = {
   podium: "🏅"
 };
 
-function firstParam(searchParams: BadgeCodexPageProps["searchParams"], key: string): string | null {
+function firstParam(searchParams: Awaited<BadgeCodexPageProps["searchParams"]>, key: string): string | null {
   const value = searchParams?.[key];
   if (Array.isArray(value)) return value[0] ?? null;
   return value ?? null;
@@ -381,7 +381,9 @@ function EarnersPanel({
   );
 }
 
-export default async function BadgeCodexPage({ params, searchParams }: BadgeCodexPageProps) {
+export default async function BadgeCodexPage(props: BadgeCodexPageProps) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   const { clubSlug } = params;
   const requestedBucket = firstParam(searchParams, "bucket");
   const selectedCategory = firstParam(searchParams, "category");

@@ -36,7 +36,9 @@ async function main() {
     phone: "private-phone", edit_token: "private-edit", notes: "private-note" };
   let renderer;
   try {
-    await act(async () => { renderer = create(React.createElement(Recorder,snapshot)); await new Promise(resolve => setTimeout(resolve,25)); });
+    await act(async () => { renderer = create(React.createElement(Recorder,snapshot)); });
+    // Flush the mount effects before waiting for their debounce timer (React 19).
+    await act(async () => { await new Promise(resolve => setTimeout(resolve,25)); });
     assert.equal(requests.length,1);
     const rejected = requests[0];
     assert.equal(rejected.body.attempt_id,id);

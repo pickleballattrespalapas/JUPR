@@ -6,8 +6,8 @@ import { getClubTournamentRegistration } from "@/lib/tournamentRegistrationApi";
 import TournamentRegistrationForm from "./TournamentRegistrationForm";
 
 type TournamentRegistrationPageProps = {
-  params: { clubSlug: string };
-  searchParams?: { tournament?: string; tournament_id?: string };
+  params: Promise<{ clubSlug: string }>;
+  searchParams?: Promise<{ tournament?: string; tournament_id?: string }>;
 };
 
 const cardStyle = {
@@ -37,10 +37,9 @@ function timeZoneLabel(value: string): string {
   return labels[city] || city;
 }
 
-export default async function TournamentRegistrationPage({
-  params,
-  searchParams
-}: TournamentRegistrationPageProps) {
+export default async function TournamentRegistrationPage(props: TournamentRegistrationPageProps) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   const { clubSlug } = params;
   const { data, error } = await getClubTournamentRegistration(clubSlug, {
     registrationSlug: searchParams?.tournament ?? null,

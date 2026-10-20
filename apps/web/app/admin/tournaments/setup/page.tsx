@@ -2,10 +2,11 @@ import { redirect } from "next/navigation";
 import { tournamentSetupStepHref } from "@/components/TournamentSetupWizardNav";
 import { readTournamentRouteContext } from "@/lib/tournamentRouteContext";
 
-type Props = { searchParams?: Record<string, string | string[] | undefined> };
+type Props = { searchParams?: Promise<Record<string, string | string[] | undefined>> };
 
 // Keep the six-step wizard as the only selected-tournament Setup entry point.
-export default function TournamentSetupPhasePage({ searchParams }: Props) {
+export default async function TournamentSetupPhasePage(props: Props) {
+  const searchParams = await props.searchParams;
   const context = readTournamentRouteContext(searchParams);
   if (!context.tournamentId) redirect("/admin/tournaments");
   redirect(

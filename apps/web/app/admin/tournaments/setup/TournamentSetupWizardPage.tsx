@@ -62,7 +62,7 @@ export default async function TournamentSetupWizardPage({
   const resolveDivisionId = first(searchParams?.resolveDivision).trim();
   if (!context.tournamentId) redirect("/admin/tournaments");
 
-  const { clubId } = requireAdminWorkspace();
+  const { clubId } = await requireAdminWorkspace();
   const { data: status, error } = await loadStatus(clubId);
 
   return (

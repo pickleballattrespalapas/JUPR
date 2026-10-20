@@ -7,11 +7,12 @@ import { readTournamentRouteContext } from "@/lib/tournamentRouteContext";
 import TournamentCheckInPanel from "./TournamentCheckInPanel";
 
 type Props = {
-  searchParams?: Record<string, string | string[] | undefined>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
-export default function TournamentCheckInPage({ searchParams }: Props) {
-  const { clubId } = requireAdminWorkspace();
+export default async function TournamentCheckInPage(props: Props) {
+  const searchParams = await props.searchParams;
+  const { clubId } = await requireAdminWorkspace();
   const context = readTournamentRouteContext(searchParams);
   if (!context.tournamentId) redirect("/admin/tournaments");
 

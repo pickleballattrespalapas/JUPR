@@ -2,7 +2,7 @@ import Link from "@/components/PublicClubLink";
 import { getPublicTeamTournamentIndex } from "@/lib/tournamentTeamCompetitionApi";
 
 type Props = {
-  params: { clubSlug: string };
+  params: Promise<{ clubSlug: string }>;
 };
 
 const card = {
@@ -21,7 +21,8 @@ function divisionLabel(eventFamily?: string | null, divisionName?: string | null
   return `${family} · ${division}`;
 }
 
-export default async function TournamentTeamResultsIndex({ params }: Props) {
+export default async function TournamentTeamResultsIndex(props: Props) {
+  const params = await props.params;
   const { data, error } = await getPublicTeamTournamentIndex(params.clubSlug);
 
   return (

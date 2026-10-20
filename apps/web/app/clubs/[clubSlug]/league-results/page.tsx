@@ -14,8 +14,8 @@ import LeaguePlayerRoster from "@/components/LeaguePlayerRoster";
 import PrintButton from "./PrintButton";
 
 type LeagueResultsPageProps = {
-  params: { clubSlug: string };
-  searchParams?: Record<string, string | string[] | undefined>;
+  params: Promise<{ clubSlug: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
 type SectionKey = "overall" | "weekly" | "player";
@@ -45,7 +45,7 @@ const sectionLabels: Record<SectionKey, string> = {
   player: "Player"
 };
 
-function firstParam(searchParams: LeagueResultsPageProps["searchParams"], key: string): string | null {
+function firstParam(searchParams: Awaited<LeagueResultsPageProps["searchParams"]>, key: string): string | null {
   const value = searchParams?.[key];
   if (Array.isArray(value)) return value[0] ?? null;
   return value ?? null;
@@ -311,7 +311,9 @@ function PlayerTrend({ rows, playerName }: { rows: LeagueResultsStatRow[]; playe
   );
 }
 
-export default async function LeagueResultsPage({ params, searchParams }: LeagueResultsPageProps) {
+export default async function LeagueResultsPage(props: LeagueResultsPageProps) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   const { clubSlug } = params;
   const leagueName = decodeParam(firstParam(searchParams, "league"));
   const activeSection = normalizeSection(firstParam(searchParams, "section"));

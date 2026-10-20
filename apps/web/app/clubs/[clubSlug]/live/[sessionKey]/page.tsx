@@ -3,14 +3,15 @@ import { getClubLiveSession } from "@/lib/api";
 import LiveSessionRunner from "./LiveSessionRunner";
 
 type LiveSessionPageProps = {
-  params: { clubSlug: string; sessionKey: string };
+  params: Promise<{ clubSlug: string; sessionKey: string }>;
 };
 
 function apiBase(): string {
   return "/api";
 }
 
-export default async function ClubLiveSessionPage({ params }: LiveSessionPageProps) {
+export default async function ClubLiveSessionPage(props: LiveSessionPageProps) {
+  const params = await props.params;
   const { clubSlug, sessionKey } = params;
   const { data } = await getClubLiveSession(clubSlug, sessionKey);
   const clubName = data?.club?.name ?? clubSlug;

@@ -4,7 +4,11 @@ import EventHistoryView from "@/components/EventHistoryView";
 import { publicSiteFetch } from "@/lib/clubSiteServer";
 import type { EventHistory } from "@/lib/eventSeasons";
 
-export default async function TournamentHistoryPage({ params, searchParams }: { params: { clubSlug: string }; searchParams: { tournament_id?: string; tournament?: string } }) {
+export default async function TournamentHistoryPage(
+  props: { params: Promise<{ clubSlug: string }>; searchParams: Promise<{ tournament_id?: string; tournament?: string }> }
+) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   const event = searchParams.tournament_id || searchParams.tournament;
   if (!event) notFound();
   const history = await publicSiteFetch<EventHistory>(`/public/clubs/${encodeURIComponent(params.clubSlug)}/event-history?${new URLSearchParams({ kind: "tournament", event })}`);

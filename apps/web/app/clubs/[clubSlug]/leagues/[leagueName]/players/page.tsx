@@ -6,8 +6,8 @@ import { getClubLeagueResults, type LeagueResultsRecentMatch } from "@/lib/api";
 import LeaguePlayerSelect from "./LeaguePlayerSelect";
 
 type Props = {
-  params: { clubSlug: string; leagueName: string };
-  searchParams?: Record<string, string | string[] | undefined>;
+  params: Promise<{ clubSlug: string; leagueName: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
 const cardStyle = {
@@ -26,7 +26,7 @@ function decodeLeagueName(value: string): string {
   }
 }
 
-function firstParam(searchParams: Props["searchParams"], key: string): string | null {
+function firstParam(searchParams: Awaited<Props["searchParams"]>, key: string): string | null {
   const value = searchParams?.[key];
   if (Array.isArray(value)) return value[0] ?? null;
   return value ?? null;
@@ -59,7 +59,9 @@ function opponentsLabel(match: LeagueResultsRecentMatch): string {
   return match.opponents.map((opponent) => opponent.player_name).join(" / ") || "—";
 }
 
-export default async function PublicLeaguePlayerSummariesPage({ params, searchParams }: Props) {
+export default async function PublicLeaguePlayerSummariesPage(props: Props) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   const leagueName = decodeLeagueName(params.leagueName);
   const requestedPlayer = firstParam(searchParams, "player");
   const { data, error } = await getClubLeagueResults(

@@ -23,7 +23,7 @@ async function loadStatus(clubId: string): Promise<{ data: StatusResponse | null
 }
 
 export default async function ChallengeLadderAdminPage() {
-  const { clubId, clubSlug } = requireAdminWorkspace();
+  const { clubId, clubSlug } = await requireAdminWorkspace();
   const { data: status, error } = await loadStatus(clubId);
   return (
     <section>

@@ -15,7 +15,8 @@ function upstreamUrl(base: string, clubSlug: string, searchParams: URLSearchPara
   return `${base.replace(/\/$/, "")}/clubs/${encodeURIComponent(clubSlug)}/match-explorer/preview?${params.toString()}`;
 }
 
-export async function GET(request: Request, { params }: { params: { clubSlug: string } }) {
+export async function GET(request: Request, props: { params: Promise<{ clubSlug: string }> }) {
+  const params = await props.params;
   const base = baseUrl();
   if (!base) {
     return NextResponse.json({ detail: PUBLIC_ERROR }, { status: 500 });

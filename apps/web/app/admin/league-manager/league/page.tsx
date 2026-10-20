@@ -6,15 +6,16 @@ import { readLeagueRouteContext } from "@/lib/leagueRouteContext";
 import LeagueHomePanel from "./LeagueHomePanel";
 
 type Props = {
-  searchParams?: Record<string, string | string[] | undefined>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
-export default async function AdminSelectedLeaguePage({ searchParams }: Props) {
+export default async function AdminSelectedLeaguePage(props: Props) {
+  const searchParams = await props.searchParams;
   const context = readLeagueRouteContext(searchParams);
   if (!context.leagueId) redirect("/admin/league-manager");
   const leagueName = context.leagueName || context.leagueId;
 
-  const { clubId, clubSlug } = requireAdminWorkspace();
+  const { clubId, clubSlug } = await requireAdminWorkspace();
   const { data: status, error } = await getAdminLeagueManagerStatus(clubId);
 
   return (

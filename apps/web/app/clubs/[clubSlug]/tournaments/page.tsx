@@ -10,8 +10,8 @@ import {
 } from "@/lib/tournamentRegistrationApi";
 
 type Props = {
-  params: { clubSlug: string };
-  searchParams?: Record<string, string | string[] | undefined>;
+  params: Promise<{ clubSlug: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
 const cardStyle = {
@@ -23,7 +23,7 @@ const cardStyle = {
 };
 
 function firstParam(
-  searchParams: Props["searchParams"],
+  searchParams: Awaited<Props["searchParams"]>,
   key: string
 ): string | null {
   const value = searchParams?.[key];
@@ -106,10 +106,9 @@ function markdownish(text?: string | null) {
     ));
 }
 
-export default async function PublicTournamentsPage({
-  params,
-  searchParams
-}: Props) {
+export default async function PublicTournamentsPage(props: Props) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   const registrationSlug = firstParam(searchParams, "tournament");
   const tournamentId = firstParam(searchParams, "tournament_id");
   const explicitSelection = Boolean(registrationSlug || tournamentId);

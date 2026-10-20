@@ -11,14 +11,14 @@ import {
 } from "@/lib/tournamentResultsApi";
 
 type Props = {
-  params: { clubSlug: string };
-  searchParams?: {
+  params: Promise<{ clubSlug: string }>;
+  searchParams?: Promise<{
     draw?: string;
     tournament_id?: string;
     tournament?: string;
     view?: string;
     tab?: string;
-  };
+  }>;
 };
 
 const cardStyle = {
@@ -421,7 +421,9 @@ function CompletedDrawCard({ draw, href }: { draw: PublicTournamentDrawResult; h
   );
 }
 
-export default async function TournamentResultsPage({ params, searchParams }: Props) {
+export default async function TournamentResultsPage(props: Props) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   const tournamentId = String(searchParams?.tournament_id || searchParams?.tournament || "").trim();
   const view = searchParams?.view === "past" ? "past" : "current";
 

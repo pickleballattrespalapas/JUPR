@@ -1,5 +1,6 @@
 import CompetitionWorkspace from "./CompetitionWorkspace";
 
-export default function CompetitionPage({ searchParams }: { searchParams: { season?: string; meet?: string } }) {
+export default async function CompetitionPage(props: { searchParams: Promise<{ season?: string; meet?: string }> }) {
+  const searchParams = await props.searchParams;
   return <CompetitionWorkspace initialSeasonId={typeof searchParams.season === "string" ? searchParams.season : ""} initialMeetId={typeof searchParams.meet === "string" ? searchParams.meet : ""} />;
 }

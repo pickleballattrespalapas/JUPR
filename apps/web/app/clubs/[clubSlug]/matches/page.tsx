@@ -6,8 +6,8 @@ import { getClubMatches, type PublicMatch } from "@/lib/api";
 import { publicMatchTypeLabel } from "@/lib/publicMatchLabels";
 
 type MatchesPageProps = {
-  params: { clubSlug: string };
-  searchParams?: Record<string, string | string[] | undefined>;
+  params: Promise<{ clubSlug: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
 type SortKey = "date" | "league" | "score";
@@ -16,7 +16,7 @@ const thStyle = { textAlign: "left" as const, borderBottom: "1px solid #cbd5e1",
 const tdStyle = { borderBottom: "1px solid #e2e8f0", padding: "0.6rem", whiteSpace: "nowrap" as const };
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 
-function firstParam(searchParams: MatchesPageProps["searchParams"], key: string): string | null {
+function firstParam(searchParams: Awaited<MatchesPageProps["searchParams"]>, key: string): string | null {
   const value = searchParams?.[key];
   if (Array.isArray(value)) return value[0] ?? null;
   return value ?? null;
@@ -48,7 +48,7 @@ function formatMatchDate(value?: string | null): string {
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
-function teamLabel(clubSlug: string, players: PublicMatch["team_1"]): JSX.Element {
+function teamLabel(clubSlug: string, players: PublicMatch["team_1"]): React.JSX.Element {
   return (
     <>
       {players.map((player, index) => (
@@ -85,7 +85,9 @@ function sortMatches(matches: PublicMatch[], sort: SortKey): PublicMatch[] {
   return sorted;
 }
 
-export default async function MatchesPage({ params, searchParams }: MatchesPageProps) {
+export default async function MatchesPage(props: MatchesPageProps) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   const { clubSlug } = params;
   const selectedLeague = firstParam(searchParams, "league");
   const q = (firstParam(searchParams, "q") ?? "").trim();

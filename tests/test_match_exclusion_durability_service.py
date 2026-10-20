@@ -220,7 +220,7 @@ def test_apply_exclusion_freezes_scope_replays_reconciles_and_finalizes(
     assert apply_params["p_badge_ids"] == ["first_win"]
     assert (
         apply_params["p_badge_contract_version"]
-        == "jupr:match-exclusion-badges:v1"
+        == "jupr:match-exclusion-badges:v2"
     )
 
 

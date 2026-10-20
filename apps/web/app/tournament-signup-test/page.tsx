@@ -6,8 +6,9 @@ import FourPlayerTeamSetupRecovery from "../clubs/[clubSlug]/tournament-registra
 // interaction harness. Never expose a test registration page in production.
 export const dynamic = "force-dynamic";
 
-export default function TournamentSignupHarness({ searchParams }: { searchParams: { confirmation?: string } }) {
+export default async function TournamentSignupHarness(props: { searchParams: Promise<{ confirmation?: string }> }) {
   if (process.env.JUPR_INTERACTION_TEST_HARNESS !== "1") notFound();
+  const searchParams = await props.searchParams;
   const event = {
     id: "team-event", registration_day_id: "day1", label: "Mixed 5.0",
     event_family_label: "Team Tournament", division_name: "Mixed 5.0",

@@ -2,9 +2,10 @@ import { redirect } from "next/navigation";
 import { readTournamentRouteContext, tournamentRouteHref } from "@/lib/tournamentRouteContext";
 import TournamentLiveRoute from "../TournamentLiveRoute";
 
-type Props = { searchParams?: Record<string, string | string[] | undefined> };
+type Props = { searchParams?: Promise<Record<string, string | string[] | undefined>> };
 
-export default function TournamentCorrectionsRecoveryPage({ searchParams }: Props) {
+export default async function TournamentCorrectionsRecoveryPage(props: Props) {
+  const searchParams = await props.searchParams;
   const context = readTournamentRouteContext(searchParams);
   if (context.dayId) {
     redirect(tournamentRouteHref("/admin/tournaments/live-operations", context, { panel: "corrections" }));

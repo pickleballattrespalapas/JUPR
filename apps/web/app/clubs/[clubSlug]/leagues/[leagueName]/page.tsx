@@ -8,7 +8,7 @@ import { LeagueAwardRaceGrid } from "@/components/LeagueAwardRace";
 import { getClubLeagueResults } from "@/lib/api";
 
 type Props = {
-  params: { clubSlug: string; leagueName: string };
+  params: Promise<{ clubSlug: string; leagueName: string }>;
 };
 
 const cardStyle = {
@@ -27,7 +27,8 @@ function decodeLeagueName(value: string): string {
   }
 }
 
-export default async function PublicLeagueHomePage({ params }: Props) {
+export default async function PublicLeagueHomePage(props: Props) {
+  const params = await props.params;
   const leagueName = decodeLeagueName(params.leagueName);
   const { data, error } = await getClubLeagueResults(
     params.clubSlug,

@@ -1,10 +1,11 @@
 import MatchLogWorkspace from "../MatchLogWorkspace";
 import type { MatchLogSearchParams } from "../MatchLogWorkspace";
 
-export default function MatchLogReplayPage({
-  searchParams,
-}: {
-  searchParams?: MatchLogSearchParams;
-}) {
+export default async function MatchLogReplayPage(
+  props: {
+    searchParams?: Promise<MatchLogSearchParams>;
+  }
+) {
+  const searchParams = await props.searchParams;
   return <MatchLogWorkspace mode="replay" searchParams={searchParams} />;
 }

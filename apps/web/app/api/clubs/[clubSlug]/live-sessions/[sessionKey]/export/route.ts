@@ -5,7 +5,11 @@ function baseUrl(): string | null {
   return process.env.JUPR_API_BASE_URL || process.env.NEXT_PUBLIC_JUPR_API_BASE_URL || null;
 }
 
-export async function GET(request: Request, { params }: { params: { clubSlug: string; sessionKey: string } }) {
+export async function GET(
+  request: Request,
+  props: { params: Promise<{ clubSlug: string; sessionKey: string }> }
+) {
+  const params = await props.params;
   const base = baseUrl();
   if (!base) return publicLiveErrorResponse(500);
   const format = new URL(request.url).searchParams.get("format") === "json" ? "json" : "csv";

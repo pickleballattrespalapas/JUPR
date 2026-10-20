@@ -10,7 +10,7 @@ function statusText(value?: string | null): string {
 }
 
 export default async function AdminPlayerUpdatesPage() {
-  const { clubId } = requireAdminWorkspace();
+  const { clubId } = await requireAdminWorkspace();
   const { data: status, error } = await getAdminPlayerUpdatesStatus(clubId);
   const smtpConfigured = Boolean(status?.smtp_configured);
 

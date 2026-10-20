@@ -184,7 +184,7 @@ const adminGroups: AdminGroup[] = [
 function NotificationBadge({ items, summaryId }: { items: AdminNotification[]; summaryId: string }) {
   const anchor = useRef<HTMLSpanElement>(null);
   const tooltip = useRef<HTMLSpanElement>(null);
-  const closeTimer = useRef<ReturnType<typeof setTimeout>>();
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState({ top: 8, left: 8 });
   const summary = notificationSummary(items);

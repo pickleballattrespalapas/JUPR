@@ -30,7 +30,7 @@ export default async function TournamentLiveRoute({
   const context = readTournamentRouteContext(searchParams);
   if (!context.tournamentId) redirect("/admin/tournaments");
 
-  const { clubId } = requireAdminWorkspace();
+  const { clubId } = await requireAdminWorkspace();
   const { data: status, error } = await getAdminTournamentLiveStatus(clubId);
   const heading = context.tournamentName ? `${context.tournamentName} ${title}` : title;
 

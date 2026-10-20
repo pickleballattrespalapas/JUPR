@@ -2,10 +2,11 @@ import { redirect } from "next/navigation";
 import { tournamentSetupStepHref } from "@/components/TournamentSetupWizardNav";
 import { readTournamentRouteContext } from "@/lib/tournamentRouteContext";
 
-type Props = { searchParams?: Record<string, string | string[] | undefined> };
+type Props = { searchParams?: Promise<Record<string, string | string[] | undefined>> };
 
 // Preserve the legacy URL but hand off immediately to the canonical builder.
-export default function TournamentSetupPage({ searchParams }: Props) {
+export default async function TournamentSetupPage(props: Props) {
+  const searchParams = await props.searchParams;
   const context = readTournamentRouteContext(searchParams);
   if (!context.tournamentId) redirect("/admin/tournaments/create");
   redirect(

@@ -303,7 +303,7 @@ async function deepLinkContext() {
   }).default;
   const Route = load('app/admin/interclub/registrations/page.tsx', { './RegistrationWorkspace': { default: Page, __esModule: true } }).default;
   let tree;
-  await act(async () => { tree = create(React.createElement(Route, { searchParams: { season: sid, meet: mid2, step: 'lineups' } })); });
+  await act(async () => { tree = create(await Route({ searchParams: Promise.resolve({ season: sid, meet: mid2, step: 'lineups' }) })); });
   assert.equal(tree.root.findByProps({ 'aria-label': 'Meet' }).props.value, mid2, 'A link from operations opens the requested meet instead of the first meet');
   assert.equal(tree.root.findByProps({ 'aria-label': 'Lineups' }).props['aria-current'], 'step');
   assert.equal(tree.root.findByProps({ id: 'season-player-pool' }).props.hidden, true);
@@ -317,7 +317,7 @@ async function deepLinkContext() {
     assert.equal(url.searchParams.get('meet'), mid2);
   }
   await act(async () => tree.unmount());
-  await act(async () => { tree = create(React.createElement(Route, { searchParams: { season: sid } })); });
+  await act(async () => { tree = create(await Route({ searchParams: Promise.resolve({ season: sid }) })); });
   assert.equal(tree.root.findByProps({ 'aria-label': 'Meet' }).props.value, mid, 'Organizer defaults to its own next meet, not the first visible meet for other clubs');
   await act(async () => button(tree, 'Next: open meet signup').props.onClick());
   assert.equal(tree.root.findByProps({ 'aria-label': 'Meet' }).props.value, mid, 'Pool next action opens the own-club meet shown in the confirmation');

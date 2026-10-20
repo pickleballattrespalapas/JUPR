@@ -57,7 +57,7 @@ export default function TournamentPartnerDetails({
   const skillReadOnly = Boolean(value.profileId && value.profileHasRating);
   const requestId = useRef(0);
   const detailsVersion = useRef(0);
-  const lookupTimer = useRef<ReturnType<typeof setTimeout>>();
+  const lookupTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const onChangeRef = useRef(onChange);
   useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
   const [candidates, setCandidates] = useState<PublicRegistrationPlayer[] | null>(null);

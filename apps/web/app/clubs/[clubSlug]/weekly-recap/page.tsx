@@ -9,8 +9,8 @@ import type { WeeklyRecapJson, WeeklyRecapSpotlight, WeeklyRecapTournament } fro
 import PrintButton from "./PrintButton";
 
 type WeeklyRecapPageProps = {
-  params: { clubSlug: string };
-  searchParams?: Record<string, string | string[] | undefined>;
+  params: Promise<{ clubSlug: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
 type RecapSection = "all" | "spotlight" | "around" | "tournaments" | "progress" | "ahead";
@@ -51,7 +51,7 @@ const spotlightStyleByKey: Record<string, { background: string; borderLeft: stri
   PERFECT_RUN: { background: "linear-gradient(135deg, #fff0f5, #ffd6e8)", borderLeft: "6px solid #d63384" }
 };
 
-function firstParam(searchParams: WeeklyRecapPageProps["searchParams"], key: string): string | null {
+function firstParam(searchParams: Awaited<WeeklyRecapPageProps["searchParams"]>, key: string): string | null {
   const value = searchParams?.[key];
   if (Array.isArray(value)) return value[0] ?? null;
   return value ?? null;
@@ -240,7 +240,9 @@ function RecapBody({ recap, activeSection, clubSlug }: { recap: WeeklyRecapJson;
   );
 }
 
-export default async function WeeklyRecapPage({ params, searchParams }: WeeklyRecapPageProps) {
+export default async function WeeklyRecapPage(props: WeeklyRecapPageProps) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   const { clubSlug } = params;
   const selectedWeek = decodeParam(firstParam(searchParams, "week"));
   const activeSection = normalizeSection(firstParam(searchParams, "section"));

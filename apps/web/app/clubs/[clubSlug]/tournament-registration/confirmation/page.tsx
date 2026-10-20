@@ -10,12 +10,12 @@ import { recoverPublicFourPlayerTeamSetup } from "@/lib/tournamentTeamCompetitio
 import FourPlayerTeamSetupRecovery from "./FourPlayerTeamSetupRecovery";
 
 type ConfirmationPageProps = {
-  params: { clubSlug: string };
-  searchParams?: {
+  params: Promise<{ clubSlug: string }>;
+  searchParams?: Promise<{
     confirmation_token?: string;
     email_status?: string;
     team_setup?: string;
-  };
+  }>;
 };
 
 const cardStyle = {
@@ -108,7 +108,9 @@ function deliveryMessage(status?: string): { text: string; color: string; backgr
   return null;
 }
 
-export default async function TournamentRegistrationConfirmationPage({ params, searchParams }: ConfirmationPageProps) {
+export default async function TournamentRegistrationConfirmationPage(props: ConfirmationPageProps) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   const { clubSlug } = params;
   const confirmationToken = searchParams?.confirmation_token || "";
   const [confirmationResult, teamRecoveryResult] = confirmationToken

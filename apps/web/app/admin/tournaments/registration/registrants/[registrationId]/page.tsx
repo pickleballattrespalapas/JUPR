@@ -9,15 +9,17 @@ import { readTournamentRouteContext, tournamentRouteHref } from "@/lib/tournamen
 import TournamentRegistrantEditPanel from "./TournamentRegistrantEditPanel";
 
 type Props = {
-  params: { registrationId: string };
-  searchParams?: Record<string, string | string[] | undefined>;
+  params: Promise<{ registrationId: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
-export default async function TournamentRegistrantEditPage({ params, searchParams }: Props) {
+export default async function TournamentRegistrantEditPage(props: Props) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   const context = readTournamentRouteContext(searchParams);
   const registrationId = decodeURIComponent(String(params.registrationId || "")).trim();
   if (!context.tournamentId) redirect("/admin/tournaments");
   if (!registrationId) redirect(tournamentRouteHref("/admin/tournaments/registration/registrants", context));
-  const { clubId } = requireAdminWorkspace();
+  const { clubId } = await requireAdminWorkspace();
   const { data, error } = await getAdminTournamentStatus(clubId);
   return (
     <section>
