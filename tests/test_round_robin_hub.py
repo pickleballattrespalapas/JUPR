@@ -63,9 +63,11 @@ def test_partial_score_releases_court_without_counting_standings_or_advancing():
     state, events = score(state, events, "c0")
     assert events["a"]["rounds"][0]["status"] == "saved"
     assert all(p["matches"] == 1 for p in generator_event_standings(events["a"]))
-    assert events["a"]["currentRoundNumber"] == 1
-    state, events = command(state, events, "advance_round", session_key="a")
     assert events["a"]["currentRoundNumber"] == 2
+    assert events["a"]["hubAutoAdvancedFromRound"] == 1
+    assert {m["round_number"] for m in build_hub_snapshot(state, events, now=LATER)["eligible_queue"]} == {2}
+    with pytest.raises(ValueError, match="Finish the current round"):
+        command(state, events, "advance_round", session_key="a")
 
 
 def test_bye_wait_survives_round_and_is_first_priority():
@@ -75,7 +77,7 @@ def test_bye_wait_survives_round_and_is_first_priority():
     state, events = command(state, events, "auto_fill_courts")
     state, events = score(state, events, "c0")
     state, events = score(state, events, "c1")
-    state, events = command(state, events, "advance_round", now=LATER, session_key="a")
+    assert events["a"]["currentRoundNumber"] == 2
     snapshot = build_hub_snapshot(state, events, now=LATER)
     top = snapshot["eligible_queue"][0]
     assert bye in [p["id"] for p in top["side_a"] + top["side_b"]]
@@ -135,13 +137,13 @@ def test_reserved_game_promotes_atomically_after_score_and_labels_follow_assignm
     assert current_matches(events)[1]["courtLabel"] == "Court 0"
 
 
-def test_unscored_match_completion_requires_whole_round_then_explicit_advance():
+def test_unscored_match_completion_advances_automatically_only_after_whole_round():
     state, events = setup({"a": event(scoring="unscored")})
     state, events = command(state, events, "auto_fill_courts")
     for index in range(2):
         assignment = state["courts"][index]["current"]
         state, events = command(state, events, "mark_played", court_id=f"c{index}", **assignment)
-        assert events["a"]["currentRoundNumber"] == 1
+        assert events["a"]["currentRoundNumber"] == (1 if index == 0 else 2)
         assert events["a"]["rounds"][0]["status"] == ("active" if index == 0 else "played")
 
 
@@ -262,6 +264,14 @@ def test_moneyball_partial_scores_preserve_frozen_expectations_and_full_roster_r
     state, events = score(state, events, "c0")
     assert all(p["matches"] == 1 for p in generator_event_standings(events["a"]))
     assert events["a"]["moneyballPrivate"] == lock
+    assert {m["round_number"] for m in build_hub_snapshot(state, events, now=LATER)["eligible_queue"]} == {2}
+    while events["a"]["status"] == "active":
+        state, events = command(state, events, "auto_fill_courts")
+        state, events = score(state, events, "c0")
+    assert events["a"]["currentRoundNumber"] == 7
+    assert len(events["a"]["rounds"]) == 7
+    assert all(r["status"] == "saved" for r in events["a"]["rounds"])
+    assert events["a"]["moneyballPrivate"] == lock
     assert not build_hub_snapshot(state, events, now=LATER)["eligible_queue"]
 
 
@@ -276,9 +286,11 @@ def test_attaching_out_of_order_results_is_rejected_and_score_correction_preserv
     before_wait = deepcopy(state["players"])
     before = deepcopy(events)
     events["a"] = save_generator_round(events["a"], round_number=1, scores=[
-        {"match_id": current_matches(events)[0]["id"], "score_a": 11, "score_b": 8}])
+        {"match_id": events["a"]["rounds"][0]["matches"][0]["id"], "score_a": 11, "score_b": 8}])
     state, events = reconcile_hub_events(state, before, events, now="2026-10-20T03:20:00Z")
     assert state["players"] == before_wait
+    assert events["a"]["currentRoundNumber"] == 2
+    assert events["a"]["rounds"][1] == before["a"]["rounds"][1]
 
 
 def ref(key, player):
@@ -423,3 +435,92 @@ def test_identity_name_review_normalization_matches_sql_latin_and_whitespace_rul
     groups["b"]["participants"][0]["name"] = "JOSÉ\tONE"
     state, events = setup(groups)
     assert build_hub_snapshot(state, events, now=START)["identity_pending_count"] == 1
+
+
+def test_automatic_rounds_continue_beyond_schedule_without_advancing_other_group():
+    a = start_generator_event(create_generator_preview(generator_kind="round_robin", play_format="doubles",
+        title="A", participant_names=[f"A {n}" for n in range(4)], total_rounds=1))
+    a["roundRobinHubId"] = "hub"
+    state, events = setup({"a": a, "b": event("B", 4)}, courts=1)
+    original_b = deepcopy(events["b"])
+    for expected in range(2, 5):
+        match = current_matches(events)[0]
+        state, events = command(state, events, "assign_next_court", session_key="a", match_id=match["id"])
+        assert "hubAutoAdvancedFromRound" not in events["a"]
+        state, events = score(state, events, "c0")
+        assert events["a"]["currentRoundNumber"] == expected
+        assert events["a"]["hubAutoAdvancedFromRound"] == expected - 1
+        assert events["a"]["rounds"][-1]["status"] == "active"
+        assert state["courts"][0]["current"] is None
+        assert events["b"] == original_b
+    assert all(p["matches"] == 3 for p in generator_event_standings(events["a"]))
+
+
+def test_automatic_playoff_progression_waits_for_both_semifinals_and_finishes_final():
+    from jupr_app.domain.generator_playoffs import start_generator_playoff
+    a = event("Playoff", 8)
+    a = save_generator_round(a, round_number=1, scores=[{"match_id": m["id"], "score_a": 11, "score_b": 7} for m in a["rounds"][0]["matches"]])
+    a = start_generator_playoff(a, playoff_format="top_eight")
+    state, events = setup({"a": a})
+    state, events = command(state, events, "auto_fill_courts")
+    state, events = score(state, events, "c0")
+    assert events["a"]["currentRoundNumber"] == 2
+    state, events = score(state, events, "c1")
+    assert events["a"]["currentRoundNumber"] == 3
+    final = current_matches(events)[0]
+    semifinals = events["a"]["rounds"][1]["matches"]
+    assert final["sideA"] == semifinals[0]["sideA"]
+    assert final["sideB"] == semifinals[1]["sideA"]
+    state, events = command(state, events, "auto_fill_courts")
+    state, events = score(state, events, "c0")
+    assert events["a"]["status"] == "completed"
+    assert events["a"]["currentRoundNumber"] == 3
+    assert len(events["a"]["rounds"]) == 3
+    assert not build_hub_snapshot(state, events, now=LATER)["eligible_queue"]
+
+
+def test_next_round_retains_pause_and_applies_scheduled_roster_departure():
+    state, events = setup()
+    state, events = command(state, events, "auto_fill_courts")
+    departed = current_matches(events)[0]["sideA"][0]
+    paused = next(p for p in events["a"]["participants"] if p["id"] == current_matches(events)[1]["sideA"][0])
+    identity = player_identity(paused, "a", state)
+    state, events = command(state, events, "pause_player", identity=identity)
+    before = deepcopy(events)
+    events["a"] = mutate_generator_roster(events["a"], action="remove", participant_id=departed)
+    state, events = reconcile_hub_events(state, before, events, now=START)
+    state, events = score(state, events, "c0")
+    state, events = score(state, events, "c1")
+    assert events["a"]["currentRoundNumber"] == 2
+    assert departed not in events["a"]["rosterByRound"]["2"]
+    assert state["players"][identity]["paused"]
+    assert state["players"][identity]["pause_started_at"] == LATER
+    assert departed in before["a"]["rounds"][0]["matches"][0]["sideA"]
+    assert events["a"]["rounds"][0]["matches"][0]["sideA"] == before["a"]["rounds"][0]["matches"][0]["sideA"]
+
+
+def test_manager_already_advanced_unscored_round_does_not_advance_twice():
+    from jupr_app.domain.adaptive_play_engine import advance_generator_event, mark_generator_round_played
+    state, events = setup({"a": event(scoring="unscored")})
+    state, events = command(state, events, "auto_fill_courts")
+    after = deepcopy(events)
+    after["a"] = advance_generator_event(mark_generator_round_played(after["a"], round_number=1))
+    state, after = reconcile_hub_events(state, events, after, now=LATER)
+    assert after["a"]["currentRoundNumber"] == 2
+    assert after["a"]["hubAutoAdvancedFromRound"] == 1
+    assert after["a"]["rounds"][1]["status"] == "active"
+    assert all(c["current"] is None for c in state["courts"])
+
+
+def test_fill_resumes_legacy_completed_round_once_and_dispatch_clears_end_boundary():
+    state, events = setup({"a": event(count=4)})
+    events["a"] = save_generator_round(events["a"], round_number=1, scores=[{"match_id": current_matches(events)[0]["id"], "score_a": 11, "score_b": 7}])
+    before = deepcopy(events)
+    assert build_hub_snapshot(state, events, now=LATER)["groups"][0]["can_advance"]
+    assert events == before  # Reading the hub cannot progress it.
+    state, events = command(state, events, "auto_fill_courts")
+    assert events["a"]["currentRoundNumber"] == 2
+    assert state["courts"][0]["current"]["round_number"] == 2
+    assert "hubAutoAdvancedFromRound" not in events["a"]
+    state, events = command(state, events, "auto_fill_courts")
+    assert events["a"]["currentRoundNumber"] == 2

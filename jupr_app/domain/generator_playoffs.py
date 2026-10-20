@@ -11,10 +11,11 @@ PLAYOFF_FORMATS = {"groups_of_four", "top_eight"}
 
 def generator_playoff_options(event: dict[str, Any]) -> dict[str, Any]:
     from jupr_app.domain.adaptive_play_engine import (
-        active_participant_ids, generator_event_standings, normalize_scoring_mode,
+        active_participant_ids, generator_event_standings, hub_auto_advance_boundary, normalize_scoring_mode,
     )
 
-    current = int(event.get("currentRoundNumber") or 1)
+    auto_boundary = hub_auto_advance_boundary(event)
+    current = auto_boundary or int(event.get("currentRoundNumber") or 1)
     current_row = next((r for r in event.get("rounds", []) if r.get("number") == current), {})
     reason = None
     if event.get("eventFormat") == "moneyball_expectations":
@@ -31,7 +32,9 @@ def generator_playoff_options(event: dict[str, Any]) -> dict[str, Any]:
         reason = "Save or skip the current round before starting a playoff."
     elif any(r.get("number", 0) < current and r.get("status") not in {"saved", "skipped"} for r in event.get("rounds", [])):
         reason = "Save or skip every open round before starting a playoff."
-    elif any(r.get("number", 0) > current and r.get("status") != "preview" for r in event.get("rounds", [])):
+    elif any(r.get("number", 0) > current and r.get("status") != "preview"
+             and not (auto_boundary and r.get("number") == auto_boundary + 1)
+             for r in event.get("rounds", [])):
         reason = "Finish the recorded rounds before starting a playoff."
 
     active = set(active_participant_ids(event, current + 1))
@@ -124,6 +127,7 @@ def start_generator_playoff(event: dict[str, Any], *, playoff_format: str) -> di
     next_event["totalRounds"] = int(next_event["rounds"][-1]["number"])
     next_event["status"] = "active"
     next_event.pop("completedAt", None)
+    next_event.pop("hubAutoAdvancedFromRound", None)
     return next_event
 
 

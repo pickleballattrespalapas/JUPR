@@ -2,7 +2,8 @@
  * Loopback-only E2E: actual Next UI -> FastAPI routes -> generator/hub services
  * -> transactional RPC double. Starts without sessions. Sessions are created
  * using real generator APIs; identity review, pause and court assignment
- * use the UI. Covers guest/profile identity and an exact response-loss retry.
+ * use the UI. Covers guest/profile identity, review cleanup, automatic round
+ * progression and an exact response-loss retry.
  * Does not test real authentication, RLS or PostgreSQL locks.
  * Run from apps/web: node tests/round-robin-hub-identities-browser.cjs
  * GENERATOR_BROWSER_{PYTHON,EXECUTABLE,ARGS,ARTIFACTS,WEB_PORT,API_PORT,NEXT_MODE}
@@ -135,6 +136,13 @@ async function main() {
       await page.getByRole('tab',{name:'Court board',exact:true}).click();
       return command(page,page.getByRole('button',{name:'Fill open courts',exact:true}),'auto_fill_courts');
     }
+    async function scoreCourt(label) {
+      await page.getByRole('tab',{name:'Court board',exact:true}).click();
+      await page.getByRole('article',{name:label,exact:true}).getByRole('button',{name:'Enter score',exact:true}).click();
+      await page.getByLabel('Side A score',{exact:true}).fill('11');
+      await page.getByLabel('Side B score',{exact:true}).fill('6');
+      return command(page,page.getByRole('button',{name:'Save score & release court',exact:true}),'score_and_release');
+    }
 
     const numbers = Array.from({length:8},(_,i)=>String(i+1));
     const numberedA = await createSession('Numbers A',numbers);
@@ -147,6 +155,14 @@ async function main() {
     await openReview();
     assert.equal(await page.locator('[data-review-id]').count(),8);
     await snapshot(page,'matching-numbered-guests.png');
+    const firstReviewId = await page.locator('[data-review-id]').first().getAttribute('data-review-id');
+    detail = await command(page,page.locator('[data-review-id]').first().getByRole('button',{name:/^Different people:/}),'resolve_identities');
+    assert.equal(detail.workspace.identity_pending_count,7);
+    await page.locator(`[data-review-id="${firstReviewId}"]`).waitFor({state:'detached'});
+    assert.equal(await page.locator('[data-review-id]').count(),7,'Resolved name must disappear immediately without reloading');
+    assert.equal(await page.getByRole('button',{name:'Saved decisions (1)',exact:true}).getAttribute('aria-expanded'),'false');
+    await snapshot(page,'one-resolved-seven-pending.png');
+    record('An individually resolved name disappears immediately; only seven pending names remain');
 
     // Commit the identity decision, then lose only the response. The UI must
     // retry the exact saved operation, and the service must replay its receipt.
@@ -176,6 +192,15 @@ async function main() {
     assert.equal(detail.workspace.identity_pending_count,0);
     assert.equal(detail.workspace.players.length,16,'Same labels confirmed different must remain distinct people');
     assert.equal(detail.workspace.eligible_queue.length,4);
+    await page.locator('[data-review-id]').first().waitFor({state:'detached'});
+    assert.equal(await page.locator('[data-review-id]').count(),0);
+    const savedDecisions = page.getByRole('button',{name:'Saved decisions (8)',exact:true});
+    assert.equal(await savedDecisions.getAttribute('aria-expanded'),'false');
+    await snapshot(page,'all-resolved-saved-collapsed.png');
+    await savedDecisions.click();
+    assert.equal(await page.getByRole('region',{name:'Saved identity decisions',exact:true}).locator('[data-review-id]').count(),8);
+    await savedDecisions.click();
+    assert.equal(await page.locator('[data-review-id]').count(),0);
     record('Two numbered 1–8 groups require review; all-different decisions survive an exact response-loss retry');
     await page.reload();
     await page.getByRole('heading',{name:'Numbered guest review',exact:true}).waitFor();
@@ -206,6 +231,41 @@ async function main() {
     assert(await page.evaluate(()=>document.documentElement.scrollWidth <= window.innerWidth),'Mobile court board must not overflow');
     await page.setViewportSize({width:1440,height:1000});
     record('Different guests retain independent pause state after reload and matches from both groups use courts');
+
+    const aCourt = occupied(detail).find(court=>court.current.session_key === numberedA.session_key);
+    const bCourt = occupied(detail).find(court=>court.current.session_key === numberedB.session_key);
+    detail = await scoreCourt(aCourt.label);
+    let sessionState = (await fixture()).sessions.find(session=>session.session_key === numberedA.session_key);
+    assert.equal(sessionState.event.currentRoundNumber,1);
+    assert.equal(sessionState.event.rounds[0].status,'active');
+    assert(sessionState.standings.every(row=>row.matches === 0),'Partial round scores must not count yet');
+    assert.equal(detail.workspace.groups.find(group=>group.session_key === numberedA.session_key).completed_matches,1);
+    assert.equal(detail.workspace.courts.find(court=>court.id === aCourt.id).current,null);
+    await assignFromGroup('Numbers A');
+    detail = await scoreCourt(aCourt.label);
+    const nextA = detail.workspace.groups.find(group=>group.session_key === numberedA.session_key);
+    const stillB = detail.workspace.groups.find(group=>group.session_key === numberedB.session_key);
+    assert.equal(nextA.current_round_number,2,'Final score must advance the same group automatically');
+    assert.equal(nextA.completed_matches,0);
+    assert.equal(stillB.current_round_number,1,'Other group must stay on its own round');
+    assert.equal(stillB.completed_matches,0);
+    assert.equal(detail.workspace.courts.find(court=>court.id === bCourt.id).current.match_id,bCourt.current.match_id);
+    assert.equal(detail.workspace.courts.find(court=>court.id === aCourt.id).current,null,'New matches queue; they must not auto-assign');
+    assert.equal(detail.workspace.eligible_queue.filter(match=>match.session_key === numberedA.session_key && match.round_number === 2).length,2);
+    sessionState = (await fixture()).sessions.find(session=>session.session_key === numberedA.session_key);
+    assert.equal(sessionState.event.rounds[0].status,'saved');
+    assert(sessionState.standings.every(row=>row.matches === 1),'Finished round scores must now count');
+    await page.getByRole('tab',{name:'Round robins',exact:true}).click();
+    await snapshot(page,'automatic-round-two-other-group-round-one.png');
+    assert.equal(await page.getByRole('button',{name:'Next round',exact:true}).count(),0,'Automatic advancement must not require another Next round click');
+    await page.reload();
+    await page.getByRole('heading',{name:'Numbered guest review',exact:true}).waitFor();
+    detail = await readHub(numberedHubId);
+    assert.equal(detail.workspace.groups.find(group=>group.session_key === numberedA.session_key).current_round_number,2);
+    assert.equal(detail.workspace.groups.find(group=>group.session_key === numberedB.session_key).current_round_number,1);
+    await page.getByRole('tab',{name:'Match queue',exact:true}).click();
+    await snapshot(page,'automatic-next-round-queue.png');
+    record('Final score saves standings and queues the next round automatically; the other group and court stay unchanged after reload');
 
     const sameA = await createSession('Same Guest A',['Shared Guest','A Guest 2','A Guest 3','A Guest 4']);
     const sameB = await createSession('Same Guest B',['Shared Guest','B Guest 2','B Guest 3','B Guest 4']);
@@ -247,13 +307,14 @@ async function main() {
     await page.getByLabel('Side B score',{exact:true}).fill('6');
     detail = await command(page,page.getByRole('button',{name:'Save score & release court',exact:true}),'score_and_release');
     assert.equal(occupied(detail).length,0);
-    assert.equal(detail.workspace.groups.find(group=>group.session_key === legacyCourt.current.session_key).completed_matches,1);
+    assert.equal(detail.workspace.groups.find(group=>group.session_key === legacyCourt.current.session_key).current_round_number,2);
+    assert.equal(detail.workspace.groups.find(group=>group.session_key === legacyCourt.current.session_key).completed_matches,0);
     const upgradedState = await requestApi(`/identity-fixture/hubs/${legacyHubId}`);
     assert.equal(upgradedState.identity_version,2);
     assert(upgradedState.player_keys.every(key=>!key.startsWith('name:')));
     await openReview();
     detail = await command(page,page.locator('[data-review-id]').getByRole('button',{name:/^Different people:/}),'resolve_identities');
-    assert.equal(detail.workspace.eligible_queue.length,1);
+    assert.equal(detail.workspace.eligible_queue.length,2);
     record('Legacy active courts survive reload and can save scores before resolving matching names');
 
     // Pick a real profile in the builder, then mix in manual guests. This is

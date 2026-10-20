@@ -249,7 +249,10 @@ def command_round_robin_hub(db: Any, *, club_id: str, hub_id: str, action: str,
             target_key = str(court["current"].get("session_key") or "")
         if target_key in sessions and _is_locked(sessions[target_key]) and action not in {"remove_group", "cancel_reservation", "release_game"}:
             raise ValueError("Submitted results are locked for administrator review.")
-        state, events = apply_hub_command(state, events, action=action, payload=payload, now=_now())
+        command_payload = payload
+        if action == "auto_fill_courts":
+            command_payload = {**payload, "excluded_session_keys": [key for key, session in sessions.items() if _is_locked(session)]}
+        state, events = apply_hub_command(state, events, action=action, payload=command_payload, now=_now())
     _rpc_commit(db, club_id=club_id, hub_id=hub_id, expected_version=expected_version,
                 operation_key=idempotency_key, fingerprint=fingerprint, title=str(row["title"]),
                 status=status, state=state, sessions=_read_set(sessions, events, state, hub_id), actor_email=actor_email)
