@@ -26,8 +26,9 @@ async function loadStatus(clubId: string): Promise<StatusResponse | null> {
   }
 }
 
-export default async function LadderGeneratorPage() {
+export default async function LadderGeneratorPage({ searchParams }: { searchParams?: Promise<{ draft?: string | string[] }> }) {
   const { clubId } = await requireAdminWorkspace();
+  const params = await searchParams;
   const status = await loadStatus(clubId);
   return (
     <section>
@@ -43,6 +44,7 @@ export default async function LadderGeneratorPage() {
         apiBase={apiBase()}
         clubId={clubId}
         status={status}
+        draftToken={typeof params?.draft === "string" ? params.draft : undefined}
       />
     </section>
   );

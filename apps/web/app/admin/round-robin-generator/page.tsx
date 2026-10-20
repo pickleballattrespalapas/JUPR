@@ -28,11 +28,12 @@ async function loadStatus(clubId: string): Promise<StatusResponse | null> {
 }
 
 export default async function RoundRobinGeneratorPage({ searchParams }: {
-  searchParams?: Promise<{ hub?: string | string[] }>;
+  searchParams?: Promise<{ hub?: string | string[]; draft?: string | string[] }>;
 }) {
   const { clubId } = await requireAdminWorkspace();
   const params = await searchParams;
   const returnHubId = typeof params?.hub === "string" ? params.hub : undefined;
+  const draftToken = typeof params?.draft === "string" ? params.draft : undefined;
   const status = await loadStatus(clubId);
   return (
     <section>
@@ -50,6 +51,7 @@ export default async function RoundRobinGeneratorPage({ searchParams }: {
         clubId={clubId}
         status={status}
         returnHubId={returnHubId}
+        draftToken={draftToken}
       />
     </section>
   );

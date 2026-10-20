@@ -215,13 +215,14 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         ROOT / "supabase/migrations",
     )
 
-    assert len(versions) == 154
+    assert len(versions) == 155
     assert {"20261109004103", "20261109004104", "20261109004105"}.issubset(versions)
     assert {
         "badge_conflicts_are_not_serialization_failures",
         "unrated_match_activity",
         "restrict_team_match_admin_rpc_execution",
     }.issubset(contract["required_ledger_names"])
+    assert "play_generator_operation_surface" in contract["required_ledger_names"]
     assert "round_robin_hub_atomic_operations" in contract["required_ledger_names"]
     assert "20261020033713" in versions
     assert "weekly_recap_builder" in contract["required_ledger_names"]
@@ -310,9 +311,9 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         "20261109004105",
     )
     assert {"20260908155131", "20260908164204"}.issubset(versions)
-    assert len(names) == 154
+    assert len(names) == 155
     assert all("XX" not in version for version in versions)
-    assert len(contract["required_ledger_names"]) == 154
+    assert len(contract["required_ledger_names"]) == 155
     assert "interclub_conflicts_are_not_serialization_failures" in contract["required_ledger_names"]
     assert {"interclub_competition_operations", "southern_bcs_eligibility", "interclub_rating_ledger", "interclub_publication_review_guard", "interclub_meet_overlap_guard", "southern_bcs_missing_pairing_rosters", "interclub_lineup_refresh_deadline_guard"}.issubset(contract["required_ledger_names"])
     assert {"public_club_sites", "public_club_directory_sort"}.issubset(contract["required_ledger_names"])
@@ -394,6 +395,7 @@ def test_reviewed_migration_contract_is_bound_to_sql_bytes(tmp_path: Path) -> No
 
 
 @pytest.mark.parametrize("missing_name", [
+    "play_generator_operation_surface",
     "round_robin_hub_atomic_operations",
     "badge_conflicts_are_not_serialization_failures",
     "unrated_match_activity",

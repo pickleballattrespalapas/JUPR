@@ -1,0 +1,10 @@
+{
+  "name": "jupr-sql-regressions",
+  "private": true,
+  "scripts": {
+    "test:generator-journal": "node play_generator_operation_surface.mjs"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.10"
+  }
+}
