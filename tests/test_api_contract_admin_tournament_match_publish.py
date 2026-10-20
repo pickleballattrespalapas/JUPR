@@ -164,6 +164,7 @@ def install_official_publish_prerequisites(tables: dict[str, list[dict]]) -> Non
                 continue
             badges.append(
                 {
+                    "id": f"podium-badge-{len(badges) + 1}",
                     "club_id": "club",
                     "player_id": player_id,
                     "badge_id": PODIUM_BADGE_MAP[placement],
