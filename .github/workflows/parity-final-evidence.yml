@@ -16,6 +16,11 @@ on:
           - match-rating-writes
           - match-exclusion-recovery
           - complete-book
+      persistent_open:
+        description: "Use existing persistent-open staging for isolated match-exclusion rehearsal only"
+        required: false
+        default: false
+        type: boolean
       candidate_sha:
         description: "Exact 40-character Git SHA deployed to Vercel and Fly"
         required: true
@@ -157,6 +162,7 @@ jobs:
           CANDIDATE_SHA: ${{ inputs.candidate_sha }}
           FLY_IMAGE_REF: ${{ inputs.fly_image_ref }}
           MUTATION_CONFIRMATION: ${{ inputs.mutation_confirmation }}
+          PERSISTENT_OPEN: ${{ inputs.persistent_open }}
           PARITY_MODE: ${{ inputs.mode }}
           VERCEL_DEPLOYMENT_ID: ${{ inputs.vercel_deployment_id }}
           VERCEL_DEPLOYMENT_ORIGIN: ${{ inputs.vercel_deployment_origin }}
@@ -202,6 +208,13 @@ jobs:
               WRITE_WAVE="match-exclusion-recovery"
               ;;
           esac
+          if [ "$PERSISTENT_OPEN" = "true" ]; then
+            if [ "$PARITY_MODE" != "match-exclusion-recovery" ]; then
+              echo "Persistent-open evidence is restricted to the isolated match-exclusion fixture" >&2
+              exit 2
+            fi
+            WRITE_WAVE="open"
+          fi
           case "$PARITY_MODE" in
             match-rating-writes|match-exclusion-recovery)
               if [ "$MUTATION_CONFIRMATION" != "RUN DISPOSABLE STAGING WRITES" ]; then

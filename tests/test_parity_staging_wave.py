@@ -1,6 +1,8 @@
 import hashlib
 import json
 import re
+
+import pytest
 from pathlib import Path
 
 import scripts.run_parity_staging_wave as staging_wave
@@ -357,7 +359,7 @@ def test_deployment_identity_binds_each_evidence_mode_to_exact_write_projection(
         "vercel_deployment_id": vercel_id,
         "vercel_deployment_origin": immutable_origin,
     }
-    for mode, write_wave in EXPECTED_WRITE_WAVE_BY_EVIDENCE_MODE.items():
+    for mode, write_wave in [*EXPECTED_WRITE_WAVE_BY_EVIDENCE_MODE.items(), ("isolated-persistent-open", "open")]:
         api = _api_identity(sha, fly_image, write_wave=write_wave)
         assert deployment_identity_errors(
             web,
@@ -460,8 +462,9 @@ def test_identity_preflight_queries_the_supplied_immutable_candidate_origin(
     assert requested_headers[1] == {}
 
 
+@pytest.mark.parametrize("write_wave", ["match-exclusion-recovery", "open"])
 def test_identity_only_mutating_wave_needs_no_fixture_and_runs_zero_browser_writes(
-    monkeypatch,
+    write_wave, monkeypatch,
     tmp_path: Path,
 ) -> None:
     sha = "a" * 40
@@ -475,7 +478,7 @@ def test_identity_only_mutating_wave_needs_no_fixture_and_runs_zero_browser_writ
     monkeypatch.setattr(staging_wave, "manifest_errors", lambda _wave: [])
 
     def fake_deployment_identity(_env, **kwargs):
-        assert kwargs["expected_write_wave"] == "match-exclusion-recovery"
+        assert kwargs["expected_write_wave"] == write_wave
         assert kwargs["web_origin"] == immutable_origin
         assert kwargs["expected_web_origin"] == immutable_origin
         identity_phases.append(str(kwargs.get("phase") or "preflight"))
@@ -500,7 +503,7 @@ def test_identity_only_mutating_wave_needs_no_fixture_and_runs_zero_browser_writ
         fly_image,
         tmp_path,
         identity_only=True,
-        expected_write_wave="match-exclusion-recovery",
+        expected_write_wave=write_wave,
     )
 
     assert errors == []
@@ -957,3 +960,18 @@ def test_manual_workflow_is_dispatch_only_exact_staging_candidate_and_least_scop
     assert "if (!attestedDeploymentOrigin)" in staging_support
     assert "remoteBaseUrl !== expectedStagingWebOrigin" in staging_support
     assert "remoteBaseUrl !== attestedDeploymentOrigin" in staging_support
+
+
+@pytest.mark.parametrize("wave", ["public-read", "admin-read-export", "match-rating-writes"])
+def test_persistent_open_rejects_other_rehearsals_before_contact(monkeypatch, tmp_path, wave):
+    monkeypatch.setattr(staging_wave.os, "environ", _base_env())
+    monkeypatch.setattr(staging_wave, "_head_sha", lambda: "a" * 40)
+    monkeypatch.setattr(staging_wave, "manifest_errors", lambda _: [])
+    def reject_contact(*args, **kwargs):
+        raise AssertionError("Invalid posture must fail before contacting any deployment")
+    monkeypatch.setattr(staging_wave, "_deployment_identity", reject_contact)
+    errors = staging_wave.run_wave(wave, "a" * 40, "dpl_staging123",
+        "https://jupr-a1b2c3d4-pickleballattrespalapas1.vercel.app",
+        "registry.fly.io/juprleagues-api-staging:deployment-1234567890",
+        tmp_path, identity_only=True, expected_write_wave="open")
+    assert any("requires staging write wave" in error for error in errors)

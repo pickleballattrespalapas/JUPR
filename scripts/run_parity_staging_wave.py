@@ -602,6 +602,10 @@ def run_wave(
     errors.extend(candidate_errors(candidate_sha, _head_sha()))
     errors.extend(manifest_errors(wave))
     required_write_wave = EXPECTED_WRITE_WAVE_BY_EVIDENCE_MODE[wave]
+    # Only the isolated exclusion fixture can opt into the persistent-open posture.
+    # Identity checks still require the exact open flag set, staging DB and dry-run email.
+    if wave == "match-exclusion-recovery" and expected_write_wave == "open":
+        required_write_wave = "open"
     if expected_write_wave is not None and expected_write_wave != required_write_wave:
         errors.append(
             f"Evidence mode {wave} requires staging write wave {required_write_wave}, "
