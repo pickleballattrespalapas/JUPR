@@ -99,6 +99,72 @@ def build_player_activity_update(
     }
 
 
+def build_recorded_game_activity_update(
+    player: Mapping[str, Any], match_time, *, now_utc: datetime | None = None,
+) -> dict:
+    """Record scored play without undoing explicit visibility exclusions.
+
+    The caller must supply the persisted active flag, not its display-time
+    projection. An old automatic inactivity marker clears on a newer game;
+    an exclusion after the latest game, or active=False without a marker,
+    remains in force, as in the daily activity reconciler.
+    """
+    update = build_player_activity_update(player.get("last_game_at"), match_time, now_utc=now_utc)
+    if not update:
+        return update
+    latest = coerce_utc_datetime(update["last_game_at"])
+    exclusion = coerce_utc_datetime(player.get("inactive_at"))
+    if (
+        is_merged_player(player)
+        or (player.get("active") is False and exclusion is None)
+        or (exclusion is not None and exclusion > latest)
+    ):
+        update.update(active=player.get("active"), inactive_at=player.get("inactive_at"))
+        if is_merged_player(player):
+            update["active"] = False
+    return update
+
+
+def record_game_activity_with_cas(
+    *, supabase, club_id: str, player_id: int, match_time, sb_retry,
+) -> None:
+    """Safely refresh activity for the legacy writer after its match insert.
+
+    Unlike the atomic write-plan path, this caller cannot keep the pre-insert
+    snapshot locked. Re-read and compare every activity/exclusion field so a
+    concurrent game, administrator exclusion, or identity merge is preserved.
+    """
+    fields = ("last_game_at", "inactive_at", "active", "name")
+    for _attempt in range(3):
+        rows = sb_retry(
+            lambda: supabase.table("players")
+            .select("id,name,last_game_at,inactive_at,active")
+            .eq("club_id", str(club_id)).eq("id", int(player_id))
+            .limit(1).execute()
+        ).data or []
+        if len(rows) != 1:
+            raise RuntimeError(f"Recorded-game activity requires an existing player {int(player_id)}.")
+        current = rows[0]
+        payload = build_recorded_game_activity_update(current, match_time)
+        if not payload or all(current.get(key) == value for key, value in payload.items()):
+            return
+
+        def compare_and_swap():
+            query = (supabase.table("players").update(payload)
+                     .eq("club_id", str(club_id)).eq("id", int(player_id)))
+            for field in fields:
+                value = current.get(field)
+                query = query.is_(field, "null") if value is None else query.eq(field, value)
+            return query.execute()
+
+        if sb_retry(compare_and_swap).data:
+            return
+    raise RuntimeError(
+        f"Player {int(player_id)} changed during recorded-game activity refresh; "
+        "the recorded match remains available for activity reconciliation."
+    )
+
+
 def recompute_last_game_at_for_players(
     *,
     supabase,

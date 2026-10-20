@@ -1,5 +1,6 @@
+-- Populated staging: use build_badge_staging_verification.py for an isolated fixture.
 -- Run inside a transaction after the migration, then ROLLBACK the whole test.
--- Uses synthetic admin identity and a real staging club player; no writes persist.
+-- Bare script is for an isolated test database; never target an existing staging player.
 do $$
 declare
   target_club text;
@@ -47,7 +48,7 @@ begin
   begin
     perform public.admin_manage_badges_v1(target_club,'badge-test@invalid.example',actor,'administrator',gen_random_uuid(),'save_season',payload);
     raise exception 'stale revision accepted';
-  exception when serialization_failure then null; end;
+  exception when sqlstate 'PT409' then null; end;
   insert into public.player_badges(club_id,player_id,badge_id,context_type,context_id,value_json)
     values(target_club,target_player,'battle_tested','season','badge-season:'||season_id,
       jsonb_build_object('season_start','2040-11-01','season_end','2041-03-31','season_timezone','America/Mazatlan'));
@@ -62,7 +63,7 @@ begin
       values(target_club,target_player,'consistency','season','badge-season:'||season_id,
         jsonb_build_object('season_start','2040-11-01','season_end','2041-04-01','season_timezone','America/Mazatlan'));
     raise exception 'stale season evidence accepted';
-  exception when serialization_failure then null; end;
+  exception when sqlstate 'PT409' then null; end;
   if has_function_privilege('anon','public.admin_manage_badges_v1(text,text,uuid,text,uuid,text,jsonb)','EXECUTE')
     or has_table_privilege('authenticated','public.badge_seasons','INSERT') then raise exception 'client write exposure'; end if;
 end;

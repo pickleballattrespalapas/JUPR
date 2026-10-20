@@ -117,6 +117,7 @@ function gameTitle(game: PublicTournamentGameResult): string {
 }
 
 function scoreText(game: PublicTournamentGameResult): string {
+  if (game.state !== "FINAL") return gameStateLabel(game.state);
   if (game.outcome_label) {
     return game.winner_name
       ? `${game.outcome_label} · ${game.winner_name}`
@@ -129,6 +130,7 @@ function scoreText(game: PublicTournamentGameResult): string {
 }
 
 function seriesGameScoresText(game: PublicTournamentGameResult): string | null {
+  if (game.state !== "FINAL") return null;
   const scores = [...(game.game_scores || [])].sort(
     (left, right) => left.game_number - right.game_number
   );

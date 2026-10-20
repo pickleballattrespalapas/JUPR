@@ -402,7 +402,8 @@ def review_generator_submission(
             for key in ("player_updates", "league_rating_updates")}
         queue_summary = queue_player_updates(supabase=db, club_id=club_id,
             db_matches=review["payloads"],
-            affected_players={int(update["player_id"]) for update in evidence["player_updates"]},
+            affected_players={int(update["player_id"]) for update in evidence["player_updates"]
+                              if not update.get("activity_only")},
             successful_match_dates=[match["date"] for match in review["payloads"]],
             match_ids=session_match_ids, session_evidence=evidence, badge_refs=badge_refs)
         if queue_summary.get("mode") == "error" or queue_summary.get("failed"):

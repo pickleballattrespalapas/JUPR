@@ -40,6 +40,14 @@ class _Query:
         self._filters.append(("eq", col, val))
         return self
 
+    def is_(self, col, val):
+        self._filters.append(("is", col, None if val == "null" else val))
+        return self
+
+    def in_(self, col, values):
+        self._filters.append(("in", col, set(values)))
+        return self
+
     def limit(self, n):
         self._limit = int(n)
         return self
@@ -66,6 +74,10 @@ class _Supabase:
         for op, col, val in q._filters:
             if op == "eq":
                 data = [r for r in data if str(r.get(col)) == str(val)]
+            elif op == "is":
+                data = [r for r in data if r.get(col) is val]
+            elif op == "in":
+                data = [r for r in data if r.get(col) in val]
         if q._limit is not None:
             data = data[: q._limit]
         if q._op == "select":
@@ -88,10 +100,10 @@ class _Supabase:
 def _players_df():
     return pd.DataFrame(
         [
-            {"id": 1, "name": "A", "rating": 1200, "wins": 0, "losses": 0, "matches_played": 0},
-            {"id": 2, "name": "B", "rating": 1200, "wins": 0, "losses": 0, "matches_played": 0},
-            {"id": 3, "name": "C", "rating": 1200, "wins": 0, "losses": 0, "matches_played": 0},
-            {"id": 4, "name": "D", "rating": 1200, "wins": 0, "losses": 0, "matches_played": 0},
+            {"id": 1, "club_id": "club", "name": "A", "rating": 1200, "wins": 0, "losses": 0, "matches_played": 0},
+            {"id": 2, "club_id": "club", "name": "B", "rating": 1200, "wins": 0, "losses": 0, "matches_played": 0},
+            {"id": 3, "club_id": "club", "name": "C", "rating": 1200, "wins": 0, "losses": 0, "matches_played": 0},
+            {"id": 4, "club_id": "club", "name": "D", "rating": 1200, "wins": 0, "losses": 0, "matches_played": 0},
         ]
     )
 
@@ -254,12 +266,18 @@ def test_process_matches_unrated_records_match_without_rating_changes(monkeypatc
     after = {int(row["id"]): row for row in sb.tables["players"]}
     assert int(after[1]["matches_played"]) == int(before[1]["matches_played"])
     assert float(after[1]["rating"]) == float(before[1]["rating"])
+    for player_id, previous in before.items():
+        current = after[player_id]
+        assert {key: value for key, value in current.items()
+                if key not in {"last_game_at", "active", "inactive_at"}} == previous
+        assert current["last_game_at"] == sb.tables["matches"][0]["date"]
+        assert current["active"] is True and current["inactive_at"] is None
     assert len(sb.tables["matches"]) == 1
     assert sb.tables["matches"][0]["rating_scope"] == "unrated"
     assert float(sb.tables["matches"][0]["elo_delta"]) == 0.0
 
 
-def test_process_matches_unrated_plan_has_match_but_no_aggregate_writes(
+def test_process_matches_unrated_plan_has_activity_without_rating_aggregate_changes(
     monkeypatch,
 ):
     _patch_side_effects(monkeypatch)
@@ -291,8 +309,16 @@ def test_process_matches_unrated_plan_has_match_but_no_aggregate_writes(
     assert result["skipped_unrated"] == 1
     assert len(result["write_plan"]["match_rows"]) == 1
     assert result["write_plan"]["match_rows"][0]["rating_scope"] == "unrated"
-    assert result["write_plan"]["player_updates"] == []
+    updates = result["write_plan"]["player_updates"]
+    assert {update["player_id"] for update in updates} == {1, 2, 3, 4}
+    for update in updates:
+        assert update["activity_only"] is True
+        assert update["after"]["last_game_at"] == "2026-07-26T00:00:00+00:00"
+        for field in ("rating", "wins", "losses", "matches_played"):
+            assert update["after"][field] == update["expected"][field]
     assert result["write_plan"]["league_rating_updates"] == []
+    assert result["side_effect_context"]["affected_player_ids"] == []
+    assert sb.tables["players"] == _players_df().to_dict("records")
     assert sb.tables["matches"] == []
 
 

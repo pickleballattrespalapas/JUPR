@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Response
 from pydantic import BaseModel
 from supabase import Client
 
 from jupr_app.services.public_support_intake_service import (
     SupportIntakeRateLimitError,
+    SupportIntakeUnavailableError,
+    build_public_support_intake_status,
     create_public_support_intake_request,
 )
 from services.api.staging_write_guard import require_public_intake_or_403
@@ -45,6 +47,14 @@ def install_public_support_intake_routes(
 ) -> None:
     """Register public support/data-correction/privacy intake routes."""
 
+    @app.get("/clubs/{club_slug}/support/intake/status")
+    def get_club_public_support_intake_status(club_slug: str, response: Response) -> dict[str, Any]:
+        response.headers["Cache-Control"] = "no-store"
+        club = get_club(club_slug)
+        club_id = str(club.get("id") or club.get("club_id") or club_slug)
+        status = build_public_support_intake_status(get_supabase_client(), club_id=club_id)
+        return {"club": public_club_payload(club, club_slug), **status}
+
     @app.post("/clubs/{club_slug}/support/intake")
     def post_club_public_support_intake(
         club_slug: str,
@@ -62,6 +72,8 @@ def install_public_support_intake_routes(
                 payload=_dump_model(payload),
                 source=payload.source,
             )
+        except SupportIntakeUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "300"}) from exc
         except SupportIntakeRateLimitError as exc:
             raise HTTPException(status_code=429, detail=str(exc), headers={"Retry-After": "3600"}) from exc
         except ValueError as exc:

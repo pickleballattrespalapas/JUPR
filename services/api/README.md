@@ -183,7 +183,8 @@ returns the same structured rulebook/status policy consumed by the Next route.
 - `GET /clubs/{club_slug}/live-sessions/{session_key}`
 - `GET /clubs/{club_slug}/match-explorer`
 - `GET /clubs/{club_slug}/match-explorer/preview?me=...&partner=...&opp1=...&opp2=...` (Python-authoritative expected score, deltas, player projections, and impact chart)
-- `POST /clubs/{club_slug}/support/intake` durable general-support, data-correction, and profile-privacy intake; exact retries are deduplicated and hourly limits are enforced server-side
+- `GET /clubs/{club_slug}/support/intake/status` no-store public readiness, including the staff-review write boundary and required queue schema; no request data or counts
+- `POST /clubs/{club_slug}/support/intake` durable general-support, data-correction, and profile-privacy intake; exact retries are deduplicated and hourly limits are enforced server-side. Returns 503 without inserting when staff review is unavailable (the global write policy can reject earlier with 403). See `docs/support-review-rollout.md`.
 - `GET /admin/clubs/{club_id}/support-requests` guarded club-scoped review queue
 - `PATCH /admin/clubs/{club_id}/support-requests/{request_id}` guarded stale-safe status/privacy-fulfillment update
 - `POST /admin/clubs/{club_id}/matches/batch` guarded/disabled by default

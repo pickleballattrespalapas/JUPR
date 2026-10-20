@@ -8,9 +8,10 @@ import pandas as pd
 
 from jupr_app.domain.player_activity import (
     PERSISTED_ACTIVE_BY_PLAYER_ID_ATTR,
-    build_player_activity_update,
+    build_recorded_game_activity_update,
     coerce_utc_datetime,
     max_activity_time,
+    record_game_activity_with_cas,
 )
 from jupr_app.domain.player_ratings_source import build_seed_rating_maps, current_seed_rating
 from jupr_app.domain.gamification.badge_queue import enqueue_badge_eval
@@ -440,7 +441,6 @@ def process_matches(
             end_r3 = apply_updates(p3, do2, di2, t2_outcome, update_island=update_island, league_name=league_name, rating_bonus_elo=t2_bonus)
             end_r4 = apply_updates(p4, do2, di2, t2_outcome, update_island=update_island, league_name=league_name, rating_bonus_elo=t2_bonus)
             for pid in (p1, p2, p3, p4):
-                last_game_updates[pid] = max_activity_time(last_game_updates.get(pid), match_dt)
                 affected_players.add(int(pid))
             if winner_bonus_elo > 0 and (t1_outcome is True or t2_outcome is True):
                 bonus_match_count += 1
@@ -449,6 +449,10 @@ def process_matches(
 
         if is_unrated:
             skipped_unrated += 1
+        # Recorded play establishes activity independently of rating scope.
+        # Keep affected_players restricted to rated side effects/badges.
+        for pid in (p1, p2, p3, p4):
+            last_game_updates[pid] = max_activity_time(last_game_updates.get(pid), match_dt)
 
         db_matches.append(
             build_match_row(
@@ -472,7 +476,8 @@ def process_matches(
     if build_write_plan_only:
         player_updates: list[dict[str, Any]] = []
         persisted_active = df_players_all.attrs.get(PERSISTED_ACTIVE_BY_PLAYER_ID_ATTR, {})
-        for pid, stats in sorted(overall_updates.items()):
+        for pid in sorted(set(overall_updates) | set(last_game_updates)):
+            stats = overall_updates.get(pid)
             rows = _frame_rows(df_players_all, id=int(pid))
             if len(rows) != 1:
                 raise RuntimeError(
@@ -481,7 +486,9 @@ def process_matches(
             current = rows[0]
             stored_active = persisted_active.get(int(pid), current.get("active"))
             latest_match_at = last_game_updates.get(int(pid))
-            activity_update = build_player_activity_update(current.get("last_game_at"), latest_match_at)
+            activity_update = build_recorded_game_activity_update(
+                {**current, "active": stored_active}, latest_match_at,
+            )
             expected = {
                 "rating": float(current.get("rating", 1200.0) or 1200.0),
                 "wins": int(current.get("wins", 0) or 0),
@@ -491,16 +498,26 @@ def process_matches(
                 "inactive_at": current.get("inactive_at"),
                 "active": bool(stored_active) if stored_active is not None else None,
             }
-            after = {
-                "rating": float(stats["r"]),
-                "wins": int(stats["w"]),
-                "losses": int(stats["l"]),
-                "matches_played": int(stats["mp"]),
-                **activity_update,
-            }
-            player_updates.append(
-                {"player_id": int(pid), "rating_mode": "doubles", "expected": expected, "after": after}
-            )
+            if stats is None:
+                # No seed/default normalization may alter an unrated profile.
+                unchanged = {
+                    field: current.get(field)
+                    for field in ("rating", "wins", "losses", "matches_played")
+                }
+                expected.update(unchanged)
+                after = {**unchanged, **activity_update}
+            else:
+                after = {
+                    "rating": float(stats["r"]),
+                    "wins": int(stats["w"]),
+                    "losses": int(stats["l"]),
+                    "matches_played": int(stats["mp"]),
+                    **activity_update,
+                }
+            player_updates.append({
+                "player_id": int(pid), "rating_mode": "doubles",
+                "expected": expected, "after": after, "activity_only": stats is None,
+            })
 
         league_rating_updates: list[dict[str, Any]] = []
         for (pid, league_name), stats in sorted(island_updates.items()):
@@ -646,10 +663,17 @@ def process_matches(
     for pid, stats in overall_updates.items():
         row = {"id": int(pid), "rating": float(stats["r"]), "wins": int(stats["w"]), "losses": int(stats["l"]), "matches_played": int(stats["mp"])}
         pr = get_player_row(int(pid))
-        existing_last_game_at = None if pr is None else pr.get("last_game_at")
         latest_match_at = last_game_updates.get(int(pid))
-        activity_update = build_player_activity_update(existing_last_game_at, latest_match_at)
+        current = {} if pr is None else pr.to_dict()
+        current["active"] = df_players_all.attrs.get(PERSISTED_ACTIVE_BY_PLAYER_ID_ATTR, {}).get(int(pid), current.get("active"))
+        activity_update = build_recorded_game_activity_update(current, latest_match_at)
         sb_retry(lambda row=row, activity_update=activity_update: update_player_row(row, activity_update))
+
+    for pid in set(last_game_updates) - set(overall_updates):
+        record_game_activity_with_cas(
+            supabase=supabase, club_id=str(club_id), player_id=int(pid),
+            match_time=last_game_updates[pid], sb_retry=sb_retry,
+        )
 
     if island_updates:
         for (pid, league_name), stats in island_updates.items():

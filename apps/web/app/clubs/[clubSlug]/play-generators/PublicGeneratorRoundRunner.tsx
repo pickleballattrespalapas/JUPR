@@ -395,6 +395,7 @@ export default function GeneratorRoundRunner({
   const [substituteScope, setSubstituteScope] = useState<"round" | "rest">("rest");
   const [rosterOrder, setRosterOrder] = useState<string[]>([]);
   const skipDestinationRef = useRef<number | "completed" | null>(null);
+  const sessionLoadRef = useRef<AbortController | null>(null);
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
     if (!apiBase) {
@@ -412,6 +413,7 @@ export default function GeneratorRoundRunner({
       cache: "no-store"
     });
     const payload = await response.json().catch(() => null);
+    if (options?.signal?.aborted) throw new DOMException("Request aborted", "AbortError");
     if (!response.ok) {
       if (shared && response.status === 403) {
         sessionStorage.removeItem(`shared-generator-edit:${clubId}:${sessionKey}`);
@@ -462,14 +464,20 @@ export default function GeneratorRoundRunner({
   }
 
   async function loadSession(): Promise<void> {
+    sessionLoadRef.current?.abort();
+    const controller = new AbortController();
+    sessionLoadRef.current = controller;
+    const isCurrentLoad = () => sessionLoadRef.current === controller && !controller.signal.aborted;
     setBusy(true);
     setMessage(null);
     try {
       const payload = await requestJson<DetailResponse>(
         `/clubs/${encodeURIComponent(clubId)}/play-generators/sessions/${encodeURIComponent(
           sessionKey
-        )}`
+        )}`,
+        { signal: controller.signal }
       );
+      if (!isCurrentLoad()) return;
       if (payload.session.generator_kind !== generatorKind) {
         throw new UserFacingError("This link opens in the other play generator.");
       }
@@ -486,9 +494,14 @@ export default function GeneratorRoundRunner({
         );
       }
     } catch (error) {
-      setMessage(requestFailureMessage(error, "We couldn’t load this session. Please try again."));
+      if (isCurrentLoad()) {
+        setMessage(requestFailureMessage(error, "We couldn’t load this session. Please try again."));
+      }
     } finally {
-      setBusy(false);
+      if (isCurrentLoad()) {
+        sessionLoadRef.current = null;
+        setBusy(false);
+      }
     }
   }
 
@@ -504,6 +517,10 @@ export default function GeneratorRoundRunner({
       window.history.replaceState({}, "", `${window.location.pathname}${window.location.search}`);
     }
     void loadSession();
+    return () => {
+      sessionLoadRef.current?.abort();
+      sessionLoadRef.current = null;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clubId, sessionKey, roundNumber, shared]);
 

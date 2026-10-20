@@ -398,15 +398,16 @@ def build_public_tournament_results(
                 or None,
                 "team_a_name": team_names.get(str(row.get("team_a_id") or ""), "TBD"),
                 "team_b_name": team_names.get(str(row.get("team_b_id") or ""), "TBD"),
-                "score_a": _integer(row.get("score_a")),
-                "score_b": _integer(row.get("score_b")),
-                "winner_name": team_names.get(
-                    str(row.get("winner_team_id") or ""), ""
-                )
-                or None,
-                "outcome_label": _non_played_outcome_label(row),
+                # Upcoming playoff participants are public; their draft result
+                # must stay private until the game has a finalized outcome.
+                "score_a": _integer(row.get("score_a")) if _game_public_state(row) == "FINAL" else None,
+                "score_b": _integer(row.get("score_b")) if _game_public_state(row) == "FINAL" else None,
+                "winner_name": (
+                    team_names.get(str(row.get("winner_team_id") or ""), "") or None
+                ) if _game_public_state(row) == "FINAL" else None,
+                "outcome_label": _non_played_outcome_label(row) if _game_public_state(row) == "FINAL" else None,
                 "state": _game_public_state(row),
-                "finalized_at": _json_safe(row.get("finalized_at")),
+                "finalized_at": _json_safe(row.get("finalized_at")) if _game_public_state(row) == "FINAL" else None,
                 "game_scores": (
                     series_game_scores.get(str(row.get("id") or ""), [])
                     if _game_public_state(row) == "FINAL"

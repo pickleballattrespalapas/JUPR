@@ -1,9 +1,11 @@
+-- Populated staging: use build_badge_staging_verification.py for an isolated fixture.
 -- Run in BEGIN / ROLLBACK against staging after the program migration.
 do $$
 declare
  club text; player bigint; rev bigint; actor uuid:=gen_random_uuid(); operation uuid:=gen_random_uuid();
  candidate jsonb; tie jsonb; payload jsonb; response jsonb; original_id uuid; earned timestamptz;
  prior_digest text; after_digest text; test_session uuid:=gen_random_uuid();
+ stale_before jsonb; stale_after jsonb; applied_before bigint;
 begin
  -- Reconciliation intentionally corrects engine-owned awards within one club.
  -- An isolated synthetic club keeps this test independent of live staging awards.
@@ -27,10 +29,17 @@ begin
  update public.player_badges set revoked_at=now(),revoked_by=actor where id=original_id;
  perform public.apply_program_badges_v1(club,rev,candidate,'[]','[]');
  if not exists(select 1 from public.player_badges where id=original_id and revoked_by=actor) then raise exception 'manual revocation erased'; end if;
+ select jsonb_build_object('state',to_jsonb(s),'awards',
+   (select jsonb_agg(to_jsonb(b) order by b.id) from public.player_badges b where b.club_id=club))
+   into stale_before from public.badge_program_state s where s.club_id=club;
  begin
    perform public.apply_program_badges_v1(club,rev-1,candidate,'[]','[]');
    raise exception 'stale revision accepted';
- exception when serialization_failure then null; end;
+ exception when sqlstate 'PT409' then null; end;
+ select jsonb_build_object('state',to_jsonb(s),'awards',
+   (select jsonb_agg(to_jsonb(b) order by b.id) from public.player_badges b where b.club_id=club))
+   into stale_after from public.badge_program_state s where s.club_id=club;
+ if stale_before is distinct from stale_after then raise exception 'stale apply changed state or awards'; end if;
  begin
    perform public.apply_program_badges_v1(club,rev,null,'[]','[]');
    raise exception 'incomplete response accepted';
@@ -56,7 +65,7 @@ begin
  begin
    perform public.admin_resolve_round_robin_v1(club,'program-badge-test@invalid.example',actor,'administrator',operation,payload||jsonb_build_object('source_fingerprint',repeat('c',64)));
    raise exception 'stale tie accepted';
- exception when serialization_failure then null; end;
+ exception when sqlstate 'PT409' then null; end;
  response:=public.admin_resolve_round_robin_v1(club,'program-badge-test@invalid.example',actor,'administrator',operation,payload);
  if not exists(select 1 from public.live_sessions where id=test_session and state->'event'->'round_robin_winner'->>'participant_id'='p1') then raise exception 'public winner decision missing'; end if;
  if response <> public.admin_resolve_round_robin_v1(club,'program-badge-test@invalid.example',actor,'administrator',operation,payload) then raise exception 'decision retry changed result'; end if;
@@ -65,11 +74,18 @@ begin
  begin
    perform public.admin_resolve_round_robin_v1(club,'program-badge-test@invalid.example',actor,'administrator',operation,payload||jsonb_build_object('winner_player_id',-1));
    raise exception 'changed retry accepted';
- exception when serialization_failure then null; end;
+ exception when sqlstate 'PT409' then null; end;
 
  select revision into rev from public.badge_program_state where club_id=club;
  update public.players set name=name||' trigger-test' where id=player and club_id=club;
  if (select revision from public.badge_program_state where club_id=club) <= rev then raise exception 'source changes lost'; end if;
+ select applied_revision into applied_before from public.badge_program_state where club_id=club;
+ perform public.program_badge_failure_v1(club);
+ if not exists(select 1 from public.badge_program_state where club_id=club
+     and applied_revision=applied_before and applied_revision<revision
+     and retry_after>=now()+interval '1 minute' and last_error is not null) then
+   raise exception 'failed evaluation was acknowledged or lost its durable backoff';
+ end if;
  if has_function_privilege('anon','public.apply_program_badges_v1(text,bigint,jsonb,jsonb,jsonb)','EXECUTE')
     or has_function_privilege('authenticated','public.admin_resolve_round_robin_v1(text,text,uuid,text,uuid,jsonb)','EXECUTE')
     or has_table_privilege('authenticated','public.badge_program_state','UPDATE') then raise exception 'private program data exposed'; end if;

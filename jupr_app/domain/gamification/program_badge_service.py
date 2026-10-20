@@ -6,12 +6,15 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
+from postgrest.exceptions import APIError
+
 from jupr_app.domain.gamification.badge_types import BadgeCandidate
 from jupr_app.domain.gamification.program_badges import evaluate_program_badges
 from jupr_app.services.production_feature_policy import production_feature_enabled
 from jupr_app.services.staging_write_guard import staging_write_wave_allows
 
 logger = logging.getLogger(__name__)
+STALE_PROGRAM_REVISION_MESSAGE = "Program results changed. Read a fresh snapshot."
 
 
 def program_badge_preview(supabase: Any, club_id: str) -> dict:
@@ -25,13 +28,27 @@ def reconcile_program_badges(supabase: Any, club_id: str, *, dry_run: bool = Fal
     preview = program_badge_preview(supabase, club_id)
     if dry_run:
         return preview
-    if not program_badge_writes_enabled(club_id):
-        raise PermissionError("Program badge awarding is paused.")
-    result = supabase.rpc("apply_program_badges_v1", {"p_club_id": club_id, "p_revision": preview["revision"],
-        "p_awards": preview["awards"], "p_pending_ties": preview["pending_ties"], "p_review": preview["review"]}).execute().data
-    if not isinstance(result, dict) or not result.get("ok"):
-        raise RuntimeError("Program badge reconciliation was not confirmed.")
-    return result
+    # A stale source revision needs a new snapshot, never a replay of the same
+    # payload. Refresh at most once; continued churn stays pending for the
+    # worker's durable one-minute backoff instead of a tight retry loop.
+    for attempt in range(2):
+        if not program_badge_writes_enabled(club_id):
+            raise PermissionError("Program badge awarding is paused.")
+        try:
+            result = supabase.rpc("apply_program_badges_v1", {
+                "p_club_id": club_id, "p_revision": preview["revision"],
+                "p_awards": preview["awards"], "p_pending_ties": preview["pending_ties"],
+                "p_review": preview["review"],
+            }).execute().data
+        except APIError as exc:
+            if attempt or exc.code != "PT409" or exc.message != STALE_PROGRAM_REVISION_MESSAGE:
+                raise
+            preview = program_badge_preview(supabase, club_id)
+            continue
+        if not isinstance(result, dict) or not result.get("ok"):
+            raise RuntimeError("Program badge reconciliation was not confirmed.")
+        return result
+    raise RuntimeError("Program badge reconciliation was not confirmed.")
 
 
 def program_badge_writes_enabled(club_id: str = "tres_palapas") -> bool:
