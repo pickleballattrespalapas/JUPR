@@ -115,7 +115,7 @@ def resolve_match_exclusion_badge_ids(
     supabase: Any,
     *,
     club_id: str,
-    match_limit: int = 5000,
+    match_limit: int | None = None,
 ) -> list[str]:
     """Resolve and freeze the exact badge scope before a match exclusion."""
 
@@ -199,7 +199,7 @@ def reconcile_match_exclusion_badges(
     operation_id: str,
     player_ids: list[int],
     actor_email: str = "",
-    match_limit: int = 5000,
+    match_limit: int | None = None,
 ) -> dict[str, Any]:
     """Claim and reconcile every pending player for one exclusion operation."""
 
@@ -374,9 +374,9 @@ def _load_reconciliation_context(
     supabase: Any,
     *,
     club_id: str,
-    match_limit: int,
+    match_limit: int | None,
 ) -> Any:
-    if int(match_limit) <= 0:
+    if match_limit is not None and int(match_limit) <= 0:
         raise ValueError("match_limit must be positive")
     (
         df_players_all,
@@ -390,7 +390,7 @@ def _load_reconciliation_context(
         id_to_name,
         schema_degraded,
         schema_degraded_reason,
-    ) = load_data(supabase, club_id, match_limit=int(match_limit))
+    ) = load_data(supabase, club_id, match_limit=match_limit)
     ctx = SimpleNamespace(
         supabase=supabase,
         club_id=club_id,
@@ -413,7 +413,7 @@ def _load_reconciliation_context(
         supabase,
         club_id=club_id,
         df_matches=df_matches,
-        match_limit=int(match_limit),
+        match_limit=match_limit,
     )
     return ctx
 
@@ -423,7 +423,7 @@ def _assert_complete_active_match_load(
     *,
     club_id: str,
     df_matches: pd.DataFrame,
-    match_limit: int,
+    match_limit: int | None,
 ) -> None:
     response = (
         supabase.table("matches")
@@ -439,7 +439,7 @@ def _assert_complete_active_match_load(
             "Badge reconciliation could not prove the active-match row count."
         )
     exact_count = int(exact_count)
-    if exact_count > int(match_limit):
+    if match_limit is not None and exact_count > int(match_limit):
         raise RuntimeError(
             "Badge reconciliation active-match history exceeds match_limit; "
             "increase the bounded limit before any exclusion write."

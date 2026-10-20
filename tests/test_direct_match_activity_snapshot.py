@@ -52,7 +52,7 @@ class SnapshotSupabase:
             def __init__(self):
                 self.filters = []
 
-            def select(self, *_args):
+            def select(self, *_args, **_kwargs):
                 return self
 
             def eq(self, field, value):
@@ -72,11 +72,17 @@ class SnapshotSupabase:
             def limit(self, *_args):
                 return self
 
+            def range(self, start, end):
+                self.bounds = (start, end)
+                return self
+
             def execute(self):
-                return SimpleNamespace(data=deepcopy([
+                rows = deepcopy([
                     row for row in db.tables.get(name, [])
                     if all(predicate(row) for predicate in self.filters)
-                ]))
+                ])
+                start, end = getattr(self, "bounds", (0, len(rows)))
+                return SimpleNamespace(data=rows[start:end+1], count=len(rows))
 
         return Query()
 

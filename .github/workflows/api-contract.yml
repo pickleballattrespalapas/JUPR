@@ -71,6 +71,16 @@ jobs:
             tests/test_league_live_flexible_day.py \
             tests/test_direct_match_activity_snapshot.py
 
+      - name: Verify complete history and correction recovery
+        run: |
+          python -m pytest -q \
+            tests/test_complete_history_load.py \
+            tests/test_load_data_degraded_schema.py \
+            tests/test_load_data_merged_players.py \
+            tests/test_match_exclusion_badge_reconcile.py \
+            tests/test_match_exclusion_durability_service.py \
+            tests/test_match_exclusion_atomic_recovery_schema.py
+
       - name: Verify league award eligibility
         run: |
           python -m pytest -q \
