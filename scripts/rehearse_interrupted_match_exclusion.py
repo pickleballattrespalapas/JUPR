@@ -45,7 +45,7 @@ def owned_fixture(report_dir, env, *, fresh=False):
     return manifest, rows, client, email
 
 
-def crash_after_commit(**kwargs):
+def crash_after_commit(_supabase=None, **kwargs):
     operation = kwargs["operation"]
     if operation.get("operation_status") != "pending_replay" or not operation.get("replay_job_id"):
         raise fixture.FixtureError("Atomic commit did not leave pending replay work.")
@@ -131,7 +131,14 @@ def rehearse(report_dir, env):
             env=dict(env), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=180)
         if child.returncode != CRASH_EXIT:
             raise fixture.FixtureError("Child did not exit at the expected commit boundary.")
+        fixture._write_json(report_dir / "child-exit.json", {"exit_code": child.returncode})
         finish_interrupted(report_dir, env)
+    except Exception as exc:
+        fixture._write_json(report_dir / "rehearsal-failure.json", {
+            "error_type": type(exc).__name__,
+            "failure": str(exc) if isinstance(exc, fixture.FixtureError) else "Unexpected rehearsal error",
+        })
+        raise
     finally:
         fixture.cleanup_fixture(report_dir=report_dir, env=env)
 
