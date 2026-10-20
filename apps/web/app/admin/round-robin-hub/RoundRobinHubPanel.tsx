@@ -16,6 +16,8 @@ import styles from "./RoundRobinHubPanel.module.css";
 type Props = { apiBase: string | null; clubId: string; initialHubId?: string; initialAddSessionKey?: string };
 type Tab = "board" | "queue" | "groups" | "players" | "courts";
 type Pending = { hubId: string; body: HubCommand | CreateHubInput };
+type CreatedSession = { hubId: string; sessionKey: string };
+type ReturnIntent = CreatedSession & { attempted: boolean };
 type ScoreEditor = { courtId: string; match: HubMatch; version: string | number; scoreA: string; scoreB: string };
 type CourtEditor = { match: HubMatch; sourceCourtId: string; targetCourtId: string; version: string | number };
 type SessionView = { sessionKey: string; view: "round" | "standings"; roundNumber: number };
@@ -57,6 +59,9 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [pending, setPending] = useState<Pending | null>(null);
+  const [pendingHydrated, setPendingHydrated] = useState(false);
+  const [createdSession, setCreatedSession] = useState<CreatedSession | null>(null);
+  const [attaching, setAttaching] = useState(false);
   const [creating, setCreating] = useState(false);
   const [title, setTitle] = useState("");
   const [createCourts, setCreateCourts] = useState<HubCourtConfig[]>(() => newCourts(6));
@@ -71,10 +76,12 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
   const selectedRef = useRef(hubId);
   const loadSequence = useRef(0);
   const mutationLock = useRef(false);
+  const returnIntent = useRef<ReturnIntent | null>(null);
+  const attachmentInFlight = useRef<ReturnIntent | null>(null);
   const scoreInput = useRef<HTMLInputElement>(null);
   const ready = Boolean(apiBase && accessToken);
   const workspace = detail?.workspace;
-  const disabled = busy || Boolean(pending) || detail?.hub.status === "completed";
+  const disabled = busy || attaching || Boolean(pending) || detail?.hub.status === "completed";
   const groupMap = useMemo(() => new Map((workspace?.groups || []).map(group => [group.session_key, group])), [workspace?.groups]);
   const availableSessions = list.sessions.filter(session => !session.round_robin_hub_id && session.status === "active" && !groupMap.has(session.session_key));
 
@@ -117,7 +124,19 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
     }
   }, [ready, request]);
 
+  const clearReturnIntent = useCallback(() => {
+    returnIntent.current = null;
+    setCreatedSession(null);
+    // Navigation may cancel preparation, but never discards a sent command or
+    // its durable pending request. That command still needs confirmation.
+    if (!mutationLock.current) {
+      attachmentInFlight.current = null;
+      setAttaching(false);
+    }
+  }, []);
+
   function selectHub(id: string): void {
+    clearReturnIntent();
     selectedRef.current = id;
     loadSequence.current += 1;
     setHubId(id); setDetail(null); setCreating(false); setSessionView(null); setScoreEditor(null); setCourtEditor(null); setError(""); setMessage("");
@@ -127,8 +146,27 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
   useEffect(() => {
     const retained = readPending(clubId);
     setPending(retained);
+    setPendingHydrated(true);
     if (retained) setError("A previous action needs confirmation. Retry it below before making another change.");
   }, [clubId]);
+
+  // Next preserves this panel's state on return navigation. The URL, rather than
+  // the previously selected event, owns the destination of a newly created RR.
+  useEffect(() => {
+    if (!initialHubId || !initialAddSessionKey || returnIntent.current?.hubId !== initialHubId || returnIntent.current.sessionKey !== initialAddSessionKey) clearReturnIntent();
+    if (!initialHubId) return;
+    if (selectedRef.current !== initialHubId) {
+      selectedRef.current = initialHubId;
+      loadSequence.current += 1;
+      setHubId(initialHubId); setDetail(null); setCreating(false); setSessionView(null); setScoreEditor(null); setCourtEditor(null);
+    }
+    if (!initialAddSessionKey) return;
+    if (returnIntent.current?.hubId === initialHubId && returnIntent.current.sessionKey === initialAddSessionKey) return;
+    returnIntent.current = { hubId: initialHubId, sessionKey: initialAddSessionKey, attempted: false };
+    setCreatedSession({ hubId: initialHubId, sessionKey: initialAddSessionKey });
+    setAddSessionKey(initialAddSessionKey); setTab("board"); setCreating(false); setMessage("");
+    setSessionView(null); setScoreEditor(null); setCourtEditor(null);
+  }, [initialHubId, initialAddSessionKey, clearReturnIntent]);
 
   useEffect(() => {
     if (!ready) return;
@@ -139,7 +177,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
       else if (!selectedRef.current) { setCreating(true); setLoading(false); }
     }).catch(cause => { if (live) { setError(cause instanceof Error ? cause.message : "Unable to load hubs."); setLoading(false); } });
     return () => { live = false; };
-  }, [ready, loadList]);
+  }, [ready, loadList, initialHubId, initialAddSessionKey]);
 
   useEffect(() => { selectedRef.current = hubId; if (hubId && ready) void loadHub(hubId); }, [hubId, ready, loadHub]);
   useEffect(() => {
@@ -150,13 +188,28 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
     return () => { window.clearInterval(timer); window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); };
   }, [hubId, ready, loadHub]);
 
-  async function execute(operation: Pending): Promise<boolean> {
+  const completeCreatedSession = useCallback((value: HubDetailResponse): boolean => {
+    const intent = returnIntent.current;
+    if (!intent || value.hub.id !== intent.hubId || !value.workspace.groups.some(group => group.session_key === intent.sessionKey)) return false;
+    returnIntent.current = null;
+    setCreatedSession(null); setAddSessionKey("");
+    selectedRef.current = intent.hubId;
+    setHubId(intent.hubId); setDetail(value); setCreating(false); setTab("board"); setError("");
+    setMessage("Round robin added. Choose Next open court or Fill open courts to start play.");
+    window.history.replaceState(null, "", `/admin/round-robin-hub?hub=${encodeURIComponent(intent.hubId)}`);
+    return true;
+  }, []);
+
+  const execute = useCallback(async (operation: Pending): Promise<boolean> => {
     if (mutationLock.current) return false;
     mutationLock.current = true; setBusy(true); setError(""); setMessage(""); savePending(operation);
     loadSequence.current += 1;
     try {
       const value = await request<HubDetailResponse>(operation.hubId ? `/${encodeURIComponent(operation.hubId)}/commands` : "", operation.body);
       if (operation.hubId && String(value.hub.id) !== operation.hubId) throw new Error("The action returned a different event. Retry this exact action to confirm its result.");
+      if (returnIntent.current?.hubId === operation.hubId && "action" in operation.body && operation.body.action === "add_group" && operation.body.payload.session_key === returnIntent.current.sessionKey && !value.workspace.groups.some(group => group.session_key === returnIntent.current?.sessionKey)) {
+        throw new Error("The round robin's addition was not confirmed. Retry this exact action to check its result.");
+      }
       savePending(null);
       if (!operation.hubId) {
         selectedRef.current = value.hub.id; setHubId(value.hub.id); setCreating(false);
@@ -165,7 +218,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
       if (selectedRef.current === value.hub.id) setDetail(value);
       setMessage("action" in operation.body ? commandMessages[operation.body.action] || "Hub updated." : "Event created. Add your round robins below.");
       setScoreEditor(null); setCourtEditor(null); setFinishReview(false);
-      if (!operation.hubId || ("action" in operation.body && operation.body.action === "add_group")) setTab("groups");
+      if (!completeCreatedSession(value) && (!operation.hubId || ("action" in operation.body && operation.body.action === "add_group"))) setTab("groups");
       void loadList().catch(() => undefined);
       return true;
     } catch (cause) {
@@ -177,7 +230,38 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
       }
       return false;
     } finally { mutationLock.current = false; setBusy(false); setLoading(false); }
-  }
+  }, [request, savePending, loadList, loadHub, completeCreatedSession]);
+
+  const attachCreatedSession = useCallback(async (intent: ReturnIntent): Promise<void> => {
+    if (mutationLock.current || pending || returnIntent.current !== intent) return;
+    // Set before awaiting so Strict Mode and rerenders cannot start a second request.
+    intent.attempted = true;
+    attachmentInFlight.current = intent;
+    setAttaching(true); setError("");
+    selectedRef.current = intent.hubId;
+    setHubId(intent.hubId); setCreating(false);
+    loadSequence.current += 1;
+    try {
+      const value = await request<HubDetailResponse>(`/${encodeURIComponent(intent.hubId)}`);
+      if (returnIntent.current !== intent) return;
+      if (value.hub.id !== intent.hubId) throw new Error("The server returned a different event. Retry adding your saved round robin.");
+      setDetail(value);
+      if (completeCreatedSession(value)) return;
+      await execute({ hubId: intent.hubId, body: { action: "add_group", payload: { session_key: intent.sessionKey }, expected_version: value.hub.version, idempotency_key: hubOperationKey() } });
+    } catch (cause) {
+      if (returnIntent.current === intent) setError(cause instanceof Error ? cause.message : "Unable to add your saved round robin to this event.");
+    } finally {
+      if (attachmentInFlight.current === intent) {
+        attachmentInFlight.current = null;
+        setAttaching(false); setLoading(false);
+      }
+    }
+  }, [pending, request, execute, completeCreatedSession]);
+
+  useEffect(() => {
+    const intent = returnIntent.current;
+    if (ready && pendingHydrated && createdSession && !pending && !busy && intent && !intent.attempted) void attachCreatedSession(intent);
+  }, [ready, pendingHydrated, createdSession, pending, busy, attachCreatedSession]);
 
   async function command(action: HubCommandAction, payload: Record<string, unknown> = {}, version?: string | number): Promise<boolean> {
     if (!detail || disabled) return false;
@@ -242,14 +326,15 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
 
   return <div className={styles.root}>
     <section className={styles.scope} aria-label="Choose event">
-      <label className={styles.field}>Event<select aria-label="Select hub" value={hubId} disabled={busy || Boolean(pending)} onChange={event => selectHub(event.target.value)}><option value="">Choose an event</option>{list.hubs.map(hub => <option key={hub.id} value={hub.id}>{hub.title}{hub.status === "completed" ? " · Finished" : ""}</option>)}</select></label>
-      <button type="button" className={styles.button} disabled={busy || Boolean(pending)} onClick={() => { setCreating(true); setSessionView(null); setError(""); }}>New event</button>
-      <button type="button" className={styles.button} disabled={busy || loading} onClick={() => { void loadList().catch(cause => setError(cause.message)); if (hubId) void loadHub(hubId); }}>Refresh</button>
+      <label className={styles.field}>Event<select aria-label="Select hub" value={hubId} disabled={busy || attaching || Boolean(pending)} onChange={event => selectHub(event.target.value)}><option value="">Choose an event</option>{list.hubs.map(hub => <option key={hub.id} value={hub.id}>{hub.title}{hub.status === "completed" ? " · Finished" : ""}</option>)}</select></label>
+      <button type="button" className={styles.button} disabled={busy || attaching || Boolean(pending)} onClick={() => { setCreating(true); setSessionView(null); setError(""); }}>New event</button>
+      <button type="button" className={styles.button} disabled={busy || attaching || loading} onClick={() => { void loadList().catch(cause => setError(cause.message)); if (hubId) void loadHub(hubId); }}>Refresh</button>
     </section>
 
     {error ? <div role="alert" className={`${styles.notice} ${styles.error}`}><p>{error}</p></div> : null}
     {message ? <div role="status" className={`${styles.notice} ${styles.success}`}><p>{message}</p></div> : null}
     {pending ? <section className={`${styles.notice} ${styles.error}`} aria-label="Confirm pending action"><strong>Confirm the previous action</strong><p>Its exact request is saved. Retrying checks the same action without creating a second one.</p><button type="button" className={styles.button} disabled={busy} onClick={() => void execute(pending)}>{busy ? "Checking…" : "Retry saved action"}</button></section> : null}
+    {createdSession ? <section className={styles.notice} aria-label="Add created round robin"><strong>Round robin created</strong><p>{attaching ? "Adding your round robin to this event…" : "Your round robin is saved. Complete its addition to the hub to make its matches available for courts."}</p><div className={styles.actions}><Link className={styles.button} href={`/admin/round-robin-generator/sessions/${encodeURIComponent(createdSession.sessionKey)}/rounds/1`}>Open created round robin</Link>{!pending && !attaching ? <button type="button" className={styles.primary} disabled={busy} onClick={() => { if (returnIntent.current) void attachCreatedSession(returnIntent.current); }}>Retry adding to hub</button> : null}</div></section> : null}
 
     {creating ? <section className={styles.card} aria-label="Create event"><div className={styles.heading}><div><h2>Create an event</h2><p className={styles.muted}>Name this gathering and choose the courts available to its round robins.</p></div>{detail ? <button type="button" className={styles.button} onClick={() => setCreating(false)}>Cancel</button> : null}</div>
       <div className={styles.inlineForm}><label className={styles.field}>Event name<input value={title} maxLength={160} placeholder="Friday Pickleball Night" onChange={event => setTitle(event.target.value)} /></label><label className={styles.field} style={{ flex: "0 1 10rem" }}>Number of courts<input type="number" min={1} max={40} value={createCourts.length} onChange={event => { const count = Math.max(1, Math.min(40, Number(event.target.value) || 1)); setCreateCourts(current => count <= current.length ? current.slice(0, count) : [...current, ...newCourts(count).slice(current.length).map(court => ({ ...court, id: hubOperationKey() }))]); }} /></label></div>
@@ -275,7 +360,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
       {tab === "queue" ? <section id="hub-panel-queue" role="tabpanel" aria-labelledby="hub-tab-queue" className={styles.root}><div className={styles.card}><h2>Ready matches · {workspace.eligible_queue.length}</h2><p className={styles.small}>Priority follows the longest waiting player in each eligible match. Scheduled byes count toward waiting time.</p>{workspace.eligible_queue.length ? queueRows(workspace.eligible_queue, "ready") : <p className={styles.empty}>No matches are ready.</p>}</div>{workspace.reserved_queue.length ? <div className={styles.card}><h2>Reserved next · {workspace.reserved_queue.length}</h2>{queueRows(workspace.reserved_queue, "waiting")}</div> : null}{workspace.blocked_queue.length ? <div className={styles.card}><h2>Waiting for players or courts · {workspace.blocked_queue.length}</h2>{queueRows(workspace.blocked_queue, "blocked")}</div> : null}</section> : null}
 
       {tab === "groups" ? <section id="hub-panel-groups" role="tabpanel" aria-labelledby="hub-tab-groups" className={styles.root}>
-        <div className={styles.card}><div className={styles.heading}><div><h2>Add a round robin</h2><p className={styles.muted}>Each group keeps its roster, format, rating choice, and results.</p></div><Link className={styles.button} href={`/admin/round-robin-generator?hub=${encodeURIComponent(detail.hub.id)}`}>Create round robin</Link></div><div className={styles.inlineForm}><label className={styles.field}>Existing active round robin<select value={addSessionKey} onChange={event => setAddSessionKey(event.target.value)}><option value="">Choose a round robin</option>{availableSessions.map(session => <option key={session.session_key} value={session.session_key}>{session.title} · {formatName(session.event_format)} · {session.rating_mode || "unrated"}</option>)}</select></label><button type="button" className={styles.primary} disabled={disabled || !availableSessions.some(session => session.session_key === addSessionKey)} onClick={() => void command("add_group", { session_key: addSessionKey }).then(ok => { if (ok) setAddSessionKey(""); })}>Add to hub</button></div>{!availableSessions.length ? <p className={styles.small}>No other active round robins are available. Create one, then return here to add it.</p> : null}</div>
+        <div className={styles.card}><div className={styles.heading}><div><h2>Add a round robin</h2><p className={styles.muted}>Each group keeps its roster, format, rating choice, and results.</p></div><Link className={styles.button} href={`/admin/round-robin-generator?hub=${encodeURIComponent(detail.hub.id)}`}>Create round robin</Link></div><div className={styles.inlineForm}><label className={styles.field}>Existing active round robin<select value={addSessionKey} onChange={event => setAddSessionKey(event.target.value)}><option value="">Choose a round robin</option>{availableSessions.map(session => <option key={session.session_key} value={session.session_key}>{session.title} · {formatName(session.event_format)} · {session.rating_mode || "unrated"}</option>)}</select></label><button type="button" className={styles.primary} disabled={disabled || !availableSessions.some(session => session.session_key === addSessionKey)} onClick={() => void command("add_group", { session_key: addSessionKey }).then(ok => { if (ok) setAddSessionKey(""); })}>Add to hub</button></div>{!availableSessions.length ? <p className={styles.small}>No other active round robins are available. Create a round robin to add it to this event and queue its matches.</p> : null}</div>
         <div className={styles.grid}>{workspace.groups.map(group => {
           const dedicated = workspace.courts.filter(court => court.dedicated_session_key === group.session_key);
           const groupBusy = workspace.courts.some(court => court.current?.session_key === group.session_key || court.next?.session_key === group.session_key);
@@ -291,7 +376,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
 
       {tab === "courts" ? <section id="hub-panel-courts" role="tabpanel" aria-labelledby="hub-tab-courts" className={styles.card}><h2>Court setup</h2><p className={styles.muted}>A group with dedicated courts uses only those courts. Other groups use the shared courts.</p>{courtEditorRows(editCourts, setEditCourts, true)}{String(courtDraftVersion) !== String(detail.hub.version) ? <p className={styles.small}>The court board has changed since this editor opened. Review current courts before saving.</p> : null}<div className={styles.actions}><button type="button" className={styles.primary} disabled={disabled || !editCourts.length || editCourts.some(court => !court.label.trim())} onClick={() => void command("configure_courts", { courts: editCourts.map(courtConfig) }, courtDraftVersion).then(ok => { if (ok) setTab("board"); })}>Save court setup</button><button type="button" className={styles.button} disabled={busy} onClick={openCourtSetup}>Reload current courts</button><button type="button" className={styles.button} disabled={disabled} onClick={() => setFinishReview(true)}>Finish event</button></div></section> : null}
 
-      {sessionView ? <section className={styles.embedded} aria-label="Manage selected round robin"><div className={styles.heading}><div><p className={styles.eyebrow}>Round robin controls</p><h2>{groupMap.get(sessionView.sessionKey)?.title || "Round robin"}</h2></div><button type="button" className={styles.button} onClick={() => setSessionView(null)}>Close round robin controls</button></div><div className={styles.embeddedBody} inert={busy || Boolean(pending)}>{sessionView.view === "standings" ? <GeneratorStandings key={`${sessionView.sessionKey}:standings`} apiBase={apiBase} clubId={clubId} sessionKey={sessionView.sessionKey} embedded refreshKey={detail.hub.version} onNavigate={target => setSessionView({ ...sessionView, view: target.view, roundNumber: target.roundNumber || sessionView.roundNumber })} onSessionChanged={() => { void loadHub(hubId, true); }} /> : <GeneratorRoundRunner key={`${sessionView.sessionKey}:round:${sessionView.roundNumber}`} apiBase={apiBase} clubId={clubId} generatorKind="round_robin" sessionKey={sessionView.sessionKey} roundNumber={sessionView.roundNumber} embedded refreshKey={detail.hub.version} onNavigate={target => setSessionView({ ...sessionView, view: target.view, roundNumber: target.roundNumber || sessionView.roundNumber })} onSessionChanged={() => { void loadHub(hubId, true); }} />}</div></section> : null}
+      {sessionView ? <section className={styles.embedded} aria-label="Manage selected round robin"><div className={styles.heading}><div><p className={styles.eyebrow}>Round robin controls</p><h2>{groupMap.get(sessionView.sessionKey)?.title || "Round robin"}</h2></div><button type="button" className={styles.button} onClick={() => setSessionView(null)}>Close round robin controls</button></div><div className={styles.embeddedBody} inert={busy || attaching || Boolean(pending)}>{sessionView.view === "standings" ? <GeneratorStandings key={`${sessionView.sessionKey}:standings`} apiBase={apiBase} clubId={clubId} sessionKey={sessionView.sessionKey} embedded refreshKey={detail.hub.version} onNavigate={target => setSessionView({ ...sessionView, view: target.view, roundNumber: target.roundNumber || sessionView.roundNumber })} onSessionChanged={() => { void loadHub(hubId, true); }} /> : <GeneratorRoundRunner key={`${sessionView.sessionKey}:round:${sessionView.roundNumber}`} apiBase={apiBase} clubId={clubId} generatorKind="round_robin" sessionKey={sessionView.sessionKey} roundNumber={sessionView.roundNumber} embedded refreshKey={detail.hub.version} onNavigate={target => setSessionView({ ...sessionView, view: target.view, roundNumber: target.roundNumber || sessionView.roundNumber })} onSessionChanged={() => { void loadHub(hubId, true); }} />}</div></section> : null}
     </> : null}
 
     {scoreEditor ? <InteractionDialog open phase={busy ? "working" : "ready"} title={`Enter score · ${selectedScoreCourt?.label || "Court"}`} description={<p>{groupMap.get(scoreEditor.match.session_key)?.title} · Round {scoreEditor.match.round_number}</p>} initialFocusRef={scoreInput} dirty={Boolean(scoreEditor.scoreA || scoreEditor.scoreB)} onRequestClose={() => { if (!busy) setScoreEditor(null); }} actions={<><button type="button" className={styles.button} disabled={busy} onClick={() => setScoreEditor(null)}>Cancel</button><button type="submit" form="hub-score-form" className={styles.primary} disabled={disabled || !scoreValid || scoreMatchChanged || scoreStale}>Save score &amp; release court</button></>}>

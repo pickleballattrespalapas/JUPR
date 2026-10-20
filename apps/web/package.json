@@ -11,7 +11,8 @@
     "test:e2e:public-read": "playwright test e2e/staging.smoke.spec.ts e2e/leaderboards.staging.spec.ts e2e/league-results.parity.spec.ts e2e/players.staging.spec.ts e2e/public-explorer-recap.spec.ts e2e/admin-operations-auth.spec.ts e2e/tournament-admin-navigation.spec.ts --retries=0 --forbid-only",
     "test:e2e:notifications": "playwright test e2e/admin-notifications.spec.ts --retries=0 --forbid-only",
     "test:e2e:staging": "playwright test",
-    "test:round-robin-hub-browser": "node tests/round-robin-hub-browser.cjs"
+    "test:round-robin-hub-browser": "node tests/round-robin-hub-browser.cjs",
+    "test:round-robin-hub-start-browser": "node tests/round-robin-hub-start-browser.cjs"
   },
   "dependencies": {
     "@hello-pangea/dnd": "18.0.1",

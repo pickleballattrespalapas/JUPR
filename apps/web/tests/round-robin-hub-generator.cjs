@@ -123,5 +123,30 @@ function embeddedClick(href) {
   await act(async()=>button(tree,'Queue late-arrival game').props.onClick());
   assert.deepEqual(arrivalRequest,{ids:['a0','a1','a2','a3'],court:3});
   await act(async()=>tree.unmount());
-  console.log('PASS hub generator integration: embedded navigation, sequential rounds, partial standings, safe refresh, roster controls, and advance.');
+
+  const rosterModule = load('@/components/GeneratorRosterSetup');
+  stubs['@/components/GeneratorRosterSetup'] = {...rosterModule,__esModule:true,default:()=>null};
+  let clearedDrafts=0;
+  stubs['@/lib/playGeneratorDraft'] = {
+    readPlayGeneratorDraft:()=>({title:'New group',playFormat:'doubles',ratingMode:'unrated',targetCount:4,
+      participantText:'One\nTwo\nThree\nFour',linkedPlayerIds:{},preview:{...clone(fixture.event),previewFingerprint:'preview'}}),
+    writePlayGeneratorDraft(){},clearPlayGeneratorDraft(){clearedDrafts++;}
+  };
+  const Workspace = load('@/app/admin/play-generators/GeneratorWorkspace').default;
+  for (const hub of ['hub/2',undefined]) {
+    navigation.length=0;const creates=[];
+    global.fetch=async(url,options={})=>{
+      if(options.method==='POST') creates.push({url,body:JSON.parse(options.body)});
+      return {ok:true,status:200,json:async()=>options.method==='POST'?{session:{session_key:'new/rr',current_round_number:1}}:{sessions:[]}};
+    };
+    await act(async()=>{tree=create(h(Workspace,{apiBase:'https://api.invalid',clubId:'club',generatorKind:'round_robin',status:{enabled:true,writes_enabled:true},returnHubId:hub}));});
+    await act(async()=>button(tree,hub?'Start and add to hub':'Start unrated session').props.onClick());
+    assert.equal(creates.length,1,'Starting creates exactly one round robin');
+    assert.equal(creates[0].body.rating_mode,'unrated');
+    assert.equal(creates[0].body.preview_fingerprint,'preview');
+    assert.deepEqual(navigation,[hub?'/admin/round-robin-hub?hub=hub%2F2&add_session=new%2Frr':'/admin/round-robin-generator/sessions/new%2Frr/rounds/1']);
+    await act(async()=>tree.unmount());
+  }
+  assert.equal(clearedDrafts,2);
+  console.log('PASS hub generator integration: embedded controls, sequential standings, safe refresh, roster controls, and hub/standalone creation destinations.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
