@@ -10,7 +10,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Any
 
 from jupr_app.domain.adaptive_play_engine import (
-    advance_generator_event, mark_generator_round_played, save_generator_round,
+    active_participant_ids, advance_generator_event, mark_generator_round_played, save_generator_round,
 )
 from jupr_app.domain.moneyball_expectations import is_moneyball, validate_score
 
@@ -334,6 +334,36 @@ def _claims(hub: dict[str, Any], events: dict[str, dict[str, Any]]) -> dict[str,
     return claims
 
 
+def _add_player_unavailable_reason(event: dict[str, Any]) -> str | None:
+    if event.get("status") != "active":
+        return "Players can only join an active round robin."
+    if is_moneyball(event):
+        return "Moneyball’s starting lineup is fixed. Use the generator for substitutions."
+    if event.get("playoff"):
+        return "Playoff teams are fixed after seeding."
+    if len(event.get("participants") or []) >= 40:
+        return "This round robin already has the maximum of 40 players."
+    return None
+
+
+def _can_rejoin_profile(event: dict[str, Any], session_key: str, hub: dict[str, Any],
+                        identity: str, claims: dict[str, Any]) -> bool:
+    existing = [p for p in event.get("participants") or [] if player_identity(p, session_key, hub) == identity]
+    if not existing:
+        return True
+    current = int(event.get("currentRoundNumber") or 1)
+    if any(p.get("inactive_from_round") is None or int(p["inactive_from_round"]) > current for p in existing):
+        return False
+    claim = claims.get(identity)
+    if claim and claim[0] == session_key:
+        return False
+    remaining_rounds = {current, current + 1}
+    remaining_rounds.update(int(r["number"]) for r in event.get("rounds") or [] if int(r["number"]) >= current)
+    remaining_rounds.update(int(number) for number in event.get("rosterByRound") or {} if int(number) >= current)
+    remaining_ids = {pid for number in remaining_rounds for pid in active_participant_ids(event, number)}
+    return all(str(p["id"]) not in remaining_ids for p in existing)
+
+
 def build_hub_snapshot(hub: dict[str, Any], events: dict[str, dict[str, Any]], *, now: str) -> dict[str, Any]:
     state = deepcopy(hub)
     _ensure_players(state, events, now)
@@ -354,6 +384,8 @@ def build_hub_snapshot(hub: dict[str, Any], events: dict[str, dict[str, Any]], *
         key = str(group["session_key"])
         event = events[key]
         row = _round(event)
+        active = set(active_participant_ids(event, int(row["number"])))
+        add_unavailable = _add_player_unavailable_reason(event)
         completed = sum(_complete(m, event) for m in _matches(row))
         groups.append({"session_key": key, "title": event.get("name") or key,
             "current_round_number": int(row["number"]), "round_status": row.get("status"),
@@ -363,6 +395,8 @@ def build_hub_snapshot(hub: dict[str, Any], events: dict[str, dict[str, Any]], *
             "advance_label": "Finish session" if ((is_moneyball(event) and all(r.get("status") == "saved" for r in event.get("rounds") or [])) or (event.get("playoff") and int(row["number"]) >= int(event.get("totalRounds") or 0))) else "Next round",
             "event_format": event.get("eventFormat") or "standard", "scoring_mode": event.get("scoringMode") or "scored",
             "rating_mode": event.get("ratingMode") or "unrated", "status": event.get("status"),
+            "can_add_player": add_unavailable is None, "add_player_unavailable_reason": add_unavailable,
+            "players": [],
             "dedicated_court_ids": [c["id"] for c in state.get("courts") or [] if c.get("dedicated_session_key") == key]})
         by_id = {str(p["id"]): p for p in event.get("participants") or []}
         for participant in event.get("participants") or []:
@@ -374,6 +408,17 @@ def build_hub_snapshot(hub: dict[str, Any], events: dict[str, dict[str, Any]], *
                 "on_court": identity in playing_identities, "reserved": identity in claims and identity not in playing_identities})
             info["session_keys"].append(key)
             info["participant_ids"][key] = str(participant["id"])
+            groups[-1]["players"].append({
+                "participant_id": str(participant["id"]), "name": participant.get("name"),
+                "display_name": identity_data["nodes"][(key, str(participant["id"]))]["display_name"],
+                "identity": identity, "profile_id": participant.get("player_id"),
+                "can_rejoin": identity.startswith("player:") and _can_rejoin_profile(event, key, state, identity, claims),
+                "active": str(participant["id"]) in active,
+                "active_from_round": int(participant.get("active_from_round") or 1),
+                "inactive_from_round": participant.get("inactive_from_round"),
+                "inactive_rounds": list(participant.get("inactive_rounds") or []),
+                **{field: info[field] for field in ("paused", "wait_seconds", "on_court", "reserved")},
+            })
         for match in _matches(row):
             players = _participants(event, match)
             identities = [player_identity(p, key, state) for p in players]
@@ -630,6 +675,16 @@ def mutate_hub_roster(event: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     result = mutate_generator_roster(original, **kwargs)
     result["roundRobinHubId"] = hub_id
     current = int(event.get("currentRoundNumber") or 1)
+    action = str(kwargs.get("action") or "")
+    participant_id = str(kwargs.get("participant_id") or "")
+    if action == "remove":
+        departing = next(p for p in result["participants"] if str(p["id"]) == participant_id)
+        effective = int(departing["inactive_from_round"])
+        # Hub schedules are generated incrementally; old future overrides may
+        # remain after their round objects were trimmed. Departure applies to all.
+        for number, roster in (result.get("rosterByRound") or {}).items():
+            if int(number) >= effective:
+                result["rosterByRound"][number] = [pid for pid in roster if str(pid) != participant_id]
     original_row = _round(event)
     if original_row.get("status") not in {"active", "preview"}:
         return result
@@ -638,8 +693,6 @@ def mutate_hub_roster(event: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     protected_people = {str(pid) for m in protected for pid in (m.get("sideA") or m.get("teamA") or []) + (m.get("sideB") or m.get("teamB") or [])}
     original_ids = active_participant_ids(event, current)
     active = list(original_ids)
-    action = str(kwargs.get("action") or "")
-    participant_id = str(kwargs.get("participant_id") or "")
     old_people = {str(p["id"]) for p in event.get("participants") or []}
     added = next((p for p in result.get("participants") or [] if str(p["id"]) not in old_people), None)
     if action == "add" and added:
@@ -729,6 +782,24 @@ def apply_hub_command(hub: dict[str, Any], events: dict[str, dict[str, Any]], *,
         if any(int(r["number"]) > current and r.get("status") in {"saved", "played"} for r in event.get("rounds") or []):
             raise ValueError("This session has out-of-order results. Resolve them before attaching it.")
         state["groups"].append({"session_key": session_key, "joined_at": now})
+    elif action == "add_player":
+        from jupr_app.domain.adaptive_play_engine import mutate_generator_roster
+        event = _event(state, updated, session_key)
+        unavailable = _add_player_unavailable_reason(event)
+        if unavailable:
+            raise ValueError(unavailable)
+        name = payload.get("name")
+        if not isinstance(name, str) or not name.strip() or len(name) > 160:
+            raise ValueError("Enter a player name of up to 160 characters.")
+        player_id = payload.get("player_id")
+        if player_id is not None:
+            if type(player_id) is not int or player_id <= 0:
+                raise ValueError("Choose a valid club player profile.")
+            identity = f"player:{player_id}"
+            if not _can_rejoin_profile(event, session_key, state, identity, _claims(state, updated)):
+                raise ValueError("This club player is already in this round robin's active or upcoming roster.")
+        changed = {**updated, session_key: mutate_generator_roster(event, action="add", name=name, player_id=player_id)}
+        state, updated = reconcile_hub_events(state, updated, changed, now=now)
     elif action == "remove_group":
         event = _event(state, updated, session_key)
         if any(d["resolution"] == "same" and ((_ref(d["left"])[0] == session_key) != (_ref(d["right"])[0] == session_key)) for d in state.get("identity_decisions") or []):

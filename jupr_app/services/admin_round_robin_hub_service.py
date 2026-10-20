@@ -113,6 +113,11 @@ def get_round_robin_hub(db: Any, *, club_id: str, hub_id: str) -> dict[str, Any]
         group["rating_mode"] = _event(session).get("ratingMode", "unrated")
         group["results_locked"] = _is_locked(session)
         group["source_mode"] = (session.get("state") or {}).get("mode")
+        if group["results_locked"] or row.get("status") != "active" or session.get("status") != "active":
+            group["can_add_player"] = False
+            group["add_player_unavailable_reason"] = (
+                "Submitted results are locked for administrator review." if group["results_locked"]
+                else "Players can only join an active round robin in an active hub.")
     return {"ok": True, "hub": _summary(row), "workspace": workspace}
 
 
@@ -252,6 +257,20 @@ def command_round_robin_hub(db: Any, *, club_id: str, hub_id: str, action: str,
         command_payload = payload
         if action == "auto_fill_courts":
             command_payload = {**payload, "excluded_session_keys": [key for key, session in sessions.items() if _is_locked(session)]}
+        elif action == "add_player":
+            if target_key not in sessions:
+                raise ValueError("Choose a round robin attached to this hub.")
+            if sessions[target_key].get("status") != "active":
+                raise ValueError("Players can only join an active round robin.")
+            player_id = payload.get("player_id")
+            if player_id is not None:
+                if type(player_id) is not int or player_id <= 0:
+                    raise ValueError("Choose a valid club player profile.")
+                from jupr_app.services.admin_play_generator_service import _player_rows_by_id
+                player = _player_rows_by_id(db, club_id=club_id, player_ids=[player_id]).get(player_id)
+                if not player:
+                    raise ValueError("This player profile was not found in this club.")
+                command_payload = {**payload, "name": str(player.get("name") or "").strip()}
         state, events = apply_hub_command(state, events, action=action, payload=command_payload, now=_now())
     _rpc_commit(db, club_id=club_id, hub_id=hub_id, expected_version=expected_version,
                 operation_key=idempotency_key, fingerprint=fingerprint, title=str(row["title"]),

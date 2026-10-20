@@ -3,7 +3,7 @@
  * -> transactional RPC double. Starts without sessions. Sessions are created
  * using real generator APIs; identity review, pause and court assignment
  * use the UI. Covers guest/profile identity, review cleanup, automatic round
- * progression and an exact response-loss retry.
+ * progression, grouped roster additions and exact response-loss retries.
  * Does not test real authentication, RLS or PostgreSQL locks.
  * Run from apps/web: node tests/round-robin-hub-identities-browser.cjs
  * GENERATOR_BROWSER_{PYTHON,EXECUTABLE,ARGS,ARTIFACTS,WEB_PORT,API_PORT,NEXT_MODE}
@@ -143,6 +143,14 @@ async function main() {
       await page.getByLabel('Side B score',{exact:true}).fill('6');
       return command(page,page.getByRole('button',{name:'Save score & release court',exact:true}),'score_and_release');
     }
+    async function openAddPlayer(groupTitle, name, profileId) {
+      await page.getByRole('tab',{name:'Players',exact:true}).click();
+      await page.getByRole('region',{name:`Players in ${groupTitle}`,exact:true}).getByRole('button',{name:'Add player',exact:true}).click();
+      const dialog = page.getByRole('dialog',{name:'Add player',exact:true});
+      await dialog.getByRole('combobox',{name:'Player name or club profile',exact:true}).fill(name);
+      if (profileId !== undefined) await dialog.locator(`[data-player-value="${profileId}"]`).click();
+      return dialog;
+    }
 
     const numbers = Array.from({length:8},(_,i)=>String(i+1));
     const numberedA = await createSession('Numbers A',numbers);
@@ -211,6 +219,13 @@ async function main() {
     const guestB = detail.workspace.players.find(player=>player.name === '1' && player.session_keys.includes(numberedB.session_key));
     assert(guestA && guestB && guestA.identity !== guestB.identity);
     await page.getByRole('tab',{name:'Players',exact:true}).click();
+    for (const title of ['Numbers A','Numbers B']) {
+      const roster = page.getByRole('region',{name:`Players in ${title}`,exact:true});
+      assert.equal(await roster.locator('[data-player-identity]').count(),8);
+      assert.deepEqual(await roster.locator('[data-player-identity] strong').allTextContents(),numbers,'Each group uses plain player names beneath its own heading');
+    }
+    await snapshot(page,'grouped-numbered-rosters.png');
+    record('Players are grouped by round robin with plain numbered names beneath each group heading');
     const playerRow = page.locator(`[data-player-identity="${guestA.identity}"]`);
     detail = await command(page,playerRow.getByRole('button',{name:'Pause player',exact:true}),'pause_player');
     assert(detail.workspace.players.find(player=>player.identity === guestA.identity).paused);
@@ -225,6 +240,11 @@ async function main() {
     const occupants = occupied(detail).flatMap(court=>people(court.current).map(player=>player.identity));
     assert.equal(new Set(occupants).size,8);
     await page.getByRole('tab',{name:'Court board',exact:true}).click();
+    for (const court of occupied(detail)) {
+      const match = court.current;
+      const label = `${match.side_a.map(player=>player.name).join(' / ')} vs ${match.side_b.map(player=>player.name).join(' / ')}`;
+      assert.equal(await page.getByRole('article',{name:court.label,exact:true}).locator('strong').first().textContent(),label,'Court match names must not repeat group titles beside each player');
+    }
     await snapshot(page,'different-numbered-guests-playing.png');
     await page.setViewportSize({width:390,height:844});
     await snapshot(page,'mobile-different-numbered-guests.png');
@@ -266,6 +286,78 @@ async function main() {
     await page.getByRole('tab',{name:'Match queue',exact:true}).click();
     await snapshot(page,'automatic-next-round-queue.png');
     record('Final score saves standings and queues the next round automatically; the other group and court stay unchanged after reload');
+
+    const hubUrl = page.url();
+    const bCurrentBefore = (await fixture()).sessions.find(session=>session.session_key === numberedB.session_key).event.rounds[0];
+    const bMatchBefore = bCurrentBefore.matches.find(match=>match.id === bCourt.current.match_id);
+    let addRequest, addCommitted;
+    const loseAddResponse = async route => {
+      if (route.request().method() !== 'POST' || route.request().postDataJSON()?.action !== 'add_player') return route.continue();
+      addRequest = route.request().postDataJSON();
+      const response = await route.fetch();
+      addCommitted = {status:response.status(),body:await response.json()};
+      return route.fulfill({status:503,contentType:'application/json',headers:{'access-control-allow-origin':webOrigin},
+        body:JSON.stringify({detail:'Local rehearsal: player was added but the response was lost.'})});
+    };
+    let addDialog = await openAddPlayer('Numbers B','Late Guest');
+    await page.route(commandUrl,loseAddResponse);
+    const failedAdd = page.waitForResponse(response=>response.url() === commandUrl && response.request().postDataJSON()?.action === 'add_player');
+    const [lostAdd] = await Promise.all([failedAdd,addDialog.getByRole('button',{name:'Add player to round robin',exact:true}).click()]);
+    assert.equal(lostAdd.status(),503);
+    await page.unroute(commandUrl,loseAddResponse);
+    assert.equal(addCommitted.status,200,JSON.stringify(addCommitted.body));
+    assert.equal(await addDialog.getByRole('combobox',{name:'Player name or club profile',exact:true}).inputValue(),'Late Guest');
+    await addDialog.getByRole('alert').first().waitFor();
+    await page.screenshot({path:path.join(output,'guest-add-retry-preserved.png'),fullPage:false});
+    const retriedAdd = page.waitForResponse(response=>response.url() === commandUrl && response.request().postDataJSON()?.action === 'add_player');
+    const [addReplay] = await Promise.all([retriedAdd,addDialog.getByRole('button',{name:'Retry saved action',exact:true}).click()]);
+    detail = await addReplay.json();
+    assert(addReplay.ok(),JSON.stringify(detail));
+    assert.deepEqual(addReplay.request().postDataJSON(),addRequest);
+    assert.equal(detail.hub.version,addCommitted.body.hub.version,'Exact add-player replay must not add twice');
+    await addDialog.waitFor({state:'hidden'});
+    assert.equal(page.url(),hubUrl,'Adding a guest must keep the organizer in the hub');
+    let rosterState = await fixture();
+    let bSession = rosterState.sessions.find(session=>session.session_key === numberedB.session_key);
+    let aSession = rosterState.sessions.find(session=>session.session_key === numberedA.session_key);
+    assert.equal(bSession.event.participants.length,9);
+    assert.equal(aSession.event.participants.length,8);
+    assert.equal(bSession.event.participants.filter(player=>player.name === 'Late Guest').length,1);
+    assert.equal(bSession.event.participants.find(player=>player.name === 'Late Guest').player_id ?? null,null);
+    assert.deepEqual(bSession.event.rounds[0].matches.find(match=>match.id === bCourt.current.match_id),bMatchBefore,'Adding a player must preserve the game already on court');
+    assert.equal(detail.workspace.courts.find(court=>court.id === bCourt.id).current.match_id,bCourt.current.match_id);
+    await snapshot(page,'guest-added-to-selected-group.png');
+    record('Guest added inside its group without navigation; response-loss retry adds exactly one participant and preserves the active match');
+
+    for (const title of ['Numbers A','Numbers B']) {
+      addDialog = await openAddPlayer(title,'Player 1',1);
+      detail = await command(page,addDialog.getByRole('button',{name:'Add player to round robin',exact:true}),'add_player');
+      await addDialog.waitFor({state:'hidden'});
+      assert.equal(page.url(),hubUrl);
+    }
+    rosterState = await fixture();
+    for (const key of [numberedA.session_key,numberedB.session_key]) {
+      const session = rosterState.sessions.find(session=>session.session_key === key);
+      assert.equal(session.event.participants.find(player=>player.name === 'Player 1').player_id,1);
+    }
+    assert.deepEqual(new Set(detail.workspace.players.find(player=>player.identity === 'player:1').session_keys),new Set([numberedA.session_key,numberedB.session_key]));
+    for (const title of ['Numbers A','Numbers B']) assert.equal(await page.getByRole('region',{name:`Players in ${title}`,exact:true}).locator('[data-player-identity="player:1"]').count(),1);
+    addDialog = await openAddPlayer('Numbers A','Late Guest');
+    detail = await command(page,addDialog.getByRole('button',{name:'Add player to round robin',exact:true}),'add_player');
+    await addDialog.waitFor({state:'hidden'});
+    assert.equal(detail.workspace.identity_pending_count,1,'A newly added matching guest name must request review');
+    assert.equal(page.url(),hubUrl);
+    await page.getByRole('region',{name:'Matching player names',exact:true}).getByRole('article',{name:'Identity review for Late Guest',exact:true}).waitFor();
+    await snapshot(page,'added-guest-needs-identity-review.png');
+    detail = await command(page,page.getByRole('article',{name:'Identity review for Late Guest',exact:true}).getByRole('button',{name:/^Different people:/}),'resolve_identities');
+    assert.equal(detail.workspace.identity_pending_count,0);
+    assert.equal(detail.workspace.players.filter(player=>player.name === 'Late Guest').length,2);
+    assert.equal(detail.workspace.courts.find(court=>court.id === bCourt.id).current.match_id,bCourt.current.match_id);
+    await page.setViewportSize({width:390,height:844});
+    await snapshot(page,'mobile-grouped-rosters-after-additions.png');
+    assert(await page.evaluate(()=>document.documentElement.scrollWidth <= window.innerWidth),'Grouped rosters must not overflow on mobile');
+    await page.setViewportSize({width:1440,height:1000});
+    record('Linked additions retain one shared profile identity in both groups; matching added guests prompt review within the same hub');
 
     const sameA = await createSession('Same Guest A',['Shared Guest','A Guest 2','A Guest 3','A Guest 4']);
     const sameB = await createSession('Same Guest B',['Shared Guest','B Guest 2','B Guest 3','B Guest 4']);
@@ -355,7 +447,7 @@ async function main() {
 
     expectedConsoleErrors.push(...errors.filter(error=>error.type === 'console' && error.url === commandUrl && /503/.test(error.message)));
     const unexpectedErrors = errors.filter(error=>!expectedConsoleErrors.includes(error));
-    assert(expectedConsoleErrors.length <= 1,'Only the intentionally lost response may emit a network error');
+    assert(expectedConsoleErrors.length <= 2,'Only the two intentionally lost responses may emit network errors');
     assert.deepEqual(unexpectedErrors,[],'No unexpected browser errors');
     fs.writeFileSync(path.join(output,'evidence.json'),JSON.stringify({passed:true,evidence,errors:unexpectedErrors,expectedConsoleErrors,
       sessions:(await fixture()).sessions.length},null,2));
