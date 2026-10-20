@@ -1,5 +1,5 @@
 {
   "schema_version": 1,
   "confirmation": "DEPLOY PRODUCTION API",
-  "release_parent_sha": "ce0b3ba5f04d3507c2991a879f4df800daa7266e"
+  "release_parent_sha": "b06de3f5836417c43f3dd3784d4257da41badd12"
 }
