@@ -47,3 +47,10 @@ assert.deepEqual(weeklyReportDatePreset('this_week',new Date('2026-10-16T17:00:0
 assert.deepEqual(weeklyReportDatePreset('last_seven',new Date('2026-10-16T17:00:00Z')),{start:'2026-10-10',end:'2026-10-16'});
 assert.deepEqual(weeklyReportDatePreset('last_week',new Date('2026-10-12T05:00:00Z')),{start:'2026-09-28',end:'2026-10-04'}, 'Sunday night in Mazatlan stays in the correct week');
 console.log('Weekly report email, escaping, compact/full variants, and club date presets: passed');
+for (const parameter of ['tournament_id', 'tournament']) {
+  const href = `tournament-results?${parameter}=event-123`;
+  assert.equal(reportPath('tres', href), `/clubs/tres/${href}`);
+  for (const suffix of ['&redirect=https://evil.example', '#fragment', '/../../admin', '&tournament_id=other']) {
+    assert.equal(reportPath('tres', href + suffix), '');
+  }
+}

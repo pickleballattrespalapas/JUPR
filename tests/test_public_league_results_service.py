@@ -24,6 +24,8 @@ class FakeQuery:
         self._rows = list(rows)
         self._strict_select = bool(strict_select)
         self._filters: dict[str, object] = {}
+        self._start = 0
+        self._order = None
         self._limit: int | None = None
         self._selected_columns: list[str] | None = None
 
@@ -47,6 +49,15 @@ class FakeQuery:
         self._limit = int(value)
         return self
 
+    def order(self, key):
+        self._order = key
+        return self
+
+    def range(self, start, end):
+        self._start = start
+        self._limit = end - start + 1
+        return self
+
     def execute(self):
         rows = list(self._rows)
         if self._strict_select and self._selected_columns is not None:
@@ -60,8 +71,10 @@ class FakeQuery:
                 raise RuntimeError(f"Unknown selected columns: {', '.join(unknown)}")
         for key, expected in self._filters.items():
             rows = [row for row in rows if row.get(key) == expected]
+        if self._order:
+            rows.sort(key=lambda row: row.get(self._order, ""))
         if self._limit is not None:
-            rows = rows[: self._limit]
+            rows = rows[self._start : self._start + self._limit]
         if self._selected_columns is not None:
             rows = [
                 {
@@ -363,10 +376,10 @@ def test_public_league_results_builds_standings_weekly_and_highlights() -> None:
     assert payload["recent_matches"][0]["match_id"] == 11
     assert payload["recent_matches"][0]["result"] == "L"
     assert "admin_flag" not in payload["weekly_results"][0]
-    assert supabase.table_calls.count("leagues_metadata") == 1
-    assert supabase.table_calls.count("players") == 1
-    assert supabase.table_calls.count("league_ratings") == 1
-    assert supabase.table_calls.count("matches") == 1
+    assert supabase.table_calls.count("leagues_metadata") == 2
+    assert supabase.table_calls.count("players") == 2
+    assert supabase.table_calls.count("league_ratings") == 2
+    assert supabase.table_calls.count("matches") == 2
     assert "team_league_teams" not in supabase.table_calls
     assert "team_league_fixtures" not in supabase.table_calls
 
@@ -586,3 +599,31 @@ def test_finished_results_keep_inactive_participants_in_weekly_history(status) -
     assert {row["player_id"] for row in payload["standings"]} == {1, 2, 3, 4}
     assert {row["player_id"] for row in payload["weekly_results"]} == {1, 2, 3, 4}
     assert {row["player_id"] for row in payload["players"]} == {1, 2, 3, 4}
+
+
+@pytest.mark.parametrize('cap', [137, 1000])
+def test_complete_league_history_survives_server_row_caps(monkeypatch, cap):
+    db = fake_supabase()
+    template = db._tables['matches'][0]
+    db._tables['matches'] = [dict(template, id=i, week_tag=f'Week {1 + i // 83}') for i in range(1408)]
+    db._tables['matches'] += [dict(template, id=9000, club_id='other'), dict(template, id=9001, deleted_at='2026-01-01')]
+    original = FakeQuery.execute
+    monkeypatch.setattr(FakeQuery, 'execute', lambda self: SimpleNamespace(data=original(self).data[:cap]))
+    matches = _league_matches(db, club_id='club', league_name='Open')
+    assert len(matches) == 1408
+    assert len({row['id'] for row in matches}) == 1408
+    result = build_public_league_results(db, club_id='club', league_name='Open')
+    assert [week['week_num'] for week in result['weeks']] == list(range(1, 18))
+
+
+def test_failed_later_history_page_does_not_publish_partial_results(monkeypatch):
+    from jupr_app.data.paged_reads import DataReadUnavailable
+    db = fake_supabase()
+    original = FakeQuery.execute
+    def execute(query):
+        if query._start:
+            raise RuntimeError('database unavailable')
+        return original(query)
+    monkeypatch.setattr(FakeQuery, 'execute', execute)
+    with pytest.raises(DataReadUnavailable):
+        build_public_league_results(db, club_id='club', league_name='Open')

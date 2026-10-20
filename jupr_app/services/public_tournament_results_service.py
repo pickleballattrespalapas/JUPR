@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
+from jupr_app.data.paged_reads import read_all_rows
+
 from jupr_app.domain.tournament_registration_repo import (
     get_public_tournament_bundle,
     list_public_tournaments,
@@ -37,11 +39,14 @@ def _rows(
     *,
     filters: tuple[tuple[str, Any], ...] = (),
 ) -> list[dict[str, Any]]:
-    query = supabase.table(table_name).select("*")
-    for key, value in filters:
-        query = query.eq(key, value)
+    def query_factory():
+        query = supabase.table(table_name).select("*")
+        for key, value in filters:
+            query = query.eq(key, value)
+        return query
+
     try:
-        return [dict(row) for row in (query.execute().data or [])]
+        return read_all_rows(query_factory)
     except Exception as exc:
         raise RuntimeError(f"Public tournament results could not load {table_name}.") from exc
 
@@ -292,18 +297,12 @@ def build_public_tournament_results(
         if player_id not in (None, "")
     }
     try:
-        player_rows = [
-            dict(row)
-            for row in (
-                supabase.table("players")
-                .select("*")
-                .eq("club_id", str(club_id))
-                .in_("id", [int(value) if value.isdigit() else value for value in player_ids])
-                .execute()
-                .data
-                or []
-            )
-        ] if player_ids else []
+        player_rows = read_all_rows(lambda: (
+            supabase.table("players")
+            .select("*")
+            .eq("club_id", str(club_id))
+            .in_("id", [int(value) if value.isdigit() else value for value in player_ids])
+        )) if player_ids else []
     except Exception as exc:
         raise RuntimeError("Public tournament results could not resolve player names.") from exc
     players = {str(row.get("id") or ""): row for row in player_rows}
