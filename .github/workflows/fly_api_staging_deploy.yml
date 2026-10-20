@@ -468,7 +468,7 @@ jobs:
         if: steps.league-live-e2e.outputs.run == 'true'
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
 
@@ -568,7 +568,7 @@ jobs:
         if: steps.staging-posture.outputs.write_wave == 'open' && github.event.inputs.qa_admin != 'off'
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
 

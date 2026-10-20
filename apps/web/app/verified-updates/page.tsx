@@ -3,7 +3,10 @@ import VerifiedUpdatesPageContent from "./VerifiedUpdatesPageContent";
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 
-export default async function VerifiedUpdatesPage({ searchParams }: { searchParams?: { club?: string; club_slug?: string; player_id?: string; pid?: string } }) {
+export default async function VerifiedUpdatesPage(
+  props: { searchParams?: Promise<{ club?: string; club_slug?: string; player_id?: string; pid?: string }> }
+) {
+  const searchParams = await props.searchParams;
   const clubSlug = String(searchParams?.club || searchParams?.club_slug || "").trim();
   const initialPlayerId = searchParams?.player_id || searchParams?.pid || null;
 

@@ -12,8 +12,8 @@ const routeGroups = (clubSlug: string) => [
   ["Operations", ["/admin", "/admin/match-log", "/admin/match-uploader", "/admin/league-manager", "/admin/tools", "/admin/badges"]]
 ] as const;
 
-export default function ThemeQaPage() {
-  const { clubSlug } = requireAdminWorkspace();
+export default async function ThemeQaPage() {
+  const { clubSlug } = await requireAdminWorkspace();
   return (
     <section>
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>

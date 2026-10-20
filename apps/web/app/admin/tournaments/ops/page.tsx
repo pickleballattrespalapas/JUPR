@@ -2,9 +2,10 @@ import { redirect } from "next/navigation";
 import { readTournamentRouteContext, tournamentRouteHref } from "@/lib/tournamentRouteContext";
 import TournamentLiveRoute from "../live-operations/TournamentLiveRoute";
 
-type Props = { searchParams?: Record<string, string | string[] | undefined> };
+type Props = { searchParams?: Promise<Record<string, string | string[] | undefined>> };
 
-export default function AdminTournamentOpsPage({ searchParams }: Props) {
+export default async function AdminTournamentOpsPage(props: Props) {
+  const searchParams = await props.searchParams;
   const context = readTournamentRouteContext(searchParams);
   const legacyImportTournamentId = String(Array.isArray(searchParams?.tournament_id) ? searchParams?.tournament_id[0] : searchParams?.tournament_id || "").trim();
   if (!searchParams?.tournament && legacyImportTournamentId) {

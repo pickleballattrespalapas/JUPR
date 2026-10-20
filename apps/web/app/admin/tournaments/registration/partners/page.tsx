@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import TournamentPhaseNav from "@/components/TournamentPhaseNav";
 import { readTournamentRouteContext, tournamentRouteHref } from "@/lib/tournamentRouteContext";
 
-type Props = { searchParams?: Record<string, string | string[] | undefined> };
+type Props = { searchParams?: Promise<Record<string, string | string[] | undefined>> };
 
 const cardStyle = {
   border: "1px solid #e2e8f0",
@@ -13,8 +13,9 @@ const cardStyle = {
   background: "white"
 };
 
-export default function TournamentPartnersPage({ searchParams }: Props) {
-  const { clubSlug } = requireAdminWorkspace();
+export default async function TournamentPartnersPage(props: Props) {
+  const searchParams = await props.searchParams;
+  const { clubSlug } = await requireAdminWorkspace();
   const context = readTournamentRouteContext(searchParams);
   if (!context.tournamentId) redirect("/admin/tournaments");
   const partnerBoardParams = new URLSearchParams({

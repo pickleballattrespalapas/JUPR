@@ -3,7 +3,8 @@ import { getPublicSite, publicSiteFetch } from "@/lib/clubSiteServer";
 import type { SeasonTrophy } from "@/lib/interclubAwards";
 import type { TournamentGoldHighlight } from "@/lib/tournamentHighlights";
 import ClubSiteContent from "@/components/ClubSiteContent";
-export default async function ClubHome({ params }: { params: { clubSlug: string } }) {
+export default async function ClubHome(props: { params: Promise<{ clubSlug: string }> }) {
+  const params = await props.params;
   const site = await getPublicSite(params.clubSlug);
   if (!site) notFound();
   // Optional honors load independently; an unavailable service must not hide the website.

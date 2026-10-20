@@ -3,8 +3,8 @@ import Link from "next/link";
 import { getAdminApiBaseUrl } from "@/lib/adminMatchLogApi";
 import AdminPilotPreflightPanel from "./AdminPilotPreflightPanel";
 
-export default function AdminPilotPage() {
-  const { clubId } = requireAdminWorkspace();
+export default async function AdminPilotPage() {
+  const { clubId } = await requireAdminWorkspace();
   return (
     <section>
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>

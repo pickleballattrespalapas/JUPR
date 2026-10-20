@@ -3,12 +3,13 @@ import { getEmailPreferences } from "@/lib/emailPreferencesApi";
 import EmailPreferencesPanel from "./EmailPreferencesPanel";
 
 type EmailPreferencesPageProps = {
-  searchParams?: { token?: string; ut?: string; sid?: string; subscription_id?: string };
+  searchParams?: Promise<{ token?: string; ut?: string; sid?: string; subscription_id?: string }>;
 };
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 
-export default async function EmailPreferencesPage({ searchParams }: EmailPreferencesPageProps) {
+export default async function EmailPreferencesPage(props: EmailPreferencesPageProps) {
+  const searchParams = await props.searchParams;
   const token = searchParams?.token || null;
   const ut = searchParams?.ut || null;
   const sid = searchParams?.sid || null;

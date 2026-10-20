@@ -23,7 +23,7 @@ async function loadStatus(clubId: string): Promise<{ data: StatusResponse | null
 }
 
 export default async function AdminToolsPage() {
-  const { clubId } = requireAdminWorkspace();
+  const { clubId } = await requireAdminWorkspace();
   const { data: status, error } = await loadStatus(clubId);
   return (
     <section>

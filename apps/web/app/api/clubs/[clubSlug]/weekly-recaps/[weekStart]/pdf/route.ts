@@ -13,8 +13,9 @@ function publicPdfError(status: number): string {
 
 export async function GET(
   _request: Request,
-  { params }: { params: { clubSlug: string; weekStart: string } }
+  props: { params: Promise<{ clubSlug: string; weekStart: string }> }
 ) {
+  const params = await props.params;
   const base = baseUrl();
   if (!base) {
     return NextResponse.json({ detail: publicPdfError(500) }, { status: 500 });

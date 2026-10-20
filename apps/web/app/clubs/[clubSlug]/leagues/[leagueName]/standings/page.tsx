@@ -8,7 +8,7 @@ import { getClubLeagueResults, type LeagueResultsStatRow } from "@/lib/api";
 import PrintButton from "../../../league-results/PrintButton";
 
 type Props = {
-  params: { clubSlug: string; leagueName: string };
+  params: Promise<{ clubSlug: string; leagueName: string }>;
 };
 
 const cardStyle = {
@@ -35,7 +35,8 @@ function highlightNames(rows: LeagueResultsStatRow[]): string {
     .join(", ");
 }
 
-export default async function PublicLeagueStandingsPage({ params }: Props) {
+export default async function PublicLeagueStandingsPage(props: Props) {
+  const params = await props.params;
   const leagueName = decodeLeagueName(params.leagueName);
   const { data, error } = await getClubLeagueResults(
     params.clubSlug,

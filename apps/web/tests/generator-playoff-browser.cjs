@@ -58,7 +58,7 @@ async function scoreRound(page, number) {
 (async () => {
   const api = start(process.env.GENERATOR_BROWSER_PYTHON || "python3",
     ["-m", "uvicorn", "generator_submission_api:app", "--app-dir", path.join(root, "tests/e2e"), "--host", "127.0.0.1", "--port", apiPort], root);
-  const next = start(process.execPath, [require.resolve("next/dist/bin/next"), "dev", "--hostname", "127.0.0.1", "--port", webPort], webRoot);
+  const next = start(process.execPath, [require.resolve("next/dist/bin/next"), "dev", "--webpack", "--hostname", "127.0.0.1", "--port", webPort], webRoot);
   let browser;
   try {
     await ready(`${apiOrigin}/fixture-result`, [api, next]);

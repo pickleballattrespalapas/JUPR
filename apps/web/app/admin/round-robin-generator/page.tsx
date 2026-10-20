@@ -27,7 +27,7 @@ async function loadStatus(clubId: string): Promise<StatusResponse | null> {
 }
 
 export default async function RoundRobinGeneratorPage() {
-  const { clubId } = requireAdminWorkspace();
+  const { clubId } = await requireAdminWorkspace();
   const status = await loadStatus(clubId);
   return (
     <section>

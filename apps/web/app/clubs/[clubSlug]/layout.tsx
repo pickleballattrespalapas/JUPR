@@ -5,16 +5,22 @@ import { ClubDisplayProvider } from "@/components/ClubDisplay";
 import RememberPublicClub from "@/components/RememberPublicClub";
 import ClubSiteHeader from "@/components/ClubSiteHeader";
 import { ClubPageNavigationProvider } from "@/components/PublicClubLink";
-export async function generateMetadata({ params }: { params: { clubSlug: string } }) {
+export async function generateMetadata(props: { params: Promise<{ clubSlug: string }> }) {
+  const params = await props.params;
   return requestShareMetadata(`/clubs/${params.clubSlug}`);
 }
-export default async function ClubLayout({
-  params,
-  children,
-}: {
-  params: { clubSlug: string };
-  children: React.ReactNode;
-}) {
+export default async function ClubLayout(
+  props: {
+    params: Promise<{ clubSlug: string }>;
+    children: React.ReactNode;
+  }
+) {
+  const params = await props.params;
+
+  const {
+    children
+  } = props;
+
   const site = await getPublicSite(params.clubSlug);
   if (!site) notFound();
   const doc = site.document;

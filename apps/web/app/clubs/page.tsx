@@ -3,11 +3,12 @@ import { getClubDirectory, type Directory } from "@/lib/clubSiteServer";
 import { safeImageUrl } from "@/lib/clubSite";
 import styles from "@/components/ClubWebsite.module.css";
 export const dynamic = "force-dynamic";
-export default async function DirectoryPage({
-  searchParams,
-}: {
-  searchParams?: { q?: string; page?: string };
-}) {
+export default async function DirectoryPage(
+  props: {
+    searchParams?: Promise<{ q?: string; page?: string }>;
+  }
+) {
+  const searchParams = await props.searchParams;
   const q = String(searchParams?.q || "").slice(0, 120);
   const page = Math.max(1, Math.min(10000, Number(searchParams?.page) || 1));
   let data: Directory | null = null,

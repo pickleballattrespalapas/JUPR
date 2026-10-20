@@ -1,7 +1,8 @@
 import { redirect } from "next/navigation";
 
-type Props = { params: { clubSlug: string } };
+type Props = { params: Promise<{ clubSlug: string }> };
 
-export default function RetiredPublicLiveLanding({ params }: Props) {
+export default async function RetiredPublicLiveLanding(props: Props) {
+  const params = await props.params;
   redirect(`/clubs/${params.clubSlug}/play`);
 }

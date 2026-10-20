@@ -25,7 +25,7 @@ export default async function TournamentOpsWorkflowPage({
   tournamentName,
   initialDrawId = null
 }: Props) {
-  const { clubId } = requireAdminWorkspace();
+  const { clubId } = await requireAdminWorkspace();
   const { data, error } = await getAdminTournamentStatus(clubId);
   const phase = workflow === "results" || workflow === "publish" ? "publish" : "live";
 

@@ -6,7 +6,8 @@ import type { SeasonTrophy } from "@/lib/interclubAwards";
 import InterclubFinalResults from "@/components/InterclubFinalResults";
 
 export const metadata = { title: "Interclub final results", robots: { index: false, follow: false } };
-export default async function FinalResultsPage({ params }: { params: { seasonId: string } }) {
+export default async function FinalResultsPage(props: { params: Promise<{ seasonId: string }> }) {
+  const params = await props.params;
   if (!/^[0-9a-f-]{36}$/i.test(params.seasonId)) notFound();
   const [league, awards] = await Promise.all([
     publicSiteFetch<PublicLeague>(`/public/interclub/${params.seasonId}`),

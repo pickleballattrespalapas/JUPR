@@ -6,14 +6,15 @@ import { getPublicTeamLeague, teamLeagueApiBaseUrl } from "@/lib/teamLeagueApi";
 import TeamLeagueRegistrationForm from "./TeamLeagueRegistrationForm";
 import PublicLeagueNav from "@/components/PublicLeagueNav";
 
-type Props = { params: { clubSlug: string; leagueName: string } };
+type Props = { params: Promise<{ clubSlug: string; leagueName: string }> };
 const card = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white", minWidth: 0 };
 
 function categoryLabel(category: string): string {
   return ({ mens: "Men's", womens: "Women's", mixed: "Mixed", open: "Open" } as Record<string, string>)[category] || "Open";
 }
 
-export default async function TeamLeagueDetailPage({ params }: Props) {
+export default async function TeamLeagueDetailPage(props: Props) {
+  const params = await props.params;
   const leagueName = decodeURIComponent(params.leagueName);
   const { data, error } = await getPublicTeamLeague(params.clubSlug, leagueName);
   if (error || !data) {

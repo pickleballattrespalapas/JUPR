@@ -20,7 +20,7 @@ export type FormDialogProps = {
   workingLabel?: string;
   cancelLabel?: string;
   children: ReactNode;
-  initialFocusRef?: RefObject<HTMLElement>;
+  initialFocusRef?: RefObject<HTMLElement | null>;
   getFirstInvalidField?: () => HTMLElement | null;
   onSubmit: () => Promise<ActionCompletion>;
   onCancel: () => void;

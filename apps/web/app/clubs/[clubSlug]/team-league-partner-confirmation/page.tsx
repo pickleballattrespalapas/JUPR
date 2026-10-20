@@ -3,11 +3,13 @@ import { teamLeagueApiBaseUrl } from "@/lib/teamLeagueApi";
 import PartnerConfirmationPanel from "./PartnerConfirmationPanel";
 
 type Props = {
-  params: { clubSlug: string };
-  searchParams: { team?: string };
+  params: Promise<{ clubSlug: string }>;
+  searchParams: Promise<{ team?: string }>;
 };
 
-export default function TeamLeaguePartnerConfirmationPage({ params, searchParams }: Props) {
+export default async function TeamLeaguePartnerConfirmationPage(props: Props) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   return (
     <section>
       <p style={{ color: "#2563eb", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>Team league</p>

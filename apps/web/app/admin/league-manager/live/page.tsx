@@ -7,14 +7,15 @@ import LeagueLiveRoundPanel from "./LeagueLiveRoundPanel";
 import LeagueManagerNav from "../LeagueManagerNav";
 import SelectedLeaguePanelScope from "../SelectedLeaguePanelScope";
 
-type Props = { searchParams?: Record<string, string | string[] | undefined> };
+type Props = { searchParams?: Promise<Record<string, string | string[] | undefined>> };
 
-export default async function LeagueManagerLivePage({ searchParams }: Props) {
+export default async function LeagueManagerLivePage(props: Props) {
+  const searchParams = await props.searchParams;
   const context = readLeagueRouteContext(searchParams);
   if (!context.leagueId) redirect("/admin/league-manager");
   const leagueName = context.leagueName || context.leagueId;
 
-  const { clubId, clubSlug } = requireAdminWorkspace();
+  const { clubId, clubSlug } = await requireAdminWorkspace();
   const [{ data: leagueStatus, error: leagueError }, { data: liveDomainStatus, error: liveDomainError }, { data: playersData, error: playersError }] = await Promise.all([
     getAdminLeagueManagerStatus(clubId),
     getAdminLeagueLiveStatus(clubId),

@@ -6,7 +6,7 @@ import ReplayHistoryForm from "./ReplayHistoryForm";
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 
 export default async function AdminReplayHistoryPage() {
-  const { clubId } = requireAdminWorkspace();
+  const { clubId } = await requireAdminWorkspace();
   const { data, error } = await getAdminReplayStatus(clubId);
 
   return (

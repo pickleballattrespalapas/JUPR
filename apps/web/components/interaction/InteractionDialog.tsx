@@ -25,8 +25,8 @@ export type InteractionDialogProps = {
   description?: ReactNode;
   children: ReactNode;
   actions: ReactNode;
-  initialFocusRef?: RefObject<HTMLElement>;
-  returnFocusRef?: RefObject<HTMLElement>;
+  initialFocusRef?: RefObject<HTMLElement | null>;
+  returnFocusRef?: RefObject<HTMLElement | null>;
   originFocusRef?: { current: HTMLElement | null };
   restoreFocus?: boolean;
   dirty?: boolean;

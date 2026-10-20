@@ -7,8 +7,8 @@ import { getClubPlayers } from "@/lib/api";
 import type { PublicPlayer } from "@/lib/api";
 
 type PlayersPageProps = {
-  params: { clubSlug: string };
-  searchParams?: Record<string, string | string[] | undefined>;
+  params: Promise<{ clubSlug: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
 type SortKey = "rating" | "singles" | "matches" | "name" | "win_pct" | "recent";
@@ -18,7 +18,7 @@ const tdStyle = { borderBottom: "1px solid #e2e8f0", padding: "0.6rem", whiteSpa
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 const pillStyle = { border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.45rem 0.75rem", color: "#0f172a", textDecoration: "none" };
 
-function firstParam(searchParams: PlayersPageProps["searchParams"], key: string): string | null {
+function firstParam(searchParams: Awaited<PlayersPageProps["searchParams"]>, key: string): string | null {
   const value = searchParams?.[key];
   if (Array.isArray(value)) return value[0] ?? null;
   return value ?? null;
@@ -87,7 +87,9 @@ function dateLabel(value?: string | null): string {
   return Number.isNaN(date.getTime()) ? String(value).slice(0, 10) : date.toISOString().slice(0, 10);
 }
 
-export default async function ClubPlayersPage({ params, searchParams }: PlayersPageProps) {
+export default async function ClubPlayersPage(props: PlayersPageProps) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   const { clubSlug } = params;
   const q = (firstParam(searchParams, "q") ?? "").trim().slice(0, 80);
   const sort = normalizeSort(firstParam(searchParams, "sort"));
