@@ -15,6 +15,7 @@ type Props = {
   searchParams?: {
     draw?: string;
     tournament_id?: string;
+    tournament?: string;
     view?: string;
     tab?: string;
   };
@@ -421,7 +422,7 @@ function CompletedDrawCard({ draw, href }: { draw: PublicTournamentDrawResult; h
 }
 
 export default async function TournamentResultsPage({ params, searchParams }: Props) {
-  const tournamentId = String(searchParams?.tournament_id || "").trim();
+  const tournamentId = String(searchParams?.tournament_id || searchParams?.tournament || "").trim();
   const view = searchParams?.view === "past" ? "past" : "current";
 
   if (!tournamentId) {

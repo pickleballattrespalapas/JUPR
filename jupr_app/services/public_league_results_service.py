@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import re
+
 from collections import defaultdict
 from datetime import date, datetime
 from typing import Any, Mapping
+
+from jupr_app.data.paged_reads import read_all_rows
 
 from jupr_app.services.public_league_visibility import (
     ACTIVE_LEAGUE_VIEW,
@@ -104,19 +107,18 @@ def _fetch_table(
     club_id: str,
     filters: dict[str, Any] | None = None,
     null_filters: tuple[str, ...] = (),
-    limit: int | None = None,
 ) -> list[dict[str, Any]]:
-    try:
+    def query_factory():
         query = supabase.table(table_name).select(select_cols).eq("club_id", str(club_id))
         for field, value in (filters or {}).items():
             query = query.eq(str(field), value)
         for field in null_filters:
             query = query.is_(str(field), None)
-        if limit is not None:
-            query = query.limit(int(limit))
-        return _safe_rows(query.execute())
-    except Exception:
-        return []
+        return query
+
+    # Each key is unique within the club/league filters used by this service.
+    order = {"leagues_metadata": "league_name", "league_ratings": "player_id"}.get(table_name, "id")
+    return read_all_rows(query_factory, order=order)
 
 
 def _fetch_players(
@@ -270,7 +272,6 @@ def _league_matches(supabase: Any, *, club_id: str, league_name: str) -> list[di
         club_id=club_id,
         filters={"league": str(league_name)},
         null_filters=("deleted_at",),
-        limit=5000,
     )
     result: list[dict[str, Any]] = []
     for row in rows:
@@ -395,7 +396,6 @@ def _league_rating_rows(
         LEAGUE_RATINGS_SELECT,
         club_id=club_id,
         filters={"league_name": str(league_name)},
-        limit=5000,
     )
 
 

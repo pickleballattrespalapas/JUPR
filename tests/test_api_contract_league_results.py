@@ -18,6 +18,8 @@ class FakeQuery:
     def __init__(self, rows):
         self._rows = list(rows)
         self._filters: dict[str, object] = {}
+        self._start = 0
+        self._order = None
         self._limit: int | None = None
 
     def select(self, *_args, **_kwargs):
@@ -36,12 +38,23 @@ class FakeQuery:
         self._limit = int(value)
         return self
 
+    def order(self, key):
+        self._order = key
+        return self
+
+    def range(self, start, end):
+        self._start = start
+        self._limit = end - start + 1
+        return self
+
     def execute(self):
         rows = list(self._rows)
         for key, expected in self._filters.items():
             rows = [row for row in rows if row.get(key) == expected]
+        if self._order:
+            rows.sort(key=lambda row: row.get(self._order, ""))
         if self._limit is not None:
-            rows = rows[: self._limit]
+            rows = rows[self._start : self._start + self._limit]
         return SimpleNamespace(data=rows)
 
 
