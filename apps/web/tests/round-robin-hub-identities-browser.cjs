@@ -139,9 +139,20 @@ async function main() {
     async function scoreCourt(label) {
       await page.getByRole('tab',{name:'Court board',exact:true}).click();
       await page.getByRole('article',{name:label,exact:true}).getByRole('button',{name:'Enter score',exact:true}).click();
-      await page.getByLabel('Side A score',{exact:true}).fill('11');
-      await page.getByLabel('Side B score',{exact:true}).fill('6');
-      return command(page,page.getByRole('button',{name:'Save score & release court',exact:true}),'score_and_release');
+      const dialog = page.getByRole('dialog',{name:`Enter score · ${label}`,exact:true});
+      await dialog.waitFor({state:'visible'});
+      assert.equal(await dialog.getAttribute('data-state'),'ready');
+      const sideA = dialog.getByLabel('Side A score',{exact:true});
+      const sideB = dialog.getByLabel('Side B score',{exact:true});
+      // showModal can focus Side A before InteractionDialog's queued focus frame.
+      // Let that handoff finish before fast synthetic fills switch to Side B.
+      assert(await sideA.evaluate(input=>new Promise(resolve=>requestAnimationFrame(()=>resolve(document.activeElement === input)))),
+        'The score dialog must finish its initial focus handoff before typing');
+      await sideA.fill('11');
+      await sideB.fill('6');
+      assert.equal(await sideA.inputValue(),'11');
+      assert.equal(await sideB.inputValue(),'6');
+      return command(page,dialog.getByRole('button',{name:'Save score & release court',exact:true}),'score_and_release');
     }
     async function openAddPlayer(groupTitle, name, profileId, options = {}) {
       await page.getByRole('tab',{name:options.origin === 'board' ? 'Court board' : 'Players',exact:true}).click();
@@ -507,10 +518,7 @@ async function main() {
     assert.equal((await requestApi(`/identity-fixture/hubs/${legacyHubId}`)).identity_version,null,'Read-only legacy upgrade must not write');
     await page.getByRole('tab',{name:'Court board',exact:true}).click();
     await snapshot(page,'legacy-active-court-review.png');
-    await page.getByRole('article',{name:legacyCourt.label,exact:true}).getByRole('button',{name:'Enter score',exact:true}).click();
-    await page.getByLabel('Side A score',{exact:true}).fill('11');
-    await page.getByLabel('Side B score',{exact:true}).fill('6');
-    detail = await command(page,page.getByRole('button',{name:'Save score & release court',exact:true}),'score_and_release');
+    detail = await scoreCourt(legacyCourt.label);
     assert.equal(occupied(detail).length,0);
     assert.equal(detail.workspace.groups.find(group=>group.session_key === legacyCourt.current.session_key).current_round_number,2);
     assert.equal(detail.workspace.groups.find(group=>group.session_key === legacyCourt.current.session_key).completed_matches,0);
