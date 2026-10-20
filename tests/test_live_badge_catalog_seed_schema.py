@@ -7,7 +7,7 @@ import re
 from jupr_app.domain.gamification.badge_catalog import BADGE_DEFINITIONS
 from jupr_app.domain.gamification.badge_registry import active_badge_ids
 from jupr_app.domain.gamification.match_exclusion_reconcile import (
-    MATCH_EXCLUSION_BADGE_IDS,
+    MATCH_EXCLUSION_BADGE_IDS_V1,
 )
 from jupr_app.domain.gamification.requirements import load_requirements_map
 
@@ -43,20 +43,20 @@ def _canonical_values_block(sql: str) -> str:
     return canonical_prefix.rsplit("from (\n            values", 1)[1]
 
 
-def test_live_badge_seed_exactly_matches_the_runtime_contract() -> None:
+def test_historical_live_badge_seed_exactly_matches_v1_contract() -> None:
     sql = MIGRATION.read_text(encoding="utf-8")
     values_block = _canonical_values_block(sql)
     seeded_ids = set(re.findall(r"^\s*\('([^']+)'", values_block, re.MULTILINE))
-    expected_ids = set(MATCH_EXCLUSION_BADGE_IDS)
+    expected_ids = set(MATCH_EXCLUSION_BADGE_IDS_V1)
 
     assert len(expected_ids) == 29
     assert seeded_ids == expected_ids
-    assert expected_ids == active_badge_ids()
+    assert expected_ids <= active_badge_ids()
 
 
-def test_live_badge_seed_matches_current_python_definitions() -> None:
+def test_historical_live_badge_seed_keeps_original_definition_shape() -> None:
     sql = _normalized(MIGRATION.read_text(encoding="utf-8"))
-    expected_ids = set(MATCH_EXCLUSION_BADGE_IDS)
+    expected_ids = set(MATCH_EXCLUSION_BADGE_IDS_V1)
     canonical = {
         badge.badge_id: badge
         for badge in BADGE_DEFINITIONS
@@ -65,8 +65,11 @@ def test_live_badge_seed_matches_current_python_definitions() -> None:
     requirements = load_requirements_map()
 
     assert set(canonical) == expected_ids
-    for badge_id in MATCH_EXCLUSION_BADGE_IDS:
+    for badge_id in MATCH_EXCLUSION_BADGE_IDS_V1:
         badge = replace(canonical[badge_id], **historical_presentation(MIGRATION.read_text(), badge_id))
+        # The later reactivation migration makes Steady Hand stackable by season.
+        if badge_id == "steady_hand":
+            badge = replace(badge, is_stackable=False)
         expected_row = (
             "("
             + ", ".join(
