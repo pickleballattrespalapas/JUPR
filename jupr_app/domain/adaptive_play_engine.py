@@ -1394,6 +1394,47 @@ def _round_has_any_scores(round_row: dict[str, Any]) -> bool:
     )
 
 
+def prepare_hub_round(event: dict[str, Any], round_number: int) -> dict[str, Any]:
+    """Prepare one rolling round without advancing or replanning earlier games.
+
+    Pending matchups count toward rotation history even before their scores are
+    saved. Court eligibility and contiguous result finalization remain the hub's
+    responsibility; this helper only materializes the requested schedule.
+    """
+    if not event.get("roundRobinHubId") or event.get("generatorKind") != "round_robin":
+        raise ValueError("Rolling round preparation requires a round robin attached to a hub.")
+    if event.get("status") != "active":
+        raise ValueError("Prepare new rounds only for an active round robin.")
+    if type(round_number) is not int or round_number < 1:
+        raise ValueError("Choose a valid round number.")
+    finish_after = event.get("hubFinishAfterRound")
+    if finish_after is not None and round_number > int(finish_after):
+        raise ValueError("This round robin is finishing. No later round can be prepared.")
+    result = copy.deepcopy(event)
+    result["hubRollingEnabled"] = True
+    existing = next((row for row in result.get("rounds") or [] if int(row["number"]) == round_number), None)
+    if existing is not None:
+        if result.get("playoff") and any(
+            match.get("sourceMatchIds") and (not match.get("sideA") or not match.get("sideB"))
+            for match in _round_matches(existing)
+        ):
+            from jupr_app.domain.generator_playoffs import populate_playoff_final
+            populate_playoff_final(result, existing)
+        return result
+    if is_moneyball(result) or result.get("playoff"):
+        raise ValueError("This event has a fixed schedule. No extra round can be prepared.")
+    if round_number > 1 and not any(int(row["number"]) == round_number - 1 for row in result.get("rounds") or []):
+        raise ValueError("Prepare earlier rounds before preparing this round.")
+    fixed_count = _fixed_schedule_count(result)
+    if fixed_count and round_number > fixed_count and not result.get("adaptiveFromRound"):
+        result["adaptiveFromRound"] = fixed_count + 1
+    row = _generate_round_robin_round(result, round_number, history_before_round(result, round_number, include_preview=True))
+    result.setdefault("rounds", []).append(row)
+    result["rounds"].sort(key=lambda item: int(item["number"]))
+    result["totalRounds"] = max(int(result.get("totalRounds") or 0), round_number)
+    return result
+
+
 def hub_auto_advance_boundary(event: dict[str, Any]) -> int | None:
     """Return the last finished round only while its automatic successor is unused.
 
@@ -1422,10 +1463,10 @@ def hub_auto_advance_boundary(event: dict[str, Any]) -> int | None:
             continue
         if row.get("status") != ("active" if number == current else "preview"):
             return None
-        if row.get("stage") == "playoff" or _round_has_any_scores(row):
+        if row.get("stage") == "playoff" or row.get("hubStartedAt") or _round_has_any_scores(row):
             return None
         if any(match.get("status") not in {None, "scheduled"}
-               or match.get("hubCompletedAt") or match.get("courtLabel") or match.get("reservedCourtLabel")
+               or match.get("hubCompletedAt") or match.get("hubStartedAt") or match.get("courtLabel") or match.get("reservedCourtLabel")
                for match in _round_matches(row)):
             return None
     return boundary
@@ -1499,6 +1540,8 @@ def mark_generator_round_played(event: dict[str, Any], *, round_number: int) -> 
     round_status = str(row.get("status"))
     if round_status == "played":
         return next_event
+    if event.get("roundRobinHubId") and int(round_number) != int(event.get("currentRoundNumber") or 1):
+        raise ValueError("Finish earlier rounds before marking this hub round played.")
     if round_status not in {"active", "preview"}:
         raise ValueError("Only an active round can be marked played.")
     if _round_has_any_scores(row):
@@ -1517,6 +1560,8 @@ def mark_generator_round_played(event: dict[str, Any], *, round_number: int) -> 
 
 def skip_generator_round(event: dict[str, Any], *, round_number: int, reason: str = "") -> dict[str, Any]:
     next_event = copy.deepcopy(event)
+    if event.get("roundRobinHubId") and int(round_number) != int(event.get("currentRoundNumber") or 1):
+        raise ValueError("Only the current unfinished round can be skipped in the hub.")
     if is_moneyball(next_event):
         raise ValueError("Moneyball requires the complete fixed rotation. Choose another scheduled round instead of skipping.")
     row = _get_round(next_event, round_number)
@@ -1535,6 +1580,8 @@ def skip_generator_round(event: dict[str, Any], *, round_number: int, reason: st
 def reopen_generator_round(event: dict[str, Any], *, round_number: int) -> dict[str, Any]:
     """Unlock a skipped round without changing games already sent onto court."""
     next_event = copy.deepcopy(event)
+    if event.get("roundRobinHubId") and int(round_number) != int(event.get("currentRoundNumber") or 1):
+        raise ValueError("An earlier or future round cannot be reopened in the hub.")
     if next_event.get("playoff"):
         raise ValueError("Round-robin results are fixed once the playoff starts.")
     if str(next_event.get("generatorKind") or "") != "round_robin":
@@ -1953,6 +2000,9 @@ def advance_generator_event(event: dict[str, Any]) -> dict[str, Any]:
     row = _get_round(next_event, current)
     if str(row.get("status")) not in {"saved", "played", "skipped"}:
         raise ValueError("Save or skip the current round before continuing. Unscored Round-Robins may mark it played.")
+    finish_after = next_event.get("hubFinishAfterRound")
+    if next_event.get("roundRobinHubId") and finish_after is not None and current >= int(finish_after):
+        return complete_generator_event(next_event)
     total = int(next_event.get("totalRounds") or 1)
     kind = str(next_event.get("generatorKind") or "round_robin")
     if (kind == "ladder" or next_event.get("playoff")) and current >= total:
@@ -1971,6 +2021,15 @@ def advance_generator_event(event: dict[str, Any]) -> dict[str, Any]:
         next_event["currentRoundNumber"] = next_number
         return next_event
     next_number = current + 1
+    if next_event.get("roundRobinHubId") and next_event.get("hubRollingEnabled"):
+        # The hub may already have dispatched later games. Move the result
+        # cursor without regenerating any of those planned or started rounds.
+        next_event = prepare_hub_round(next_event, next_number)
+        next_round = _get_round(next_event, next_number)
+        if next_round.get("status") == "preview":
+            next_round["status"] = "active"
+        next_event["currentRoundNumber"] = next_number
+        return next_event
     if kind == "round_robin" and next_event.get("rosterRevisions") and not next_event.get("perfectRotation") and not next_event.get("playoff"):
         if _recover_perfect_rotation(next_event):
             total = int(next_event["totalRounds"])
@@ -2115,9 +2174,13 @@ def _regenerate_round_robin_from(event: dict[str, Any], start_round: int) -> Non
     if event.get("roundRobinHubId"):
         current = int(event.get("currentRoundNumber") or 1)
         current_row = next((r for r in event.get("rounds") or [] if int(r["number"]) == current), {})
-        # A roster change may invalidate future previews. Build only the current
-        # round, or one next round after completion; the hub never queues ahead.
-        total = min(total, current + int(current_row.get("status") in {"saved", "played", "skipped"}))
+        if event.get("hubRollingEnabled"):
+            # A rolling hub owns changes to each waiting remainder. Its metadata
+            # roster edits must never truncate already prepared later rounds.
+            total = max(total, max(existing, default=current))
+        else:
+            # Legacy hubs build only the current round or one next round.
+            total = min(total, current + int(current_row.get("status") in {"saved", "played", "skipped"}))
     for number in range(int(start_round), total+1):
         previous = existing.get(number)
         # Scores can be entered ahead of the current round. Never overwrite
@@ -2125,6 +2188,11 @@ def _regenerate_round_robin_from(event: dict[str, Any], start_round: int) -> Non
         if previous and (
             str(previous.get("status")) in {"saved", "played", "skipped", "active"}
             or _round_has_any_scores(previous)
+            or (event.get("roundRobinHubId") and (previous.get("hubStartedAt") or any(
+                match.get("hubStartedAt") or match.get("hubCompletedAt")
+                or str(match.get("id")) in set(event.get("hubAssignedMatchIds") or [])
+                for match in _round_matches(previous)
+            )))
         ):
             row = copy.deepcopy(previous)
         else:

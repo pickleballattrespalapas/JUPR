@@ -4,7 +4,7 @@ const React = require("react"), { act, create } = require("react-test-renderer")
 const root = path.resolve(__dirname, ".."), cache = new Map(), h = React.createElement;
 global.IS_REACT_ACT_ENVIRONMENT = true;
 const navigation = [];
-const router = { push: url => navigation.push(url), replace() {}, refresh() {} };
+const router = { push: url => navigation.push(url), replace: url => navigation.push(url), refresh() {} };
 const Link = ({ children, ...props }) => h("a", props, children);
 const stubs = {
   "next/link": Link,
@@ -97,7 +97,7 @@ function embeddedClick(href) {
   assert.ok(text(tree.toJSON()).includes('1 of 2 matches complete — scores saved, standings pending.'));
   assert.ok(text(tree.toJSON()).includes('Stadium'));
   assert.equal(button(tree,'Refresh court results').props.disabled,false,'Persisted partial scores are not unsaved drafts');
-  assert.equal(tree.root.findAllByProps({'aria-label':'Open round 2'}).length,0,'Future rounds cannot be selected while linked');
+  assert.equal(tree.root.findAllByProps({'aria-label':'Open round 2'}).length,0,'Legacy linked sessions expose only the current round until the hub prepares more');
   assert.ok(text(tree.toJSON()).includes('Add player'),'Full roster functionality remains in embedded runner');
   await act(async()=>embeddedClick('/admin/round-robin-generator/sessions/rr/standings'));
   assert.deepEqual(routed,[{view:'standings'}]); assert.deepEqual(navigation,[]);
@@ -126,8 +126,65 @@ function embeddedClick(href) {
 
   global.sessionStorage={getItem:()=> 'organizer-token',setItem(){},removeItem(){}};
   global.window={location:{hash:'',pathname:'/standings',search:''},history:{replaceState(){}}};
+  for (const Component of [Runner,PublicRunner]) {
+    setup();
+    if(Component===PublicRunner) state.version=1;
+    state.event.hubPreparedThroughRound=2;
+    state.event.rounds[1].status='active';
+    state.event.rounds.push({...clone(state.event.rounds[1]),number:3,status:'preview',matches:[]});
+    await act(async()=>{tree=create(h(Component,withCallbacks()));});
+    assert.equal(tree.root.findAllByProps({'aria-label':'Open round 2'}).length,1,'Prepared future rounds are visible');
+    assert.equal(tree.root.findAllByProps({'aria-label':'Open round 3'}).length,0,'Unprepared templates remain outside the visible horizon');
+    assert.ok(text(tree.toJSON()).includes('Standings update in round order'));
+    await act(async()=>tree.root.findByProps({'aria-label':'Open round 2'}).props.onClick());
+    assert.equal(writes.length,0,'Viewing a prepared future round never selects or advances it');
+    if(Component===Runner) assert.deepEqual(routed,[{view:'round',roundNumber:2}]);
+    else assert.ok(navigation.at(-1).endsWith('/rounds/2'));
+    await act(async()=>tree.unmount());
+
+    await act(async()=>{tree=create(h(Component,withCallbacks({roundNumber:2})));});
+    assert.ok(text(tree.toJSON()).includes('View only here.'));
+    assert.equal(tree.root.findAllByProps({'aria-label':'r2a side A score'}).length,0,'Future rounds cannot bypass hub player dependencies with a whole-round score save');
+    assert.equal(button(tree,'Save round scores'),undefined);
+    assert.equal(button(tree,'Next scheduled round'),undefined);
+    assert.equal(writes.length,0);
+    await act(async()=>tree.unmount());
+
+    setup();
+    if(Component===PublicRunner) state.version=1;
+    await act(async()=>{tree=create(h(Component,withCallbacks({roundNumber:2})));});
+    if(Component===Runner) assert.deepEqual(routed,[{view:'round',roundNumber:1}]);
+    else assert.ok(navigation.at(-1).endsWith('/rounds/1'));
+    assert.equal(writes.length,0,'A direct unprepared-round URL only returns to the current round');
+    await act(async()=>tree.unmount());
+
+    for(const linked of [true,false]) {
+      setup();
+      if(Component===PublicRunner) state.version=1;
+      state.status=state.event.status='completed';state.event.rounds[0].status='saved';
+      if(!linked) delete state.round_robin_hub_id;
+      await act(async()=>{tree=create(h(Component,withCallbacks()));});
+      assert.equal(Boolean(button(tree,'Keep playing')),!linked,'Only standalone completed sessions offer Keep playing');
+      assert.equal(reads,1,'Completed linked status needs no extra hub request');
+      assert.equal(writes.length,0);
+      await act(async()=>tree.unmount());
+    }
+  }
+  for (const Component of [Standings,PublicStandings]) {
+    for(const linked of [true,false]) {
+      setup();
+      if(Component===PublicStandings) state.version=1;
+      state.status=state.event.status='completed';state.event.rounds[0].status='saved';
+      if(!linked) delete state.round_robin_hub_id;
+      await act(async()=>{tree=create(h(Component,withCallbacks()));});
+      assert.equal(Boolean(button(tree,'Keep playing · Round 2')),!linked,'Completed hub standings cannot restart a closed group');
+      assert.equal(reads,1,'Completed standings need no extra hub request');
+      assert.equal(writes.length,0);
+      await act(async()=>tree.unmount());
+    }
+  }
   for (const Component of [Runner,PublicRunner,Standings,PublicStandings]) {
-    for (const started of [null,'assigned','reserved','partial','played']) {
+    for (const started of [null,'assigned','reserved','partial','played','dispatched','round_dispatched','later_round_dispatched']) {
       setup();
       const expectedVersion=Component===PublicRunner||Component===PublicStandings?1:'v1';
       state.version=expectedVersion;
@@ -141,6 +198,12 @@ function embeddedClick(href) {
       if(started==='reserved') match.reservedCourtLabel='Main';
       if(started==='partial') match.scoreA=0;
       if(started==='played') match.status='played';
+      if(started==='dispatched') match.hubStartedAt='2026-10-20T12:00:00Z';
+      if(started==='round_dispatched') state.event.rounds[1].hubStartedAt='2026-10-20T12:00:00Z';
+      if(started==='later_round_dispatched') state.event.rounds.push({
+        number:3,status:'preview',hubStartedAt:'2026-10-20T12:00:00Z',
+        matches:[{id:'replacement-r3',status:'scheduled',sideA:['p1','p3'],sideB:['p2','p4']}],
+      });
       await act(async()=>{tree=create(h(Component,withCallbacks({roundNumber:2})));});
       assert.equal(Boolean(button(tree,'Finish session')),!started,`${Component.name}: Finish only while automatic next round is untouched (${started})`);
       assert.equal(button(tree,'Next scheduled round'),undefined,'Already queued next round needs no additional advance');

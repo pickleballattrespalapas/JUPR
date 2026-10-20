@@ -19,6 +19,8 @@ export type HubGroup = {
   total_rounds?: number; advance_label?: string; rating_mode?: string; status?: string; dedicated_court_ids?: string[];
   players?: HubGroupPlayer[]; can_add_player?: boolean; add_player_unavailable_reason?: string | null;
   can_remove_player?: boolean; remove_player_unavailable_reason?: string | null;
+  can_finish?: boolean; finish_unavailable_reason?: string | null; finish_requested?: boolean;
+  finish_after_round?: number | null; finish_boundary_round?: number | null; finish_pending_matches?: number;
 };
 export type HubWaitingPlayer = {
   identity: string; name: string; display_name?: string; paused: boolean; wait_seconds: number; session_keys: string[];
@@ -46,7 +48,7 @@ export type HubListResponse = { ok: boolean; hubs: HubSummary[]; sessions: HubSe
 export type HubDetailResponse = { ok: boolean; hub: HubSummary; workspace: HubWorkspace };
 export type HubCommandAction = "add_group" | "remove_group" | "configure_courts" | "assign_next_court" |
   "assign_game" | "reserve_game_for_court" | "cancel_reservation" | "move_game" | "release_game" |
-  "score_and_release" | "mark_played" | "pause_player" | "resume_player" | "advance_round" | "finish_hub" | "auto_fill_courts" |
+  "score_and_release" | "mark_played" | "pause_player" | "resume_player" | "advance_round" | "finish_hub" | "finish_group" | "auto_fill_courts" |
   "resolve_identities" | "add_player" | "remove_player";
 export type HubCommand = {
   action: HubCommandAction; payload: Record<string, unknown>; expected_version: string | number; idempotency_key: string;

@@ -4,7 +4,7 @@ import GeneratorMoneyballExpectations, { type MoneyballExpectation, type Moneyba
 
 
 import GeneratorSharing from "@/components/GeneratorSharing";
-import { hubAutoAdvanceBoundary } from "@/lib/hubAutoAdvanceBoundary";
+import { hubAutoAdvanceBoundary, hubPreparedRoundLimit } from "@/lib/hubAutoAdvanceBoundary";
 
 import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
 import GeneratorRoundSchedule from "@/components/GeneratorRoundSchedule";
@@ -89,6 +89,7 @@ type GeneratorEvent = {
   hubAssignedMatchIds?: string[];
   roundRobinHubId?: string;
   hubAutoAdvancedFromRound?: number;
+  hubPreparedThroughRound?: number;
 };
 
 type GeneratorSession = {
@@ -482,7 +483,8 @@ export default function GeneratorRoundRunner({
         throw new Error("This session belongs to the other generator module.");
       }
       applySession(payload.session);
-      const hasRequested = payload.session.event.rounds.some((row) => row.number === roundNumber);
+      const hasRequested = payload.session.event.rounds.some((row) => row.number === roundNumber)
+        && (!payload.session.round_robin_hub_id || roundNumber <= hubPreparedRoundLimit(payload.session.event));
       if (!hasRequested) {
         navigate(
           roundPath(
@@ -514,6 +516,7 @@ export default function GeneratorRoundRunner({
   const matches = flattenMatches(round);
   const isCurrent =
     Boolean(event) && Number(event?.currentRoundNumber || 1) === Number(roundNumber);
+  const visibleRoundLimit = session?.round_robin_hub_id ? hubPreparedRoundLimit(event) : Number(event?.currentRoundNumber || 1);
   const scoringMode: ScoringMode = session?.scoring_mode || event?.scoringMode || "scored";
   const scoredSession = scoringMode === "scored";
   const resultsLocked = Boolean(session?.submission || session?.official_publish?.published_at || session?.official_publish?.published_match_ids?.length);
@@ -521,10 +524,12 @@ export default function GeneratorRoundRunner({
   const canEditRound =
     canManage &&
     session?.status === "active" &&
+    (!session?.round_robin_hub_id || isCurrent) &&
     (isCurrent || (generatorKind === "round_robin" && !event?.playoff)) &&
     round?.status === "active";
   const canEditSavedScores =
     canManage && scoredSession && round?.status === "saved" &&
+    (!session?.round_robin_hub_id || roundNumber <= Number(event?.currentRoundNumber || 1)) &&
     (session?.status === "active" || session?.status === "completed") &&
     (isCurrent || (generatorKind === "round_robin" && !event?.playoff));
   const editingScores = canEditSavedScores && editingSavedScores;
@@ -739,8 +744,8 @@ export default function GeneratorRoundRunner({
     if (!session || !event || busy || editingScores || (canEditRound && anyDraftScore)) return;
     const target = event.rounds.find(row => row.number === number);
     if (!target || (number === roundNumber && isCurrent)) return;
-    if (session.round_robin_hub_id && number > event.currentRoundNumber) {
-      setMessage("Finish this group’s current round before starting another round.");
+    if (session.round_robin_hub_id && number > hubPreparedRoundLimit(event)) {
+      setMessage("This round has not been prepared by the hub yet. Refresh to see the latest matchups.");
       return;
     }
     setBusy(true);
@@ -948,9 +953,10 @@ export default function GeneratorRoundRunner({
 
       {session.round_robin_hub_id ? <aside style={{ ...cardStyle, background: "#eff6ff" }} aria-label="Round Robin Hub status">
         <strong>Managed in the Round Robin Hub</strong>
-        <p style={{ marginBottom: 0 }}>Courts and scores stay synchronized. Each group completes its current round before its next round starts.
+        <p style={{ marginBottom: 0 }}>Courts and scores stay synchronized. The hub releases prepared matches as players finish their earlier games. Standings update in round order after each whole round is complete.
           {!embedded ? <> <Link href={`/admin/round-robin-hub?hub=${encodeURIComponent(session.round_robin_hub_id)}`}>Open court board</Link></> : null}
         </p>
+        {roundNumber > event.currentRoundNumber ? <p style={{ marginBottom: 0 }}>View only here. The hub controls when these matches can play and records their results.</p> : null}
         {round.status === "active" && matches.some(match => match.scoreA != null && match.scoreB != null) ? <p style={{ marginBottom: 0 }}>
           Round {roundNumber}: {matches.filter(match => match.scoreA != null && match.scoreB != null).length} of {matches.length} matches complete — scores saved, standings pending.
         </p> : null}
@@ -968,7 +974,7 @@ export default function GeneratorRoundRunner({
         <article style={{ ...cardStyle, background: "#ecfdf5", borderColor: "#86efac" }}>
           <h2 style={{ marginTop: 0 }}>Session complete</h2>
           <p style={{ marginBottom: 0, color: "#166534" }}>Review the saved session history below.</p>
-          {generatorKind === "round_robin" && canManage && !editingScores && !event.playoff && event.eventFormat !== "moneyball_expectations" ? (
+          {generatorKind === "round_robin" && canManage && !session.round_robin_hub_id && !editingScores && !event.playoff && event.eventFormat !== "moneyball_expectations" ? (
             <button type="button" onClick={() => void advanceRound()} disabled={busy} style={{ ...primaryButton, marginTop: "1rem" }}>
               {busy ? "Continuing…" : "Keep playing"}
             </button>
@@ -977,12 +983,12 @@ export default function GeneratorRoundRunner({
       ) : null}
 
       {generatorKind === "round_robin" && !event.playoff ? (
-        <GeneratorRoundSchedule rounds={session.round_robin_hub_id ? event.rounds.filter(row => row.number <= event.currentRoundNumber) : event.rounds} participants={event.participants}
+        <GeneratorRoundSchedule rounds={session.round_robin_hub_id ? event.rounds.filter(row => row.number <= visibleRoundLimit) : event.rounds} participants={event.participants}
           selectedRound={roundNumber} currentRound={event.currentRoundNumber}
           disabled={busy || editingScores || (canEditRound && anyDraftScore)}
           unsaved={editingScores || (canEditRound && anyDraftScore)}
           perfect={Boolean(event.perfectRotation)} adaptive={Boolean(event.adaptiveFromRound)} moneyball={event.eventFormat === "moneyball_expectations"}
-          sequential={Boolean(session.round_robin_hub_id)}
+          hubManaged={Boolean(session.round_robin_hub_id)}
           onOpen={number => void openScheduledRound(number)} />
       ) : null}
 
@@ -1017,7 +1023,7 @@ export default function GeneratorRoundRunner({
                 Previous round
               </Link>
             ) : null}
-            {nextExisting && nextExisting <= Number(event.currentRoundNumber || 1) ? (
+            {nextExisting && nextExisting <= visibleRoundLimit ? (
               <Link href={roundPath(generatorKind, sessionKey, nextExisting)} style={secondaryButton}>
                 Next round
               </Link>
@@ -1256,7 +1262,9 @@ export default function GeneratorRoundRunner({
               title="Finish this session?"
               description={round.status === "active"
                 ? "This unfinished round will not count. Saved scores and played rounds will be kept."
-                : "Finish with the saved scores and played rounds. You can keep playing again until results are submitted."}
+                : session.round_robin_hub_id
+                  ? "Finish with the saved scores and played rounds."
+                  : "Finish with the saved scores and played rounds. You can keep playing again until results are submitted."}
               confirmLabel="Finish session"
               confirmationText="FINISH SESSION"
               disabled={busy || (round.status === "active" && anyDraftScore)}

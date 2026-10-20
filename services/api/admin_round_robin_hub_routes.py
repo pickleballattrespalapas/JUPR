@@ -51,7 +51,7 @@ class HubCommandRequest(BaseModel):
         "add_group", "remove_group", "configure_courts", "assign_next_court", "assign_game",
         "reserve_game_for_court", "cancel_reservation", "move_game", "release_game",
         "score_and_release", "mark_played", "pause_player", "resume_player", "advance_round",
-        "finish_hub", "rename_hub",
+        "finish_hub", "finish_group", "rename_hub",
         "auto_fill_courts", "resolve_identities", "add_player", "remove_player",
     ]
     payload: dict[str, Any] = Field(default_factory=dict, max_length=20)
