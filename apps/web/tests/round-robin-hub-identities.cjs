@@ -106,6 +106,10 @@ global.fetch = async (url, options = {}) => {
     const existing = detail.workspace.players.find(item => item.identity === identity);
     if (existing) existing.session_keys.push(group.session_key);
     else detail.workspace.players.push({ ...player, session_keys: [group.session_key], participant_ids: [player.participant_id] });
+  } else if (body.action === "remove_player") {
+    const group = detail.workspace.groups.find(item => item.session_key === body.payload.session_key);
+    const player = group.players.find(item => item.participant_id === body.payload.participant_id);
+    player.active = false; player.inactive_from_round = group.current_round_number; player.can_remove = false;
   } else throw new Error(`Unexpected action ${body.action}`);
   detail.hub.version += 1; receipts.set(body.idempotency_key, clone(body));
   if (failAfterCommit) { failAfterCommit = false; throw new Error("Response lost after identity decision saved"); }
@@ -205,13 +209,14 @@ global.fetch = async (url, options = {}) => {
   await act(async () => tree.unmount());
 
   setup([]);
-  const shared = { identity: "player:101", paused: false, wait_seconds: 30, on_court: false, reserved: false, active: true, active_from_round: 1, profile_id: 101 };
+  const shared = { identity: "player:101", paused: false, wait_seconds: 30, on_court: false, reserved: false, active: true, active_from_round: 1, profile_id: 101, on_bye: true };
   detail.workspace.players = [{ ...shared, name: "Alex local", session_keys: ["a", "b"], participant_ids: { a: "a-1", b: "b-1" } }];
   detail.workspace.groups[0].players = [{ ...shared, participant_id: "a-1", name: "Alex local" },
     { ...shared, identity: "player:103", profile_id: 103, participant_id: "a-left", name: "Return Player", active: false, inactive_from_round: 1, can_rejoin: true }];
   detail.workspace.groups[1].players = [{ ...shared, participant_id: "b-1", name: "Zander alias" }];
   detail.workspace.groups[2].players = [];
-  detail.workspace.groups.forEach(group => { group.can_add_player = group.session_key !== "c"; });
+  detail.workspace.groups.forEach(group => { group.can_add_player = group.session_key !== "c"; group.can_remove_player = group.session_key !== "c"; });
+  detail.workspace.groups.forEach(group => group.players.forEach(player => { player.can_remove = player.active; }));
   detail.workspace.groups[2].add_player_unavailable_reason = "Moneyball uses its fixed roster. Open Manage round robin to substitute a player.";
   detail.workspace.groups.reverse();
   await mount(); await click("Players");
@@ -219,6 +224,7 @@ global.fetch = async (url, options = {}) => {
   assert.deepEqual(tree.root.findAll(node => node.props["data-player-group"]).map(node => node.props["data-player-group"]), ["a", "b", "c"]);
   assert.equal(text(groupSection("a").findAllByType("strong")[0]), "Alex local");
   assert.equal(text(groupSection("b").findByType("strong")), "Zander alias", "Each group preserves its own alias for a shared profile");
+  assert.ok(text(groupSection("b")).includes("On bye this round · Waiting"), "Bye status remains visible with elapsed waiting time");
   await act(async () => groupSection("a").findAllByType("button").find(node => text(node) === "Pause player").props.onClick());
   assert.equal(groupSection("b").findAllByType("button").some(node => text(node) === "Ready again"), true, "Pausing from one group updates the shared person's controls in another group");
   const search = tree.root.findAllByType("input").find(node => node.props.type === "search");
@@ -226,40 +232,90 @@ global.fetch = async (url, options = {}) => {
   assert.equal(tree.root.findAll(node => node.props["data-player-group"] === "b").length, 1);
   assert.equal(tree.root.findAll(node => node.props["data-player-group"] === "a").length, 0, "Search uses the group's own alias");
   await act(async () => search.props.onChange({ target: { value: "" } }));
-  assert.equal(groupSection("c").findAllByType("button").some(node => text(node) === "Add player"), false);
+  assert.equal(tree.root.findAllByType("button").filter(node => text(node) === "Add player").length, 1, "Add player is a single action outside the grouped rosters");
+  assert.equal(groupSection("a").findAllByType("button").some(node => text(node) === "Add player"), false);
   assert.ok(text(groupSection("c")).includes("fixed roster"));
 
-  async function openAdd(key) { await act(async () => groupSection(key).findAllByType("button").find(node => text(node) === "Add player").props.onClick()); }
+  async function openAdd() { await click("Add player"); }
   async function typePlayer(value) { await act(async () => tree.root.findAllByType("input").find(node => node.props["aria-label"] === "Player name or club profile").props.onChange({ target: { value } })); }
+  const destination = () => tree.root.findByProps({ "aria-label": "Round robin" });
+  async function chooseGroup(value) { await act(async () => destination().props.onChange({ target: { value } })); }
   async function submitPlayer() { await act(async () => tree.root.findByProps({ id: "hub-add-player-form" }).props.onSubmit({ preventDefault() {} })); }
-  await openAdd("b"); await typePlayer("Late Guest"); failAfterCommit = true;
+  await openAdd();
+  assert.equal(destination().props.value, "", "The user chooses a destination after entering the player");
+  assert.equal(destination().props.required, true);
+  assert.equal(button(tree, "Add player to round robin").props.disabled, true);
+  const unavailableOption = destination().findAllByType("option").find(node => node.props.value === "c");
+  assert.equal(unavailableOption.props.disabled, true);
+  assert.ok(text(unavailableOption).includes("fixed roster"));
+  await typePlayer("Late Guest");
+  await submitPlayer();
+  assert.notEqual(requests.at(-1)?.action, "add_player", "A name alone cannot submit without a destination");
+  await chooseGroup("b"); failAfterCommit = true;
   await submitPlayer();
   const lostAdd = clone(requests.at(-1));
   assert.deepEqual(lostAdd.payload, { session_key: "b", name: "Late Guest" });
   assert.equal(lostAdd.action, "add_player");
   assert.ok(tree.root.findByProps({ "data-dialog": "Add player" }), "An uncertain add keeps its dialog available for the exact retry");
   assert.equal(button(tree, "Add player to round robin").props.disabled, true);
+  assert.equal(destination().props.disabled, true, "An uncertain add cannot change the saved destination");
+  assert.equal(destination().props.value, "b");
+  assert.equal(tree.root.findAllByType("input").find(node => node.props["aria-label"] === "Player name or club profile").props.disabled, true);
   await click("Retry saved action");
   assert.deepEqual(requests.at(-1), lostAdd);
   assert.equal(tree.root.findAllByProps({ "data-dialog": "Add player" }).length, 0);
   assert.equal(groupSection("b").findAllByType("strong").filter(node => text(node) === "Late Guest").length, 1, "Retried addition appears once in the chosen group");
   assert.equal(groupSection("a").findAllByType("strong").some(node => text(node) === "Late Guest"), false);
 
-  await openAdd("b"); await typePlayer("Casey");
+  await openAdd(); await typePlayer("Casey");
   await act(async () => tree.root.findByProps({ "data-player-value": "102" }).props.onClick({ preventDefault() {} }));
+  assert.equal(destination().props.value, "", "Profile selection works before choosing a round robin");
+  await chooseGroup("a"); await chooseGroup("b");
   await submitPlayer();
-  assert.deepEqual(requests.at(-1).payload, { session_key: "b", name: "Casey Club", player_id: 102 }, "Choosing a directory result sends its authoritative profile ID");
-  await openAdd("a"); await typePlayer("Casey");
+  assert.deepEqual(requests.at(-1).payload, { session_key: "b", name: "Casey Club", player_id: 102 }, "Changing destination preserves the chosen profile and sends the explicit target");
+  await openAdd(); await typePlayer("Casey");
   await act(async () => tree.root.findByProps({ "data-player-value": "102" }).props.onClick({ preventDefault() {} }));
-  await typePlayer("Different Guest"); await submitPlayer();
+  assert.equal(destination().findAllByType("option").find(node => node.props.value === "b").props.disabled, true, "A profile already in the destination disables that destination");
+  await chooseGroup("a"); await typePlayer("Different Guest"); await submitPlayer();
   assert.deepEqual(requests.at(-1).payload, { session_key: "a", name: "Different Guest" }, "Editing a selected name clears its profile ID");
-  await openAdd("a"); await typePlayer("Club Alex");
-  assert.equal(tree.root.findByProps({ "data-player-value": "101" }).props.disabled, true, "An existing active profile cannot be added again");
+  await openAdd(); await typePlayer("Club Alex"); await chooseGroup("a");
+  await act(async () => tree.root.findByProps({ "data-player-value": "101" }).props.onClick({ preventDefault() {} }));
+  assert.equal(destination().props.value, "a", "An invalidated destination is retained for explicit correction");
+  assert.equal(button(tree, "Add player to round robin").props.disabled, true);
+  assert.ok(text(tree.toJSON()).includes("This player is already in this round robin."));
   await typePlayer("Return Player");
-  assert.equal(tree.root.findByProps({ "data-player-value": "103" }).props.disabled, false, "The server's permanent-departure eligibility allows the player to rejoin");
   await act(async () => tree.root.findByProps({ "data-player-value": "103" }).props.onClick({ preventDefault() {} }));
+  assert.equal(destination().findAllByType("option").find(node => node.props.value === "a").props.disabled, false, "The server's permanent-departure eligibility allows the player to rejoin");
   await submitPlayer();
   assert.deepEqual(requests.at(-1).payload, { session_key: "a", name: "Return Player", player_id: 103 });
+
+  await openAdd(); await typePlayer("Still here"); await chooseGroup("b");
+  const changedGroup = detail.workspace.groups.find(group => group.session_key === "b");
+  changedGroup.can_add_player = false; changedGroup.add_player_unavailable_reason = "This round robin was completed.";
+  await click("Refresh");
+  assert.equal(destination().props.value, "b");
+  assert.equal(button(tree, "Add player to round robin").props.disabled, true);
+  assert.ok(text(tree.toJSON()).includes("This round robin was completed."));
+  const beforeInvalidSubmit = requests.length;
+  await submitPlayer();
+  assert.equal(requests.length, beforeInvalidSubmit, "An unavailable chosen group never silently redirects the addition");
+  await click("Cancel"); await openAdd();
+  assert.equal(destination().props.value, "");
+  assert.equal(tree.root.findAllByType("input").find(node => node.props["aria-label"] === "Player name or club profile").props.value, "", "Cancel resets the name and destination");
+  await click("Cancel");
+  await click("Court board");
+  assert.ok(text(tree.root.findByProps({ "aria-label": "Byes this round" })).includes("Numbers A · Alex local"), "The court board keeps current byes visible under their round robin");
+  await openAdd(); await typePlayer("Board Guest"); await chooseGroup("a"); await submitPlayer();
+  assert.equal(button(tree, "Court board").props["aria-selected"], true, "Adding from court operations keeps the court board open");
+  const addedOnBoard = detail.workspace.groups.find(group => group.session_key === "a").players.find(player => player.name === "Board Guest");
+  addedOnBoard.can_remove = true;
+  await click("Refresh"); await click("Remove player");
+  await act(async () => tree.root.findByProps({ "aria-label": "Round robin" }).props.onChange({ target: { value: "a" } }));
+  await act(async () => tree.root.findByProps({ "aria-label": "Player" }).props.onChange({ target: { value: addedOnBoard.participant_id } }));
+  await act(async () => tree.root.findByProps({ id: "hub-remove-player-form" }).props.onSubmit({ preventDefault() {} }));
+  assert.deepEqual(requests.at(-1).payload, { session_key: "a", participant_id: addedOnBoard.participant_id });
+  assert.equal(requests.at(-1).action, "remove_player");
+  assert.equal(button(tree, "Court board").props["aria-selected"], true, "Removing from court operations keeps the court board open");
   await act(async () => tree.unmount());
 
   assert.equal(api.hubMatchLabel(blockedMatch), "1 vs Partner");

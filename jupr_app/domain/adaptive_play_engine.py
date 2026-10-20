@@ -1797,6 +1797,11 @@ def _recover_perfect_rotation(event: dict[str, Any]) -> bool:
     Only unstarted games are replanned. Late arrivals need not have attended
     prior rounds; those absences do not become assigned byes.
     """
+    if event.get("roundRobinHubId"):
+        # A hub rolls one round at a time after roster changes. Reconstructing an
+        # exact full rotation can strand late arrivals on repeated future byes.
+        event["perfectRotation"] = False
+        return False
     if event.get("generatorKind") != "round_robin" or event.get("playFormat") != "doubles" or event.get("playoff"):
         return False
     current = int(event.get("currentRoundNumber") or 1)
@@ -2142,8 +2147,9 @@ def mutate_generator_roster(
     roster_order: list[str] | None = None,
     participant_ids: list[str] | None = None,
     court_number: int | None = None,
+    _hub_managed: bool = False,
 ) -> dict[str, Any]:
-    if event.get("roundRobinHubId") and not is_moneyball(event) and action != "seat_arrivals":
+    if event.get("roundRobinHubId") and not _hub_managed and not is_moneyball(event) and action != "seat_arrivals":
         from jupr_app.domain.round_robin_hub import mutate_hub_roster
         return mutate_hub_roster(event, action=action, participant_id=participant_id, name=name,
             player_id=player_id, substitute_scope=substitute_scope, roster_order=roster_order)

@@ -228,3 +228,23 @@ def test_add_player_invalid_payload_is_rejected_without_writes(api, payload):
         "idempotency_key": "invalid-add-player"})
     assert response.status_code == 400
     assert db.storage == snapshot
+
+
+def test_remove_player_command_is_scoped_and_replays_without_reason(api):
+    client, db = api
+    session(db, count=8)
+    hub = command(db, create(db), "add_group", {"session_key": "rr-a"})
+    pid = hub["workspace"]["groups"][0]["players"][0]["participant_id"]
+    path = f"{BASE}/{hub['hub']['id']}/commands"
+    body = {"action": "remove_player", "payload": {"session_key": "rr-a", "participant_id": pid},
+        "expected_version": hub["hub"]["version"], "idempotency_key": "remove-player-api-once"}
+    snapshot = deepcopy(db.storage)
+    invalid = client.post(path, headers=HEADERS, json={**body, "payload": {"session_key": "other-group", "participant_id": pid}})
+    assert invalid.status_code == 400 and db.storage == snapshot
+    missing = client.post(path, headers=HEADERS, json={**body, "payload": {"session_key": "rr-a", "participant_id": "unknown"}})
+    assert missing.status_code == 400 and db.storage == snapshot
+    first = client.post(path, headers=HEADERS, json=body)
+    replay = client.post(path, headers=HEADERS, json=body)
+    assert first.status_code == replay.status_code == 200 and replay.json()["replayed"]
+    player = next(p for p in first.json()["workspace"]["groups"][0]["players"] if p["participant_id"] == pid)
+    assert not player["active"] and not player["can_remove"]
