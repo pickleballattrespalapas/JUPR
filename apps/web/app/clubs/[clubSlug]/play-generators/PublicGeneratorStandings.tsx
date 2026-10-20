@@ -20,6 +20,7 @@ type StandingsSort = "wins" | "points" | "differential" | "moneyball_expectation
 type ScoringMode = "scored" | "unscored";
 
 type Session = {
+  round_robin_hub_id?: string | null;
   session_key: string;
   title: string;
   status: string;
@@ -269,6 +270,7 @@ export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey, 
           {session.submission ? <button type="button" onClick={() => void loadSession()} style={{ ...linkButton, cursor: "pointer", justifySelf: "start", background: "white" }}>Refresh approval status</button> : null}
         </div>
       ) : null}
+      {session.round_robin_hub_id ? <p role="status">Standings include completed rounds only. Scores from a partly finished round remain pending.</p> : null}
       <PlayGeneratorStandingsTable rows={session.standings || []} sortMode={sortMode} title={session.event.playoff ? "Round-robin standings" : undefined} />
       <GeneratorMoneyball value={session.moneyball} />
       {moneyball ? <GeneratorMoneyballExpectations rows={session.event.moneyballExpectations} locked format={session.event.moneyball} /> : null}

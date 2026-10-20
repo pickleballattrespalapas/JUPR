@@ -64,6 +64,13 @@ def _payload(row: dict[str, Any]) -> dict[str, Any]:
 
 def _cas(supabase: Any, row: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     # A revoke/owner edit racing a handed-off write wins via the same row lease.
+    if _state(row).get("round_robin_hub_id"):
+        from jupr_app.services.admin_round_robin_hub_service import persist_linked_generator_patch
+        return persist_linked_generator_patch(
+            supabase, before=row,
+            patch={**patch, "updated_at": _now_iso(), "version": int(row.get("version") or 1) + 1},
+            expected_version=_version(row),
+        )
     updated = _first(supabase.table("live_sessions").update({
         **patch, "updated_at": _now_iso(), "version": int(row.get("version") or 1) + 1,
     }).eq("club_id", row["club_id"]).eq("session_key", row["session_key"])

@@ -37,6 +37,7 @@ type Participant = {
 };
 
 type MatchRow = {
+  courtLabel?: string;
   id: string;
   label?: string;
   round?: number;
@@ -86,9 +87,11 @@ type GeneratorEvent = {
   perfectRotation?: boolean;
   adaptiveFromRound?: number | null;
   rosterRevisions?: Array<Record<string, unknown>>;
+  hubAssignedMatchIds?: string[];
 };
 
 type GeneratorSession = {
+  round_robin_hub_id?: string | null;
   results_locked?: boolean;
   submission?: GeneratorSubmissionStatus | null;
   created_at?: string;
@@ -548,12 +551,14 @@ export default function GeneratorRoundRunner({
     (session?.status === "active" || session?.status === "completed") &&
     (isCurrent || (generatorKind === "round_robin" && !event?.playoff));
   const editingScores = canEditSavedScores && editingSavedScores;
-  const canReopenRound = canManage && !event?.playoff && generatorKind === "round_robin" && round?.status === "skipped";
+  const canReopenRound = canManage && !session?.round_robin_hub_id && !event?.playoff && generatorKind === "round_robin" && round?.status === "skipped";
   const hasOtherOpenRound = event?.rounds.some(row => row.status === "active" && row.number !== event.currentRoundNumber) ?? false;
-  const canFinishSession = canManage && (event?.eventFormat !== "moneyball_expectations" || event.rounds.every(row => row.status === "saved")) && !event?.playoff && generatorKind === "round_robin" && session?.status === "active" && isCurrent && !hasOtherOpenRound;
-  const draftScoreCount = scoredSession
-    ? Object.values(scores).filter((value) => value !== "").length
-    : 0;
+  const canFinishSession = canManage && (event?.eventFormat !== "moneyball_expectations" || event.rounds.every(row => row.status === "saved")) && !event?.playoff && generatorKind === "round_robin" && session?.status === "active" && isCurrent && !hasOtherOpenRound && (!session?.round_robin_hub_id || (["saved", "played", "skipped"].includes(round?.status || "") && !event?.hubAssignedMatchIds?.length));
+  const draftScoreCount = scoredSession ? matches.reduce((count, match) => count + (["a", "b"] as const)
+    .filter(side => {
+      const saved = side === "a" ? match.scoreA : match.scoreB;
+      return (scores[scoreKey(match.id, side)] ?? "") !== (saved == null ? "" : String(saved));
+    }).length, 0) : 0;
   const anyDraftScore = draftScoreCount > 0;
   const results = round ? roundStandings(round, participants) : [];
   const byeNames = (round?.byeParticipantIds || [])
@@ -753,10 +758,14 @@ export default function GeneratorRoundRunner({
     if (!session || !event || busy || editingScores || (canEditRound && anyDraftScore)) return;
     const target = event.rounds.find(row => row.number === number);
     if (!target || (number === roundNumber && isCurrent)) return;
+    if (session.round_robin_hub_id && number > event.currentRoundNumber) {
+      setMessage("Finish this group’s current round before starting another round.");
+      return;
+    }
     setBusy(true);
     setMessage(null);
     try {
-      if (canManage && !event.playoff && ["preview", "active", "skipped"].includes(target.status)) {
+      if (canManage && !session.round_robin_hub_id && !event.playoff && ["preview", "active", "skipped"].includes(target.status)) {
         await runMutation(`/clubs/${encodeURIComponent(clubId)}/play-generators/sessions/${encodeURIComponent(sessionKey)}/rounds/${number}/select`, {});
       }
       router.push(sessionRoundPath(generatorKind, clubId, sessionKey, number));
@@ -882,6 +891,8 @@ export default function GeneratorRoundRunner({
       setNewPlayerId("");
       setMessage(next.event.eventFormat === "moneyball_expectations"
         ? "Substitution applied. Both players are ineligible to win; expectations remain fixed."
+        : next.round_robin_hub_id
+        ? "Players updated. Games already assigned or completed stay in place; waiting matchups use the updated roster."
         : generatorKind === "round_robin" || roundNumber < next.event.totalRounds
         ? `Players updated for Round ${roundNumber + 1}. Current games and score entries stay in place.`
         : "This is the final round. Added arrivals can play together on a spare court below.");
@@ -906,7 +917,9 @@ export default function GeneratorRoundRunner({
         { action: "seat_arrivals", participant_ids: participantIds, court_number: court },
         true
       );
-      setMessage(`Late arrivals are playing on Court ${court}. All existing games and score entries stay in place.`);
+      setMessage(session?.round_robin_hub_id
+        ? "Late-arrival game added to the hub queue. Assign its court from the court board."
+        : `Late arrivals are playing on Court ${court}. All existing games and score entries stay in place.`);
     } catch (error) {
       setMessage(requestFailureMessage(error, "We couldn’t add the late-arrival game. Please try again."));
     } finally {
@@ -954,12 +967,21 @@ export default function GeneratorRoundRunner({
       <PublicControls navigation resetKey={String(roundNumber)} context={`Round ${roundNumber} · ${roundStatusLabel(round.status)}`}>
 {generatorKind === "round_robin" && (shared || editToken) ? <GeneratorSharing apiBase={apiBase} clubId={clubId} sessionKey={sessionKey} version={session.version} ownerToken={shared ? undefined : editToken} shared={shared} locked={resultsLocked} disabled={busy || editingScores || (canEditRound && anyDraftScore)} onChanged={loadSession} /> : null}
 
+      {session.round_robin_hub_id ? <aside style={{ ...cardStyle, background: "#eff6ff" }}>
+        <strong>Courts are managed in the Round Robin Hub.</strong>
+        <p style={{ marginBottom: 0 }}>Each group completes its current round before starting the next. Saved scores count in standings only when the whole round is complete.</p>
+        {round.status === "active" && matches.some(match => match.scoreA != null && match.scoreB != null) ? <p style={{ marginBottom: 0 }}>
+          Round {roundNumber}: {matches.filter(match => match.scoreA != null && match.scoreB != null).length} of {matches.length} matches complete — scores saved, standings pending.
+        </p> : null}
+      </aside> : null}
+
       {generatorKind === "round_robin" && !event.playoff ? (
-        <GeneratorRoundSchedule rounds={event.rounds} participants={event.participants}
+        <GeneratorRoundSchedule rounds={session.round_robin_hub_id ? event.rounds.filter(row => row.number <= event.currentRoundNumber) : event.rounds} participants={event.participants}
           selectedRound={roundNumber} currentRound={event.currentRoundNumber}
           disabled={busy || editingScores || (canEditRound && anyDraftScore)}
           unsaved={editingScores || (canEditRound && anyDraftScore)}
           perfect={Boolean(event.perfectRotation)} adaptive={Boolean(event.adaptiveFromRound)} moneyball={event.eventFormat === "moneyball_expectations"}
+          sequential={Boolean(session.round_robin_hub_id)}
           onOpen={number => void openScheduledRound(number)} />
       ) : null}
 
@@ -1065,7 +1087,7 @@ export default function GeneratorRoundRunner({
                 }}
               >
                 <p style={{ margin: "0 0 0.4rem", color: "#64748b" }}>
-                  {matchFormatLabel(match, event.playFormat)} · Court {match.court || "—"}
+                  {matchFormatLabel(match, event.playFormat)} · {match.courtLabel || `Court ${match.court || "—"}`}
                   {match.miniRound ? ` · Game ${match.miniRound}` : ""}
                   {match.label ? ` · ${match.label}` : ""}
                 </p>
@@ -1480,6 +1502,7 @@ export default function GeneratorRoundRunner({
             usedCourts={matches.map(match => Number(match.court || 0))}
             byeParticipantIds={round.byeParticipantIds}
             busy={busy}
+            queueOnly={Boolean(session.round_robin_hub_id)}
             onStart={startArrivalGame}
           /> : null}
         </article>

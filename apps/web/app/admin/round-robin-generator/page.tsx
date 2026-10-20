@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import GeneratorWorkspace from "@/app/admin/play-generators/GeneratorWorkspace";
 
@@ -26,8 +27,12 @@ async function loadStatus(clubId: string): Promise<StatusResponse | null> {
   }
 }
 
-export default async function RoundRobinGeneratorPage() {
+export default async function RoundRobinGeneratorPage({ searchParams }: {
+  searchParams?: Promise<{ hub?: string | string[] }>;
+}) {
   const { clubId } = await requireAdminWorkspace();
+  const params = await searchParams;
+  const returnHubId = typeof params?.hub === "string" ? params.hub : undefined;
   const status = await loadStatus(clubId);
   return (
     <section>
@@ -38,11 +43,13 @@ export default async function RoundRobinGeneratorPage() {
       <p style={{ color: "#334155", maxWidth: "900px" }}>
         Build singles, doubles, or mixed doubles-and-singles schedules; preview every planned matchup and bye, print the schedule, then run one round at a time.
       </p>
+      <p><Link href={returnHubId ? `/admin/round-robin-hub?hub=${encodeURIComponent(returnHubId)}` : "/admin/round-robin-hub"}>← Round Robin Hub</Link>{returnHubId ? " · This new round robin will join the selected hub." : " · Run several round robins on one court board."}</p>
       <GeneratorWorkspace
         generatorKind="round_robin"
         apiBase={apiBase()}
         clubId={clubId}
         status={status}
+        returnHubId={returnHubId}
       />
     </section>
   );

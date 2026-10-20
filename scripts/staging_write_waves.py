@@ -393,6 +393,8 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("PATCH", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/submission/title"),
         ("POST", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/review"),
         ("POST", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/publish"),
+        ("POST", "/admin/clubs/{club_id}/round-robin-hubs"),
+        ("POST", "/admin/clubs/{club_id}/round-robin-hubs/{hub_id}/commands"),
     ),
     "public-live": (
         ("POST", "/clubs/{club_slug}/live-sessions"),

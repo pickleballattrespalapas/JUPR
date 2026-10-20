@@ -129,6 +129,7 @@ def _session_payload(row: dict[str, Any]) -> dict[str, Any]:
         "id": str(row.get("id") or ""),
         "club_id": str(row.get("club_id") or ""),
         "session_key": str(row.get("session_key") or ""),
+        "round_robin_hub_id": state.get("round_robin_hub_id"),
         "title": _clean_text(row.get("title") or event.get("name"), limit=160),
         "status": str(row.get("status") or event.get("status") or "active"),
         "source": str(row.get("source") or "play_generator"),
@@ -162,7 +163,10 @@ def _session_payload(row: dict[str, Any]) -> dict[str, Any]:
 
 def _is_generator_row(row: dict[str, Any], generator_kind: str | None = None) -> bool:
     state = _state(row)
-    if str(state.get("mode") or "") != "admin_play_generator":
+    mode = str(state.get("mode") or "")
+    linked_public_rr = (mode == "public_play_generator" and state.get("round_robin_hub_id")
+                        and _event_from_state(state).get("generatorKind") == "round_robin")
+    if mode != "admin_play_generator" and not linked_public_rr:
         return False
     if generator_kind:
         return str(state.get("generator_kind") or "") == str(generator_kind)
@@ -529,6 +533,12 @@ def _persist_event(
         patch["completed_at"] = now
     elif status == "active":
         patch["completed_at"] = None
+    if _state(before).get("round_robin_hub_id"):
+        # Court release and generator results share one durable transaction.
+        from jupr_app.services.admin_round_robin_hub_service import persist_linked_generator_patch
+        return persist_linked_generator_patch(
+            supabase, before=before, patch=patch, expected_version=expected_version,
+        )
     return _update_live_row(
         supabase,
         club_id=str(before.get("club_id") or ""),
@@ -990,6 +1000,17 @@ def _format_publish_idempotency_key(value: str, match_format: str) -> str:
     return f"{str(value)[:120]}:{digest}"
 
 
+def _require_hub_ready_for_publication(row: dict[str, Any]) -> None:
+    state = _state(row)
+    if not state.get("round_robin_hub_id"):
+        return
+    event = _event_from_state(state)
+    if (row.get("status") != "completed" or event.get("status") != "completed"
+            or event.get("hubAssignedMatchIds")
+            or any(round_row.get("status") == "active" for round_row in event.get("rounds", []))):
+        raise ValueError("Resolve this round robin’s matches and finish it before submitting or publishing results.")
+
+
 def publish_play_generator_matches(
     supabase: Any,
     *,
@@ -1006,6 +1027,7 @@ def publish_play_generator_matches(
     if actor_role not in {"administrator", "club_owner", "super_admin"}:
         raise PermissionError("Only a club administrator can publish generator results. Submit them for approval.")
     before = _live_row(supabase, club_id=str(club_id), session_key=str(session_key))
+    _require_hub_ready_for_publication(before)
     if _state(before).get("generator_submission"):
         raise ValueError("Approve these results from the generator submissions queue.")
     if str(before.get("updated_at") or "") != str(expected_version or ""):

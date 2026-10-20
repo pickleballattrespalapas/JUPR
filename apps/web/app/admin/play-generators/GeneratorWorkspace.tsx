@@ -28,6 +28,7 @@ type Participant = {
 };
 
 type MatchRow = {
+  courtLabel?: string;
   id: string;
   round?: number;
   court?: number;
@@ -117,6 +118,9 @@ type Props = {
   apiBase: string | null;
   clubId: string;
   status: StatusResponse | null;
+  embedded?: boolean;
+  onCreated?: (sessionKey: string) => void;
+  returnHubId?: string;
 };
 
 const cardStyle = {
@@ -235,7 +239,10 @@ export default function GeneratorWorkspace({
   generatorKind,
   apiBase,
   clubId,
-  status
+  status,
+  embedded = false,
+  onCreated,
+  returnHubId
 }: Props) {
   const router = useRouter();
   const { accessToken, session: adminSession } = useAdminSession();
@@ -456,6 +463,12 @@ export default function GeneratorWorkspace({
       const session = payload.session;
       if (!session?.session_key) throw new Error("The session was created without a session key.");
       clearPlayGeneratorDraft(draftKey);
+      if (onCreated) { onCreated(session.session_key); return; }
+      if (returnHubId) {
+        router.push(`/admin/round-robin-hub?hub=${encodeURIComponent(returnHubId)}&add_session=${encodeURIComponent(session.session_key)}`);
+        router.refresh();
+        return;
+      }
       const path = `/admin/${generatorSlug(generatorKind)}/sessions/${encodeURIComponent(
         session.session_key
       )}/rounds/${session.current_round_number || 1}`;
@@ -834,7 +847,7 @@ export default function GeneratorWorkspace({
                         }}
                       >
                         <span style={{ color: "#64748b" }}>
-                          {matchFormatLabel(match, preview.playFormat)} · Court {match.court || "—"}
+                          {matchFormatLabel(match, preview.playFormat)} · {match.courtLabel || `Court ${match.court || "—"}`}
                           {match.miniRound ? `.${match.miniRound}` : ""}
                         </span>
                         <strong>{sideLabel(match.sideA || match.teamA, previewParticipants)}</strong>
@@ -858,7 +871,7 @@ export default function GeneratorWorkspace({
         </article>
       ) : null}
 
-      <article style={cardStyle}>
+      {!embedded ? <article style={cardStyle}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
           <div>
             <h2 style={{ marginTop: 0 }}>Existing {generatorTitle(generatorKind)} sessions</h2>
@@ -901,7 +914,7 @@ export default function GeneratorWorkspace({
         ) : (
           <p style={{ color: "#64748b" }}>No generator sessions yet.</p>
         )}
-      </article>
+      </article> : null}
     </div>
   );
 }

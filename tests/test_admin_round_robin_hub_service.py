@@ -1,0 +1,418 @@
+"""Service contracts against a transactional RPC double.
+
+These tests exercise orchestration and generator integration. PostgreSQL locking,
+RLS, trigger and constraint behavior is covered separately by the SQL tests.
+"""
+from __future__ import annotations
+
+from copy import deepcopy
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+
+import pytest
+
+from jupr_app.domain.adaptive_play_engine import create_generator_preview, generator_event_standings, start_generator_event
+from jupr_app.services import admin_round_robin_hub_service as service
+from jupr_app.services.public_live_operation_service import PublicLiveConflictError
+
+
+class FakeConflict(Exception):
+    code = "40001"
+
+
+class ReadQuery:
+    def __init__(self, db, name):
+        self.db, self.name = db, name
+        self.filters, self.limit_count, self.order_by = [], None, None
+
+    def select(self, *_args):
+        return self
+
+    def eq(self, key, value):
+        self.filters.append(lambda row: str(row.get(key)) == str(value))
+        return self
+
+    def in_(self, key, values):
+        self.filters.append(lambda row: row.get(key) in values)
+        return self
+
+    def order(self, key, desc=False):
+        self.order_by = (key, desc)
+        return self
+
+    def limit(self, count):
+        self.limit_count = count
+        return self
+
+    def execute(self):
+        values = [deepcopy(row) for row in self.db.storage.setdefault(self.name, []) if all(test(row) for test in self.filters)]
+        if self.order_by:
+            key, reverse = self.order_by
+            values.sort(key=lambda row: str(row.get(key) or ""), reverse=reverse)
+        return SimpleNamespace(data=values[:self.limit_count])
+
+
+class TransactionalHubDB:
+    def __init__(self):
+        self.storage = {"live_sessions": [], service.HUB_TABLE: [], service.OPERATION_TABLE: []}
+        self.calls = []
+        self.clock = datetime(2026, 10, 20, tzinfo=timezone.utc)
+        self.before_commit = None
+
+    def table(self, name):
+        return ReadQuery(self, name)
+
+    def rpc(self, name, params):
+        assert name == "commit_round_robin_hub"
+        self.calls.append(deepcopy(params))
+        return SimpleNamespace(execute=lambda: self._commit(params))
+
+    def _commit(self, p):
+        if self.before_commit:
+            action, self.before_commit = self.before_commit, None
+            action(self)
+        snapshot = deepcopy(self.storage)
+        club, hub_id = p["p_club_id"], p["p_hub_id"]
+        receipt = next((row for row in snapshot[service.OPERATION_TABLE]
+                        if row["club_id"] == club and row["hub_id"] == hub_id and row["operation_key"] == p["p_operation_key"]), None)
+        if receipt:
+            if receipt["fingerprint"] != p["p_fingerprint"]:
+                raise FakeConflict("operation fingerprint changed")
+            return SimpleNamespace(data={**deepcopy(receipt["result"]), "replayed": True})
+        hub = next((row for row in snapshot[service.HUB_TABLE] if row["club_id"] == club and row["id"] == hub_id), None)
+        if (hub is None and p["p_expected_version"] != 0) or (hub is not None and hub["version"] != p["p_expected_version"]):
+            raise FakeConflict("hub changed")
+        old_members = {group["session_key"] for group in (hub or {}).get("state", {}).get("groups", [])}
+        new_members = {group["session_key"] for group in p["p_state"].get("groups", [])}
+        assert {entry["session_key"] for entry in p["p_sessions"]} == old_members | new_members
+        read_rows = []
+        for entry in p["p_sessions"]:
+            session = next((row for row in snapshot["live_sessions"] if row["club_id"] == club and row["session_key"] == entry["session_key"]), None)
+            if not session or session["updated_at"] != entry["expected_version"] or session.get("version", 1) != entry.get("expected_numeric_version", 1):
+                raise FakeConflict("session changed")
+            read_rows.append((entry, session))
+        self.clock += timedelta(microseconds=1)
+        now = self.clock.isoformat()
+        for entry, session in read_rows:
+            if entry["patch"]:
+                numeric = int(session.get("version") or 1)
+                session.update(deepcopy(entry["patch"]))
+                session["updated_at"] = now
+                session["version"] = entry["patch"].get("version", numeric + 1)
+        if hub is None:
+            hub = {"id": hub_id, "club_id": club, "version": 0, "created_at": now}
+            snapshot[service.HUB_TABLE].append(hub)
+        hub.update(title=p["p_title"], status=p["p_status"], state=deepcopy(p["p_state"]), updated_at=now, version=hub["version"] + 1)
+        result = {"hub": deepcopy(hub), "sessions": [deepcopy(row) for _, row in read_rows], "replayed": False}
+        snapshot[service.OPERATION_TABLE].append({"club_id": club, "hub_id": hub_id, "operation_key": p["p_operation_key"],
+                                                "fingerprint": p["p_fingerprint"], "result": deepcopy(result)})
+        self.storage = snapshot
+        return SimpleNamespace(data=result)
+
+
+def session(db, key="rr-a", *, count=8, club="club-a", mode="admin_play_generator", offset=0, scoring="scored"):
+    preview = create_generator_preview(generator_kind="round_robin", play_format="doubles", title=key,
+        participant_names=[f"Player {offset + i}" for i in range(1, count + 1)],
+        player_ids=[offset + i for i in range(1, count + 1)], total_rounds=3, court_count=0,
+        scoring_mode=scoring, rating_mode="unrated")
+    event = start_generator_event(preview)
+    row = {"club_id": club, "session_key": key, "title": key, "status": "active", "version": 1,
+           "updated_at": "2026-10-19T22:00:00+00:00", "created_at": "2026-10-19T22:00:00+00:00",
+           "created_by_email": "operator@example.test", "source": "play_generator", "expires_at": "2099-01-01T00:00:00+00:00",
+           "state": {"mode": mode, "club_id": club, "generator_kind": "round_robin", "page_state": {"event": event}}}
+    db.storage["live_sessions"].append(row)
+    return deepcopy(row)
+
+
+def create(db, key="create-test", *, club="club-a", courts=1):
+    return service.create_round_robin_hub(db, club_id=club, title="Friday pickleball", actor_email="operator@example.test",
+        courts=[{"id": f"c{i}", "label": f"Court {i}", "open": True} for i in range(1, courts + 1)], idempotency_key=key)
+
+
+def command(db, hub, action, payload=None, key=None):
+    return service.command_round_robin_hub(db, club_id="club-a", hub_id=hub["hub"]["id"], action=action,
+        payload=payload or {}, expected_version=hub["hub"]["version"], idempotency_key=key or f"{action}-{hub['hub']['version']}", actor_email="operator@example.test")
+
+
+def raw_session(db, key="rr-a"):
+    return next(row for row in db.storage["live_sessions"] if row["session_key"] == key)
+
+
+def test_create_and_command_response_loss_replays_without_duplicate_hubs_or_members():
+    db = TransactionalHubDB()
+    session(db)
+    hub = create(db)
+    assert create(db)["hub"]["id"] == hub["hub"]["id"]
+    added = command(db, hub, "add_group", {"session_key": "rr-a"}, "add-once-key")
+    replay = command(db, hub, "add_group", {"session_key": "rr-a"}, "add-once-key")
+    assert replay["replayed"] is True
+    assert replay["hub"]["version"] == added["hub"]["version"]
+    assert len(replay["workspace"]["groups"]) == len(db.storage[service.HUB_TABLE]) == 1
+    assert raw_session(db)["state"]["round_robin_hub_id"] == hub["hub"]["id"]
+
+
+def test_changed_idempotency_payload_is_rejected_without_writes():
+    db = TransactionalHubDB()
+    hub = create(db)
+    command(db, hub, "rename_hub", {"title": "First title"}, "same-key-123")
+    before = deepcopy(db.storage)
+    with pytest.raises(PublicLiveConflictError, match="different change"):
+        command(db, hub, "rename_hub", {"title": "Second title"}, "same-key-123")
+    assert db.storage == before
+
+
+def test_partial_match_result_releases_court_and_counts_only_after_full_round():
+    db = TransactionalHubDB()
+    session(db)
+    hub = command(db, create(db), "add_group", {"session_key": "rr-a"})
+    assert len(hub["workspace"]["eligible_queue"]) == 2
+    first, second = hub["workspace"]["eligible_queue"]
+    hub = command(db, hub, "assign_next_court", {"session_key": "rr-a", "match_id": first["match_id"]})
+    hub = command(db, hub, "score_and_release", {"court_id": "c1", "session_key": "rr-a", "match_id": first["match_id"], "score_a": 11, "score_b": 5})
+    assert hub["workspace"]["courts"][0]["current"] is None
+    event = service._event(raw_session(db))
+    assert event["rounds"][0]["status"] == "active"
+    assert all(row["matches"] == 0 for row in generator_event_standings(event))
+    assert {entry["round_number"] for entry in hub["workspace"]["eligible_queue"]} == {1}
+    with pytest.raises(ValueError, match="current round"):
+        command(db, hub, "advance_round", {"session_key": "rr-a"})
+    hub = command(db, hub, "assign_next_court", {"session_key": "rr-a", "match_id": second["match_id"]})
+    hub = command(db, hub, "score_and_release", {"court_id": "c1", "session_key": "rr-a", "match_id": second["match_id"], "score_a": 11, "score_b": 7})
+    event = service._event(raw_session(db))
+    assert event["rounds"][0]["status"] == "saved"
+    assert all(row["matches"] == 1 for row in generator_event_standings(event))
+    assert not hub["workspace"]["eligible_queue"]
+    hub = command(db, hub, "advance_round", {"session_key": "rr-a"})
+    assert {entry["round_number"] for entry in hub["workspace"]["eligible_queue"]} == {2}
+
+
+def test_all_group_versions_are_checked_before_assigning_a_court():
+    db = TransactionalHubDB()
+    session(db)
+    session(db, "rr-b", offset=20)
+    hub = command(db, create(db), "add_group", {"session_key": "rr-a"})
+    hub = command(db, hub, "add_group", {"session_key": "rr-b"})
+    candidate = next(match for match in hub["workspace"]["eligible_queue"] if match["session_key"] == "rr-a")
+    db.before_commit = lambda db: raw_session(db, "rr-b").update(updated_at="2026-10-20T23:00:00+00:00")
+    with pytest.raises(PublicLiveConflictError):
+        command(db, hub, "assign_next_court", {"session_key": "rr-a", "match_id": candidate["match_id"]})
+    current = service.get_round_robin_hub(db, club_id="club-a", hub_id=hub["hub"]["id"])
+    assert current["workspace"]["courts"][0]["current"] is None
+    assert {row["session_key"] for row in db.calls[-1]["p_sessions"]} == {"rr-a", "rr-b"}
+
+
+def test_stale_operator_cannot_replace_a_new_court_assignment():
+    db = TransactionalHubDB()
+    session(db)
+    hub = command(db, create(db), "add_group", {"session_key": "rr-a"})
+    first, second = hub["workspace"]["eligible_queue"]
+    assigned = command(db, hub, "assign_next_court", {"session_key": "rr-a", "match_id": first["match_id"]})
+    with pytest.raises(PublicLiveConflictError):
+        command(db, hub, "assign_next_court", {"session_key": "rr-a", "match_id": second["match_id"]}, "different-op-key")
+    assert service.get_round_robin_hub(db, club_id="club-a", hub_id=hub["hub"]["id"])["hub"] == assigned["hub"]
+
+
+def test_cross_club_hubs_and_sessions_are_not_visible_or_attachable():
+    db = TransactionalHubDB()
+    session(db, club="club-b")
+    hub = create(db)
+    assert not service.list_round_robin_hubs(db, club_id="club-a")["sessions"]
+    with pytest.raises(ValueError, match="no longer available"):
+        command(db, hub, "add_group", {"session_key": "rr-a"})
+    with pytest.raises(LookupError):
+        service.get_round_robin_hub(db, club_id="club-b", hub_id=hub["hub"]["id"])
+
+
+@pytest.mark.parametrize("state_patch", [{"generator_submission": {"status": "pending"}}, {"official_publish": {"published_match_ids": [1]}}])
+def test_submitted_or_published_sessions_cannot_enter_hub(state_patch):
+    db = TransactionalHubDB()
+    session(db)
+    raw_session(db)["state"].update(state_patch)
+    hub = create(db)
+    assert not service.list_round_robin_hubs(db, club_id="club-a")["sessions"]
+    with pytest.raises(ValueError, match="not been submitted"):
+        command(db, hub, "add_group", {"session_key": "rr-a"})
+
+
+def test_complete_hub_rejects_later_commands_without_changing_court_state():
+    db = TransactionalHubDB()
+    hub = command(db, create(db), "finish_hub")
+    before = deepcopy(db.storage)
+    with pytest.raises(ValueError, match="complete"):
+        command(db, hub, "rename_hub", {"title": "Unexpected restart"})
+    assert db.storage == before
+
+
+def test_snapshot_and_list_do_not_leak_private_generator_state():
+    db = TransactionalHubDB()
+    session(db)
+    row = raw_session(db)
+    row["state"]["generator_sharing"] = {"handoff_nonce": "private-handoff-nonce"}
+    row["state"]["page_state"]["event"]["privateMoneyballLock"] = {"ratings": "private-frozen-ratings"}
+    hub = command(db, create(db), "add_group", {"session_key": "rr-a"})
+    rendered = str(hub) + str(service.list_round_robin_hubs(db, club_id="club-a"))
+    assert "private-handoff-nonce" not in rendered
+    assert "private-frozen-ratings" not in rendered
+
+
+def test_original_generator_patch_is_atomic_with_court_release_and_public_cas_fields():
+    from jupr_app.domain.adaptive_play_engine import save_generator_round
+    db = TransactionalHubDB()
+    session(db, count=4, mode="public_play_generator")
+    hub = command(db, create(db), "add_group", {"session_key": "rr-a"})
+    match = hub["workspace"]["eligible_queue"][0]
+    command(db, hub, "assign_next_court", {"session_key": "rr-a", "match_id": match["match_id"]})
+    before = deepcopy(raw_session(db))
+    event = save_generator_round(service._event(before), round_number=1,
+        scores=[{"match_id": match["match_id"], "score_a": 11, "score_b": 6}])
+    state = deepcopy(before["state"])
+    state["page_state"]["event"] = event
+    patch = {"state": state, "version": before["version"] + 1, "last_operation_key": "public-operation-key",
+             "last_request_fingerprint": "public-fingerprint", "expires_at": "2099-02-01T00:00:00+00:00"}
+    updated = service.persist_linked_generator_patch(db, before=before, patch=patch, expected_version=before["updated_at"])
+    assert updated["last_operation_key"] == "public-operation-key"
+    assert updated["last_request_fingerprint"] == "public-fingerprint"
+    assert updated["expires_at"] == patch["expires_at"]
+    detail = service.get_round_robin_hub(db, club_id="club-a", hub_id=hub["hub"]["id"])
+    assert detail["workspace"]["courts"][0]["current"] is None
+    assert detail["workspace"]["groups"][0]["completed_matches"] == 1
+    replay = service.persist_linked_generator_patch(db, before=before, patch=patch, expected_version=before["updated_at"])
+    assert replay["updated_at"] == updated["updated_at"]
+
+
+def test_no_partial_court_or_score_write_when_transaction_fails():
+    db = TransactionalHubDB()
+    session(db)
+    hub = command(db, create(db), "add_group", {"session_key": "rr-a"})
+    match = hub["workspace"]["eligible_queue"][0]
+    hub = command(db, hub, "assign_next_court", {"session_key": "rr-a", "match_id": match["match_id"]})
+    db.before_commit = lambda db: raw_session(db).update(version=raw_session(db)["version"] + 1)
+    with pytest.raises(PublicLiveConflictError):
+        command(db, hub, "score_and_release", {"court_id": "c1", "session_key": "rr-a", "match_id": match["match_id"], "score_a": 11, "score_b": 5})
+    stored = service._event(raw_session(db))["rounds"][0]["matches"]
+    assert all(match.get("scoreA") is None for match in stored)
+    detail = service.get_round_robin_hub(db, club_id="club-a", hub_id=hub["hub"]["id"])
+    assert detail["workspace"]["courts"][0]["current"]["match_id"] == match["match_id"]
+
+
+def test_detaching_group_clears_membership_markers_without_changing_schedule():
+    db = TransactionalHubDB()
+    session(db)
+    hub = command(db, create(db), "add_group", {"session_key": "rr-a"})
+    event_before = service._event(raw_session(db))
+    hub = command(db, hub, "remove_group", {"session_key": "rr-a"})
+    row = raw_session(db)
+    assert "round_robin_hub_id" not in row["state"]
+    event_after = service._event(row)
+    assert "roundRobinHubId" not in event_after
+    assert "hubAssignedMatchIds" not in event_after
+    assert event_after["rounds"] == event_before["rounds"]
+    assert not hub["workspace"]["groups"]
+
+
+def test_generic_patch_rejects_stale_numeric_version_even_when_timestamp_matches():
+    db = TransactionalHubDB()
+    session(db)
+    command(db, create(db), "add_group", {"session_key": "rr-a"})
+    before = deepcopy(raw_session(db))
+    raw_session(db)["version"] += 1
+    with pytest.raises(PublicLiveConflictError):
+        service.persist_linked_generator_patch(db, before=before, patch={"title": "Stale title"}, expected_version=before["updated_at"])
+    assert raw_session(db)["title"] == "rr-a"
+
+
+def test_closed_hub_allows_score_correction_but_cannot_restart_round_robin():
+    from jupr_app.domain.adaptive_play_engine import advance_generator_event, complete_generator_event, save_generator_round
+    db = TransactionalHubDB()
+    session(db, count=4)
+    hub = command(db, create(db), "add_group", {"session_key": "rr-a"})
+    match = hub["workspace"]["eligible_queue"][0]
+    hub = command(db, hub, "assign_next_court", {"session_key": "rr-a", "match_id": match["match_id"]})
+    hub = command(db, hub, "score_and_release", {"court_id": "c1", "session_key": "rr-a", "match_id": match["match_id"], "score_a": 11, "score_b": 5})
+    before = deepcopy(raw_session(db))
+    completed = complete_generator_event(service._event(before))
+    state = deepcopy(before["state"])
+    state["page_state"]["event"] = completed
+    service.persist_linked_generator_patch(db, before=before, patch={"state": state, "status": "completed"}, expected_version=before["updated_at"])
+    hub = service.get_round_robin_hub(db, club_id="club-a", hub_id=hub["hub"]["id"])
+    command(db, hub, "finish_hub")
+
+    before = deepcopy(raw_session(db))
+    corrected = save_generator_round(service._event(before), round_number=1,
+        scores=[{"match_id": match["match_id"], "score_a": 11, "score_b": 7}])
+    state = deepcopy(before["state"])
+    state["page_state"]["event"] = corrected
+    updated = service.persist_linked_generator_patch(db, before=before, patch={"state": state}, expected_version=before["updated_at"])
+    assert service._event(updated)["rounds"][0]["matches"][0]["scoreB"] == 7
+
+    before = deepcopy(raw_session(db))
+    restarted = advance_generator_event(service._event(before))
+    state = deepcopy(before["state"])
+    state["page_state"]["event"] = restarted
+    snapshot = deepcopy(db.storage)
+    with pytest.raises(ValueError, match="complete|closed|new hub"):
+        service.persist_linked_generator_patch(db, before=before, patch={"state": state, "status": "active"}, expected_version=before["updated_at"])
+    assert db.storage == snapshot
+
+
+@pytest.mark.parametrize("slot", ["current", "next"])
+def test_original_generator_cannot_skip_round_with_assigned_or_reserved_game(slot):
+    from jupr_app.domain.adaptive_play_engine import skip_generator_round
+    db = TransactionalHubDB()
+    session(db, count=4)
+    session(db, key="rr-b", count=4, offset=10)
+    hub = command(db, create(db), "add_group", {"session_key": "rr-a"})
+    hub = command(db, hub, "add_group", {"session_key": "rr-b"})
+    matches = {entry["session_key"]: entry for entry in hub["workspace"]["eligible_queue"]}
+    if slot == "next":
+        hub = command(db, hub, "assign_next_court", matches["rr-b"])
+        hub = command(db, hub, "reserve_game_for_court", {**matches["rr-a"], "court_id": "c1"})
+    else:
+        hub = command(db, hub, "assign_next_court", matches["rr-a"])
+    before = deepcopy(raw_session(db))
+    state = deepcopy(before["state"])
+    state["page_state"]["event"] = skip_generator_round(service._event(before), round_number=1)
+    snapshot = deepcopy(db.storage)
+    with pytest.raises(ValueError, match="[Rr]elease|[Aa]ssigned"):
+        service.persist_linked_generator_patch(db, before=before, patch={"state": state}, expected_version=before["updated_at"])
+    assert db.storage == snapshot
+    command(db, hub, "cancel_reservation" if slot == "next" else "release_game", {"court_id": "c1"})
+    before = deepcopy(raw_session(db))
+    state = deepcopy(before["state"])
+    state["page_state"]["event"] = skip_generator_round(service._event(before), round_number=1)
+    updated = service.persist_linked_generator_patch(db, before=before, patch={"state": state}, expected_version=before["updated_at"])
+    assert service._event(updated)["rounds"][0]["status"] == "skipped"
+
+
+def test_original_generator_cannot_reopen_skipped_round_after_advancing():
+    from jupr_app.domain.adaptive_play_engine import reopen_generator_round, skip_generator_round
+    db = TransactionalHubDB()
+    session(db, count=4)
+    hub = command(db, create(db), "add_group", {"session_key": "rr-a"})
+    before = deepcopy(raw_session(db))
+    state = deepcopy(before["state"])
+    state["page_state"]["event"] = skip_generator_round(service._event(before), round_number=1)
+    service.persist_linked_generator_patch(db, before=before, patch={"state": state}, expected_version=before["updated_at"])
+    hub = service.get_round_robin_hub(db, club_id="club-a", hub_id=hub["hub"]["id"])
+    command(db, hub, "advance_round", {"session_key": "rr-a"})
+    before = deepcopy(raw_session(db))
+    state = deepcopy(before["state"])
+    state["page_state"]["event"] = reopen_generator_round(service._event(before), round_number=1)
+    snapshot = deepcopy(db.storage)
+    with pytest.raises(ValueError, match="order|earlier|current round"):
+        service.persist_linked_generator_patch(db, before=before, patch={"state": state}, expected_version=before["updated_at"])
+    assert db.storage == snapshot
+
+
+def test_original_generator_cannot_skip_a_future_hub_round():
+    from jupr_app.domain.adaptive_play_engine import skip_generator_round
+    db = TransactionalHubDB()
+    session(db, count=4)
+    command(db, create(db), "add_group", {"session_key": "rr-a"})
+    before = deepcopy(raw_session(db))
+    state = deepcopy(before["state"])
+    state["page_state"]["event"] = skip_generator_round(service._event(before), round_number=2)
+    snapshot = deepcopy(db.storage)
+    with pytest.raises(ValueError, match="order"):
+        service.persist_linked_generator_patch(db, before=before, patch={"state": state}, expected_version=before["updated_at"])
+    assert db.storage == snapshot
