@@ -4,6 +4,7 @@ import GeneratorMoneyballExpectations, { type MoneyballExpectation, type Moneyba
 
 
 import GeneratorSharing from "@/components/GeneratorSharing";
+import { hubAutoAdvanceBoundary } from "@/lib/hubAutoAdvanceBoundary";
 
 import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
 import GeneratorRoundSchedule from "@/components/GeneratorRoundSchedule";
@@ -86,6 +87,8 @@ type GeneratorEvent = {
   adaptiveFromRound?: number | null;
   rosterRevisions?: Array<Record<string, unknown>>;
   hubAssignedMatchIds?: string[];
+  roundRobinHubId?: string;
+  hubAutoAdvancedFromRound?: number;
 };
 
 type GeneratorSession = {
@@ -527,7 +530,7 @@ export default function GeneratorRoundRunner({
   const editingScores = canEditSavedScores && editingSavedScores;
   const canReopenRound = canManage && !session?.round_robin_hub_id && !event?.playoff && generatorKind === "round_robin" && round?.status === "skipped";
   const hasOtherOpenRound = event?.rounds.some(row => row.status === "active" && row.number !== event.currentRoundNumber) ?? false;
-  const canFinishSession = canManage && (event?.eventFormat !== "moneyball_expectations" || event.rounds.every(row => row.status === "saved")) && !event?.playoff && generatorKind === "round_robin" && session?.status === "active" && isCurrent && !hasOtherOpenRound && (!session?.round_robin_hub_id || (["saved", "played", "skipped"].includes(round?.status || "") && !event?.hubAssignedMatchIds?.length));
+  const canFinishSession = canManage && (event?.eventFormat !== "moneyball_expectations" || event.rounds.every(row => row.status === "saved")) && !event?.playoff && generatorKind === "round_robin" && session?.status === "active" && isCurrent && !hasOtherOpenRound && (!session?.round_robin_hub_id || ((["saved", "played", "skipped"].includes(round?.status || "") || hubAutoAdvanceBoundary(event) !== null) && !event?.hubAssignedMatchIds?.length));
   const draftScoreCount = scoredSession ? matches.reduce((count, match) => count + (["a", "b"] as const)
     .filter(side => {
       const saved = side === "a" ? match.scoreA : match.scoreB;

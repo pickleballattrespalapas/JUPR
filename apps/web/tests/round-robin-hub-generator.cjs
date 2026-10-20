@@ -39,6 +39,8 @@ const button = (tree, label) => tree.root.findAllByType("button").find(node => t
 const clone = value => JSON.parse(JSON.stringify(value));
 const Runner = load('@/app/admin/play-generators/GeneratorRoundRunner').default;
 const Standings = load('@/app/admin/play-generators/GeneratorStandings').default;
+const PublicRunner = load('@/app/clubs/[clubSlug]/play-generators/PublicGeneratorRoundRunner').default;
+const PublicStandings = load('@/app/clubs/[clubSlug]/play-generators/PublicGeneratorStandings').default;
 const fixture = {
   session_key: 'rr', title: 'Hub group', status: 'active', version: 'v1', round_robin_hub_id: 'hub',
   generator_kind: 'round_robin', play_format: 'doubles', scoring_mode: 'scored', rating_mode: 'unrated',
@@ -69,8 +71,13 @@ function setup() {
           match.scoreA=result.score_a; match.scoreB=result.score_b;
         }
         state.event.rounds[0].status='saved'; state.version='v2';
+        state.event.currentRoundNumber=2; state.current_round_number=2; state.event.rounds[1].status='active';
+        state.event.hubAutoAdvancedFromRound=1;
       } else if(url.endsWith('/advance')) {
         state.event.currentRoundNumber=2; state.current_round_number=2; state.event.rounds[1].status='active';
+      } else if(url.endsWith('/complete')) {
+        state.status=state.event.status='completed';state.event.rounds[1].status='skipped';
+        delete state.event.hubAutoAdvancedFromRound;
       }
     }
     return {ok:true,status:200,json:async()=>({ok:true,session:clone(state)})};
@@ -104,7 +111,7 @@ function embeddedClick(href) {
   assert.equal(writes.length,1); assert.equal(changes,1);
   assert.equal(state.event.rounds[0].status,'saved');
   assert.ok(!text(tree.toJSON()).includes('standings pending.'));
-  assert.equal(state.current_round_number,1,'Saving complete scores does not start another group round implicitly');
+  assert.equal(state.current_round_number,2,'Manager follows the hub response that automatically queues the next round');
   await act(async()=>tree.unmount());
 
   setup(); state.event.rounds[0].status='saved';
@@ -115,6 +122,43 @@ function embeddedClick(href) {
   assert.deepEqual(routed,[{view:'round',roundNumber:2}]);
   assert.deepEqual(navigation,[],'Embedded advance keeps the hub open');
   assert.ok(changes>=1);
+  await act(async()=>tree.unmount());
+
+  global.sessionStorage={getItem:()=> 'organizer-token',setItem(){},removeItem(){}};
+  global.window={location:{hash:'',pathname:'/standings',search:''},history:{replaceState(){}}};
+  for (const Component of [Runner,PublicRunner,Standings,PublicStandings]) {
+    for (const started of [null,'assigned','reserved','partial','played']) {
+      setup();
+      const expectedVersion=Component===PublicRunner||Component===PublicStandings?1:'v1';
+      state.version=expectedVersion;
+      state.current_round_number=state.event.currentRoundNumber=2;
+      state.event.roundRobinHubId='hub';state.event.hubAutoAdvancedFromRound=1;
+      state.event.rounds[0].status='saved';
+      state.event.rounds[0].matches[1].scoreA=11;state.event.rounds[0].matches[1].scoreB=7;
+      state.event.rounds[1].status='active';
+      const match=state.event.rounds[1].matches[0];match.status='scheduled';
+      if(started==='assigned') state.event.hubAssignedMatchIds=[match.id];
+      if(started==='reserved') match.reservedCourtLabel='Main';
+      if(started==='partial') match.scoreA=0;
+      if(started==='played') match.status='played';
+      await act(async()=>{tree=create(h(Component,withCallbacks({roundNumber:2})));});
+      assert.equal(Boolean(button(tree,'Finish session')),!started,`${Component.name}: Finish only while automatic next round is untouched (${started})`);
+      assert.equal(button(tree,'Next scheduled round'),undefined,'Already queued next round needs no additional advance');
+      if(!started) {
+        await act(async()=>button(tree,'Finish session').props.onClick());
+        assert.equal(writes.length,1);
+        assert.ok(writes[0].url.endsWith('/complete'));
+        assert.equal(writes[0].body.expected_version,expectedVersion);
+      }
+      await act(async()=>tree.unmount());
+    }
+  }
+  setup();state.scoring_mode=state.event.scoringMode='unscored';
+  state.current_round_number=state.event.currentRoundNumber=2;
+  state.event.roundRobinHubId='hub';state.event.hubAutoAdvancedFromRound=1;
+  state.event.rounds[0].status='played';state.event.rounds[1].status='active';
+  await act(async()=>{tree=create(h(Runner,withCallbacks({roundNumber:2})));});
+  assert.ok(button(tree,'Finish session'),'Unscored sessions can finish at the untouched automatic boundary');
   await act(async()=>tree.unmount());
   const Arrivals = load('@/components/GeneratorLateArrivals').default;
   let arrivalRequest;

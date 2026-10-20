@@ -1,6 +1,7 @@
 "use client";
 
 import GeneratorSharing from "@/components/GeneratorSharing";
+import { hubAutoAdvanceBoundary, type HubAutoAdvanceEvent } from "@/lib/hubAutoAdvanceBoundary";
 
 import Link from "next/link";
 import { useEffect, useRef, useState, type MouseEvent } from "react";
@@ -37,7 +38,7 @@ type Session = {
   standings?: PlayGeneratorStanding[];
   playoff_options?: GeneratorPlayoffOptions | null;
   official_publish?: { published_at?: string | null; published_match_ids?: number[] };
-  event: GeneratorPlayoffEvent & {
+  event: GeneratorPlayoffEvent & HubAutoAdvanceEvent & {
     moneyballExpectations?: MoneyballExpectation[];
     moneyball?: MoneyballExpectationFormat;
     scoringMode?: ScoringMode;
@@ -205,7 +206,8 @@ export default function AdminGeneratorStandings({ apiBase, clubId, sessionKey, e
   const resultsLocked = Boolean(session.submission);
   const canManage = Boolean(accessToken) && scoringMode === "scored" && !resultsLocked;
   const canContinue = canManage && !(moneyball && session.status === "completed") && (session.status === "active" || (!session.event.playoff && session.status === "completed")) && ["saved", "skipped"].includes(currentStatus);
-  const canFinish = canContinue && (!moneyball || moneyballDone) && !session.event.playoff && session.status === "active" && visibleRounds.every((row) => ["saved", "skipped"].includes(row.status));
+  const untouchedHubBoundary = hubAutoAdvanceBoundary(session.event) !== null;
+  const canFinish = canManage && (!moneyball || moneyballDone) && !session.event.playoff && session.status === "active" && (untouchedHubBoundary || (canContinue && visibleRounds.every((row) => ["saved", "skipped"].includes(row.status))));
   const nextLabel = session.event.rounds?.find(row => row.number === currentRound + 1)?.label;
   const continueLabel = moneyball && moneyballDone ? "Finish Moneyball" : session.event.playoff
     ? currentRound >= totalRounds ? "Finish session" : `Continue to ${nextLabel || `Round ${currentRound + 1}`}`
@@ -252,12 +254,12 @@ export default function AdminGeneratorStandings({ apiBase, clubId, sessionKey, e
           </p>
         </article>
       ) : null}
-      {canContinue ? (
+      {canContinue || canFinish ? (
         <article style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>{session.status === "completed" ? "Keep playing" : continueLabel}</h2>
-          <p style={{ color: "#475569" }}>{session.event.playoff ? "Save each playoff game, then continue to the final or finish the session." : moneyball ? "Play the complete fixed rotation, then finish Moneyball to confirm the payout." : "Play as many rounds as you like. Finish the session when you’re ready to submit results."}</p>
+          <h2 style={{ marginTop: 0 }}>{session.status === "completed" ? "Keep playing" : untouchedHubBoundary ? "Finish session" : continueLabel}</h2>
+          <p style={{ color: "#475569" }}>{untouchedHubBoundary ? "The next round is queued. You can finish now before any of its matches are assigned." : session.event.playoff ? "Save each playoff game, then continue to the final or finish the session." : moneyball ? "Play the complete fixed rotation, then finish Moneyball to confirm the payout." : "Play as many rounds as you like. Finish the session when you’re ready to submit results."}</p>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
-            <button type="button" onClick={() => void updateSession("advance")} disabled={busy} style={primaryButton}>{busy ? "Working…" : continueLabel}</button>
+            {canContinue ? <button type="button" onClick={() => void updateSession("advance")} disabled={busy} style={primaryButton}>{busy ? "Working…" : continueLabel}</button> : null}
             {canFinish && !moneyball ? <button type="button" onClick={() => void updateSession("complete")} disabled={busy} style={{ ...linkButton, cursor: "pointer", background: "white" }}>Finish session</button> : null}
           </div>
         </article>

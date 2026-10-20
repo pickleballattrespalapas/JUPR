@@ -237,9 +237,70 @@ def test_partial_match_result_releases_court_and_counts_only_after_full_round():
     event = service._event(raw_session(db))
     assert event["rounds"][0]["status"] == "saved"
     assert all(row["matches"] == 1 for row in generator_event_standings(event))
-    assert not hub["workspace"]["eligible_queue"]
-    hub = command(db, hub, "advance_round", {"session_key": "rr-a"})
+    assert event["currentRoundNumber"] == 2
     assert {entry["round_number"] for entry in hub["workspace"]["eligible_queue"]} == {2}
+    with pytest.raises(ValueError, match="current round"):
+        command(db, hub, "advance_round", {"session_key": "rr-a"})
+
+
+def test_last_score_and_next_round_replay_atomically_after_lost_response(monkeypatch):
+    db = TransactionalHubDB()
+    session(db, count=4)
+    session(db, "rr-b", count=4, offset=20)
+    hub = command(db, create(db), "add_group", {"session_key": "rr-a"})
+    hub = command(db, hub, "add_group", {"session_key": "rr-b"})
+    matches = {match["session_key"]: match for match in hub["workspace"]["eligible_queue"]}
+    hub = command(db, hub, "assign_next_court", matches["rr-a"])
+    hub = command(db, hub, "reserve_game_for_court", {**matches["rr-b"], "court_id": "c1"})
+    request = dict(club_id="club-a", hub_id=hub["hub"]["id"], action="score_and_release",
+        payload={"court_id": "c1", "session_key": "rr-a", "match_id": matches["rr-a"]["match_id"], "score_a": 11, "score_b": 7},
+        expected_version=hub["hub"]["version"], idempotency_key="final-score-response-lost", actor_email="operator@example.test")
+    original_get = service.get_round_robin_hub
+
+    def lose_response(*args, **kwargs):
+        raise ConnectionError("response lost after commit")
+
+    monkeypatch.setattr(service, "get_round_robin_hub", lose_response)
+    calls_before = len(db.calls)
+    with pytest.raises(ConnectionError, match="after commit"):
+        service.command_round_robin_hub(db, **request)
+    assert len(db.calls) == calls_before + 1
+    persisted = deepcopy(db.storage)
+    assert service._event(raw_session(db))["currentRoundNumber"] == 2
+    assert service._event(raw_session(db))["rounds"][0]["status"] == "saved"
+    assert service._event(raw_session(db, "rr-b"))["currentRoundNumber"] == 1
+    assert db.storage[service.HUB_TABLE][0]["state"]["courts"][0]["current"]["session_key"] == "rr-b"
+    monkeypatch.setattr(service, "get_round_robin_hub", original_get)
+    replay = service.command_round_robin_hub(db, **request)
+    assert replay["replayed"] is True
+    assert len(db.calls) == calls_before + 1
+    assert db.storage == persisted
+    assert {match["round_number"] for match in replay["workspace"]["eligible_queue"]} == {2}
+
+
+@pytest.mark.parametrize("locked_round_saved", [False, True])
+def test_fill_catches_up_ready_groups_without_advancing_or_assigning_locked_results(locked_round_saved):
+    from jupr_app.domain.adaptive_play_engine import save_generator_round
+
+    db = TransactionalHubDB()
+    session(db, count=4)
+    session(db, "rr-b", count=4, offset=20)
+    hub = command(db, create(db), "add_group", {"session_key": "rr-a"})
+    hub = command(db, hub, "add_group", {"session_key": "rr-b"})
+    # Represent an existing hub left at a saved round before automatic progression.
+    for key in (["rr-a", "rr-b"] if locked_round_saved else ["rr-b"]):
+        row = raw_session(db, key)
+        event = service._event(row)
+        row["state"]["page_state"]["event"] = save_generator_round(event, round_number=1,
+            scores=[{"match_id": event["rounds"][0]["matches"][0]["id"], "score_a": 11, "score_b": 7}])
+    raw_session(db)["state"]["generator_submission"] = {"status": "pending"}
+    locked_before = deepcopy(raw_session(db))
+    result = command(db, hub, "auto_fill_courts", {"excluded_session_keys": []})
+    assert raw_session(db) == locked_before
+    assert result["workspace"]["courts"][0]["current"]["session_key"] == "rr-b"
+    assert result["workspace"]["courts"][0]["current"]["round_number"] == 2
+    assert service._event(raw_session(db, "rr-b"))["currentRoundNumber"] == 2
+    assert next(item for item in db.calls[-1]["p_sessions"] if item["session_key"] == "rr-a")["patch"] == {}
 
 
 def test_all_group_versions_are_checked_before_assigning_a_court():
@@ -331,22 +392,34 @@ def test_original_generator_patch_is_atomic_with_court_release_and_public_cas_fi
     assert updated["expires_at"] == patch["expires_at"]
     detail = service.get_round_robin_hub(db, club_id="club-a", hub_id=hub["hub"]["id"])
     assert detail["workspace"]["courts"][0]["current"] is None
-    assert detail["workspace"]["groups"][0]["completed_matches"] == 1
+    assert service._event(updated)["rounds"][0]["status"] == "saved"
+    assert service._event(updated)["currentRoundNumber"] == 2
+    assert detail["workspace"]["groups"][0]["completed_matches"] == 0
+    assert detail["workspace"]["groups"][0]["current_round_number"] == 2
     replay = service.persist_linked_generator_patch(db, before=before, patch=patch, expected_version=before["updated_at"])
     assert replay["updated_at"] == updated["updated_at"]
+    assert service._event(replay)["currentRoundNumber"] == 2
 
 
 def test_no_partial_court_or_score_write_when_transaction_fails():
     db = TransactionalHubDB()
-    session(db)
+    session(db, count=4)
     hub = command(db, create(db), "add_group", {"session_key": "rr-a"})
     match = hub["workspace"]["eligible_queue"][0]
     hub = command(db, hub, "assign_next_court", {"session_key": "rr-a", "match_id": match["match_id"]})
+    before_hubs = deepcopy(db.storage[service.HUB_TABLE])
+    before_receipts = deepcopy(db.storage[service.OPERATION_TABLE])
     db.before_commit = lambda db: raw_session(db).update(version=raw_session(db)["version"] + 1)
     with pytest.raises(PublicLiveConflictError):
         command(db, hub, "score_and_release", {"court_id": "c1", "session_key": "rr-a", "match_id": match["match_id"], "score_a": 11, "score_b": 5})
     stored = service._event(raw_session(db))["rounds"][0]["matches"]
     assert all(match.get("scoreA") is None for match in stored)
+    assert service._event(raw_session(db))["currentRoundNumber"] == 1
+    assert db.storage[service.HUB_TABLE] == before_hubs
+    assert db.storage[service.OPERATION_TABLE] == before_receipts
+    attempted = db.calls[-1]["p_sessions"][0]["patch"]["state"]["page_state"]["event"]
+    assert attempted["currentRoundNumber"] == 2
+    assert attempted["rounds"][0]["status"] == "saved"
     detail = service.get_round_robin_hub(db, club_id="club-a", hub_id=hub["hub"]["id"])
     assert detail["workspace"]["courts"][0]["current"]["match_id"] == match["match_id"]
 

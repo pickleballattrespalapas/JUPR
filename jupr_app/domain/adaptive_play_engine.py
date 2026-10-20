@@ -1393,6 +1393,44 @@ def _round_has_any_scores(round_row: dict[str, Any]) -> bool:
         for match in _round_matches(round_row)
     )
 
+
+def hub_auto_advance_boundary(event: dict[str, Any]) -> int | None:
+    """Return the last finished round only while its automatic successor is unused.
+
+    A hub may prepare the next round before the organizer decides to finish or
+    seed playoffs. The marker alone is insufficient: court claims and any
+    recorded play must still prevent replacing that next round.
+    """
+    if (not event.get("roundRobinHubId") or event.get("generatorKind") != "round_robin"
+            or event.get("status") != "active" or event.get("playoff") or is_moneyball(event)
+            or event.get("hubAssignedMatchIds")):
+        return None
+    boundary = event.get("hubAutoAdvancedFromRound")
+    current = int(event.get("currentRoundNumber") or 1)
+    if type(boundary) is not int or boundary < 1 or current != boundary + 1:
+        return None
+    rounds = event.get("rounds") or []
+    source = next((r for r in rounds if int(r.get("number") or 0) == boundary), None)
+    active = next((r for r in rounds if int(r.get("number") or 0) == current), None)
+    if not source or not active or active.get("status") != "active":
+        return None
+    for row in rounds:
+        number = int(row.get("number") or 0)
+        if number <= boundary:
+            if row.get("status") not in {"saved", "played", "skipped"}:
+                return None
+            continue
+        if row.get("status") != ("active" if number == current else "preview"):
+            return None
+        if row.get("stage") == "playoff" or _round_has_any_scores(row):
+            return None
+        if any(match.get("status") not in {None, "scheduled"}
+               or match.get("hubCompletedAt") or match.get("courtLabel") or match.get("reservedCourtLabel")
+               for match in _round_matches(row)):
+            return None
+    return boundary
+
+
 def save_generator_round(
     event: dict[str, Any],
     *,
@@ -1519,7 +1557,9 @@ def reopen_generator_round(event: dict[str, Any], *, round_number: int) -> dict[
 def complete_generator_event(event: dict[str, Any]) -> dict[str, Any]:
     """Finish explicitly, leaving any unplayed future schedule recoverable."""
     next_event = copy.deepcopy(event)
-    if event.get("roundRobinHubId") and _get_round(event, int(event.get("currentRoundNumber") or 1)).get("status") not in {"saved", "played", "skipped"}:
+    if (event.get("roundRobinHubId")
+            and _get_round(event, int(event.get("currentRoundNumber") or 1)).get("status") not in {"saved", "played", "skipped"}
+            and hub_auto_advance_boundary(event) is None):
         raise ValueError("Resolve the current round in the hub before finishing this round robin.")
     if is_moneyball(next_event) and not all_games_saved(next_event):
         raise ValueError("Save all scheduled Moneyball games before finishing and awarding the pool.")
@@ -1549,6 +1589,7 @@ def complete_generator_event(event: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("Save scores, mark played, or skip the current round before completing the session.")
     next_event["status"] = "completed"
     next_event["completedAt"] = next_event.get("completedAt") or _now_iso()
+    next_event.pop("hubAutoAdvancedFromRound", None)
     return next_event
 
 

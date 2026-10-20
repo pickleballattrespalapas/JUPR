@@ -116,7 +116,7 @@ global.fetch = async (url, options = {}) => {
   await act(async () => button(tree, "Round robins").props.onClick());
   assert.ok(text(tree.toJSON()).includes("1 of 2 matches complete"));
   assert.ok(text(tree.toJSON()).includes("Standings update when this round is complete."));
-  assert.equal(buttons(tree, "Next round")[0].props.disabled, true, "Partially completed round cannot advance");
+  assert.equal(button(tree, "Next round"), undefined, "Active rounds advance automatically only when all matches finish");
   assert.ok(tree.root.findAllByType("a").some(link => link.props.href.startsWith("/admin/round-robin-generator?hub=event-1&draft=")));
   await act(async () => buttons(tree, "Manage round robin")[0].props.onClick());
   assert.equal(tree.root.findByProps({ "data-runner": "a" }).props["data-runner"], "a");

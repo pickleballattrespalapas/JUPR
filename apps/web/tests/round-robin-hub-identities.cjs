@@ -135,7 +135,7 @@ global.fetch = async (url, options = {}) => {
   assert.equal(stored.size, 0);
   await click("Players");
   assert.equal(button(tree, "These are all different people"), undefined, "Saved decisions do not require repeat review");
-  await click("Review player identities");
+  await click("Review player identities"); await click("Saved decisions (1)");
   assert.ok(text(reviewCard()).includes("Different people"), "Saved decisions remain accessible for correction");
   const playerA = tree.root.findByProps({ "data-player-identity": guestA.identity });
   const playerB = tree.root.findByProps({ "data-player-identity": guestB.identity });
@@ -169,14 +169,14 @@ global.fetch = async (url, options = {}) => {
   setup([review([participant("a", 101), participant("b", 101)], { status: "same" })]);
   // Real snapshots collapse same-profile rows; keep one here to avoid duplicate React keys.
   detail.workspace.players = detail.workspace.players.slice(0, 1);
-  await mount(); await click("Players"); await click("Review player identities");
+  await mount(); await click("Players"); await click("Review player identities"); await click("Saved decisions (1)");
   assert.equal(choice("Different people").props.disabled, true, "A shared authoritative profile cannot be split");
   assert.ok(text(tree.toJSON()).includes("cannot be split here"));
   await act(async () => tree.unmount());
 
   setup([review([participant("a", 101), participant("b", 101), participant("c")], { status: "same" })]);
   detail.workspace.players = detail.workspace.players.filter((player, index) => index !== 1);
-  await mount(); await click("Players"); await click("Review player identities");
+  await mount(); await click("Players"); await click("Review player identities"); await click("Saved decisions (1)");
   assert.equal(choice("Different people").props.disabled, false, "Select the complete merged component to separate a guest from repeated authoritative profiles");
   assert.ok(text(tree.toJSON()).includes("same club profile stay together"));
   await act(async () => choice("Different people").props.onClick());

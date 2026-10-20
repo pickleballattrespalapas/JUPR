@@ -466,6 +466,19 @@ def _sync_assignment_projection(hub: dict[str, Any], events: dict[str, dict[str,
                 event, _, match = _find_match(hub, events, assignment)
                 event["hubAssignedMatchIds"].append(str(match["id"]))
                 match["courtLabel" if slot == "current" else "reservedCourtLabel"] = court["label"]
+                # A dispatched round is no longer an untouched automatic continuation.
+                event.pop("hubAutoAdvancedFromRound", None)
+
+
+def _auto_advance_hub_round(event: dict[str, Any]) -> dict[str, Any]:
+    """Use the generator's existing rolling, Moneyball and playoff progression."""
+    current = int(event.get("currentRoundNumber") or 1)
+    advanced = advance_generator_event(event)
+    advanced.pop("hubAutoAdvancedFromRound", None)
+    if advanced.get("status") == "active" and int(advanced.get("currentRoundNumber") or 1) == current + 1:
+        # Retain an explicit Finish/playoff boundary until the new round is dispatched.
+        advanced["hubAutoAdvancedFromRound"] = current
+    return advanced
 
 
 def _promote(hub: dict[str, Any], events: dict[str, dict[str, Any]], now: str) -> None:
@@ -518,9 +531,15 @@ def save_hub_match(event: dict[str, Any], *, match_id: str, score_a: Any = None,
 def validate_hub_session_change(hub: dict[str, Any], before_events: dict[str, dict[str, Any]],
                                 session_key: str, event: dict[str, Any]) -> None:
     """Guard existing generator controls before their joint hub/session commit."""
+    from jupr_app.domain.adaptive_play_engine import hub_auto_advance_boundary
+
     before = before_events[session_key]
     prior_round = int(before.get("currentRoundNumber") or 1)
     next_round = int(event.get("currentRoundNumber") or 1)
+    if event.get("playoff") and not before.get("playoff") and next_round == prior_round:
+        boundary = hub_auto_advance_boundary(before)
+        if boundary is None or (event.get("playoff") or {}).get("sourceRound") != boundary:
+            raise ValueError("Finish the current round before starting a playoff.")
     if next_round != prior_round:
         if _round(event, prior_round).get("status") not in {"saved", "played", "skipped"} or next_round != prior_round + 1:
             raise ValueError("Finish the current round before moving to the next round.")
@@ -575,6 +594,18 @@ def reconcile_hub_events(hub: dict[str, Any], before_events: dict[str, dict[str,
                 event, _, match = _find_match(state, updated, assignment)
                 if _complete(match, event):
                     court[slot] = None
+    for key in _group_keys(state):
+        prior = before_events[key]
+        number = int(prior.get("currentRoundNumber") or 1)
+        event = updated[key]
+        if (_round(prior, number).get("status") not in {"saved", "played"}
+                and _round(event, number).get("status") in {"saved", "played"}
+                and event.get("status") == "active"):
+            if int(event.get("currentRoundNumber") or 1) == number:
+                updated[key] = _auto_advance_hub_round(event)
+            elif int(event.get("currentRoundNumber") or 1) == number + 1:
+                # Original unscored manager controls already advance once.
+                event["hubAutoAdvancedFromRound"] = number
     _ensure_players(state, updated, now)
     _promote(state, updated, now)
     _sync_assignment_projection(state, updated)
@@ -752,8 +783,14 @@ def apply_hub_command(hub: dict[str, Any], events: dict[str, dict[str, Any]], *,
             player["wait_since"] = (_time(player.get("wait_since") or now) + timedelta(seconds=elapsed)).isoformat()
             player.update(paused=False, pause_started_at=None)
     elif action == "auto_fill_courts":
+        excluded = set(payload.get("excluded_session_keys") or [])
+        # Explicit Fill also resumes legacy groups left at a completed round.
+        for key in _group_keys(state) - excluded:
+            event = updated[key]
+            if event.get("status") == "active" and _round(event).get("status") in {"saved", "played", "skipped"}:
+                updated[key] = _auto_advance_hub_round(event)
         while True:
-            ready = build_hub_snapshot(state, updated, now=now)["eligible_queue"]
+            ready = [entry for entry in build_hub_snapshot(state, updated, now=now)["eligible_queue"] if entry["session_key"] not in excluded]
             chosen = None
             for candidate in ready:
                 court = next((c for c in state["courts"] if c["id"] in candidate["allowed_court_ids"] and not c.get("current") and not c.get("next")), None)
@@ -808,6 +845,8 @@ def apply_hub_command(hub: dict[str, Any], events: dict[str, dict[str, Any]], *,
         updated[session_key] = save_hub_match(event, match_id=str(payload.get("match_id") or ""),
             score_a=payload.get("score_a"), score_b=payload.get("score_b"), played=action == "mark_played", now=now)
         court["current"] = None
+        if _round(updated[session_key]).get("status") in {"saved", "played"}:
+            updated[session_key] = _auto_advance_hub_round(updated[session_key])
         _promote(state, updated, now)
     elif action == "advance_round":
         event = _event(state, updated, session_key)
