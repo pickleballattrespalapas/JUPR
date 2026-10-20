@@ -52,7 +52,7 @@ let detail = {
   }
 };
 const requests = [], requestUrls = [], receipts = new Map();
-let failNext = false, conflictNext = false, loseAddResponse = false, listReads = 0;
+let failNext = false, conflictNext = false, loseAddResponse = false, loseFinishResponse = false, listReads = 0;
 let deferDetailAfter = -1, releaseDetail;
 let availableSessions = [{ session_key: "new", title: "New RR", status: "active", rating_mode: "unrated" }];
 global.fetch = async (url, options = {}) => {
@@ -89,6 +89,13 @@ global.fetch = async (url, options = {}) => {
     assert.deepEqual(body.payload, { identity: "player:b1" });
     detail.workspace.players[0].paused = true;
   } else if (body.action === "resume_player") detail.workspace.players[0].paused = false;
+  else if (body.action === "finish_group") {
+    const group = detail.workspace.groups.find(group => group.session_key === body.payload.session_key);
+    assert.ok(group && group.can_finish);
+    group.finish_requested = true; group.finish_after_round = group.finish_boundary_round; group.can_finish = false;
+    if (!group.finish_pending_matches) group.status = "completed";
+    if (detail.workspace.groups.every(group => group.status === "completed")) detail.hub.status = "completed";
+  }
   else if (body.action === "add_group") {
     const key = body.payload.session_key;
     assert.ok(!detail.workspace.groups.some(group => group.session_key === key), "Do not add a group twice");
@@ -99,6 +106,7 @@ global.fetch = async (url, options = {}) => {
   detail.hub.version += 1;
   receipts.set(body.idempotency_key, clone(body));
   if (body.action === "add_group" && loseAddResponse) { loseAddResponse = false; throw new Error("Response lost after attachment"); }
+  if (body.action === "finish_group" && loseFinishResponse) { loseFinishResponse = false; throw new Error("Response lost after finish request"); }
   return { ok: true, json: async () => clone(detail) };
 };
 
@@ -123,7 +131,7 @@ global.fetch = async (url, options = {}) => {
   await act(async () => button(tree, "Round robins").props.onClick());
   assert.ok(text(tree.toJSON()).includes("1 of 2 matches complete"));
   assert.ok(text(tree.toJSON()).includes("Standings update when this round is complete."));
-  assert.equal(button(tree, "Next round"), undefined, "Active rounds advance automatically only when all matches finish");
+  assert.equal(button(tree, "Next round"), undefined, "The hub manages the rolling queue without a manual next-round gate");
   assert.ok(tree.root.findAllByType("a").some(link => link.props.href.startsWith("/admin/round-robin-generator?hub=event-1&draft=")));
   await act(async () => buttons(tree, "Manage round robin")[0].props.onClick());
   assert.equal(tree.root.findByProps({ "data-runner": "a" }).props["data-runner"], "a");
@@ -169,6 +177,55 @@ global.fetch = async (url, options = {}) => {
   const props = (hub, session = "") => ({ apiBase: "http://test.local", clubId: "club", initialHubId: hub, initialAddSessionKey: session });
   const standingsGroup = (key, status = "active", scoring_mode = "scored") => ({ session_key: key, title: `${key} round robin`, status, scoring_mode,
     current_round_number: 1, round_status: "active", completed_matches: 0, total_matches: 2, can_advance: false, event_format: "standard" });
+  emptyHub("finish-event");
+  detail.workspace.groups = [
+    { ...standingsGroup("already-finished", "completed"), can_finish: false },
+    { ...standingsGroup("draining"), can_finish: true, finish_requested: false, finish_boundary_round: 2, finish_pending_matches: 3 },
+    { ...standingsGroup("last"), can_finish: true, finish_requested: false, finish_boundary_round: 1, finish_pending_matches: 0 },
+    { ...standingsGroup("locked"), can_finish: false, finish_unavailable_reason: "Results are already submitted." }
+  ];
+  await act(async () => { tree = create(h(Panel, props("finish-event"))); });
+  await act(async () => button(tree, "Finish").props.onClick());
+  const finishDialog = () => tree.root.findByProps({ "data-dialog": "Finish round robin" });
+  const finishSelect = () => finishDialog().findByProps({ "aria-label": "Round robin to finish" });
+  const finishSubmit = () => finishDialog().findAllByType("button").find(node => text(node) === "Finish round robin");
+  assert.equal(finishSelect().props.value, "", "Choose the RR explicitly before requesting its finish");
+  assert.equal(finishSubmit().props.disabled, true);
+  assert.deepEqual(finishSelect().findAllByType("option").map(option => option.props.value), ["", "draining", "last", "locked"], "Finished RRs are excluded from finish choices");
+  assert.equal(finishSelect().findAllByType("option").find(option => option.props.value === "locked").props.disabled, true);
+  assert.ok(text(finishDialog()).includes("Results are already submitted."));
+  await act(async () => finishSelect().props.onChange({ target: { value: "draining" } }));
+  assert.ok(text(finishDialog()).includes("Finish after round 2."));
+  assert.ok(text(finishDialog()).includes("3 matches still need to finish"));
+  assert.ok(text(finishDialog()).includes("No scores are discarded."));
+  loseFinishResponse = true;
+  await act(async () => tree.root.findByProps({ id: "hub-finish-group-form" }).props.onSubmit({ preventDefault() {} }));
+  const finishRequest = clone(requests.at(-1));
+  assert.deepEqual(finishRequest.payload, { session_key: "draining" });
+  assert.equal(finishSelect().props.disabled, true, "An uncertain finish cannot be redirected to another RR");
+  assert.equal(finishSelect().props.value, "draining");
+  assert.equal(finishSubmit().props.disabled, true);
+  assert.equal(button(tree, "Keep playing").props.disabled, true);
+  await act(async () => button(tree, "Retry saved action").props.onClick());
+  assert.deepEqual(requests.at(-1), finishRequest, "Finish retry retains exact target, version and operation key");
+  assert.equal(tree.root.findAllByProps({ "data-dialog": "Finish round robin" }).length, 0);
+  assert.equal(button(tree, "Court board").props["aria-selected"], true, "Finishing keeps the operator on the board");
+  assert.ok(text(tree.root.findByProps({ "aria-label": "Finishing round robins" })).includes("draining round robin · Finishing after round 2 · 3 matches left"));
+  detail.workspace.groups.find(group => group.session_key === "draining").status = "completed";
+  detail.workspace.groups.find(group => group.session_key === "locked").status = "completed";
+  detail.hub.version += 1;
+  await act(async () => button(tree, "Refresh").props.onClick());
+  await act(async () => button(tree, "Finish").props.onClick());
+  await act(async () => finishSelect().props.onChange({ target: { value: "last" } }));
+  assert.ok(text(finishDialog()).includes("This round robin will finish now."));
+  await act(async () => tree.root.findByProps({ id: "hub-finish-group-form" }).props.onSubmit({ preventDefault() {} }));
+  assert.ok(text(tree.toJSON()).includes("All round robins are finished. Event closed."));
+  assert.equal(button(tree, "Finish").props.disabled, true);
+  await act(async () => tree.root.findByProps({ id: "hub-tab-standings" }).props.onClick());
+  assert.equal(tree.root.findByProps({ "aria-label": "Standings round robin" }).findAllByType("option").length, 4, "Finished RR results remain available after the last finish closes the event");
+  assert.equal(tree.root.findByType(Standings).parent.props.inert, false, "Completed events still allow viewing and sharing standings");
+  await act(async () => tree.unmount());
+
   emptyHub("standings-event");
   const completed = standingsGroup("finished", "completed"), unscored = standingsGroup("casual", "active", "unscored"), active = standingsGroup("live");
   detail.workspace.groups = [completed, unscored, active];

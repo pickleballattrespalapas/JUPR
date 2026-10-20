@@ -151,7 +151,7 @@ def guest_identity_hub(db):
 def test_identity_resolution_is_durable_and_exact_retry_does_not_repeat_it():
     db = TransactionalHubDB()
     hub = guest_identity_hub(db)
-    assert len(hub["workspace"]["blocked_queue"]) == 2
+    assert len([match for match in hub["workspace"]["blocked_queue"] if match["round_number"] == 1]) == 2
     before_sessions = deepcopy(db.storage["live_sessions"])
     request = dict(club_id="club-a", hub_id=hub["hub"]["id"], action="resolve_identities",
         payload={"resolution": "all_different"}, expected_version=hub["hub"]["version"],
@@ -464,7 +464,8 @@ def test_closed_hub_allows_score_correction_but_cannot_restart_round_robin():
     state["page_state"]["event"] = completed
     service.persist_linked_generator_patch(db, before=before, patch={"state": state, "status": "completed"}, expected_version=before["updated_at"])
     hub = service.get_round_robin_hub(db, club_id="club-a", hub_id=hub["hub"]["id"])
-    command(db, hub, "finish_hub")
+    assert hub["hub"]["status"] == "completed", "The last generator completion closes its hub atomically"
+    assert db.calls[-1]["p_status"] == "completed"
 
     before = deepcopy(raw_session(db))
     corrected = save_generator_round(service._event(before), round_number=1,
@@ -475,7 +476,10 @@ def test_closed_hub_allows_score_correction_but_cannot_restart_round_robin():
     assert service._event(updated)["rounds"][0]["matches"][0]["scoreB"] == 7
 
     before = deepcopy(raw_session(db))
-    restarted = advance_generator_event(service._event(before))
+    with pytest.raises(ValueError, match="active|complete"):
+        advance_generator_event(service._event(before))
+    restarted = service._event(before)
+    restarted.update(status="active", completedAt=None)
     state = deepcopy(before["state"])
     state["page_state"]["event"] = restarted
     snapshot = deepcopy(db.storage)
@@ -523,10 +527,12 @@ def test_original_generator_cannot_reopen_skipped_round_after_advancing():
     state["page_state"]["event"] = skip_generator_round(service._event(before), round_number=1)
     service.persist_linked_generator_patch(db, before=before, patch={"state": state}, expected_version=before["updated_at"])
     hub = service.get_round_robin_hub(db, club_id="club-a", hub_id=hub["hub"]["id"])
-    command(db, hub, "advance_round", {"session_key": "rr-a"})
+    assert hub["workspace"]["groups"][0]["current_round_number"] == 2
     before = deepcopy(raw_session(db))
     state = deepcopy(before["state"])
-    state["page_state"]["event"] = reopen_generator_round(service._event(before), round_number=1)
+    with pytest.raises(ValueError, match="earlier"):
+        reopen_generator_round(service._event(before), round_number=1)
+    state["page_state"]["event"]["rounds"][0]["status"] = "active"
     snapshot = deepcopy(db.storage)
     with pytest.raises(ValueError, match="order|earlier|current round"):
         service.persist_linked_generator_patch(db, before=before, patch={"state": state}, expected_version=before["updated_at"])
@@ -540,7 +546,9 @@ def test_original_generator_cannot_skip_a_future_hub_round():
     command(db, create(db), "add_group", {"session_key": "rr-a"})
     before = deepcopy(raw_session(db))
     state = deepcopy(before["state"])
-    state["page_state"]["event"] = skip_generator_round(service._event(before), round_number=2)
+    with pytest.raises(ValueError, match="current"):
+        skip_generator_round(service._event(before), round_number=2)
+    state["page_state"]["event"]["rounds"][1]["status"] = "skipped"
     snapshot = deepcopy(db.storage)
     with pytest.raises(ValueError, match="order"):
         service.persist_linked_generator_patch(db, before=before, patch={"state": state}, expected_version=before["updated_at"])
@@ -696,3 +704,113 @@ def test_remove_player_restrictions_match_group_availability_and_do_not_write(re
     with pytest.raises(ValueError):
         command(db, hub, "remove_player", {"session_key": "rr-a", "participant_id": event["participants"][0]["id"]})
     assert db.storage == snapshot
+
+
+def test_finish_selected_group_keeps_other_group_running_and_last_finish_closes_atomically():
+    db = TransactionalHubDB()
+    session(db, count=4)
+    session(db, key="rr-b", count=4, offset=20)
+    hub = command(db, create(db), "add_group", {"session_key": "rr-a"})
+    hub = command(db, hub, "add_group", {"session_key": "rr-b"})
+    other = deepcopy(raw_session(db, "rr-b"))
+    first = command(db, hub, "finish_group", {"session_key": "rr-a"})
+    assert first["hub"]["status"] == "active"
+    assert raw_session(db)["status"] == "completed"
+    assert raw_session(db, "rr-b") == other
+    assert {m["session_key"] for m in first["workspace"]["eligible_queue"]} == {"rr-b"}
+    assert len(first["workspace"]["groups"]) == 2
+    final = command(db, first, "finish_group", {"session_key": "rr-b"}, key="finish-final-once")
+    assert final["hub"]["status"] == "completed"
+    assert all(row["status"] == "completed" for row in db.storage["live_sessions"])
+    assert db.calls[-1]["p_status"] == "completed"
+    assert {entry["session_key"] for entry in db.calls[-1]["p_sessions"]} == {"rr-a", "rr-b"}
+    assert all(not court["current"] and not court["next"] for court in final["workspace"]["courts"])
+    before = deepcopy(db.storage)
+    calls = len(db.calls)
+    replay = command(db, first, "finish_group", {"session_key": "rr-b"}, key="finish-final-once")
+    assert replay["replayed"] is True
+    assert replay["hub"] == final["hub"]
+    assert db.storage == before and len(db.calls) == calls
+
+
+def test_finish_request_preserves_partial_scores_and_drains_before_last_hub_closes():
+    db = TransactionalHubDB()
+    session(db, count=8)
+    hub = command(db, create(db), "add_group", {"session_key": "rr-a"})
+    first, second = [m for m in hub["workspace"]["eligible_queue"] if m["round_number"] == 1]
+    hub = command(db, hub, "assign_next_court", first)
+    hub = command(db, hub, "score_and_release", {**first, "court_id": "c1", "score_a": 11, "score_b": 5})
+    hub = command(db, hub, "finish_group", {"session_key": "rr-a"})
+    group = hub["workspace"]["groups"][0]
+    assert group["finish_requested"] and group["finish_after_round"] == 1
+    assert hub["hub"]["status"] == raw_session(db)["status"] == "active"
+    assert all(row["matches"] == 0 for row in generator_event_standings(service._event(raw_session(db))))
+    assert {m["round_number"] for m in hub["workspace"]["eligible_queue"]} == {1}
+    hub = command(db, hub, "assign_next_court", second)
+    hub = command(db, hub, "score_and_release", {**second, "court_id": "c1", "score_a": 11, "score_b": 7})
+    assert hub["hub"]["status"] == raw_session(db)["status"] == "completed"
+    assert not hub["workspace"]["eligible_queue"]
+    event = service._event(raw_session(db))
+    assert event["rounds"][0]["status"] == "saved"
+    assert all(row["matches"] == 1 for row in generator_event_standings(event))
+    assert {m["id"]: m["scoreB"] for m in event["rounds"][0]["matches"]} == {first["match_id"]: 5, second["match_id"]: 7}
+    assert db.calls[-1]["p_status"] == "completed"
+
+
+def test_finishing_last_group_rejects_concurrent_session_change_without_partial_close():
+    db = TransactionalHubDB()
+    session(db, count=4)
+    hub = command(db, create(db), "add_group", {"session_key": "rr-a"})
+    before_hub = deepcopy(db.storage[service.HUB_TABLE])
+    before_operations = deepcopy(db.storage[service.OPERATION_TABLE])
+
+    def change_session(current):
+        raw_session(current)["updated_at"] = "2026-10-20T23:00:00+00:00"
+        raw_session(current)["version"] += 1
+
+    db.before_commit = change_session
+    with pytest.raises(PublicLiveConflictError):
+        command(db, hub, "finish_group", {"session_key": "rr-a"})
+    assert db.storage[service.HUB_TABLE] == before_hub
+    assert db.storage[service.OPERATION_TABLE] == before_operations
+    assert raw_session(db)["status"] == "active"
+
+
+def test_finish_group_respects_submission_lock_and_route_allows_command():
+    from services.api.admin_round_robin_hub_routes import HubCommandRequest
+    request = HubCommandRequest(action="finish_group", payload={"session_key": "rr-a"},
+        expected_version=2, idempotency_key="finish-locked-group")
+    assert request.action == "finish_group"
+    db = TransactionalHubDB()
+    session(db, count=4)
+    hub = command(db, create(db), "add_group", {"session_key": "rr-a"})
+    raw_session(db)["state"]["generator_submission"] = {"status": "pending"}
+    before = deepcopy(db.storage)
+    with pytest.raises(ValueError, match="locked"):
+        command(db, hub, "finish_group", {"session_key": "rr-a"})
+    detail = service.get_round_robin_hub(db, club_id="club-a", hub_id=hub["hub"]["id"])
+    assert detail["workspace"]["groups"][0]["can_finish"] is False
+    assert db.storage == before
+
+
+def test_rolling_commands_and_linked_sharing_do_not_replan_submitted_siblings():
+    db = TransactionalHubDB()
+    session(db, count=4)
+    session(db, key="rr-b", count=5, offset=20)
+    hub = command(db, create(db), "add_group", {"session_key": "rr-a"})
+    hub = command(db, hub, "add_group", {"session_key": "rr-b"})
+    locked = raw_session(db, "rr-b")
+    locked["state"]["generator_submission"] = {"status": "pending"}
+    locked_event = locked["state"]["page_state"]["event"]
+    locked_event["rounds"] = locked_event["rounds"][:1]
+    locked_event.pop("hubRollingEnabled", None)
+    before_locked = deepcopy(locked)
+    identity = hub["workspace"]["groups"][0]["players"][0]["identity"]
+    hub = command(db, hub, "pause_player", {"identity": identity})
+    assert raw_session(db, "rr-b") == before_locked
+    before = deepcopy(raw_session(db))
+    shared_state = deepcopy(before["state"])
+    shared_state["generator_sharing"] = {"enabled": True}
+    service.persist_linked_generator_patch(db, before=before, patch={"state": shared_state}, expected_version=before["updated_at"])
+    assert raw_session(db, "rr-b") == before_locked
+    assert raw_session(db)["state"]["generator_sharing"]["enabled"] is True

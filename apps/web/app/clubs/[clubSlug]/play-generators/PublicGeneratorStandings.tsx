@@ -238,7 +238,7 @@ export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey, 
   const visibleRounds = (session.event.rounds || []).filter((row) => row.number <= currentRound);
   const resultsLocked = Boolean(session.submission) || Boolean(session.results_locked);
   const canManage = Boolean(editToken) && scoringMode === "scored" && !resultsLocked;
-  const canContinue = canManage && !(moneyball && session.status === "completed") && (session.status === "active" || (!session.event.playoff && session.status === "completed")) && ["saved", "skipped"].includes(currentStatus);
+  const canContinue = canManage && !((moneyball || session.round_robin_hub_id) && session.status === "completed") && (session.status === "active" || (!session.event.playoff && session.status === "completed")) && ["saved", "skipped"].includes(currentStatus);
   const untouchedHubBoundary = hubAutoAdvanceBoundary(session.event) !== null;
   const canFinish = canManage && (!moneyball || moneyballDone) && !session.event.playoff && session.status === "active" && (untouchedHubBoundary || (canContinue && visibleRounds.every((row) => ["saved", "skipped"].includes(row.status))));
   const nextLabel = session.event.rounds?.find(row => row.number === currentRound + 1)?.label;

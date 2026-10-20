@@ -89,7 +89,7 @@ def test_playoffs_use_completed_boundary_and_current_roster_without_mutating_opt
 
 
 @pytest.mark.parametrize("change", ["assigned", "reserved", "court_label", "score_a", "score_b", "played",
-                                    "completed_at", "stale_marker", "earlier_open", "future_score", "future_played"])
+                                    "completed_at", "started_round", "stale_marker", "earlier_open", "future_score", "future_played"])
 def test_stale_marker_never_discards_started_or_unresolved_play(change):
     event = waiting_event()
     current = event["rounds"][1]["matches"][0]
@@ -107,6 +107,10 @@ def test_stale_marker_never_discards_started_or_unresolved_play(change):
         current["status"] = "played"
     elif change == "completed_at":
         current["hubCompletedAt"] = "2026-10-20T03:30:00Z"
+    elif change == "started_round":
+        # A released match may be replaced during a roster edit. Its round's
+        # durable dispatch history still makes this an unsafe finish boundary.
+        event["rounds"][1]["hubStartedAt"] = "2026-10-20T03:20:00Z"
     elif change == "stale_marker":
         event["hubAutoAdvancedFromRound"] = 2
     elif change == "earlier_open":

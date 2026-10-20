@@ -116,6 +116,10 @@ def get_round_robin_hub(db: Any, *, club_id: str, hub_id: str) -> dict[str, Any]
         if group["results_locked"] or row.get("status") != "active" or session.get("status") != "active":
             group["can_add_player"] = False
             group["can_remove_player"] = False
+            group["can_finish"] = False
+            group["finish_unavailable_reason"] = (
+                "Submitted results are locked for administrator review." if group["results_locked"]
+                else "This round robin or event has already finished.")
             group["add_player_unavailable_reason"] = (
                 "Submitted results are locked for administrator review." if group["results_locked"]
                 else "Roster changes require an active round robin in an active hub.")
@@ -196,6 +200,16 @@ def _read_set(rows: dict[str, dict[str, Any]], events: dict[str, dict[str, Any]]
     return result
 
 
+def _status_after_sessions(status: str, state: dict[str, Any], events: dict[str, dict[str, Any]]) -> str:
+    """Close the last group's event in the same transaction as its final result."""
+    members = _group_keys(state)
+    if (status == "active" and members
+            and all(events[key].get("status") == "completed" for key in members)
+            and not any(court.get("current") or court.get("next") for court in state.get("courts") or [])):
+        return "completed"
+    return status
+
+
 def create_round_robin_hub(db: Any, *, club_id: str, title: str, courts: list[dict[str, Any]],
                           idempotency_key: str, actor_email: str) -> dict[str, Any]:
     from jupr_app.domain.round_robin_hub import apply_hub_command
@@ -259,10 +273,10 @@ def command_round_robin_hub(db: Any, *, club_id: str, hub_id: str, action: str,
             target_key = str(court["current"].get("session_key") or "")
         if target_key in sessions and _is_locked(sessions[target_key]) and action not in {"remove_group", "cancel_reservation", "release_game"}:
             raise ValueError("Submitted results are locked for administrator review.")
-        command_payload = payload
-        if action == "auto_fill_courts":
-            command_payload = {**payload, "excluded_session_keys": [key for key, session in sessions.items() if _is_locked(session)]}
-        elif action in {"add_player", "remove_player"}:
+        # Court planning must not rewrite submitted siblings, even when the
+        # command targets another group or only changes hub availability.
+        command_payload = {**payload, "excluded_session_keys": [key for key, session in sessions.items() if _is_locked(session)]}
+        if action in {"add_player", "remove_player"}:
             if target_key not in sessions:
                 raise ValueError("Choose a round robin attached to this hub.")
             if sessions[target_key].get("status") != "active":
@@ -275,8 +289,9 @@ def command_round_robin_hub(db: Any, *, club_id: str, hub_id: str, action: str,
                 player = _player_rows_by_id(db, club_id=club_id, player_ids=[player_id]).get(player_id)
                 if not player:
                     raise ValueError("This player profile was not found in this club.")
-                command_payload = {**payload, "name": str(player.get("name") or "").strip()}
+                command_payload["name"] = str(player.get("name") or "").strip()
         state, events = apply_hub_command(state, events, action=action, payload=command_payload, now=_now())
+    status = _status_after_sessions(status, state, events)
     _rpc_commit(db, club_id=club_id, hub_id=hub_id, expected_version=expected_version,
                 operation_key=idempotency_key, fingerprint=fingerprint, title=str(row["title"]),
                 status=status, state=state, sessions=_read_set(sessions, events, state, hub_id), actor_email=actor_email)
@@ -307,7 +322,8 @@ def persist_linked_generator_patch(db: Any, *, before: dict[str, Any], patch: di
     after_events[session_key] = _event({**current, **patch})
     if row.get("status") == "completed" and after_events[session_key].get("status") != "completed":
         raise ValueError("This hub is complete. Create a new event before starting more games.")
-    state, after_events = reconcile_hub_events(state, before_events, after_events, now=_now())
+    state, after_events = reconcile_hub_events(state, before_events, after_events, now=_now(),
+        excluded_session_keys={key for key, session in sessions.items() if _is_locked(session)})
     read_set = _read_set(sessions, after_events, state, hub_id)
     for item in read_set:
         if item["session_key"] == session_key:
@@ -321,7 +337,7 @@ def persist_linked_generator_patch(db: Any, *, before: dict[str, Any], patch: di
     # Retry identity is tied to the original row and requested change, not volatile hub data.
     committed = _rpc_commit(db, club_id=club_id, hub_id=hub_id, expected_version=int(row["version"]),
                             operation_key=operation_key, fingerprint=fingerprint, title=str(row["title"]),
-                            status=str(row["status"]), state=state, sessions=read_set,
+                            status=_status_after_sessions(str(row["status"]), state, after_events), state=state, sessions=read_set,
                             actor_email=str(before.get("created_by_email") or ""))
     updated = next((value for value in committed.get("sessions", []) if value.get("session_key") == session_key), None)
     if updated is None:

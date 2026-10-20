@@ -5,6 +5,7 @@ type Match = {
   courtLabel?: string;
   reservedCourtLabel?: string;
   hubCompletedAt?: string;
+  hubStartedAt?: string;
 };
 
 export type HubAutoAdvanceEvent = {
@@ -16,8 +17,15 @@ export type HubAutoAdvanceEvent = {
   status?: string;
   playoff?: unknown;
   currentRoundNumber?: number;
-  rounds?: Array<{ number: number; status: string; stage?: string; matches?: Match[]; courts?: Array<{ matches?: Match[] }> }>;
+  rounds?: Array<{ number: number; status: string; stage?: string; hubStartedAt?: string; matches?: Match[]; courts?: Array<{ matches?: Match[] }> }>;
 };
+
+/** The hub explicitly prepares its visible horizon; older sessions expose only the current round. */
+export function hubPreparedRoundLimit(event?: { currentRoundNumber?: number; hubPreparedThroughRound?: number } | null): number {
+  const current = event?.currentRoundNumber || 1;
+  const prepared = event?.hubPreparedThroughRound;
+  return typeof prepared === "number" && Number.isInteger(prepared) && prepared >= current ? prepared : current;
+}
 
 /** Presentation only; the server rechecks the boundary and live court claims. */
 export function hubAutoAdvanceBoundary(event?: HubAutoAdvanceEvent | null): number | null {
@@ -33,10 +41,10 @@ export function hubAutoAdvanceBoundary(event?: HubAutoAdvanceEvent | null): numb
       if (!["saved", "played", "skipped"].includes(row.status)) return null;
       continue;
     }
-    if (row.status !== (row.number === current ? "active" : "preview") || row.stage === "playoff") return null;
+    if (row.status !== (row.number === current ? "active" : "preview") || row.stage === "playoff" || row.hubStartedAt) return null;
     const matches = row.matches?.length ? row.matches : (row.courts || []).flatMap(court => court.matches || []);
     if (matches.some(match => match.scoreA != null || match.scoreB != null || (match.status && match.status !== "scheduled")
-      || match.courtLabel || match.reservedCourtLabel || match.hubCompletedAt)) return null;
+      || match.courtLabel || match.reservedCourtLabel || match.hubCompletedAt || match.hubStartedAt)) return null;
   }
   return boundary;
 }

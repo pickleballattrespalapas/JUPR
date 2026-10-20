@@ -133,6 +133,28 @@ async function main() {
       await page.getByRole('tab',{name:'Match queue',exact:true}).click();
       return command(page,page.getByRole('listitem').filter({hasText:title}).getByRole('button',{name:'Next open court',exact:true}).first(),'assign_next_court');
     }
+    async function assignMatch(match) {
+      await page.getByRole('tab',{name:'Match queue',exact:true}).click();
+      const label = `${match.side_a.map(player=>player.name).join(' / ')} vs ${match.side_b.map(player=>player.name).join(' / ')}`;
+      const row = page.getByRole('listitem').filter({hasText:match.group_title})
+        .filter({has:page.getByText(`${match.group_title} · Round ${match.round_number}`,{exact:true})})
+        .filter({has:page.getByText(label,{exact:true})});
+      return command(page,row.getByRole('button',{name:'Next open court',exact:true}),'assign_next_court');
+    }
+    async function finishGroup(sessionKey) {
+      await page.getByRole('tab',{name:'Court board',exact:true}).click();
+      await page.getByRole('button',{name:'Finish',exact:true}).click();
+      const dialog = page.getByRole('dialog',{name:'Finish round robin',exact:true});
+      const group = dialog.getByRole('combobox',{name:'Round robin to finish',exact:true});
+      const submit = dialog.getByRole('button',{name:'Finish round robin',exact:true});
+      assert.equal(await group.inputValue(),'','Finishing requires an explicit round-robin selection');
+      assert(await submit.isDisabled());
+      await group.selectOption(sessionKey);
+      const value = await command(page,submit,'finish_group');
+      await dialog.waitFor({state:'hidden'});
+      assert.equal(await page.getByRole('tab',{name:'Court board',exact:true}).getAttribute('aria-selected'),'true');
+      return value;
+    }
     async function fillCourts() {
       await page.getByRole('tab',{name:'Court board',exact:true}).click();
       return command(page,page.getByRole('button',{name:'Fill open courts',exact:true}),'auto_fill_courts');
@@ -213,7 +235,7 @@ async function main() {
     const numberedHubId = detail.hub.id;
     assert.equal(detail.workspace.identity_pending_count,8);
     assert.equal(detail.workspace.eligible_queue.length,0,'Unreviewed duplicate names cannot silently claim courts');
-    assert.equal(detail.workspace.blocked_queue.length,4);
+    assert.equal(detail.workspace.blocked_queue.filter(match=>match.round_number === 1).length,4);
     await openReview();
     assert.equal(await page.locator('[data-review-id]').count(),8);
     await snapshot(page,'matching-numbered-guests.png');
@@ -285,7 +307,7 @@ async function main() {
     detail = await command(page,playerRow.getByRole('button',{name:'Pause player',exact:true}),'pause_player');
     assert(detail.workspace.players.find(player=>player.identity === guestA.identity).paused);
     assert(!detail.workspace.players.find(player=>player.identity === guestB.identity).paused,'Pausing guest 1 in A must not pause guest 1 in B');
-    assert(detail.workspace.blocked_queue.every(match=>match.session_key === numberedA.session_key));
+    assert(detail.workspace.blocked_queue.filter(match=>match.round_number === 1).every(match=>match.session_key === numberedA.session_key));
     assert.equal(detail.workspace.eligible_queue.filter(match=>match.session_key === numberedB.session_key).length,2);
     await command(page,playerRow.getByRole('button',{name:'Ready again',exact:true}),'resume_player');
     await assignFromGroup('Numbers A');
@@ -401,7 +423,6 @@ async function main() {
     assert.equal(await page.getByRole('tab',{name:'Court board',exact:true}).getAttribute('aria-selected'),'true','Board Remove must return to the board');
     assert.equal(page.url(),hubUrl);
     bPrepared = (await fixture()).sessions.find(session=>session.session_key === numberedB.session_key);
-    assert.equal(bPrepared.event.rounds.length,1,'The rehearsal must include previously trimmed future matchups');
     assert.equal(bPrepared.event.rosterByRound['2'].length,8);
     assert(!bPrepared.event.rosterByRound['2'].includes(temporaryId));
     assert(![...bPrepared.event.rounds[0].matches.flatMap(match=>[...match.sideA,...match.sideB]),...bPrepared.event.rounds[0].byeParticipantIds].includes(temporaryId));
@@ -459,13 +480,20 @@ async function main() {
     }
     bSession = (await fixture()).sessions.find(session=>session.session_key === numberedB.session_key);
     assert.equal(bSession.event.currentRoundNumber,2);
-    assert.deepEqual(bSession.event.rounds.map(round=>round.number),[1,2],'A rolling hub must not restore future preview rounds from the old roster');
     assert.equal(bSession.event.rosterByRound['2'].length,9);
     assert(bSession.event.rosterByRound['2'].includes(arrivingId),'The ninth player must carry into next-round membership after prior roster mutations');
     const nextRosterRound = bSession.event.rounds.find(round=>round.number === 2);
     const nextScheduledIds = [...nextRosterRound.matches.flatMap(match=>[...match.sideA,...match.sideB]),...nextRosterRound.byeParticipantIds];
     assert(nextScheduledIds.includes(arrivingId),'The arriving player must have a next-round matchup or explicit bye before any court assignment');
     assert.equal(nextScheduledIds.filter(id=>id === arrivingId).length,1);
+    const preparedRosterRounds = bSession.event.rounds.filter(round=>round.number >= 2);
+    for (const round of preparedRosterRounds) {
+      assert(bSession.event.rosterByRound[String(round.number)].includes(arrivingId),'Prepared rounds must retain the added player instead of restoring an old roster');
+      const scheduled = [...round.matches.flatMap(match=>[...match.sideA,...match.sideB]),...round.byeParticipantIds];
+      assert.equal(scheduled.filter(id=>id === arrivingId).length,1,'An active arrival has exactly one match or bye in each prepared round');
+    }
+    assert(preparedRosterRounds.some(round=>round.matches.some(match=>[...match.sideA,...match.sideB].includes(arrivingId))),
+      'Prepared rounds must give the arrival an upcoming match, not permanent byes');
     assert.equal(occupied(detail).filter(court=>court.current.session_key === numberedB.session_key).length,0);
     await page.getByRole('tab',{name:'Players',exact:true}).click();
     const arrivingRow = page.getByRole('region',{name:'Players in Numbers B',exact:true}).locator(`[data-participant-id="${arrivingId}"]`);
@@ -550,7 +578,7 @@ async function main() {
     assert.equal(detail.workspace.identity_pending_count,0);
     detail = await fillCourts();
     assert.equal(occupied(detail).length,1,'Confirmed same person cannot play two courts simultaneously');
-    assert.equal(detail.workspace.blocked_queue.length,1);
+    assert.equal(detail.workspace.blocked_queue.filter(match=>match.round_number === 1).length,1);
     assert(detail.workspace.blocked_queue[0].blockers.some(blocker=>/already assigned/.test(blocker)));
     const sharedGuest = detail.workspace.players.find(player=>player.name === 'Shared Guest');
     assert.equal(sharedGuest.session_keys.length,2);
@@ -609,7 +637,7 @@ async function main() {
     assert.equal(detail.workspace.identity_pending_count,0,'Same linked profile is automatically one person');
     detail = await fillCourts();
     assert.equal(occupied(detail).length,1);
-    assert.equal(detail.workspace.blocked_queue.length,1);
+    assert.equal(detail.workspace.blocked_queue.filter(match=>match.round_number === 1).length,1);
     assert(detail.workspace.players.some(player=>player.identity === 'player:1' && player.session_keys.length === 2));
     record('Mixed roster keeps its selected profile; the same profile remains a hard cross-group court constraint');
 
@@ -623,6 +651,105 @@ async function main() {
     assert.deepEqual(new Set(alex.map(player=>player.identity)),new Set(['player:101','player:102']));
     await snapshot(page,'distinct-profiles-same-name.png');
     record('Two different club profiles with the same display name play independently');
+
+    // Five first-round games guarantee that at least one later game can use
+    // only freed players while a deliberately slow four-player game remains.
+    // Every matchup comes from the real generator; no schedule is hand-seeded.
+    const rolling = await createSession('Rolling twenty',Array.from({length:20},(_,index)=>`Rolling ${index+1}`));
+    const remaining = await createSession('Last round robin',['Last A','Last B','Last C','Last D']);
+    detail = await createHub('Rolling and selected finish',[rolling,remaining]);
+    const rollingHubId = detail.hub.id;
+    async function rollingState() {
+      return (await fixture()).sessions.find(session=>session.session_key === rolling.session_key);
+    }
+    async function assertRollingEligibility(value) {
+      const event = (await rollingState()).event;
+      for (const candidate of value.workspace.eligible_queue.filter(match=>match.session_key === rolling.session_key)) {
+        const ids = new Set(people(candidate).map(player=>String(player.id)));
+        for (const earlier of event.rounds.filter(round=>round.number < candidate.round_number && round.status !== 'skipped')) {
+          assert(earlier.matches.filter(match=>[...match.sideA,...match.sideB].some(id=>ids.has(String(id))))
+            .every(match=>match.scoreA != null && match.scoreB != null),'Ready matches cannot leapfrog any player’s unfinished earlier game');
+        }
+      }
+      const courtPlayers = occupied(value).flatMap(court=>people(court.current).map(player=>player.identity));
+      assert.equal(new Set(courtPlayers).size,courtPlayers.length,'Nobody can occupy two courts');
+    }
+    const opening = detail.workspace.eligible_queue.filter(match=>match.session_key === rolling.session_key && match.round_number === 1);
+    assert.equal(opening.length,5);
+    assert(detail.workspace.blocked_queue.some(match=>match.session_key === rolling.session_key && match.round_number > 1));
+    detail = await assignMatch(opening[0]);
+    const slowCourt = occupied(detail).find(court=>court.current.session_key === rolling.session_key);
+    const slowIds = new Set(people(slowCourt.current).map(player=>player.identity));
+    for (const match of opening.slice(1)) {
+      detail = await assignMatch(match);
+      const fastCourt = occupied(detail).find(court=>court.id !== slowCourt.id);
+      detail = await scoreCourt(fastCourt.label);
+      assert.equal(detail.workspace.courts.find(court=>court.id === slowCourt.id).current.match_id,slowCourt.current.match_id);
+      await assertRollingEligibility(detail);
+    }
+    let rollingResult = await rollingState();
+    assert.equal(rollingResult.event.currentRoundNumber,1);
+    assert(rollingResult.standings.every(row=>row.matches === 0));
+    const early = detail.workspace.eligible_queue.find(match=>match.session_key === rolling.session_key && match.round_number === 2);
+    assert(early,'A later-round game with four freed players must be ready before the slow first-round game finishes');
+    assert(people(early).every(player=>!slowIds.has(player.identity)));
+    detail = await assignMatch(early);
+    const earlyCourt = occupied(detail).find(court=>court.id !== slowCourt.id);
+    assert.equal(earlyCourt.current.round_number,2);
+    assert.equal(detail.workspace.courts.find(court=>court.id === slowCourt.id).current.round_number,1);
+    await assertRollingEligibility(detail);
+    await page.getByRole('tab',{name:'Court board',exact:true}).click();
+    await snapshot(page,'slow-round-one-and-playing-round-two.png');
+    detail = await scoreCourt(earlyCourt.label);
+    rollingResult = await rollingState();
+    assert.equal(rollingResult.event.currentRoundNumber,1);
+    assert(rollingResult.standings.every(row=>row.matches === 0),'A later score cannot publish standings before the unfinished earlier round');
+    assert.equal(rollingResult.event.rounds.find(round=>round.number === 2).matches.find(match=>match.id === early.match_id).scoreA,11);
+    record('Freed players start and score a later round while a slow earlier game remains, without leapfrogging players or publishing pending standings');
+
+    detail = await finishGroup(rolling.session_key);
+    let finishing = detail.workspace.groups.find(group=>group.session_key === rolling.session_key);
+    assert.equal(finishing.finish_requested,true);
+    assert.equal(finishing.finish_after_round,2,'Finish drains every game through the highest started round');
+    assert.equal(finishing.finish_pending_matches,5);
+    assert.equal(detail.hub.status,'active');
+    assert.equal(detail.workspace.groups.find(group=>group.session_key === remaining.session_key).status,'active');
+    assert(detail.workspace.eligible_queue.filter(match=>match.session_key === rolling.session_key).every(match=>match.round_number <= 2));
+    await snapshot(page,'finish-selected-group-draining.png');
+    detail = await scoreCourt(slowCourt.label);
+    rollingResult = await rollingState();
+    assert(rollingResult.standings.every(row=>row.matches === 1),'Finishing the slow round publishes that round only');
+    for (let game=0; game<4; game++) {
+      const next = detail.workspace.eligible_queue.find(match=>match.session_key === rolling.session_key);
+      assert(next && next.round_number === 2,'Only remaining games inside the finish boundary may start');
+      detail = await assignMatch(next);
+      await assertRollingEligibility(detail);
+      const court = occupied(detail).find(item=>item.current.session_key === rolling.session_key);
+      detail = await scoreCourt(court.label);
+    }
+    rollingResult = await rollingState();
+    assert.equal(rollingResult.status,'completed');
+    assert(rollingResult.standings.every(row=>row.matches === 2));
+    assert(rollingResult.event.rounds.filter(round=>round.number > 2).every(round=>round.matches.every(match=>match.scoreA == null && match.scoreB == null)));
+    assert.equal(detail.workspace.groups.find(group=>group.session_key === rolling.session_key).status,'completed');
+    assert.equal(detail.hub.status,'active','Finishing one group must leave the other round robin and event active');
+    assert.equal(detail.workspace.groups.find(group=>group.session_key === remaining.session_key).status,'active');
+    detail = await finishGroup(remaining.session_key);
+    assert.equal(detail.hub.status,'completed','The event closes automatically when the last round robin finishes');
+    assert(detail.workspace.groups.every(group=>group.status === 'completed'));
+    assert.equal(occupied(detail).length,0);
+    await page.reload();
+    await page.getByRole('heading',{name:'Rolling and selected finish',exact:true}).waitFor();
+    assert.equal((await readHub(rollingHubId)).hub.status,'completed');
+    await page.getByRole('tab',{name:'Standings',exact:true}).click();
+    await page.getByRole('combobox',{name:'Standings round robin',exact:true}).selectOption(rolling.session_key);
+    await page.getByRole('heading',{name:'Rolling twenty standings',exact:true}).waitFor();
+    const closedSharing = await clickRequest(page,page.getByRole('button',{name:'Share standings',exact:true}),
+      `/play-generators/sessions/${encodeURIComponent(rolling.session_key)}/sharing`);
+    assert.equal(closedSharing.sharing.enabled,true,'Completed events retain standings sharing');
+    await page.getByRole('img',{name:'Standings QR code',exact:true}).waitFor();
+    await snapshot(page,'completed-hub-standings-still-shareable.png');
+    record('Finish targets one round robin, drains all started rounds, keeps the other group live, and closes the last group while preserving shareable standings');
 
     expectedConsoleErrors.push(...errors.filter(error=>error.type === 'console' && error.url === commandUrl && /503/.test(error.message)));
     const unexpectedErrors = errors.filter(error=>!expectedConsoleErrors.includes(error));

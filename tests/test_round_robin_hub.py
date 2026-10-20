@@ -14,6 +14,148 @@ START = "2026-10-20T03:00:00+00:00"
 LATER = "2026-10-20T03:10:00+00:00"
 
 
+def limited_rolling_event():
+    value = start_generator_event(create_generator_preview(generator_kind="round_robin", play_format="doubles",
+        title="Rolling", participant_names=[f"Player {i}" for i in range(12)], court_count=1, total_rounds=3))
+    return value
+
+
+def test_later_round_bye_players_can_finish_before_slow_first_round_and_standings_wait():
+    state, events = setup({"a": limited_rolling_event()}, courts=2)
+    original = deepcopy(events["a"]["rounds"])
+    ready = build_hub_snapshot(state, events, now=START)["eligible_queue"]
+    assert {m["round_number"] for m in ready} == {1, 2, 3}
+    first = next(m for m in ready if m["round_number"] == 1)
+    later = next(m for m in ready if m["round_number"] == 2)
+    state, events = command(state, events, "assign_game", court_id="c0", **{k: first[k] for k in ("session_key", "match_id")})
+    state, events = command(state, events, "assign_game", court_id="c1", **{k: later[k] for k in ("session_key", "match_id")})
+    state, events = score(state, events, "c1")
+    assert events["a"]["currentRoundNumber"] == 1
+    assert events["a"]["rounds"][1]["status"] == "preview"
+    assert all(row["matches"] == 0 for row in generator_event_standings(events["a"]))
+    assert events["a"]["rounds"][2]["matches"] == original[2]["matches"]
+    state, events = score(state, events, "c0")
+    assert events["a"]["currentRoundNumber"] == 3
+    assert [r["status"] for r in events["a"]["rounds"][:2]] == ["saved", "saved"]
+    assert sum(row["matches"] for row in generator_event_standings(events["a"])) == 8
+
+
+def test_later_matches_cannot_leapfrog_an_earlier_queued_game():
+    state, events = setup()
+    future = events["a"]["rounds"][1]["matches"][0]
+    snap = build_hub_snapshot(state, events, now=START)
+    blocked = next(m for m in snap["blocked_queue"] if m["match_id"] == future["id"])
+    assert "A player has an unfinished match in an earlier round." in blocked["blockers"]
+    with pytest.raises(ValueError, match="not ready"):
+        command(state, events, "assign_game", session_key="a", match_id=future["id"], court_id="c0")
+
+
+@pytest.mark.parametrize("action", ["remove", "substitute"])
+def test_roster_edit_preserves_later_live_match_and_defers_target_departure(action):
+    state, events = setup({"a": limited_rolling_event()}, courts=2)
+    later = events["a"]["rounds"][1]["matches"][0]
+    state, events = command(state, events, "assign_game", session_key="a", match_id=later["id"], court_id="c1")
+    protected = deepcopy(events["a"]["rounds"][1]["matches"][0])
+    target = protected["sideA"][0]
+    before = deepcopy(events)
+    events["a"] = mutate_generator_roster(events["a"], action=action, participant_id=target,
+        name="Replacement" if action == "substitute" else None, substitute_scope="rest")
+    state, events = reconcile_hub_events(state, before, events, now=START)
+    assert events["a"]["rounds"][1]["matches"][0] == protected
+    assert state["courts"][1]["current"]["match_id"] == protected["id"]
+    participant = next(p for p in events["a"]["participants"] if p["id"] == target)
+    assert participant["inactive_from_round"] == 3
+    assert target not in events["a"]["rosterByRound"]["3"]
+    assert target in events["a"]["rounds"][0]["byeParticipantIds"]
+
+
+def test_finish_drains_latest_started_round_and_keeps_released_start_history():
+    state, events = setup({"a": limited_rolling_event()}, courts=2)
+    later = events["a"]["rounds"][1]["matches"][0]
+    state, events = command(state, events, "assign_game", session_key="a", match_id=later["id"], court_id="c1")
+    state, events = command(state, events, "release_game", court_id="c1")
+    details = build_hub_snapshot(state, events, now=START)["groups"][0]
+    assert details["finish_boundary_round"] == 2 and details["finish_pending_matches"] == 2
+    state, events = command(state, events, "finish_group", session_key="a")
+    assert events["a"]["hubFinishAfterRound"] == 2
+    for _ in range(2):
+        state, events = command(state, events, "auto_fill_courts")
+        occupied = next(c["id"] for c in state["courts"] if c["current"])
+        state, events = score(state, events, occupied)
+    assert events["a"]["status"] == "completed"
+    assert [r["status"] for r in events["a"]["rounds"][:3]] == ["saved", "saved", "skipped"]
+    assert sum(row["matches"] for row in generator_event_standings(events["a"])) == 8
+
+
+def test_finish_untouched_group_and_adopt_unlinked_single_round_with_byes():
+    unlinked = start_generator_event(create_generator_preview(generator_kind="round_robin", play_format="doubles",
+        title="Five", participant_names=[f"Player {i}" for i in range(5)], total_rounds=1, court_count=0))
+    state, events = setup({"a": unlinked})
+    assert events["a"]["hubPreparedThroughRound"] >= 2
+    assert events["a"]["roundRobinHubId"]
+    state, events = command(state, events, "finish_group", session_key="a")
+    assert events["a"]["status"] == "completed"
+    assert events["a"]["currentRoundNumber"] == 1 and events["a"]["rounds"]
+
+
+def test_detach_rejects_future_results_pending_earlier_round():
+    state, events = setup({"a": limited_rolling_event()})
+    later = events["a"]["rounds"][1]["matches"][0]
+    state, events = command(state, events, "assign_game", session_key="a", match_id=later["id"], court_id="c0")
+    state, events = score(state, events, "c0")
+    with pytest.raises(ValueError, match="partially scored"):
+        command(state, events, "remove_group", session_key="a")
+
+
+def test_profile_identity_blocks_earlier_obligation_under_another_roster_name():
+    value = limited_rolling_event()
+    first_id = value["rounds"][0]["matches"][0]["sideA"][0]
+    later_id = value["rounds"][1]["matches"][0]["sideA"][0]
+    for participant in value["participants"]:
+        if participant["id"] in {first_id, later_id}:
+            participant["player_id"] = 123
+    state, events = setup({"a": value})
+    later = events["a"]["rounds"][1]["matches"][0]
+    snapshot = build_hub_snapshot(state, events, now=START)
+    entry = next(m for m in snapshot["blocked_queue"] if m["match_id"] == later["id"])
+    assert "A player has an unfinished match in an earlier round." in entry["blockers"]
+
+
+def test_finish_counts_future_reservation_and_promotes_it_before_completion():
+    state, events = setup({"a": limited_rolling_event()}, courts=1)
+    first = events["a"]["rounds"][0]["matches"][0]
+    later = events["a"]["rounds"][1]["matches"][0]
+    state, events = command(state, events, "assign_game", session_key="a", match_id=first["id"], court_id="c0")
+    state, events = command(state, events, "reserve_game_for_court", session_key="a", match_id=later["id"], court_id="c0")
+    state, events = command(state, events, "finish_group", session_key="a")
+    assert events["a"]["hubFinishAfterRound"] == 2
+    state, events = score(state, events, "c0")
+    assert state["courts"][0]["current"]["match_id"] == later["id"]
+    state, events = score(state, events, "c0")
+    assert events["a"]["status"] == "completed" and state["courts"][0]["current"] is None
+
+
+def test_new_plan_does_not_depend_on_which_court_finishes_first():
+    value = start_generator_event(create_generator_preview(generator_kind="round_robin", play_format="doubles",
+        title="Deterministic", participant_names=[f"Player {i}" for i in range(12)], total_rounds=1, court_count=0))
+    state, events = setup({"a": value}, courts=3)
+    state, events = command(state, events, "auto_fill_courts")
+    _, a = score(deepcopy(state), deepcopy(events), "c0")
+    _, b = score(deepcopy(state), deepcopy(events), "c1")
+    assert a["a"]["rounds"][1] == b["a"]["rounds"][1]
+
+
+def test_released_unscored_later_game_can_change_roster_without_losing_finish_boundary():
+    state, events = setup({"a": limited_rolling_event()}, courts=1)
+    later = events["a"]["rounds"][1]["matches"][0]
+    target = later["sideA"][0]
+    state, events = command(state, events, "assign_game", session_key="a", match_id=later["id"], court_id="c0")
+    state, events = command(state, events, "release_game", court_id="c0")
+    state, events = command(state, events, "remove_player", session_key="a", participant_id=target)
+    assert all(target not in m["sideA"] + m["sideB"] for r in events["a"]["rounds"] for m in r["matches"])
+    assert build_hub_snapshot(state, events, now=START)["groups"][0]["finish_boundary_round"] == 2
+
+
 def event(prefix="A", count=8, scoring="scored", player_ids=None):
     result = start_generator_event(create_generator_preview(generator_kind="round_robin", play_format="doubles",
         title=prefix, participant_names=[f"{prefix} {n}" for n in range(count)], player_ids=player_ids or [],
@@ -182,7 +324,7 @@ def test_add_four_arrivals_to_active_round_creates_queued_game_without_changing_
         events["a"] = mutate_generator_roster(events["a"], action="add", name=f"Arrival {n}")
         state, events = reconcile_hub_events(state, before, events, now=LATER)
     assert len(current_matches(events)) == 2
-    assert len(events["a"]["rounds"]) == 1  # adaptive next round waits for completion
+    assert events["a"]["hubPreparedThroughRound"] >= 2
     assert current_matches(events)[0] == first
     assert len(build_hub_snapshot(state, events, now=LATER)["eligible_queue"]) == 1
 
@@ -412,7 +554,7 @@ def test_pending_identity_propagates_to_renamed_same_person_occurrences():
     state, events = command(state, events, "resolve_identities", resolution="same", participants=[ref("a", groups["a"]["participants"][0]), ref("b", groups["b"]["participants"][0])])
     snap = build_hub_snapshot(state, events, now=START)
     assert not snap["eligible_queue"]
-    assert len(snap["blocked_queue"]) == 3
+    assert len([m for m in snap["blocked_queue"] if m["round_number"] == 1]) == 3
 
 
 def test_same_profile_different_spelling_is_visible_in_complete_correction_component():
@@ -646,7 +788,7 @@ def test_late_arrival_reaches_next_round_after_prior_edits_trimmed_future_rounds
     state, events = command(state, events, "add_player", session_key="a", name="Temporary")
     temporary = events["a"]["participants"][-1]["id"]
     state, events = command(state, events, "remove_player", session_key="a", participant_id=temporary)
-    assert len(events["a"]["rounds"]) == 1 and "2" in events["a"]["rosterByRound"]
+    assert "2" in events["a"]["rosterByRound"]
     first, second = current_matches(events)
     state, events = command(state, events, "assign_game", session_key="a", match_id=first["id"], court_id="c0")
     state, events = command(state, events, "reserve_game_for_court", session_key="a", match_id=second["id"], court_id="c0")
@@ -658,7 +800,8 @@ def test_late_arrival_reaches_next_round_after_prior_edits_trimmed_future_rounds
     state, events = score(state, events, "c0")
     state, events = score(state, events, "c0")
     assert arrival in active_participant_ids(events["a"], 2)
-    assert len(events["a"]["rounds"]) == 2 and not events["a"]["perfectRotation"]
+    assert events["a"]["hubPreparedThroughRound"] >= 2 and not events["a"]["perfectRotation"]
+    assert all(arrival in active_participant_ids(events["a"], r["number"]) for r in events["a"]["rounds"] if r["number"] >= 2)
     assert len(current_matches(events)) == 2
     assert any(arrival in m["sideA"] + m["sideB"] for m in current_matches(events))
     assert temporary not in active_participant_ids(events["a"], 2)
@@ -734,7 +877,7 @@ def test_repair_untouched_recovered_rotation_keeps_saved_history_and_seats_late_
     state, events = command(state, events, "auto_fill_courts")
     state, events = score(state, events, "c0")
     state, events = score(state, events, "c1")
-    assert events["a"]["currentRoundNumber"] == 5 and len(events["a"]["rounds"]) == 5
+    assert events["a"]["currentRoundNumber"] == 5 and events["a"]["hubPreparedThroughRound"] >= 5
     assert len(current_matches(events)) == 2
 
 
