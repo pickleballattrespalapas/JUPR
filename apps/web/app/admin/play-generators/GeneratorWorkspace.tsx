@@ -803,7 +803,7 @@ export default function GeneratorWorkspace({
               disabled={busy || creationPending || !writesEnabled}
               style={primaryButton}
             >
-              {busy ? "Starting…" : `Start ${ratingMode} session`}
+              {busy ? "Starting…" : returnHubId ? "Start and add to hub" : `Start ${ratingMode} session`}
             </button>
           </div>
 

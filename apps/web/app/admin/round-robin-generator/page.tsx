@@ -43,7 +43,7 @@ export default async function RoundRobinGeneratorPage({ searchParams }: {
       <p style={{ color: "#334155", maxWidth: "900px" }}>
         Build singles, doubles, or mixed doubles-and-singles schedules; preview every planned matchup and bye, print the schedule, then run one round at a time.
       </p>
-      <p><Link href={returnHubId ? `/admin/round-robin-hub?hub=${encodeURIComponent(returnHubId)}` : "/admin/round-robin-hub"}>← Round Robin Hub</Link>{returnHubId ? " · This new round robin will join the selected hub." : " · Run several round robins on one court board."}</p>
+      <p><Link href={returnHubId ? `/admin/round-robin-hub?hub=${encodeURIComponent(returnHubId)}` : "/admin/round-robin-hub"}>← Round Robin Hub</Link>{returnHubId ? " · Preview your schedule, then choose Start and add to hub. Your first-round matches will be ready to assign on the court board." : " · Run several round robins on one court board."}</p>
       <GeneratorWorkspace
         generatorKind="round_robin"
         apiBase={apiBase()}

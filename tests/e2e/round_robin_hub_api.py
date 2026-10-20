@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import generator_submission_api as generator
 from test_admin_round_robin_hub_service import TransactionalHubDB
 from jupr_app.services import admin_round_robin_hub_service as hub_service
+from jupr_app.services import admin_play_generator_service as generator_service
 from services.api import admin_round_robin_hub_routes as hub_routes
 
 app = generator.app
@@ -35,6 +36,10 @@ def rpc(name, params):
 
 database.rpc = rpc
 generator.patches.setattr(hub_routes, "_require_write_gate", lambda: None)
+# The loopback fixture already authorizes its synthetic admin mutation routes.
+# Expose the same capability to the real admin builder's read-only status check.
+generator.patches.setattr(generator_service, "is_staging_write_gate_enabled", lambda flag: True)
+generator.patches.setattr(generator_service, "is_admin_jupr_live_enabled", lambda: True)
 hub_routes.install_admin_round_robin_hub_routes(app, get_supabase_client=lambda: database)
 
 
