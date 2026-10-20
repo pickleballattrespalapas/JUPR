@@ -7,13 +7,14 @@ import type { EventHistory } from "@/lib/eventSeasons";
 export const metadata = {
   robots: { index: false, follow: false },
 };
-export default async function LeaguePage({
-  params,
-  searchParams,
-}: {
-  params: { seasonId: string };
-  searchParams: { view?: string };
-}) {
+export default async function LeaguePage(
+  props: {
+    params: Promise<{ seasonId: string }>;
+    searchParams: Promise<{ view?: string }>;
+  }
+) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   if (!/^[0-9a-f-]{36}$/i.test(params.seasonId)) notFound();
   const [league, history] = await Promise.all([
     publicSiteFetch<PublicLeague>(`/public/interclub/${params.seasonId}`),

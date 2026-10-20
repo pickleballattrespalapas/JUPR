@@ -1,10 +1,11 @@
 import TeamInvitationReview from "./TeamInvitationReview";
 
 type Props = {
-  params: { clubSlug: string };
+  params: Promise<{ clubSlug: string }>;
 };
 
-export default function TournamentTeamInvitationPage({ params }: Props) {
+export default async function TournamentTeamInvitationPage(props: Props) {
+  const params = await props.params;
   return (
     <section>
       <p style={{ color: "#2563eb", fontWeight: 800 }}>Private team invitation</p>

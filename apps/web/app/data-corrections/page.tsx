@@ -13,7 +13,8 @@ const cardStyle = {
   background: "white"
 };
 
-export default function DataCorrectionsPage({ searchParams }: { searchParams?: SupportSearchParams }) {
+export default async function DataCorrectionsPage(props: { searchParams?: Promise<SupportSearchParams> }) {
+  const searchParams = await props.searchParams;
   const clubSlug = supportParam(searchParams, "club");
   return (
     <section style={{ maxWidth: "920px" }}>

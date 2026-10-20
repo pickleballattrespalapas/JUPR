@@ -4,14 +4,15 @@ import { getAdminScoreEntryStatus, isNextAdminScoreEntryEnabled } from "@/lib/sc
 import ScoreEntryForm from "./ScoreEntryForm";
 
 type ScoreEntryPageProps = {
-  params: { clubSlug: string };
+  params: Promise<{ clubSlug: string }>;
 };
 
 function apiBase(): string | null {
   return process.env.NEXT_PUBLIC_JUPR_API_BASE_URL || process.env.JUPR_API_BASE_URL || null;
 }
 
-export default async function ScoreEntryPage({ params }: ScoreEntryPageProps) {
+export default async function ScoreEntryPage(props: ScoreEntryPageProps) {
+  const params = await props.params;
   const { clubSlug } = params;
   if (!isNextAdminScoreEntryEnabled()) {
     return (

@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, use } from "react";
 import { useAdminWorkspace } from "@/lib/useAdminWorkspace";
 import { useAdminSession } from "@/lib/useAdminSession";
 import { getAdminPlayerEditorApiBaseUrl } from "@/lib/adminPlayerEditorApi";
@@ -10,7 +10,8 @@ import InterclubSetupWizard from "./InterclubSetupWizard";
 import styles from "./setup.module.css";
 import { registrationMeetPlanning } from "@/lib/interclubRegistrationWindow";
 
-export default function InterclubPage({ searchParams }: { searchParams?: { season?: string } }) {
+export default function InterclubPage(props: { searchParams: Promise<{ season?: string }> }) {
+  const searchParams = use(props.searchParams);
   const { session, accessToken, loading } = useAdminSession();
   const { clubId } = useAdminWorkspace();
   const canManage = session?.capabilities?.assignments.some(a => a.club_id === clubId && ["administrator", "club_owner", "super_admin"].includes(a.role));

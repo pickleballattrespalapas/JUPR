@@ -12,8 +12,8 @@ import PartnerRequestReviewPanel from "./PartnerRequestReviewPanel";
 import { groupPartnerEntries, groupPartnerNotes } from "@/lib/tournamentPartnerBoard";
 
 type Props = {
-  params: { clubSlug: string };
-  searchParams?: Record<string, string | string[] | undefined>;
+  params: Promise<{ clubSlug: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
 const cardStyle = {
@@ -25,7 +25,7 @@ const cardStyle = {
 };
 
 function firstParam(
-  searchParams: Props["searchParams"],
+  searchParams: Awaited<Props["searchParams"]>,
   key: string
 ): string | null {
   const value = searchParams?.[key];
@@ -34,12 +34,10 @@ function firstParam(
 }
 
 function slugify(value: string): string {
-  return (
-    value
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "") || "event"
-  );
+  return (value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "event");
 }
 
 function eventName(familyValue?: string | null, divisionValue?: string | null): string {
@@ -86,10 +84,9 @@ function boardQuery({
   return text ? `?${text}` : "";
 }
 
-export default async function TournamentPartnerBoardPage({
-  params,
-  searchParams
-}: Props) {
+export default async function TournamentPartnerBoardPage(props: Props) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   const registrationSlug = firstParam(searchParams, "tournament");
   const tournamentId = firstParam(searchParams, "tournament_id");
   if (!registrationSlug && !tournamentId) {

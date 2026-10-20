@@ -34,7 +34,7 @@ const footer = render([{ ...sponsor, tier: "premier" }], "footer");
 assert.match(footer, /<strong>Coastal Homes<\/strong>/, "Uploading a footer logo never replaces the sponsor name");
 assert.ok(footer.indexOf("<img") < footer.indexOf("<strong>"));
 assert.match(render([{ ...sponsor, logo_url: "", website: "" }], "header"), /Coastal Homes/);
-assert.doesNotMatch(render([{ ...sponsor, website: "javascript:alert(1)" }], "header"), /href=/);
+assert.doesNotMatch(render([{ ...sponsor, website: "javascript:alert(1)" }], "header"), /<a\b[^>]*href=|javascript:/, "Unsafe sponsor websites never become links; React may preload the safe logo");
 assert.equal(render([sponsor], "footer"), "");
 assert.equal(render([], "header"), "");
 assert.equal(model.normalizeSponsorWebsite("example.com"), "https://example.com/");

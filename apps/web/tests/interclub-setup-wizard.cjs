@@ -236,7 +236,7 @@ async function invitationDashboard() {
     '@/lib/interclubRegistration': registration, '@/lib/interclubRegistrationWindow': registrationWindow, '@/lib/interclubSetup': helpers, './InterclubSetupWizard': () => null, './setup.module.css': {}
   }).default;
   let tree;
-  await act(async () => { tree = create(React.createElement(Home)); });
+  await act(async () => { tree = create(React.createElement(Home, { searchParams: Promise.resolve({}) })); });
   assert.deepEqual(tree.root.findAllByType('h2').map(nodeText), ['Invitations to your club', 'Seasons your club has joined', 'Continue setup', 'Seasons your club organizes', 'Previous invitations']);
   const card = name => tree.root.findAllByType('article').find(a => a.findAllByType('h3').some(h => nodeText(h) === name));
   const links = name => card(name).findAllByType('a');
@@ -253,7 +253,7 @@ async function invitationDashboard() {
   assert.ok(requests.every(r => r.url.includes('/clubs/beta/') && !r.options.method), 'Dashboard only loads the current club');
 
   clubId = 'alpha'; registrations = [];
-  await act(async () => tree.update(React.createElement(Home)));
+  await act(async () => tree.update(React.createElement(Home, { searchParams: Promise.resolve({}) })));
   assert.ok(!text(tree).includes('Invited season') && !text(tree).includes('Joined season'), 'Club switching removes the previous club invitation cards');
   assert.equal(tree.root.findAllByType('h2').filter(h => nodeText(h) === 'Invitations to your club').length, 0);
   await act(async () => tree.unmount());

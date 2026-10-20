@@ -5,8 +5,9 @@ import { getPublicSite } from "@/lib/clubSiteServer";
 import { LAST_CLUB_COOKIE, validClubSlug } from "@/lib/clubSite";
 import styles from "@/components/ClubWebsite.module.css";
 export const dynamic = "force-dynamic";
-export default async function Home({ searchParams }: { searchParams?: { welcome?: string } }) {
-  const slug = cookies().get(LAST_CLUB_COOKIE)?.value || "";
+export default async function Home(props: { searchParams?: Promise<{ welcome?: string }> }) {
+  const searchParams = await props.searchParams;
+  const slug = (await cookies()).get(LAST_CLUB_COOKIE)?.value || "";
   let remembered = false;
   if (!searchParams?.welcome && validClubSlug(slug)) {
     try { remembered = Boolean(await getPublicSite(slug)); } catch { /* Homepage remains available during an API outage. */ }

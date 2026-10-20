@@ -20,6 +20,45 @@ const text = node => typeof node === "string" ? node : (node?.children || []).ma
 const request = { request_type: "general_support", requester_name: "Alex", requester_email: "alex@example.test",
   subject: "Help", description: "Request details", consent_to_contact: true };
 
+async function pageQueryParameters() {
+  const { supportParam } = load("components/SupportIntakeGate.tsx", {
+    "next/link": () => null,
+    "@/lib/clubSiteServer": {},
+    "@/lib/publicSupportContent": {},
+    "@/lib/supportIntakeApi": {},
+  });
+  for (const [route, formModule] of [
+    ["support", "./SupportRequestForm"],
+    ["data-corrections", "./DataCorrectionForm"],
+    ["profile-privacy", "./ProfilePrivacyRequestForm"],
+  ]) {
+    let gateProps, formProps;
+    const Page = load(`app/${route}/page.tsx`, {
+      "next/link": ({ children, ...props }) => h("a", props, children),
+      "@/components/PublicControls": ({ children }) => children,
+      "@/lib/publicSupportContent": { SUPPORT_EMAIL: "support@example.test" },
+      "@/components/SupportIntakeGate": { __esModule: true, supportParam,
+        default: props => { gateProps = props; return props.children; } },
+      [formModule]: props => { formProps = props; return h("form"); },
+    }).default;
+    const params = { club: " beta ", player_id: "17", player_name: "Blair" };
+    const markup = renderToStaticMarkup(await Page({ searchParams: Promise.resolve(params) }));
+    assert.equal(gateProps.searchParams, params, `${route} passes resolved query parameters to the intake gate`);
+    assert.equal(gateProps.path, `/${route}`);
+    assert.equal(formProps.clubSlug, "beta", `${route} keeps the explicit club after resolving Next's Promise`);
+    if (route === "profile-privacy") {
+      assert.equal(formProps.playerId, "17");
+      assert.equal(formProps.playerName, "Blair");
+    }
+    if (route !== "data-corrections") assert.match(markup, /href="\/data-corrections\?club=beta"/);
+    renderToStaticMarkup(await Page({ searchParams: Promise.resolve({ club: ["alpha", "beta"] }) }));
+    assert.equal(formProps.clubSlug, "", `${route} does not choose from ambiguous clubs`);
+    renderToStaticMarkup(await Page({}));
+    assert.equal(formProps.clubSlug, "", `${route} has no implicit default club`);
+    assert.equal(gateProps.searchParams, undefined);
+  }
+}
+
 async function gateBehavior() {
   let readinessCalls = [], directoryCalls = [], ready = true, missing = false, directoryBroken = false;
   const { default: Gate, supportParam } = load("components/SupportIntakeGate.tsx", {
@@ -132,8 +171,9 @@ async function formsKeepExplicitClubAndFailedInput() {
 }
 
 (async () => {
+  await pageQueryParameters();
   await gateBehavior();
   await apiBehavior();
   await formsKeepExplicitClubAndFailedInput();
-  console.log("Support intake: explicit club selection, readiness gates, fallback contact, scoped forms and preserved failed input passed.");
+  console.log("Support intake: async page queries, explicit club selection, readiness gates, fallback contact, scoped forms and preserved failed input passed.");
 })().catch(error => { console.error(error); process.exitCode = 1; });

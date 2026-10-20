@@ -1,7 +1,8 @@
 import TournamentDayWorkspaceRoute from "./TournamentDayWorkspaceRoute";
 
-type Props = { searchParams?: Record<string, string | string[] | undefined> };
+type Props = { searchParams?: Promise<Record<string, string | string[] | undefined>> };
 
-export default function TournamentLiveOperationsPhasePage({ searchParams }: Props) {
+export default async function TournamentLiveOperationsPhasePage(props: Props) {
+  const searchParams = await props.searchParams;
   return <TournamentDayWorkspaceRoute searchParams={searchParams} />;
 }

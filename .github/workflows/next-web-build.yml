@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
       - uses: actions/setup-python@v5
@@ -35,10 +35,18 @@ jobs:
       - name: Verify full round schedule and navigation
         working-directory: apps/web
         run: node tests/rr-schedule-navigation-browser.cjs
+      - name: Build Next app for recap browser acceptance
+        working-directory: apps/web
+        env:
+          JUPR_API_BASE_URL: http://127.0.0.1:8042
+          NEXT_PUBLIC_JUPR_API_BASE_URL: http://127.0.0.1:8042
+          NEXT_PUBLIC_JUPR_ENV: staging
+        run: npm run build
       - name: Verify recap builder, drafts, publishing and mobile editing
         working-directory: apps/web
         env:
           RECAP_BROWSER_ARTIFACTS: test-results/recap-builder
+          RECAP_BROWSER_NEXT_MODE: start
         run: node tests/recap-builder-browser.cjs
       - name: Upload round navigation browser evidence
         if: always()
@@ -56,7 +64,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
       - run: npm ci --no-audit --no-fund
@@ -85,9 +93,9 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
       - name: Verify Vercel preview API isolation config
         env:
           VERCEL_ENV: preview
@@ -156,5 +164,7 @@ jobs:
             node lib/tournamentPartnerBoard.test.mjs
       - name: Test Challenge Ladder full-result rendering
         run: npm run test:component
+      - name: Lint Next app
+        run: npm run lint
       - name: Build Next app
         run: npm run build

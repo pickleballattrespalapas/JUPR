@@ -2,7 +2,7 @@ import Link from "@/components/PublicClubLink";
 import { getPublicTournamentResultsIndex } from "@/lib/tournamentResultsApi";
 
 type Props = {
-  params: { clubSlug: string };
+  params: Promise<{ clubSlug: string }>;
 };
 
 const cardStyle = {
@@ -24,7 +24,8 @@ function dateLabel(value?: string | null): string {
   }).format(date);
 }
 
-export default async function PastTournamentsPage({ params }: Props) {
+export default async function PastTournamentsPage(props: Props) {
+  const params = await props.params;
   const { data, error } = await getPublicTournamentResultsIndex(
     params.clubSlug,
     "past"

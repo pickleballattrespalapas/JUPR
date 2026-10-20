@@ -4,7 +4,7 @@ import { getAdminLeagueManagerApiBaseUrl, getAdminLeagueManagerStatus } from "@/
 import LeagueManagerPanel from "./LeagueManagerPanel";
 
 export default async function AdminLeagueManagerPage() {
-  const { clubId } = requireAdminWorkspace();
+  const { clubId } = await requireAdminWorkspace();
   const { data: status, error } = await getAdminLeagueManagerStatus(clubId);
 
   return (

@@ -4,11 +4,13 @@ import { getClubTournamentRegistration } from "@/lib/tournamentRegistrationApi";
 import EditLinkRequestForm from "../EditLinkRequestForm";
 
 type Props = {
-  params: { clubSlug: string };
-  searchParams?: { tournament?: string; tournament_id?: string };
+  params: Promise<{ clubSlug: string }>;
+  searchParams?: Promise<{ tournament?: string; tournament_id?: string }>;
 };
 
-export default async function ManageTournamentRegistrationPage({ params, searchParams }: Props) {
+export default async function ManageTournamentRegistrationPage(props: Props) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   const { clubSlug } = params;
   const { data, error } = await getClubTournamentRegistration(clubSlug, {
     registrationSlug: searchParams?.tournament ?? null,

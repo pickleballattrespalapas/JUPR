@@ -5,8 +5,8 @@ import { getClubTournamentRegistrationEdit } from "@/lib/tournamentRegistrationA
 import EditTournamentRegistrationForm from "./EditTournamentRegistrationForm";
 
 type EditTournamentRegistrationPageProps = {
-  params: { clubSlug: string };
-  searchParams?: { edit_token?: string; tournament?: string; tournament_id?: string };
+  params: Promise<{ clubSlug: string }>;
+  searchParams?: Promise<{ edit_token?: string; tournament?: string; tournament_id?: string }>;
 };
 
 const cardStyle = {
@@ -16,7 +16,9 @@ const cardStyle = {
   background: "white"
 };
 
-export default async function EditTournamentRegistrationPage({ params, searchParams }: EditTournamentRegistrationPageProps) {
+export default async function EditTournamentRegistrationPage(props: EditTournamentRegistrationPageProps) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   const { clubSlug } = params;
   const editToken = searchParams?.edit_token || "";
   const { data, error, status } = editToken

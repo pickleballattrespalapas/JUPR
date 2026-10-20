@@ -5,8 +5,9 @@ import TopPlayersPrintablePanel from "./TopPlayersPrintablePanel";
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 
-export default async function TopPlayersPrintablePage({ searchParams }: { searchParams?: { limit?: string } }) {
-  const { clubId, clubSlug } = requireAdminWorkspace();
+export default async function TopPlayersPrintablePage(props: { searchParams?: Promise<{ limit?: string }> }) {
+  const searchParams = await props.searchParams;
+  const { clubId, clubSlug } = await requireAdminWorkspace();
   const limit = Math.max(5, Math.min(Number(searchParams?.limit || 50) || 50, 200));
   const { data: status, error } = await getAdminLeagueManagerStatus(clubId);
 

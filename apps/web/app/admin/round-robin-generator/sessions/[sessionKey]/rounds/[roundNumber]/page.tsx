@@ -2,15 +2,16 @@ import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import GeneratorRoundRunner from "@/app/admin/play-generators/GeneratorRoundRunner";
 
 type Props = {
-  params: { sessionKey: string; roundNumber: string };
+  params: Promise<{ sessionKey: string; roundNumber: string }>;
 };
 
 function apiBase(): string | null {
   return process.env.JUPR_API_BASE_URL || process.env.NEXT_PUBLIC_JUPR_API_BASE_URL || null;
 }
 
-export default function RoundRobinRoundPage({ params }: Props) {
-  const { clubId } = requireAdminWorkspace();
+export default async function RoundRobinRoundPage(props: Props) {
+  const params = await props.params;
+  const { clubId } = await requireAdminWorkspace();
   return (
     <GeneratorRoundRunner
       apiBase={apiBase()}

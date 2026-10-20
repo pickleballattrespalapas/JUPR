@@ -4,10 +4,11 @@ import { getClub } from "@/lib/api";
 import { isNextAdminScoreEntryEnabled } from "@/lib/scoreEntry";
 
 type LegacyScoreEntryPageProps = {
-  params: { clubId: string };
+  params: Promise<{ clubId: string }>;
 };
 
-export default async function LegacyScoreEntryPage({ params }: LegacyScoreEntryPageProps) {
+export default async function LegacyScoreEntryPage(props: LegacyScoreEntryPageProps) {
+  const params = await props.params;
   if (!isNextAdminScoreEntryEnabled()) {
     return (
       <section>

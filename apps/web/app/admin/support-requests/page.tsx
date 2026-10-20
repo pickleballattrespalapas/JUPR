@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 
 export default async function AdminSupportRequestsPage() {
-  const { clubId } = requireAdminWorkspace();
+  const { clubId } = await requireAdminWorkspace();
   const { data: status, error } = await getAdminSupportRequestsStatus(clubId);
 
   return (

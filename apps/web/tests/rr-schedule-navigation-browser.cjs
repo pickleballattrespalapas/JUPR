@@ -85,7 +85,7 @@ async function verifyStandingsQr(page, expectedUrl) {
         NEXT_PUBLIC_JUPR_ENV: "staging", GENERATOR_BROWSER_WEB_PORT: webPort };
       start(process.env.GENERATOR_BROWSER_PYTHON || "python3", ["-m", "uvicorn", "generator_submission_api:app",
         "--app-dir", path.join(root, "tests/e2e"), "--host", "127.0.0.1", "--port", apiPort], env, root);
-      start(process.execPath, [require.resolve("next/dist/bin/next"), "dev", "--hostname", "127.0.0.1", "--port", webPort], env, webRoot);
+      start(process.execPath, [require.resolve("next/dist/bin/next"), "dev", "--webpack", "--hostname", "127.0.0.1", "--port", webPort], env, webRoot);
     }
     await ready(`${api}/fixture-result`);
     await ready(`${web}/clubs/test/round-robin-generator`);

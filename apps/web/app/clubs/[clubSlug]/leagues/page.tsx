@@ -5,8 +5,8 @@ import { publicLeagueHomeHref, publicLeagueResultsHref } from "@/components/Publ
 import { getClubLeagueResults } from "@/lib/api";
 
 type Props = {
-  params: { clubSlug: string };
-  searchParams?: Record<string, string | string[] | undefined>;
+  params: Promise<{ clubSlug: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
 type LeagueView = "active" | "past";
@@ -19,7 +19,7 @@ const cardStyle = {
   minWidth: 0
 };
 
-function selectedView(searchParams: Props["searchParams"]): LeagueView {
+function selectedView(searchParams: Awaited<Props["searchParams"]>): LeagueView {
   const raw = searchParams?.view;
   const value = Array.isArray(raw) ? raw[0] : raw;
   return value === "past" ? "past" : "active";
@@ -30,7 +30,9 @@ function viewHref(clubSlug: string, view: LeagueView): string {
   return view === "past" ? `${base}?view=past` : base;
 }
 
-export default async function PublicLeaguesPage({ params, searchParams }: Props) {
+export default async function PublicLeaguesPage(props: Props) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   const { data, error } = await getClubLeagueResults(params.clubSlug);
   const view = selectedView(searchParams);
   const activeLeagues = data?.leagues || [];

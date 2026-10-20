@@ -14,7 +14,8 @@ const cardStyle = {
   background: "white"
 };
 
-export default function SupportPage({ searchParams }: { searchParams?: SupportSearchParams }) {
+export default async function SupportPage(props: { searchParams?: Promise<SupportSearchParams> }) {
+  const searchParams = await props.searchParams;
   const clubSlug = supportParam(searchParams, "club");
   const subject = encodeURIComponent("Pickleball Club Sandwich support request");
   const body = encodeURIComponent("Name:\nClub:\nPage or issue:\nDetails:\n");

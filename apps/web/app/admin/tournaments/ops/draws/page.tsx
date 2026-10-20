@@ -2,8 +2,9 @@ import { redirect } from "next/navigation";
 import { readTournamentRouteContext } from "@/lib/tournamentRouteContext";
 import TournamentOpsWorkflowPage from "../TournamentOpsWorkflowPage";
 
-type Props = { searchParams?: Record<string, string | string[] | undefined> };
-export default function TournamentDrawOperationsPage({ searchParams }: Props) {
+type Props = { searchParams?: Promise<Record<string, string | string[] | undefined>> };
+export default async function TournamentDrawOperationsPage(props: Props) {
+  const searchParams = await props.searchParams;
   const context = readTournamentRouteContext(searchParams);
   if (!context.tournamentId) redirect("/admin/tournaments");
 

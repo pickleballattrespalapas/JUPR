@@ -1,11 +1,12 @@
 import Link from "@/components/PublicClubLink";
 import { publicSiteFetch } from "@/lib/clubSiteServer";
 import styles from "@/components/ClubWebsite.module.css";
-export default async function ClubInterclubPage({
-  params,
-}: {
-  params: { clubSlug: string };
-}) {
+export default async function ClubInterclubPage(
+  props: {
+    params: Promise<{ clubSlug: string }>;
+  }
+) {
+  const params = await props.params;
   const data = await publicSiteFetch<{
     leagues: {
       id: string;

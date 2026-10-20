@@ -4,8 +4,8 @@ import Link from "@/components/PublicClubLink";
 import { getPublicTeamLeagues } from "@/lib/teamLeagueApi";
 
 type Props = {
-  params: { clubSlug: string };
-  searchParams?: Record<string, string | string[] | undefined>;
+  params: Promise<{ clubSlug: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 type LeagueView = "active" | "past";
 const card = {
@@ -30,13 +30,15 @@ function leagueStatusLabel(status: string): string {
   } as Record<string, string>)[status] || "League available";
 }
 
-function selectedView(searchParams: Props["searchParams"]): LeagueView {
+function selectedView(searchParams: Awaited<Props["searchParams"]>): LeagueView {
   const raw = searchParams?.view;
   const value = Array.isArray(raw) ? raw[0] : raw;
   return value === "past" ? "past" : "active";
 }
 
-export default async function TeamLeaguesPage({ params, searchParams }: Props) {
+export default async function TeamLeaguesPage(props: Props) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   const view = selectedView(searchParams);
   const { data, error } = await getPublicTeamLeagues(params.clubSlug, view);
   const base = `/clubs/${encodeURIComponent(params.clubSlug)}/team-leagues`;

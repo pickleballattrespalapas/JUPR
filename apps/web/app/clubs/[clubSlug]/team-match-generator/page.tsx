@@ -1,9 +1,10 @@
 import Link from "@/components/PublicClubLink";
 import TeamMatchGenerator from "./TeamMatchGenerator";
 
-type Props = { params: { clubSlug: string } };
+type Props = { params: Promise<{ clubSlug: string }> };
 
-export default function TeamMatchGeneratorPage({ params }: Props) {
+export default async function TeamMatchGeneratorPage(props: Props) {
+  const params = await props.params;
   return (
     <section>
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
