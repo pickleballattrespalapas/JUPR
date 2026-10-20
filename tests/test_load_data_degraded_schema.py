@@ -9,6 +9,7 @@ from jupr_app.data.load import load_data
 class _FakeResponse:
     def __init__(self, data):
         self.data = data
+        self.count = len(data)
 
 
 class _FakeTableQuery:
@@ -17,7 +18,7 @@ class _FakeTableQuery:
         self.table_name = table_name
         self._select = ""
 
-    def select(self, cols):
+    def select(self, cols, **kwargs):
         self._select = cols
         return self
 
@@ -31,6 +32,9 @@ class _FakeTableQuery:
         return self
 
     def limit(self, *args, **kwargs):
+        return self
+
+    def range(self, *args):
         return self
 
     def execute(self):
