@@ -1,4 +1,6 @@
+import json
 from pathlib import Path
+import re
 
 
 def _read(path: str) -> str:
@@ -25,7 +27,7 @@ def test_api_contract_runs_new_deployment_and_admin_ux_regressions() -> None:
         assert test_path in workflow
 
 
-def test_next_build_runs_builder_contract_on_its_node_20_runtime() -> None:
+def test_next_build_runs_builder_contract_on_the_application_node_runtime() -> None:
     workflow = _read(".github/workflows/next-web-build.yml")
     builder_test = _read(
         "apps/web/app/admin/tournament-setup/tournamentSetupBuilder.test.mjs"
@@ -35,7 +37,12 @@ def test_next_build_runs_builder_contract_on_its_node_20_runtime() -> None:
     )
     storage_test = _read("apps/web/lib/adminAuthClient.storage.test.mjs")
 
-    assert "node-version: \"20\"" in workflow
+    node_major = _read("apps/web/.nvmrc").strip()
+    package = json.loads(_read("apps/web/package.json"))
+    assert node_major.isdecimal()
+    assert package["engines"]["node"] == f"{node_major}.x"
+    node_versions = re.findall(r"^[ \t]*node-version:[ \t]*(.*)$", workflow, re.MULTILINE)
+    assert {version.strip().strip("\"'") for version in node_versions} == {node_major}
     assert "npx tsc" in workflow
     assert "app/admin/tournament-setup/tournamentSetupBuilder.ts" in workflow
     assert "app/admin/tournaments/setup/tournamentSetupPublicationStatus.ts" in workflow
