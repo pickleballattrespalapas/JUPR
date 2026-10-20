@@ -545,3 +545,87 @@ def test_original_generator_cannot_skip_a_future_hub_round():
     with pytest.raises(ValueError, match="order"):
         service.persist_linked_generator_patch(db, before=before, patch={"state": state}, expected_version=before["updated_at"])
     assert db.storage == snapshot
+
+
+def test_hub_add_guest_is_atomic_and_exact_retry_does_not_duplicate_roster_or_reset_wait():
+    db = TransactionalHubDB()
+    session(db, count=4)
+    hub = command(db, create(db), "add_group", {"session_key": "rr-a"})
+    hub = command(db, hub, "auto_fill_courts")
+    original_assignment = deepcopy(hub["workspace"]["courts"][0]["current"])
+    before_version = raw_session(db)["version"]
+    added = command(db, hub, "add_player", {"session_key": "rr-a", "name": "  New   Guest "}, "arrival-once-key")
+    after = deepcopy(db.storage)
+    replayed = command(db, hub, "add_player", {"session_key": "rr-a", "name": "  New   Guest "}, "arrival-once-key")
+    assert replayed["replayed"] and db.storage == after
+    assert raw_session(db)["version"] == before_version + 1
+    assert added["hub"]["version"] == replayed["hub"]["version"]
+    players = added["workspace"]["groups"][0]["players"]
+    assert len(players) == 5 and players[-1]["name"] == "New Guest"
+    assert players[-1]["identity"].startswith("guest:rr-a:")
+    assert players[-1]["profile_id"] is None and players[-1]["active"]
+    assert {key: added["workspace"]["courts"][0]["current"][key] for key in ("session_key", "match_id", "side_a", "side_b", "assigned_at")} == {key: original_assignment[key] for key in ("session_key", "match_id", "side_a", "side_b", "assigned_at")}
+    event = service._event(raw_session(db))
+    assert players[-1]["participant_id"] in event["rounds"][0]["byeParticipantIds"]
+
+
+def test_hub_add_profile_uses_club_canonical_name_and_rejects_duplicates_and_other_clubs():
+    db = TransactionalHubDB()
+    session(db, count=4)
+    db.storage["players"] = [{"id": 20, "club_id": "club-a", "name": "Canonical Player"},
+                             {"id": 21, "club_id": "club-b", "name": "Private Other Club"}]
+    hub = command(db, create(db), "add_group", {"session_key": "rr-a"})
+    hub = command(db, hub, "add_player", {"session_key": "rr-a", "name": "Client alias", "player_id": 20})
+    added = hub["workspace"]["groups"][0]["players"][-1]
+    assert added["name"] == "Canonical Player"
+    assert added["profile_id"] == 20 and added["identity"] == "player:20"
+    for player_id, message in [(20, "already in"), (21, "not found in this club"), (999, "not found in this club")]:
+        snapshot = deepcopy(db.storage)
+        with pytest.raises(ValueError, match=message):
+            command(db, hub, "add_player", {"session_key": "rr-a", "name": "Another alias", "player_id": player_id})
+        assert db.storage == snapshot
+
+
+@pytest.mark.parametrize("player_id", [True, 0, -1, 1.5, "20"])
+def test_hub_add_profile_requires_positive_integer_identity(player_id):
+    db = TransactionalHubDB()
+    session(db, count=4)
+    hub = command(db, create(db), "add_group", {"session_key": "rr-a"})
+    snapshot = deepcopy(db.storage)
+    with pytest.raises(ValueError, match="valid club player"):
+        command(db, hub, "add_player", {"session_key": "rr-a", "name": "Arrival", "player_id": player_id})
+    assert db.storage == snapshot
+
+
+def test_hub_add_player_rejects_unattached_and_locked_sessions_without_writes():
+    db = TransactionalHubDB()
+    session(db, count=4)
+    session(db, "rr-b", count=4, offset=10)
+    hub = command(db, create(db), "add_group", {"session_key": "rr-a"})
+    snapshot = deepcopy(db.storage)
+    with pytest.raises(ValueError, match="attached to this hub"):
+        command(db, hub, "add_player", {"session_key": "rr-b", "name": "Arrival"})
+    assert db.storage == snapshot
+    raw_session(db)["state"]["generator_submission"] = {"status": "pending"}
+    hub = service.get_round_robin_hub(db, club_id="club-a", hub_id=hub["hub"]["id"])
+    assert not hub["workspace"]["groups"][0]["can_add_player"]
+    assert "locked" in hub["workspace"]["groups"][0]["add_player_unavailable_reason"]
+    snapshot = deepcopy(db.storage)
+    with pytest.raises(ValueError, match="locked"):
+        command(db, hub, "add_player", {"session_key": "rr-a", "name": "Arrival"})
+    assert db.storage == snapshot
+
+
+def test_hub_add_player_rolls_back_if_another_group_changes_before_joint_commit():
+    db = TransactionalHubDB()
+    session(db, count=4)
+    session(db, "rr-b", count=4, offset=10)
+    hub = command(db, create(db), "add_group", {"session_key": "rr-a"})
+    hub = command(db, hub, "add_group", {"session_key": "rr-b"})
+    target_before = deepcopy(raw_session(db))
+    hub_before = deepcopy(db.storage[service.HUB_TABLE])
+    db.before_commit = lambda current: raw_session(current, "rr-b").update(version=99)
+    with pytest.raises(PublicLiveConflictError, match="changed"):
+        command(db, hub, "add_player", {"session_key": "rr-a", "name": "Arrival"}, "arrival-conflict-key")
+    assert raw_session(db) == target_before
+    assert db.storage[service.HUB_TABLE] == hub_before

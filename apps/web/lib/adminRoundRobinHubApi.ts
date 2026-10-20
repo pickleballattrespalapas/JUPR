@@ -6,10 +6,17 @@ export type HubMatch = {
   court_id?: string | null; reserved_court_id?: string | null; score_a?: number | null; score_b?: number | null;
 };
 export type HubCourt = HubCourtConfig & { current: HubMatch | null; next: HubMatch | null };
+export type HubGroupPlayer = {
+  participant_id: string; name: string; display_name?: string; identity: string; profile_id: number | null;
+  paused: boolean; wait_seconds: number; on_court: boolean; reserved: boolean; active: boolean;
+  active_from_round?: number; inactive_from_round?: number | null; inactive_rounds?: number[];
+  can_rejoin?: boolean;
+};
 export type HubGroup = {
   session_key: string; title: string; current_round_number: number; round_status: string;
   completed_matches: number; total_matches: number; can_advance: boolean; event_format: string; scoring_mode: string;
   total_rounds?: number; advance_label?: string; rating_mode?: string; status?: string; dedicated_court_ids?: string[];
+  players?: HubGroupPlayer[]; can_add_player?: boolean; add_player_unavailable_reason?: string | null;
 };
 export type HubWaitingPlayer = {
   identity: string; name: string; display_name?: string; paused: boolean; wait_seconds: number; session_keys: string[];
@@ -38,7 +45,7 @@ export type HubDetailResponse = { ok: boolean; hub: HubSummary; workspace: HubWo
 export type HubCommandAction = "add_group" | "remove_group" | "configure_courts" | "assign_next_court" |
   "assign_game" | "reserve_game_for_court" | "cancel_reservation" | "move_game" | "release_game" |
   "score_and_release" | "mark_played" | "pause_player" | "resume_player" | "advance_round" | "finish_hub" | "auto_fill_courts" |
-  "resolve_identities";
+  "resolve_identities" | "add_player";
 export type HubCommand = {
   action: HubCommandAction; payload: Record<string, unknown>; expected_version: string | number; idempotency_key: string;
 };
@@ -83,7 +90,7 @@ export function hubPlayerLabel(player: { name: string; display_name?: string }):
 }
 
 export function hubMatchLabel(match: HubMatch): string {
-  return `${match.side_a.map(hubPlayerLabel).join(" / ")} vs ${match.side_b.map(hubPlayerLabel).join(" / ")}`;
+  return `${match.side_a.map(player => player.name).join(" / ")} vs ${match.side_b.map(player => player.name).join(" / ")}`;
 }
 
 export function isUncertainHubError(error: unknown): boolean {

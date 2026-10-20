@@ -196,3 +196,35 @@ def test_identity_batch_resolution_uses_authenticated_cas_and_exact_retry(api):
     assert second.json()["replayed"] is True
     assert second.json()["hub"]["version"] == first.json()["hub"]["version"]
     assert client.post(path, headers=HEADERS, json={**body, "idempotency_key": "stale-resolution"}).status_code == 409
+
+
+def test_add_player_command_returns_group_roster_and_replays_once(api):
+    client, db = api
+    session(db, count=4)
+    hub = command(db, create(db), "add_group", {"session_key": "rr-a"})
+    body = {"action": "add_player", "payload": {"session_key": "rr-a", "name": "New arrival"},
+            "expected_version": hub["hub"]["version"], "idempotency_key": "add-player-api-once"}
+    path = f"{BASE}/{hub['hub']['id']}/commands"
+    first = client.post(path, headers=HEADERS, json=body)
+    retry = client.post(path, headers=HEADERS, json=body)
+    assert first.status_code == retry.status_code == 200
+    assert retry.json()["replayed"]
+    group = first.json()["workspace"]["groups"][0]
+    assert group["can_add_player"] and len(group["players"]) == 5
+    assert group["players"][-1]["name"] == "New arrival"
+    assert first.json()["hub"]["version"] == retry.json()["hub"]["version"]
+
+
+@pytest.mark.parametrize("payload", [{"session_key": "rr-a", "name": "  "},
+    {"session_key": "rr-a", "name": "x" * 161}, {"session_key": "rr-a", "name": ["not a name"]},
+    {"session_key": "rr-a", "name": "Guest", "player_id": True}])
+def test_add_player_invalid_payload_is_rejected_without_writes(api, payload):
+    client, db = api
+    session(db, count=4)
+    hub = command(db, create(db), "add_group", {"session_key": "rr-a"})
+    snapshot = deepcopy(db.storage)
+    response = client.post(f"{BASE}/{hub['hub']['id']}/commands", headers=HEADERS, json={
+        "action": "add_player", "payload": payload, "expected_version": hub["hub"]["version"],
+        "idempotency_key": "invalid-add-player"})
+    assert response.status_code == 400
+    assert db.storage == snapshot

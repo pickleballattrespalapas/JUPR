@@ -524,3 +524,117 @@ def test_fill_resumes_legacy_completed_round_once_and_dispatch_clears_end_bounda
     assert "hubAutoAdvancedFromRound" not in events["a"]
     state, events = command(state, events, "auto_fill_courts")
     assert events["a"]["currentRoundNumber"] == 2
+
+
+def test_hub_add_players_preserves_scored_playing_reserved_matches_and_waits():
+    state, events = setup({"a": event(count=12)}, courts=1)
+    first, second, third = current_matches(events)
+    state, events = command(state, events, "assign_game", session_key="a", match_id=first["id"], court_id="c0")
+    state, events = score(state, events, "c0")
+    state, events = command(state, events, "assign_game", session_key="a", match_id=second["id"], court_id="c0")
+    state, events = command(state, events, "reserve_game_for_court", session_key="a", match_id=third["id"], court_id="c0")
+    protected = deepcopy(current_matches(events))
+    old_waits, assignments = deepcopy(state["players"]), deepcopy(state["courts"])
+    for number in range(4):
+        state, events = command(state, events, "add_player", now=LATER, session_key="a", name=f"Arrival {number}")
+        assert current_matches(events)[:3] == protected
+        assert state["courts"] == assignments
+        assert {key: state["players"][key] for key in old_waits} == old_waits
+        if number < 3:
+            assert len(events["a"]["rounds"][0]["byeParticipantIds"]) == number + 1
+    assert len(current_matches(events)) == 4
+    queued = build_hub_snapshot(state, events, now=LATER)["eligible_queue"]
+    assert len(queued) == 1
+    assert {p["name"] for p in queued[0]["side_a"] + queued[0]["side_b"]} == {f"Arrival {n}" for n in range(4)}
+    assert events["a"]["currentRoundNumber"] == 1
+    assert all(p["matches"] == 0 for p in generator_event_standings(events["a"]))
+
+
+def test_group_rosters_preserve_local_profile_names_and_share_pause_wait():
+    state, events = setup({"a": event("A", 4, player_ids=[1, 2, 3, 4]), "b": event("B", 4, player_ids=[1, 5, 6, 7])})
+    state, events = command(state, events, "pause_player", now=LATER, identity="player:1")
+    snapshot = build_hub_snapshot(state, events, now=LATER)
+    rosters = {g["session_key"]: g["players"] for g in snapshot["groups"]}
+    assert len(snapshot["players"]) == 7
+    shared_a, shared_b = rosters["a"][0], rosters["b"][0]
+    assert shared_a["name"] == "A 0" and shared_b["name"] == "B 0"
+    assert shared_a["identity"] == shared_b["identity"] == "player:1"
+    assert shared_a["paused"] and shared_b["paused"]
+    assert shared_a["wait_seconds"] == shared_b["wait_seconds"] == 600
+    assert shared_a["active"] and shared_b["active"]
+    assert all(g["can_add_player"] and g["add_player_unavailable_reason"] is None for g in snapshot["groups"])
+
+
+def test_adding_shared_profile_reuses_pause_wait_and_departed_profile_can_rejoin():
+    state, events = setup({"a": event("A", 4, player_ids=[1, 2, 3, 4]), "b": event("B", 4, player_ids=[5, 6, 7, 8])})
+    state, events = command(state, events, "pause_player", now=LATER, identity="player:1")
+    previous = deepcopy(state["players"]["player:1"])
+    state, events = command(state, events, "add_player", now="2026-10-20T03:20:00Z", session_key="b", name="A 0", player_id=1)
+    assert state["players"]["player:1"] == previous
+    added = events["b"]["participants"][-1]
+    assert player_identity(added, "b", state) == "player:1"
+    before = deepcopy(events)
+    events["b"] = mutate_generator_roster(events["b"], action="remove", participant_id=added["id"])
+    state, events = reconcile_hub_events(state, before, events, now=LATER)
+    entry = next(g for g in build_hub_snapshot(state, events, now=LATER)["groups"] if g["session_key"] == "b")["players"][-1]
+    assert not entry["active"] and entry["inactive_from_round"] == 1
+    assert entry["can_rejoin"]
+    assert all(added["id"] not in ids for number, ids in events["b"].get("rosterByRound", {}).items() if int(number) >= 1)
+    state, events = command(state, events, "add_player", now=LATER, session_key="b", name="A 0", player_id=1)
+    assert events["b"]["participants"][-1]["id"] != added["id"]
+    assert state["players"]["player:1"] == previous
+    old_entry = next(p for p in events["b"]["participants"] if p["id"] == added["id"])
+    assert old_entry["inactive_from_round"] == 1
+    with pytest.raises(ValueError, match="already in"):
+        command(state, events, "add_player", session_key="b", name="Different label", player_id=1)
+
+
+@pytest.mark.parametrize("change, message", [
+    ({"status": "completed"}, "active round robin"),
+    ({"eventFormat": "moneyball_expectations"}, "starting lineup"),
+    ({"playoff": {"format": "top_eight"}}, "Playoff teams"),
+])
+def test_hub_add_player_respects_existing_generator_restrictions(change, message):
+    state, events = setup({"a": event(count=4)})
+    events["a"].update(change)
+    group = build_hub_snapshot(state, events, now=START)["groups"][0]
+    assert not group["can_add_player"]
+    assert message in group["add_player_unavailable_reason"]
+    with pytest.raises(ValueError, match=message):
+        command(state, events, "add_player", session_key="a", name="Arrival")
+
+
+def test_temporarily_absent_profile_cannot_rejoin_as_duplicate_roster_entry():
+    state, events = setup({"a": event("A", 4, player_ids=[1, 2, 3, 4])})
+    person = events["a"]["participants"][0]
+    person["inactive_rounds"] = [1]
+    events["a"].setdefault("rosterByRound", {})["1"] = [p["id"] for p in events["a"]["participants"][1:]]
+    with pytest.raises(ValueError, match="active or upcoming roster"):
+        command(state, events, "add_player", session_key="a", name="A 0", player_id=1)
+
+
+def test_rejoin_guard_includes_ungenerated_future_roster_overrides():
+    state, events = setup({"a": event("A", 4, player_ids=[1, 2, 3, 4])})
+    person = events["a"]["participants"][0]
+    before = deepcopy(events)
+    events["a"] = mutate_generator_roster(events["a"], action="remove", participant_id=person["id"])
+    state, events = reconcile_hub_events(state, before, events, now=START)
+    events["a"].setdefault("rosterByRound", {})["9"] = [p["id"] for p in events["a"]["participants"]]
+    member = build_hub_snapshot(state, events, now=START)["groups"][0]["players"][0]
+    assert not member["can_rejoin"]
+    with pytest.raises(ValueError, match="active or upcoming roster"):
+        command(state, events, "add_player", session_key="a", name="A 0", player_id=1)
+
+
+def test_departed_profile_can_rejoin_while_playing_in_another_group_but_cannot_double_book():
+    state, events = setup({"a": event("A", 4, player_ids=[1, 2, 3, 4]), "b": event("B", 4, player_ids=[1, 5, 6, 7])})
+    before = deepcopy(events)
+    events["b"] = mutate_generator_roster(events["b"], action="remove", participant_id=events["b"]["participants"][0]["id"])
+    state, events = reconcile_hub_events(state, before, events, now=START)
+    state, events = command(state, events, "assign_game", session_key="a", match_id=current_matches(events)[0]["id"], court_id="c0")
+    member = build_hub_snapshot(state, events, now=START)["groups"][1]["players"][0]
+    assert member["can_rejoin"] and member["on_court"]
+    state, events = command(state, events, "add_player", session_key="b", name="B 0", player_id=1)
+    snapshot = build_hub_snapshot(state, events, now=START)
+    assert not any(m["session_key"] == "b" for m in snapshot["eligible_queue"])
+    assert any(m["session_key"] == "b" and "A player is already assigned to a court." in m["blockers"] for m in snapshot["blocked_queue"])

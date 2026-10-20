@@ -74,6 +74,7 @@ function setup(reviews = [review()]) {
   } };
 }
 global.fetch = async (url, options = {}) => {
+  if (url.includes("/clubs/club/players?")) return { ok: true, json: async () => ({ players: [{ id: 101, name: "Club Alex" }, { id: 102, name: "Casey Club" }, { id: 103, name: "Return Player" }] }) };
   assert.equal(options.headers.Authorization, "Bearer test-staff");
   if (!options.body) return { ok: true, json: async () => url.endsWith("/round-robin-hubs") ? { ok: true, hubs: [clone(detail.hub)], sessions: [] } : clone(detail) };
   const body = JSON.parse(options.body); requests.push(body);
@@ -95,6 +96,16 @@ global.fetch = async (url, options = {}) => {
     detail.workspace.identity_pending_count = detail.workspace.identity_review.filter(item => item.status === "pending").length;
   } else if (body.action === "pause_player") {
     detail.workspace.players.find(player => player.identity === body.payload.identity).paused = true;
+    detail.workspace.groups.forEach(group => group.players?.forEach(player => { if (player.identity === body.payload.identity) player.paused = true; }));
+  } else if (body.action === "add_player") {
+    const group = detail.workspace.groups.find(item => item.session_key === body.payload.session_key);
+    const identity = body.payload.player_id ? `player:${body.payload.player_id}` : `guest:${body.payload.session_key}:${body.payload.name}`;
+    const player = { participant_id: `added-${requests.length}`, identity, name: body.payload.name, profile_id: body.payload.player_id || null,
+      active: true, active_from_round: 1, paused: false, wait_seconds: 0, on_court: false, reserved: false };
+    group.players.push(player);
+    const existing = detail.workspace.players.find(item => item.identity === identity);
+    if (existing) existing.session_keys.push(group.session_key);
+    else detail.workspace.players.push({ ...player, session_keys: [group.session_key], participant_ids: [player.participant_id] });
   } else throw new Error(`Unexpected action ${body.action}`);
   detail.hub.version += 1; receipts.set(body.idempotency_key, clone(body));
   if (failAfterCommit) { failAfterCommit = false; throw new Error("Response lost after identity decision saved"); }
@@ -116,7 +127,7 @@ global.fetch = async (url, options = {}) => {
   assert.equal(button(tree, "Next open court").props.disabled, false, "Unrelated ready matches remain dispatchable during review");
   await click("Match queue");
   assert.ok(text(tree.toJSON()).includes("Matching player name needs identity review: 1"));
-  assert.ok(text(tree.toJSON()).includes("1 · Numbers A vs Partner"), "Match labels distinguish separate guest entries");
+  assert.ok(text(tree.toJSON()).includes("1 vs Partner"), "Match labels use names with the group shown separately");
   await click("Review matching names");
   assert.ok(tree.root.findByProps({ "aria-label": "Matching player names" }));
   assert.equal(choice("Same person").props.disabled, false);
@@ -193,7 +204,65 @@ global.fetch = async (url, options = {}) => {
   assert.notEqual(requests[0].idempotency_key, requests[1].idempotency_key);
   await act(async () => tree.unmount());
 
-  assert.equal(api.hubMatchLabel(blockedMatch), "1 · Numbers A vs Partner");
+  setup([]);
+  const shared = { identity: "player:101", paused: false, wait_seconds: 30, on_court: false, reserved: false, active: true, active_from_round: 1, profile_id: 101 };
+  detail.workspace.players = [{ ...shared, name: "Alex local", session_keys: ["a", "b"], participant_ids: { a: "a-1", b: "b-1" } }];
+  detail.workspace.groups[0].players = [{ ...shared, participant_id: "a-1", name: "Alex local" },
+    { ...shared, identity: "player:103", profile_id: 103, participant_id: "a-left", name: "Return Player", active: false, inactive_from_round: 1, can_rejoin: true }];
+  detail.workspace.groups[1].players = [{ ...shared, participant_id: "b-1", name: "Zander alias" }];
+  detail.workspace.groups[2].players = [];
+  detail.workspace.groups.forEach(group => { group.can_add_player = group.session_key !== "c"; });
+  detail.workspace.groups[2].add_player_unavailable_reason = "Moneyball uses its fixed roster. Open Manage round robin to substitute a player.";
+  detail.workspace.groups.reverse();
+  await mount(); await click("Players");
+  const groupSection = key => tree.root.findByProps({ "data-player-group": key });
+  assert.deepEqual(tree.root.findAll(node => node.props["data-player-group"]).map(node => node.props["data-player-group"]), ["a", "b", "c"]);
+  assert.equal(text(groupSection("a").findAllByType("strong")[0]), "Alex local");
+  assert.equal(text(groupSection("b").findByType("strong")), "Zander alias", "Each group preserves its own alias for a shared profile");
+  await act(async () => groupSection("a").findAllByType("button").find(node => text(node) === "Pause player").props.onClick());
+  assert.equal(groupSection("b").findAllByType("button").some(node => text(node) === "Ready again"), true, "Pausing from one group updates the shared person's controls in another group");
+  const search = tree.root.findAllByType("input").find(node => node.props.type === "search");
+  await act(async () => search.props.onChange({ target: { value: "Zander" } }));
+  assert.equal(tree.root.findAll(node => node.props["data-player-group"] === "b").length, 1);
+  assert.equal(tree.root.findAll(node => node.props["data-player-group"] === "a").length, 0, "Search uses the group's own alias");
+  await act(async () => search.props.onChange({ target: { value: "" } }));
+  assert.equal(groupSection("c").findAllByType("button").some(node => text(node) === "Add player"), false);
+  assert.ok(text(groupSection("c")).includes("fixed roster"));
+
+  async function openAdd(key) { await act(async () => groupSection(key).findAllByType("button").find(node => text(node) === "Add player").props.onClick()); }
+  async function typePlayer(value) { await act(async () => tree.root.findAllByType("input").find(node => node.props["aria-label"] === "Player name or club profile").props.onChange({ target: { value } })); }
+  async function submitPlayer() { await act(async () => tree.root.findByProps({ id: "hub-add-player-form" }).props.onSubmit({ preventDefault() {} })); }
+  await openAdd("b"); await typePlayer("Late Guest"); failAfterCommit = true;
+  await submitPlayer();
+  const lostAdd = clone(requests.at(-1));
+  assert.deepEqual(lostAdd.payload, { session_key: "b", name: "Late Guest" });
+  assert.equal(lostAdd.action, "add_player");
+  assert.ok(tree.root.findByProps({ "data-dialog": "Add player" }), "An uncertain add keeps its dialog available for the exact retry");
+  assert.equal(button(tree, "Add player to round robin").props.disabled, true);
+  await click("Retry saved action");
+  assert.deepEqual(requests.at(-1), lostAdd);
+  assert.equal(tree.root.findAllByProps({ "data-dialog": "Add player" }).length, 0);
+  assert.equal(groupSection("b").findAllByType("strong").filter(node => text(node) === "Late Guest").length, 1, "Retried addition appears once in the chosen group");
+  assert.equal(groupSection("a").findAllByType("strong").some(node => text(node) === "Late Guest"), false);
+
+  await openAdd("b"); await typePlayer("Casey");
+  await act(async () => tree.root.findByProps({ "data-player-value": "102" }).props.onClick({ preventDefault() {} }));
+  await submitPlayer();
+  assert.deepEqual(requests.at(-1).payload, { session_key: "b", name: "Casey Club", player_id: 102 }, "Choosing a directory result sends its authoritative profile ID");
+  await openAdd("a"); await typePlayer("Casey");
+  await act(async () => tree.root.findByProps({ "data-player-value": "102" }).props.onClick({ preventDefault() {} }));
+  await typePlayer("Different Guest"); await submitPlayer();
+  assert.deepEqual(requests.at(-1).payload, { session_key: "a", name: "Different Guest" }, "Editing a selected name clears its profile ID");
+  await openAdd("a"); await typePlayer("Club Alex");
+  assert.equal(tree.root.findByProps({ "data-player-value": "101" }).props.disabled, true, "An existing active profile cannot be added again");
+  await typePlayer("Return Player");
+  assert.equal(tree.root.findByProps({ "data-player-value": "103" }).props.disabled, false, "The server's permanent-departure eligibility allows the player to rejoin");
+  await act(async () => tree.root.findByProps({ "data-player-value": "103" }).props.onClick({ preventDefault() {} }));
+  await submitPlayer();
+  assert.deepEqual(requests.at(-1).payload, { session_key: "a", name: "Return Player", player_id: 103 });
+  await act(async () => tree.unmount());
+
+  assert.equal(api.hubMatchLabel(blockedMatch), "1 vs Partner");
   assert.equal(api.hubPlayerLabel({ name: "Legacy name" }), "Legacy name", "Older snapshots still render safely");
   console.log("Round robin hub identity review checks passed");
 })().catch(error => { console.error(error); process.exitCode = 1; });
