@@ -314,7 +314,12 @@ def test_admin_match_uploader_unrated_singles_records_without_rating_change(monk
     assert tables["matches"][0]["rating_scope"] == "unrated"
     assert tables["matches"][0]["match_format"] == "singles"
     assert tables["matches"][0]["singles_replay_managed"] is True
-    assert tables["players"] == before
+    for player, previous in zip(tables["players"], before):
+        assert {key: value for key, value in player.items()
+                if key not in {"active", "inactive_at", "last_game_at"}} == previous
+        assert player["last_game_at"] == "2026-05-01T00:00:00+00:00"
+        assert player["active"] is False  # historical play is outside the 14-day window
+        assert player["inactive_at"] is not None
 
 
 def test_admin_match_uploader_first_singles_uses_neutral_independent_seed_and_keeps_latest_date(

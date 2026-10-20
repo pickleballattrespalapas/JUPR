@@ -20,6 +20,7 @@ def _tables() -> dict[str, list[dict]]:
 
 
 def _install(monkeypatch, supabase):
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_SUPPORT_REQUESTS", "1")
     monkeypatch.setenv("SUPABASE_URL", "http://example.local")
     monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
     monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)

@@ -26,7 +26,7 @@ const initialState: State = {
   consent: false
 };
 
-export default function SupportRequestForm({ clubSlug = "tres-palapas" }: { clubSlug?: string }) {
+export default function SupportRequestForm({ clubSlug }: { clubSlug: string }) {
   const [state, setState] = useState<State>(initialState);
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);

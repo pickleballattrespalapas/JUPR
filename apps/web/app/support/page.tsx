@@ -3,6 +3,9 @@ import PublicControls from "@/components/PublicControls";
 import Link from "next/link";
 import { SERVICE_LOCATION, SERVICE_OPERATOR, SUPPORT_EMAIL } from "@/lib/publicSupportContent";
 import SupportRequestForm from "./SupportRequestForm";
+import SupportIntakeGate, { supportParam, type SupportSearchParams } from "@/components/SupportIntakeGate";
+
+export const dynamic = "force-dynamic";
 
 const cardStyle = {
   border: "1px solid #e2e8f0",
@@ -11,7 +14,8 @@ const cardStyle = {
   background: "white"
 };
 
-export default function SupportPage() {
+export default function SupportPage({ searchParams }: { searchParams?: SupportSearchParams }) {
+  const clubSlug = supportParam(searchParams, "club");
   const subject = encodeURIComponent("Pickleball Club Sandwich support request");
   const body = encodeURIComponent("Name:\nClub:\nPage or issue:\nDetails:\n");
   return (
@@ -34,7 +38,7 @@ export default function SupportPage() {
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Data corrections</h2>
           <p style={{ color: "#475569" }}>Wrong score, teammate, opponent, league, tournament entry, or player profile details should use the correction checklist.</p>
-          <Link href="/data-corrections">Open correction checklist</Link>
+          <Link href={clubSlug ? `/data-corrections?${new URLSearchParams({ club: clubSlug })}` : "/data-corrections"}>Open correction checklist</Link>
         </article>
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>FAQ</h2>
@@ -46,12 +50,12 @@ export default function SupportPage() {
 <article id="general-support-form" style={{ ...cardStyle, marginTop: "1rem" }}>
         <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Send a support request</h2>
         <p style={{ color: "#475569" }}>Send your question to the club&apos;s support team. Submitting this form will not change player, match, rating, or tournament information.</p>
-        <SupportRequestForm />
+        <SupportIntakeGate path="/support" searchParams={searchParams}><SupportRequestForm clubSlug={clubSlug} /></SupportIntakeGate>
       </article>
       <article id="operator" style={{ ...cardStyle, marginTop: "1rem", background: "#f8fafc" }}>
         <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Operator and policy links</h2>
         <p style={{ color: "#475569" }}>{SERVICE_OPERATOR} operates this service for {SERVICE_LOCATION}.</p>
-        <p><Link href="/privacy">Privacy policy</Link> · <Link href="/profile-privacy">Profile privacy request</Link> · <Link href="/terms">Terms of use</Link></p>
+        <p><Link href="/privacy">Privacy policy</Link> · <Link href={clubSlug ? `/profile-privacy?${new URLSearchParams({ club: clubSlug })}` : "/profile-privacy"}>Profile privacy request</Link> · <Link href="/terms">Terms of use</Link></p>
       </article>
     </section>
   );

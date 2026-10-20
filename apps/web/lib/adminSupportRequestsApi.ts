@@ -1,5 +1,6 @@
 export type AdminSupportRequestsStatus = {
   enabled: boolean;
+  ready_for_review?: boolean;
   status: string;
   requests_endpoint?: string | null;
   update_endpoint?: string | null;

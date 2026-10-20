@@ -128,6 +128,44 @@ def test_admin_tournament_ops_snapshot_includes_player_options(monkeypatch):
     assert payload["teams"][0]["draw_id"] == "draw_1"
 
 
+def test_admin_tournament_ops_recovery_keeps_schema_valid_club_roster(monkeypatch):
+    tables = tournament_team_tables()
+    for player in tables["players"]:
+        player["active"] = player["id"] != 2
+    tables["players"].append({"club_id": "other-club", "id": 5, "name": "Other", "active": True})
+    supabase = FakeSupabase(tables, strict_select_tables={"players"})
+    monkeypatch.setenv("JUPR_ENABLE_NEXT_ADMIN_TOURNAMENTS", "1")
+    monkeypatch.setenv("SUPABASE_URL", "http://example.local")
+    monkeypatch.setenv("SUPABASE_ANON_KEY", "local")
+    monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
+    _install_auth(monkeypatch)
+
+    def unavailable_state(*_args, **_kwargs):
+        raise RuntimeError("State table temporarily unavailable")
+
+    monkeypatch.setattr(
+        "jupr_app.services.admin_tournament_ops_service._load_admin_tournament_ops_state",
+        unavailable_state,
+    )
+    response = TestClient(app).get(
+        "/admin/clubs/club/tournaments/admin/tournaments/tour_1/ops?draw_id=draw_1",
+        headers={"Authorization": "Bearer local"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["players"] == [
+        {"id": 1, "name": "Alex", "active": True},
+        {"id": 2, "name": "Blair", "active": False},
+        {"id": 3, "name": "Casey", "active": True},
+        {"id": 4, "name": "Devon", "active": True},
+    ]
+    assert payload["state_ready"] is False
+    assert payload["state_fingerprint"] is None
+    assert payload["warnings"] == ["Tournament Ops state fingerprint unavailable: RuntimeError"]
+    assert supabase.operations == []
+
+
 def test_admin_tournament_draw_team_replace_blocks_existing_games(monkeypatch):
     tables = tournament_team_tables()
     tables["tournament_games"].append({"id": "game_1", "tournament_id": "tour_1", "draw_id": "draw_1"})

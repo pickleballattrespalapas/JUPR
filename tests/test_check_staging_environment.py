@@ -283,6 +283,8 @@ def test_full_next_api_check_requires_enabled_status_payloads(monkeypatch):
             payload["mutations_enabled"] = expected_gates[
                 "JUPR_ENABLE_NEXT_ADMIN_COMMUNICATIONS_MUTATIONS"
             ]
+        if path.endswith("/support-requests/status"):
+            payload["ready_for_review"] = False
         if path.endswith("/player-updates/status"):
             payload["auto_send_enabled"] = False
         elif path.endswith("/league-manager/status"):
@@ -364,6 +366,8 @@ def test_full_next_api_check_requires_enabled_status_payloads(monkeypatch):
             }, None
         if url.endswith("/admin/operations/status"):
             return 401, None, "HTTP 401"
+        if url.endswith("/support/intake/status"):
+            return 200, {"accepting_requests": False}, None
         if "/admin/clubs/" in url and url.endswith("/status"):
             return 200, status_payload(url), None
         if url.endswith("/health/live-sessions"):
@@ -396,6 +400,7 @@ def test_full_next_api_check_requires_enabled_status_payloads(monkeypatch):
         summary["checked_endpoints"][template.format(club_id="tres_palapas")]["status"] == "ok"
         for template in cse.ADMIN_STATUS_PATHS
     )
+    assert summary["checked_endpoints"]["/clubs/tres-palapas/support/intake/status"]["accepting_requests"] is False
     for suffix in (
         "player-updates/status",
         "verified-updates/status",
@@ -406,6 +411,22 @@ def test_full_next_api_check_requires_enabled_status_payloads(monkeypatch):
         ]
         assert checked["enabled"] is True
         assert checked["mutations_enabled"] is False
+
+    def fake_support_drift_get(url: str):
+        status, payload, error = fake_get(url)
+        if url.endswith("/support/intake/status"):
+            payload = {"accepting_requests": True}
+        return status, payload, error
+
+    monkeypatch.setattr(cse, "_http_get_json", fake_support_drift_get)
+    support_rc, support_summary = cse.run_checks(_args(
+        api_base_url="https://api.example.com", require_api=True, expect_full_next_admin=True,
+        write_wave="none", expected_git_sha=sha, expected_fly_app_name=app_name,
+        expected_web_origin="https://jupr-git-staging-pickleballattrespalapas1.vercel.app",
+        expected_supabase_project_ref=project_ref,
+    ))
+    assert support_rc == 1
+    assert any("support/intake/status accepting_requests" in error for error in support_summary["errors"])
 
     def fake_web_origin_drift_get(url: str):
         status, payload, error = fake_get(url)

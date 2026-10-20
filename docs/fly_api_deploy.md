@@ -93,8 +93,8 @@ timestamps. For example, the reconciled staging ledger records
 repository filename begins `20260719155515`. Treating those numbers as equal
 would incorrectly request duplicate migration application.
 
-The reviewed profile therefore requires the exact 39 logical ledger names
-known from the reconciled environment and rejects missing, duplicate, malformed,
+The reviewed profile therefore requires the exact logical ledger names listed
+in the contract and rejects missing, duplicate, malformed,
 or additional names. Its repository-content fingerprint hashes every canonical
 migration filename and its SQL bytes, forcing an explicit profile review when
 either the inventory or reviewed SQL changes. The
@@ -110,6 +110,38 @@ ledger row. The workflow directly requires:
 
 The logical-name profile, schema probes, and protected reviewed head must all
 pass before and after deployment. The workflow never applies or repairs schema.
+
+### Updating the reviewed migration contract
+
+A migration change requires a local contract update after its SQL review. Keep
+the existing `required_ledger_names`: historical connector-assigned names can
+differ from repository filenames, so regenerating that list from filenames
+would discard reviewed requirements. Add only the reviewed new logical names,
+keeping the list unique and sorted. A runtime dependency must be a required
+ledger entry; do not classify it as schema-only to bypass deployment checks.
+
+After all SQL changes are final, calculate the repository fingerprint using the
+same implementation as the verifier, from the repository root:
+
+```sh
+python - <<'PY'
+from pathlib import Path
+from scripts.deployment_verifier import repository_migration_content_fingerprint
+print(repository_migration_content_fingerprint(Path("supabase/migrations")))
+PY
+```
+
+Set `repository_migration_content_sha256` to that result. Preserve
+`allow_additional_ledger_names=false`, the existing schema-only exception, and
+the profile unless a separate profile change has been reviewed. Update the
+inventory assertions in `tests/test_production_deployment_hardening.py` and run
+that test file; verify that a ledger missing any newly required entry fails.
+Recalculate independently for each branch if its SQL inventory or bytes differ.
+
+This records the candidate's schema requirements. It does not apply migrations,
+change the protected remote ledger head, or authorize a production deployment.
+An environment missing a newly required migration must continue to fail
+verification until a separately authorized schema rollout is complete.
 
 The initial production promotion policy is deliberately read-only:
 

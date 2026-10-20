@@ -318,6 +318,53 @@ def test_standard_results_include_multi_day_scores_bracket_standings_and_medals(
         assert private_value not in serialized
 
 
+@pytest.mark.parametrize(
+    "draft_result",
+    [
+        {"winner_team_id": "team-private-a", "outcome_type": None, "finalized_at": None},
+        {"winner_team_id": "team-private-a", "outcome_type": "FORFEIT", "finalized_at": None},
+        {"winner_team_id": None, "outcome_type": None, "finalized_at": "2026-09-02T16:00:00Z"},
+    ],
+)
+def test_public_playoff_bracket_hides_unfinalized_result_fields(draft_result) -> None:
+    storage = _results_storage()
+    game = storage["tournament_games"][1]
+    game.update(score_a=7, score_b=3, **draft_result)
+    before_game = deepcopy(game)
+
+    draw = build_public_tournament_results(
+        FakeSupabase(storage), club_id="club-1", tournament_id="t1",
+    )["draws"][0]
+    public_game = draw["bracket"][0]
+
+    assert public_game["state"] == "READY"
+    assert public_game["team_a_name"] == "Alex Ace"
+    assert public_game["team_b_name"] == "Blair Backhand"
+    assert public_game["playoff_round"] == "Final"
+    assert public_game["public_game_key"]
+    for field in ("score_a", "score_b", "winner_name", "outcome_label", "finalized_at"):
+        assert public_game[field] is None
+    assert public_game["game_scores"] == []
+    assert draw["scores"][0]["score_a"] == 15
+    assert game == before_game
+
+
+def test_public_playoff_bracket_preserves_finalized_played_result() -> None:
+    storage = _results_storage()
+    game = storage["tournament_games"][1]
+    game.update(score_a=15, score_b=11, winner_team_id="team-private-a", outcome_type=None)
+
+    public_game = build_public_tournament_results(
+        FakeSupabase(storage), club_id="club-1", tournament_id="t1",
+    )["draws"][0]["bracket"][0]
+
+    assert public_game["state"] == "FINAL"
+    assert (public_game["score_a"], public_game["score_b"]) == (15, 11)
+    assert public_game["winner_name"] == "Alex Ace"
+    assert public_game["finalized_at"] == game["finalized_at"]
+    assert public_game["outcome_label"] is None
+
+
 def test_best_of_three_children_are_nested_in_parent_results_without_leaking() -> None:
     storage = _results_storage()
     round_robin = storage["tournament_games"][0]

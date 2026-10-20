@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import HTTPException, Query
+from fastapi import HTTPException, Query, Response
 from pydantic import BaseModel
 
 from jupr_app.domain.admin.roles import (
@@ -88,7 +88,8 @@ def install_admin_support_requests_routes(app, *, get_supabase_client) -> None:
     """Register guarded support/data-correction/privacy request review routes."""
 
     @app.get("/admin/clubs/{club_id}/support-requests/status")
-    def get_admin_support_requests_status(club_id: str) -> dict[str, Any]:
+    def get_admin_support_requests_status(club_id: str, response: Response) -> dict[str, Any]:
+        response.headers["Cache-Control"] = "no-store"
         supabase = get_supabase_client() if is_admin_support_requests_enabled() else None
         return build_admin_support_requests_status(supabase, club_id=str(club_id))
 

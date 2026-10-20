@@ -1,0 +1,94 @@
+import {readFile} from 'node:fs/promises';
+import assert from 'node:assert/strict';
+import {fileURLToPath} from 'node:url';
+// Optional isolated PostgreSQL/WASM validation. Install PGlite outside this repo
+// and set PGLITE_MODULE to its absolute dist/index.js path; see recovery runbook.
+// This uses real routines against a minimal synthetic schema. It does not model
+// the full Supabase schema, PostgREST or multi-connection concurrency.
+assert.ok(process.env.PGLITE_MODULE, 'Set PGLITE_MODULE to an installed PGlite dist/index.js');
+const {PGlite}=await import(process.env.PGLITE_MODULE);
+const root=fileURLToPath(new URL('../../',import.meta.url));
+const read=path=>readFile(`${root}/${path}`,'utf8');
+const db=new PGlite();
+const definitions=[];
+function routine(source,name) {
+  const pattern = new RegExp(`create (?:or replace )?function public\\.${name}\\([\\s\\S]*?\\$\\$;`, 'i');
+  const match=source.match(pattern);
+  assert.ok(match,`Missing ${name}`);
+  return match[0];
+}
+const admin=await read('supabase/migrations/20261109001100_badge_reactivation_and_admin_seasons.sql');
+const program=await read('supabase/migrations/20261109001200_program_badge_expansion.sql');
+const apply=await read('supabase/migrations/20261109001300_program_badge_reconciliation_actor.sql');
+const rr=await read('supabase/migrations/20261109001400_program_badge_round_robin_state.sql');
+const migration=await read('supabase/migrations/20261109004103_badge_conflicts_are_not_serialization_failures.sql');
+await db.exec(`
+create role anon; create role authenticated; create role service_role;
+create table public.clubs(id text primary key);
+create table public.players(id bigint primary key, club_id text, name text);
+create table public.badges(badge_id text primary key, is_active bool, state text);
+create table public.player_badges(
+ id uuid primary key default gen_random_uuid(),club_id text,player_id bigint,badge_id text,
+ earned_at timestamptz default now(),context_type text,context_id text,match_id text,value_num numeric,
+ value_json jsonb default '{}',awarded_by text,rule_version text,revoked_at timestamptz,
+ revoked_by uuid,revoked_reason text,revoke_reason text
+);
+create table public.admin_role_assignments(club_id text,user_id uuid,email text,role text,revoked_at timestamptz,expires_at timestamptz);
+create table public.admin_activity_log(club_id text,actor_email text,actor_role text,action_type text,entity_type text,entity_id text,before_json jsonb,after_json jsonb,source_page text,flagged_for_review bool);
+create table public.badge_eval_queue(club_id text,context_id text,event_type text,player_ids bigint[],payload_json jsonb,status text);
+create table public.live_sessions(id uuid primary key,club_id text,session_key text,status text,title text,source text,state jsonb,updated_at timestamptz,version bigint default 1,completed_at timestamptz);
+create table public.live_events(id uuid primary key,club_id text,source_event_uid text,raw_event_json jsonb,updated_at timestamptz);
+create table public.tournaments(id uuid,club_id text);
+`);
+await db.exec(admin.split('create or replace function public.admin_manage_badges_v1')[0]);
+await db.exec(program.split('-- Minimal privileged trigger:')[0]);
+for (const [source,name] of [[admin,'admin_manage_badges_v1'],[admin,'validate_badge_season_award_v1'],[apply,'apply_program_badges_v1'],[rr,'admin_resolve_round_robin_v1'],[program,'mark_program_badges_dirty_v1'],[program,'program_badge_failure_v1']]) {
+  const def=routine(source,name);definitions.push(def);await db.exec(def);
+}
+await db.exec(`
+revoke all on function public.admin_manage_badges_v1(text,text,uuid,text,uuid,text,jsonb),public.validate_badge_season_award_v1(),public.apply_program_badges_v1(text,bigint,jsonb,jsonb,jsonb),public.admin_resolve_round_robin_v1(text,text,uuid,text,uuid,jsonb),public.mark_program_badges_dirty_v1() from public, anon, authenticated;
+grant execute on function public.admin_manage_badges_v1(text,text,uuid,text,uuid,text,jsonb),public.validate_badge_season_award_v1(),public.apply_program_badges_v1(text,bigint,jsonb,jsonb,jsonb),public.admin_resolve_round_robin_v1(text,text,uuid,text,uuid,jsonb) to service_role;
+create trigger validate_badge_season_award before insert on public.player_badges for each row execute function public.validate_badge_season_award_v1();
+create trigger program_badges_dirty after insert or update or delete on public.players for each row execute function public.mark_program_badges_dirty_v1();
+create trigger program_badges_dirty after insert or update or delete on public.live_sessions for each row execute function public.mark_program_badges_dirty_v1();
+create function public.unrelated_serialization_failure() returns void language plpgsql as $$ begin raise exception using errcode='40001',message='Unrelated serialization failure'; end $$;
+insert into public.clubs values('transaction-test');
+insert into public.players values(1,'transaction-test','Synthetic player');
+insert into public.badges values('round_robin_wins_1',true,'live'),('good_sport',true,'live'),('battle_tested',true,'live'),('consistency',true,'live');
+`);
+const catalogQuery=`select oid,proname,proacl,prosecdef,proconfig,pg_get_functiondef(oid) as definition from pg_proc where pronamespace='public'::regnamespace order by proname`;
+const before=(await db.query(catalogQuery)).rows;
+await db.exec(migration);
+const after=(await db.query(catalogQuery)).rows;
+let changed=0;
+for (let i=0;i<before.length;i++) {
+  const expected={...before[i]};
+  if (['apply_program_badges_v1','admin_resolve_round_robin_v1','admin_manage_badges_v1','validate_badge_season_award_v1'].includes(expected.proname)) {
+    changed+=(expected.definition.match(/errcode\s*=\s*'40001'/g)||[]).length;
+    expected.definition=expected.definition.replace(/errcode\s*=\s*'40001'/g,"errcode='PT409'");
+  }
+  assert.deepEqual(after[i],expected,`Definition, OID, ACL or security changed unexpectedly: ${expected.proname}`);
+}
+assert.equal(changed,6);
+await db.exec(migration);
+assert.deepEqual((await db.query(catalogQuery)).rows,after,'Migration rerun changed routines');
+console.log('PASS: migration changes exactly six explicit raises; signatures, OIDs, ACLs, security settings and all other code preserved; idempotent rerun');
+try { await db.query('select public.unrelated_serialization_failure()'); assert.fail('Unrelated 40001 was swallowed'); }
+catch (error) { assert.equal(error.code,'40001'); }
+console.log('PASS: unrelated serialization failure remains 40001');
+const counts=async()=> (await db.query(`select (select count(*) from player_badges) as awards,(select count(*) from admin_activity_log) as activity,(select count(*) from badge_round_robin_operations) as rr,(select count(*) from badge_seasons) as seasons,(select revision from badge_program_state where club_id='transaction-test') as revision`)).rows;
+const pristine=await counts();
+for (const path of ['tests/sql/program_badge_transactions.sql','tests/sql/badge_admin_transactions.sql']) {
+  const results=await db.exec(`begin;\n${await read(path)}\nrollback;`);
+  assert.deepEqual(await counts(),pristine,`Writes survived rollback: ${path}`);
+  console.log(`PASS: ${path} and rollback restored fixture state`);
+}
+// Force catalog drift in the last target and prove earlier replacements roll back.
+for (const def of definitions.slice(0,4)) await db.exec(def);
+await db.exec(routine(admin,'validate_badge_season_award_v1').replace("errcode='40001'","errcode='P0001'"));
+const driftBefore=(await db.query(catalogQuery)).rows;
+try { await db.exec(migration); assert.fail('Catalog drift accepted'); }
+catch(error) { assert.match(error.message,/Badge conflict definition changed/); await db.exec('rollback'); }
+assert.deepEqual((await db.query(catalogQuery)).rows,driftBefore,'Partial migration survived failed prerequisite');
+console.log('PASS: unexpected last-target definition fails atomically; preceding replacements rolled back');
+await db.close();

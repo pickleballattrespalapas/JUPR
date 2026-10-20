@@ -21,7 +21,12 @@ from jupr_app.domain.match_processing import (
     build_active_league_metadata_expectations,
     has_managed_league_metadata,
 )
-from jupr_app.domain.player_activity import build_player_activity_update, coerce_utc_datetime, max_activity_time
+from jupr_app.domain.player_activity import (
+    build_recorded_game_activity_update,
+    coerce_utc_datetime,
+    max_activity_time,
+    record_game_activity_with_cas,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -253,6 +258,7 @@ def process_singles_matches(
     player_updates: dict[int, dict[str, Any]] = {}
     league_updates: dict[tuple[int, str], dict[str, Any]] = {}
     last_game_updates: dict[int, datetime] = {}
+    rated_last_game_updates: dict[int, datetime] = {}
     affected_players: set[int] = set()
     successful_match_dates: list[str] = []
     managed_league_names: set[str] = set()
@@ -486,12 +492,15 @@ def process_singles_matches(
                     bonus_elo=p2_bonus,
                 )
             for pid in (p1, p2):
-                last_game_updates[pid] = max_activity_time(last_game_updates.get(pid), match_dt)
+                rated_last_game_updates[pid] = max_activity_time(rated_last_game_updates.get(pid), match_dt)
                 affected_players.add(int(pid))
             if winner_bonus_elo > 0 and (p1_outcome is True or p2_outcome is True):
                 bonus_match_count += 1
                 bonus_player_elo_total += winner_bonus_elo
             stored_delta = (abs(d1) if p1_outcome is True else abs(d2)) + (winner_bonus_elo if (p1_outcome is True or p2_outcome is True) else 0.0)
+
+        for pid in (p1, p2):
+            last_game_updates[pid] = max_activity_time(last_game_updates.get(pid), match_dt)
 
         db_match = build_match_row(
             club_id=str(club_id),
@@ -523,7 +532,7 @@ def process_singles_matches(
     if build_write_plan_only:
         planned_player_updates: list[dict[str, Any]] = []
         for pid, stats in sorted(player_updates.items()):
-            if pid not in affected_players:
+            if pid not in last_game_updates:
                 continue
             if int(pid) not in live_players:
                 raise RuntimeError(
@@ -534,9 +543,9 @@ def process_singles_matches(
             singles_last_game_at = max_activity_time(
                 current.get("singles_last_game_at")
                 or _singles_replay_baseline(current).get("last_game_at"),
-                latest_match_at,
+                rated_last_game_updates.get(int(pid)),
             )
-            activity_update = build_player_activity_update(current.get("last_game_at"), latest_match_at)
+            activity_update = build_recorded_game_activity_update(current, latest_match_at)
             expected = {
                 # The calculation may start from the immutable replay baseline
                 # when the player has no materialized singles rating yet.  CAS
@@ -565,9 +574,21 @@ def process_singles_matches(
                 ),
                 **activity_update,
             }
-            planned_player_updates.append(
-                {"player_id": int(pid), "rating_mode": "singles", "expected": expected, "after": after}
-            )
+            activity_only = pid not in affected_players
+            if activity_only:
+                # Unrated singles must not materialize a seeded rating or
+                # advance the rated-singles replay/activity baseline.
+                fields = (
+                    "singles_rating", "singles_wins", "singles_losses",
+                    "singles_matches_played", "singles_last_game_at",
+                )
+                unchanged = {field: current.get(field) for field in fields}
+                expected.update(unchanged)
+                after.update(unchanged)
+            planned_player_updates.append({
+                "player_id": int(pid), "rating_mode": "singles",
+                "expected": expected, "after": after, "activity_only": activity_only,
+            })
         planned_league_updates: list[dict[str, Any]] = []
         for (pid, league_name), stats in sorted(league_updates.items()):
             rows = _league_frame_rows(
@@ -719,17 +740,22 @@ def process_singles_matches(
             )
 
     for pid, stats in player_updates.items():
+        if pid not in last_game_updates:
+            continue
         if pid not in affected_players:
+            record_game_activity_with_cas(
+                supabase=supabase, club_id=str(club_id), player_id=int(pid),
+                match_time=last_game_updates[pid], sb_retry=sb_retry,
+            )
             continue
         existing_row = player_row(int(pid)) or {}
-        existing_last_game_at = existing_row.get("last_game_at")
         latest_match_at = last_game_updates.get(int(pid))
         singles_last_game_at = max_activity_time(
             existing_row.get("singles_last_game_at")
             or _singles_replay_baseline(existing_row).get("last_game_at"),
-            latest_match_at,
+            rated_last_game_updates.get(int(pid)),
         )
-        activity_update = build_player_activity_update(existing_last_game_at, latest_match_at)
+        activity_update = build_recorded_game_activity_update(existing_row, latest_match_at)
         payload = {
             "singles_rating": float(stats["r"]),
             "singles_wins": int(stats["w"]),

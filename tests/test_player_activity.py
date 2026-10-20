@@ -5,6 +5,7 @@ import pandas as pd
 from jupr_app.domain.player_activity import (
     add_activity_columns,
     build_player_activity_update,
+    build_recorded_game_activity_update,
     is_player_leaderboard_active,
     should_mark_inactive,
 )
@@ -82,3 +83,33 @@ def test_select_leaderboard_players_respects_toggle():
 
     assert select_leaderboard_players(df_active, df_all, "Active").equals(df_active)
     assert select_leaderboard_players(df_active, df_all, "See all").equals(df_all)
+
+
+def test_recorded_activity_respects_manual_and_merged_exclusions():
+    now = datetime(2026, 10, 20, 20, tzinfo=timezone.utc)
+    game = now - timedelta(hours=1)
+    base = {"name": "Player", "last_game_at": None, "active": True, "inactive_at": None}
+    for exclusion in (
+        {"active": False},
+        {"inactive_at": now.isoformat()},
+        {"name": "Old (MERGED into Player #1)", "active": False},
+    ):
+        player = {**base, **exclusion}
+        result = build_recorded_game_activity_update(player, game, now_utc=now)
+        assert result["last_game_at"] == game.isoformat()
+        assert result["active"] == player["active"]
+        assert result["inactive_at"] == player["inactive_at"]
+        assert not is_player_leaderboard_active({**player, **result}, now_utc=now)
+
+
+def test_recorded_activity_clears_automatic_marker_but_never_rewinds_game_date():
+    now = datetime(2026, 10, 20, 20, tzinfo=timezone.utc)
+    game = now - timedelta(hours=1)
+    old = now - timedelta(days=30)
+    player = {"active": False, "inactive_at": old.isoformat(), "last_game_at": None}
+    result = build_recorded_game_activity_update(player, game, now_utc=now)
+    assert result == {"active": True, "inactive_at": None, "last_game_at": game.isoformat()}
+    assert build_recorded_game_activity_update({**player, **result}, old, now_utc=now) == result
+    result = build_recorded_game_activity_update(player, old, now_utc=now)
+    assert result["active"] is False
+    assert result["last_game_at"] == old.isoformat()

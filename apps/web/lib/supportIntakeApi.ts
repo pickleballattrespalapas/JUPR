@@ -30,6 +30,11 @@ export type PublicSupportRequestResponse = {
   message?: string | null;
 };
 
+export type PublicSupportIntakeStatus = {
+  club: { id: string; slug: string; name: string };
+  accepting_requests: boolean;
+};
+
 type ApiResult<T> = {
   data: T | null;
   error: string | null;
@@ -87,7 +92,7 @@ function publicSupportError(status: number, detail: string): string {
     }
     return "Check the information you entered and try again.";
   }
-  if (status === 403) return "Support requests aren’t available right now. Please try again later.";
+  if (status === 403 || status === 503) return "Support requests aren’t available right now. Please contact your club organizer or email PCS support.";
   return PUBLIC_SUPPORT_ERROR;
 }
 
@@ -122,6 +127,7 @@ export async function submitPublicSupportRequest(
   payload: PublicSupportRequestPayload
 ): Promise<ApiResult<PublicSupportRequestResponse>> {
   const apiBase = baseUrl();
+  if (!clubSlug.trim()) return { data: null, error: "Choose your club before submitting a request.", status: null };
   if (!apiBase) return { data: null, error: PUBLIC_SUPPORT_ERROR, status: null };
   try {
     const response = await fetch(`${apiBase.replace(/\/$/, "")}/clubs/${encodeURIComponent(clubSlug)}/support/intake`, {
@@ -149,5 +155,22 @@ export async function submitPublicSupportRequest(
     };
   } catch {
     return { data: null, error: PUBLIC_SUPPORT_ERROR, status: null };
+  }
+}
+
+export async function getPublicSupportIntakeStatus(clubSlug: string): Promise<ApiResult<PublicSupportIntakeStatus>> {
+  const apiBase = baseUrl();
+  if (!apiBase || !clubSlug.trim()) return { data: null, error: PUBLIC_SUPPORT_ERROR };
+  try {
+    const response = await fetch(`${apiBase.replace(/\/$/, "")}/clubs/${encodeURIComponent(clubSlug)}/support/intake/status`, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(10000)
+    });
+    if (!response.ok) return { data: null, error: PUBLIC_SUPPORT_ERROR, status: response.status };
+    const data = await response.json() as PublicSupportIntakeStatus;
+    if (!data.club?.slug || typeof data.accepting_requests !== "boolean") return { data: null, error: PUBLIC_SUPPORT_ERROR };
+    return { data, error: null, status: response.status };
+  } catch {
+    return { data: null, error: PUBLIC_SUPPORT_ERROR };
   }
 }

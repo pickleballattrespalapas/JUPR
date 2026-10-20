@@ -2,6 +2,9 @@
 import PublicControls from "@/components/PublicControls";
 import DataCorrectionForm from "./DataCorrectionForm";
 import { SUPPORT_EMAIL } from "@/lib/publicSupportContent";
+import SupportIntakeGate, { supportParam, type SupportSearchParams } from "@/components/SupportIntakeGate";
+
+export const dynamic = "force-dynamic";
 
 const cardStyle = {
   border: "1px solid #e2e8f0",
@@ -10,7 +13,8 @@ const cardStyle = {
   background: "white"
 };
 
-export default function DataCorrectionsPage() {
+export default function DataCorrectionsPage({ searchParams }: { searchParams?: SupportSearchParams }) {
+  const clubSlug = supportParam(searchParams, "club");
   return (
     <section style={{ maxWidth: "920px" }}>
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
@@ -39,7 +43,7 @@ export default function DataCorrectionsPage() {
           <p style={{ color: "#475569" }}>
             Staff will review the original information and correct the relevant player, match, league, tournament, badge, or rating details.
           </p>
-          <DataCorrectionForm />
+          <SupportIntakeGate path="/data-corrections" searchParams={searchParams}><DataCorrectionForm clubSlug={clubSlug} /></SupportIntakeGate>
         </article>
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Email fallback</h2>
