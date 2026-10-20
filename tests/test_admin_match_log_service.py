@@ -62,6 +62,10 @@ class FakeQuery:
         self.limit_value = int(value)
         return self
 
+    def range(self, start, end):
+        self.bounds = (start, end)
+        return self
+
     def update(self, payload):
         self.update_payload = dict(payload or {})
         return self
@@ -116,11 +120,16 @@ class FakeQuery:
             for row in matched:
                 row.update(self.update_payload)
             return SimpleNamespace(data=matched)
+        exact_count = len(matched)
+        if hasattr(self, "bounds"):
+            start, end = self.bounds
         if self.order_key:
             matched = sorted(matched, key=lambda row: str(row.get(self.order_key) or ""), reverse=self.order_desc)
+        if hasattr(self, "bounds"):
+            matched = matched[start:end+1]
         if self.limit_value is not None:
             matched = matched[: self.limit_value]
-        return SimpleNamespace(data=matched)
+        return SimpleNamespace(data=matched, count=exact_count)
 
 
 class FakeSupabase:

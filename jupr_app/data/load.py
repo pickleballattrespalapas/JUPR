@@ -1,6 +1,8 @@
 import time
 import pandas as pd
 
+from jupr_app.data.counted_reads import read_counted_rows
+
 from jupr_app.domain.player_activity import PERSISTED_ACTIVE_BY_PLAYER_ID_ATTR, add_activity_columns
 from jupr_app.domain.gamification.badge_descriptions import BADGE_DESCRIPTIONS_MD
 from jupr_app.domain.gamification.badge_registry import badge_schema_by_id
@@ -33,6 +35,18 @@ PLAYER_BADGES_OPTIONAL_COLUMNS = [
 MERGED_PLAYER_MARKER = "(MERGED into "
 
 
+def _read_rows(supabase, table, club_id=None, columns="*", *, active_matches=False, limit=None):
+    def query(count):
+        q = supabase.table(table).select(columns, count=count)
+        if club_id is not None:
+            q = q.eq("club_id", club_id)
+        if active_matches:
+            q = q.is_("deleted_at", None)
+        return q
+    return read_counted_rows(query, key="badge_id" if table == "badges" else "id",
+                             descending=table == "matches", limit=limit)
+
+
 def _missing_player_badges_columns(exc: APIError) -> set[str]:
     message = str(exc)
     missing = {col for col in PLAYER_BADGES_OPTIONAL_COLUMNS if col in message}
@@ -62,12 +76,7 @@ def _fetch_player_badges(supabase, club_id: str) -> tuple[pd.DataFrame, bool, st
     schema_degraded_reason = None
     select_cols = ",".join(PLAYER_BADGES_BASE_COLUMNS + PLAYER_BADGES_OPTIONAL_COLUMNS)
     try:
-        pb_resp = (
-            supabase.table("player_badges")
-            .select(select_cols)
-            .eq("club_id", club_id)
-            .execute()
-        )
+        rows = _read_rows(supabase, "player_badges", club_id, select_cols)
     except APIError as exc:
         missing = _missing_player_badges_columns(exc)
         if getattr(exc, "code", None) == "42703" and missing:
@@ -78,15 +87,10 @@ def _fetch_player_badges(supabase, club_id: str) -> tuple[pd.DataFrame, bool, st
                 "migrations/20260630_player_badges_revocation.sql."
             )
             legacy_select = ",".join(PLAYER_BADGES_BASE_COLUMNS)
-            pb_resp = (
-                supabase.table("player_badges")
-                .select(legacy_select)
-                .eq("club_id", club_id)
-                .execute()
-            )
+            rows = _read_rows(supabase, "player_badges", club_id, legacy_select)
         else:
             raise
-    df_player_badges = pd.DataFrame(pb_resp.data or [])
+    df_player_badges = pd.DataFrame(rows)
     df_player_badges = _ensure_player_badges_columns(df_player_badges)
     return df_player_badges, schema_degraded, schema_degraded_reason
 
@@ -94,20 +98,12 @@ def _fetch_player_badges(supabase, club_id: str) -> tuple[pd.DataFrame, bool, st
 def _fetch_matches(
     supabase,
     club_id: str,
-    match_limit: int,
+    match_limit: int | None,
 ) -> tuple[pd.DataFrame, bool, str | None]:
     schema_degraded = False
     schema_degraded_reason = None
     try:
-        m_resp = (
-            supabase.table("matches")
-            .select("*")
-            .eq("club_id", club_id)
-            .is_("deleted_at", None)
-            .order("id", desc=True)
-            .limit(int(match_limit))
-            .execute()
-        )
+        rows = _read_rows(supabase, "matches", club_id, active_matches=True, limit=match_limit)
     except APIError as exc:
         message = str(exc)
         if getattr(exc, "code", None) == "42703" and "deleted_at" in message:
@@ -116,17 +112,10 @@ def _fetch_matches(
                 "matches.deleted_at column is missing; apply "
                 "supabase/migrations/20260424_matches_soft_delete.sql to enable soft-delete filtering."
             )
-            m_resp = (
-                supabase.table("matches")
-                .select("*")
-                .eq("club_id", club_id)
-                .order("id", desc=True)
-                .limit(int(match_limit))
-                .execute()
-            )
+            rows = _read_rows(supabase, "matches", club_id, limit=match_limit)
         else:
             raise
-    return pd.DataFrame(m_resp.data or []), schema_degraded, schema_degraded_reason
+    return pd.DataFrame(rows), schema_degraded, schema_degraded_reason
 
 
 def _drop_merged_players(df: pd.DataFrame) -> pd.DataFrame:
@@ -143,12 +132,13 @@ def _drop_merged_players(df: pd.DataFrame) -> pd.DataFrame:
     return df.loc[~merged_mask].copy()
 
 
-def load_data(supabase, club_id: str, match_limit: int = 5000):
+def load_data(supabase, club_id: str, match_limit: int | None = None):
     """
     Loads club-scoped tables and returns:
       df_players_all, df_players_active, df_leagues, df_matches, df_meta, df_badges,
       df_player_badges, name_to_id, id_to_name, schema_degraded, schema_degraded_reason
 
+    By default all history is loaded. Explicit match_limit keeps a bounded preview.
     No Streamlit calls here. Raise exceptions to be handled by UI.
     """
     club_id = str(club_id)
@@ -162,18 +152,13 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
             schema_degraded = False
             schema_degraded_reason = None
             # Players
-            p_resp = (
-                supabase.table("players")
-                .select("*")
-                .eq("club_id", club_id)
-                .execute()
-            )
-            df_players_all = pd.DataFrame(p_resp.data or [])
+            player_rows = _read_rows(supabase, "players", club_id)
+            df_players_all = pd.DataFrame(player_rows)
             # Atomic match writes compare against stored state, while active in
             # the returned rows remains the leaderboard eligibility projection.
             df_players_all.attrs[PERSISTED_ACTIVE_BY_PLAYER_ID_ATTR] = {
                 int(row["id"]): row["active"]
-                for row in (p_resp.data or [])
+                for row in player_rows
                 if row.get("id") is not None and "active" in row
             }
 
@@ -187,17 +172,10 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
                 df_players_active = df_players_all.copy()
 
             # League ratings
-            l_resp = (
-                supabase.table("league_ratings")
-                .select(
-                    "id,player_id,league_name,rating,starting_rating,wins,losses,"
-                    "matches_played,is_active,inactive_at"
-                )
-                .eq("club_id", club_id)
-                .execute()
-            )
-
-            df_leagues = pd.DataFrame(l_resp.data or [])
+            league_rows = _read_rows(supabase, "league_ratings", club_id,
+                "id,player_id,league_name,rating,starting_rating,wins,losses,"
+                "matches_played,is_active,inactive_at")
+            df_leagues = pd.DataFrame(league_rows)
 
             # Matches
             (
@@ -210,39 +188,23 @@ def load_data(supabase, club_id: str, match_limit: int = 5000):
                 schema_degraded_reason = matches_schema_degraded_reason
 
             # Metadata
-            meta_resp = (
-                supabase.table("leagues_metadata")
-                .select("*")
-                .eq("club_id", club_id)
-                .execute()
-            )
-            df_meta = pd.DataFrame(meta_resp.data or [])
+            df_meta = pd.DataFrame(_read_rows(supabase, "leagues_metadata", club_id))
 
             # Badges (global definitions)
             try:
                 # Support older badge schema variants that lack state-related columns.
-                badges_resp = (
-                    supabase.table("badges")
-                    .select(
-                        "badge_id,name,prestige,category,is_stackable,is_active,rarity,"
-                        "tier,icon_key,scope,state,state_changed_at,state_change_reason,eval_triggers,created_at"
-                    )
-                    .execute()
-                )
+                badge_rows = _read_rows(supabase, "badges", columns=
+                    "badge_id,name,prestige,category,is_stackable,is_active,rarity,"
+                    "tier,icon_key,scope,state,state_changed_at,state_change_reason,eval_triggers,created_at")
             except APIError as exc:
                 message = str(exc)
                 if getattr(exc, "code", None) == "42703" or "badges.state does not exist" in message:
-                    badges_resp = (
-                        supabase.table("badges")
-                        .select(
-                            "badge_id,name,prestige,category,is_stackable,is_active,rarity,"
-                            "tier,icon_key,scope,created_at"
-                        )
-                        .execute()
-                    )
+                    badge_rows = _read_rows(supabase, "badges", columns=
+                        "badge_id,name,prestige,category,is_stackable,is_active,rarity,"
+                        "tier,icon_key,scope,created_at")
                 else:
                     raise
-            df_badges = pd.DataFrame(badges_resp.data or [])
+            df_badges = pd.DataFrame(badge_rows)
             if not df_badges.empty and "badge_id" in df_badges.columns:
                 if "state" not in df_badges.columns:
                     df_badges["state"] = "live"
