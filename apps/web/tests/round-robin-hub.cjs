@@ -8,12 +8,19 @@ global.sessionStorage = { getItem: key => stored.get(key) || null, setItem: (key
 const replacedUrls = [];
 global.window = { history: { replaceState(_state, _title, url) { replacedUrls.push(url); } }, setInterval: () => 1, clearInterval() {}, addEventListener() {}, removeEventListener() {} };
 global.document = { visibilityState: "visible", addEventListener() {}, removeEventListener() {} };
+let standingsMounts = 0;
+function Standings(props) {
+  const [instance] = React.useState(() => ++standingsMounts);
+  return h("div", { "data-standings": props.sessionKey, "data-instance": instance, "data-refresh-key": props.refreshKey, "data-embedded": props.embedded, "data-club": props.clubId },
+    "Full session standings", h("button", { onClick: () => props.onNavigate({ view: "round", roundNumber: 3 }) }, "Current round"),
+    h("button", { onClick: props.onSessionChanged }, "Refresh after sharing"));
+}
 const stubs = {
   "next/link": ({ children, ...props }) => h("a", props, children),
   "@/lib/useAdminSession": { useAdminSession: () => ({ accessToken: "test-staff" }) },
   "@/components/interaction": { InteractionDialog: ({ title, children, actions }) => h("section", { "data-dialog": title }, children, actions) },
-  "@/app/admin/play-generators/GeneratorRoundRunner": { __esModule: true, default: props => h("div", { "data-runner": props.sessionKey }, h("button", { onClick: () => props.onNavigate({ view: "standings" }) }, "Embedded standings")) },
-  "@/app/admin/play-generators/GeneratorStandings": { __esModule: true, default: props => h("div", { "data-standings": props.sessionKey }, "Full session standings") }
+  "@/app/admin/play-generators/GeneratorRoundRunner": { __esModule: true, default: props => h("div", { "data-runner": props.sessionKey, "data-round": props.roundNumber }, h("button", { onClick: () => props.onNavigate({ view: "standings" }) }, "Embedded standings")) },
+  "@/app/admin/play-generators/GeneratorStandings": { __esModule: true, default: Standings }
 };
 function load(name, parent = root) {
   if (Object.hasOwn(stubs, name)) return stubs[name];
@@ -122,6 +129,13 @@ global.fetch = async (url, options = {}) => {
   assert.equal(tree.root.findByProps({ "data-runner": "a" }).props["data-runner"], "a");
   await act(async () => button(tree, "Embedded standings").props.onClick());
   assert.ok(text(tree.toJSON()).includes("Full session standings"));
+  assert.equal(tree.root.findByProps({ id: "hub-tab-standings" }).props["aria-selected"], true);
+  assert.equal(tree.root.findByProps({ "aria-label": "Standings round robin" }).props.value, "a");
+  assert.equal(tree.root.findAllByProps({ "data-runner": "a" }).length, 0, "Standings replaces the embedded manager");
+  await act(async () => button(tree, "Current round").props.onClick());
+  assert.equal(button(tree, "Round robins").props["aria-selected"], true);
+  assert.equal(tree.root.findByProps({ "data-runner": "a" }).props["data-round"], 3, "Standings round links stay in this hub and select the requested round");
+  assert.equal(tree.root.findAllByProps({ "data-standings": "a" }).length, 0);
   await act(async () => button(tree, "Close round robin controls").props.onClick());
 
   await act(async () => button(tree, "Players").props.onClick());
@@ -153,6 +167,57 @@ global.fetch = async (url, options = {}) => {
     deferDetailAfter = -1; releaseDetail = undefined;
   }
   const props = (hub, session = "") => ({ apiBase: "http://test.local", clubId: "club", initialHubId: hub, initialAddSessionKey: session });
+  const standingsGroup = (key, status = "active", scoring_mode = "scored") => ({ session_key: key, title: `${key} round robin`, status, scoring_mode,
+    current_round_number: 1, round_status: "active", completed_matches: 0, total_matches: 2, can_advance: false, event_format: "standard" });
+  emptyHub("standings-event");
+  const completed = standingsGroup("finished", "completed"), unscored = standingsGroup("casual", "active", "unscored"), active = standingsGroup("live");
+  detail.workspace.groups = [completed, unscored, active];
+  await act(async () => { tree = create(h(Panel, props("standings-event"))); });
+  await act(async () => tree.root.findByProps({ id: "hub-tab-standings" }).props.onClick());
+  const selectStandings = async key => act(async () => tree.root.findByProps({ "aria-label": "Standings round robin" }).props.onChange({ target: { value: key } }));
+  const selectedStandings = () => tree.root.findByProps({ "aria-label": "Standings round robin" }).props.value;
+  assert.equal(selectedStandings(), "live", "Default to an active scored group rather than completed or unscored groups");
+  const liveView = tree.root.findByProps({ "data-standings": "live" });
+  assert.equal(liveView.props["data-embedded"], true);
+  assert.equal(liveView.props["data-club"], "club");
+  const liveInstance = liveView.props["data-instance"];
+  assert.deepEqual(tree.root.findByProps({ "aria-label": "Standings round robin" }).findAllByType("option").map(option => text(option)), ["finished round robin · Finished", "casual round robin · Unscored", "live round robin"]);
+  await selectStandings("finished");
+  const finishedInstance = tree.root.findByProps({ "data-standings": "finished" }).props["data-instance"];
+  assert.notEqual(finishedInstance, liveInstance, "Changing groups remounts standings so sharing state cannot leak");
+  detail.workspace.groups.reverse(); detail.hub.version += 1;
+  await act(async () => button(tree, "Refresh after sharing").props.onClick());
+  assert.equal(selectedStandings(), "finished", "Refresh and list reordering preserve an explicit choice");
+  assert.equal(tree.root.findByProps({ "data-standings": "finished" }).props["data-instance"], finishedInstance);
+  assert.equal(tree.root.findByProps({ "data-standings": "finished" }).props["data-refresh-key"], detail.hub.version, "Hub refresh reaches the selected embedded standings");
+  await selectStandings("casual");
+  assert.equal(tree.root.findByProps({ "data-standings": "casual" }).props["data-standings"], "casual", "Unscored groups delegate their explanation to the existing standings view");
+  detail.workspace.groups = [completed, active]; detail.hub.version += 1;
+  await act(async () => button(tree, "Refresh after sharing").props.onClick());
+  assert.equal(selectedStandings(), "live", "Removing the selected group falls back to an active scored group");
+  detail.workspace.groups.unshift(unscored);
+  await act(async () => button(tree, "Refresh after sharing").props.onClick());
+  assert.equal(selectedStandings(), "live", "Reattaching a previously selected group does not revive stale selection");
+  await act(async () => button(tree, "Round robins").props.onClick());
+  await act(async () => tree.root.findAllByType("article").find(article => text(article).includes("finished round robin")).findAllByType("button").find(node => text(node) === "Standings").props.onClick());
+  assert.equal(selectedStandings(), "finished", "The group card opens this group's Standings tab");
+  await act(async () => button(tree, "Round robins").props.onClick());
+  await act(async () => buttons(tree, "Manage round robin")[0].props.onClick());
+  await act(async () => tree.root.findByProps({ id: "hub-tab-standings" }).props.onClick());
+  assert.equal(tree.root.findAllByProps({ "aria-label": "Manage selected round robin" }).length, 0, "Opening the tab clears any stale round controls");
+  await selectStandings("live");
+  const beforeHubSwitch = tree.root.findByProps({ "data-standings": "live" }).props["data-instance"];
+  detail.hub.id = "other-standings-event"; detail.workspace.groups = [active];
+  await act(async () => tree.update(h(Panel, props("other-standings-event"))));
+  assert.equal(selectedStandings(), "live");
+  assert.notEqual(tree.root.findByProps({ "data-standings": "live" }).props["data-instance"], beforeHubSwitch, "Even a matching session key remounts when the hub changes");
+  detail.workspace.groups = []; detail.hub.version += 1;
+  await act(async () => button(tree, "Refresh after sharing").props.onClick());
+  assert.equal(tree.root.findByProps({ "aria-label": "Standings round robin" }).props.disabled, true);
+  assert.equal(tree.root.findAllByType(Standings).length, 0);
+  assert.ok(text(tree.toJSON()).includes("Add a round robin to this event to view its standings here."));
+  await act(async () => tree.unmount());
+
   emptyHub("old-event");
   await act(async () => { tree = create(h(Panel, props("old-event"))); });
   await act(async () => button(tree, "Round robins").props.onClick());

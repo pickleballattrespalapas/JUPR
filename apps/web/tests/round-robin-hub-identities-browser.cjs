@@ -69,13 +69,14 @@ async function requestApi(suffix, body) {
   assert(response.ok, `${suffix}: ${response.status} ${JSON.stringify(result)}`);
   return result;
 }
-async function createSession(title, names, profiles = {}) {
+async function createSession(title, names, profiles = {}, publicOrigin = false) {
   const body = {generator_kind:'round_robin',event_format:'standard',play_format:'doubles',title,
     participant_names:names,participant_player_ids:profiles,total_rounds:3,court_count:0,
     scoring_mode:'scored',rating_mode:'unrated',standings_sort:'wins'};
-  const preview = await requestApi('/admin/clubs/club/play-generators/preview',body);
-  return (await requestApi('/admin/clubs/club/play-generators/sessions',{...body,
-    preview_fingerprint:preview.preview.previewFingerprint,expected_version:'new',idempotency_key:`identity-${crypto.randomUUID()}`})).session;
+  const prefix = publicOrigin ? '/clubs/test' : '/admin/clubs/club';
+  const preview = await requestApi(`${prefix}/play-generators/preview`,body);
+  return (await requestApi(`${prefix}/play-generators/sessions`,{...body,
+    preview_fingerprint:preview.preview.previewFingerprint,...(publicOrigin ? {} : {expected_version:'new'}),idempotency_key:`identity-${crypto.randomUUID()}`})).session;
 }
 function people(match) { return [...match.side_a,...match.side_b]; }
 function occupied(detail) { return detail.workspace.courts.filter(court=>court.current); }
@@ -154,6 +155,23 @@ async function main() {
       assert.equal(await sideB.inputValue(),'6');
       return command(page,dialog.getByRole('button',{name:'Save score & release court',exact:true}),'score_and_release');
     }
+    async function assertStandings(target, title, games) {
+      await target.getByRole('heading',{name:`${title} standings`,exact:true}).waitFor();
+      const table = target.getByRole('table');
+      const headers = await table.locator('thead th').allTextContents();
+      const rows = await table.locator('tbody tr').evaluateAll(items=>items.map(row=>Array.from(row.querySelectorAll('td'),cell=>cell.textContent.trim())));
+      assert.equal(rows.length,8);
+      assert(rows.every(row=>Number(row[headers.indexOf('Games')]) === games),'Only completed rounds count in the selected standings');
+      assert.equal(rows.reduce((sum,row)=>sum+Number(row[headers.indexOf('Wins')]),0),games*4);
+      assert.equal(rows.reduce((sum,row)=>sum+Number(row[headers.indexOf('Points')]),0),games*68);
+    }
+    async function selectStandings(title, games) {
+      const hubUrl = page.url();
+      await page.getByRole('tab',{name:'Standings',exact:true}).click();
+      await page.getByRole('combobox',{name:'Standings round robin',exact:true}).selectOption({label:title});
+      await assertStandings(page,title,games);
+      assert.equal(page.url(),hubUrl,'Standings selection stays inside the hub');
+    }
     async function openAddPlayer(groupTitle, name, profileId, options = {}) {
       await page.getByRole('tab',{name:options.origin === 'board' ? 'Court board' : 'Players',exact:true}).click();
       assert.equal(await page.getByRole('button',{name:'Add player',exact:true}).count(),1,'Each hub view has one global Add player entry');
@@ -190,7 +208,7 @@ async function main() {
 
     const numbers = Array.from({length:8},(_,i)=>String(i+1));
     const numberedA = await createSession('Numbers A',numbers);
-    const numberedB = await createSession('Numbers B',numbers);
+    const numberedB = await createSession('Numbers B',numbers,{},true);
     let detail = await createHub('Numbered guest review',[numberedA,numberedB]);
     const numberedHubId = detail.hub.id;
     assert.equal(detail.workspace.identity_pending_count,8);
@@ -298,6 +316,22 @@ async function main() {
     assert(sessionState.standings.every(row=>row.matches === 0),'Partial round scores must not count yet');
     assert.equal(detail.workspace.groups.find(group=>group.session_key === numberedA.session_key).completed_matches,1);
     assert.equal(detail.workspace.courts.find(court=>court.id === aCourt.id).current,null);
+    await selectStandings('Numbers A',0);
+    await snapshot(page,'standings-partial-round-pending.png');
+    await selectStandings('Numbers B',0);
+    const shared = await clickRequest(page,page.getByRole('button',{name:'Share standings',exact:true}),
+      `/play-generators/sessions/${encodeURIComponent(numberedB.session_key)}/sharing`);
+    assert.equal(shared.sharing.enabled,true);
+    const standingsLink = page.getByRole('textbox',{name:'Standings link',exact:true});
+    await standingsLink.waitFor();
+    const sharedUrl = await standingsLink.inputValue();
+    assert.equal(sharedUrl,`${webOrigin}/clubs/test/round-robin-generator/shared/${encodeURIComponent(numberedB.session_key)}/standings`);
+    assert.equal(new URL(sharedUrl).hash,'','View-only sharing must not include an organizer token');
+    await page.getByRole('img',{name:'Standings QR code',exact:true}).waitFor();
+    assert.equal(await page.getByRole('link',{name:'Open standings',exact:true}).getAttribute('href'),sharedUrl);
+    await snapshot(page,'standings-selected-group-share-qr.png');
+    // Sharing also versions the hub. The next court command must use that
+    // refreshed version immediately, without a poll or manual Refresh.
     await assignFromGroup('Numbers A');
     detail = await scoreCourt(aCourt.label);
     const nextA = detail.workspace.groups.find(group=>group.session_key === numberedA.session_key);
@@ -323,6 +357,30 @@ async function main() {
     await page.getByRole('tab',{name:'Match queue',exact:true}).click();
     await snapshot(page,'automatic-next-round-queue.png');
     record('Final score saves standings and queues the next round automatically; the other group and court stay unchanged after reload');
+
+    await selectStandings('Numbers A',1);
+    await snapshot(page,'standings-completed-group.png');
+    await selectStandings('Numbers B',0);
+    // A fresh context has no admin session or organizer token: the actual
+    // public route must show this selected group without editing controls.
+    const publicContext = await browser.newContext({viewport:{width:390,height:844}});
+    await publicContext.route('**/*',route=>['127.0.0.1','localhost'].includes(new URL(route.request().url()).hostname) ? route.continue() : route.abort());
+    const publicPage = await publicContext.newPage();
+    publicPage.on('pageerror',error=>errors.push({type:'pageerror',message:error.message}));
+    publicPage.on('console',message=>{if(message.type() === 'error') errors.push({type:'console',message:message.text(),url:message.location().url});});
+    const publicRead = publicPage.waitForResponse(response=>response.url() === `${apiOrigin}/clubs/test/shared-play-generators/sessions/${encodeURIComponent(numberedB.session_key)}`);
+    const [publicResponse] = await Promise.all([publicRead,publicPage.goto(sharedUrl)]);
+    assert(publicResponse.ok());
+    assert.equal(publicResponse.request().headers().authorization,undefined);
+    assert.equal((await publicResponse.json()).session.session_key,numberedB.session_key);
+    await assertStandings(publicPage,'Numbers B',0);
+    assert.equal(await publicPage.getByRole('button',{name:/^(Finish session|Hand off RR|Revoke handoff link|Enter score)$/}).count(),0);
+    assert(await publicPage.evaluate(()=>document.documentElement.scrollWidth <= window.innerWidth),'Public standings must not overflow on mobile');
+    await snapshot(publicPage,'public-selected-group-standings.png');
+    await publicContext.close();
+    await selectStandings('Numbers A',1);
+    assert.equal(await page.getByRole('textbox',{name:'Standings link',exact:true}).count(),0,'Switching groups clears the previous group share link');
+    record('Hub standings switch between groups, exclude partial scores, and share the selected group by link and QR to a view-only public page');
 
     const hubUrl = page.url();
     const bCurrentBefore = (await fixture()).sessions.find(session=>session.session_key === numberedB.session_key).event.rounds[0];

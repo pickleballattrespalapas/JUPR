@@ -17,13 +17,14 @@ import {
 import styles from "./RoundRobinHubPanel.module.css";
 
 type Props = { apiBase: string | null; clubId: string; initialHubId?: string; initialAddSessionKey?: string };
-type Tab = "board" | "queue" | "groups" | "players" | "courts";
+type Tab = "board" | "queue" | "groups" | "standings" | "players" | "courts";
 type Pending = { hubId: string; body: HubCommand | CreateHubInput };
 type CreatedSession = { hubId: string; sessionKey: string };
 type ReturnIntent = CreatedSession & { attempted: boolean };
 type ScoreEditor = { courtId: string; match: HubMatch; version: string | number; scoreA: string; scoreB: string };
 type CourtEditor = { match: HubMatch; sourceCourtId: string; targetCourtId: string; version: string | number };
-type SessionView = { sessionKey: string; view: "round" | "standings"; roundNumber: number };
+type SessionView = { sessionKey: string; roundNumber: number };
+type StandingsSelection = { hubId: string; sessionKey: string };
 
 const emptyList: HubListResponse = { ok: true, hubs: [], sessions: [] };
 const commandMessages: Partial<Record<HubCommandAction, string>> = {
@@ -46,6 +47,10 @@ function courtConfig(court: HubCourtConfig): HubCourtConfig {
   return { id: court.id, label: court.label, dedicated_session_key: court.dedicated_session_key || null, open: court.open };
 }
 function formatName(value?: string): string { return value === "moneyball_expectations" ? "Moneyball" : "Round robin"; }
+function defaultStandingsGroup(groups: HubGroup[]): HubGroup | undefined {
+  return groups.find(group => group.status === "active" && group.scoring_mode !== "unscored")
+    || groups.find(group => group.scoring_mode !== "unscored") || groups[0];
+}
 function identityParticipantKey(participant: HubIdentityParticipant): string {
   return JSON.stringify([participant.session_key, participant.participant_id]);
 }
@@ -92,6 +97,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
   const [scoreEditor, setScoreEditor] = useState<ScoreEditor | null>(null);
   const [courtEditor, setCourtEditor] = useState<CourtEditor | null>(null);
   const [sessionView, setSessionView] = useState<SessionView | null>(null);
+  const [standingsSelection, setStandingsSelection] = useState<StandingsSelection | null>(null);
   const [finishReview, setFinishReview] = useState(false);
   const [identityReviewOpen, setIdentityReviewOpen] = useState(false);
   const [savedIdentityReviewOpen, setSavedIdentityReviewOpen] = useState(false);
@@ -111,6 +117,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
   const createDraftToken = useMemo(() => hubOperationKey(), [hubId, workspace?.groups.length]);
   const disabled = busy || attaching || Boolean(pending) || detail?.hub.status === "completed";
   const groupMap = useMemo(() => new Map((workspace?.groups || []).map(group => [group.session_key, group])), [workspace?.groups]);
+  const standingsGroup = standingsSelection?.hubId === detail?.hub.id ? groupMap.get(standingsSelection?.sessionKey || "") : undefined;
   const availableSessions = list.sessions.filter(session => !session.round_robin_hub_id && session.status === "active" && !groupMap.has(session.session_key));
   const playerGroups = (workspace?.groups || []).map(group => ({
     group,
@@ -142,6 +149,17 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
     return value;
   }, [ready, request]);
 
+  const applyHubDetail = useCallback((value: HubDetailResponse) => {
+    setDetail(value);
+    const groups = value.workspace.groups;
+    setStandingsSelection(current => {
+      if (current?.hubId === value.hub.id && groups.some(group => group.session_key === current.sessionKey)) return current;
+      const group = defaultStandingsGroup(groups);
+      return group ? { hubId: value.hub.id, sessionKey: group.session_key } : null;
+    });
+    setSessionView(current => current && groups.some(group => group.session_key === current.sessionKey) ? current : null);
+  }, []);
+
   const loadHub = useCallback(async (id: string, silent = false) => {
     if (!ready || !id) return;
     const sequence = ++loadSequence.current;
@@ -150,7 +168,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
       const value = await request<HubDetailResponse>(`/${encodeURIComponent(id)}`);
       if (String(value.hub.id) !== id) throw new Error("The server returned a different event. Reload the hub before continuing.");
       if (sequence === loadSequence.current && selectedRef.current === id) {
-        setDetail(value);
+        applyHubDetail(value);
         if (!silent) setError("");
       }
       return value;
@@ -159,7 +177,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
     } finally {
       if (sequence === loadSequence.current && selectedRef.current === id) setLoading(false);
     }
-  }, [ready, request]);
+  }, [ready, request, applyHubDetail]);
 
   const clearReturnIntent = useCallback(() => {
     returnIntent.current = null;
@@ -177,6 +195,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
     selectedRef.current = id;
     loadSequence.current += 1;
     setHubId(id); setDetail(null); setCreating(false); setSessionView(null); setScoreEditor(null); setCourtEditor(null); setError(""); setMessage("");
+    setStandingsSelection(null);
     setAddPlayerOpen(false); setRemovePlayerOpen(false);
     setIdentityReviewOpen(false); setSavedIdentityReviewOpen(false); setIdentitySelections({});
     if (typeof window !== "undefined") window.history.replaceState(null, "", `/admin/round-robin-hub${id ? `?hub=${encodeURIComponent(id)}` : ""}`);
@@ -198,6 +217,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
       selectedRef.current = initialHubId;
       loadSequence.current += 1;
       setHubId(initialHubId); setDetail(null); setCreating(false); setSessionView(null); setScoreEditor(null); setCourtEditor(null);
+      setStandingsSelection(null);
       setAddPlayerOpen(false); setRemovePlayerOpen(false);
       setIdentityReviewOpen(false); setSavedIdentityReviewOpen(false); setIdentitySelections({});
     }
@@ -235,11 +255,11 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
     returnIntent.current = null;
     setCreatedSession(null); setAddSessionKey("");
     selectedRef.current = intent.hubId;
-    setHubId(intent.hubId); setDetail(value); setCreating(false); setTab("board"); setError("");
+    setHubId(intent.hubId); applyHubDetail(value); setCreating(false); setTab("board"); setError("");
     setMessage("Round robin added. Choose Next open court or Fill open courts to start play.");
     window.history.replaceState(null, "", `/admin/round-robin-hub?hub=${encodeURIComponent(intent.hubId)}`);
     return true;
-  }, []);
+  }, [applyHubDetail]);
 
   const execute = useCallback(async (operation: Pending): Promise<boolean> => {
     if (mutationLock.current) return false;
@@ -256,7 +276,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
         selectedRef.current = value.hub.id; setHubId(value.hub.id); setCreating(false);
         window.history.replaceState(null, "", `/admin/round-robin-hub?hub=${encodeURIComponent(value.hub.id)}`);
       }
-      if (selectedRef.current === value.hub.id) setDetail(value);
+      if (selectedRef.current === value.hub.id) applyHubDetail(value);
       setMessage("action" in operation.body ? commandMessages[operation.body.action] || "Hub updated." : "Event created. Add your round robins below.");
       setScoreEditor(null); setCourtEditor(null); setFinishReview(false);
       if ("action" in operation.body && operation.body.action === "add_player") {
@@ -284,7 +304,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
       }
       return false;
     } finally { mutationLock.current = false; setBusy(false); setLoading(false); }
-  }, [request, savePending, loadList, loadHub, completeCreatedSession]);
+  }, [request, savePending, loadList, loadHub, completeCreatedSession, applyHubDetail]);
 
   const attachCreatedSession = useCallback(async (intent: ReturnIntent): Promise<void> => {
     if (mutationLock.current || pending || returnIntent.current !== intent) return;
@@ -299,7 +319,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
       const value = await request<HubDetailResponse>(`/${encodeURIComponent(intent.hubId)}`);
       if (returnIntent.current !== intent) return;
       if (value.hub.id !== intent.hubId) throw new Error("The server returned a different event. Retry adding your saved round robin.");
-      setDetail(value);
+      applyHubDetail(value);
       if (completeCreatedSession(value)) return;
       await execute({ hubId: intent.hubId, body: { action: "add_group", payload: { session_key: intent.sessionKey }, expected_version: value.hub.version, idempotency_key: hubOperationKey() } });
     } catch (cause) {
@@ -310,7 +330,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
         setAttaching(false); setLoading(false);
       }
     }
-  }, [pending, request, execute, completeCreatedSession]);
+  }, [pending, request, execute, completeCreatedSession, applyHubDetail]);
 
   useEffect(() => {
     const intent = returnIntent.current;
@@ -348,7 +368,20 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
   }
 
   function showSession(group: HubGroup, view: "round" | "standings" = "round"): void {
-    setSessionView({ sessionKey: group.session_key, view, roundNumber: group.current_round_number });
+    if (view === "standings") {
+      setStandingsSelection({ hubId, sessionKey: group.session_key });
+      setSessionView(null); setTab("standings");
+    } else setSessionView({ sessionKey: group.session_key, roundNumber: group.current_round_number });
+  }
+
+  function navigateSession(sessionKey: string, target: { view: "round" | "standings"; roundNumber?: number }): void {
+    const group = groupMap.get(sessionKey);
+    if (!group) return;
+    if (target.view === "standings") showSession(group, "standings");
+    else {
+      setSessionView({ sessionKey, roundNumber: target.roundNumber || group.current_round_number });
+      if (tab === "standings") setTab("groups");
+    }
   }
 
   function openIdentityReview(): void {
@@ -446,7 +479,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
     {loading && !detail ? <p role="status">Loading court board…</p> : null}
     {detail && workspace && !creating ? <>
       <div className={styles.heading}><div><h2 style={{ marginBottom: ".4rem" }}>{detail.hub.title}</h2><div className={styles.summary}><span><strong>{workspace.groups.length}</strong> round robins</span><span><strong>{workspace.courts.filter(court => court.open && !court.current).length}</strong> open courts</span><span><strong>{workspace.eligible_queue.length}</strong> ready matches</span><span><strong>{workspace.players.filter(player => player.paused).length}</strong> paused players</span></div></div><span className={`${styles.badge} ${detail.hub.status === "completed" ? "" : styles.good}`}>{detail.hub.status === "completed" ? "Finished" : "Live event"}</span></div>
-      <nav className={styles.nav} role="tablist" aria-label="Hub views">{([['board', 'Court board'], ['queue', 'Match queue'], ['groups', 'Round robins'], ['players', 'Players'], ['courts', 'Court setup']] as const).map(([value, label]) => <button type="button" key={value} role="tab" id={`hub-tab-${value}`} aria-selected={tab === value} aria-controls={`hub-panel-${value}`} onClick={() => value === "courts" ? openCourtSetup() : setTab(value)}>{label}</button>)}</nav>
+      <nav className={styles.nav} role="tablist" aria-label="Hub views">{([['board', 'Court board'], ['queue', 'Match queue'], ['groups', 'Round robins'], ['standings', 'Standings'], ['players', 'Players'], ['courts', 'Court setup']] as const).map(([value, label]) => <button type="button" key={value} role="tab" id={`hub-tab-${value}`} aria-selected={tab === value} aria-controls={`hub-panel-${value}`} onClick={() => { if (value === "courts") openCourtSetup(); else { if (value === "standings") setSessionView(null); setTab(value); } }}>{label}</button>)}</nav>
 
       {identityPendingCount > 0 ? <section className={styles.notice} role="status" aria-label="Player identity review needed"><div className={styles.heading}><div><strong>Review matching player names</strong><p className={styles.small}>Confirm who is playing across groups. Only their queued matches wait for review; other ready matches can keep playing.</p></div><button type="button" className={styles.button} onClick={openIdentityReview}>Review matching names</button></div></section> : null}
 
@@ -472,6 +505,15 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
         })}</div>
       </section> : null}
 
+      {tab === "standings" ? <section id="hub-panel-standings" role="tabpanel" aria-labelledby="hub-tab-standings" className={styles.root}>
+        <div className={styles.card}><h2>Standings</h2><p className={styles.muted}>Choose a round robin to view results and share its standings.</p>
+          <label className={styles.field}>Round robin<select aria-label="Standings round robin" value={standingsGroup?.session_key || ""} disabled={!workspace.groups.length} onChange={event => { const group = groupMap.get(event.target.value); if (group) showSession(group, "standings"); }}>
+            {!workspace.groups.length ? <option value="">No round robins</option> : null}{workspace.groups.map(group => <option key={group.session_key} value={group.session_key}>{group.title}{group.scoring_mode === "unscored" ? " · Unscored" : ""}{group.status === "completed" ? " · Finished" : ""}</option>)}
+          </select></label>
+        </div>
+        {standingsGroup ? <div inert={busy || attaching || Boolean(pending)}><GeneratorStandings key={`${detail.hub.id}:${standingsGroup.session_key}:standings`} apiBase={apiBase} clubId={clubId} sessionKey={standingsGroup.session_key} embedded refreshKey={detail.hub.version} onNavigate={target => navigateSession(standingsGroup.session_key, target)} onSessionChanged={async () => { await loadHub(hubId, true); }} /></div> : <p className={styles.card}>Add a round robin to this event to view its standings here.</p>}
+      </section> : null}
+
       {tab === "players" ? <section id="hub-panel-players" role="tabpanel" aria-labelledby="hub-tab-players" className={styles.card}>
         <div className={styles.heading}><div><h2>Players</h2><p className={styles.muted}>Players are grouped by round robin. Pause for a break and resume when ready; waiting time is held. Pausing a shared player applies across this event.</p></div><div className={styles.actions}><button type="button" className={styles.primary} disabled={disabled || !workspace.groups.length} onClick={() => { setAddPlayerOpen(true); setRemovePlayerOpen(false); setError(""); }}>Add player</button><button type="button" className={styles.button} disabled={disabled || !workspace.groups.length} onClick={() => { setRemovePlayerOpen(true); setAddPlayerOpen(false); setError(""); }}>Remove player</button>{identityReviews.length ? <button type="button" className={styles.button} onClick={openIdentityReview}>Review player identities</button> : null}<label className={styles.field}>Find player<input type="search" value={playerSearch} onChange={event => setPlayerSearch(event.target.value)} /></label></div></div>
         {identityReviews.length > 0 && (identityReviewOpen || identityPendingCount > 0) ? reviewIdentityNames() : null}
@@ -495,7 +537,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
 
       {tab === "courts" ? <section id="hub-panel-courts" role="tabpanel" aria-labelledby="hub-tab-courts" className={styles.card}><h2>Court setup</h2><p className={styles.muted}>A group with dedicated courts uses only those courts. Other groups use the shared courts.</p>{courtEditorRows(editCourts, setEditCourts, true)}{String(courtDraftVersion) !== String(detail.hub.version) ? <p className={styles.small}>The court board has changed since this editor opened. Review current courts before saving.</p> : null}<div className={styles.actions}><button type="button" className={styles.primary} disabled={disabled || !editCourts.length || editCourts.some(court => !court.label.trim())} onClick={() => void command("configure_courts", { courts: editCourts.map(courtConfig) }, courtDraftVersion).then(ok => { if (ok) setTab("board"); })}>Save court setup</button><button type="button" className={styles.button} disabled={busy} onClick={openCourtSetup}>Reload current courts</button><button type="button" className={styles.button} disabled={disabled} onClick={() => setFinishReview(true)}>Finish event</button></div></section> : null}
 
-      {sessionView ? <section className={styles.embedded} aria-label="Manage selected round robin"><div className={styles.heading}><div><p className={styles.eyebrow}>Round robin controls</p><h2>{groupMap.get(sessionView.sessionKey)?.title || "Round robin"}</h2></div><button type="button" className={styles.button} onClick={() => setSessionView(null)}>Close round robin controls</button></div><div className={styles.embeddedBody} inert={busy || attaching || Boolean(pending)}>{sessionView.view === "standings" ? <GeneratorStandings key={`${sessionView.sessionKey}:standings`} apiBase={apiBase} clubId={clubId} sessionKey={sessionView.sessionKey} embedded refreshKey={detail.hub.version} onNavigate={target => setSessionView({ ...sessionView, view: target.view, roundNumber: target.roundNumber || sessionView.roundNumber })} onSessionChanged={() => { void loadHub(hubId, true); }} /> : <GeneratorRoundRunner key={`${sessionView.sessionKey}:round:${sessionView.roundNumber}`} apiBase={apiBase} clubId={clubId} generatorKind="round_robin" sessionKey={sessionView.sessionKey} roundNumber={sessionView.roundNumber} embedded refreshKey={detail.hub.version} onNavigate={target => setSessionView({ ...sessionView, view: target.view, roundNumber: target.roundNumber || sessionView.roundNumber })} onSessionChanged={() => { void loadHub(hubId, true); }} />}</div></section> : null}
+      {sessionView && groupMap.has(sessionView.sessionKey) ? <section className={styles.embedded} aria-label="Manage selected round robin"><div className={styles.heading}><div><p className={styles.eyebrow}>Round robin controls</p><h2>{groupMap.get(sessionView.sessionKey)?.title || "Round robin"}</h2></div><button type="button" className={styles.button} onClick={() => setSessionView(null)}>Close round robin controls</button></div><div className={styles.embeddedBody} inert={busy || attaching || Boolean(pending)}><GeneratorRoundRunner key={`${detail.hub.id}:${sessionView.sessionKey}:round:${sessionView.roundNumber}`} apiBase={apiBase} clubId={clubId} generatorKind="round_robin" sessionKey={sessionView.sessionKey} roundNumber={sessionView.roundNumber} embedded refreshKey={detail.hub.version} onNavigate={target => navigateSession(sessionView.sessionKey, target)} onSessionChanged={async () => { await loadHub(hubId, true); }} /></div></section> : null}
     </> : null}
 
     {addPlayerOpen && workspace ? <HubAddPlayerDialog key={hubId} apiBase={apiBase} clubId={clubId} groups={workspace.groups}

@@ -156,3 +156,75 @@ def test_routes_enforce_token_gate_and_omit_submit_publish_and_access_management
         assert client.post(f"{root}/complete", json=body).status_code == 403
     else:
         assert client.post(f"{root}/complete", json={**body, "edit_token": ""}).status_code == 422
+
+
+def test_hub_public_rr_admin_sharing_uses_timestamp_and_owner_keeps_numeric_lease(monkeypatch):
+    from test_admin_round_robin_hub_service import TransactionalHubDB, command, create, raw_session, session
+    from jupr_app.services.admin_play_generator_service import get_play_generator_session
+    from jupr_app.services.public_live_operation_service import hash_edit_token
+
+    monkeypatch.setenv("JUPR_PUBLIC_LIVE_TOKEN_SECRET", "x" * 48)
+    db = TransactionalHubDB()
+    session(db, mode="public_play_generator")
+    db.storage["clubs"] = [{"id": "club-a", "slug": "club-slug"}]
+    raw_session(db)["edit_token_hash"] = hash_edit_token("original-owner")
+    hub = command(db, create(db), "add_group", {"session_key": "rr-a"})
+    fresh = get_play_generator_session(db, club_id="club-a", session_key="rr-a")["session"]
+    before_event = deepcopy(fresh["event"])
+    calls = len(db.calls)
+
+    shared = sharing.manage_generator_sharing(db, club_id="club-a", session_key="rr-a",
+        action="view", expected_version=fresh["version"], admin_authorized=True)
+    assert isinstance(shared["session"]["version"], str)
+    assert shared["session"]["version"] == raw_session(db)["updated_at"]
+    assert shared["session"]["event"] == before_event
+    assert shared["sharing"]["club_slug"] == "club-slug"
+    assert len(db.calls) == calls + 1
+    assert db.storage["round_robin_hubs"][0]["version"] == hub["hub"]["version"] + 1
+
+    before = deepcopy(db.storage)
+    with pytest.raises(PublicLiveConflictError):
+        sharing.manage_generator_sharing(db, club_id="club-a", session_key="rr-a",
+            action="handoff", expected_version=fresh["version"], admin_authorized=True)
+    with pytest.raises(PermissionError):
+        sharing.manage_generator_sharing(db, club_id="club-a", session_key="rr-a",
+            action="handoff", expected_version=raw_session(db)["version"], owner_token="wrong-owner")
+    assert db.storage == before
+
+    owner = sharing.manage_generator_sharing(db, club_id="club-a", session_key="rr-a",
+        action="handoff", expected_version=raw_session(db)["version"], owner_token="original-owner")
+    assert isinstance(owner["session"]["version"], int)
+    assert owner["session"]["version"] == raw_session(db)["version"]
+    assert owner["sharing"]["handoff_token"]
+    assert owner["session"]["event"] == before_event
+    with pytest.raises(PublicLiveConflictError):
+        sharing.manage_generator_sharing(db, club_id="club-a", session_key="rr-a",
+            action="revoke", expected_version=raw_session(db)["updated_at"], owner_token="original-owner")
+
+
+@pytest.mark.parametrize("mode", ["admin_play_generator", "public_play_generator"])
+def test_shared_hub_standings_wait_for_whole_round_completion(mode):
+    from test_admin_round_robin_hub_service import TransactionalHubDB, command, create, raw_session, session
+    from jupr_app.services.admin_play_generator_service import get_play_generator_session
+
+    db = TransactionalHubDB()
+    session(db, mode=mode)
+    db.storage["clubs"] = [{"id": "club-a", "slug": "club-slug"}]
+    hub = command(db, create(db), "add_group", {"session_key": "rr-a"})
+    sharing.manage_generator_sharing(db, club_id="club-a", session_key="rr-a",
+        action="view", expected_version=raw_session(db)["updated_at"], admin_authorized=True)
+    from jupr_app.services.admin_round_robin_hub_service import get_round_robin_hub
+    hub = get_round_robin_hub(db, club_id="club-a", hub_id=hub["hub"]["id"])
+
+    for completed in (1, 2):
+        pending = hub["workspace"]["eligible_queue"][0]
+        reference = {key: pending[key] for key in ("session_key", "round_number", "match_id")}
+        hub = command(db, hub, "assign_game", {**reference, "court_id": "c1"})
+        hub = command(db, hub, "score_and_release", {**reference, "court_id": "c1", "score_a": 11, "score_b": 8})
+        shared = sharing.get_shared_generator(db, club_id="club-a", session_key="rr-a")["session"]
+        admin = get_play_generator_session(db, club_id="club-a", session_key="rr-a")["session"]
+        assert shared["standings"] == admin["standings"]
+        assert {row["matches"] for row in shared["standings"]} == ({0} if completed == 1 else {1})
+        assert shared["current_round_number"] == (1 if completed == 1 else 2)
+        assert "handoff_nonce" not in str(shared)
+        assert "edit_token_hash" not in str(shared)

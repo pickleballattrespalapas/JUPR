@@ -53,7 +53,7 @@ type Props = {
   apiBase: string | null; clubId: string; sessionKey: string;
   embedded?: boolean;
   onNavigate?: (target: { view: "round" | "standings"; roundNumber?: number }) => void;
-  onSessionChanged?: () => void;
+  onSessionChanged?: () => void | Promise<void>;
   refreshKey?: string | number;
 };
 
@@ -230,7 +230,7 @@ export default function AdminGeneratorStandings({ apiBase, clubId, sessionKey, e
           {!embedded ? <> <Link href={`/admin/round-robin-hub?hub=${encodeURIComponent(session.round_robin_hub_id)}`}>Open court board</Link></> : null}
         </p>
       </aside> : null}
-      <GeneratorSharing apiBase={apiBase} clubId={clubId} sessionKey={sessionKey} version={session.version} adminToken={accessToken || undefined} locked={resultsLocked} disabled={busy} onChanged={loadSession} />
+      <GeneratorSharing apiBase={apiBase} clubId={clubId} sessionKey={sessionKey} version={session.version} adminToken={accessToken || undefined} locked={resultsLocked} disabled={busy} onChanged={async () => { await Promise.all([loadSession(), onSessionChanged?.()]); }} />
       <nav aria-label="Round-Robin session navigation" style={{ ...cardStyle, display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
         <Link href={`/admin/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${currentRound}`} style={linkButton}>Current round</Link>
         {visibleRounds.map((row) => <Link key={row.number} href={`/admin/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${row.number}`} style={linkButton}>{row.label || `Round ${row.number}`}{row.status === "skipped" ? " · Skipped" : ""}</Link>)}
