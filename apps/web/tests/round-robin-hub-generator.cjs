@@ -130,7 +130,7 @@ function embeddedClick(href) {
   global.window={sessionStorage:{getItem:key=>recoveryStorage.get(key)||null,setItem:(key,value)=>recoveryStorage.set(key,value),removeItem:key=>recoveryStorage.delete(key)}};
   const baseDraft='admin-play-generator-draft:club:round_robin';
   const savedDraft=()=>({title:'New group',playFormat:'doubles',ratingMode:'unrated',targetCount:4,
-    participantText:'One\nTwo\nThree\nFour',linkedPlayerIds:{},preview:{...clone(fixture.event),previewFingerprint:'preview'}});
+    participantText:'One\nTwo\nThree\nFour',linkedPlayerIds:{two:22,four:44},preview:{...clone(fixture.event),previewFingerprint:'preview'}});
   stubs['@/lib/playGeneratorDraft'] = {
     readPlayGeneratorDraft:key=>drafts.get(key)||null,
     writePlayGeneratorDraft:(key,value)=>drafts.set(key,clone(value)),clearPlayGeneratorDraft:key=>drafts.delete(key)
@@ -153,6 +153,8 @@ function embeddedClick(href) {
     assert.equal(creates.length,1,'Starting creates exactly one round robin');
     assert.equal(creates[0].body.rating_mode,'unrated');
     assert.equal(creates[0].body.preview_fingerprint,'preview');
+    assert.deepEqual(creates[0].body.participant_player_ids,{Two:22,Four:44},'Guest entries preserve the selected profiles in mixed rosters');
+    assert.equal(Object.hasOwn(creates[0].body,'player_ids'),false,'New starts send explicit sparse links rather than an all-or-nothing ID list');
     assert.deepEqual(navigation,[hub?'/admin/round-robin-hub?hub=hub%2F2&add_session=new%2Frr':'/admin/round-robin-generator/sessions/new%2Frr/rounds/1']);
     const runLabel=hub?'Run this round robin in the hub':'Run this session';
     await act(async()=>button(tree,runLabel).props.onClick());
@@ -232,6 +234,17 @@ function embeddedClick(href) {
   await act(async()=>resolvePreview());
   assert.equal(button(tree,'Start and add to hub'),undefined,'Old preview response cannot populate a new draft');
   assert.equal(drafts.get(scopedKey('new-hub','new-preview')).preview,null);
+  await act(async()=>tree.unmount());
+
+  resetDraft('mixed-hub','mixed-preview');const previewBodies=[];
+  global.fetch=async(url,options={})=>{
+    if(url.endsWith('/preview')) {previewBodies.push(JSON.parse(options.body));return response({preview:savedDraft().preview});}
+    return response({sessions:[]});
+  };
+  await act(async()=>{tree=create(h(Workspace,workspaceProps('mixed-hub','mixed-preview')));});
+  await act(async()=>button(tree,'Preview matchups').props.onClick());
+  assert.deepEqual(previewBodies[0].participant_names,['One','Two','Three','Four']);
+  assert.deepEqual(previewBodies[0].participant_player_ids,{Two:22,Four:44},'Preview preserves the same sparse profiles as Start');
   await act(async()=>tree.unmount());
   console.log('PASS hub generator integration: embedded controls, sequential standings, safe refresh, roster controls, and hub/standalone creation destinations.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

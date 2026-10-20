@@ -7,9 +7,9 @@ import GeneratorRoundRunner from "@/app/admin/play-generators/GeneratorRoundRunn
 import GeneratorStandings from "@/app/admin/play-generators/GeneratorStandings";
 import { useAdminSession } from "@/lib/useAdminSession";
 import {
-  hubMatchLabel, hubOperationKey, hubWaitLabel, isUncertainHubError, requestRoundRobinHub, RoundRobinHubApiError,
+  hubMatchLabel, hubPlayerLabel, hubOperationKey, hubWaitLabel, isUncertainHubError, requestRoundRobinHub, RoundRobinHubApiError,
   type CreateHubInput, type HubCommand, type HubCommandAction, type HubCourtConfig, type HubDetailResponse,
-  type HubGroup, type HubListResponse, type HubMatch
+  type HubGroup, type HubIdentityParticipant, type HubIdentityReview, type HubListResponse, type HubMatch
 } from "@/lib/adminRoundRobinHubApi";
 import styles from "./RoundRobinHubPanel.module.css";
 
@@ -30,7 +30,8 @@ const commandMessages: Partial<Record<HubCommandAction, string>> = {
   move_game: "Match moved.", release_game: "Match returned to the queue.", score_and_release: "Score saved and court released.",
   mark_played: "Match marked played and court released.", pause_player: "Player paused. Their waiting time is held.",
   resume_player: "Player is ready again.", advance_round: "Next round is ready for the court queue.", finish_hub: "Event finished.",
-  auto_fill_courts: "Available courts filled with eligible matches."
+  auto_fill_courts: "Available courts filled with eligible matches.",
+  resolve_identities: "Player identity decisions saved. The court queue has been updated."
 };
 
 function newCourts(count: number): HubCourtConfig[] {
@@ -40,6 +41,9 @@ function courtConfig(court: HubCourtConfig): HubCourtConfig {
   return { id: court.id, label: court.label, dedicated_session_key: court.dedicated_session_key || null, open: court.open };
 }
 function formatName(value?: string): string { return value === "moneyball_expectations" ? "Moneyball" : "Round robin"; }
+function identityParticipantKey(participant: HubIdentityParticipant): string {
+  return JSON.stringify([participant.session_key, participant.participant_id]);
+}
 function pendingStorageKey(clubId: string): string { return `rr-hub-pending:${clubId}`; }
 function readPending(clubId: string): Pending | null {
   try {
@@ -73,6 +77,8 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
   const [courtEditor, setCourtEditor] = useState<CourtEditor | null>(null);
   const [sessionView, setSessionView] = useState<SessionView | null>(null);
   const [finishReview, setFinishReview] = useState(false);
+  const [identityReviewOpen, setIdentityReviewOpen] = useState(false);
+  const [identitySelections, setIdentitySelections] = useState<Record<string, string[]>>({});
   const selectedRef = useRef(hubId);
   const loadSequence = useRef(0);
   const mutationLock = useRef(false);
@@ -81,6 +87,9 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
   const scoreInput = useRef<HTMLInputElement>(null);
   const ready = Boolean(apiBase && accessToken);
   const workspace = detail?.workspace;
+  const identityReviews = workspace?.identity_review || [];
+  const pendingIdentityReviews = identityReviews.filter(review => review.status === "pending");
+  const identityPendingCount = workspace?.identity_pending_count ?? pendingIdentityReviews.length;
   const createDraftToken = useMemo(() => hubOperationKey(), [hubId, workspace?.groups.length]);
   const disabled = busy || attaching || Boolean(pending) || detail?.hub.status === "completed";
   const groupMap = useMemo(() => new Map((workspace?.groups || []).map(group => [group.session_key, group])), [workspace?.groups]);
@@ -141,6 +150,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
     selectedRef.current = id;
     loadSequence.current += 1;
     setHubId(id); setDetail(null); setCreating(false); setSessionView(null); setScoreEditor(null); setCourtEditor(null); setError(""); setMessage("");
+    setIdentityReviewOpen(false); setIdentitySelections({});
     if (typeof window !== "undefined") window.history.replaceState(null, "", `/admin/round-robin-hub${id ? `?hub=${encodeURIComponent(id)}` : ""}`);
   }
 
@@ -160,6 +170,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
       selectedRef.current = initialHubId;
       loadSequence.current += 1;
       setHubId(initialHubId); setDetail(null); setCreating(false); setSessionView(null); setScoreEditor(null); setCourtEditor(null);
+      setIdentityReviewOpen(false); setIdentitySelections({});
     }
     if (!initialAddSessionKey) return;
     if (returnIntent.current?.hubId === initialHubId && returnIntent.current.sessionKey === initialAddSessionKey) return;
@@ -220,6 +231,11 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
       setMessage("action" in operation.body ? commandMessages[operation.body.action] || "Hub updated." : "Event created. Add your round robins below.");
       setScoreEditor(null); setCourtEditor(null); setFinishReview(false);
       if (!completeCreatedSession(value) && (!operation.hubId || ("action" in operation.body && operation.body.action === "add_group"))) setTab("groups");
+      if ("action" in operation.body && operation.body.action === "add_group" && Number(value.workspace.identity_pending_count || 0) > 0) {
+        setIdentityReviewOpen(true); setTab("players");
+        setMessage("Round robin added. Review the matching player names below; other ready matches can keep playing.");
+      }
+      if ("action" in operation.body && operation.body.action === "resolve_identities") setIdentitySelections({});
       void loadList().catch(() => undefined);
       return true;
     } catch (cause) {
@@ -298,6 +314,48 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
     setSessionView({ sessionKey: group.session_key, view, roundNumber: group.current_round_number });
   }
 
+  function openIdentityReview(): void {
+    setIdentityReviewOpen(true); setTab("players");
+  }
+
+  function selectedIdentityParticipants(review: HubIdentityReview): HubIdentityParticipant[] {
+    const selected = identitySelections[review.id];
+    return selected ? review.participants.filter(participant => selected.includes(identityParticipantKey(participant))) : review.participants;
+  }
+
+  function reviewIdentityNames() {
+    return <section className={styles.card} aria-label="Matching player names">
+      <div className={styles.heading}><div><h3>Matching player names</h3><p className={styles.muted}>Choose whether these entries belong to the same person or to different people. Decisions apply to this event’s court queue and pauses; round robin scores stay unchanged.</p></div><button type="button" className={styles.button} onClick={() => setIdentityReviewOpen(false)} disabled={identityPendingCount > 0}>Hide identity review</button></div>
+      {identityPendingCount > 0 ? <div className={styles.notice}><p><strong>{identityPendingCount} matching {identityPendingCount === 1 ? "name needs" : "names need"} review.</strong> Only queued matches involving these entries are waiting for a decision.</p><div className={styles.actions}><button type="button" className={styles.primary} disabled={disabled} onClick={() => void command("resolve_identities", { resolution: "all_different" })}>These are all different people</button></div><p className={styles.small}>This resolves all pending matching names as different people. Previously confirmed same-person entries and linked player profiles stay together.</p></div> : <p className={styles.small}>These decisions are saved. You can correct them here at any time; merging entries requires their court assignments to be finished or released first.</p>}
+      <div className={styles.root}>{identityReviews.map(review => {
+        const selected = selectedIdentityParticipants(review);
+        const profileIds = selected.map(participant => participant.profile_id).filter((id): id is number => id != null);
+        const distinctProfiles = new Set(profileIds);
+        const selectedHasSameProfile = distinctProfiles.size < profileIds.length;
+        const selectedIsOneProfile = profileIds.length === selected.length && distinctProfiles.size === 1;
+        const canMergeSelection = distinctProfiles.size <= 1 && (selected.length !== review.participants.length || review.can_merge);
+        const reviewDisabled = disabled || selected.length < 2;
+        const selectedLabel = selected.map(hubPlayerLabel).join(" and ");
+        return <article key={review.id} className={styles.groupCard} data-review-id={review.id} aria-label={`Identity review for ${review.name}`}>
+          <div className={styles.heading}><h4 style={{ margin: 0 }}>{review.name}</h4><span className={`${styles.badge} ${review.status === "pending" ? styles.waiting : ""}`}>{review.status === "pending" ? "Needs review" : review.status === "same" ? "Same person" : review.status === "different" ? "Different people" : "Some entries share a person"}</span></div>
+          <div className={styles.playerList}>{review.participants.map(participant => {
+            const label = hubPlayerLabel(participant);
+            const key = identityParticipantKey(participant);
+            return <div key={key} className={styles.player}><div>{review.participants.length > 2 ? <label className={styles.checkbox}><input type="checkbox" checked={selected.some(item => identityParticipantKey(item) === key)} disabled={disabled} aria-label={`Select ${label} from ${participant.group_title} for identity decision`} onChange={event => {
+              const keys = selected.map(identityParticipantKey);
+              setIdentitySelections(current => ({ ...current, [review.id]: event.target.checked ? [...keys, key] : keys.filter(item => item !== key) }));
+            }} /><strong>{label}</strong></label> : <strong>{label}</strong>}<p className={styles.small}>{participant.group_title} · {participant.profile_id == null ? "Guest player" : "Linked club player"}</p></div></div>;
+          })}</div>
+          {review.participants.length > 2 ? <p className={styles.small}>Select at least two entries to decide together. You can make separate decisions for the remaining entries. To split a previous same-person decision, select all entries that share that person.</p> : null}
+          {review.assigned ? <p className={styles.small}>Finish or release affected assignments before marking these as the same person.</p> : null}
+          {!canMergeSelection && selected.length >= 2 ? <p className={styles.small}>These entries link to different club profiles and must stay separate.</p> : null}
+          {selectedHasSameProfile ? <p className={styles.small}>{selectedIsOneProfile ? "Entries linked to the same club profile belong to one person and cannot be split here." : "Entries linked to the same club profile stay together when other selected entries are separated."}</p> : null}
+          <div className={styles.actions}><button type="button" className={styles.button} aria-label={`Same person: ${selectedLabel}`} disabled={reviewDisabled || review.assigned || !canMergeSelection} onClick={() => void command("resolve_identities", { resolution: "same", participants: selected.map(participant => ({ session_key: participant.session_key, participant_id: participant.participant_id })) })}>Same person</button><button type="button" className={styles.button} aria-label={`Different people: ${selectedLabel}`} disabled={reviewDisabled || selectedIsOneProfile} onClick={() => void command("resolve_identities", { resolution: "different", participants: selected.map(participant => ({ session_key: participant.session_key, participant_id: participant.participant_id })) })}>Different people</button></div>
+        </article>;
+      })}</div>
+    </section>;
+  }
+
   function queueRows(matches: HubMatch[], kind: "ready" | "waiting" | "blocked") {
     return <ol className={styles.queue}>{matches.map((match, index) => {
       const openCourt = workspace?.courts.some(court => court.open && !court.current && !court.next && match.allowed_court_ids.includes(court.id));
@@ -348,6 +406,8 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
       <div className={styles.heading}><div><h2 style={{ marginBottom: ".4rem" }}>{detail.hub.title}</h2><div className={styles.summary}><span><strong>{workspace.groups.length}</strong> round robins</span><span><strong>{workspace.courts.filter(court => court.open && !court.current).length}</strong> open courts</span><span><strong>{workspace.eligible_queue.length}</strong> ready matches</span><span><strong>{workspace.players.filter(player => player.paused).length}</strong> paused players</span></div></div><span className={`${styles.badge} ${detail.hub.status === "completed" ? "" : styles.good}`}>{detail.hub.status === "completed" ? "Finished" : "Live event"}</span></div>
       <nav className={styles.nav} role="tablist" aria-label="Hub views">{([['board', 'Court board'], ['queue', 'Match queue'], ['groups', 'Round robins'], ['players', 'Players'], ['courts', 'Court setup']] as const).map(([value, label]) => <button type="button" key={value} role="tab" id={`hub-tab-${value}`} aria-selected={tab === value} aria-controls={`hub-panel-${value}`} onClick={() => value === "courts" ? openCourtSetup() : setTab(value)}>{label}</button>)}</nav>
 
+      {identityPendingCount > 0 ? <section className={styles.notice} role="status" aria-label="Player identity review needed"><div className={styles.heading}><div><strong>Review matching player names</strong><p className={styles.small}>Confirm who is playing across groups. Only their queued matches wait for review; other ready matches can keep playing.</p></div><button type="button" className={styles.button} onClick={openIdentityReview}>Review matching names</button></div></section> : null}
+
       {tab === "board" ? <section id="hub-panel-board" role="tabpanel" aria-labelledby="hub-tab-board" className={styles.root}>
         <div className={styles.card}><div className={styles.heading}><div><h3>Ready for a court</h3><p className={styles.small}>Longest waiting players first, including time on bye.</p></div><button type="button" className={styles.primary} disabled={disabled || !workspace.eligible_queue.length || !workspace.courts.some(court => court.open && !court.current)} onClick={() => void command("auto_fill_courts")}>Fill open courts</button></div>{workspace.eligible_queue.length ? queueRows(workspace.eligible_queue.slice(0, 4), "ready") : <p className={styles.muted}>No matches are ready. Check paused players, group progress, and court availability.</p>}{workspace.eligible_queue.length > 4 ? <button type="button" className={styles.button} style={{ marginTop: ".7rem" }} onClick={() => setTab("queue")}>View all {workspace.eligible_queue.length} ready matches</button> : null}</div>
         <div className={styles.grid}>{workspace.courts.map(court => <article key={court.id} className={`${styles.court} ${court.current ? styles.occupied : ""} ${!court.open ? styles.closed : ""}`} aria-label={court.label}>
@@ -370,9 +430,9 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
         })}</div>
       </section> : null}
 
-      {tab === "players" ? <section id="hub-panel-players" role="tabpanel" aria-labelledby="hub-tab-players" className={styles.card}><div className={styles.heading}><div><h2>Players</h2><p className={styles.muted}>Pause for a break and resume when ready. No reason needed. Waiting time is held while paused.</p></div><label className={styles.field}>Find player<input type="search" value={playerSearch} onChange={event => setPlayerSearch(event.target.value)} /></label></div><div className={styles.playerList}>{workspace.players.filter(player => player.name.toLowerCase().includes(playerSearch.toLowerCase())).map(player => {
+      {tab === "players" ? <section id="hub-panel-players" role="tabpanel" aria-labelledby="hub-tab-players" className={styles.card}><div className={styles.heading}><div><h2>Players</h2><p className={styles.muted}>Pause for a break and resume when ready. No reason needed. Waiting time is held while paused.</p></div><div className={styles.actions}>{identityReviews.length ? <button type="button" className={styles.button} onClick={openIdentityReview}>Review player identities</button> : null}<label className={styles.field}>Find player<input type="search" value={playerSearch} onChange={event => setPlayerSearch(event.target.value)} /></label></div></div>{identityReviews.length > 0 && (identityReviewOpen || identityPendingCount > 0) ? reviewIdentityNames() : null}<div className={styles.playerList}>{workspace.players.filter(player => hubPlayerLabel(player).toLowerCase().includes(playerSearch.toLowerCase())).map(player => {
         const playingCourt = workspace.courts.find(court => court.current && [...court.current.side_a, ...court.current.side_b].some(person => person.identity === player.identity));
-        return <div key={player.identity} className={styles.player}><div><strong>{player.name}</strong><p className={styles.small}>{player.session_keys.map(key => groupMap.get(key)?.title).filter(Boolean).join(" · ")}</p><span className={styles.small}>{playingCourt ? `Playing on ${playingCourt.label}` : `Waiting ${hubWaitLabel(player.wait_seconds)}`}{player.paused ? " · Paused" : ""}</span></div><button type="button" className={player.paused ? styles.primary : styles.button} disabled={disabled} onClick={() => void command(player.paused ? "resume_player" : "pause_player", { identity: player.identity })}>{player.paused ? "Ready again" : "Pause player"}</button></div>;
+        return <div key={player.identity} className={styles.player} aria-label={hubPlayerLabel(player)} data-player-identity={player.identity}><div><strong>{hubPlayerLabel(player)}</strong><p className={styles.small}>{player.session_keys.map(key => groupMap.get(key)?.title).filter(Boolean).join(" · ")}</p><span className={styles.small}>{playingCourt ? `Playing on ${playingCourt.label}` : `Waiting ${hubWaitLabel(player.wait_seconds)}`}{player.paused ? " · Paused" : ""}</span></div><button type="button" className={player.paused ? styles.primary : styles.button} disabled={disabled} onClick={() => void command(player.paused ? "resume_player" : "pause_player", { identity: player.identity })}>{player.paused ? "Ready again" : "Pause player"}</button></div>;
       })}</div><p className={styles.small}>To leave a round robin early or change a roster, open that group’s Manage round robin controls.</p></section> : null}
 
       {tab === "courts" ? <section id="hub-panel-courts" role="tabpanel" aria-labelledby="hub-tab-courts" className={styles.card}><h2>Court setup</h2><p className={styles.muted}>A group with dedicated courts uses only those courts. Other groups use the shared courts.</p>{courtEditorRows(editCourts, setEditCourts, true)}{String(courtDraftVersion) !== String(detail.hub.version) ? <p className={styles.small}>The court board has changed since this editor opened. Review current courts before saving.</p> : null}<div className={styles.actions}><button type="button" className={styles.primary} disabled={disabled || !editCourts.length || editCourts.some(court => !court.label.trim())} onClick={() => void command("configure_courts", { courts: editCourts.map(courtConfig) }, courtDraftVersion).then(ok => { if (ok) setTab("board"); })}>Save court setup</button><button type="button" className={styles.button} disabled={busy} onClick={openCourtSetup}>Reload current courts</button><button type="button" className={styles.button} disabled={disabled} onClick={() => setFinishReview(true)}>Finish event</button></div></section> : null}
@@ -381,7 +441,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
     </> : null}
 
     {scoreEditor ? <InteractionDialog open phase={busy ? "working" : "ready"} title={`Enter score · ${selectedScoreCourt?.label || "Court"}`} description={<p>{groupMap.get(scoreEditor.match.session_key)?.title} · Round {scoreEditor.match.round_number}</p>} initialFocusRef={scoreInput} dirty={Boolean(scoreEditor.scoreA || scoreEditor.scoreB)} onRequestClose={() => { if (!busy) setScoreEditor(null); }} actions={<><button type="button" className={styles.button} disabled={busy} onClick={() => setScoreEditor(null)}>Cancel</button><button type="submit" form="hub-score-form" className={styles.primary} disabled={disabled || !scoreValid || scoreMatchChanged || scoreStale}>Save score &amp; release court</button></>}>
-      <form id="hub-score-form" onSubmit={event => { event.preventDefault(); if (scoreValid && !scoreStale && !scoreMatchChanged) void command("score_and_release", { court_id: scoreEditor.courtId, session_key: scoreEditor.match.session_key, match_id: scoreEditor.match.match_id, score_a: Number(scoreA), score_b: Number(scoreB) }, scoreEditor.version); }}><div className={styles.scoreGrid}><label className={styles.field}>{scoreEditor.match.side_a.map(player => player.name).join(" / ")}<input ref={scoreInput} aria-label="Side A score" inputMode="numeric" type="number" min={0} max={99} value={scoreEditor.scoreA} onChange={event => setScoreEditor({ ...scoreEditor, scoreA: event.target.value })} /></label><label className={styles.field}>{scoreEditor.match.side_b.map(player => player.name).join(" / ")}<input aria-label="Side B score" inputMode="numeric" type="number" min={0} max={99} value={scoreEditor.scoreB} onChange={event => setScoreEditor({ ...scoreEditor, scoreB: event.target.value })} /></label></div></form><p className={styles.small}>This saves the match and frees its court. The score counts toward standings when the entire round is complete.</p>{scoreA && scoreB && !scoreValid ? <p role="alert">Enter two different whole-number scores between 0 and 99.</p> : null}{scoreMatchChanged ? <p role="alert">This court now has a different match. Close this score entry and review the court board.</p> : scoreStale ? <div className={styles.notice}><p>The court board changed while this score was open. The same match is still on court; review it before saving.</p><button type="button" className={styles.button} onClick={() => setScoreEditor({ ...scoreEditor, version: detail!.hub.version })}>Reviewed — keep these scores</button></div> : null}{error ? <p role="alert">{error}</p> : null}{pending ? <button type="button" className={styles.button} disabled={busy} onClick={() => void execute(pending)}>Retry saved action</button> : null}
+      <form id="hub-score-form" onSubmit={event => { event.preventDefault(); if (scoreValid && !scoreStale && !scoreMatchChanged) void command("score_and_release", { court_id: scoreEditor.courtId, session_key: scoreEditor.match.session_key, match_id: scoreEditor.match.match_id, score_a: Number(scoreA), score_b: Number(scoreB) }, scoreEditor.version); }}><div className={styles.scoreGrid}><label className={styles.field}>{scoreEditor.match.side_a.map(hubPlayerLabel).join(" / ")}<input ref={scoreInput} aria-label="Side A score" inputMode="numeric" type="number" min={0} max={99} value={scoreEditor.scoreA} onChange={event => setScoreEditor({ ...scoreEditor, scoreA: event.target.value })} /></label><label className={styles.field}>{scoreEditor.match.side_b.map(hubPlayerLabel).join(" / ")}<input aria-label="Side B score" inputMode="numeric" type="number" min={0} max={99} value={scoreEditor.scoreB} onChange={event => setScoreEditor({ ...scoreEditor, scoreB: event.target.value })} /></label></div></form><p className={styles.small}>This saves the match and frees its court. The score counts toward standings when the entire round is complete.</p>{scoreA && scoreB && !scoreValid ? <p role="alert">Enter two different whole-number scores between 0 and 99.</p> : null}{scoreMatchChanged ? <p role="alert">This court now has a different match. Close this score entry and review the court board.</p> : scoreStale ? <div className={styles.notice}><p>The court board changed while this score was open. The same match is still on court; review it before saving.</p><button type="button" className={styles.button} onClick={() => setScoreEditor({ ...scoreEditor, version: detail!.hub.version })}>Reviewed — keep these scores</button></div> : null}{error ? <p role="alert">{error}</p> : null}{pending ? <button type="button" className={styles.button} disabled={busy} onClick={() => void execute(pending)}>Retry saved action</button> : null}
     </InteractionDialog> : null}
 
     {courtEditor ? <InteractionDialog open phase={busy ? "working" : "ready"} title={courtEditor.sourceCourtId ? "Move or remove match" : "Choose court"} description={<p>{hubMatchLabel(courtEditor.match)}</p>} onRequestClose={() => { if (!busy) setCourtEditor(null); }} actions={<><button type="button" className={styles.button} disabled={busy} onClick={() => setCourtEditor(null)}>Cancel</button>{courtEditor.sourceCourtId ? <button type="button" className={styles.button} disabled={disabled} onClick={() => void command("release_game", { court_id: courtEditor.sourceCourtId, session_key: courtEditor.match.session_key, match_id: courtEditor.match.match_id }, courtEditor.version)}>Return to queue</button> : null}<button type="button" className={styles.primary} disabled={disabled || !targetCourt || !choiceCourts.some(court => court.id === targetCourt.id)} onClick={() => void command(courtEditor.sourceCourtId ? "move_game" : targetCourt?.current ? "reserve_game_for_court" : "assign_game", courtEditor.sourceCourtId ? { court_id: courtEditor.sourceCourtId, target_court_id: courtEditor.targetCourtId, session_key: courtEditor.match.session_key, match_id: courtEditor.match.match_id } : { session_key: courtEditor.match.session_key, match_id: courtEditor.match.match_id, court_id: courtEditor.targetCourtId }, courtEditor.version)}>{courtEditor.sourceCourtId ? "Move match" : targetCourt?.current ? "Reserve next" : "Assign to court"}</button></>}>

@@ -136,3 +136,50 @@ def test_every_play_generator_unsafe_route_is_classified_for_staging() -> None:
     )
     for route in required:
         assert route in waves
+
+
+def test_sparse_admin_profiles_reach_preview_start_and_durable_request(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from services.api import admin_play_generator_routes as routes
+    from test_admin_play_generator_service import FakeSupabase
+
+    db = FakeSupabase()
+    db.storage["players"] = [{"id": 21, "club_id": "club", "name": "Linked player"}]
+    monkeypatch.setattr(routes, "_resolve_role_or_403", lambda **kwargs: ("staff@example.invalid", "administrator"))
+    monkeypatch.setattr(routes, "_require_write_gate", lambda: None)
+    recorded = []
+
+    def record_intent(_db, **kwargs):
+        recorded.append(kwargs["request_payload"])
+        return kwargs["mutate"]()
+
+    monkeypatch.setattr(routes, "run_durable_admin_operation", record_intent)
+    app = FastAPI()
+    routes.install_admin_play_generator_routes(app, get_supabase_client=lambda: db)
+    client = TestClient(app)
+    body = {"generator_kind": "round_robin", "play_format": "doubles", "title": "Mixed roster",
+            "participant_names": ["Guest A", "Linked player", "Guest B", "Guest C"],
+            "participant_player_ids": {"Linked player": 21}, "total_rounds": 3, "court_count": 1}
+    preview = client.post("/admin/clubs/club/play-generators/preview", json=body)
+    assert preview.status_code == 200, preview.text
+    assert [p.get("player_id") for p in preview.json()["preview"]["participants"]] == [None, 21, None, None]
+    started = client.post("/admin/clubs/club/play-generators/sessions", json={**body,
+        "preview_fingerprint": preview.json()["preview"]["previewFingerprint"],
+        "expected_version": "new", "idempotency_key": "sparse-links-start-1"})
+    assert started.status_code == 200, started.text
+    assert [p.get("player_id") for p in started.json()["session"]["event"]["participants"]] == [None, 21, None, None]
+    assert recorded[0]["participant_player_ids"] == {"Linked player": 21}
+
+
+def test_new_optional_profile_map_keeps_legacy_start_intent_fingerprint():
+    from services.api.admin_play_generator_routes import GeneratorStartRequest, _model_payload
+    body = {"generator_kind": "round_robin", "play_format": "doubles", "participant_names": ["A", "B", "C", "D"],
+            "player_ids": [1, 2, 3, 4], "expected_version": "new", "idempotency_key": "retained-old-start"}
+    model = GeneratorStartRequest(**body)
+    legacy_payload = model.model_dump()
+    legacy_payload.pop("participant_player_ids")
+    assert _model_payload(model) == legacy_payload
+    assert _model_payload(GeneratorStartRequest(**body, participant_player_ids={})) == legacy_payload
+    linked = GeneratorStartRequest(**{**body, "player_ids": [], "participant_player_ids": {"A": 1}})
+    assert _model_payload(linked)["participant_player_ids"] == {"A": 1}

@@ -251,16 +251,35 @@ def _resolve_names_and_ids(
     club_id: str,
     participant_names: list[str],
     player_ids: list[int] | None,
-) -> tuple[list[str], list[int]]:
+    participant_player_ids: dict[str, int] | None = None,
+) -> tuple[list[str], list[int | None]]:
     names = [_clean_text(value, limit=160) for value in participant_names or []]
     names = [value for value in names if value]
-    ids = [int(value) for value in (player_ids or []) if value is not None]
+    ids: list[int | None] = [int(value) for value in (player_ids or []) if value is not None]
+    if participant_player_ids:
+        if ids:
+            raise ValueError("Provide player_ids or participant_player_ids, not both.")
+        known_names = {name.casefold() for name in names}
+        requested: dict[str, int] = {}
+        for name, player_id in participant_player_ids.items():
+            key = _clean_text(name, limit=160).casefold()
+            if key not in known_names:
+                raise ValueError("A linked player is not in this roster. Choose the player from the club list again.")
+            if key in requested and requested[key] != int(player_id):
+                raise ValueError("Choose one club profile for each roster entry.")
+            requested[key] = int(player_id)
+        if len(set(requested.values())) != len(requested):
+            raise ValueError("A club profile cannot occupy two places in this roster.")
+        # Retain every roster slot. Guests must never shift or erase another
+        # participant's explicit profile, even when two clubs use the same name.
+        ids = [requested.get(name.casefold()) for name in names]
     if ids and len(ids) != len(names):
         raise ValueError("Official player IDs and participant names must have the same length.")
     if not ids:
         return names, []
-    players = _player_rows_by_id(supabase, club_id=str(club_id), player_ids=ids)
-    missing = [pid for pid in ids if pid not in players]
+    linked_ids = [pid for pid in ids if pid is not None]
+    players = _player_rows_by_id(supabase, club_id=str(club_id), player_ids=linked_ids)
+    missing = [pid for pid in linked_ids if pid not in players]
     if missing:
         raise ValueError(f"Player id {missing[0]} was not found in this club.")
     return names, ids
@@ -283,6 +302,7 @@ def preview_play_generator(
     scoring_mode: str = "scored",
     rating_mode: str = "unrated",
     event_format: str = "standard",
+    participant_player_ids: dict[str, int] | None = None,
     _include_private: bool = False,
 ) -> dict[str, Any]:
     names, ids = _resolve_names_and_ids(
@@ -290,6 +310,7 @@ def preview_play_generator(
         club_id=str(club_id),
         participant_names=participant_names,
         player_ids=player_ids,
+        participant_player_ids=participant_player_ids,
     )
     event = create_generator_preview(
         generator_kind=generator_kind,
@@ -362,6 +383,7 @@ def create_play_generator_session(
     scoring_mode: str = "scored",
     rating_mode: str = "unrated",
     event_format: str = "standard",
+    participant_player_ids: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     preview = preview_play_generator(
         supabase,
@@ -371,6 +393,7 @@ def create_play_generator_session(
         title=title,
         participant_names=participant_names,
         player_ids=player_ids,
+        participant_player_ids=participant_player_ids,
         total_rounds=total_rounds,
         court_count=court_count,
         doubles_court_count=doubles_court_count,

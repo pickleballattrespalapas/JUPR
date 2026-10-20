@@ -32,13 +32,49 @@ playoffs, exports, sharing, and submission/approval workflow.
 - Ending a session or starting playoffs must resolve pending play first. Rating
   publication continues through the existing approval workflow.
 
+## Player identity and repeated names
+
+Linked club profiles identify people by their profile ID, regardless of the name
+shown in a group. A profile cannot occupy or reserve two courts. Two distinct
+profiles may share a name without sharing availability.
+
+Typed guest names belong to stable participants in their original sessions. When
+a guest name matches another participant in the event, the Players review asks
+whether they are the same person or different people. The organizer can confirm
+all unresolved names as different people together. Decisions are saved with the
+event and can be reviewed later; refreshing does not discard them. Batch review
+preserves previously confirmed same-person links and authoritative profile links.
+
+Confirmed same-person entries share court eligibility, waiting time, and pause
+status. Confirmed different people keep those independently and receive group
+labels wherever their names would otherwise be ambiguous. Original round-robin
+scores and standings remain separate. Changing a display name does not itself
+merge players or reset their waiting time.
+
+Unresolved identities block only affected waiting matches. Existing matches can
+finish, scores can be saved, and unrelated matches can continue. Correcting an
+identity decision must not create overlapping court assignments or reservations.
+Existing events receive the same review without discarding their court state.
+Separating guests can preserve their current assignments. Merging people requires
+releasing affected assignments first. To split a shared identity, select every
+entry belonging to that person; repeated occurrences of one club profile remain
+linked. A group that anchors a shared identity must stay attached until that
+relationship is explicitly resolved. Completing the group can leave it attached.
+
+Manual guests may play casually and submit scored results for review. Before
+official publication, the approval workflow still requires the correct club
+profile for every participant used in a result, including unrated statistics.
+Initials, surnames, nicknames, and group labels help distinguish people visually;
+none of them substitutes for a profile link when publishing results.
+
 ## Persistence and concurrency
 
 The hub owns assignments and availability; existing `live_sessions` records own
 match results. A service-role-only PostgreSQL RPC locks the hub and its complete
 session read set, compares versions, and commits court state and session state in
 one transaction. An operation receipt makes exact retries idempotent. Court and
-player leases prevent overlapping assignments across active hubs in a club.
+player leases prevent overlapping assignments across active hubs in a club for
+known profiles. Guest identity decisions apply within the named hub event.
 
 Existing admin, public organizer, and shared organizer writes for attached sessions
 route through the same transaction. A database trigger rejects direct changes to
@@ -59,6 +95,12 @@ Moneyball calibration data or organizer tokens.
    protect assigned/completed lineups and keep the hub and original page synchronized.
 7. Run scored, unscored, Moneyball, rated/unrated, finish, playoff, and submission
    flows using the same individual-session controls.
+8. Attach two groups with the same typed names. Resolve them as different people
+   and use courts concurrently; pause one guest without pausing the other.
+9. Confirm a repeated guest as the same person, including a guest matching a
+   linked profile, and verify shared availability and no overlapping reservation.
+10. Preserve selected club profiles in a roster that also contains manual guests.
+    Refresh identity decisions and retry an uncertain save without applying it twice.
 
 Deployment target for this feature is staging. Production release requires Joe's
 separate authorization under the repository's AGENTS.md.
@@ -75,3 +117,8 @@ separate authorization under the repository's AGENTS.md.
   are test doubles in this rehearsal.
 - `node tests/sql/round_robin_hub_atomic.mjs` runs the migration and transaction
   checks on PGlite. Set `PGLITE_MODULE` if the package is installed outside this repo.
+- `npm run test:round-robin-hub-identities-browser` rehearses duplicate-name review,
+  separate and shared guests, profile protection, mixed rosters, and saved decisions
+  using loopback-only browser/API fixtures.
+- `node tests/sql/round_robin_hub_participant_identities.mjs` verifies database
+  identity derivation, assignment eligibility, retries, legacy upgrades, and grants.

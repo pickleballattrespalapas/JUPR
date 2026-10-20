@@ -55,3 +55,6 @@ jobs:
       - name: Verify generator journal constraint and protections
         working-directory: tests/sql
         run: npm run test:generator-journal
+      - name: Verify hub atomic saves and participant identity leases
+        working-directory: tests/sql
+        run: npm run test:round-robin-hub

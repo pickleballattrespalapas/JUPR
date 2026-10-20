@@ -6,6 +6,7 @@ on:
       - "apps/web/**"
       - "tests/e2e/generator_submission_api.py"
       - "tests/e2e/round_robin_hub_api.py"
+      - "tests/e2e/round_robin_hub_identity_api.py"
       - "tests/e2e/recap_builder_api.py"
       - ".github/workflows/next-web-build.yml"
   workflow_dispatch:
@@ -59,6 +60,13 @@ jobs:
           GENERATOR_BROWSER_NEXT_MODE: start
           GENERATOR_BROWSER_API_PORT: "8042"
         run: npm run test:round-robin-hub-start-browser
+      - name: Verify guest identity review and profile court safety
+        working-directory: apps/web
+        env:
+          GENERATOR_BROWSER_ARTIFACTS: test-results/round-robin-hub-identities
+          GENERATOR_BROWSER_NEXT_MODE: start
+          GENERATOR_BROWSER_API_PORT: "8042"
+        run: npm run test:round-robin-hub-identities-browser
       - name: Upload round navigation browser evidence
         if: always()
         uses: actions/upload-artifact@v4

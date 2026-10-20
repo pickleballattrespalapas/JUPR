@@ -80,7 +80,7 @@ def test_bye_wait_survives_round_and_is_first_priority():
     top = snapshot["eligible_queue"][0]
     assert bye in [p["id"] for p in top["side_a"] + top["side_b"]]
     assert top["wait_seconds"] == 600
-    assert state["players"][player_identity(bye_person)]["wait_since"] == START
+    assert state["players"][player_identity(bye_person, "a", state)]["wait_since"] == START
 
 
 def test_pause_freezes_wait_cancels_reservation_and_keeps_existing_wait_on_resume():
@@ -89,7 +89,7 @@ def test_pause_freezes_wait_cancels_reservation_and_keeps_existing_wait_on_resum
     state, events = command(state, events, "assign_game", session_key="a", match_id=first["id"], court_id="c0")
     state, events = command(state, events, "reserve_game_for_court", session_key="a", match_id=second["id"], court_id="c0")
     participant = next(p for p in events["a"]["participants"] if p["id"] == second["sideA"][0])
-    identity = player_identity(participant)
+    identity = player_identity(participant, "a", state)
     state, events = command(state, events, "pause_player", now="2026-10-20T03:05:00Z", identity=identity)
     assert state["courts"][0]["next"] is None
     snap = build_hub_snapshot(state, events, now=LATER)
@@ -220,12 +220,24 @@ def test_mutations_are_pure_and_reject_closing_occupied_court():
         command(changed, after, "configure_courts", courts=config)
 
 
-def test_mixed_guest_and_linked_same_name_is_rejected():
+def test_mixed_guest_and_linked_same_name_requires_review_without_changing_official_links():
     a = event("A", 4, player_ids=[1, 2, 3, 4])
     b = event("B", 4)
     b["participants"][0]["name"] = "A 0"
-    with pytest.raises(ValueError, match="both with and without"):
-        setup({"a": a, "b": b})
+    state, events = setup({"a": a, "b": b})
+    snap = build_hub_snapshot(state, events, now=LATER)
+    assert snap["identity_pending_count"] == 1
+    assert not snap["eligible_queue"]
+    refs = [ref("a", a["participants"][0]), ref("b", b["participants"][0])]
+    original = deepcopy(events)
+    state, events = command(state, events, "resolve_identities", resolution="same", participants=refs)
+    assert events == original
+    assert state["participant_identities"]["b"][b["participants"][0]["id"]] == "player:1"
+    assert events["b"]["participants"][0].get("player_id") is None
+    state, events = command(state, events, "auto_fill_courts")
+    assert sum(bool(c["current"]) for c in state["courts"]) == 1
+    with pytest.raises(ValueError, match="shared guest identities"):
+        command(state, events, "remove_group", session_key="a")
 
 
 def test_moneyball_partial_scores_preserve_frozen_expectations_and_full_roster_rules():
@@ -267,3 +279,147 @@ def test_attaching_out_of_order_results_is_rejected_and_score_correction_preserv
         {"match_id": current_matches(events)[0]["id"], "score_a": 11, "score_b": 8}])
     state, events = reconcile_hub_events(state, before, events, now="2026-10-20T03:20:00Z")
     assert state["players"] == before_wait
+
+
+def ref(key, player):
+    return {"session_key": key, "participant_id": str(player["id"])}
+
+
+def numbered_groups():
+    a, b = event("Alpha", 4), event("Beta", 4)
+    for e in (a, b):
+        for index, p in enumerate(e["participants"], 1):
+            p["name"] = str(index)
+    return {"a": a, "b": b}
+
+
+def test_numbered_guests_review_then_different_run_concurrently_and_rename_is_not_identity():
+    state, events = setup(numbered_groups())
+    snap = build_hub_snapshot(state, events, now=LATER)
+    assert snap["identity_pending_count"] == 4
+    assert len(snap["players"]) == 8
+    assert not snap["eligible_queue"]
+    assert {p["display_name"] for p in snap["identity_review"][0]["participants"]} == {"1 · Alpha", "1 · Beta"}
+    state, events = command(state, events, "resolve_identities", resolution="all_different")
+    assert build_hub_snapshot(state, events, now=LATER)["identity_pending_count"] == 0
+    state, events = command(state, events, "auto_fill_courts")
+    assert [c["current"]["session_key"] for c in state["courts"]] == ["a", "b"]
+    before, before_players = deepcopy(events), deepcopy(state["players"])
+    events["a"]["participants"][0]["name"] = "Alex One"
+    state, events = reconcile_hub_events(state, before, events, now=LATER)
+    assert state["players"] == before_players
+    assert len(build_hub_snapshot(state, events, now=LATER)["identity_review"]) == 4
+
+
+def test_pending_names_only_block_involved_people_and_distinct_profiles_need_no_confirmation():
+    groups = numbered_groups()
+    groups["c"] = event("Unrelated", 4)
+    state, events = setup(groups, courts=3)
+    state, events = command(state, events, "auto_fill_courts")
+    assert [c["current"]["session_key"] for c in state["courts"] if c["current"]] == ["c"]
+    a, b = event("Same", 4, player_ids=[1, 2, 3, 4]), event("Same", 4, player_ids=[5, 6, 7, 8])
+    state, events = setup({"a": a, "b": b})
+    snap = build_hub_snapshot(state, events, now=START)
+    assert snap["identity_pending_count"] == 0
+    assert len(snap["eligible_queue"]) == 2
+    assert len({p["display_name"] for r in snap["identity_review"] for p in r["participants"]}) == 8
+    with pytest.raises(ValueError, match="Different club profiles"):
+        command(state, events, "resolve_identities", resolution="same", participants=[ref("a", a["participants"][0]), ref("b", b["participants"][0])])
+
+
+def test_same_person_conservatively_merges_wait_pause_and_full_split_copies_both():
+    state, events = setup(numbered_groups())
+    a, b = events["a"]["participants"][0], events["b"]["participants"][0]
+    aid, bid = player_identity(a, "a", state), player_identity(b, "b", state)
+    state["players"][aid]["wait_since"] = "2026-10-20T03:03:00+00:00"
+    state, events = command(state, events, "pause_player", now="2026-10-20T03:05:00+00:00", identity=bid)
+    refs = [ref("a", a), ref("b", b)]
+    state, events = command(state, events, "resolve_identities", now=LATER, resolution="same", participants=refs)
+    identity = player_identity(b, "b", state)
+    assert identity == aid
+    person = next(p for p in build_hub_snapshot(state, events, now=LATER)["players"] if p["identity"] == identity)
+    assert person["paused"] and person["wait_seconds"] == 300
+    state, events = command(state, events, "resolve_identities", now=LATER, resolution="different", participants=refs)
+    assert player_identity(b, "b", state) == bid
+    assert state["players"][aid] == state["players"][bid]
+    assert state["players"][bid]["paused"]
+
+
+def test_partial_transitive_split_rejected_full_split_allowed_and_batch_preserves_same():
+    groups = {k: event(k, 4) for k in ("a", "b", "c", "d")}
+    for e in groups.values():
+        e["participants"][0]["name"] = "Sam"
+    state, events = setup(groups, courts=4)
+    refs = [ref(k, events[k]["participants"][0]) for k in groups]
+    state, events = command(state, events, "resolve_identities", resolution="same", participants=refs[:2])
+    state, events = command(state, events, "resolve_identities", resolution="same", participants=refs[1:3])
+    with pytest.raises(ValueError, match="every entry"):
+        command(state, events, "resolve_identities", resolution="different", participants=[refs[0], refs[2]])
+    state, events = command(state, events, "resolve_identities", resolution="all_different")
+    ids = [state["participant_identities"][r["session_key"]][r["participant_id"]] for r in refs]
+    assert ids[0] == ids[1] == ids[2] and ids[3] != ids[0]
+    state, events = command(state, events, "resolve_identities", resolution="different", participants=refs[:3])
+    assert len({state["participant_identities"][r["session_key"]][r["participant_id"]] for r in refs}) == 4
+
+
+def test_same_profile_never_splits_even_in_all_different_batch_with_guest():
+    groups = {"a": event("Same", 4, player_ids=[1, 2, 3, 4]), "b": event("Same", 4, player_ids=[1, 5, 6, 7]), "c": event("Same", 4)}
+    state, events = setup(groups, courts=3)
+    state, events = command(state, events, "resolve_identities", resolution="all_different")
+    assert state["participant_identities"]["a"][events["a"]["participants"][0]["id"]] == "player:1"
+    assert state["participant_identities"]["b"][events["b"]["participants"][0]["id"]] == "player:1"
+    state, events = command(state, events, "auto_fill_courts")
+    assert sum(bool(c["current"]) for c in state["courts"]) == 2
+
+
+def test_legacy_upgrade_preserves_live_score_pause_and_different_can_resolve_while_playing():
+    state, events = setup(numbered_groups())
+    legacy = {key: deepcopy(state[key]) for key in ("courts", "groups")}
+    legacy["players"] = {f"name:{n}": {"paused": n == 4, "wait_since": START, "pause_started_at": LATER if n == 4 else None} for n in range(1, 5)}
+    legacy["courts"][0]["current"] = {"session_key": "a", "round_number": 1, "match_id": current_matches(events)[0]["id"], "assigned_at": START}
+    before = deepcopy(legacy)
+    snap = build_hub_snapshot(legacy, events, now=LATER)
+    assert legacy == before and snap["identity_pending_count"] == 4
+    state, events = command(legacy, events, "resolve_identities", resolution="all_different", now=LATER)
+    assert state["courts"][0]["current"] == legacy["courts"][0]["current"]
+    assert all(p["wait_since"] == START for p in state["players"].values())
+    assert sum(p["paused"] for p in state["players"].values()) == 2
+    with pytest.raises(ValueError, match="Finish or release"):
+        command(state, events, "resolve_identities", resolution="same", participants=[ref("a", events["a"]["participants"][0]), ref("b", events["b"]["participants"][0])])
+    scored, _ = score(legacy, events, "c0")
+    assert scored["courts"][0]["current"] is None
+    assert scored["identity_version"] == 2
+
+
+def test_pending_identity_propagates_to_renamed_same_person_occurrences():
+    groups = {k: event(k, 4) for k in ("a", "b", "c")}
+    groups["a"]["participants"][0]["name"] = "Sam"
+    groups["b"]["participants"][0]["name"] = "Other spelling"
+    groups["c"]["participants"][0]["name"] = "Sam"
+    state, events = setup(groups, courts=3)
+    state, events = command(state, events, "resolve_identities", resolution="same", participants=[ref("a", groups["a"]["participants"][0]), ref("b", groups["b"]["participants"][0])])
+    snap = build_hub_snapshot(state, events, now=START)
+    assert not snap["eligible_queue"]
+    assert len(snap["blocked_queue"]) == 3
+
+
+def test_same_profile_different_spelling_is_visible_in_complete_correction_component():
+    groups = {"a": event("A", 4, player_ids=[1, 2, 3, 4]), "b": event("B", 4, player_ids=[1, 5, 6, 7]), "c": event("C", 4)}
+    for key, name in {"a": "Sam", "b": "Samuel", "c": "Sam"}.items():
+        groups[key]["participants"][0]["name"] = name
+    state, events = setup(groups)
+    state, events = command(state, events, "resolve_identities", resolution="same", participants=[ref("a", groups["a"]["participants"][0]), ref("c", groups["c"]["participants"][0])])
+    review = build_hub_snapshot(state, events, now=START)["identity_review"]
+    assert len(review) == 1 and len(review[0]["participants"]) == 3
+    state, events = command(state, events, "resolve_identities", resolution="different", participants=review[0]["participants"])
+    assert state["participant_identities"]["a"][groups["a"]["participants"][0]["id"]] == "player:1"
+    assert state["participant_identities"]["b"][groups["b"]["participants"][0]["id"]] == "player:1"
+    assert state["participant_identities"]["c"][groups["c"]["participants"][0]["id"]].startswith("guest:")
+
+
+def test_identity_name_review_normalization_matches_sql_latin_and_whitespace_rules():
+    groups = {"a": event("A", 4), "b": event("B", 4)}
+    groups["a"]["participants"][0]["name"] = " José\u00a0One "
+    groups["b"]["participants"][0]["name"] = "JOSÉ\tONE"
+    state, events = setup(groups)
+    assert build_hub_snapshot(state, events, now=START)["identity_pending_count"] == 1

@@ -20,13 +20,111 @@ def _time(value: str) -> datetime:
     return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
 
 
-def player_identity(player: dict[str, Any]) -> str:
+def player_identity(player: dict[str, Any], session_key: str = "", hub: dict[str, Any] | None = None) -> str:
+    """Names are labels; only a profile or an immutable roster entry identifies a person."""
+    if hub is not None:
+        identity = (hub.get("participant_identities", {}).get(session_key) or {}).get(str(player["id"]))
+        if identity:
+            return identity
     if player.get("player_id") is not None:
         return f"player:{int(player['player_id'])}"
-    name = " ".join(str(player.get("name") or "").lower().split())
-    if not name:
-        raise ValueError("Every hub player needs a name or club profile.")
-    return f"name:{name}"
+    if not session_key or not player.get("id"):
+        raise ValueError("A guest needs an immutable session participant ID.")
+    return f"guest:{session_key}:{player['id']}"
+
+
+def _name_key(name: Any) -> str:
+    # Match the database exactly, independently of its Unicode locale/version.
+    whitespace = "\t\n\v\f\r\x1c\x1d\x1e\x1f\x85\xa0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000"
+    uppercase = "ABCDEFGHIJKLMNOPQRSTUVWXYZ" + "".join(chr(n) for n in (*range(0xC0, 0xD7), *range(0xD8, 0xDF)))
+    lowercase = "abcdefghijklmnopqrstuvwxyz" + "".join(chr(n + 32) for n in (*range(0xC0, 0xD7), *range(0xD8, 0xDF)))
+    translated = str(name or "").translate(str.maketrans(uppercase + whitespace, lowercase + " " * len(whitespace)))
+    return " ".join(part for part in translated.split(" ") if part)
+
+
+def _ref(value: dict[str, Any]) -> tuple[str, str]:
+    return str(value.get("session_key") or ""), str(value.get("participant_id") or "")
+
+
+def _ref_json(ref: tuple[str, str]) -> dict[str, str]:
+    return {"session_key": ref[0], "participant_id": ref[1]}
+
+
+def _identity_data(hub: dict[str, Any], events: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    nodes = {}
+    titles = [str(events.get(str(g["session_key"]), {}).get("name") or g["session_key"]) for g in hub.get("groups") or []]
+    for index, group in enumerate(hub.get("groups") or []):
+        key = str(group["session_key"])
+        if key not in events:
+            raise ValueError("An attached round robin is unavailable.")
+        title = titles[index]
+        qualifier = f"{title} ({index + 1})" if titles.count(title) > 1 else title
+        for player in events[key].get("participants") or []:
+            ref = (key, str(player.get("id") or ""))
+            if not ref[1] or not _name_key(player.get("name")) or ref in nodes:
+                raise ValueError("Every hub participant needs a unique session-scoped ID and name.")
+            nodes[ref] = {**_ref_json(ref), "name": player["name"], "group_title": title,
+                "qualifier": qualifier, "profile_id": int(player["player_id"]) if player.get("player_id") is not None else None,
+                "base": player_identity(player, key), "name_key": _name_key(player["name"])}
+    parent = {ref: ref for ref in nodes}
+
+    def find(ref):
+        while parent[ref] != ref:
+            parent[ref] = parent[parent[ref]]
+            ref = parent[ref]
+        return ref
+
+    def union(a, b):
+        parent[find(a)] = find(b)
+
+    profiles = {}
+    for ref, node in nodes.items():
+        if node["profile_id"] is not None:
+            previous = profiles.setdefault(node["profile_id"], ref)
+            union(ref, previous)
+    decisions = hub.get("identity_decisions") or []
+    for decision in decisions:
+        left, right = _ref(decision.get("left") or {}), _ref(decision.get("right") or {})
+        if left not in nodes or right not in nodes or decision.get("resolution") not in {"same", "different"}:
+            raise ValueError("An identity decision references an unavailable participant.")
+        if decision["resolution"] == "same":
+            union(left, right)
+    components = {}
+    for ref in nodes:
+        components.setdefault(find(ref), []).append(ref)
+    identities = {}
+    for members in components.values():
+        profile_ids = {nodes[ref]["profile_id"] for ref in members if nodes[ref]["profile_id"] is not None}
+        if len(profile_ids) > 1:
+            raise ValueError("Different club profiles identify different people and cannot be merged.")
+        identity = f"player:{next(iter(profile_ids))}" if profile_ids else min(nodes[ref]["base"] for ref in members)
+        for ref in members:
+            identities[ref] = identity
+    different = set()
+    for decision in decisions:
+        if decision["resolution"] == "different":
+            pair = frozenset((identities[_ref(decision["left"])], identities[_ref(decision["right"])]))
+            if len(pair) != 2:
+                raise ValueError("Identity decisions conflict with a club profile or a same-person confirmation.")
+            different.add(pair)
+    pending_pairs = []
+    by_name = {}
+    for ref, node in nodes.items():
+        node["identity"] = identities[ref]
+        by_name.setdefault(node["name_key"], []).append(ref)
+    for refs in by_name.values():
+        for index, left in enumerate(refs):
+            for right in refs[index + 1:]:
+                if identities[left] != identities[right] and (nodes[left]["profile_id"] is None or nodes[right]["profile_id"] is None) and frozenset((identities[left], identities[right])) not in different:
+                    pending_pairs.append((left, right))
+    pending = {identities[ref] for pair in pending_pairs for ref in pair}
+    for refs in by_name.values():
+        distinct = len({identities[ref] for ref in refs}) > 1
+        for ref in refs:
+            node = nodes[ref]
+            node["display_name"] = f"{node['name']} · {node['qualifier']}" if distinct else node["name"]
+    return {"nodes": nodes, "identities": identities, "different": different,
+        "pending_pairs": pending_pairs, "pending": pending, "by_name": by_name}
 
 
 def _matches(row: dict[str, Any]) -> list[dict[str, Any]]:
@@ -67,8 +165,6 @@ def _participants(event: dict[str, Any], match: dict[str, Any]) -> list[dict[str
     if any(pid not in by_id for pid in ids) or len(ids) not in (2, 4) or len(set(ids)) != len(ids):
         raise ValueError("This matchup has an incomplete or duplicate lineup.")
     players = [by_id[pid] for pid in ids]
-    if len({player_identity(p) for p in players}) != len(players):
-        raise ValueError("A player cannot appear twice in the same matchup.")
     return players
 
 
@@ -99,19 +195,116 @@ def _wait(player: dict[str, Any], now: str) -> float:
 
 
 def _ensure_players(hub: dict[str, Any], events: dict[str, dict[str, Any]], now: str) -> None:
-    players = hub.setdefault("players", {})
-    named_identities: dict[str, set[str]] = {}
-    for group in hub.get("groups") or []:
-        event = events.get(str(group["session_key"]))
-        if not event:
-            raise ValueError("An attached round robin is unavailable.")
-        for participant in event.get("participants") or []:
-            identity = player_identity(participant)
-            name = " ".join(str(participant.get("name") or "").lower().split())
-            named_identities.setdefault(name, set()).add(identity)
-            players.setdefault(identity, {"paused": False, "wait_since": now, "pause_started_at": None})
-    if any(any(i.startswith("name:") for i in ids) and any(i.startswith("player:") for i in ids) for ids in named_identities.values()):
-        raise ValueError("A name appears both with and without a club profile. Link that player to the same club profile in every group, or distinguish different players' names.")
+    old_map, old_players = hub.get("participant_identities") or {}, hub.get("players") or {}
+    legacy = hub.get("identity_version") != 2
+    existing = {(str(g["session_key"]), str(p["id"])) for g in hub.get("groups") or [] for p in events.get(str(g["session_key"]), {}).get("participants") or []}
+    hub["identity_decisions"] = [d for d in hub.get("identity_decisions") or [] if _ref(d.get("left") or {}) in existing and _ref(d.get("right") or {}) in existing]
+    data = _identity_data(hub, events)
+    mapping, sources = {}, {}
+    for ref, identity in data["identities"].items():
+        mapping.setdefault(ref[0], {})[ref[1]] = identity
+        node = data["nodes"][ref]
+        old_identity = (old_map.get(ref[0]) or {}).get(ref[1])
+        if old_identity is None:
+            legacy_name = " ".join(str(node["name"]).lower().split())
+            old_identity = (f"player:{node['profile_id']}" if node["profile_id"] is not None else f"name:{legacy_name}") if legacy else node["base"]
+        row = old_players.get(old_identity) or {"paused": False, "wait_since": now, "pause_started_at": None}
+        sources.setdefault(identity, {})[old_identity] = row
+    players = {}
+    for identity, rows in sources.items():
+        values = list(rows.values())
+        if len(values) == 1:
+            players[identity] = deepcopy(values[0])
+        else:
+            # A shared person gets no extra idle credit from an older alias; pause is conservative.
+            paused = any(row.get("paused") for row in values)
+            players[identity] = {"paused": paused, "wait_since": (_time(now) - timedelta(seconds=min(_wait(row, now) for row in values))).isoformat(), "pause_started_at": now if paused else None}
+    hub.update(identity_version=2, participant_identities=mapping, players=players)
+
+
+def _identity_review(hub: dict[str, Any], data: dict[str, Any], claims: dict[str, Any]) -> list[dict[str, Any]]:
+    # Keep confirmed relationships reviewable even after someone changes a label.
+    buckets = [{ref} for ref in data["nodes"]]
+
+    def connect(refs):
+        refs = set(refs)
+        touched = [bucket for bucket in buckets if bucket & refs]
+        merged = set().union(*touched)
+        for bucket in touched:
+            buckets.remove(bucket)
+        buckets.append(merged)
+
+    for refs in data["by_name"].values():
+        connect(refs)
+    same_people = {}
+    for ref, identity in data["identities"].items():
+        same_people.setdefault(identity, []).append(ref)
+    for refs in same_people.values():
+        connect(refs)
+    for decision in hub.get("identity_decisions") or []:
+        connect((_ref(decision["left"]), _ref(decision["right"])))
+    review = []
+    for refs in sorted((bucket for bucket in buckets if len(bucket) > 1), key=lambda bucket: min(bucket)):
+        nodes = [data["nodes"][ref] for ref in sorted(refs)]
+        identities = {node["identity"] for node in nodes}
+        has_pending = any(left in refs and right in refs for left, right in data["pending_pairs"])
+        status = "pending" if has_pending else "same" if len(identities) == 1 else "different" if len(identities) == len(nodes) else "mixed"
+        review.append({"id": "guest:" + ":".join(min(refs)), "name": nodes[0]["name"], "status": status,
+            "can_merge": len({node["profile_id"] for node in nodes if node["profile_id"] is not None}) <= 1,
+            "assigned": any(node["identity"] in claims for node in nodes),
+            "participants": [{key: node[key] for key in ("name", "display_name", "session_key", "group_title", "participant_id", "identity", "profile_id")} for node in nodes]})
+    return review
+
+
+def _resolve_identities(hub: dict[str, Any], events: dict[str, dict[str, Any]], payload: dict[str, Any], now: str) -> None:
+    data = _identity_data(hub, events)
+    resolution = str(payload.get("resolution") or "")
+    decisions = deepcopy(hub.get("identity_decisions") or [])
+
+    def decide(left, right, kind):
+        pair = frozenset((left, right))
+        decisions[:] = [d for d in decisions if frozenset((_ref(d["left"]), _ref(d["right"]))) != pair]
+        decisions.append({"left": _ref_json(left), "right": _ref_json(right), "resolution": kind})
+
+    if resolution == "all_different":
+        # Resolve only unanswered pairs. Existing SAME components stay intact.
+        for left, right in data["pending_pairs"]:
+            decide(left, right, "different")
+    elif resolution in {"same", "different"}:
+        refs = sorted({_ref(ref) for ref in payload.get("participants") or [] if isinstance(ref, dict)})
+        if len(refs) < 2 or any(ref not in data["nodes"] for ref in refs):
+            raise ValueError("Choose at least two current participant entries to review.")
+        selected_identities = {data["identities"][ref] for ref in refs}
+        if resolution == "same":
+            profiles = {node["profile_id"] for node in data["nodes"].values() if node["identity"] in selected_identities and node["profile_id"] is not None}
+            if len(profiles) > 1:
+                raise ValueError("Different club profiles identify different people and cannot be merged.")
+            if len(selected_identities) > 1 and selected_identities & _claims(hub, events).keys():
+                raise ValueError("Finish or release affected assignments before marking these as the same person.")
+            decisions[:] = [d for d in decisions if not (d["resolution"] == "different" and data["identities"][_ref(d["left"])] in selected_identities and data["identities"][_ref(d["right"])] in selected_identities)]
+            for right in refs[1:]:
+                decide(refs[0], right, "same")
+        else:
+            splitting = set()
+            for identity in selected_identities:
+                members = {ref for ref, value in data["identities"].items() if value == identity}
+                selected_members = members & set(refs)
+                # Multiple occurrences of one club profile remain the same person.
+                if len(selected_members) > 1 and any(data["nodes"][ref]["profile_id"] is None for ref in selected_members):
+                    if not members <= set(refs):
+                        raise ValueError("Select every entry in the confirmed same-person group before separating them.")
+                    splitting.update(members)
+            decisions[:] = [d for d in decisions if not (d["resolution"] == "same" and (_ref(d["left"]) in splitting or _ref(d["right"]) in splitting))]
+            temporary = {**hub, "identity_decisions": decisions}
+            separated = _identity_data(temporary, events)["identities"]
+            for index, left in enumerate(refs):
+                for right in refs[index + 1:]:
+                    if separated[left] != separated[right]:
+                        decide(left, right, "different")
+    else:
+        raise ValueError("Choose Same person, Different people, or All different.")
+    hub["identity_decisions"] = decisions
+    _ensure_players(hub, events, now)
 
 
 def _claims(hub: dict[str, Any], events: dict[str, dict[str, Any]]) -> dict[str, tuple[str, str]]:
@@ -134,7 +327,7 @@ def _claims(hub: dict[str, Any], events: dict[str, dict[str, Any]]) -> dict[str,
             if str(court["id"]) not in _allowed(hub, key[0]):
                 raise ValueError("This court is not available to the assigned round robin.")
             for player in _participants(event, match):
-                identity = player_identity(player)
+                identity = player_identity(player, key[0], hub)
                 if identity in claims:
                     raise ValueError("A player cannot be assigned to two courts.")
                 claims[identity] = key
@@ -145,6 +338,7 @@ def build_hub_snapshot(hub: dict[str, Any], events: dict[str, dict[str, Any]], *
     state = deepcopy(hub)
     _ensure_players(state, events, now)
     claims = _claims(state, events)
+    identity_data = _identity_data(state, events)
     assignments: dict[tuple[str, str], tuple[dict, str]] = {}
     playing_identities: set[str] = set()
     for court in state.get("courts") or []:
@@ -153,7 +347,7 @@ def build_hub_snapshot(hub: dict[str, Any], events: dict[str, dict[str, Any]], *
                 assignments[_key(court[slot])] = (court, slot)
                 if slot == "current":
                     current_event, _, current_match = _find_match(state, events, court[slot])
-                    playing_identities.update(player_identity(p) for p in _participants(current_event, current_match))
+                    playing_identities.update(player_identity(p, court[slot]["session_key"], state) for p in _participants(current_event, current_match))
     ready, blocked, reserved, groups, all_matches = [], [], [], [], {}
     public_players: dict[str, dict[str, Any]] = {}
     for group in state.get("groups") or []:
@@ -172,8 +366,9 @@ def build_hub_snapshot(hub: dict[str, Any], events: dict[str, dict[str, Any]], *
             "dedicated_court_ids": [c["id"] for c in state.get("courts") or [] if c.get("dedicated_session_key") == key]})
         by_id = {str(p["id"]): p for p in event.get("participants") or []}
         for participant in event.get("participants") or []:
-            identity = player_identity(participant)
+            identity = player_identity(participant, key, state)
             info = public_players.setdefault(identity, {"identity": identity, "name": participant.get("name"),
+                "display_name": identity_data["nodes"][(key, str(participant["id"]))]["display_name"],
                 "paused": bool(state["players"][identity].get("paused")),
                 "wait_seconds": 0 if identity in playing_identities else int(_wait(state["players"][identity], now)), "session_keys": [], "participant_ids": {},
                 "on_court": identity in playing_identities, "reserved": identity in claims and identity not in playing_identities})
@@ -181,14 +376,14 @@ def build_hub_snapshot(hub: dict[str, Any], events: dict[str, dict[str, Any]], *
             info["participant_ids"][key] = str(participant["id"])
         for match in _matches(row):
             players = _participants(event, match)
-            identities = [player_identity(p) for p in players]
+            identities = [player_identity(p, key, state) for p in players]
             waits = sorted((_wait(state["players"][i], now) for i in identities), reverse=True)
-            side = lambda ids: [{"id": str(pid), "name": by_id[str(pid)].get("name"), "identity": player_identity(by_id[str(pid)])} for pid in ids]
+            side = lambda ids: [{"id": str(pid), "name": by_id[str(pid)].get("name"), "display_name": identity_data["nodes"][(key, str(pid))]["display_name"], "identity": player_identity(by_id[str(pid)], key, state)} for pid in ids]
             side_a = side(match.get("sideA") or match.get("teamA") or [])
             side_b = side(match.get("sideB") or match.get("teamB") or [])
             entry = {"session_key": key, "match_id": str(match["id"]), "round_number": int(row["number"]),
                 "group_title": event.get("name") or key, "side_a": side_a, "side_b": side_b,
-                "label": " / ".join(str(p["name"]) for p in side_a) + " vs " + " / ".join(str(p["name"]) for p in side_b),
+                "label": " / ".join(str(p["display_name"]) for p in side_a) + " vs " + " / ".join(str(p["display_name"]) for p in side_b),
                 "wait_seconds": int(waits[0]) if waits else 0, "wait_order": waits,
                 "allowed_court_ids": _allowed(state, key), "blockers": [], "status": "waiting",
                 "score_a": match.get("scoreA"), "score_b": match.get("scoreB")}
@@ -209,6 +404,10 @@ def build_hub_snapshot(hub: dict[str, Any], events: dict[str, dict[str, Any]], *
                 entry["blockers"].append("This round is complete.")
             if any(state["players"][i].get("paused") for i in identities):
                 entry["blockers"].append("A player is paused.")
+            if any(i in identity_data["pending"] for i in identities):
+                entry["blockers"].append("Confirm matching player names in Players before assigning this match.")
+            if len(set(identities)) != len(identities):
+                entry["blockers"].append("The same person appears twice in this match. Update the group roster.")
             if any(i in claims for i in identities):
                 entry["blockers"].append("A player is already assigned to a court.")
             if not entry["allowed_court_ids"]:
@@ -228,8 +427,10 @@ def build_hub_snapshot(hub: dict[str, Any], events: dict[str, dict[str, Any]], *
         for slot in ("current", "next"):
             item[slot] = deepcopy(all_matches.get(_key(court[slot]))) if court.get(slot) else None
         courts.append(item)
+    review = _identity_review(state, identity_data, claims)
     return {"courts": courts, "groups": groups, "eligible_queue": ready, "blocked_queue": blocked,
-        "reserved_queue": reserved, "players": list(public_players.values())}
+        "reserved_queue": reserved, "players": list(public_players.values()), "identity_review": review,
+        "identity_pending_count": sum(row["status"] == "pending" for row in review)}
 
 
 def _candidate(hub: dict[str, Any], events: dict[str, dict[str, Any]], payload: dict[str, Any], now: str) -> dict[str, Any]:
@@ -244,7 +445,7 @@ def _candidate(hub: dict[str, Any], events: dict[str, dict[str, Any]], payload: 
 def _reset_wait(hub: dict[str, Any], events: dict[str, dict[str, Any]], assignment: dict[str, Any], now: str) -> None:
     event, _, match = _find_match(hub, events, assignment)
     for player in _participants(event, match):
-        row = hub["players"][player_identity(player)]
+        row = hub["players"][player_identity(player, assignment["session_key"], hub)]
         row["wait_since"] = now
         if row.get("paused"):
             row["pause_started_at"] = now
@@ -340,8 +541,8 @@ def validate_hub_session_change(hub: dict[str, Any], before_events: dict[str, di
             if new_round.get("status") == "skipped":
                 raise ValueError("Release this group's courts and reservations before skipping the round.")
             identity_fields = ("id", "sideA", "sideB", "teamA", "teamB", "playFormat")
-            old_people = [player_identity(p) for p in _participants(before, old_match)]
-            new_people = [player_identity(p) for p in _participants(event, new_match)]
+            old_people = [player_identity(p, session_key) for p in _participants(before, old_match)]
+            new_people = [player_identity(p, session_key) for p in _participants(event, new_match)]
             if any(old_match.get(k) != new_match.get(k) for k in identity_fields) or old_people != new_people:
                 raise ValueError("Move this assigned matchup back to the queue before changing its players or score.")
     if event.get("status") == "completed" and _round(event, prior_round).get("status") not in {"saved", "played", "skipped"}:
@@ -499,6 +700,8 @@ def apply_hub_command(hub: dict[str, Any], events: dict[str, dict[str, Any]], *,
         state["groups"].append({"session_key": session_key, "joined_at": now})
     elif action == "remove_group":
         event = _event(state, updated, session_key)
+        if any(d["resolution"] == "same" and ((_ref(d["left"])[0] == session_key) != (_ref(d["right"])[0] == session_key)) for d in state.get("identity_decisions") or []):
+            raise ValueError("Review and separate shared guest identities in Players before removing this group.")
         if any(c.get(s, {}).get("session_key") == session_key for c in state["courts"] for s in ("current", "next") if c.get(s)):
             raise ValueError("Release this group's courts and reservations before removing it.")
         if any(not _complete(m, event) for m in _matches(_round(event))) and any(_complete(m, event) for m in _matches(_round(event))):
@@ -530,6 +733,8 @@ def apply_hub_command(hub: dict[str, Any], events: dict[str, dict[str, Any]], *,
         if any((c.get("current") or c.get("next")) and cid not in seen_ids for cid, c in previous.items()):
             raise ValueError("Release a court and its reservation before removing it.")
         state["courts"] = result
+    elif action == "resolve_identities":
+        _resolve_identities(state, updated, payload, now)
     elif action in {"pause_player", "resume_player"}:
         identity = str(payload.get("identity") or "")
         if identity not in state["players"]:
@@ -540,7 +745,7 @@ def apply_hub_command(hub: dict[str, Any], events: dict[str, dict[str, Any]], *,
             for court in state["courts"]:
                 if court.get("next"):
                     event, _, match = _find_match(state, updated, court["next"])
-                    if identity in {player_identity(p) for p in _participants(event, match)}:
+                    if identity in {player_identity(p, court["next"]["session_key"], state) for p in _participants(event, match)}:
                         court["next"] = None
         elif action == "resume_player" and player.get("paused"):
             elapsed = max(0.0, (_time(now) - _time(player.get("pause_started_at") or now)).total_seconds())

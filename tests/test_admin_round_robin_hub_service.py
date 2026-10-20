@@ -138,6 +138,62 @@ def raw_session(db, key="rr-a"):
     return next(row for row in db.storage["live_sessions"] if row["session_key"] == key)
 
 
+def guest_identity_hub(db):
+    """Two roster entries share a label, not a club profile."""
+    for key, offset in (("rr-a", 0), ("rr-b", 10)):
+        session(db, key=key, count=4, offset=offset)
+        person = raw_session(db, key)["state"]["page_state"]["event"]["participants"][0]
+        person["name"], person["player_id"] = "Alex", None
+    hub = command(db, create(db, courts=2), "add_group", {"session_key": "rr-a"})
+    return command(db, hub, "add_group", {"session_key": "rr-b"})
+
+
+def test_identity_resolution_is_durable_and_exact_retry_does_not_repeat_it():
+    db = TransactionalHubDB()
+    hub = guest_identity_hub(db)
+    assert len(hub["workspace"]["blocked_queue"]) == 2
+    before_sessions = deepcopy(db.storage["live_sessions"])
+    request = dict(club_id="club-a", hub_id=hub["hub"]["id"], action="resolve_identities",
+        payload={"resolution": "all_different"}, expected_version=hub["hub"]["version"],
+        idempotency_key="identity-different-once", actor_email="operator@example.test")
+    result = service.command_round_robin_hub(db, **request)
+    assert len(result["workspace"]["eligible_queue"]) == 2
+    persisted = deepcopy(db.storage[service.HUB_TABLE][0])
+    assert persisted["state"]["identity_version"] == 2
+    assert persisted["state"]["identity_decisions"][0]["resolution"] == "different"
+    assert db.storage["live_sessions"] == before_sessions
+    call_count = len(db.calls)
+    replay = service.command_round_robin_hub(db, **request)
+    assert replay["replayed"] is True
+    assert replay["hub"]["version"] == result["hub"]["version"]
+    assert len(db.calls) == call_count
+    assert db.storage[service.HUB_TABLE][0] == persisted
+    with pytest.raises(PublicLiveConflictError, match="different change"):
+        service.command_round_robin_hub(db, **{**request, "payload": {"resolution": "same"}})
+
+
+def test_identity_resolution_read_set_rejects_concurrent_roster_change_atomically():
+    db = TransactionalHubDB()
+    hub = guest_identity_hub(db)
+    before_hubs = deepcopy(db.storage[service.HUB_TABLE])
+    before_receipts = deepcopy(db.storage[service.OPERATION_TABLE])
+
+    def roster_changes(current):
+        row = raw_session(current, "rr-b")
+        row["updated_at"] = "2026-10-20T10:00:00+00:00"
+        row["version"] += 1
+
+    db.before_commit = roster_changes
+    with pytest.raises(PublicLiveConflictError, match="changed"):
+        command(db, hub, "resolve_identities", {"resolution": "all_different"})
+    assert db.storage[service.HUB_TABLE] == before_hubs
+    assert db.storage[service.OPERATION_TABLE] == before_receipts
+    assert {entry["session_key"] for entry in db.calls[-1]["p_sessions"]} == {"rr-a", "rr-b"}
+    refreshed = service.get_round_robin_hub(db, club_id="club-a", hub_id=hub["hub"]["id"])
+    resolved = command(db, refreshed, "resolve_identities", {"resolution": "all_different"})
+    assert len(resolved["workspace"]["eligible_queue"]) == 2
+
+
 def test_create_and_command_response_loss_replays_without_duplicate_hubs_or_members():
     db = TransactionalHubDB()
     session(db)
