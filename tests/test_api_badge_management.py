@@ -4,6 +4,7 @@ from uuid import uuid4
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from postgrest.exceptions import APIError
 
 from services.api import admin_badge_management_routes as routes
 
@@ -87,3 +88,24 @@ def test_round_robin_decision_is_admin_only_and_starts_evaluation(monkeypatch):
     assert checks == ['club']
     assert seen[0]['action'] == 'resolve_round_robin'
     assert seen[0]['payload']['source_fingerprint'] == p['source_fingerprint']
+
+
+@pytest.mark.parametrize('endpoint,request_payload', [
+    ('seasons', dict(operation_id=str(uuid4()),id=str(uuid4()),name='Club season',
+                     start_date='2026-09-15',end_date='2027-09-14',timezone='UTC',expected_revision=1)),
+    ('round-robin-winners', dict(operation_id=str(uuid4()),source_key='live:rr',
+                               source_fingerprint='a'*64,winner_player_id=1)),
+])
+def test_stale_badge_evidence_returns_conflict_without_scheduling_work(monkeypatch, endpoint, request_payload):
+    c = client(monkeypatch)
+    checks = []
+    monkeypatch.setattr(routes, 'check_saved_season', lambda *_: checks.append('season'))
+    monkeypatch.setattr(routes, 'check_program_badges', lambda *_: checks.append('program'))
+    def stale(*_args, **_kwargs):
+        raise APIError({'code': 'PT409', 'message': 'Results changed. Refresh before saving.',
+                        'details': None, 'hint': None})
+    monkeypatch.setattr(routes, 'save_badge_management', stale)
+    result = c.post(f'/admin/clubs/club/badge-management/{endpoint}', json=request_payload)
+    assert result.status_code == 409
+    assert result.json()['detail'] == 'Results changed. Refresh before saving.'
+    assert checks == []

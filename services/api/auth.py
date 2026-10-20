@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, Callable
 from urllib.parse import urlparse
 
@@ -52,8 +53,18 @@ def _decode_with_secret(token: str, *, secret: str, audience: str | None) -> dic
     return jwt.decode(token, secret, **kwargs)
 
 
+@lru_cache(maxsize=4)
+def _jwks_client(jwks_url: str) -> jwt.PyJWKClient:
+    # Only deployment-configured URLs reach this cache. Cache the key set for a
+    # bounded lifetime, not individual keys indefinitely or decoded user claims.
+    # PyJWT retains its refresh-on-rotation behavior and verifies every token.
+    return jwt.PyJWKClient(
+        jwks_url, cache_keys=False, cache_jwk_set=True, lifespan=300, timeout=5
+    )
+
+
 def _decode_with_jwks(token: str, *, jwks_url: str, audience: str | None) -> dict[str, Any]:
-    signing_key = jwt.PyJWKClient(jwks_url).get_signing_key_from_jwt(token)
+    signing_key = _jwks_client(jwks_url).get_signing_key_from_jwt(token)
     kwargs: dict[str, Any] = {"algorithms": list(JWKS_ALGORITHMS), "options": {"require": ["exp", "sub"]}}
     if audience:
         kwargs["audience"] = audience

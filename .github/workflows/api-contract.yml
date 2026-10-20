@@ -65,6 +65,10 @@ jobs:
             tests/test_league_awards_team_categories.py \
             tests/test_league_most_upsets_eligibility.py
 
+      - name: Verify program badge rules and admin decisions
+        run: |
+          python -m pytest -q tests/test_program_badges.py tests/test_program_badge_service.py tests/test_badge_conflict_migration.py tests/test_api_badge_management.py tests/test_badge_schema.py tests/test_badge_recompute.py tests/test_public_player_service.py
+
       - name: Verify round-robin late arrivals and roster changes
         run: |
           python -m pytest -q \

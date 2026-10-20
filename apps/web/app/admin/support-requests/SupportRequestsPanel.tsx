@@ -257,6 +257,7 @@ export default function SupportRequestsPanel({ apiBase, clubId, status }: Props)
         <p style={{ color: "#475569" }}>{adminSessionLabel(session)}</p>
         {sessionLoading ? <p>Checking session…</p> : null}
         {sessionMessage ? <p style={{ color: "#64748b" }}>{sessionMessage}</p> : null}
+        {!status.ready_for_review ? <p role="alert">{status.warnings?.[0] || "Support requests can be read, but review updates are currently unavailable."}</p> : null}
       </article>
 
       <article style={cardStyle}>
@@ -300,7 +301,7 @@ export default function SupportRequestsPanel({ apiBase, clubId, status }: Props)
               confirmLabel={edit.status === "dismissed" ? "Yes, dismiss request" : "Yes, save status"}
               confirmationText="SAVE REQUEST STATUS"
               tone={edit.status === "dismissed" ? "danger" : "default"}
-              disabled={busy}
+              disabled={busy || !status.ready_for_review}
               busy={busy}
               onConfirm={saveStatus}
             />

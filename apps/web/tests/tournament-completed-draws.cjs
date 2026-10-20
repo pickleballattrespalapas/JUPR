@@ -89,6 +89,19 @@ function hrefs(html) {
   assert.match(await render({ tab: "live" }), /All draws are complete/);
   draws = [active];
   assert.match(await render({ tab: "completed" }), /No completed draws yet/);
+  active.bracket = [
+    { public_game_key: "draft-score", stage: "PLAYOFF", playoff_round: "Final", state: "READY", team_a_name: "Upcoming A", team_b_name: "Upcoming B", score_a: 7, score_b: 3, game_scores: [{ game_number: 1, score_a: 19, score_b: 17 }] },
+    { public_game_key: "draft-outcome", stage: "PLAYOFF", playoff_round: "Bronze", state: "PENDING", team_a_name: "TBD", team_b_name: "Upcoming C", score_a: 5, score_b: 2, outcome_label: "Walkover", winner_name: "Draft winner" },
+    { public_game_key: "final-score", stage: "PLAYOFF", playoff_round: "Semifinal", state: "FINAL", team_a_name: "Played A", team_b_name: "Played B", score_a: 15, score_b: 11, game_scores: [{ game_number: 1, score_a: 11, score_b: 9 }] },
+    { public_game_key: "final-outcome", stage: "PLAYOFF", playoff_round: "Semifinal", state: "FINAL", team_a_name: "Played C", team_b_name: "Played D", outcome_label: "Forfeit", winner_name: "Final winner" }
+  ];
+  const bracket = await render();
+  assert.match(bracket, /Upcoming A vs\. Upcoming B/);
+  assert.match(bracket, />Ready<|>Upcoming</);
+  assert.doesNotMatch(bracket, /7–3|5–2|19–17|Walkover|Draft winner/);
+  assert.match(bracket, /15–11/);
+  assert.match(bracket, /Game 1: 11–9/);
+  assert.match(bracket, /Forfeit · Final winner/);
   draws = [];
   assert.match(await render(), /No results yet/);
   console.log("Completed draw navigation, podium cards, tied medals, deep links, archive context, and empty states passed.");

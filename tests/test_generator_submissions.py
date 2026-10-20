@@ -110,6 +110,12 @@ def db(monkeypatch):
     return database
 
 
+def without_activity(players):
+    return [{key: value for key, value in player.items()
+             if key not in {"active", "inactive_at", "last_game_at"}}
+            for player in players]
+
+
 def completed_session(db, *, rating_mode="unrated", play_format="doubles", kind="round_robin", total_rounds=1, player_count=None):
     count = player_count or (8 if play_format != "singles" else 4)
     names = [f"Player {i}" for i in range(1, count + 1)]
@@ -155,8 +161,9 @@ def freeze_approval_clock(monkeypatch, now):
 
 
 @pytest.mark.parametrize("rating_mode,play_format", [
-    ("rated", "doubles"),
-    ("rated", "singles"), ("rated", "doubles_singles"),
+    ("rated", "doubles"), ("unrated", "doubles"),
+    ("rated", "singles"), ("unrated", "singles"),
+    ("rated", "doubles_singles"), ("unrated", "doubles_singles"),
 ])
 def test_morning_approval_keeps_players_active_and_retry_keeps_frozen_time(
     db, monkeypatch, real_approval_data, rating_mode, play_format,
@@ -376,7 +383,9 @@ def test_organizer_choice_controls_approved_matches_ratings_stats_and_recap(db, 
     records = db.db["matches"]
     assert records
     assert all(m["rating_scope"] == ("unrated" if rating_mode == "unrated" else "overall_only") for m in records)
-    assert (db.db["players"] == before) == (rating_mode == "unrated")
+    assert (without_activity(db.db["players"]) == without_activity(before)) == (rating_mode == "unrated")
+    played_ids = {m[key] for m in db.db["matches"] for key in ("t1_p1", "t1_p2", "t2_p1", "t2_p2") if m.get(key) is not None}
+    assert all(p["last_game_at"] for p in db.db["players"] if p["id"] in played_ids)
     stats, _, _, _ = _compute_stats(_filter_matches(pd.DataFrame(records), include_tournaments=True), {})
     expected_games = sum(2 if m["match_format"] == "singles" else 4 for m in records)
     assert sum(p["games"] for p in stats.values()) == expected_games
@@ -555,7 +564,9 @@ def test_approval_uses_persisted_activity_instead_of_leaderboard_projection(
     assert real_approval_data and not real_approval_data[0]["active"].any()
     assert all(player["active"] for player in before)
     assert len(db.db["matches"]) == 6
-    assert (db.db["players"] == before) == (rating_mode == "unrated")
+    assert (without_activity(db.db["players"]) == without_activity(before)) == (rating_mode == "unrated")
+    played_ids = {m[key] for m in db.db["matches"] for key in ("t1_p1", "t1_p2", "t2_p1", "t2_p2") if m.get(key) is not None}
+    assert all(p["last_game_at"] for p in db.db["players"] if p["id"] in played_ids)
     assert all(receipt["result_json"]["committed"] for receipt in db.db["admin_direct_match_entry_operations"])
 
 
@@ -641,10 +652,11 @@ def test_review_http_reports_resumable_conflict_and_recovery_errors(
 
 
 @pytest.mark.parametrize("committed", [False, True])
+@pytest.mark.parametrize("rating_mode", ["rated", "unrated"])
 def test_sealed_review_excludes_later_merged_player_but_can_finalize_existing_receipt(
-    db, monkeypatch, real_approval_data, committed,
+    db, monkeypatch, real_approval_data, committed, rating_mode,
 ):
-    session, token = completed_session(db, rating_mode="rated")
+    session, token = completed_session(db, rating_mode=rating_mode)
     session = submit(db, session, token)
     args = review_args(session)
     original_rpc = db.rpc
@@ -1029,3 +1041,62 @@ def test_starting_level_route_keeps_existing_staging_wave_boundaries():
     assert wave_allows_request("jupr-live", "PATCH", path)
     for wave in ("none", "communications", "public-live", "public-intake-auth"):
         assert not wave_allows_request(wave, "PATCH", path)
+
+
+@pytest.mark.parametrize("play_format", ["doubles", "singles", "doubles_singles"])
+@pytest.mark.parametrize("persisted_active", [True, False, None])
+def test_social_approval_reactivates_returning_players_without_rating_changes(
+    db, monkeypatch, real_approval_data, play_format, persisted_active,
+):
+    now = datetime(2026, 10, 20, 20, tzinfo=timezone.utc)
+    freeze_approval_clock(monkeypatch, now)
+    for player in db.db["players"]:
+        player.update(active=persisted_active, inactive_at="2026-10-01T03:00:00+00:00")
+        # An unmaterialized singles profile must stay unmaterialized, including
+        # its immutable replay seed and its rated-singles last-game timestamp.
+        player.update(singles_rating=None, singles_wins=None, singles_losses=None,
+                      singles_matches_played=None, singles_last_game_at=None)
+    before = copy.deepcopy(db.db["players"])
+    session, token = completed_session(db, play_format=play_format, total_rounds=3)
+    session = submit(db, session, token)
+    args = {**review_args(session), "match_date": "2026-10-20"}
+    result = service.review_generator_submission(db, **args)
+    assert result["status"] == "approved"
+    assert real_approval_data and not real_approval_data[0]["active"].any()
+    assert without_activity(db.db["players"]) == without_activity(before)
+    records = db.db["matches"]
+    played_ids = {m[key] for m in records for key in ("t1_p1", "t1_p2", "t2_p1", "t2_p2") if m.get(key) is not None}
+    for player in db.db["players"]:
+        if player["id"] in played_ids:
+            assert player_activity.is_player_leaderboard_active(player, now_utc=now)
+            assert player["inactive_at"] is None
+            assert datetime.fromisoformat(player["last_game_at"]) == max(
+                datetime.fromisoformat(m["date"]) for m in records
+                if player["id"] in [m.get(key) for key in ("t1_p1", "t1_p2", "t2_p1", "t2_p2")])
+        else:
+            assert player == before[player["id"] - 1]
+    assert all(update["activity_only"] for receipt in db.db["admin_direct_match_entry_operations"]
+               for update in receipt["result_json"]["player_updates"])
+    assert not db.db.get("player_profile_update_outbox")
+    committed = copy.deepcopy(db.db["players"])
+    assert service.review_generator_submission(db, **args)["idempotent_replay"]
+    assert db.db["players"] == committed
+
+
+@pytest.mark.parametrize("play_format", ["doubles", "singles"])
+@pytest.mark.parametrize("exclusion", [
+    {"active": False, "inactive_at": None},
+    {"active": True, "inactive_at": "2026-10-20T19:30:00+00:00"},
+])
+def test_social_approval_preserves_manual_exclusion(db, monkeypatch, real_approval_data, play_format, exclusion):
+    now = datetime(2026, 10, 20, 20, tzinfo=timezone.utc)
+    freeze_approval_clock(monkeypatch, now)
+    for player in db.db["players"]:
+        player.update(exclusion)
+    session, token = completed_session(db, play_format=play_format)
+    session = submit(db, session, token)
+    service.review_generator_submission(db, **{**review_args(session), "match_date": "2026-10-20"})
+    for player in db.db["players"]:
+        assert player["active"] is exclusion["active"]
+        assert player["inactive_at"] == exclusion["inactive_at"]
+        assert not player_activity.is_player_leaderboard_active(player, now_utc=now)

@@ -383,7 +383,7 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         ROOT / "supabase/migrations",
     )
 
-    assert len(versions) == 169
+    assert len(versions) == 171
     assert "weekly_recap_builder" in contract["required_ledger_names"]
     assert "20261019053313" in versions
     assert "tournament_team_division_transfer" in contract["required_ledger_names"]
@@ -401,7 +401,7 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
     assert "tournament_gender_eligibility_reviews" in contract["required_ledger_names"]
     assert {"complete_registration_cancellation", "registration_cancellation_audit_policies"}.issubset(contract["required_ledger_names"])
     assert "20260909203736" in versions
-    assert versions[-40:] == (
+    assert versions[-42:] == (
         "20261030010000",
         "20261101000000",
         "20261102000000",
@@ -442,13 +442,18 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         "20261109004100",
         "20261109004101",
         "20261109004102",
+        "20261109004103",
+        "20261109004104",
     )
-    assert len(names) == 169
+    assert len(names) == 171
     assert all("XX" not in version for version in versions)
-    assert len(contract["required_ledger_names"]) == 156
+    assert len(contract["required_ledger_names"]) == 158
     assert "partner_email_invitations" in contract["required_ledger_names"]
-    assert len(contract["deployment_order"]) == 156
-    assert contract["deployment_order"][-3:] == ("event_season_deleted_draft_cleanup", "interclub_player_identity_availability", "weekly_recap_builder")
+    assert len(contract["deployment_order"]) == 158
+    assert contract["deployment_order"][-5:] == (
+        "event_season_deleted_draft_cleanup", "interclub_player_identity_availability", "weekly_recap_builder",
+        "badge_conflicts_are_not_serialization_failures", "unrated_match_activity",
+    )
     assert {"interclub_season_trophies", "event_season_history"}.issubset(contract["required_ledger_names"])
     assert set(contract["deployment_order"]) == set(
         contract["required_ledger_names"]
@@ -883,7 +888,7 @@ def test_preflight_accepts_only_matching_protected_project_and_config() -> None:
     )
 
     assert errors == []
-    assert migrations[-1] == "20261109004102"
+    assert migrations[-1] == "20261109004104"
 
     wrong_project_errors, _ = verifier.preflight_errors(
         _production_env(

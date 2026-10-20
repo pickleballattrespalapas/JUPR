@@ -30,8 +30,11 @@ class FakeQuery:
         self.limit_value = None
         self.update_payload = None
         self.insert_payload = None
+        self.selected_columns = None
 
-    def select(self, *_args, **_kwargs):
+    def select(self, columns="*", *_args, **_kwargs):
+        if columns != "*":
+            self.selected_columns = [column.strip() for column in columns.split(",")]
         return self
 
     def eq(self, key, value):
@@ -65,6 +68,12 @@ class FakeQuery:
         return self
 
     def execute(self):
+        if self.table_name == "players" and self.selected_columns:
+            # Match the canonical players schema instead of allowing nonexistent
+            # columns to pass silently through API contract tests.
+            missing = set(self.selected_columns) - {"id", "club_id", "name", "active"}
+            if missing:
+                raise RuntimeError(f"Unknown players columns: {sorted(missing)}")
         rows = self.storage.setdefault(self.table_name, [])
         if self.insert_payload is not None:
             row = {"id": f"row-{len(rows) + 1}", **self.insert_payload}
@@ -86,6 +95,8 @@ class FakeQuery:
             return SimpleNamespace(data=updated)
         if self.limit_value is not None:
             scoped = scoped[: self.limit_value]
+        if self.table_name == "players" and self.selected_columns:
+            scoped = [{column: row.get(column) for column in self.selected_columns} for row in scoped]
         return SimpleNamespace(data=scoped)
 
 
@@ -204,6 +215,68 @@ def test_public_verified_updates_api_is_club_scoped_and_validates_email(monkeypa
     assert [player["id"] for player in options.json()["players"]] == [1]
     assert invalid.status_code == 400
     assert "valid email" in invalid.json()["detail"]
+
+
+@pytest.mark.parametrize("active", [True, False])
+def test_public_verified_updates_schema_valid_options_status_and_request(monkeypatch, active):
+    supabase = FakeSupabase()
+    supabase.storage["players"][0]["active"] = active
+    before_player = dict(supabase.storage["players"][0])
+    client = _api_client(monkeypatch, supabase)
+
+    options = client.get("/clubs/sandwich-club/verified-updates/options")
+    status_before = client.get("/clubs/sandwich-club/verified-updates/status?player_id=1")
+    created = client.post(
+        "/clubs/sandwich-club/verified-updates/request",
+        json={"player_id": 1, "email": "user@example.com"},
+    )
+    status_after = client.get("/clubs/sandwich-club/verified-updates/status?player_id=1")
+
+    assert [options.status_code, status_before.status_code, created.status_code, status_after.status_code] == [200] * 4
+    assert options.json()["players"][0]["is_active"] is active
+    assert status_before.json()["player"]["is_active"] is active
+    assert status_before.json()["player"]["already_requested"] is False
+    assert created.json()["player"]["is_active"] is active
+    assert created.json()["request_status"] == "pending_admin_review"
+    assert status_after.json()["player"]["request_status"] == "pending_admin_review"
+    assert status_after.json()["player"]["already_requested"] is True
+    assert status_after.json()["player"]["is_active"] is active
+    # Inactivity does not bar a subscription or change the player's activity.
+    assert supabase.storage["players"] == [before_player]
+    assert len(supabase.storage["player_profile_update_subscriptions"]) == 1
+
+
+@pytest.mark.parametrize("player_id", [2, 999])
+def test_public_verified_updates_missing_or_other_club_player_does_not_create_request(monkeypatch, player_id):
+    supabase = FakeSupabase()
+    supabase.storage["players"].append({"club_id": "other-club", "id": 2, "name": "Other", "active": False})
+    client = _api_client(monkeypatch, supabase)
+
+    status = client.get(f"/clubs/sandwich-club/verified-updates/status?player_id={player_id}")
+    created = client.post(
+        "/clubs/sandwich-club/verified-updates/request",
+        json={"player_id": player_id, "email": "user@example.com"},
+    )
+
+    assert status.status_code == created.status_code == 400
+    assert status.json()["detail"] == created.json()["detail"] == "player not found"
+    assert supabase.storage["player_profile_update_subscriptions"] == []
+
+
+def test_public_verified_updates_options_do_not_discard_activity_after_query_failure(monkeypatch):
+    original_execute = FakeQuery.execute
+
+    def unavailable_activity(query):
+        if query.table_name == "players" and "active" in (query.selected_columns or []):
+            raise RuntimeError("Player query unavailable")
+        return original_execute(query)
+
+    monkeypatch.setattr(FakeQuery, "execute", unavailable_activity)
+    supabase = FakeSupabase()
+    supabase.storage["players"][0]["active"] = False
+
+    with pytest.raises(RuntimeError, match="Player query unavailable"):
+        list_public_verified_update_player_options(supabase, club_id="club")
 
 
 def test_public_verified_updates_api_returns_429_for_durable_email_rate_cap(monkeypatch):

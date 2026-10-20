@@ -4,10 +4,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from uuid import NAMESPACE_URL, uuid5
 
 from jupr_app.config import get_email_mode
 from jupr_app.data.client import make_supabase
+from jupr_app.domain.notifications.player_profile_update_repo import session_player_update_operation_key
 from jupr_app.domain.notifications.smtp_mailer import get_smtp_config_status
 from jupr_app.workers.player_update_email_worker import run_player_update_email_worker
 
@@ -44,9 +44,9 @@ def deliver_pending_updates() -> dict[str, int]:
     try:
         rows = (
             client.table("player_profile_update_outbox")
-            .select("id,club_id,subscription_id,week_start,week_end,row_version,queue_operation_key")
+            .select("id,club_id,row_version,queue_operation_key,digest_snapshot_json")
             .eq("send_status", "pending")
-            .eq("digest_snapshot_json", "{}")
+            .eq("digest_snapshot_json->>update_scope", "session")
             .order("created_at")
             .limit(250)
             .execute().data or []
@@ -60,11 +60,17 @@ def deliver_pending_updates() -> dict[str, int]:
     clubs: dict[str, list[dict]] = {}
     for row in rows:
         club_id = str(row.get("club_id") or "")
-        expected_key = str(uuid5(
-            NAMESPACE_URL,
-            f"jupr:auto-player-update:{club_id}:{row.get('subscription_id')}:{row.get('week_start')}:{row.get('week_end')}",
-        ))
-        if club_id and str(row.get("queue_operation_key")) == expected_key:
+        snapshot = row.get("digest_snapshot_json")
+        if not isinstance(snapshot, dict) or snapshot.get("update_scope") != "session":
+            continue
+        try:
+            expected_key = session_player_update_operation_key(
+                club_id=club_id, match_ids=snapshot.get("match_ids"),
+            )
+        except ValueError:
+            # Legacy rows without exact games cannot be reconstructed safely.
+            continue
+        if str(row.get("queue_operation_key")) == expected_key:
             clubs.setdefault(club_id, []).append({
                 "id": row["id"], "expected_row_version": row["row_version"],
             })

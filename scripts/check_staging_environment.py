@@ -18,6 +18,7 @@ from scripts.staging_write_waves import (
     REGISTRATION_SECRET_WAVES,
     STAGING_WRITE_WAVES,
     expected_write_flags,
+    wave_allows_request,
 )
 
 PROD_MARKERS = ("prod", "production", "live")
@@ -388,6 +389,7 @@ def _check_api(
         f"/clubs/{club_slug}": f"{base}/clubs/{club_slug}",
         f"/clubs/{club_slug}/leaderboards": f"{base}/clubs/{club_slug}/leaderboards",
         f"/clubs/{club_slug}/live-sessions": f"{base}/clubs/{club_slug}/live-sessions",
+        f"/clubs/{club_slug}/support/intake/status": f"{base}/clubs/{club_slug}/support/intake/status",
     }
     for template in ADMIN_STATUS_PATHS:
         path = template.format(club_id=club_id)
@@ -563,7 +565,18 @@ def _check_api(
                 )
 
         if expect_full_next_admin and expected_write_wave is not None and isinstance(payload, dict):
-            if path == f"/admin/clubs/{club_id}/player-updates/status":
+            support_review_expected = expected_gates["JUPR_ENABLE_NEXT_ADMIN_SUPPORT_REQUESTS"] and wave_allows_request(
+                expected_write_wave, "PATCH", f"/admin/clubs/{club_id}/support-requests/request"
+            )
+            if path == f"/clubs/{club_slug}/support/intake/status":
+                require_bool(path, payload, "accepting_requests", bool(
+                    support_review_expected
+                    and expected_gates["JUPR_ENABLE_STAGING_PUBLIC_INTAKE_WRITES"]
+                    and wave_allows_request(expected_write_wave, "POST", f"/clubs/{club_slug}/support/intake")
+                ))
+            elif path == f"/admin/clubs/{club_id}/support-requests/status":
+                require_bool(path, payload, "ready_for_review", support_review_expected)
+            elif path == f"/admin/clubs/{club_id}/player-updates/status":
                 require_bool(
                     path,
                     payload,

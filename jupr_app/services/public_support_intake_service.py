@@ -8,6 +8,12 @@ from typing import Any
 from urllib.parse import urlparse
 from uuid import uuid4
 
+from jupr_app.services.support_request_availability import (
+    SUPPORT_UNAVAILABLE_MESSAGE,
+    support_intake_writes_enabled,
+    support_queue_schema_ready,
+)
+
 REQUEST_TYPES = {"data_correction", "profile_privacy", "general_support"}
 REQUEST_STATUS_NEW = "new"
 SUPPORT_RATE_WINDOW = timedelta(hours=1)
@@ -17,6 +23,20 @@ EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
 class SupportIntakeRateLimitError(RuntimeError):
     """Raised when a public requester exceeds the durable intake limit."""
+
+
+class SupportIntakeUnavailableError(RuntimeError):
+    """Raised before accepting a request without an available review path."""
+
+
+def build_public_support_intake_status(supabase: Any, *, club_id: str) -> dict[str, Any]:
+    accepting = support_intake_writes_enabled() and support_queue_schema_ready(
+        supabase, club_id=club_id
+    )
+    return {
+        "accepting_requests": accepting,
+        "message": "Club staff can review requests." if accepting else SUPPORT_UNAVAILABLE_MESSAGE,
+    }
 
 
 def _safe_text(value: Any, *, limit: int = 1000) -> str:
@@ -168,6 +188,9 @@ def create_public_support_intake_request(
     This intentionally creates a staff-review queue item only. It does not mutate
     player, match, rating, badge, registration, tournament, or privacy-display data.
     """
+
+    if not build_public_support_intake_status(supabase, club_id=club_id)["accepting_requests"]:
+        raise SupportIntakeUnavailableError(SUPPORT_UNAVAILABLE_MESSAGE)
 
     if _safe_text(payload.get("website"), limit=200):
         return {

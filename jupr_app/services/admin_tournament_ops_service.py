@@ -67,7 +67,7 @@ def _player_options(supabase: Any, *, club_id: str) -> tuple[list[dict[str, Any]
     try:
         rows = _safe_rows(
             supabase.table("players")
-            .select("id,name,active,is_active")
+            .select("id,name,active")
             .eq("club_id", str(club_id))
             .execute()
         )
