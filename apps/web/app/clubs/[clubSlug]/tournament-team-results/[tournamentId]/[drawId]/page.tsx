@@ -4,7 +4,7 @@ import { getPublicTeamTournamentResults } from "@/lib/tournamentTeamCompetitionA
 import styles from "@/components/tournaments/TournamentTeamCompetition.module.css";
 
 type Props = {
-  params: { clubSlug: string; tournamentId: string; drawId: string };
+  params: Promise<{ clubSlug: string; tournamentId: string; drawId: string }>;
 };
 
 function number(value: unknown): number {
@@ -58,7 +58,8 @@ function matchupTitle(matchup: { playoff_game_code?: string | null; round_number
   return labels[code] || `Round ${matchup.round_number} · Match ${matchup.slot_number}`;
 }
 
-export default async function TournamentTeamResultsDetail({ params }: Props) {
+export default async function TournamentTeamResultsDetail(props: Props) {
+  const params = await props.params;
   const { data, error, status } = await getPublicTeamTournamentResults(
     params.clubSlug,
     params.tournamentId,

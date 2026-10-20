@@ -17,12 +17,13 @@ from jupr_app.domain.gamification.badges_repo import build_player_badge_rows
 from jupr_app.domain.gamification.evaluators import build_evaluation_context
 
 
-MATCH_EXCLUSION_BADGE_CONTRACT_VERSION = "jupr:match-exclusion-badges:v1"
+MATCH_EXCLUSION_BADGE_CONTRACT_VERSION_V1 = "jupr:match-exclusion-badges:v1"
+MATCH_EXCLUSION_BADGE_CONTRACT_VERSION = "jupr:match-exclusion-badges:v2"
 
 # This is an intentionally frozen upper bound. Adding or removing a live badge
 # requires a new contract version so an in-flight exclusion can finish against
 # the exact badge scope captured before its match mutation.
-MATCH_EXCLUSION_BADGE_IDS: tuple[str, ...] = (
+MATCH_EXCLUSION_BADGE_IDS_V1: tuple[str, ...] = (
     "blowout_artist",
     "bounce_back",
     "clean_sweep_week",
@@ -54,6 +55,57 @@ MATCH_EXCLUSION_BADGE_IDS: tuple[str, ...] = (
     "weekly_regular",
 )
 
+# Frozen v2 scope; never derive an in-flight contract from the live registry.
+MATCH_EXCLUSION_BADGE_IDS: tuple[str, ...] = (
+    "above_expectations",
+    "battle_tested",
+    "blowout_artist",
+    "bounce_back",
+    "breakthrough",
+    "clean_sweep_week",
+    "clutch_performer",
+    "consistency",
+    "david_vs_goliath",
+    "dedicated_participant_50",
+    "dominant_run",
+    "draft_master",
+    "first_win",
+    "giant_slayer",
+    "hall_of_fame_night",
+    "high_output",
+    "high_roller",
+    "hot_streak",
+    "ice_in_veins",
+    "iron_week",
+    "legendary_upset",
+    "level_up",
+    "lifetime_participant_200",
+    "marathon_month",
+    "most_improved_monthly",
+    "mountain_climber",
+    "mr_reliable",
+    "nemesis_found",
+    "network_builder",
+    "participant",
+    "pickle_perfection",
+    "rivalry_streak",
+    "rivalry_win",
+    "rocket_start",
+    "settled_the_score",
+    "social_butterfly",
+    "steady_hand",
+    "swiss_army_knife",
+    "untouchable",
+    "upset_champion",
+    "weekly_regular",
+)
+
+MATCH_EXCLUSION_BADGE_CONTRACTS = {
+    MATCH_EXCLUSION_BADGE_CONTRACT_VERSION_V1: MATCH_EXCLUSION_BADGE_IDS_V1,
+    MATCH_EXCLUSION_BADGE_CONTRACT_VERSION: MATCH_EXCLUSION_BADGE_IDS,
+}
+
+
 MATCH_EXCLUSION_BADGE_CLAIM_RPC = "claim_match_exclusion_badge_progress"
 MATCH_EXCLUSION_BADGE_APPLY_RPC = "apply_match_exclusion_badge_reconciliation"
 MATCH_EXCLUSION_BADGE_FAIL_RPC = "fail_match_exclusion_badge_progress"
@@ -83,12 +135,13 @@ def build_match_exclusion_badge_plan(
     club_id: str,
     player_id: int,
     badge_ids: Iterable[str],
+    contract_version: str = MATCH_EXCLUSION_BADGE_CONTRACT_VERSION,
 ) -> list[dict[str, Any]]:
     """Build one player's exact desired engine-owned badge rows."""
 
     clean_club_id = _required_text(club_id, "club_id")
     clean_player_id = _positive_player_id(player_id)
-    clean_badge_ids = _validate_frozen_badge_ids(badge_ids)
+    clean_badge_ids = _validate_frozen_badge_ids(badge_ids, contract_version=contract_version)
     _assert_context_is_canonical_safe(ctx, clean_club_id)
     evaluation = _canonical_evaluation_context(ctx, clean_club_id)
     return _build_player_plan(
@@ -96,6 +149,7 @@ def build_match_exclusion_badge_plan(
         club_id=clean_club_id,
         player_id=clean_player_id,
         badge_ids=clean_badge_ids,
+        contract_version=contract_version,
     )
 
 
@@ -154,12 +208,11 @@ def reconcile_match_exclusion_badges(
     expected_player_ids = sorted({_positive_player_id(value) for value in player_ids})
     if not expected_player_ids:
         raise ValueError("player_ids must contain at least one player")
-    _assert_frozen_code_contract()
-
     worker_id = f"match-exclusion-badges:{uuid4()}"
     expected_player_set = set(expected_player_ids)
     processed_player_ids: list[int] = []
     operation_badge_ids: tuple[str, ...] | None = None
+    operation_contract_version: str | None = None
     context: Any | None = None
     evaluation: BadgeEvaluationContext | None = None
     inserted_count = 0
@@ -191,18 +244,22 @@ def reconcile_match_exclusion_badges(
             )
             if (
                 claim_contract_version
-                and claim_contract_version
-                != MATCH_EXCLUSION_BADGE_CONTRACT_VERSION
+                and claim_contract_version not in MATCH_EXCLUSION_BADGE_CONTRACTS
             ):
                 raise RuntimeError(
                     "Badge progress uses an unsupported reconciliation contract version."
                 )
+            if claim_contract_version:
+                if operation_contract_version and claim_contract_version != operation_contract_version:
+                    raise RuntimeError("Badge progress rows disagree on the operation's contract version.")
+                operation_contract_version = claim_contract_version
             no_claim_badge_ids = claim.get("badge_ids") or claim.get(
                 "badge_allowlist"
             )
             if no_claim_badge_ids is not None:
                 operation_badge_ids = _validate_frozen_badge_ids(
-                    no_claim_badge_ids
+                    no_claim_badge_ids,
+                    contract_version=operation_contract_version or MATCH_EXCLUSION_BADGE_CONTRACT_VERSION,
                 )
             break
 
@@ -224,12 +281,16 @@ def reconcile_match_exclusion_badges(
                 )
 
             contract_version = str(claim.get("badge_contract_version") or "")
-            if contract_version != MATCH_EXCLUSION_BADGE_CONTRACT_VERSION:
+            if contract_version not in MATCH_EXCLUSION_BADGE_CONTRACTS:
                 raise RuntimeError(
                     "Badge progress uses an unsupported reconciliation contract version."
                 )
+            if operation_contract_version and contract_version != operation_contract_version:
+                raise RuntimeError("Badge progress rows disagree on the operation's contract version.")
+            operation_contract_version = contract_version
             claimed_badge_ids = _validate_frozen_badge_ids(
-                claim.get("badge_ids") or claim.get("badge_allowlist") or []
+                claim.get("badge_ids") or claim.get("badge_allowlist") or [],
+                contract_version=contract_version,
             )
             if operation_badge_ids is None:
                 operation_badge_ids = claimed_badge_ids
@@ -253,6 +314,7 @@ def reconcile_match_exclusion_badges(
                 club_id=clean_club_id,
                 player_id=claimed_player_id,
                 badge_ids=claimed_badge_ids,
+                contract_version=contract_version,
             )
             applied = apply_match_exclusion_badge_plan(
                 supabase,
@@ -294,7 +356,7 @@ def reconcile_match_exclusion_badges(
         "ok": True,
         "operation_id": clean_operation_id,
         "club_id": clean_club_id,
-        "contract_version": MATCH_EXCLUSION_BADGE_CONTRACT_VERSION,
+        "contract_version": operation_contract_version or MATCH_EXCLUSION_BADGE_CONTRACT_VERSION,
         "player_ids": expected_player_ids,
         "processed_player_ids": sorted(processed_player_ids),
         "badge_ids": list(operation_badge_ids or ()),
@@ -482,6 +544,7 @@ def _build_player_plan(
     club_id: str,
     player_id: int,
     badge_ids: tuple[str, ...],
+    contract_version: str,
 ) -> list[dict[str, Any]]:
     specs = registry()
     candidates: list[BadgeCandidate] = []
@@ -502,6 +565,7 @@ def _build_player_plan(
             club_id=club_id,
             player_id=player_id,
             badge_ids=set(badge_ids),
+            contract_version=contract_version,
         )
         key = (
             player_id,
@@ -530,6 +594,7 @@ def _candidate_plan_row(
     club_id: str,
     player_id: int,
     badge_ids: set[str],
+    contract_version: str,
 ) -> dict[str, Any]:
     if str(candidate.club_id) != str(club_id):
         raise RuntimeError("Badge evaluator returned a candidate for the wrong club.")
@@ -548,7 +613,7 @@ def _candidate_plan_row(
         club_id,
         [candidate],
         awarded_by="engine",
-        rule_version=MATCH_EXCLUSION_BADGE_CONTRACT_VERSION,
+        rule_version=contract_version,
     )[0]
     row = {
         field: _json_safe(projected.get(field))
@@ -566,21 +631,26 @@ def _candidate_plan_row(
     return row
 
 
-def _validate_frozen_badge_ids(values: Iterable[Any]) -> tuple[str, ...]:
+def _validate_frozen_badge_ids(
+    values: Iterable[Any], *, contract_version: str = MATCH_EXCLUSION_BADGE_CONTRACT_VERSION,
+) -> tuple[str, ...]:
+    frozen_ids = MATCH_EXCLUSION_BADGE_CONTRACTS.get(contract_version)
+    if frozen_ids is None:
+        raise RuntimeError("Badge progress uses an unsupported reconciliation contract version.")
     requested = [str(value or "").strip() for value in values]
     if any(not value for value in requested):
         raise RuntimeError("Frozen badge allowlist contains a blank badge ID.")
     if len(requested) != len(set(requested)):
         raise RuntimeError("Frozen badge allowlist contains duplicate badge IDs.")
-    unexpected = sorted(set(requested) - set(MATCH_EXCLUSION_BADGE_IDS))
+    unexpected = sorted(set(requested) - set(frozen_ids))
     if unexpected:
         raise RuntimeError(
-            "Frozen badge allowlist exceeds the supported v1 contract: "
+            f"Frozen badge allowlist exceeds the supported {contract_version} contract: "
             + ", ".join(unexpected)
         )
     requested_set = set(requested)
     return tuple(
-        badge_id for badge_id in MATCH_EXCLUSION_BADGE_IDS if badge_id in requested_set
+        badge_id for badge_id in frozen_ids if badge_id in requested_set
     )
 
 

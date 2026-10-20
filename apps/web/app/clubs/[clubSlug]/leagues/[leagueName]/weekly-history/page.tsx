@@ -5,8 +5,8 @@ import PublicLeagueNav from "@/components/PublicLeagueNav";
 import { getClubLeagueResults, type LeagueResultsStatRow } from "@/lib/api";
 
 type Props = {
-  params: { clubSlug: string; leagueName: string };
-  searchParams?: Record<string, string | string[] | undefined>;
+  params: Promise<{ clubSlug: string; leagueName: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
 const cardStyle = {
@@ -25,7 +25,7 @@ function decodeLeagueName(value: string): string {
   }
 }
 
-function firstParam(searchParams: Props["searchParams"], key: string): string | null {
+function firstParam(searchParams: Awaited<Props["searchParams"]>, key: string): string | null {
   const value = searchParams?.[key];
   if (Array.isArray(value)) return value[0] ?? null;
   return value ?? null;
@@ -61,7 +61,9 @@ function highlightRows(rows: LeagueResultsStatRow[]): string {
     .join(", ");
 }
 
-export default async function PublicLeagueWeeklyHistoryPage({ params, searchParams }: Props) {
+export default async function PublicLeagueWeeklyHistoryPage(props: Props) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   const leagueName = decodeLeagueName(params.leagueName);
   const requestedWeek = parsePositiveInt(firstParam(searchParams, "week"));
   const { data, error } = await getClubLeagueResults(

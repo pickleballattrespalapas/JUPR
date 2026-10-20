@@ -12,8 +12,8 @@ import {
 } from "@/lib/clubSite";
 
 type LeaderboardPageProps = {
-  params: { clubSlug: string };
-  searchParams?: Record<string, string | string[] | undefined>;
+  params: Promise<{ clubSlug: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
 type SortKey = "rank" | "rating" | "matches" | "win_pct" | "gain" | "name";
@@ -53,7 +53,7 @@ const tdStyle = {
   verticalAlign: "top" as const
 };
 
-function firstParam(searchParams: LeaderboardPageProps["searchParams"], key: string): string | null {
+function firstParam(searchParams: Awaited<LeaderboardPageProps["searchParams"]>, key: string): string | null {
   const value = searchParams?.[key];
   if (Array.isArray(value)) return value[0] ?? null;
   return value ?? null;
@@ -234,7 +234,9 @@ function qualificationLabel(entry: LeaderboardEntry, overall: boolean): string {
   return entry.qualified ? "Qualified" : `${matchesPlayed(entry)}/${Number(entry.min_games ?? 0)} games`;
 }
 
-export default async function ClubLeaderboardPage({ params, searchParams }: LeaderboardPageProps) {
+export default async function ClubLeaderboardPage(props: LeaderboardPageProps) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   const { clubSlug } = params;
   const leagueView = normalizeLeagueView(firstParam(searchParams, "league_view"));
   const requestedLeague = firstParam(searchParams, "league") || (leagueView === "past" ? "" : "OVERALL");

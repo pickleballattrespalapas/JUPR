@@ -7,8 +7,8 @@ import { publicBadgeRarityLabel } from "@/lib/badgeApi";
 import { publicSocialEventTypeLabel } from "@/lib/publicMatchLabels";
 
 type PlayerProfilePageProps = {
-  params: { clubSlug: string; playerId: string };
-  searchParams?: Record<string, string | string[] | undefined>;
+  params: Promise<{ clubSlug: string; playerId: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
 type SectionKey = "overview" | "ratings" | "positions" | "trophies" | "social" | "matches" | "badges";
@@ -27,7 +27,7 @@ const thStyle = { textAlign: "left" as const, borderBottom: "1px solid #cbd5e1",
 const tdStyle = { borderBottom: "1px solid #e2e8f0", padding: "0.6rem", whiteSpace: "nowrap" as const };
 const pillStyle = { border: "1px solid #cbd5e1", borderRadius: "999px", padding: "0.45rem 0.75rem", color: "#0f172a", textDecoration: "none" };
 
-function firstParam(searchParams: PlayerProfilePageProps["searchParams"], key: string): string | null {
+function firstParam(searchParams: Awaited<PlayerProfilePageProps["searchParams"]>, key: string): string | null {
   const value = searchParams?.[key];
   if (Array.isArray(value)) return value[0] ?? null;
   return value ?? null;
@@ -153,7 +153,9 @@ function RatingTrend({ points, clubSlug }: { points: PublicRatingHistoryPoint[];
   );
 }
 
-export default async function PlayerProfilePage({ params, searchParams }: PlayerProfilePageProps) {
+export default async function PlayerProfilePage(props: PlayerProfilePageProps) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   const { clubSlug, playerId } = params;
   const section = normalizeSection(firstParam(searchParams, "section"));
   const selectedLeague = firstParam(searchParams, "league");

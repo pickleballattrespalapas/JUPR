@@ -41,7 +41,7 @@ const footerStyle: CSSProperties = {
 };
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
-  const path = headers().get("x-pcs-club-path") || "/";
+  const path = (await headers()).get("x-pcs-club-path") || "/";
   const site = path.startsWith("/admin") ? null : await getPublicSite("tres-palapas").catch(() => null);
   const showClubPage = (path: string) => !!site && !!publicClubPage(site.document, site.slug, path);
   const isStaging =

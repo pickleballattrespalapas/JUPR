@@ -1,11 +1,12 @@
 import { notFound } from "next/navigation";
 import { getPublicSite } from "@/lib/clubSiteServer";
 import ClubSiteContent from "@/components/ClubSiteContent";
-export default async function CustomClubPage({
-  params,
-}: {
-  params: { clubSlug: string; pageSlug: string };
-}) {
+export default async function CustomClubPage(
+  props: {
+    params: Promise<{ clubSlug: string; pageSlug: string }>;
+  }
+) {
+  const params = await props.params;
   const site = await getPublicSite(params.clubSlug);
   if (
     !site ||

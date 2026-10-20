@@ -3,11 +3,11 @@ import { getClubMatchExplorerContext, getClubPlayerOptions } from "@/lib/api";
 import MatchExplorerForm from "./MatchExplorerForm";
 
 type MatchExplorerPageProps = {
-  params: { clubSlug: string };
-  searchParams?: Record<string, string | string[] | undefined>;
+  params: Promise<{ clubSlug: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
-function firstParam(searchParams: MatchExplorerPageProps["searchParams"], key: string): string | null {
+function firstParam(searchParams: Awaited<MatchExplorerPageProps["searchParams"]>, key: string): string | null {
   const value = searchParams?.[key];
   if (Array.isArray(value)) return value[0] ?? null;
   return value ?? null;
@@ -18,7 +18,9 @@ function apiBase(): string {
   return "/api";
 }
 
-export default async function MatchExplorerPage({ params, searchParams }: MatchExplorerPageProps) {
+export default async function MatchExplorerPage(props: MatchExplorerPageProps) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   const { clubSlug } = params;
   const [playersResult, contextResult] = await Promise.all([
     getClubPlayerOptions(clubSlug),

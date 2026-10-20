@@ -4,7 +4,7 @@ import { getAdminTournamentApiBaseUrl, getAdminTournamentStatus } from "@/lib/ad
 import TournamentAdminPanel from "./TournamentAdminPanel";
 
 export default async function AdminTournamentsPage() {
-  const { clubId } = requireAdminWorkspace();
+  const { clubId } = await requireAdminWorkspace();
   const { data, error } = await getAdminTournamentStatus(clubId);
 
   return (

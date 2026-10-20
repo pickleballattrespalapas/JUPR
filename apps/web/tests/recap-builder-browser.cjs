@@ -10,6 +10,8 @@ const web = path.resolve(__dirname, ".."),
 const apiOrigin = "http://127.0.0.1:8042",
   origin = "http://127.0.0.1:3042";
 const output = process.env.RECAP_BROWSER_ARTIFACTS || "/tmp/recap-browser";
+const nextMode = process.env.RECAP_BROWSER_NEXT_MODE || "dev";
+assert(["dev", "start"].includes(nextMode), "Use dev or a prebuilt start server");
 fs.mkdirSync(output, { recursive: true });
 const logs = [];
 function start(cmd, args, opts) {
@@ -77,7 +79,8 @@ async function confirm(page, label, text) {
     process.execPath,
     [
       require.resolve("next/dist/bin/next"),
-      "dev",
+      nextMode,
+      ...(nextMode === "dev" ? ["--webpack"] : []),
       "--hostname",
       "127.0.0.1",
       "--port",
@@ -89,6 +92,12 @@ async function confirm(page, label, text) {
   try {
     await ready(apiOrigin + "/fixture-result");
     await ready(origin + "/api/environment");
+    if (nextMode === "dev") {
+      // Compile the public preview before editing. A cold Next 16 development
+      // compilation can refresh the shared module graph and reload the editor.
+      // Release acceptance uses a prebuilt start server instead.
+      await ready(origin + "/clubs/test/weekly-recap");
+    }
     browser = await chromium.launch({
       headless: true,
       executablePath: process.env.RECAP_BROWSER_EXECUTABLE,

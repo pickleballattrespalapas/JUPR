@@ -2,13 +2,14 @@ import Link from "@/components/PublicClubLink";
 import TeamMatchSessionRunner from "./TeamMatchSessionRunner";
 
 type Props = {
-  params: {
+  params: Promise<{
     clubSlug: string;
     sessionKey: string;
-  };
+  }>;
 };
 
-export default function TeamMatchSessionPage({ params }: Props) {
+export default async function TeamMatchSessionPage(props: Props) {
+  const params = await props.params;
   return (
     <section>
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>

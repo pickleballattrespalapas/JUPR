@@ -4,7 +4,7 @@ import { getClubMatch, type PublicMatchPlayer, type PublicRatingSnapshotEntry } 
 import { publicMatchTypeLabel } from "@/lib/publicMatchLabels";
 
 type MatchDetailPageProps = {
-  params: { clubSlug: string; matchId: string };
+  params: Promise<{ clubSlug: string; matchId: string }>;
 };
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
@@ -23,7 +23,7 @@ function scoreLabel(scoreA?: number | null, scoreB?: number | null): string {
   return `${scoreA ?? 0}–${scoreB ?? 0}`;
 }
 
-function teamLabel(clubSlug: string, players: PublicMatchPlayer[]): JSX.Element {
+function teamLabel(clubSlug: string, players: PublicMatchPlayer[]): React.JSX.Element {
   return (
     <>
       {players.map((player, index) => (
@@ -56,7 +56,8 @@ function snapshotRows(players: PublicMatchPlayer[], snapshot: PublicRatingSnapsh
   });
 }
 
-export default async function MatchDetailPage({ params }: MatchDetailPageProps) {
+export default async function MatchDetailPage(props: MatchDetailPageProps) {
+  const params = await props.params;
   const { clubSlug, matchId } = params;
   const { data, error } = await getClubMatch(clubSlug, matchId);
   const match = data?.match;

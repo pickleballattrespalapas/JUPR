@@ -17,7 +17,8 @@ function baseUrl(): string | null {
   return process.env.JUPR_API_BASE_URL || process.env.NEXT_PUBLIC_JUPR_API_BASE_URL || null;
 }
 
-export async function GET(_request: Request, { params }: { params: { clubSlug: string } }) {
+export async function GET(_request: Request, props: { params: Promise<{ clubSlug: string }> }) {
+  const params = await props.params;
   const base = baseUrl();
   if (!base) {
     return publicLiveErrorResponse(500);
@@ -35,7 +36,8 @@ export async function GET(_request: Request, { params }: { params: { clubSlug: s
   }
 }
 
-export async function POST(request: Request, { params }: { params: { clubSlug: string } }) {
+export async function POST(request: Request, props: { params: Promise<{ clubSlug: string }> }) {
+  const params = await props.params;
   const base = baseUrl();
   if (!base) {
     return publicLiveErrorResponse(500);

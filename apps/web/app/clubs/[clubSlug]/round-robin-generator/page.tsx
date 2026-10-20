@@ -1,6 +1,6 @@
 import PublicGeneratorWorkspace from "@/app/clubs/[clubSlug]/play-generators/PublicGeneratorWorkspace";
 
-type Props = { params: { clubSlug: string } };
+type Props = { params: Promise<{ clubSlug: string }> };
 type StatusResponse = { enabled: boolean; writes_enabled?: boolean; status: string; warnings?: string[] };
 
 function serverApiBase(): string | null {
@@ -18,7 +18,8 @@ async function loadStatus(clubSlug: string): Promise<StatusResponse | null> {
   }
 }
 
-export default async function PublicGeneratorPage({ params }: Props) {
+export default async function PublicGeneratorPage(props: Props) {
+  const params = await props.params;
   const status = await loadStatus(params.clubSlug);
   return (
     <section>

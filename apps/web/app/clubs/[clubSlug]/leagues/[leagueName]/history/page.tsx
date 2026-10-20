@@ -4,7 +4,8 @@ import EventHistoryView from "@/components/EventHistoryView";
 import { publicSiteFetch } from "@/lib/clubSiteServer";
 import type { EventHistory } from "@/lib/eventSeasons";
 
-export default async function LeagueHistoryPage({ params }: { params: { clubSlug: string; leagueName: string } }) {
+export default async function LeagueHistoryPage(props: { params: Promise<{ clubSlug: string; leagueName: string }> }) {
+  const params = await props.params;
   const name = decodeURIComponent(params.leagueName);
   const history = await publicSiteFetch<EventHistory>(`/public/clubs/${encodeURIComponent(params.clubSlug)}/event-history?${new URLSearchParams({ kind: "league", event: name })}`);
   if (!history) notFound();

@@ -6,8 +6,8 @@ import { getClubChallengeLadder } from "@/lib/challengeLadderApi";
 import type { PublicLadderChallenge, PublicLadderChallengeSide, PublicLadderPlayer, PublicLadderTier } from "@/lib/challengeLadderApi";
 
 type ChallengeLadderPageProps = {
-  params: { clubSlug: string };
-  searchParams?: Record<string, string | string[] | undefined>;
+  params: Promise<{ clubSlug: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
 type SectionKey = "ladder" | "challenges" | "rules";
@@ -27,7 +27,7 @@ const sectionLabels: Record<SectionKey, string> = {
   rules: "Quick rules"
 };
 
-function firstParam(searchParams: ChallengeLadderPageProps["searchParams"], key: string): string | null {
+function firstParam(searchParams: Awaited<ChallengeLadderPageProps["searchParams"]>, key: string): string | null {
   const value = searchParams?.[key];
   if (Array.isArray(value)) return value[0] ?? null;
   return value ?? null;
@@ -277,7 +277,9 @@ function PlayerChallengePanel({ player, clubSlug }: { player: FlatPlayer; clubSl
   );
 }
 
-export default async function ChallengeLadderPage({ params, searchParams }: ChallengeLadderPageProps) {
+export default async function ChallengeLadderPage(props: ChallengeLadderPageProps) {
+  const searchParams = await props.searchParams;
+  const params = await props.params;
   const { clubSlug } = params;
   const section = normalizeSection(firstParam(searchParams, "section"));
   const selectedTier = firstParam(searchParams, "tier");

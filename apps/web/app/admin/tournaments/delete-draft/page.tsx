@@ -4,13 +4,14 @@ import { getAdminTournamentApiBaseUrl, getAdminTournamentStatus } from "@/lib/ad
 import DeleteDraftPanel from "./DeleteDraftPanel";
 import { readTournamentRouteContext } from "@/lib/tournamentRouteContext";
 
-type Props = { searchParams?: Record<string, string | string[] | undefined> };
+type Props = { searchParams?: Promise<Record<string, string | string[] | undefined>> };
 
-export default async function AdminTournamentDeleteDraftPage({ searchParams }: Props) {
+export default async function AdminTournamentDeleteDraftPage(props: Props) {
+  const searchParams = await props.searchParams;
   const context = readTournamentRouteContext(searchParams);
   if (!context.tournamentId) redirect("/admin/tournaments");
 
-  const { clubId } = requireAdminWorkspace();
+  const { clubId } = await requireAdminWorkspace();
   const { data, error } = await getAdminTournamentStatus(clubId);
 
   return (

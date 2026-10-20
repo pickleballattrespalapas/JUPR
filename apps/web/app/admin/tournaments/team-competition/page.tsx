@@ -4,10 +4,11 @@ import TournamentPhaseNav from "@/components/TournamentPhaseNav";
 import { readTournamentRouteContext } from "@/lib/tournamentRouteContext";
 import TeamTournamentAdminPanel from "./TeamTournamentAdminPanel";
 
-type Props = { searchParams?: Record<string, string | string[] | undefined> };
+type Props = { searchParams?: Promise<Record<string, string | string[] | undefined>> };
 
-export default function TeamTournamentAdminPage({ searchParams }: Props) {
-  const { clubId } = requireAdminWorkspace();
+export default async function TeamTournamentAdminPage(props: Props) {
+  const searchParams = await props.searchParams;
+  const { clubId } = await requireAdminWorkspace();
   const context = readTournamentRouteContext(searchParams);
   if (!context.tournamentId) redirect("/admin/tournaments");
 

@@ -73,13 +73,9 @@ function setup() {
 const render = nextProps => h(React.StrictMode, null, h(RoundRunner, nextProps));
 async function mount() {
   const state = setup();
-  // React 18's test renderer does not replay StrictMode effects. Replace the
-  // initial route while its fetch is pending to exercise real cleanup/setup.
-  await act(async () => { state.tree = create(render({ ...props, roundNumber: 2 })); });
-  assert.equal(state.pending.length, 1);
-  await act(async () => state.tree.update(render(props)));
-  assert.equal(state.pending.length, 2, 'A pending initial route load is replaced by the current route');
-  assert.equal(state.pending[0].options.signal.aborted, true, 'Cleanup aborts the obsolete initial load');
+  await act(async () => { state.tree = create(render(props)); });
+  assert.equal(state.pending.length, 2, 'StrictMode exercises effect setup, cleanup, and setup');
+  assert.equal(state.pending[0].options.signal.aborted, true, 'Cleanup aborts the first mount load');
   assert.equal(state.pending[1].options.signal.aborted, false);
   return state;
 }
@@ -179,5 +175,5 @@ async function refreshReplacementAndContextCleanup() {
   await canceledErrorCannotFinishCurrentLoad();
   await canceledForbiddenCannotRevokeButCurrentForbiddenCan();
   await refreshReplacementAndContextCleanup();
-  console.log('PASS round load lifecycle: replaced initial loads preserve drafts, stale errors and 403s, latest refresh, context cleanup, and genuine token revocation.');
+  console.log('PASS round load lifecycle: StrictMode drafts, stale errors and 403s, latest refresh, context cleanup, and genuine token revocation.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

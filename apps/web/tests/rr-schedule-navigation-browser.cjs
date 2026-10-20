@@ -9,6 +9,8 @@ const webRoot = path.resolve(__dirname, ".."), root = path.resolve(webRoot, "../
 const apiPort = process.env.GENERATOR_BROWSER_API_PORT || "8057", webPort = process.env.GENERATOR_BROWSER_WEB_PORT || "3038";
 const api = `http://127.0.0.1:${apiPort}`, web = `http://127.0.0.1:${webPort}`;
 const output = process.env.GENERATOR_BROWSER_ARTIFACTS || path.join(webRoot, "test-results", "rr-navigation");
+const nextMode = process.env.GENERATOR_BROWSER_NEXT_MODE || "dev";
+assert(["dev", "start"].includes(nextMode), "Use dev or a prebuilt start server");
 const children = [], logs = [];
 function start(command, args, env, cwd) {
   const child = spawn(command, args, { env, cwd, stdio: ["ignore", "pipe", "pipe"] });
@@ -85,7 +87,7 @@ async function verifyStandingsQr(page, expectedUrl) {
         NEXT_PUBLIC_JUPR_ENV: "staging", GENERATOR_BROWSER_WEB_PORT: webPort };
       start(process.env.GENERATOR_BROWSER_PYTHON || "python3", ["-m", "uvicorn", "generator_submission_api:app",
         "--app-dir", path.join(root, "tests/e2e"), "--host", "127.0.0.1", "--port", apiPort], env, root);
-      start(process.execPath, [require.resolve("next/dist/bin/next"), "dev", "--hostname", "127.0.0.1", "--port", webPort], env, webRoot);
+      start(process.execPath, [require.resolve("next/dist/bin/next"), nextMode, ...(nextMode === "dev" ? ["--webpack"] : []), "--hostname", "127.0.0.1", "--port", webPort], env, webRoot);
     }
     await ready(`${api}/fixture-result`);
     await ready(`${web}/clubs/test/round-robin-generator`);
@@ -146,7 +148,9 @@ async function verifyStandingsQr(page, expectedUrl) {
     }
     const handedSave = handed.waitForResponse(r => r.url().includes("/shared-play-generators/") && r.request().method()==="PATCH");
     await handed.getByRole("button",{name:"Save round scores",exact:true}).click();
-    assert.equal((await handedSave).ok(),true);
+    const handedSaveResponse = await handedSave;
+    assert.equal(handedSaveResponse.ok(), true,
+      `${audience} handoff save returned ${handedSaveResponse.status()}; scores=${JSON.stringify(handedSaveResponse.request().postDataJSON()?.scores)}: ${handedSaveResponse.ok() ? "" : await handedSaveResponse.text()}`);
     await expect.poll(async () => (await viewer.getByRole("table").textContent()).includes("11"),{timeout:20000}).toBe(true);
     await viewer.setViewportSize({width:390,height:844});
     await verifyStandingsQr(viewer,standingsURL);

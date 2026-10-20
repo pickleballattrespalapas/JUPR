@@ -3,10 +3,11 @@ import Link from "next/link";
 import { getAdminWeeklyRecapApiBaseUrl, getAdminWeeklyRecapStatus } from "@/lib/adminWeeklyRecapApi";
 import WeeklyRecapAdminPanel from "./WeeklyRecapAdminPanel";
 
-type PageProps = { searchParams?: { week_start?: string; print?: string } };
+type PageProps = { searchParams?: Promise<{ week_start?: string; print?: string }> };
 
-export default async function AdminWeeklyRecapPage({ searchParams }: PageProps) {
-  const { clubId, clubSlug } = requireAdminWorkspace();
+export default async function AdminWeeklyRecapPage(props: PageProps) {
+  const searchParams = await props.searchParams;
+  const { clubId, clubSlug } = await requireAdminWorkspace();
   const { data: status, error } = await getAdminWeeklyRecapStatus(clubId);
 
   return (

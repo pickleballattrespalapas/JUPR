@@ -1,6 +1,6 @@
 import Link from "@/components/PublicClubLink";
 
-type Props = { params: { clubSlug: string } };
+type Props = { params: Promise<{ clubSlug: string }> };
 
 const cardStyle = {
   border: "1px solid #e2e8f0",
@@ -11,7 +11,8 @@ const cardStyle = {
   textDecoration: "none"
 };
 
-export default function PublicPlayHub({ params }: Props) {
+export default async function PublicPlayHub(props: Props) {
+  const params = await props.params;
   const base = `/clubs/${params.clubSlug}`;
   return (
     <section>

@@ -8,13 +8,14 @@ import { readTournamentRouteContext } from "@/lib/tournamentRouteContext";
 
 export const dynamic = "force-dynamic";
 
-type Props = { searchParams?: Record<string, string | string[] | undefined> };
+type Props = { searchParams?: Promise<Record<string, string | string[] | undefined>> };
 
-export default async function AdminTournamentRegistrationManagementPage({ searchParams }: Props) {
+export default async function AdminTournamentRegistrationManagementPage(props: Props) {
+  const searchParams = await props.searchParams;
   const context = readTournamentRouteContext(searchParams);
   if (!context.tournamentId) redirect("/admin/tournaments");
 
-  const { clubId } = requireAdminWorkspace();
+  const { clubId } = await requireAdminWorkspace();
   const { data, error } = await getAdminTournamentStatus(clubId);
 
   return (

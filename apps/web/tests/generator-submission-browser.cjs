@@ -68,7 +68,7 @@ async function main() {
   const api = start(process.env.GENERATOR_BROWSER_PYTHON || process.env.CODEX_PRIMARY_RUNTIME_PYTHON || 'python3',
     ['-m', 'uvicorn', 'generator_submission_api:app', '--app-dir', path.join(root, 'tests/e2e'), '--host', '127.0.0.1', '--port', apiPort],
     {cwd:root, env});
-  const next = start(process.execPath, [require.resolve('next/dist/bin/next'), 'dev', '--hostname', '127.0.0.1', '--port', webPort], {cwd:webRoot, env});
+  const next = start(process.execPath, [require.resolve('next/dist/bin/next'), 'dev', '--webpack', '--hostname', '127.0.0.1', '--port', webPort], {cwd:webRoot, env});
   let browser;
   try {
     await ready(`${apiOrigin}/fixture-result`, [api, next]);

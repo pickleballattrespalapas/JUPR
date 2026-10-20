@@ -17,6 +17,9 @@ from jupr_app.domain.gamification.match_exclusion_reconcile import (
     MATCH_EXCLUSION_BADGE_CONTRACT_VERSION,
     MATCH_EXCLUSION_BADGE_FAIL_RPC,
     MATCH_EXCLUSION_BADGE_IDS,
+    MATCH_EXCLUSION_BADGE_IDS_V1,
+    MATCH_EXCLUSION_BADGE_CONTRACT_VERSION_V1,
+    _validate_frozen_badge_ids,
     _assert_complete_active_match_load,
     build_match_exclusion_badge_plan,
     reconcile_match_exclusion_badges,
@@ -140,11 +143,14 @@ def _evaluation(ctx: Any) -> BadgeEvaluationContext:
     )
 
 
-def test_frozen_v1_allowlist_is_exactly_the_code_live_live_scope():
+def test_frozen_v2_allowlist_is_exactly_the_code_live_live_scope():
     assert set(MATCH_EXCLUSION_BADGE_IDS) == active_badge_ids()
     assert "tournament_champion" not in MATCH_EXCLUSION_BADGE_IDS
     assert "league_champion" not in MATCH_EXCLUSION_BADGE_IDS
-    assert "above_expectations" not in MATCH_EXCLUSION_BADGE_IDS
+    assert "above_expectations" in MATCH_EXCLUSION_BADGE_IDS
+    assert "above_expectations" not in MATCH_EXCLUSION_BADGE_IDS_V1
+    assert len(MATCH_EXCLUSION_BADGE_IDS_V1) == 29
+    assert len(MATCH_EXCLUSION_BADGE_IDS) == 41
     assert len(MATCH_EXCLUSION_BADGE_IDS) == len(set(MATCH_EXCLUSION_BADGE_IDS))
 
 
@@ -426,3 +432,45 @@ def test_reconcile_refuses_operation_allowlist_outside_frozen_v1(monkeypatch):
         )
 
     assert any(name == MATCH_EXCLUSION_BADGE_FAIL_RPC for name, _params in supabase.calls)
+
+
+@pytest.mark.parametrize('version,badge_id', [
+    (MATCH_EXCLUSION_BADGE_CONTRACT_VERSION_V1, 'first_win'),
+    (MATCH_EXCLUSION_BADGE_CONTRACT_VERSION, 'above_expectations'),
+])
+def test_worker_preserves_stored_contract_in_real_plan(monkeypatch, version, badge_id):
+    supabase = _ReconcileSupabase()
+    original = supabase.rpc
+    def rpc(name, params):
+        result = original(name, params)
+        if name == MATCH_EXCLUSION_BADGE_CLAIM_RPC and result.data.get('claimed'):
+            result.data.update(badge_contract_version=version, badge_ids=[badge_id])
+        return result
+    supabase.rpc = rpc
+    target = 'jupr_app.domain.gamification.match_exclusion_reconcile'
+    monkeypatch.setattr(target + '._load_reconciliation_context', lambda *a, **k: _safe_ctx())
+    monkeypatch.setattr(target + '._canonical_evaluation_context', lambda *a: object())
+    candidate = BadgeCandidate(badge_id=badge_id, player_id=7, club_id='club', context_type='overall', context_id='evidence', match_id=None)
+    monkeypatch.setattr(target + '.registry', lambda: {badge_id: SimpleNamespace(evaluator=lambda ctx: [candidate])})
+    # Recovery is bound to its saved contract, even if today's active catalog changes.
+    monkeypatch.setattr(target + '.active_badge_ids', lambda: {'future_badge'})
+    result = reconcile_match_exclusion_badges(supabase, club_id='club', operation_id='operation-1', player_ids=[7])
+    assert result['contract_version'] == version
+    desired = next(params['p_desired_badges'] for name, params in supabase.calls if name == MATCH_EXCLUSION_BADGE_APPLY_RPC)
+    assert desired[0]['rule_version'] == version
+    assert desired[0]['badge_id'] == badge_id
+
+
+def test_v1_scope_cannot_silently_expand_to_v2():
+    with pytest.raises(RuntimeError, match='exceeds'):
+        _validate_frozen_badge_ids(['above_expectations'], contract_version=MATCH_EXCLUSION_BADGE_CONTRACT_VERSION_V1)
+    assert _validate_frozen_badge_ids(['above_expectations']) == ('above_expectations',)
+    with pytest.raises(RuntimeError, match='unsupported'):
+        _validate_frozen_badge_ids(['first_win'], contract_version='unknown')
+
+
+def test_new_operations_still_fail_closed_on_catalog_drift(monkeypatch):
+    target = 'jupr_app.domain.gamification.match_exclusion_reconcile'
+    monkeypatch.setattr(target + '.active_badge_ids', lambda: {'first_win'})
+    with pytest.raises(RuntimeError, match='drifted'):
+        resolve_match_exclusion_badge_ids(object(), club_id='club')
