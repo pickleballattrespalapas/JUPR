@@ -8,6 +8,8 @@ import argparse
 from datetime import date, datetime, timedelta
 import json
 import os
+from pathlib import Path
+import traceback
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -52,7 +54,11 @@ def main() -> int:
         try:
             result = verify(db, club_id=args.club_id, start=start, end=end, timezone=args.timezone)
         except Exception as exc:
-            print(json.dumps({"ok": False, "error_type": type(exc).__name__}), flush=True)
+            # Code locations only: exception messages and locals may contain private data.
+            locations = [{"file": Path(frame.filename).name, "function": frame.name,
+                          "line": frame.lineno} for frame in traceback.extract_tb(exc.__traceback__)]
+            print(json.dumps({"ok": False, "error_type": type(exc).__name__,
+                              "locations": locations}), flush=True)
             return 1
     print(json.dumps(result), flush=True)
     return 0
