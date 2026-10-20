@@ -1,9 +1,9 @@
 "use client";
 
-type Match = { court?: number; sideA?: string[]; sideB?: string[]; teamA?: string[]; teamB?: string[]; scoreA?: number | null; scoreB?: number | null };
+type Match = { courtLabel?: string; court?: number; sideA?: string[]; sideB?: string[]; teamA?: string[]; teamB?: string[]; scoreA?: number | null; scoreB?: number | null };
 type Round = { number: number; status: string; matches?: Match[]; courts?: Array<{ matches?: Match[] }>; byeParticipantIds?: string[] };
 
-export default function GeneratorRoundSchedule({ rounds, participants, selectedRound, currentRound, disabled, unsaved, perfect, adaptive, moneyball, onOpen }: {
+export default function GeneratorRoundSchedule({ rounds, participants, selectedRound, currentRound, disabled, unsaved, perfect, adaptive, moneyball, sequential, onOpen }: {
   rounds: Round[];
   participants: Array<{ id: string; name: string }>;
   selectedRound: number;
@@ -13,6 +13,7 @@ export default function GeneratorRoundSchedule({ rounds, participants, selectedR
   perfect: boolean;
   adaptive: boolean;
   moneyball?: boolean;
+  sequential?: boolean;
   onOpen: (number: number) => void;
 }) {
   const names = new Map(participants.map(player => [player.id, player.name]));
@@ -21,7 +22,8 @@ export default function GeneratorRoundSchedule({ rounds, participants, selectedR
     <section aria-label="Round-Robin schedule" style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: 14, padding: "1rem" }}>
       <h2 style={{ marginTop: 0 }}>Round schedule</h2>
       <p style={{ color: "#475569" }}>
-        {moneyball ? "Fixed Moneyball rotation: complete every scheduled game to decide the winner. Choose any scheduled round; substitutions disqualify both players from winning."
+        {sequential ? "This group completes its current round before starting the next. Other groups in the hub continue independently."
+          : moneyball ? "Fixed Moneyball rotation: complete every scheduled game to decide the winner. Choose any scheduled round; substitutions disqualify both players from winning."
           : adaptive ? "Adaptive rotation: balance assigned byes first, then partner and opponent coverage."
           : perfect ? "Perfect rotation: partner everyone once and face everyone twice. Compatible roster changes preserve this priority. Choose any round; skipping keeps the scheduled matchups."
           : "Choose any scheduled round. Matchups stay fixed until the roster changes or you add extra rounds."}
@@ -38,7 +40,7 @@ export default function GeneratorRoundSchedule({ rounds, participants, selectedR
               </button>
               <span style={{ float: "right", color: status === "Played" ? "#166534" : status === "Skipped" ? "#92400e" : "#475569", fontSize: "0.85rem" }}>{status}</span>
               {matches.map((match, index) => <p key={index} style={{ margin: "0.5rem 0 0", fontSize: "0.85rem" }}>
-                <strong>Court {match.court || index + 1}:</strong> {label(match.sideA || match.teamA || [])} vs. {label(match.sideB || match.teamB || [])}
+                <strong>{match.courtLabel || `Court ${match.court || index + 1}`}:</strong> {label(match.sideA || match.teamA || [])} vs. {label(match.sideB || match.teamB || [])}
                 {match.scoreA != null && match.scoreB != null ? ` · ${match.scoreA}–${match.scoreB}` : ""}
               </p>)}
               {round.byeParticipantIds?.length ? <p style={{ margin: "0.4rem 0 0", fontSize: "0.85rem", color: "#64748b" }}><strong>Bye:</strong> {label(round.byeParticipantIds)}</p> : null}

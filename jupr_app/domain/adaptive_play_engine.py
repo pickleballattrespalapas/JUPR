@@ -1400,6 +1400,10 @@ def save_generator_round(
     scores: list[dict[str, Any]],
 ) -> dict[str, Any]:
     next_event = copy.deepcopy(event)
+    if event.get("roundRobinHubId") and int(round_number) != int(event.get("currentRoundNumber") or 1):
+        previous = _get_round(event, round_number)
+        if previous.get("status") != "saved":
+            raise ValueError("Finish the current round before scoring another round in the hub.")
     if normalize_scoring_mode(next_event.get("scoringMode")) != "scored":
         raise ValueError("This unscored Round-Robin uses Round Played instead of score entry.")
     row = _get_round(next_event, round_number)
@@ -1515,6 +1519,8 @@ def reopen_generator_round(event: dict[str, Any], *, round_number: int) -> dict[
 def complete_generator_event(event: dict[str, Any]) -> dict[str, Any]:
     """Finish explicitly, leaving any unplayed future schedule recoverable."""
     next_event = copy.deepcopy(event)
+    if event.get("roundRobinHubId") and _get_round(event, int(event.get("currentRoundNumber") or 1)).get("status") not in {"saved", "played", "skipped"}:
+        raise ValueError("Resolve the current round in the hub before finishing this round robin.")
     if is_moneyball(next_event) and not all_games_saved(next_event):
         raise ValueError("Save all scheduled Moneyball games before finishing and awarding the pool.")
     if next_event.get("playoff") and any(
@@ -1860,6 +1866,8 @@ def _recover_perfect_rotation(event: dict[str, Any]) -> bool:
 def select_generator_round(event: dict[str, Any], *, round_number: int) -> dict[str, Any]:
     """Choose a scheduled game without treating an unplayed round as skipped."""
     next_event = copy.deepcopy(event)
+    if event.get("roundRobinHubId") and int(round_number) != int(event.get("currentRoundNumber") or 1):
+        raise ValueError("Hub groups play rounds in order. Finish the current round and choose Next round.")
     if is_moneyball(next_event) and next_event.get("status") == "completed":
         raise ValueError("This Moneyball event is complete. Saved scores can still be corrected before submission.")
     if next_event.get("generatorKind") != "round_robin" or next_event.get("playoff"):
@@ -1891,6 +1899,11 @@ def select_generator_round(event: dict[str, Any], *, round_number: int) -> dict[
 def advance_generator_event(event: dict[str, Any]) -> dict[str, Any]:
     next_event = copy.deepcopy(event)
     current = int(next_event.get("currentRoundNumber") or 1)
+    if event.get("roundRobinHubId") and any(
+        int(r["number"]) < current and r.get("status") not in {"saved", "played", "skipped"}
+        for r in event.get("rounds") or []
+    ):
+        raise ValueError("Finish earlier rounds before advancing this hub group.")
     row = _get_round(next_event, current)
     if str(row.get("status")) not in {"saved", "played", "skipped"}:
         raise ValueError("Save or skip the current round before continuing. Unscored Round-Robins may mark it played.")
@@ -2053,6 +2066,12 @@ def _regenerate_round_robin_from(event: dict[str, Any], start_round: int) -> Non
             _apply_match_history(history, match, str(event.get("playFormat") or "doubles"))
     generated = []
     total = int(event.get("totalRounds") or 1)
+    if event.get("roundRobinHubId"):
+        current = int(event.get("currentRoundNumber") or 1)
+        current_row = next((r for r in event.get("rounds") or [] if int(r["number"]) == current), {})
+        # A roster change may invalidate future previews. Build only the current
+        # round, or one next round after completion; the hub never queues ahead.
+        total = min(total, current + int(current_row.get("status") in {"saved", "played", "skipped"}))
     for number in range(int(start_round), total+1):
         previous = existing.get(number)
         # Scores can be entered ahead of the current round. Never overwrite
@@ -2083,6 +2102,10 @@ def mutate_generator_roster(
     participant_ids: list[str] | None = None,
     court_number: int | None = None,
 ) -> dict[str, Any]:
+    if event.get("roundRobinHubId") and not is_moneyball(event) and action != "seat_arrivals":
+        from jupr_app.domain.round_robin_hub import mutate_hub_roster
+        return mutate_hub_roster(event, action=action, participant_id=participant_id, name=name,
+            player_id=player_id, substitute_scope=substitute_scope, roster_order=roster_order)
     next_event = copy.deepcopy(event)
     if is_moneyball(next_event):
         if action != "substitute":

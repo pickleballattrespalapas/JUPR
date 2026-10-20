@@ -19,7 +19,7 @@ from jupr_app.domain.matches.side_effects import ensure_notification_badge_job, 
 from jupr_app.services.admin_guarded_write_service import required_audit_event
 from jupr_app.services.leaderboard_service import _leaderboard_settings
 from jupr_app.services.admin_play_generator_service import (
-    _audit, _publish_payloads, _saved_matches, _session_payload,
+    _audit, _publish_payloads, _saved_matches, _session_payload, _require_hub_ready_for_publication,
 )
 from jupr_app.services.direct_match_entry_service import submit_atomic_direct_matches
 from jupr_app.services.public_live_operation_service import (
@@ -138,6 +138,7 @@ def submit_generator_session(
         raise PublicLiveConflictError("A previous change is pending. Retry it first.")
     if row.get("status") != "completed":
         raise ValueError("Finish the session before submitting its results.")
+    _require_hub_ready_for_publication(row)
     if (state.get("official_publish") or {}).get("published_match_ids"):
         raise ValueError("This session already has published matches.")
     event = _event(row)

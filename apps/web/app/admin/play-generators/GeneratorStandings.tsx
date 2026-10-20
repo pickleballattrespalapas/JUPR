@@ -3,7 +3,7 @@
 import GeneratorSharing from "@/components/GeneratorSharing";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { useRouter } from "next/navigation";
 import GeneratorSubmission, { GeneratorSubmissionStatus, generatorResultLabel } from "@/components/GeneratorSubmission";
 import GeneratorMoneyballExpectations, { type MoneyballExpectation, type MoneyballExpectationFormat } from "@/components/GeneratorMoneyballExpectations";
@@ -19,6 +19,7 @@ type StandingsSort = "wins" | "points" | "differential" | "moneyball_expectation
 type ScoringMode = "scored" | "unscored";
 
 type Session = {
+  round_robin_hub_id?: string | null;
   session_key: string;
   title: string;
   status: string;
@@ -47,7 +48,13 @@ type Session = {
   };
 };
 
-type Props = { apiBase: string | null; clubId: string; sessionKey: string };
+type Props = {
+  apiBase: string | null; clubId: string; sessionKey: string;
+  embedded?: boolean;
+  onNavigate?: (target: { view: "round" | "standings"; roundNumber?: number }) => void;
+  onSessionChanged?: () => void;
+  refreshKey?: string | number;
+};
 
 const cardStyle = { border: "1px solid #e2e8f0", borderRadius: "14px", padding: "1rem", background: "white" };
 const linkButton = { display: "inline-flex", alignItems: "center", minHeight: "38px", padding: "0.45rem 0.75rem", border: "1px solid #cbd5e1", borderRadius: "999px", color: "#0f172a", fontWeight: 800, textDecoration: "none" };
@@ -62,12 +69,34 @@ function playFormatLabel(value: string): string {
   return "Doubles";
 }
 
-export default function AdminGeneratorStandings({ apiBase, clubId, sessionKey }: Props) {
+export default function AdminGeneratorStandings({ apiBase, clubId, sessionKey, embedded = false, onNavigate, onSessionChanged, refreshKey }: Props) {
   const router = useRouter();
   const { accessToken } = useAdminSession();
   const [session, setSession] = useState<Session | null>(null);
   const [message, setMessage] = useState("Loading standings…");
   const [busy, setBusy] = useState(false);
+
+  function navigate(path: string): void {
+    const round = path.match(/\/rounds\/(\d+)$/);
+    if (onNavigate && round) { onNavigate({ view: "round", roundNumber: Number(round[1]) }); return; }
+    router.push(path);
+  }
+  function refresh(): void { if (embedded) onSessionChanged?.(); else router.refresh(); }
+  function captureSessionNavigation(click: MouseEvent<HTMLDivElement>): void {
+    if (!onNavigate || click.button !== 0 || click.metaKey || click.ctrlKey || click.shiftKey || click.altKey) return;
+    const anchor = (click.target as Element).closest?.("a");
+    const href = anchor?.getAttribute("href") || "";
+    if (!href.startsWith(`/admin/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/`)) return;
+    click.preventDefault(); click.stopPropagation(); navigate(href);
+  }
+  const loadRef = useRef<() => void>(() => {});
+  loadRef.current = () => { if (!busy) void loadSession(); };
+  const previousRefreshKey = useRef(refreshKey);
+  useEffect(() => {
+    if (previousRefreshKey.current === refreshKey) return;
+    previousRefreshKey.current = refreshKey;
+    if (refreshKey !== undefined) loadRef.current();
+  }, [refreshKey]);
 
   async function loadSession(): Promise<void> {
     if (!apiBase || !accessToken) return;
@@ -106,13 +135,14 @@ export default function AdminGeneratorStandings({ apiBase, clubId, sessionKey }:
       const next = payload?.session as Session | undefined;
       if (!next) throw new Error("Session advanced without a refreshed session.");
       setSession(next);
+      onSessionChanged?.();
       if (next.status === "completed") {
         setMessage("Session completed.");
         return;
       }
       const nextRound = Number(next.current_round_number || 1);
-      router.push(`/admin/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${nextRound}`);
-      router.refresh();
+      navigate(`/admin/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${nextRound}`);
+      refresh();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to continue the session.");
     } finally {
@@ -136,8 +166,9 @@ export default function AdminGeneratorStandings({ apiBase, clubId, sessionKey }:
       if (!response.ok) throw new Error(String(payload?.detail || `API error (${response.status})`));
       if (!payload?.session) throw new Error("We couldn’t confirm the playoff. Refresh the page and try again.");
       setSession(payload.session as Session);
-      router.push(`/admin/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${payload.session.current_round_number}`);
-      router.refresh();
+      onSessionChanged?.();
+      navigate(`/admin/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${payload.session.current_round_number}`);
+      refresh();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "We couldn’t start the playoff. Please try again.");
     } finally { setBusy(false); }
@@ -157,6 +188,7 @@ export default function AdminGeneratorStandings({ apiBase, clubId, sessionKey }:
     if (!response.ok) throw new Error(String(payload?.detail || `API error (${response.status})`));
     if (!payload?.session) throw new Error("Could not confirm submission. Please try again.");
     setSession(payload.session as Session);
+    onSessionChanged?.();
     setMessage("");
   }
 
@@ -180,16 +212,22 @@ export default function AdminGeneratorStandings({ apiBase, clubId, sessionKey }:
     : session.status === "completed" ? `Keep playing · Round ${currentRound + 1}` : "Next scheduled round";
 
   if (scoringMode === "unscored") {
-    return <article style={cardStyle}><h1>{session.title}</h1><p>This unscored Round-Robin does not use standings.</p><Link href={`/admin/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${currentRound}`}>Return to current round</Link></article>;
+    return <div onClickCapture={captureSessionNavigation}><article style={cardStyle}><h1>{session.title}</h1><p>This unscored Round-Robin does not use standings.</p><Link href={`/admin/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${currentRound}`}>Return to current round</Link></article></div>;
   }
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", minWidth: 0, gap: "1rem" }}>
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", minWidth: 0, gap: "1rem" }} onClickCapture={captureSessionNavigation}>
       <article style={{ ...cardStyle, background: "#f8fafc" }}>
-        <p style={{ margin: "0 0 0.4rem" }}><Link href="/admin/round-robin-generator">← Round-Robin Generator</Link></p>
+        {!embedded ? <p style={{ margin: "0 0 0.4rem" }}><Link href="/admin/round-robin-generator">← Round-Robin Generator</Link></p> : null}
         <h1 style={{ margin: "0 0 0.35rem" }}>{session.title} standings</h1>
         <p style={{ margin: 0, color: "#475569" }}>{playFormatLabel(session.play_format)} · {standingsSortLabel(sortMode)} · {session.status === "completed" ? "Complete" : "In progress"} · {session.submission?.status !== "approved" ? `${session.rating_mode === "rated" ? "Rated" : "Unrated"} · ` : ""}{generatorResultLabel(session.submission)}</p>
       </article>
+      {session.round_robin_hub_id ? <aside style={{ ...cardStyle, background: "#eff6ff" }}>
+        <strong>Standings include completed rounds only.</strong>
+        <p style={{ marginBottom: 0 }}>Scores saved for a partly finished round remain pending until every match in that round is resolved.
+          {!embedded ? <> <Link href={`/admin/round-robin-hub?hub=${encodeURIComponent(session.round_robin_hub_id)}`}>Open court board</Link></> : null}
+        </p>
+      </aside> : null}
       <GeneratorSharing apiBase={apiBase} clubId={clubId} sessionKey={sessionKey} version={session.version} adminToken={accessToken || undefined} locked={resultsLocked} disabled={busy} onChanged={loadSession} />
       <nav aria-label="Round-Robin session navigation" style={{ ...cardStyle, display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
         <Link href={`/admin/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${currentRound}`} style={linkButton}>Current round</Link>
