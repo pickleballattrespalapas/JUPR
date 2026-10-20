@@ -13,7 +13,7 @@ def test_crash_exits_process_without_finally():
     code = '''
 from scripts.rehearse_interrupted_match_exclusion import crash_after_commit
 try:
-    crash_after_commit(operation={"operation_status":"pending_replay", "replay_job_id":"job"})
+    crash_after_commit(object(), operation={"operation_status":"pending_replay", "replay_job_id":"job"})
 finally:
     print("unexpected cleanup", flush=True)
 '''
