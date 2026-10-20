@@ -50,7 +50,7 @@ class Query(BaseQuery):
         data = copy.deepcopy(response.data)
         if hasattr(self, "bounds"):
             data = data[self.bounds[0]:self.bounds[1] + 1]
-        return SimpleNamespace(data=data)
+        return SimpleNamespace(data=data, count=sum(self.matches(row) for row in self.db.get(self.name, [])))
 
 
 class Database:
