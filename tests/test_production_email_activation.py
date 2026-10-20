@@ -3,12 +3,12 @@ from __future__ import annotations
 from types import SimpleNamespace
 import json
 import smtplib
+from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 
 from jupr_app.config import SMTPConfig
 from jupr_app.domain.notifications import smtp_mailer
-from jupr_app.domain.notifications.player_profile_update_repo import session_player_update_operation_key
 from jupr_app.services.staging_write_guard import staging_communications_mutations_enabled
 from jupr_app.workers import player_update_email_scheduler as scheduler
 from jupr_app.workers import player_update_email_worker as worker
@@ -121,15 +121,14 @@ def test_scheduler_only_delivers_pending_clubs_once_per_poll(monkeypatch):
             for i, club in enumerate(("a", "a", "b")):
                 rows.append({"id": str(i), "club_id": club, "subscription_id": "s",
                     "week_start": "2026-09-06", "week_end": "2026-09-06", "row_version": 1,
-                    "digest_snapshot_json": {"update_scope": "session", "match_ids": [101]},
-                    "queue_operation_key": session_player_update_operation_key(club_id=club, match_ids=[101])})
+                    "queue_operation_key": str(uuid5(NAMESPACE_URL, f"jupr:auto-player-update:{club}:s:2026-09-06:2026-09-06"))})
             rows.append({"id": "manual", "club_id": "c", "queue_operation_key": "manual-operation"})
             return SimpleNamespace(data=rows)
     monkeypatch.setattr(scheduler, "make_supabase", lambda *_: Query())
     calls = []
     monkeypatch.setattr(scheduler, "run_player_update_email_worker", lambda club, **kw: calls.append((club, kw)) or {"sent": 2})
     assert scheduler.deliver_pending_updates() == {"clubs": 2, "sent": 4, "errors": 0}
-    assert filters == [("send_status", "pending"), ("digest_snapshot_json->>update_scope", "session")]
+    assert filters == [("send_status", "pending"), ("digest_snapshot_json", "{}")]
     assert calls == [
         ("a", {"limit": 25, "outbox_items": [{"id": "0", "expected_row_version": 1}, {"id": "1", "expected_row_version": 1}]}),
         ("b", {"limit": 25, "outbox_items": [{"id": "2", "expected_row_version": 1}]}),

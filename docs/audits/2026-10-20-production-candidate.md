@@ -20,10 +20,9 @@ operational acceptance remain unverified and require separate authorization.
 | `a635291f` | `f4a9ce2f` | F06 unrated participation activity |
 | `940815cf` | `5fa55252` | F06 legacy activity concurrency guard |
 | `8c74c5b` | `bf85f673` | F05 support intake requires staff review readiness |
-| `9e936948` | `ad998956` | F03 saved-session email scheduler eligibility |
 
-F15's club-directory-dependent public form change and the Next 16 upgrade are
-excluded. The later legacy team-match function privilege migration is also
+F03 automatic email scheduler eligibility, F15's club-directory-dependent public
+form change and the Next 16 upgrade are excluded from this production release. The later legacy team-match function privilege migration is also
 excluded pending independent review. This candidate does not resolve the full
 audit or attest that every production vulnerability has been repaired.
 
@@ -59,11 +58,12 @@ therefore closes new public intake instead of silently accepting unreviewable
 requests. Opening intake requires separately reviewed staffing, authorization,
 schema readiness and support-review enablement. Existing requests are untouched.
 
-The preserved production configuration has live email and automatic session
-delivery enabled. F03 can make previously pending valid saved-session rows
-eligible after a future deployment. Review their current disposition before
-deployment; do not infer approval to send from this local test or from an old
-queue inventory. No SMTP or external send occurred in these checks.
+Production preflight on 2026-10-20 UTC found 12 pending session-email rows
+created October 14–18 UTC, all with zero attempts. The F03 scheduler change was
+removed from this release to preserve their current eligibility until Joe decides
+on historical delivery. The prepared fix remains in candidate commit d86938cdc078ccc6f160619ce07f9c4186ea5a45.
+Existing live-email configuration and unrelated notification behavior remain
+unchanged. No queue row was changed and no email was sent during preflight.
 
 ## Local verification
 
@@ -124,3 +124,12 @@ valid token revocation. That suite plus round recovery, sharing and saved-score
 correction component suites passed. TypeScript and focused ESLint passed. No
 Next 16 dependency, workflow or browser-harness change was imported; production
 configuration, policies and migration SQL remain unchanged.
+
+## Authorized production rollout
+
+Joe approved proceeding after the staging repair report. Production branch
+preflight still matches base 143c7711. No long-running database transactions
+were present; all four badge routine conflict counts match the reviewed patch.
+This release includes only the selected production-compatible repairs and two
+forward migrations; framework upgrade, historical backfills and queue release
+remain excluded. Final deployed identity and verification belong in the release PR.
