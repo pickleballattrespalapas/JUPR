@@ -30,7 +30,7 @@ def test_wrong_commit_state_does_not_exit(operation):
 
 @pytest.fixture
 def recovered():
-    operation = {'id':'operation', 'replay_job_id':'replay', 'excluded_match_ids':[3]}
+    operation = {'id':'operation', 'replay_job_id':'replay', 'excluded_match_ids':['3']}
     result = {'ok':True, 'mode':'match_exclusion_recovered', 'operation_status':'succeeded',
         'operation_id':'operation', 'replay_job_id':'replay', 'replay_status':'succeeded',
         'recovery_stage':None, 'excluded_ids':[3]}
@@ -67,7 +67,7 @@ def test_production_origin_rejected_before_fixture(monkeypatch, tmp_path):
 
 def test_durable_commit_must_exist_before_recovery(monkeypatch):
     monkeypatch.setattr(rehearsal.fixture, '_optional_manifest_ids', lambda m: ([], {'distinct':3}, {'distinct':1}, None))
-    rows = {'operations':[{'id':'op','status':'pending_replay','replay_job_id':'job','excluded_match_ids':[3]}],
+    rows = {'operations':[{'id':'op','status':'pending_replay','replay_job_id':'job','excluded_match_ids':['3']}],
         'replay_jobs':[{'id':'job','status':'pending'}],
         'matches':[{'id':3,'deleted_at':'2026-10-20','row_version':2}]}
     assert rehearsal.verify_interrupted(rows,{})['id'] == 'op'
