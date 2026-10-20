@@ -884,8 +884,8 @@ def test_manual_workflow_is_dispatch_only_exact_staging_candidate_and_least_scop
         "${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}"
     ) in fixture_cleanup_step
     assert "continue-on-error" not in fixture_cleanup_step
-    assert workflow.count("STAGING_SUPABASE_SERVICE_ROLE_KEY:") == 6
-    assert workflow.count("${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}") == 6
+    assert workflow.count("STAGING_SUPABASE_SERVICE_ROLE_KEY:") == 7
+    assert workflow.count("${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}") == 7
     assert "if: always()" in cleanup_step
     assert "public-read)" in cleanup_step
     assert (

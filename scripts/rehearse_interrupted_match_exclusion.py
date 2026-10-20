@@ -101,7 +101,7 @@ def verify_interrupted(rows, manifest):
     match = next((row for row in rows["matches"] if row["id"] == match_ids["distinct"]), {})
     if (operation.get("status") != "pending_replay" or replay.get("status") != "pending"
         or operation.get("replay_job_id") != replay.get("id")
-        or operation.get("excluded_match_ids") != [match_ids["distinct"]]
+        or [int(value) for value in operation.get("excluded_match_ids", [])] != [match_ids["distinct"]]
         or not match.get("deleted_at") or int(match.get("row_version", 0)) != versions["distinct"] + 1):
         raise fixture.FixtureError("Durable post-crash state did not match the commit boundary.")
     return operation
@@ -115,7 +115,7 @@ def verify_recovery(result, operation, *, repeated):
         or result.get("replay_job_id") != operation["replay_job_id"]
         or result.get("replay_status") != "succeeded"
         or result.get("recovery_stage") is not None
-        or result.get("excluded_ids") != operation["excluded_match_ids"]
+        or [int(value) for value in result.get("excluded_ids", [])] != [int(value) for value in operation["excluded_match_ids"]]
         or (repeated and result.get("idempotent") is not True)):
         raise fixture.FixtureError("Recovery did not preserve the committed operation and replay identity.")
 
@@ -131,37 +131,49 @@ def rehearse(report_dir, env):
             env=dict(env), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=180)
         if child.returncode != CRASH_EXIT:
             raise fixture.FixtureError("Child did not exit at the expected commit boundary.")
-        manifest, rows, client, email = owned_fixture(report_dir, env)
-        operation = verify_interrupted(rows, manifest)
-        evidence = {"candidate_sha": manifest["candidate_sha"], "status": "interrupted",
-            "operation_id": operation["id"], "replay_job_id": operation["replay_job_id"],
-            "child_exit_code": child.returncode, "observed_status": "pending_replay"}
-        fixture._write_json(report_dir / REPORT_NAME, evidence)
-        for repeated in (False, True):
-            result = api_recover(manifest["club_id"], operation["id"], env)
-            verify_recovery(result, operation, repeated=repeated)
-        final = fixture._fixture_rows(client, manifest)
-        _, user_id = fixture._decode_jwt_identity(env)
-        fixture._validate_owned_rows(final, manifest, operator_email=email, operator_user_id=user_id,
-            require_complete=False, require_terminal=True)
-        if len(final["operations"]) != 1 or len(final["replay_jobs"]) != 1:
-            raise fixture.FixtureError("Recovery created duplicate durable work.")
-        fixture._write_json(report_dir / REPORT_NAME, {**evidence, "status": "passed", "repeat_idempotent": True})
+        finish_interrupted(report_dir, env)
     finally:
         fixture.cleanup_fixture(report_dir=report_dir, env=env)
 
+
+def finish_interrupted(report_dir, env):
+    manifest, rows, client, email = owned_fixture(report_dir, env)
+    operation = verify_interrupted(rows, manifest)
+    evidence = {"candidate_sha": manifest["candidate_sha"], "status": "interrupted",
+        "operation_id": operation["id"], "replay_job_id": operation["replay_job_id"],
+        "child_exit_code": CRASH_EXIT, "observed_status": "pending_replay"}
+    fixture._write_json(report_dir / REPORT_NAME, evidence)
+    for repeated in (False, True):
+        result = api_recover(manifest["club_id"], operation["id"], env)
+        verify_recovery(result, operation, repeated=repeated)
+    final = fixture._fixture_rows(client, manifest)
+    _, user_id = fixture._decode_jwt_identity(env)
+    fixture._validate_owned_rows(final, manifest, operator_email=email, operator_user_id=user_id,
+        require_complete=False, require_terminal=True)
+    if len(final["operations"]) != 1 or len(final["replay_jobs"]) != 1:
+        raise fixture.FixtureError("Recovery created duplicate durable work.")
+    fixture._write_json(report_dir / REPORT_NAME, {**evidence, "status": "passed", "repeat_idempotent": True})
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report-dir", type=Path, required=True)
     parser.add_argument("--child", action="store_true")
+    parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
     try:
-        if args.child:
+        if args.resume:
+            try:
+                finish_interrupted(args.report_dir, os.environ)
+            finally:
+                fixture.cleanup_fixture(report_dir=args.report_dir, env=os.environ)
+        elif args.child:
             commit_child(args.report_dir, os.environ)
         else:
             rehearse(args.report_dir, os.environ)
             print("Interrupted exclusion recovered through staging API; retry and cleanup passed.")
+    except fixture.FixtureError as exc:
+        print(f"Interrupted exclusion rehearsal: {exc}", file=sys.stderr)
+        return 2
     except Exception:
         # Never emit SDK exception bodies, credentials, or child output.
         print("Interrupted exclusion rehearsal failed; inspect sanitized fixture evidence.", file=sys.stderr)

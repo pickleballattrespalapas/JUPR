@@ -21,6 +21,11 @@ on:
         required: false
         default: false
         type: boolean
+      resume_retained_interruption:
+        description: "Recover owned fixture retained by staging rehearsal 39508019890"
+        required: false
+        default: false
+        type: boolean
       candidate_sha:
         description: "Exact 40-character Git SHA deployed to Vercel and Fly"
         required: true
@@ -437,6 +442,23 @@ jobs:
       - name: Install interruption rehearsal application dependencies
         if: needs.evidence-contract.outputs.mode == 'match-exclusion-recovery'
         run: python -m pip install -r requirements.txt
+
+      - name: Recover retained isolated fixture from rehearsal 39508019890
+        if: needs.evidence-contract.outputs.mode == 'match-exclusion-recovery' && inputs.resume_retained_interruption
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: "fe1ba2eb7444a290bd51f502b15859d48b54dfa7"
+          STAGING_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.STAGING_SUPABASE_SERVICE_ROLE_KEY }}
+          JUPR_PARITY_MUTATION_CONFIRMATION: ${{ needs.evidence-contract.outputs.mutation_confirmation }}
+        run: |
+          gh run download 39508019890 --repo pickleballattrespalapas/JUPR \
+            --name parity-match-exclusion-recovery-fe1ba2eb7444a290bd51f502b15859d48b54dfa7 \
+            --dir retained-rehearsal
+          mkdir -p parity-staging-artifacts/retained-interruption
+          cp retained-rehearsal/interrupted-exclusion/match-exclusion-recovery-fixture.json \
+            parity-staging-artifacts/retained-interruption/
+          python scripts/rehearse_interrupted_match_exclusion.py --resume \
+            --report-dir parity-staging-artifacts/retained-interruption
 
       - name: Rehearse post-commit process interruption and API recovery
         if: needs.evidence-contract.outputs.mode == 'match-exclusion-recovery'
