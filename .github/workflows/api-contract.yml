@@ -99,6 +99,9 @@ jobs:
             tests/test_adaptive_play_engine.py \
             tests/test_public_play_generator_service.py \
             tests/test_admin_play_generator_service.py \
+            tests/test_round_robin_hub.py \
+            tests/test_admin_round_robin_hub_service.py \
+            tests/test_round_robin_hub_generator_integration.py \
             tests/test_weekly_recap_delta.py \
             tests/test_weekly_recap_categories.py \
             tests/test_weekly_recap_range_driven.py
