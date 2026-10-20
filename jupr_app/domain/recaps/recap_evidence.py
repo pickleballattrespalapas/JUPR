@@ -2,6 +2,8 @@
 from collections import Counter
 from math import isfinite
 
+import pandas as pd
+
 from jupr_app.data.paged_reads import read_all_rows
 from jupr_app.domain.leaderboard_metrics import compute_overall_metrics, overall_highlights
 
@@ -47,6 +49,8 @@ def metric_candidates(frame, names, tz_name):
         if len(set(ids)) != 4 or min(ids) <= 0 or a == b or min(a, b) < 0:
             continue
         row.update({slot: pid for slot, pid in zip(slots, ids)})
+        if pd.isna(row["date_dt"]):
+            raise ValueError("Recap metric evidence requires a valid match timestamp.")
         row["date"] = row["date_dt"].isoformat()
         games.append(row)
         for index, pid in enumerate(ids):

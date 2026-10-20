@@ -567,7 +567,7 @@ def _load_matches(
     frames: list[pd.DataFrame] = []
     if df_matches is not None and not df_matches.empty:
         df_local = df_matches.copy()
-        df_local["date_dt"] = pd.to_datetime(df_local.get("date", None), utc=True, errors="coerce")
+        df_local["date_dt"] = pd.to_datetime(df_local.get("date", None), utc=True, errors="coerce", format="mixed")
         in_range = _filter_by_date_bounds(df_local, start_date, end_date)
         if not in_range.empty:
             frames.append(in_range)
@@ -916,7 +916,7 @@ def _filter_matches(df_matches: pd.DataFrame, *, include_tournaments: bool) -> p
         df["week_tag"] = df["week_tag"].fillna("").astype(str).str.strip()
     else:
         df["week_tag"] = ""
-    df["date_dt"] = pd.to_datetime(df.get("date", None), utc=True, errors="coerce")
+    df["date_dt"] = pd.to_datetime(df.get("date", None), utc=True, errors="coerce", format="mixed")
     return df
 
 
@@ -1414,7 +1414,7 @@ def _compute_new_faces(
     df = pd.DataFrame(response.data or [])
     if df.empty:
         return []
-    df["date_dt"] = pd.to_datetime(df.get("date", None), utc=True, errors="coerce")
+    df["date_dt"] = pd.to_datetime(df.get("date", None), utc=True, errors="coerce", format="mixed")
     first_dates: dict[int, datetime] = {}
     for _, row in df.iterrows():
         dt = row.get("date_dt")
