@@ -60,6 +60,9 @@ function hrefs(html) {
   assert.match(live, /Mixed 3\.5\+ game team A/);
   assert.doesNotMatch(live, /completedCard|Men&#x27;s 3\.5\+ gold pair/);
 
+  const oldReportLink = await render({ tournament_id: undefined, tournament: "test-tournament" });
+  assert.equal(oldReportLink, live);
+
   const overview = await render({ tab: "completed", view: "past" });
   assert.equal((overview.match(/class="completedCard"/g) || []).length, 2);
   assert.doesNotMatch(overview, /<table|Playoff bracket|Completed scores|Current draws|Upcoming draws/);

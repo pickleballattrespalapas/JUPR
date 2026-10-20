@@ -704,3 +704,20 @@ def test_public_results_route_requires_no_patron_auth_but_still_filters_drafts()
         "/clubs/test/tournament-results", params={"tournament_id": "t1"}
     )
     assert hidden.status_code == 404
+
+
+@pytest.mark.parametrize('cap', [137, 1000])
+def test_tournament_results_keep_all_games_under_database_row_caps(monkeypatch, cap):
+    from tests.test_public_tournament_registration_service import FakeQuery
+    storage = _results_storage()
+    template = storage['tournament_games'][0]
+    storage['tournament_games'] = [dict(template, id=f'game-{i:04}', rr_round_number=i+1) for i in range(1080)]
+    storage['tournament_games'].append(dict(template, id='other-game', tournament_id='other'))
+    original = FakeQuery.execute
+    def execute(query):
+        response = original(query)
+        response.data = response.data[:cap]
+        return response
+    monkeypatch.setattr(FakeQuery, 'execute', execute)
+    result = build_public_tournament_results(FakeSupabase(storage), club_id='club-1', tournament_id='t1')
+    assert len(result['draws'][0]['scores']) == 1080
