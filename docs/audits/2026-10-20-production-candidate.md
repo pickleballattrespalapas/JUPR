@@ -106,3 +106,21 @@ only; migration SQL, production configuration and runtime policies are unchanged
 The five legacy activity contract/test-double updates from `e1b5f80f` were then
 selected; all 60 tests across the three affected legacy files pass on this
 production-compatible candidate. No runtime behavior changed in this follow-up.
+
+## Round score draft preservation
+
+Runtime repair `9a2a0f78` was selectively backported as `cfce7685`. An obsolete
+session load could previously finish after a newer load and erase entered round
+scores. Each new load now cancels its predecessor, checks that it is still the
+current load before updating state, and is canceled on route cleanup. Canceled
+responses also cannot revoke a shared editor token through a stale 403 response;
+a genuine current 403 still revokes it.
+
+The React 18 regression deliberately replaces a pending initial route load to
+exercise effect cleanup/setup, since its test renderer does not replay React 19
+StrictMode effects. It verifies preserved 11/7 drafts and the subsequent save
+payload, stale errors/403s, overlapping refreshes, changed sessions, unmount and
+valid token revocation. That suite plus round recovery, sharing and saved-score
+correction component suites passed. TypeScript and focused ESLint passed. No
+Next 16 dependency, workflow or browser-harness change was imported; production
+configuration, policies and migration SQL remain unchanged.
