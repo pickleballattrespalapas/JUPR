@@ -83,7 +83,7 @@ export function hubPlayerLabel(player: { name: string; display_name?: string }):
 }
 
 export function hubMatchLabel(match: HubMatch): string {
-  return `${match.side_a.map(hubPlayerLabel).join(" / ")} vs ${match.side_b.map(hubPlayerLabel).join(" / ")}`;
+  return `${match.side_a.map(player => player.name).join(" / ")} vs ${match.side_b.map(player => player.name).join(" / ")}`;
 }
 
 export function isUncertainHubError(error: unknown): boolean {

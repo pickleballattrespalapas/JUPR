@@ -116,7 +116,7 @@ global.fetch = async (url, options = {}) => {
   assert.equal(button(tree, "Next open court").props.disabled, false, "Unrelated ready matches remain dispatchable during review");
   await click("Match queue");
   assert.ok(text(tree.toJSON()).includes("Matching player name needs identity review: 1"));
-  assert.ok(text(tree.toJSON()).includes("1 · Numbers A vs Partner"), "Match labels distinguish separate guest entries");
+  assert.ok(text(tree.toJSON()).includes("1 vs Partner"), "Match labels use names with the group shown separately");
   await click("Review matching names");
   assert.ok(tree.root.findByProps({ "aria-label": "Matching player names" }));
   assert.equal(choice("Same person").props.disabled, false);
@@ -193,7 +193,7 @@ global.fetch = async (url, options = {}) => {
   assert.notEqual(requests[0].idempotency_key, requests[1].idempotency_key);
   await act(async () => tree.unmount());
 
-  assert.equal(api.hubMatchLabel(blockedMatch), "1 · Numbers A vs Partner");
+  assert.equal(api.hubMatchLabel(blockedMatch), "1 vs Partner");
   assert.equal(api.hubPlayerLabel({ name: "Legacy name" }), "Legacy name", "Older snapshots still render safely");
   console.log("Round robin hub identity review checks passed");
 })().catch(error => { console.error(error); process.exitCode = 1; });
