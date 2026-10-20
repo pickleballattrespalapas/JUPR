@@ -139,16 +139,52 @@ async function main() {
     async function scoreCourt(label) {
       await page.getByRole('tab',{name:'Court board',exact:true}).click();
       await page.getByRole('article',{name:label,exact:true}).getByRole('button',{name:'Enter score',exact:true}).click();
-      await page.getByLabel('Side A score',{exact:true}).fill('11');
-      await page.getByLabel('Side B score',{exact:true}).fill('6');
-      return command(page,page.getByRole('button',{name:'Save score & release court',exact:true}),'score_and_release');
+      const dialog = page.getByRole('dialog',{name:`Enter score · ${label}`,exact:true});
+      await dialog.waitFor({state:'visible'});
+      assert.equal(await dialog.getAttribute('data-state'),'ready');
+      const sideA = dialog.getByLabel('Side A score',{exact:true});
+      const sideB = dialog.getByLabel('Side B score',{exact:true});
+      // showModal can focus Side A before InteractionDialog's queued focus frame.
+      // Let that handoff finish before fast synthetic fills switch to Side B.
+      assert(await sideA.evaluate(input=>new Promise(resolve=>requestAnimationFrame(()=>resolve(document.activeElement === input)))),
+        'The score dialog must finish its initial focus handoff before typing');
+      await sideA.fill('11');
+      await sideB.fill('6');
+      assert.equal(await sideA.inputValue(),'11');
+      assert.equal(await sideB.inputValue(),'6');
+      return command(page,dialog.getByRole('button',{name:'Save score & release court',exact:true}),'score_and_release');
     }
-    async function openAddPlayer(groupTitle, name, profileId) {
-      await page.getByRole('tab',{name:'Players',exact:true}).click();
-      await page.getByRole('region',{name:`Players in ${groupTitle}`,exact:true}).getByRole('button',{name:'Add player',exact:true}).click();
+    async function openAddPlayer(groupTitle, name, profileId, options = {}) {
+      await page.getByRole('tab',{name:options.origin === 'board' ? 'Court board' : 'Players',exact:true}).click();
+      assert.equal(await page.getByRole('button',{name:'Add player',exact:true}).count(),1,'Each hub view has one global Add player entry');
+      await page.getByRole('button',{name:'Add player',exact:true}).click();
       const dialog = page.getByRole('dialog',{name:'Add player',exact:true});
-      await dialog.getByRole('combobox',{name:'Player name or club profile',exact:true}).fill(name);
+      const playerName = dialog.getByRole('combobox',{name:'Player name or club profile',exact:true});
+      const destination = dialog.getByRole('combobox',{name:'Round robin',exact:true});
+      const submit = dialog.getByRole('button',{name:'Add player to round robin',exact:true});
+      assert.equal(await destination.inputValue(),'','Every new add starts without a destination');
+      assert(await submit.isDisabled());
+      await playerName.fill(name);
       if (profileId !== undefined) await dialog.locator(`[data-player-value="${profileId}"]`).click();
+      assert.equal(await destination.inputValue(),'','Typing a name or picking a profile must not choose a destination');
+      assert(await submit.isDisabled(),'A name alone is insufficient; a round robin is required');
+      if (options.captureNameFirst) await page.screenshot({path:path.join(output,'global-add-name-before-round-robin.png'),fullPage:false});
+      if (options.changeFrom) {
+        await destination.selectOption({label:options.changeFrom});
+        assert.equal(await playerName.inputValue(),name,'Choosing a round robin must keep the entered player');
+        if (profileId !== undefined) await dialog.getByText(/Selected club profile\./).waitFor();
+      }
+      await destination.selectOption({label:groupTitle});
+      assert.equal(await playerName.inputValue(),name,'Changing the destination must keep the entered player');
+      if (profileId !== undefined) await dialog.getByText(/Selected club profile\./).waitFor();
+      return dialog;
+    }
+    async function openRemovePlayer(groupTitle, participantId) {
+      await page.getByRole('tab',{name:'Court board',exact:true}).click();
+      await page.getByRole('button',{name:'Remove player',exact:true}).click();
+      const dialog = page.getByRole('dialog',{name:'Remove player',exact:true});
+      await dialog.getByRole('combobox',{name:'Round robin',exact:true}).selectOption({label:groupTitle});
+      await dialog.getByRole('combobox',{name:'Player',exact:true}).selectOption(participantId);
       return dialog;
     }
 
@@ -223,6 +259,7 @@ async function main() {
       const roster = page.getByRole('region',{name:`Players in ${title}`,exact:true});
       assert.equal(await roster.locator('[data-player-identity]').count(),8);
       assert.deepEqual(await roster.locator('[data-player-identity] strong').allTextContents(),numbers,'Each group uses plain player names beneath its own heading');
+      assert.equal(await roster.getByRole('button',{name:'Add player',exact:true}).count(),0,'Add player belongs to the global header');
     }
     await snapshot(page,'grouped-numbered-rosters.png');
     record('Players are grouped by round robin with plain numbered names beneath each group heading');
@@ -290,6 +327,29 @@ async function main() {
     const hubUrl = page.url();
     const bCurrentBefore = (await fixture()).sessions.find(session=>session.session_key === numberedB.session_key).event.rounds[0];
     const bMatchBefore = bCurrentBefore.matches.find(match=>match.id === bCourt.current.match_id);
+    // A previous roster change trims future matchups but retains future roster
+    // overrides. Reproduce that real state through the board controls before
+    // adding the ninth active player, rather than mutating the fixture storage.
+    let addDialog = await openAddPlayer('Numbers B','Roster Preparation',undefined,{origin:'board',changeFrom:'Numbers A',captureNameFirst:true});
+    detail = await command(page,addDialog.getByRole('button',{name:'Add player to round robin',exact:true}),'add_player');
+    await addDialog.waitFor({state:'hidden'});
+    assert.equal(await page.getByRole('tab',{name:'Court board',exact:true}).getAttribute('aria-selected'),'true','Board Add must return to the board');
+    let bPrepared = (await fixture()).sessions.find(session=>session.session_key === numberedB.session_key);
+    const temporaryId = bPrepared.event.participants.find(player=>player.name === 'Roster Preparation').id;
+    let removeDialog = await openRemovePlayer('Numbers B',temporaryId);
+    await removeDialog.getByText(/leave the waiting matches and byes/).waitFor();
+    detail = await command(page,removeDialog.getByRole('button',{name:'Remove from this round robin',exact:true}),'remove_player');
+    await removeDialog.waitFor({state:'hidden'});
+    assert.equal(await page.getByRole('tab',{name:'Court board',exact:true}).getAttribute('aria-selected'),'true','Board Remove must return to the board');
+    assert.equal(page.url(),hubUrl);
+    bPrepared = (await fixture()).sessions.find(session=>session.session_key === numberedB.session_key);
+    assert.equal(bPrepared.event.rounds.length,1,'The rehearsal must include previously trimmed future matchups');
+    assert.equal(bPrepared.event.rosterByRound['2'].length,8);
+    assert(!bPrepared.event.rosterByRound['2'].includes(temporaryId));
+    assert(![...bPrepared.event.rounds[0].matches.flatMap(match=>[...match.sideA,...match.sideB]),...bPrepared.event.rounds[0].byeParticipantIds].includes(temporaryId));
+    assert.deepEqual(bPrepared.event.rounds[0].matches.find(match=>match.id === bCourt.current.match_id),bMatchBefore);
+    await snapshot(page,'board-add-remove-waiting-player.png');
+    record('Board Add and Remove stay on the board; removing a waiting arrival preserves the active game and prior results');
     let addRequest, addCommitted;
     const loseAddResponse = async route => {
       if (route.request().method() !== 'POST' || route.request().postDataJSON()?.action !== 'add_player') return route.continue();
@@ -299,7 +359,7 @@ async function main() {
       return route.fulfill({status:503,contentType:'application/json',headers:{'access-control-allow-origin':webOrigin},
         body:JSON.stringify({detail:'Local rehearsal: player was added but the response was lost.'})});
     };
-    let addDialog = await openAddPlayer('Numbers B','Late Guest');
+    addDialog = await openAddPlayer('Numbers B','Late Guest',undefined,{changeFrom:'Numbers A'});
     await page.route(commandUrl,loseAddResponse);
     const failedAdd = page.waitForResponse(response=>response.url() === commandUrl && response.request().postDataJSON()?.action === 'add_player');
     const [lostAdd] = await Promise.all([failedAdd,addDialog.getByRole('button',{name:'Add player to round robin',exact:true}).click()]);
@@ -307,6 +367,8 @@ async function main() {
     await page.unroute(commandUrl,loseAddResponse);
     assert.equal(addCommitted.status,200,JSON.stringify(addCommitted.body));
     assert.equal(await addDialog.getByRole('combobox',{name:'Player name or club profile',exact:true}).inputValue(),'Late Guest');
+    assert.equal(await addDialog.getByRole('combobox',{name:'Round robin',exact:true}).inputValue(),numberedB.session_key,'An uncertain add retains its selected destination');
+    assert.equal(addRequest.payload.session_key,numberedB.session_key);
     await addDialog.getByRole('alert').first().waitFor();
     await page.screenshot({path:path.join(output,'guest-add-retry-preserved.png'),fullPage:false});
     const retriedAdd = page.waitForResponse(response=>response.url() === commandUrl && response.request().postDataJSON()?.action === 'add_player');
@@ -320,20 +382,57 @@ async function main() {
     let rosterState = await fixture();
     let bSession = rosterState.sessions.find(session=>session.session_key === numberedB.session_key);
     let aSession = rosterState.sessions.find(session=>session.session_key === numberedA.session_key);
-    assert.equal(bSession.event.participants.length,9);
+    assert.equal(bSession.event.participants.length,10,'Nine active players plus one removed historical participant');
+    assert.equal(bSession.event.rosterByRound['1'].length,9);
     assert.equal(aSession.event.participants.length,8);
     assert.equal(bSession.event.participants.filter(player=>player.name === 'Late Guest').length,1);
     assert.equal(bSession.event.participants.find(player=>player.name === 'Late Guest').player_id ?? null,null);
     assert.deepEqual(bSession.event.rounds[0].matches.find(match=>match.id === bCourt.current.match_id),bMatchBefore,'Adding a player must preserve the game already on court');
     assert.equal(detail.workspace.courts.find(court=>court.id === bCourt.id).current.match_id,bCourt.current.match_id);
     await snapshot(page,'guest-added-to-selected-group.png');
-    record('Guest added inside its group without navigation; response-loss retry adds exactly one participant and preserves the active match');
+    record('Global Add player requires a destination after the name, keeps it through changes and exact retry, and adds one guest only to that group without changing its active match');
+
+    const arrivingId = bSession.event.participants.find(player=>player.name === 'Late Guest').id;
+    detail = await scoreCourt(bCourt.label);
+    if (detail.workspace.groups.find(group=>group.session_key === numberedB.session_key).current_round_number === 1) {
+      detail = await assignFromGroup('Numbers B');
+      const remainingCourt = occupied(detail).find(court=>court.current.session_key === numberedB.session_key);
+      detail = await scoreCourt(remainingCourt.label);
+    }
+    bSession = (await fixture()).sessions.find(session=>session.session_key === numberedB.session_key);
+    assert.equal(bSession.event.currentRoundNumber,2);
+    assert.deepEqual(bSession.event.rounds.map(round=>round.number),[1,2],'A rolling hub must not restore future preview rounds from the old roster');
+    assert.equal(bSession.event.rosterByRound['2'].length,9);
+    assert(bSession.event.rosterByRound['2'].includes(arrivingId),'The ninth player must carry into next-round membership after prior roster mutations');
+    const nextRosterRound = bSession.event.rounds.find(round=>round.number === 2);
+    const nextScheduledIds = [...nextRosterRound.matches.flatMap(match=>[...match.sideA,...match.sideB]),...nextRosterRound.byeParticipantIds];
+    assert(nextScheduledIds.includes(arrivingId),'The arriving player must have a next-round matchup or explicit bye before any court assignment');
+    assert.equal(nextScheduledIds.filter(id=>id === arrivingId).length,1);
+    assert.equal(occupied(detail).filter(court=>court.current.session_key === numberedB.session_key).length,0);
+    await page.getByRole('tab',{name:'Players',exact:true}).click();
+    const arrivingRow = page.getByRole('region',{name:'Players in Numbers B',exact:true}).locator(`[data-participant-id="${arrivingId}"]`);
+    await arrivingRow.getByText('Late Guest',{exact:true}).waitFor();
+    if (nextRosterRound.byeParticipantIds.includes(arrivingId)) assert.match(await arrivingRow.textContent(),/On bye this round/);
+    await snapshot(page,'ninth-player-carried-into-next-round.png');
+    await page.getByRole('tab',{name:'Court board',exact:true}).click();
+    if (nextRosterRound.byeParticipantIds.includes(arrivingId)) await page.getByRole('region',{name:'Byes this round',exact:true}).getByText('Late Guest',{exact:true}).waitFor();
+    else await page.getByRole('listitem').filter({hasText:'Numbers B'}).filter({hasText:'Late Guest'}).waitFor();
+    await snapshot(page,'ninth-player-court-queue-or-bye.png');
+    record('After prior roster edits, the ninth player remains in next-round membership and a matchup or bye before assignment');
+    detail = await assignFromGroup('Numbers B');
+    const additionsCourt = occupied(detail).find(court=>court.current.session_key === numberedB.session_key);
 
     for (const title of ['Numbers A','Numbers B']) {
-      addDialog = await openAddPlayer(title,'Player 1',1);
+      addDialog = await openAddPlayer(title,'Player 1',1,title === 'Numbers A' ? {changeFrom:'Numbers B'} : {});
+      if (title === 'Numbers B') assert.notEqual(await addDialog.getByRole('combobox',{name:'Round robin',exact:true}).getByRole('option',{name:/^Numbers A\b/}).getAttribute('disabled'),null,'The same profile cannot be added again to its existing group');
       detail = await command(page,addDialog.getByRole('button',{name:'Add player to round robin',exact:true}),'add_player');
       await addDialog.waitFor({state:'hidden'});
       assert.equal(page.url(),hubUrl);
+      if (title === 'Numbers A') {
+        const afterProfileAdd = await fixture();
+        assert.equal(afterProfileAdd.sessions.find(session=>session.session_key === numberedA.session_key).event.participants.filter(player=>player.player_id === 1).length,1);
+        assert.equal(afterProfileAdd.sessions.find(session=>session.session_key === numberedB.session_key).event.participants.filter(player=>player.player_id === 1).length,0,'Selecting one destination must not add the profile to another');
+      }
     }
     rosterState = await fixture();
     for (const key of [numberedA.session_key,numberedB.session_key]) {
@@ -347,17 +446,42 @@ async function main() {
     await addDialog.waitFor({state:'hidden'});
     assert.equal(detail.workspace.identity_pending_count,1,'A newly added matching guest name must request review');
     assert.equal(page.url(),hubUrl);
+    await openReview();
     await page.getByRole('region',{name:'Matching player names',exact:true}).getByRole('article',{name:'Identity review for Late Guest',exact:true}).waitFor();
     await snapshot(page,'added-guest-needs-identity-review.png');
     detail = await command(page,page.getByRole('article',{name:'Identity review for Late Guest',exact:true}).getByRole('button',{name:/^Different people:/}),'resolve_identities');
     assert.equal(detail.workspace.identity_pending_count,0);
     assert.equal(detail.workspace.players.filter(player=>player.name === 'Late Guest').length,2);
-    assert.equal(detail.workspace.courts.find(court=>court.id === bCourt.id).current.match_id,bCourt.current.match_id);
+    assert.equal(detail.workspace.courts.find(court=>court.id === additionsCourt.id).current.match_id,additionsCourt.current.match_id);
     await page.setViewportSize({width:390,height:844});
     await snapshot(page,'mobile-grouped-rosters-after-additions.png');
     assert(await page.evaluate(()=>document.documentElement.scrollWidth <= window.innerWidth),'Grouped rosters must not overflow on mobile');
     await page.setViewportSize({width:1440,height:1000});
     record('Linked additions retain one shared profile identity in both groups; matching added guests prompt review within the same hub');
+
+    await page.getByRole('tab',{name:'Match queue',exact:true}).click();
+    await page.getByRole('listitem').filter({hasText:'Numbers B'}).getByRole('button',{name:'Choose court',exact:true}).first().click();
+    const picker = page.getByRole('dialog',{name:'Choose court',exact:true});
+    await picker.getByRole('combobox',{name:/^Court/}).selectOption(additionsCourt.id);
+    detail = await command(page,picker.getByRole('button',{name:'Reserve next',exact:true}),'reserve_game_for_court');
+    const protectedCourt = detail.workspace.courts.find(court=>court.id === additionsCourt.id);
+    const departing = [protectedCourt.current,protectedCourt.next].map(match=>people(match).find(player=>numbers.includes(player.name)).id);
+    for (const [index,participantId] of departing.entries()) {
+      removeDialog = await openRemovePlayer('Numbers B',participantId);
+      await removeDialog.getByText(index === 0 ? /finish their current match/ : /reserved match stays in place/).waitFor();
+      detail = await command(page,removeDialog.getByRole('button',{name:'Remove from this round robin',exact:true}),'remove_player');
+      await removeDialog.waitFor({state:'hidden'});
+      assert.equal(await page.getByRole('tab',{name:'Court board',exact:true}).getAttribute('aria-selected'),'true');
+      assert.equal(page.url(),hubUrl);
+      const preservedCourt = detail.workspace.courts.find(court=>court.id === additionsCourt.id);
+      assert.equal(preservedCourt.current.match_id,protectedCourt.current.match_id);
+      assert.equal(preservedCourt.next.match_id,protectedCourt.next.match_id);
+      const afterRemoval = (await fixture()).sessions.find(session=>session.session_key === numberedB.session_key).event;
+      assert(afterRemoval.rosterByRound['2'].includes(participantId),'Assigned players stay in the current round');
+      assert(!afterRemoval.rosterByRound['3'].includes(participantId),'Departing players must not return in a later stored roster');
+    }
+    await snapshot(page,'board-playing-reserved-removals.png');
+    record('Removing playing and reserved players preserves their assigned matches, excludes them from the next round, and stays on the board');
 
     const sameA = await createSession('Same Guest A',['Shared Guest','A Guest 2','A Guest 3','A Guest 4']);
     const sameB = await createSession('Same Guest B',['Shared Guest','B Guest 2','B Guest 3','B Guest 4']);
@@ -394,10 +518,7 @@ async function main() {
     assert.equal((await requestApi(`/identity-fixture/hubs/${legacyHubId}`)).identity_version,null,'Read-only legacy upgrade must not write');
     await page.getByRole('tab',{name:'Court board',exact:true}).click();
     await snapshot(page,'legacy-active-court-review.png');
-    await page.getByRole('article',{name:legacyCourt.label,exact:true}).getByRole('button',{name:'Enter score',exact:true}).click();
-    await page.getByLabel('Side A score',{exact:true}).fill('11');
-    await page.getByLabel('Side B score',{exact:true}).fill('6');
-    detail = await command(page,page.getByRole('button',{name:'Save score & release court',exact:true}),'score_and_release');
+    detail = await scoreCourt(legacyCourt.label);
     assert.equal(occupied(detail).length,0);
     assert.equal(detail.workspace.groups.find(group=>group.session_key === legacyCourt.current.session_key).current_round_number,2);
     assert.equal(detail.workspace.groups.find(group=>group.session_key === legacyCourt.current.session_key).completed_matches,0);

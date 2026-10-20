@@ -629,3 +629,70 @@ def test_hub_add_player_rolls_back_if_another_group_changes_before_joint_commit(
         command(db, hub, "add_player", {"session_key": "rr-a", "name": "Arrival"}, "arrival-conflict-key")
     assert raw_session(db) == target_before
     assert db.storage[service.HUB_TABLE] == hub_before
+
+
+def test_remove_waiting_player_is_immediate_replay_safe_and_keeps_historical_record():
+    db = TransactionalHubDB()
+    session(db, count=8)
+    hub = command(db, create(db), "add_group", {"session_key": "rr-a"})
+    participant = hub["workspace"]["groups"][0]["players"][0]
+    payload = {"session_key": "rr-a", "participant_id": participant["participant_id"]}
+    removed = command(db, hub, "remove_player", payload, "remove-waiting-once")
+    snapshot = deepcopy(db.storage)
+    replay = command(db, hub, "remove_player", payload, "remove-waiting-once")
+    assert replay["replayed"] and db.storage == snapshot
+    group = removed["workspace"]["groups"][0]
+    old = next(p for p in group["players"] if p["participant_id"] == participant["participant_id"])
+    assert len(group["players"]) == 8 and not old["active"] and not old["can_remove"]
+    assert old["inactive_from_round"] == 1
+    event = service._event(raw_session(db))
+    assert participant["participant_id"] not in event["rosterByRound"]["1"]
+    assert all(participant["participant_id"] not in m["sideA"] + m["sideB"] for m in event["rounds"][0]["matches"])
+    with pytest.raises(ValueError, match="already left"):
+        command(db, removed, "remove_player", payload)
+
+
+def test_remove_playing_and_reserved_players_preserves_assignments_and_excludes_next_round():
+    db = TransactionalHubDB()
+    session(db, count=8)
+    hub = command(db, create(db), "add_group", {"session_key": "rr-a"})
+    first, second = hub["workspace"]["eligible_queue"]
+    hub = command(db, hub, "assign_game", {**first, "court_id": "c1"})
+    hub = command(db, hub, "reserve_game_for_court", {**second, "court_id": "c1"})
+    before_matches = deepcopy(service._event(raw_session(db))["rounds"][0]["matches"])
+    before_courts = deepcopy(db.storage[service.HUB_TABLE][0]["state"]["courts"])
+    departing = [first["side_a"][0]["id"], second["side_a"][0]["id"]]
+    for pid in departing:
+        hub = command(db, hub, "remove_player", {"session_key": "rr-a", "participant_id": pid})
+        assert service._event(raw_session(db))["rounds"][0]["matches"] == before_matches
+        assert db.storage[service.HUB_TABLE][0]["state"]["courts"] == before_courts
+    for match in (first, second):
+        hub = command(db, hub, "score_and_release", {"session_key": "rr-a", "court_id": "c1", "match_id": match["match_id"], "score_a": 11, "score_b": 6})
+    event = service._event(raw_session(db))
+    assert event["currentRoundNumber"] == 2
+    assert not set(departing) & set(event["rosterByRound"]["2"])
+    assert event["rounds"][0]["status"] == "saved"
+
+
+@pytest.mark.parametrize("restriction", ["locked", "completed", "moneyball", "playoff"])
+def test_remove_player_restrictions_match_group_availability_and_do_not_write(restriction):
+    db = TransactionalHubDB()
+    session(db, count=4)
+    hub = command(db, create(db), "add_group", {"session_key": "rr-a"})
+    raw = raw_session(db)
+    event = raw["state"]["page_state"]["event"]
+    if restriction == "locked":
+        raw["state"]["generator_submission"] = {"status": "pending"}
+    elif restriction == "completed":
+        raw["status"] = event["status"] = "completed"
+    elif restriction == "moneyball":
+        event["eventFormat"] = "moneyball_expectations"
+    else:
+        event["playoff"] = {"format": "top_eight"}
+    hub = service.get_round_robin_hub(db, club_id="club-a", hub_id=hub["hub"]["id"])
+    group = hub["workspace"]["groups"][0]
+    assert not group["can_remove_player"] and group["remove_player_unavailable_reason"]
+    snapshot = deepcopy(db.storage)
+    with pytest.raises(ValueError):
+        command(db, hub, "remove_player", {"session_key": "rr-a", "participant_id": event["participants"][0]["id"]})
+    assert db.storage == snapshot

@@ -115,9 +115,14 @@ def get_round_robin_hub(db: Any, *, club_id: str, hub_id: str) -> dict[str, Any]
         group["source_mode"] = (session.get("state") or {}).get("mode")
         if group["results_locked"] or row.get("status") != "active" or session.get("status") != "active":
             group["can_add_player"] = False
+            group["can_remove_player"] = False
             group["add_player_unavailable_reason"] = (
                 "Submitted results are locked for administrator review." if group["results_locked"]
-                else "Players can only join an active round robin in an active hub.")
+                else "Roster changes require an active round robin in an active hub.")
+            group["remove_player_unavailable_reason"] = group["add_player_unavailable_reason"]
+            for participant in group["players"]:
+                participant["can_remove"] = False
+                participant["remove_unavailable_reason"] = group["remove_player_unavailable_reason"]
     return {"ok": True, "hub": _summary(row), "workspace": workspace}
 
 
@@ -257,12 +262,12 @@ def command_round_robin_hub(db: Any, *, club_id: str, hub_id: str, action: str,
         command_payload = payload
         if action == "auto_fill_courts":
             command_payload = {**payload, "excluded_session_keys": [key for key, session in sessions.items() if _is_locked(session)]}
-        elif action == "add_player":
+        elif action in {"add_player", "remove_player"}:
             if target_key not in sessions:
                 raise ValueError("Choose a round robin attached to this hub.")
             if sessions[target_key].get("status") != "active":
-                raise ValueError("Players can only join an active round robin.")
-            player_id = payload.get("player_id")
+                raise ValueError("Roster changes require an active round robin.")
+            player_id = payload.get("player_id") if action == "add_player" else None
             if player_id is not None:
                 if type(player_id) is not int or player_id <= 0:
                     raise ValueError("Choose a valid club player profile.")

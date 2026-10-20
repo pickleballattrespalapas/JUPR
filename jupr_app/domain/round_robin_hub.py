@@ -334,16 +334,38 @@ def _claims(hub: dict[str, Any], events: dict[str, dict[str, Any]]) -> dict[str,
     return claims
 
 
-def _add_player_unavailable_reason(event: dict[str, Any]) -> str | None:
+def _roster_change_unavailable_reason(event: dict[str, Any]) -> str | None:
     if event.get("status") != "active":
-        return "Players can only join an active round robin."
+        return "Roster changes require an active round robin."
     if is_moneyball(event):
         return "Moneyball’s starting lineup is fixed. Use the generator for substitutions."
     if event.get("playoff"):
         return "Playoff teams are fixed after seeding."
+    return None
+
+
+def _add_player_unavailable_reason(event: dict[str, Any]) -> str | None:
+    unavailable = _roster_change_unavailable_reason(event)
+    if unavailable:
+        return unavailable
     if len(event.get("participants") or []) >= 40:
         return "This round robin already has the maximum of 40 players."
     return None
+
+
+def _can_remove_participant(event: dict[str, Any], participant: dict[str, Any]) -> bool:
+    from jupr_app.domain.adaptive_play_engine import _participant_active_in_round
+    current, pid = int(event.get("currentRoundNumber") or 1), str(participant["id"])
+    planned = {current, *(int(n) for n in event.get("rosterByRound") or {} if int(n) > current)}
+    if any(pid in active_participant_ids(event, number) for number in planned):
+        return True
+    number = max(current + 1, int(participant.get("active_from_round") or 1))
+    end = participant.get("inactive_from_round")
+    while end is None or number < int(end):
+        if _participant_active_in_round(participant, number) and pid in active_participant_ids(event, number):
+            return True
+        number += 1
+    return False
 
 
 def _can_rejoin_profile(event: dict[str, Any], session_key: str, hub: dict[str, Any],
@@ -386,6 +408,7 @@ def build_hub_snapshot(hub: dict[str, Any], events: dict[str, dict[str, Any]], *
         row = _round(event)
         active = set(active_participant_ids(event, int(row["number"])))
         add_unavailable = _add_player_unavailable_reason(event)
+        remove_unavailable = _roster_change_unavailable_reason(event)
         completed = sum(_complete(m, event) for m in _matches(row))
         groups.append({"session_key": key, "title": event.get("name") or key,
             "current_round_number": int(row["number"]), "round_status": row.get("status"),
@@ -396,11 +419,13 @@ def build_hub_snapshot(hub: dict[str, Any], events: dict[str, dict[str, Any]], *
             "event_format": event.get("eventFormat") or "standard", "scoring_mode": event.get("scoringMode") or "scored",
             "rating_mode": event.get("ratingMode") or "unrated", "status": event.get("status"),
             "can_add_player": add_unavailable is None, "add_player_unavailable_reason": add_unavailable,
+            "can_remove_player": remove_unavailable is None, "remove_player_unavailable_reason": remove_unavailable,
             "players": [],
             "dedicated_court_ids": [c["id"] for c in state.get("courts") or [] if c.get("dedicated_session_key") == key]})
         by_id = {str(p["id"]): p for p in event.get("participants") or []}
         for participant in event.get("participants") or []:
             identity = player_identity(participant, key, state)
+            can_remove = remove_unavailable is None and _can_remove_participant(event, participant)
             info = public_players.setdefault(identity, {"identity": identity, "name": participant.get("name"),
                 "display_name": identity_data["nodes"][(key, str(participant["id"]))]["display_name"],
                 "paused": bool(state["players"][identity].get("paused")),
@@ -413,7 +438,10 @@ def build_hub_snapshot(hub: dict[str, Any], events: dict[str, dict[str, Any]], *
                 "display_name": identity_data["nodes"][(key, str(participant["id"]))]["display_name"],
                 "identity": identity, "profile_id": participant.get("player_id"),
                 "can_rejoin": identity.startswith("player:") and _can_rejoin_profile(event, key, state, identity, claims),
+                "can_remove": can_remove,
+                "remove_unavailable_reason": None if can_remove else remove_unavailable or "This player has already left this round robin.",
                 "active": str(participant["id"]) in active,
+                "on_bye": str(participant["id"]) in active and str(participant["id"]) in {str(pid) for pid in row.get("byeParticipantIds") or []},
                 "active_from_round": int(participant.get("active_from_round") or 1),
                 "inactive_from_round": participant.get("inactive_from_round"),
                 "inactive_rounds": list(participant.get("inactive_rounds") or []),
@@ -658,6 +686,40 @@ def reconcile_hub_events(hub: dict[str, Any], before_events: dict[str, dict[str,
     return state, updated
 
 
+def _sync_future_roster_membership(event: dict[str, Any], participant_ids: set[str], current: int) -> None:
+    """Carry a roster edit into overrides whose future round objects were trimmed."""
+    from jupr_app.domain.adaptive_play_engine import _participant_active_in_round
+    changed = [p for p in event.get("participants") or [] if str(p["id"]) in participant_ids]
+    for number, roster in (event.get("rosterByRound") or {}).items():
+        if int(number) <= current:
+            continue
+        active = [str(p["id"]) for p in changed if _participant_active_in_round(p, int(number))]
+        retained = [str(pid) for pid in roster if str(pid) not in participant_ids or str(pid) in active]
+        event["rosterByRound"][number] = list(dict.fromkeys([*retained, *active]))
+
+
+def repair_unstarted_hub_round(event: dict[str, Any]) -> dict[str, Any]:
+    """Repair an untouched automatic continuation through an explicit joint commit.
+
+    This never runs on a read. Callers must reconcile and persist the result with
+    the hub's current court read set, so a concurrent dispatch prevents repair.
+    """
+    from jupr_app.domain.adaptive_play_engine import (
+        hub_auto_advance_boundary, _participant_active_in_round, _regenerate_round_robin_from,
+    )
+    if hub_auto_advance_boundary(event) is None:
+        raise ValueError("Only an untouched automatically generated hub round can be repaired.")
+    result = deepcopy(event)
+    current = int(result["currentRoundNumber"])
+    ids = {str(p["id"]) for p in result.get("participants") or []}
+    result.setdefault("rosterByRound", {})[str(current)] = [str(p["id"]) for p in result.get("participants") or [] if _participant_active_in_round(p, current)]
+    _sync_future_roster_membership(result, ids, current)
+    result.update(perfectRotation=False, adaptiveFromRound=min(int(result.get("adaptiveFromRound") or current), current))
+    _round(result)["status"] = "preview"
+    _regenerate_round_robin_from(result, current)
+    return result
+
+
 def mutate_hub_roster(event: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     """Apply standard roster controls to waiting games, preserving live history.
 
@@ -670,31 +732,24 @@ def mutate_hub_roster(event: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         _apply_match_history, _doubles_round, _singles_round, _mixed_round,
         _regenerate_round_robin_from, generator_match_play_format,
     )
-    original = deepcopy(event)
-    hub_id = original.pop("roundRobinHubId", None)
-    result = mutate_generator_roster(original, **kwargs)
-    result["roundRobinHubId"] = hub_id
+    # Preserve the hub marker so the generator cannot revive a full fixed
+    # rotation; bypass only this adapter's recursive roster dispatch.
+    result = mutate_generator_roster(event, _hub_managed=True, **kwargs)
     current = int(event.get("currentRoundNumber") or 1)
     action = str(kwargs.get("action") or "")
     participant_id = str(kwargs.get("participant_id") or "")
-    if action == "remove":
-        departing = next(p for p in result["participants"] if str(p["id"]) == participant_id)
-        effective = int(departing["inactive_from_round"])
-        # Hub schedules are generated incrementally; old future overrides may
-        # remain after their round objects were trimmed. Departure applies to all.
-        for number, roster in (result.get("rosterByRound") or {}).items():
-            if int(number) >= effective:
-                result["rosterByRound"][number] = [pid for pid in roster if str(pid) != participant_id]
+    old_people = {str(p["id"]) for p in event.get("participants") or []}
+    added = next((p for p in result.get("participants") or [] if str(p["id"]) not in old_people), None)
+    changed_people = ({participant_id} if action in {"remove", "substitute"} else set()) | ({str(added["id"])} if added else set())
     original_row = _round(event)
     if original_row.get("status") not in {"active", "preview"}:
+        _sync_future_roster_membership(result, changed_people, current)
         return result
     assigned = set(event.get("hubAssignedMatchIds") or [])
     protected = [deepcopy(m) for m in _matches(original_row) if str(m["id"]) in assigned or _complete(m, event)]
     protected_people = {str(pid) for m in protected for pid in (m.get("sideA") or m.get("teamA") or []) + (m.get("sideB") or m.get("teamB") or [])}
     original_ids = active_participant_ids(event, current)
     active = list(original_ids)
-    old_people = {str(p["id"]) for p in event.get("participants") or []}
-    added = next((p for p in result.get("participants") or [] if str(p["id"]) not in old_people), None)
     if action == "add" and added:
         added["active_from_round"] = current
         active.append(str(added["id"]))
@@ -718,7 +773,9 @@ def mutate_hub_roster(event: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     else:
         # An on-court player's substitution/removal takes effect next round.
         # Reorder also changes only future matchups once a round is underway.
+        _sync_future_roster_membership(result, changed_people, current)
         return result
+    _sync_future_roster_membership(result, changed_people, current)
     active = list(dict.fromkeys(active))
     result.setdefault("rosterByRound", {})[str(current)] = active
     waiting = [pid for pid in active if pid not in protected_people]
@@ -799,6 +856,20 @@ def apply_hub_command(hub: dict[str, Any], events: dict[str, dict[str, Any]], *,
             if not _can_rejoin_profile(event, session_key, state, identity, _claims(state, updated)):
                 raise ValueError("This club player is already in this round robin's active or upcoming roster.")
         changed = {**updated, session_key: mutate_generator_roster(event, action="add", name=name, player_id=player_id)}
+        state, updated = reconcile_hub_events(state, updated, changed, now=now)
+    elif action == "remove_player":
+        from jupr_app.domain.adaptive_play_engine import mutate_generator_roster
+        event = _event(state, updated, session_key)
+        unavailable = _roster_change_unavailable_reason(event)
+        if unavailable:
+            raise ValueError(unavailable)
+        participant_id = payload.get("participant_id")
+        participant = next((p for p in event.get("participants") or [] if isinstance(participant_id, str) and str(p["id"]) == participant_id), None)
+        if participant is None:
+            raise ValueError("Choose a player in this round robin.")
+        if not _can_remove_participant(event, participant):
+            raise ValueError("This player has already left this round robin.")
+        changed = {**updated, session_key: mutate_generator_roster(event, action="remove", participant_id=participant_id)}
         state, updated = reconcile_hub_events(state, updated, changed, now=now)
     elif action == "remove_group":
         event = _event(state, updated, session_key)

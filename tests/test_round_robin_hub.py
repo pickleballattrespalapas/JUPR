@@ -638,3 +638,127 @@ def test_departed_profile_can_rejoin_while_playing_in_another_group_but_cannot_d
     snapshot = build_hub_snapshot(state, events, now=START)
     assert not any(m["session_key"] == "b" for m in snapshot["eligible_queue"])
     assert any(m["session_key"] == "b" and "A player is already assigned to a court." in m["blockers"] for m in snapshot["blocked_queue"])
+
+
+def test_late_arrival_reaches_next_round_after_prior_edits_trimmed_future_rounds():
+    from jupr_app.domain.adaptive_play_engine import active_participant_ids
+    state, events = setup(courts=1)
+    state, events = command(state, events, "add_player", session_key="a", name="Temporary")
+    temporary = events["a"]["participants"][-1]["id"]
+    state, events = command(state, events, "remove_player", session_key="a", participant_id=temporary)
+    assert len(events["a"]["rounds"]) == 1 and "2" in events["a"]["rosterByRound"]
+    first, second = current_matches(events)
+    state, events = command(state, events, "assign_game", session_key="a", match_id=first["id"], court_id="c0")
+    state, events = command(state, events, "reserve_game_for_court", session_key="a", match_id=second["id"], court_id="c0")
+    protected = deepcopy(current_matches(events))
+    state, events = command(state, events, "add_player", session_key="a", name="9")
+    arrival = events["a"]["participants"][-1]["id"]
+    assert current_matches(events) == protected
+    assert build_hub_snapshot(state, events, now=START)["groups"][0]["players"][-1]["on_bye"]
+    state, events = score(state, events, "c0")
+    state, events = score(state, events, "c0")
+    assert arrival in active_participant_ids(events["a"], 2)
+    assert len(events["a"]["rounds"]) == 2 and not events["a"]["perfectRotation"]
+    assert len(current_matches(events)) == 2
+    assert any(arrival in m["sideA"] + m["sideB"] for m in current_matches(events))
+    assert temporary not in active_participant_ids(events["a"], 2)
+    assert len(events["a"]["rounds"][-1]["byeParticipantIds"]) == 1
+
+
+@pytest.mark.parametrize("scope", ["round", "rest"])
+def test_future_override_substitution_respects_scope_and_preserves_dispatched_round(scope):
+    from jupr_app.domain.adaptive_play_engine import active_participant_ids
+    state, events = setup()
+    state, events = command(state, events, "add_player", session_key="a", name="Temporary")
+    state, events = command(state, events, "remove_player", session_key="a", participant_id=events["a"]["participants"][-1]["id"])
+    state, events = command(state, events, "auto_fill_courts")
+    original = deepcopy(current_matches(events))
+    source = original[0]["sideA"][0]
+    before = deepcopy(events)
+    events["a"] = mutate_generator_roster(events["a"], action="substitute", participant_id=source, name="Substitute", substitute_scope=scope)
+    state, events = reconcile_hub_events(state, before, events, now=START)
+    replacement = events["a"]["participants"][-1]["id"]
+    assert current_matches(events) == original
+    state, events = score(state, events, "c0")
+    state, events = score(state, events, "c1")
+    assert replacement in active_participant_ids(events["a"], 2)
+    assert source not in active_participant_ids(events["a"], 2)
+    state, events = command(state, events, "auto_fill_courts")
+    state, events = score(state, events, "c0")
+    state, events = score(state, events, "c1")
+    assert (replacement in active_participant_ids(events["a"], 3)) == (scope == "rest")
+    assert (source in active_participant_ids(events["a"], 3)) == (scope == "round")
+    assert events["a"]["rounds"][0]["matches"][0]["sideA"] == original[0]["sideA"]
+
+
+def recovered_rotation_with_late_arrival():
+    """Synthetic version of the reported 8-to-9-player recovered rotation."""
+    result = event("Recovered", 8)
+    result["participants"].append({"id": "p-new-1", "name": "Late arrival", "seed": 9,
+        "roster_order": 9, "active_from_round": 3, "inactive_from_round": None, "inactive_rounds": []})
+    templates = [
+        [(["p-1", "p-6"], ["p-2", "p-5"]), (["p-3", "p-8"], ["p-4", "p-7"])],
+        [(["p-2", "p-3"], ["p-5", "p-8"]), (["p-1", "p-4"], ["p-6", "p-7"])],
+        [(["p-1", "p-8"], ["p-3", "p-6"]), (["p-2", "p-7"], ["p-4", "p-5"])],
+    ]
+    rows = []
+    for number in range(1, 14):
+        matches = [{"id": f"old-r{number}-c{index}", "round": number, "court": index,
+            "sideA": a, "sideB": b, "playFormat": "doubles", "scoreA": 11 if number <= 3 else None,
+            "scoreB": 5 if number <= 3 else None, "status": "scored" if number <= 3 else "scheduled"}
+            for index, (a, b) in enumerate(templates[(number - 1) % 3], 1)]
+        rows.append({"number": number, "status": "saved" if number <= 3 else "active" if number == 4 else "preview",
+            "matches": matches, "byeParticipantIds": ["p-new-1"] if number >= 3 else [], "warnings": []})
+    result.update(rounds=rows, currentRoundNumber=4, totalRounds=13, perfectRotation=True,
+        adaptiveFromRound=None, hubAutoAdvancedFromRound=3, hubAssignedMatchIds=[],
+        rosterRevisions=[{"action": "add", "effectiveRound": 4, "participantId": None, "name": "Late arrival"}],
+        rosterByRound={str(n): [p["id"] for p in result["participants"] if n >= 3 or p["id"] != "p-new-1"] for n in range(1, 14)})
+    return result
+
+
+def test_repair_untouched_recovered_rotation_keeps_saved_history_and_seats_late_arrival():
+    from jupr_app.domain.round_robin_hub import repair_unstarted_hub_round
+    event_before = recovered_rotation_with_late_arrival()
+    original = deepcopy(event_before)
+    repaired = repair_unstarted_hub_round(event_before)
+    assert event_before == original
+    assert repaired["rounds"][:3] == original["rounds"][:3]
+    assert repaired["participants"] == original["participants"]
+    assert generator_event_standings(repaired) == generator_event_standings(original)
+    assert repaired["currentRoundNumber"] == 4 and len(repaired["rounds"]) == 4
+    row = repaired["rounds"][-1]
+    assert row["status"] == "active" and len(row["matches"]) == 2
+    assert any("p-new-1" in m["sideA"] + m["sideB"] for m in row["matches"])
+    assert len(row["byeParticipantIds"]) == 1 and "p-new-1" not in row["byeParticipantIds"]
+    state, events = setup({"a": repaired})
+    state, events = command(state, events, "auto_fill_courts")
+    state, events = score(state, events, "c0")
+    state, events = score(state, events, "c1")
+    assert events["a"]["currentRoundNumber"] == 5 and len(events["a"]["rounds"]) == 5
+    assert len(current_matches(events)) == 2
+
+
+@pytest.mark.parametrize("change", ["assigned", "scored", "moneyball", "playoff", "no_boundary"])
+def test_unstarted_round_repair_rejects_touched_or_fixed_events(change):
+    from jupr_app.domain.round_robin_hub import repair_unstarted_hub_round
+    candidate = recovered_rotation_with_late_arrival()
+    if change == "assigned":
+        candidate["hubAssignedMatchIds"] = [candidate["rounds"][3]["matches"][0]["id"]]
+    elif change == "scored":
+        candidate["rounds"][3]["matches"][0]["scoreA"] = 11
+    elif change == "moneyball":
+        candidate["eventFormat"] = "moneyball_expectations"
+    elif change == "playoff":
+        candidate["playoff"] = {"format": "top_eight"}
+    else:
+        candidate.pop("hubAutoAdvancedFromRound")
+    with pytest.raises(ValueError, match="untouched"):
+        repair_unstarted_hub_round(candidate)
+
+
+def test_full_roster_can_remove_players_even_when_add_limit_is_reached():
+    state, events = setup({"a": event(count=40)})
+    group = build_hub_snapshot(state, events, now=START)["groups"][0]
+    assert not group["can_add_player"] and group["can_remove_player"]
+    state, events = command(state, events, "remove_player", session_key="a", participant_id=events["a"]["participants"][0]["id"])
+    assert not build_hub_snapshot(state, events, now=START)["groups"][0]["players"][0]["active"]
