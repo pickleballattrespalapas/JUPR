@@ -225,7 +225,7 @@ export default async function PlayerProfilePage({ params, searchParams }: Player
         <strong>{verifiedLabel}</strong>
         <p style={{ margin: "0.35rem 0", color: "#334155" }}>This profile shows the player&apos;s approved public name. Contact information and other private details are not shown.</p>
         {verifiedAction}
-        <span style={{ color: "#64748b" }}> · </span><Link href="/profile-privacy">Request an alias or privacy review</Link>
+        <span style={{ color: "#64748b" }}> · </span><Link href={`/profile-privacy?${new URLSearchParams({ club: clubSlug, player_id: String(playerId), player_name: data.identity.display_name })}`}>Request an alias or privacy review</Link>
       </article>
 
       <nav aria-label="Player profile sections" style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem" }}>

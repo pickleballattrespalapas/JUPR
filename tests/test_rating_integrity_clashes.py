@@ -1724,7 +1724,7 @@ def test_acceptance_singles_match_atomically_adds_both_players_to_roster():
 @pytest.mark.parametrize(
     ("rating_scope", "expected_player_update_count", "skipped_unrated"),
     [
-        ("unrated", 0, 1),
+        ("unrated", 2, 1),
         ("overall_only", 2, 0),
     ],
 )
@@ -1782,6 +1782,13 @@ def test_official_singles_match_membership_is_independent_of_rating_scope(
     }
     assert set(league_updates) == {1, 2}
     assert len(plan["player_updates"]) == expected_player_update_count
+    for update in plan["player_updates"]:
+        assert update["activity_only"] is (rating_scope == "unrated")
+        assert update["after"]["last_game_at"] == "2026-07-31T18:00:00+00:00"
+        if rating_scope == "unrated":
+            for field in ("singles_rating", "singles_wins", "singles_losses",
+                          "singles_matches_played", "singles_last_game_at"):
+                assert update["after"][field] == update["expected"][field]
     assert result["skipped_unrated"] == skipped_unrated
     assert (
         league_updates[1]["rating"],
@@ -1985,7 +1992,13 @@ def test_unrated_official_doubles_match_adds_all_participants_to_roster():
         for row in plan["league_rating_updates"]
     }
     assert set(league_updates) == {1, 2, 3, 4}
-    assert plan["player_updates"] == []
+    assert {update["player_id"] for update in plan["player_updates"]} == {1, 2, 3, 4}
+    for update in plan["player_updates"]:
+        assert update["activity_only"] is True
+        assert update["after"]["last_game_at"] == "2026-07-31T18:00:00+00:00"
+        for field in ("rating", "wins", "losses", "matches_played"):
+            assert update["after"][field] == update["expected"][field]
+    assert result["side_effect_context"]["affected_player_ids"] == []
     for player_id, baseline in enumerate((1350, 1250, 1150, 1050), start=1):
         assert league_updates[player_id] == {
             "rating": baseline,

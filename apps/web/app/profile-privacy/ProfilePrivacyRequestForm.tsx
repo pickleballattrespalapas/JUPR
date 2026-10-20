@@ -36,8 +36,8 @@ const requestKindLabels: Record<string, string> = {
   other: "Something else"
 };
 
-export default function ProfilePrivacyRequestForm({ clubSlug = "tres-palapas" }: { clubSlug?: string }) {
-  const [state, setState] = useState<FormState>(initialState);
+export default function ProfilePrivacyRequestForm({ clubSlug, playerId = "", playerName = "" }: { clubSlug: string; playerId?: string; playerName?: string }) {
+  const [state, setState] = useState<FormState>({ ...initialState, playerId, playerName });
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);

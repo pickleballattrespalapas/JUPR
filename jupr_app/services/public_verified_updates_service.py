@@ -112,11 +112,10 @@ def list_public_verified_update_player_options(supabase: Any, *, club_id: str, q
     clean_club = _clean_text(club_id, limit=80)
     if not clean_club:
         raise ValueError("club_id is required")
-    try:
-        query = supabase.table("players").select("id,name,active,is_active").eq("club_id", clean_club).order("name", desc=False)
-        rows = _safe_rows(query.limit(max(1, min(int(limit or 500), 1000))).execute())
-    except Exception:
-        rows = _safe_rows(supabase.table("players").select("id,name").eq("club_id", clean_club).execute())
+    # Activity is stored as players.active; is_active is the public API label.
+    # Do not fall back to a projection without activity and report everyone active.
+    query = supabase.table("players").select("id,name,active").eq("club_id", clean_club).order("name", desc=False)
+    rows = _safe_rows(query.limit(max(1, min(int(limit or 500), 1000))).execute())
     open_by_player = _open_subscriptions_by_player(
         supabase,
         club_id=clean_club,
@@ -138,7 +137,7 @@ def list_public_verified_update_player_options(supabase: Any, *, club_id: str, q
 def _fetch_player(supabase: Any, *, club_id: str, player_id: int) -> dict[str, Any] | None:
     return _safe_first(
         supabase.table("players")
-        .select("id,name,active,is_active")
+        .select("id,name,active")
         .eq("club_id", str(club_id))
         .eq("id", int(player_id))
         .limit(1)

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile": "next-fastapi-tournament-acceptance-2026-08-25",
-  "repository_migration_content_sha256": "0ae28c2af1ced7b52aba646bdbd9977130e2b0429e35e4b550e3d559688295cf",
+  "repository_migration_content_sha256": "def2ba65c42b97b3e7e3678ff71299c27dd9e0f6ae2aada9fac791222b0a823e",
   "allow_additional_ledger_names": false,
   "required_ledger_names": [
     "add_admin_activity_log",
@@ -17,6 +17,7 @@
     "allow_public_partner_board_source",
     "atomic_direct_match_entry",
     "atomic_league_roster_batch",
+    "badge_conflicts_are_not_serialization_failures",
     "badge_eval_queue_atomic_club_claim",
     "badge_plain_requirements",
     "badge_reactivation_and_admin_seasons",
@@ -105,6 +106,7 @@
     "replay_projection_nonretryable_conflicts",
     "restore_daily_player_inactivity",
     "restore_matches_soft_delete_contract",
+    "restrict_team_match_admin_rpc_execution",
     "revoke_legacy_public_privileges",
     "seed_live_badge_catalog",
     "seed_top_performer_badges",
@@ -153,6 +155,7 @@
     "tournament_terminal_completion_and_schedule_recovery",
     "tournament_venue_inventory",
     "transactional_bulk_tournament_check_in",
+    "unrated_match_activity",
     "weekly_recap_builder"
   ],
   "schema_contract_only_repository_migrations": [

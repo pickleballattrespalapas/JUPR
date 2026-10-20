@@ -2,6 +2,9 @@
 import PublicControls from "@/components/PublicControls";
 import Link from "next/link";
 import ProfilePrivacyRequestForm from "./ProfilePrivacyRequestForm";
+import SupportIntakeGate, { supportParam, type SupportSearchParams } from "@/components/SupportIntakeGate";
+
+export const dynamic = "force-dynamic";
 
 const cardStyle = {
   border: "1px solid #e2e8f0",
@@ -10,7 +13,8 @@ const cardStyle = {
   background: "white"
 };
 
-export default function ProfilePrivacyPage() {
+export default function ProfilePrivacyPage({ searchParams }: { searchParams?: SupportSearchParams }) {
+  const clubSlug = supportParam(searchParams, "club");
   return (
     <section style={{ maxWidth: "920px" }}>
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
@@ -37,14 +41,16 @@ export default function ProfilePrivacyPage() {
         </PublicControls>
 <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Privacy request form</h2>
-          <ProfilePrivacyRequestForm />
+          <SupportIntakeGate path="/profile-privacy" searchParams={searchParams}>
+            <ProfilePrivacyRequestForm clubSlug={clubSlug} playerId={supportParam(searchParams, "player_id")} playerName={supportParam(searchParams, "player_name")} />
+          </SupportIntakeGate>
         </article>
         <article style={cardStyle}>
           <h2 style={{ marginTop: 0, fontSize: "1.1rem" }}>Need a data correction instead?</h2>
           <p style={{ color: "#475569" }}>
             Use the correction form for wrong scores, duplicate matches, player names, tournament entries, badges, or league records.
           </p>
-          <Link href="/data-corrections">Open data correction form</Link>
+          <Link href={clubSlug ? `/data-corrections?${new URLSearchParams({ club: clubSlug })}` : "/data-corrections"}>Open data correction form</Link>
         </article>
       </div>
     </section>

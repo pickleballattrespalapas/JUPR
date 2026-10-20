@@ -95,7 +95,7 @@ def install_admin_badge_management_routes(app, *, get_supabase_client):
         except RuntimeError as exc:
             raise HTTPException(503, "Unable to verify the save. Retry the same request.") from exc
         except APIError as exc:
-            if exc.code in {"22023", "40001", "23505", "42501"}:
+            if exc.code in {"22023", "40001", "PT409", "23505", "42501"}:
                 raise HTTPException(403 if exc.code == "42501" else 409, exc.message) from exc
             raise HTTPException(503, "Unable to verify the save. Retry the same request.") from exc
 

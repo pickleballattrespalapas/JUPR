@@ -34,7 +34,7 @@ const initialState: FormState = {
   consent: false
 };
 
-export default function DataCorrectionForm({ clubSlug = "tres-palapas" }: { clubSlug?: string }) {
+export default function DataCorrectionForm({ clubSlug }: { clubSlug: string }) {
   const [state, setState] = useState<FormState>(initialState);
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);

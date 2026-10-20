@@ -164,6 +164,19 @@ The communications migration must precede the corresponding API/web release. Ver
 
 ## Guardrail for future changes
 
+### Badge conflict repair (October 2026)
+
+`20261109004103_badge_conflicts_are_not_serialization_failures.sql` replaces
+six explicit business-conflict raises across four badge routines with `PT409`.
+It preserves their installed definitions, signatures, grants and transaction
+locks and does not change PostgreSQL-generated serialization failures. It was
+created with `supabase migration new`, then sequenced after the repository's
+already future-dated November badge prerequisites so a clean replay cannot
+overwrite the correction. Existing migration files are unchanged.
+
+See `docs/badge_conflict_recovery.md` for staging verification and handling
+already-running retries. This migration never terminates a database backend.
+
 Use the guard scripts:
 
 ```bash

@@ -5,8 +5,12 @@ from typing import Any
 import os
 
 from jupr_app.domain.admin_activity_log import build_activity_payload, write_admin_activity_log
+from jupr_app.services.support_request_availability import (
+    support_queue_schema_ready,
+    support_review_enabled,
+    support_review_writes_enabled,
+)
 
-TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
 REQUEST_STATUSES = {"new", "in_review", "resolved", "dismissed"}
 REQUEST_TYPES = {"data_correction", "profile_privacy", "general_support"}
 IDENTITY_STATUSES = {"not_required", "pending", "verified", "rejected"}
@@ -20,11 +24,11 @@ class SupportRequestConflictError(RuntimeError):
 
 
 def _truthy_env(name: str) -> bool:
-    return os.getenv(name, "").strip().lower() in TRUTHY_ENV_VALUES
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def is_admin_support_requests_enabled() -> bool:
-    return _truthy_env("JUPR_ENABLE_NEXT_ADMIN_SUPPORT_REQUESTS")
+    return support_review_enabled()
 
 
 def _now_iso() -> str:
@@ -82,25 +86,25 @@ def build_admin_support_requests_status(supabase: Any | None, *, club_id: str) -
         return {
             "enabled": False,
             "status": "guarded_off",
+            "ready_for_review": False,
             "requests_endpoint": None,
             "update_endpoint": None,
             "request_count": None,
             "warnings": ["Next Support Requests is disabled. Enable JUPR_ENABLE_NEXT_ADMIN_SUPPORT_REQUESTS on FastAPI for staff review."],
         }
-    request_count = None
-    if supabase is not None:
-        try:
-            rows = _safe_rows(supabase.table("public_support_requests").select("id").eq("club_id", str(club_id)).limit(1000).execute())
-            request_count = len(rows)
-        except Exception:
-            request_count = None
+    ready = (
+        support_review_writes_enabled()
+        and supabase is not None
+        and support_queue_schema_ready(supabase, club_id=club_id)
+    )
     return {
         "enabled": True,
-        "status": "ready_for_support_request_review",
+        "status": "ready_for_support_request_review" if ready else "review_unavailable",
+        "ready_for_review": ready,
         "requests_endpoint": "/admin/clubs/{club_id}/support-requests",
         "update_endpoint": "/admin/clubs/{club_id}/support-requests/{request_id}",
-        "request_count": request_count,
-        "warnings": [],
+        "request_count": None,
+        "warnings": [] if ready else ["Support review is unavailable. Check the write policy and support queue schema before accepting requests."],
     }
 
 

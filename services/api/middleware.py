@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 import uuid
 
@@ -16,9 +17,25 @@ logger = logging.getLogger("jupr.api.request")
 
 class StructuredRequestLoggingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):  # type: ignore[override]
-        request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+        supplied_id = request.headers.get("x-request-id", "")
+        request_id = supplied_id if re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", supplied_id) else str(uuid.uuid4())
         start = time.perf_counter()
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            logger.info(
+                "request.failed",
+                extra={
+                    "method": request.method,
+                    "path": request.url.path,
+                    "status_code": 500,
+                    "elapsed_ms": round((time.perf_counter() - start) * 1000, 2),
+                    "request_id": request_id,
+                    # Exception messages can embed user input; retain only the type.
+                    "exception_type": type(exc).__name__,
+                },
+            )
+            raise
         elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
         response.headers.setdefault("x-request-id", request_id)
 

@@ -364,13 +364,14 @@ def test_public_catalog_allows_current_open_registration(monkeypatch):
                     {
                         "id": UUID,
                         "club_id": "club",
-                        "status": "REGISTRATION_OPEN",
+                        "status": "ACTIVE",
                     }
                 ],
                 "tournament_registration_settings": [
                     {
                         "tournament_id": UUID,
                         "registration_status": "open",
+                        "builder_draft_json": {"published_at": "2020-01-01T00:00:00Z"},
                         "registration_open_at": "2020-01-01T00:00:00Z",
                         "registration_close_at": "2100-01-01T00:00:00Z",
                     }
@@ -408,6 +409,72 @@ def test_public_catalog_allows_current_open_registration(monkeypatch):
 
     assert catalog["available"] is False
     assert calls == ["tournaments", "tournament_registration_settings"]
+
+
+@pytest.mark.parametrize("entry_point", ["catalog", "quote"])
+@pytest.mark.parametrize(
+    ("status", "published", "registration_status", "window"),
+    [
+        ("DRAFT", False, "open", {}),
+        ("DRAFT", True, "open", {}),
+        ("PAUSED", True, "open", {}),
+        ("INACTIVE", True, "open", {}),
+        ("ARCHIVED", True, "open", {}),
+        ("REGISTRATION_OPEN", True, "open", {}),
+        ("ACTIVE", False, "open", {}),
+        ("COMPLETED", True, "open", {}),
+        ("ACTIVE", True, "closed", {}),
+        ("ACTIVE", True, "open", {"registration_open_at": "2100-01-01T00:00:00Z"}),
+        ("ACTIVE", True, "open", {"registration_close_at": "2020-01-01T00:00:00Z"}),
+    ],
+)
+def test_anonymous_commerce_uses_shared_publication_and_window_policy(
+    monkeypatch, entry_point, status, published, registration_status, window,
+):
+    from tests.test_public_tournament_registration_service import FakeSupabase
+
+    monkeypatch.setenv("JUPR_ENABLE_TOURNAMENT_COMMERCE", "1")
+    supabase = FakeSupabase({
+        "tournaments": [{"id": UUID, "club_id": "club", "status": status}],
+        "tournament_registration_settings": [{
+            "tournament_id": UUID,
+            "registration_status": registration_status,
+            "builder_draft_json": {"published_at": "2020-01-01T00:00:00Z"} if published else {},
+            **window,
+        }],
+    })
+
+    def unexpected_read(*_args, **_kwargs):
+        pytest.fail("Private commerce data must not be read before public authorization")
+
+    monkeypatch.setattr(service, "_current_order", unexpected_read)
+    monkeypatch.setattr(service, "_load_catalog", unexpected_read)
+    with pytest.raises(PermissionError, match="unavailable"):
+        if entry_point == "catalog":
+            service.build_public_tournament_commerce_catalog(supabase, club_id="club", tournament_id=UUID)
+        else:
+            service.quote_public_tournament_commerce(supabase, club_id="club", tournament_id=UUID, request={})
+    assert supabase.rpc_calls == []
+
+
+@pytest.mark.parametrize("status,with_receipt", [("ACTIVE", False), ("COMPLETED", True)])
+def test_commerce_visibility_preserves_shared_current_and_completed_lifecycle(status, with_receipt):
+    from tests.test_public_tournament_registration_service import FakeSupabase
+
+    storage = {
+        "tournaments": [{"id": UUID, "club_id": "club", "status": status}],
+        "tournament_registration_settings": [{
+            "tournament_id": UUID,
+            "registration_status": "open",
+            "builder_draft_json": {"published_at": "2020-01-01T00:00:00Z"},
+        }],
+        "tournament_lifecycle_receipts": ([{
+            "id": "completion", "tournament_id": UUID, "action": "complete",
+        }] if with_receipt else []),
+    }
+    assert service._require_public_tournament_registration_visibility(
+        FakeSupabase(storage), club_id="club", tournament_id=UUID,
+    ) == UUID
 
 
 def test_token_bound_edit_can_read_its_scoped_catalog_after_public_close(

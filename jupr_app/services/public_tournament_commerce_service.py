@@ -13,6 +13,7 @@ from jupr_app.domain.tournament_commerce import (
     quote_tournament_commerce,
     stable_fingerprint,
 )
+from jupr_app.domain.tournament_registration_repo import classify_public_tournament
 from jupr_app.services.staging_write_guard import staging_write_wave_allows
 
 
@@ -212,14 +213,18 @@ def _require_public_tournament_registration_visibility(
         supabase.table("tournament_registration_settings")
         .select(
             "tournament_id,registration_status,"
-            "registration_open_at,registration_close_at"
+            "registration_open_at,registration_close_at,builder_draft_json"
         )
         .eq("tournament_id", canonical_tournament_id)
         .limit(1),
         label="public registration settings",
     )
     settings = settings_rows[0] if settings_rows else None
-    if not settings or not _public_registration_window_is_open(settings):
+    if (
+        not classify_public_tournament(supabase, tournament=tournament, settings=settings)
+        or not settings
+        or not _public_registration_window_is_open(settings)
+    ):
         raise PermissionError(
             "Tournament extras are unavailable for this registration."
         )
