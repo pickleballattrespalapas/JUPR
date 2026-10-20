@@ -71,6 +71,16 @@ def test_partner_invitation_routes_keep_exact_intake_and_closed_staging_guards(s
     assert not wave_allows_request("public-intake-auth", "POST", path + "/extra")
 
 
+@pytest.mark.parametrize("suffix", ["", "/hub-1/commands"])
+def test_round_robin_hub_uses_existing_generator_write_gate(suffix: str) -> None:
+    path = "/admin/clubs/fixture/round-robin-hubs" + suffix
+    assert wave_allows_request("open", "POST", path)
+    assert wave_allows_request("jupr-live", "POST", path)
+    assert not wave_allows_request(NO_WRITE_WAVE, "POST", path)
+    assert not wave_allows_request("public-live", "POST", path)
+    assert not wave_allows_request("jupr-live", "POST", path + "/extra")
+
+
 def test_every_unsafe_fastapi_route_has_an_exact_nonstale_wave_classification() -> None:
     inventory = _unsafe_fastapi_route_inventory()
     manifest = {

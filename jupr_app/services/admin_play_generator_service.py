@@ -130,6 +130,7 @@ def _session_payload(row: dict[str, Any]) -> dict[str, Any]:
         "id": str(row.get("id") or ""),
         "club_id": str(row.get("club_id") or ""),
         "session_key": str(row.get("session_key") or ""),
+        "round_robin_hub_id": state.get("round_robin_hub_id"),
         "title": _clean_text(row.get("title") or event.get("name"), limit=160),
         "status": str(row.get("status") or event.get("status") or "active"),
         "source": str(row.get("source") or "play_generator"),
@@ -163,7 +164,10 @@ def _session_payload(row: dict[str, Any]) -> dict[str, Any]:
 
 def _is_generator_row(row: dict[str, Any], generator_kind: str | None = None) -> bool:
     state = _state(row)
-    if str(state.get("mode") or "") != "admin_play_generator":
+    mode = str(state.get("mode") or "")
+    linked_public_rr = (mode == "public_play_generator" and state.get("round_robin_hub_id")
+                        and _event_from_state(state).get("generatorKind") == "round_robin")
+    if mode != "admin_play_generator" and not linked_public_rr:
         return False
     if generator_kind:
         return str(state.get("generator_kind") or "") == str(generator_kind)
@@ -248,16 +252,35 @@ def _resolve_names_and_ids(
     club_id: str,
     participant_names: list[str],
     player_ids: list[int] | None,
-) -> tuple[list[str], list[int]]:
+    participant_player_ids: dict[str, int] | None = None,
+) -> tuple[list[str], list[int | None]]:
     names = [_clean_text(value, limit=160) for value in participant_names or []]
     names = [value for value in names if value]
-    ids = [int(value) for value in (player_ids or []) if value is not None]
+    ids: list[int | None] = [int(value) for value in (player_ids or []) if value is not None]
+    if participant_player_ids:
+        if ids:
+            raise ValueError("Provide player_ids or participant_player_ids, not both.")
+        known_names = {name.casefold() for name in names}
+        requested: dict[str, int] = {}
+        for name, player_id in participant_player_ids.items():
+            key = _clean_text(name, limit=160).casefold()
+            if key not in known_names:
+                raise ValueError("A linked player is not in this roster. Choose the player from the club list again.")
+            if key in requested and requested[key] != int(player_id):
+                raise ValueError("Choose one club profile for each roster entry.")
+            requested[key] = int(player_id)
+        if len(set(requested.values())) != len(requested):
+            raise ValueError("A club profile cannot occupy two places in this roster.")
+        # Retain every roster slot. Guests must never shift or erase another
+        # participant's explicit profile, even when two clubs use the same name.
+        ids = [requested.get(name.casefold()) for name in names]
     if ids and len(ids) != len(names):
         raise ValueError("Official player IDs and participant names must have the same length.")
     if not ids:
         return names, []
-    players = _player_rows_by_id(supabase, club_id=str(club_id), player_ids=ids)
-    missing = [pid for pid in ids if pid not in players]
+    linked_ids = [pid for pid in ids if pid is not None]
+    players = _player_rows_by_id(supabase, club_id=str(club_id), player_ids=linked_ids)
+    missing = [pid for pid in linked_ids if pid not in players]
     if missing:
         raise ValueError(f"Player id {missing[0]} was not found in this club.")
     return names, ids
@@ -280,6 +303,7 @@ def preview_play_generator(
     scoring_mode: str = "scored",
     rating_mode: str = "unrated",
     event_format: str = "standard",
+    participant_player_ids: dict[str, int] | None = None,
     _include_private: bool = False,
 ) -> dict[str, Any]:
     names, ids = _resolve_names_and_ids(
@@ -287,6 +311,7 @@ def preview_play_generator(
         club_id=str(club_id),
         participant_names=participant_names,
         player_ids=player_ids,
+        participant_player_ids=participant_player_ids,
     )
     event = create_generator_preview(
         generator_kind=generator_kind,
@@ -359,6 +384,7 @@ def create_play_generator_session(
     scoring_mode: str = "scored",
     rating_mode: str = "unrated",
     event_format: str = "standard",
+    participant_player_ids: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     preview = preview_play_generator(
         supabase,
@@ -368,6 +394,7 @@ def create_play_generator_session(
         title=title,
         participant_names=participant_names,
         player_ids=player_ids,
+        participant_player_ids=participant_player_ids,
         total_rounds=total_rounds,
         court_count=court_count,
         doubles_court_count=doubles_court_count,
@@ -530,6 +557,12 @@ def _persist_event(
         patch["completed_at"] = now
     elif status == "active":
         patch["completed_at"] = None
+    if _state(before).get("round_robin_hub_id"):
+        # Court release and generator results share one durable transaction.
+        from jupr_app.services.admin_round_robin_hub_service import persist_linked_generator_patch
+        return persist_linked_generator_patch(
+            supabase, before=before, patch=patch, expected_version=expected_version,
+        )
     return _update_live_row(
         supabase,
         club_id=str(before.get("club_id") or ""),
@@ -991,6 +1024,17 @@ def _format_publish_idempotency_key(value: str, match_format: str) -> str:
     return f"{str(value)[:120]}:{digest}"
 
 
+def _require_hub_ready_for_publication(row: dict[str, Any]) -> None:
+    state = _state(row)
+    if not state.get("round_robin_hub_id"):
+        return
+    event = _event_from_state(state)
+    if (row.get("status") != "completed" or event.get("status") != "completed"
+            or event.get("hubAssignedMatchIds")
+            or any(round_row.get("status") == "active" for round_row in event.get("rounds", []))):
+        raise ValueError("Resolve this round robin’s matches and finish it before submitting or publishing results.")
+
+
 def publish_play_generator_matches(
     supabase: Any,
     *,
@@ -1007,6 +1051,7 @@ def publish_play_generator_matches(
     if actor_role not in {"administrator", "club_owner", "super_admin"}:
         raise PermissionError("Only a club administrator can publish generator results. Submit them for approval.")
     before = _live_row(supabase, club_id=str(club_id), session_key=str(session_key))
+    _require_hub_ready_for_publication(before)
     if _state(before).get("generator_submission"):
         raise ValueError("Approve these results from the generator submissions queue.")
     if str(before.get("updated_at") or "") != str(expected_version or ""):

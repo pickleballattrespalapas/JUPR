@@ -63,6 +63,7 @@ class GeneratorPreviewRequest(BaseModel):
     title: str = Field(default="Play session", max_length=160)
     participant_names: list[str] = Field(min_length=2, max_length=40)
     player_ids: list[int] = Field(default_factory=list, max_length=40)
+    participant_player_ids: dict[str, int] = Field(default_factory=dict, max_length=40)
     total_rounds: int = Field(default=3, ge=1, le=50)
     court_count: int = Field(default=0, ge=0, le=20)
     doubles_court_count: int = Field(default=0, ge=0, le=20)
@@ -181,8 +182,14 @@ class GeneratorSubmissionTitleRequest(BaseModel):
 
 def _model_payload(model: BaseModel) -> dict[str, Any]:
     if hasattr(model, "model_dump"):
-        return model.model_dump()  # type: ignore[attr-defined]
-    return model.dict()
+        payload = model.model_dump()  # type: ignore[attr-defined]
+    else:
+        payload = model.dict()
+    # Preserve durable request fingerprints for starts saved before sparse
+    # profile links were supported. Nonempty maps remain part of the intent.
+    if payload.get("participant_player_ids") == {}:
+        payload.pop("participant_player_ids")
+    return payload
 
 
 def _score_payloads(payload: GeneratorScoresRequest) -> list[dict[str, Any]]:
@@ -382,6 +389,7 @@ def install_admin_play_generator_routes(app, *, get_supabase_client) -> None:
                 title=payload.title,
                 participant_names=payload.participant_names,
                 player_ids=payload.player_ids,
+                participant_player_ids=payload.participant_player_ids,
                 total_rounds=payload.total_rounds,
                 court_count=payload.court_count,
                 doubles_court_count=payload.doubles_court_count,
@@ -460,6 +468,7 @@ def install_admin_play_generator_routes(app, *, get_supabase_client) -> None:
                     title=payload.title,
                     participant_names=payload.participant_names,
                     player_ids=payload.player_ids,
+                    participant_player_ids=payload.participant_player_ids,
                     total_rounds=payload.total_rounds,
                     court_count=payload.court_count,
                     doubles_court_count=payload.doubles_court_count,

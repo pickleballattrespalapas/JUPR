@@ -207,7 +207,7 @@ def abandon_expired_live_sessions(
     club_id: str,
     now_iso: str | None = None,
 ) -> int:
-    """Mark one club's active rows past expires_at as abandoned."""
+    """Abandon expired standalone sessions; hub membership owns linked lifecycles."""
     clean_club_id = str(club_id or "").strip()
     if not clean_club_id:
         raise ValueError("club_id is required for expired live-session cleanup")
@@ -218,6 +218,9 @@ def abandon_expired_live_sessions(
         .eq("club_id", clean_club_id)
         .eq("status", "active")
         .lt("expires_at", cutoff)
+        # Filter in the UPDATE itself so a concurrent hub attachment is rechecked
+        # by Postgres instead of tripping the hub guard and aborting the batch.
+        .is_("state->>round_robin_hub_id", "null")
         .execute()
     )
     return len(_safe_rows(resp))

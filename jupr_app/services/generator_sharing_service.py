@@ -64,6 +64,13 @@ def _payload(row: dict[str, Any]) -> dict[str, Any]:
 
 def _cas(supabase: Any, row: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     # A revoke/owner edit racing a handed-off write wins via the same row lease.
+    if _state(row).get("round_robin_hub_id"):
+        from jupr_app.services.admin_round_robin_hub_service import persist_linked_generator_patch
+        return persist_linked_generator_patch(
+            supabase, before=row,
+            patch={**patch, "updated_at": _now_iso(), "version": int(row.get("version") or 1) + 1},
+            expected_version=_version(row),
+        )
     updated = _first(supabase.table("live_sessions").update({
         **patch, "updated_at": _now_iso(), "version": int(row.get("version") or 1) + 1,
     }).eq("club_id", row["club_id"]).eq("session_key", row["session_key"])
@@ -90,7 +97,11 @@ def manage_generator_sharing(supabase: Any, *, club_id: str, session_key: str,
     if not club or not club.get("slug"):
         raise ValueError("This club’s public link is unavailable.")
     supplied_version = str(expected_version)
-    valid_version = _version(row) if mode == "admin_play_generator" else str(row.get("version") or 1)
+    # The admin session projection leases updated_at even when a public-created
+    # round robin is managed through its hub. Its original owner still leases
+    # the integer version through the public organizer page.
+    admin_version = admin_authorized or mode == "admin_play_generator"
+    valid_version = _version(row) if admin_version else str(row.get("version") or 1)
     if supplied_version != valid_version:
         raise PublicLiveConflictError("This session changed. Refresh before sharing.")
     state = _state(row)
@@ -111,7 +122,7 @@ def manage_generator_sharing(supabase: Any, *, club_id: str, session_key: str,
         state["generator_sharing"] = settings
         row = _cas(supabase, row, {"state": state})
     session = public_play_generator_session_payload(row)
-    if mode == "admin_play_generator":
+    if admin_version:
         session["version"] = _version(row)
     return {"ok": True, "session": session,
             "sharing": {"enabled": bool(settings.get("enabled")), "club_slug": str(club["slug"]),

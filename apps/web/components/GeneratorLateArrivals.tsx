@@ -22,11 +22,12 @@ type Props = {
   usedCourts: number[];
   byeParticipantIds?: string[];
   busy: boolean;
+  queueOnly?: boolean;
   onStart: (participantIds: string[], court: number) => Promise<void>;
 };
 
 export default function GeneratorLateArrivals({ participants, roundNumber, totalRounds,
-  generatorKind, playFormat, roundStatus, courtCount = 0, usedCourts, byeParticipantIds = [], busy, onStart }: Props) {
+  generatorKind, playFormat, roundStatus, courtCount = 0, usedCourts, byeParticipantIds = [], busy, queueOnly = false, onStart }: Props) {
   const [selection, setSelection] = useState<string[] | null>(null);
   const [chosenCourt, setChosenCourt] = useState<number | null>(null);
   const arrivals = participants.filter(player =>
@@ -55,7 +56,7 @@ export default function GeneratorLateArrivals({ participants, roundNumber, total
       <p>{arrivals.map(player => player.name).join(", ")}</p>
       {canStart ? (
         <>
-          <p>Have a spare court? Late arrivals and players on a bye can play now. Choose the players below.
+          <p>{queueOnly ? "Late arrivals and players on a bye can join the current round’s queue. Choose the players below." : "Have a spare court? Late arrivals and players on a bye can play now. Choose the players below."}
             {hasNextRound ? " They will mix in with everyone from the next round." : " This is the final round."}</p>
           <fieldset disabled={busy} style={{ border: 0, padding: 0, margin: "0 0 1rem" }}>
             <legend>Choose {required} players, including at least one late arrival</legend>
@@ -67,18 +68,18 @@ export default function GeneratorLateArrivals({ participants, roundNumber, total
               </label>
             ))}
           </fieldset>
-          <label>
+          {!queueOnly ? <label>
             Spare court{" "}
             <select aria-label="Spare court" disabled={busy} value={court} onChange={event => setChosenCourt(Number(event.target.value))}>
               {courts.map(number => <option key={number} value={number}>Court {number}</option>)}
             </select>
-          </label>
-          <p>Make sure this court is available for the rest of the session.</p>
+          </label> : null}
+          <p>{queueOnly ? "Assign this matchup to an available court from the hub." : "Make sure this court is available for the rest of the session."}</p>
           <button type="button" disabled={busy || selected.length !== required || !arrivals.some(player => selected.includes(player.id))} onClick={async () => {
             await onStart(selected, court);
             setSelection(null);
           }} style={{ border: 0, borderRadius: 24, padding: "0.65rem 1rem", background: "#0f172a", color: "white", fontWeight: 800 }}>
-            Start late-arrival game on Court {court}
+            {queueOnly ? "Queue late-arrival game" : `Start late-arrival game on Court ${court}`}
           </button>
         </>
       ) : (
