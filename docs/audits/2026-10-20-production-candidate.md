@@ -1,8 +1,10 @@
 # Selective production repair candidate
 
-This local candidate is based on production branch `rollback-feb8` at
-`143c771129f16da0b25f3aceb0fab26e1a9e19e5`. It has not been pushed, merged,
-deployed, or applied to a remote database. Production schema preflight and
+This candidate is based on production branch `rollback-feb8` at
+`143c771129f16da0b25f3aceb0fab26e1a9e19e5`. It is published only on the isolated
+`fix/pcs-audit-production-candidate-20261020` review branch; it has not been
+merged into production, deployed, or applied to a production database. The
+published source tree was verified against the tested local candidate. Production schema preflight and
 operational acceptance remain unverified and require separate authorization.
 
 ## Selected source changes
@@ -100,3 +102,7 @@ executed against isolated PGlite, passed both regression bodies, restored the
 fixture state and returned zero for all ten residual counts. Thirteen focused
 Python fixture/activity tests passed. These follow-ups change tests and documents
 only; migration SQL, production configuration and runtime policies are unchanged.
+
+The five legacy activity contract/test-double updates from `e1b5f80f` were then
+selected; all 60 tests across the three affected legacy files pass on this
+production-compatible candidate. No runtime behavior changed in this follow-up.
