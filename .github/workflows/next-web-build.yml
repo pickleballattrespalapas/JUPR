@@ -32,16 +32,19 @@ jobs:
       - name: Install browser
         working-directory: apps/web
         run: npx playwright install --with-deps chromium
-      - name: Verify full round schedule and navigation
-        working-directory: apps/web
-        run: node tests/rr-schedule-navigation-browser.cjs
-      - name: Build Next app for recap browser acceptance
+      - name: Build Next app for browser acceptance
         working-directory: apps/web
         env:
           JUPR_API_BASE_URL: http://127.0.0.1:8042
           NEXT_PUBLIC_JUPR_API_BASE_URL: http://127.0.0.1:8042
           NEXT_PUBLIC_JUPR_ENV: staging
         run: npm run build
+      - name: Verify full round schedule and navigation
+        working-directory: apps/web
+        env:
+          GENERATOR_BROWSER_NEXT_MODE: start
+          GENERATOR_BROWSER_API_PORT: "8042"
+        run: node tests/rr-schedule-navigation-browser.cjs
       - name: Verify recap builder, drafts, publishing and mobile editing
         working-directory: apps/web
         env:

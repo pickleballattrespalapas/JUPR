@@ -1,6 +1,6 @@
 # F02: isolated web dependency upgrade candidate
 
-This candidate updates `apps/web` from staging commit `ac0dfdd4` and is now rebased onto the operational-fix candidate `2b9b12088bce04602a61507d4ca17561ed03a1ea`. The dependency upgrade has not been pushed, merged, deployed, or tested against production. It requires a separate staging review because the security update crosses framework majors.
+This candidate updates `apps/web` from staging commit `ac0dfdd4` and is based on the operational-fix candidate `2b9b12088bce04602a61507d4ca17561ed03a1ea`. It is tracked separately in [PR 1642](https://github.com/pickleballattrespalapas/JUPR/pull/1642) because the security update crosses framework majors. The framework upgrade has not been merged, deployed, or tested against production.
 
 ## Version choice and changes
 
@@ -51,6 +51,16 @@ The rebase preserves the new support-intake command in `test:component` (now 81 
 The focused support-intake suite retains all existing assertions and additionally checks the three real page boundaries with Promise query parameters, explicit club propagation to forms and links, privacy-profile values, ambiguous club values, and absent query parameters. After integration, the support-intake suite, `next typegen`, `tsc --noEmit`, focused ESLint checks, production `next build --webpack`, package/lock consistency checks, and `git diff --check` pass. An independent source review found no integration blocker. The original full component and browser results above remain evidence for the initial candidate; unchanged browser fixtures were not repeated for this rebase.
 
 These integrated web checks ran on core `b12260a8` plus the dependency and intake changes. The final rebase onto `2b9b1208` adds only backend migration, contract, test and documentation changes; the application and workflow trees are unchanged from that validated integration.
+
+## Follow-up from GitHub checks
+
+The first framework run passed all three web jobs, including the full component suite, lint/build, round-robin and recap browser workflows, and notifications. Its API job found one stale static assertion requiring Node 20. That assertion now checks agreement between every workflow Node version, `.nvmrc`, and the package engine while preserving all builder/storage safety assertions. The failed and subsequently skipped groups passed locally: 286, 245 and 39 tests respectively. The updated API checks then passed in GitHub.
+
+A later run on the identical application tree received HTTP 400 on the first handed-off round-robin score save. The original job retained only server status logs, so the precise cause of that individual response remains unconfirmed. Investigation did establish a stale-session-load defect: under Strict Mode, two initial reads could overlap; after the first enabled score entry, the later response reset all draft scores. Both a deterministic component reproduction and a controlled real Next/FastAPI browser reproduction demonstrated four entered scores being cleared, null scores in the PATCH body, and the API's “Enter every score” rejection. The fix cancels obsolete initial loads and prevents their responses, errors or completion handlers from changing the current UI or operator credentials.
+
+Round-robin acceptance now supports `next start`, and CI builds once with the loopback fixture API at port 8042, then runs the unchanged round-robin and recap workflows sequentially against that production build. The handoff-save assertion also retains HTTP status, score values and error details on failure. It does not log the operator token. Production-mode acceptance complements the load-race regression; it does not replace it or relax the successful-save assertion.
+
+After the fix, the same controlled browser sequence preserved all four scores and submitted numeric values successfully to the real fixture API (HTTP 200). The new Strict Mode component regression covers stale successes, stale errors and loading state, late 403 responses, genuine token revocation, sharing refresh replacement, context changes and unmount cleanup. All **82** component-test commands pass. The production build passes; the full **10** round-robin browser scenario groups and the full recap browser suite pass sequentially against the same build/API port, with no address-in-use errors or server 500s. Focused lint reports zero errors and the existing set-state-in-effect warning; workflow YAML and runtime contracts pass. Independent source review found no blocker in either the lifecycle guard or the production-browser workflow change. The final GitHub run remains a release gate.
 
 ## Primary references
 
