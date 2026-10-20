@@ -221,6 +221,7 @@ def test_tournament_podiums_are_division_scoped_and_use_closeout_week(monkeypatc
     _add_tournament_draws(db,'club',[],report,{})
     assert len(report['event_results']) == 2
     assert report['event_results'][0]['title'] == 'Baja Classic · Men 4.0'
+    assert report['event_results'][0]['href'] == 'tournament-results?tournament_id=t'
     report = {'start_date':'2026-10-19','end_date':'2026-10-25','event_results':[]}
     _add_tournament_draws(db,'club',[],report,{})
     assert not report['event_results']
@@ -255,3 +256,11 @@ def test_refresh_preserves_editorial_and_omits_unavailable_spotlight_selection(m
     result = svc.generate_admin_weekly_recap(DB(),club_id='club',week_start='2026-10-12',week_end='2026-10-18',actor_email='qa@example.invalid',actor_role='club_owner',confirmation_text='GENERATE RECAP',expected_recap_id='r',expected_row_version=1)
     assert result['recap']['final_json']['report']['opening'] == 'Keep my note'
     assert result['recap']['final_json']['spotlight'] == []
+
+
+@pytest.mark.parametrize('parameter', ['tournament_id', 'tournament'])
+def test_tournament_report_links_accept_current_and_published_legacy_links(parameter):
+    href = f'tournament-results?{parameter}=event-123'
+    assert report_href(href) == href
+    for suffix in ('&redirect=https://evil.example', '#fragment', '/../../admin', '&tournament_id=other'):
+        assert report_href(href + suffix) == ''

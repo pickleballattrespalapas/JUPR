@@ -350,7 +350,7 @@ def _add_tournament_draws(db, club_id, matches, report, names):
             if not medals:
                 continue
             division = " · ".join(dict.fromkeys(filter(None, [draw.get("event_family_label"), draw.get("division_name")]))) or draw.get("name") or "Division"
-            href = f"tournament-results?tournament={quote(str(tournament['id']))}"
+            href = f"tournament-results?tournament_id={quote(str(tournament['id']))}"
             if draw.get("team_draw_id"):
                 href = f"tournament-team-results/{quote(str(tournament['id']))}/{quote(str(draw['team_draw_id']))}"
             report["event_results"].append({"title": f"{tournament['name']} · {division}", "kind": "Tournament", "date": "", "summary": "Division podium", "details": [f"{p['placement']}. {p.get('team_name') or p.get('display_name') or 'Team'}" for p in sorted(medals, key=lambda p: p.get("placement") or 99)], "href": href})

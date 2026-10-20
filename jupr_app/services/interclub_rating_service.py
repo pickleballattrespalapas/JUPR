@@ -150,13 +150,14 @@ def build_rating_projection(snapshot: dict[str, Any]) -> dict[str, Any]:
         before = [overall[key]["rating"] for key in keys]
         deltas = calculate_hybrid_elo(sum(before[:2]) / 2, sum(before[2:]) / 2, event["a"], event["b"], k_factor=DEFAULT_K_FACTOR)
         winner_a = event["a"] > event["b"]
+        tied = event["a"] == event["b"]
         for i, key in enumerate(keys):
-            won = winner_a if i < 2 else not winner_a
+            won = not tied and (winner_a if i < 2 else not winner_a)
             state = overall[key]
             delta = deltas[0 if i < 2 else 1] + (event.get("bonus", 0.0) if won else 0.0)
             state["rating"] += delta
             state["wins"] += int(won)
-            state["losses"] += int(not won)
+            state["losses"] += int(not tied and not won)
             state["matches_played"] += 1
             state["last_game_at"] = max(state["last_game_at"] or event["played_at"], event["played_at"])
             if interclub:
@@ -175,7 +176,7 @@ def build_rating_projection(snapshot: dict[str, Any]) -> dict[str, Any]:
         else:
             after = [overall[key]["rating"] for key in keys]
             row = {"id": int(event["id"]), "club_id": event["club_a"],
-                   "elo_delta": abs(deltas[0 if winner_a else 1]) + event.get("bonus", 0.0),
+                   "elo_delta": 0.0 if tied else abs(deltas[0 if winner_a else 1]) + event.get("bonus", 0.0),
                    }
             for i, field in enumerate(("t1_p1_r", "t1_p2_r", "t2_p1_r", "t2_p2_r")):
                 row[field], row[f"{field}_end"] = before[i], after[i]

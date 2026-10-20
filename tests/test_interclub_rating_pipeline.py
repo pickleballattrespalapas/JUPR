@@ -227,3 +227,26 @@ def test_local_repair_replays_pending_graph_and_keeps_failure_durable():
     unrelated = LocalDB(source(), pending=False)
     assert reconcile_interclub_for_club(unrelated, "other")["status"] == "not_requested"
     assert unrelated.calls == []
+
+
+@pytest.mark.parametrize('scores', [(8, 8), (11, 7), (7, 11)])
+def test_local_replay_preserves_ties_without_win_loss_or_bonus(scores):
+    data = source()
+    data['approved'] = []
+    data['matches'] = [{'id': 44, 'club_id': 'a', 'date': '2026-01-02T10:00:00Z',
+                        't1_p1': 1, 't1_p2': 2, 't2_p1': 3, 't2_p2': 4,
+                        'score_t1': scores[0], 'score_t2': scores[1], 'rating_bonus_elo': 5}]
+    plan = build_rating_projection(data)
+    tied = scores[0] == scores[1]
+    for index, player in enumerate(plan['players'][:4]):
+        won = not tied and ((scores[0] > scores[1]) if index < 2 else (scores[1] > scores[0]))
+        assert player['wins'] == int(won)
+        assert player['losses'] == int(not tied and not won)
+        assert player['matches_played'] == 1
+        assert player['last_game_at']
+        if tied:
+            assert player['rating'] == 1400
+    if tied:
+        assert plan['matches'][0]['elo_delta'] == 0
+        for field in ('t1_p1_r', 't1_p2_r', 't2_p1_r', 't2_p2_r'):
+            assert plan['matches'][0][field] == plan['matches'][0][field + '_end']

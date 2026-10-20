@@ -42,7 +42,7 @@ export function reportPath(clubSlug: string, path: string | undefined): string {
     `leagues/${segment}/weekly-history(?:\\?week=[1-9][0-9]*)?`,
     `round-robin-generator/shared/${segment}/standings`,
     `tournament-team-results/${segment}/${segment}`,
-    `tournament-results\\?tournament=${segment}`,
+    `tournament-results\\?tournament(?:_id)?=${segment}`,
     `weekly-recap\\?week=[0-9]{4}-[0-9]{2}-[0-9]{2}`,
   ];
   if (new RegExp(`^/interclub/${segment}$`).test(path)) return path;

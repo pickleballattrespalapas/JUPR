@@ -25,7 +25,7 @@ def report_href(value):
     segment = r"[A-Za-z0-9_.%~-]+"
     routes = [rf"leagues/{segment}/standings", rf"leagues/{segment}/weekly-history(?:\?week=[1-9][0-9]*)?",
               rf"round-robin-generator/shared/{segment}/standings", rf"tournament-team-results/{segment}/{segment}",
-              rf"tournament-results\?tournament={segment}", rf"/interclub/{segment}"]
+              rf"tournament-results\?tournament(?:_id)?={segment}", rf"/interclub/{segment}"]
     if any(re.fullmatch(pattern, value) for pattern in routes):
         return value
     return ""
