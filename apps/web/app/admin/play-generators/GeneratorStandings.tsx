@@ -1,5 +1,6 @@
 "use client";
 
+import GeneratorSessionDetails from "@/components/GeneratorSessionDetails";
 import GeneratorSharing from "@/components/GeneratorSharing";
 import { hubAutoAdvanceBoundary, type HubAutoAdvanceEvent } from "@/lib/hubAutoAdvanceBoundary";
 
@@ -203,7 +204,7 @@ export default function AdminGeneratorStandings({ apiBase, clubId, sessionKey, e
   const moneyballDone = session.moneyball?.completedGames === session.moneyball?.totalGames;
   const sortMode = session.standings_sort || session.event.standingsSort || "wins";
   const visibleRounds = (session.event.rounds || []).filter((row) => row.number <= currentRound);
-  const resultsLocked = Boolean(session.submission);
+  const resultsLocked = Boolean(session.submission || session.official_publish?.published_at || session.official_publish?.published_match_ids?.length);
   const canManage = Boolean(accessToken) && scoringMode === "scored" && !resultsLocked;
   const canContinue = canManage && !((moneyball || session.round_robin_hub_id) && session.status === "completed") && (session.status === "active" || (!session.event.playoff && session.status === "completed")) && ["saved", "skipped"].includes(currentStatus);
   const untouchedHubBoundary = hubAutoAdvanceBoundary(session.event) !== null;
@@ -223,6 +224,7 @@ export default function AdminGeneratorStandings({ apiBase, clubId, sessionKey, e
         {!embedded ? <p style={{ margin: "0 0 0.4rem" }}><Link href="/admin/round-robin-generator">← Round-Robin Generator</Link></p> : null}
         <h1 style={{ margin: "0 0 0.35rem" }}>{session.title} standings</h1>
         <p style={{ margin: 0, color: "#475569" }}>{playFormatLabel(session.play_format)} · {standingsSortLabel(sortMode)} · {session.status === "completed" ? "Complete" : "In progress"} · {session.submission?.status !== "approved" ? `${session.rating_mode === "rated" ? "Rated" : "Unrated"} · ` : ""}{generatorResultLabel(session.submission)}</p>
+              <GeneratorSessionDetails key={sessionKey} apiBase={apiBase} clubId={clubId} sessionKey={sessionKey} session={session} adminToken={accessToken || undefined} locked={resultsLocked} disabled={busy} scored={scoringMode === "scored"} onSaved={next => { setSession(next); onSessionChanged?.(); }} />
       </article>
       {session.round_robin_hub_id ? <aside style={{ ...cardStyle, background: "#eff6ff" }}>
         <strong>Standings include completed rounds only.</strong>
