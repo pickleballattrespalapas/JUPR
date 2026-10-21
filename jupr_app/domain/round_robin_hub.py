@@ -657,7 +657,7 @@ def _repair_paused_waiting_games(hub: dict[str, Any], events: dict[str, dict[str
             events[key] = _prepare_rolling_rounds(_settle_hub_rounds(event))
 
 
-def _seat_resumed_byes(hub: dict[str, Any], events: dict[str, dict[str, Any]], *, identity: str,
+def _seat_resumed_byes(hub: dict[str, Any], events: dict[str, dict[str, Any]], *, identity: str | None,
                        now: str, excluded_session_keys: set[str]) -> None:
     """Use free players in the current round without undoing any promised game."""
     from jupr_app.domain.adaptive_play_engine import (
@@ -674,6 +674,8 @@ def _seat_resumed_byes(hub: dict[str, Any], events: dict[str, dict[str, Any]], *
         row = _round(event)
         if row.get("status") not in {"active", "preview"}:
             continue
+        if identity is None and not row.get("hubPauseAdjustments") and "hubPausedParticipantIds" not in row:
+            continue  # Fill repairs a prior pause; ordinary bye plans stay intact.
         number = int(row["number"])
         by_id = {str(p["id"]): p for p in event.get("participants") or []}
         identities = {pid: player_identity(p, key, hub) for pid, p in by_id.items()}
@@ -687,7 +689,7 @@ def _seat_resumed_byes(hub: dict[str, Any], events: dict[str, dict[str, Any]], *
         free = [pid for pid in active_participant_ids(event, number) if identities[pid] not in occupied_identities
             and identities[pid] not in claims and identities[pid] not in unresolved
             and not hub["players"][identities[pid]].get("paused")]
-        if identity not in {identities[pid] for pid in free}:
+        if identity is not None and identity not in {identities[pid] for pid in free}:
             continue
         # A shared identity may have multiple roster entries, but only one seat.
         free = list({identities[pid]: pid for pid in free}.values())
@@ -1434,6 +1436,9 @@ def apply_hub_command(hub: dict[str, Any], events: dict[str, dict[str, Any]], *,
             event = updated[key]
             if event.get("status") == "active" and _round(event).get("status") in {"saved", "played", "skipped"}:
                     updated[key] = _settle_hub_rounds(event)
+        # Recover a player already resumed by an older client/server, without
+        # requiring staff to toggle availability again or change healthy plans.
+        _seat_resumed_byes(state, updated, identity=None, now=now, excluded_session_keys=excluded)
         while True:
             ready = [entry for entry in build_hub_snapshot(state, updated, now=now)["eligible_queue"] if entry["session_key"] not in excluded]
             chosen = None
