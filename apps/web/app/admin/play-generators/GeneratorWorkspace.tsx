@@ -857,7 +857,7 @@ export default function GeneratorWorkspace({
           <button
             type="button"
             onClick={() => void (registrationSetup ? startSession() : generatePreview())}
-            disabled={busy || creationPending || Boolean(pendingStart) || (registrationSetup ? !title.trim() || (playFormat === "doubles_singles" && (doublesCourtCount < 1 || singlesCourtCount < 1 || doublesCourtCount + singlesCourtCount > 20)) : !rosterReady || !mixedSetupValid)}
+            disabled={busy || creationPending || Boolean(pendingStart) || (registrationSetup ? !writesEnabled || !draftHydrated || !title.trim() || (playFormat === "doubles_singles" && (doublesCourtCount < 1 || singlesCourtCount < 1 || doublesCourtCount + singlesCourtCount > 20)) : !rosterReady || !mixedSetupValid)}
             style={primaryButton}
           >
             {busy ? (registrationSetup ? "Creating…" : "Generating…") : registrationSetup ? "Create round robin" : "Preview matchups"}
