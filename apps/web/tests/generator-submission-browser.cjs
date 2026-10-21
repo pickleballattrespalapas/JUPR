@@ -208,9 +208,14 @@ async function main() {
       // discoverable here just like sessions created through the RR Hub.
       await adminPage.goto(`${webOrigin}/admin/round-robin-generator`);
       const sessionCard = adminPage.locator('article').filter({has:adminPage.getByText(title, {exact:true})}).last();
-      await sessionCard.getByRole('link', {name:'Open session', exact:true}).click();
+      const openSession = sessionCard.getByRole('link', {name:'Open session', exact:true});
+      await openSession.waitFor();
+      const sessionHref = await openSession.getAttribute('href');
+      assert.equal(sessionHref, `/admin/round-robin-generator/sessions/${session.session_key}/rounds/${session.current_round_number}`);
+      await adminPage.goto(new URL(sessionHref, webOrigin).href);
       await adminPage.getByRole('heading', {name:title, exact:true}).waitFor();
-      await adminPage.getByRole('link', {name:'Standings', exact:true}).click();
+      const standingsHref = await adminPage.getByRole('link', {name:'Standings', exact:true}).getAttribute('href');
+      await adminPage.goto(new URL(standingsHref, webOrigin).href);
       await adminPage.getByRole('button', {name:'Submit for approval', exact:true}).waitFor();
       console.log(`PASS ${mode}: staff found and opened the ${mode === 'rated' ? 'standalone' : 'hub-linked'} completed session from the session list`);
 
