@@ -176,6 +176,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
     const sequence = ++loadSequence.current;
     if (!silent) setLoading(true);
     try {
+      let recoveryWarning = "";
       let value = await request<HubDetailResponse>(`/${encodeURIComponent(id)}`);
       if (value.registration?.automatic_pending_count && !mutationLock.current) {
         mutationLock.current = true;
@@ -185,13 +186,14 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
             idempotency_key: `automatic-checkins-v${value.hub.version}`
           });
         } catch (cause) {
-          if (!(cause instanceof RoundRobinHubApiError && cause.status === 409)) throw cause;
+          if (!(cause instanceof RoundRobinHubApiError && cause.status === 409)) recoveryWarning = "Check-ins are saved, but automatic roster updates could not finish. The hub will retry; you can still review arrivals in Registration.";
         } finally { mutationLock.current = false; }
       }
       if (String(value.hub.id) !== id) throw new Error("The server returned a different event. Reload the hub before continuing.");
       if (sequence === loadSequence.current && selectedRef.current === id) {
         applyHubDetail(value);
-        if (!silent) setError("");
+        if (recoveryWarning) setError(recoveryWarning);
+        else if (!silent) setError("");
       }
       return value;
     } catch (cause) {
