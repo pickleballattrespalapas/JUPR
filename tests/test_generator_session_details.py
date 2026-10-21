@@ -107,11 +107,13 @@ def test_admin_can_submit_public_hub_session_without_organizer_token(db):
     assert not db.db["matches"]
 
 
-def test_http_admin_submission_uses_verified_role_and_staff_version(db, monkeypatch):
+@pytest.mark.parametrize("hub_id", [None, "completed-hub"])
+def test_http_admin_submission_uses_verified_role_and_staff_version(db, monkeypatch, hub_id):
     from services.api import admin_play_generator_routes as routes
     session, _ = completed_session(db)
     row = db.db["live_sessions"][0]
-    row["state"]["round_robin_hub_id"] = "completed-hub"
+    if hub_id:
+        row["state"]["round_robin_hub_id"] = hub_id
     app = FastAPI()
     role = ["operator"]
     monkeypatch.setattr(routes, "_require_write_gate", lambda: None)
@@ -129,11 +131,35 @@ def test_http_admin_submission_uses_verified_role_and_staff_version(db, monkeypa
     headers = {"Authorization": "Bearer test-admin"}
     assert client.post(path + "/submit", headers=headers, json={**body, "actor_role": "administrator"}).status_code == 403
     role[0] = "administrator"
+    listing = client.get("/admin/clubs/club/play-generators/sessions?generator_kind=round_robin", headers=headers)
+    assert listing.status_code == 200, listing.text
+    assert [item["session_key"] for item in listing.json()["sessions"]] == [session["session_key"]]
+    opened = client.get(path, headers=headers)
+    assert opened.status_code == 200, opened.text
+    assert opened.json()["session"]["event"]["rounds"] == session["event"]["rounds"]
     response = client.post(path + "/submit", headers=headers, json=body)
     assert response.status_code == 200, response.text
     assert response.json()["session"]["submission"]["status"] == "pending"
     assert response.json()["session"]["version"] == db.db["live_sessions"][0]["updated_at"]
     assert client.post(path + "/submit", headers=headers, json=body).json()["idempotent_replay"]
+
+
+def test_admin_session_list_keeps_club_and_generator_boundaries(db):
+    from jupr_app.services.admin_play_generator_service import list_play_generator_sessions, get_play_generator_session
+    session, _ = completed_session(db)
+    row = db.db["live_sessions"][0]
+    for key, mode, club in [("foreign", "public_play_generator", "other-club"),
+                            ("other-surface", "public_team_match_generator", "club")]:
+        other = copy.deepcopy(row)
+        other.update(session_key=key, club_id=club)
+        other["state"]["mode"] = mode
+        db.db["live_sessions"].append(other)
+    listed = list_play_generator_sessions(db, club_id="club", generator_kind="round_robin")
+    assert [item["session_key"] for item in listed["sessions"]] == [session["session_key"]]
+    assert list_play_generator_sessions(db, club_id="club", generator_kind="ladder")["sessions"] == []
+    for key in ("foreign", "other-surface"):
+        with pytest.raises(ValueError, match="not found"):
+            get_play_generator_session(db, club_id="club", session_key=key)
 
 
 def test_http_admin_pending_details_and_stale_conflict(db, monkeypatch):
