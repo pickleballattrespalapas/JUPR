@@ -163,8 +163,7 @@ async function main() {
         await page.getByRole('heading', {name:`${title} standings`, exact:true}).waitFor();
         assert.equal(await page.getByRole('button', {name:'Submit for approval', exact:true}).count(), 0);
         if (mode === 'unrated') {
-          // Staff session views expose public-origin sessions once attached to
-          // an RR Hub. Use the actual hub routes to reproduce that boundary.
+          // Keep coverage of hub-linked sessions alongside standalone sessions.
           const headers = {Authorization:'Bearer local-reviewer'};
           const hubResponse = await adminContext.request.post(`${apiOrigin}/admin/clubs/club/round-robin-hubs`, {
             headers, data:{title:'Submission rehearsal hub', courts:[{id:'court-1',label:'Court 1'}], idempotency_key:'submission-hub-create'}
@@ -204,6 +203,21 @@ async function main() {
       const completed = await fixture();
       assert.deepEqual(completed.matches, before.matches, 'Finished but unapproved scores must not create official matches');
       assert.deepEqual(completed.players, before.players, 'Finished but unapproved scores must not update ratings');
+
+      // Start at the screen staff actually use: standalone sessions must be
+      // discoverable here just like sessions created through the RR Hub.
+      await adminPage.goto(`${webOrigin}/admin/round-robin-generator`);
+      const sessionCard = adminPage.locator('article').filter({has:adminPage.getByText(title, {exact:true})}).last();
+      const openSession = sessionCard.getByRole('link', {name:'Open session', exact:true});
+      await openSession.waitFor();
+      const sessionHref = await openSession.getAttribute('href');
+      assert.equal(sessionHref, `/admin/round-robin-generator/sessions/${session.session_key}/rounds/${session.current_round_number}`);
+      await adminPage.goto(new URL(sessionHref, webOrigin).href);
+      await adminPage.getByRole('heading', {name:title, exact:true}).waitFor();
+      const standingsHref = await adminPage.getByRole('link', {name:'Standings', exact:true}).getAttribute('href');
+      await adminPage.goto(new URL(standingsHref, webOrigin).href);
+      await adminPage.getByRole('button', {name:'Submit for approval', exact:true}).waitFor();
+      console.log(`PASS ${mode}: staff found and opened the ${mode === 'rated' ? 'standalone' : 'hub-linked'} completed session from the session list`);
 
       await spectator.goto(standingsUrl);
       await spectator.getByRole('heading', {name:'Final standings', exact:true}).waitFor();

@@ -162,15 +162,22 @@ def _session_payload(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _is_generator_row(row: dict[str, Any], generator_kind: str | None = None) -> bool:
+def _is_generator_row(
+    row: dict[str, Any], generator_kind: str | None = None, *, include_standalone_public: bool = False,
+) -> bool:
     state = _state(row)
     mode = str(state.get("mode") or "")
+    public_kind = _event_from_state(state).get("generatorKind")
     linked_public_rr = (mode == "public_play_generator" and state.get("round_robin_hub_id")
-                        and _event_from_state(state).get("generatorKind") == "round_robin")
-    if mode != "admin_play_generator" and not linked_public_rr:
+                        and public_kind == "round_robin")
+    # Discovery and review also include standalone organizer sessions. Keep
+    # the existing round-management boundary for callers that mutate play.
+    standalone_public = (include_standalone_public and mode == "public_play_generator"
+                         and public_kind in {"round_robin", "ladder"})
+    if mode != "admin_play_generator" and not linked_public_rr and not standalone_public:
         return False
     if generator_kind:
-        return str(state.get("generator_kind") or "") == str(generator_kind)
+        return str(state.get("generator_kind") or public_kind or "") == str(generator_kind)
     return True
 
 
@@ -196,7 +203,7 @@ def build_play_generator_status(supabase: Any | None, *, club_id: str) -> dict[s
         except Exception:
             rows = []
         for row in rows:
-            if not _is_generator_row(row):
+            if not _is_generator_row(row, include_standalone_public=True):
                 continue
             state = _state(row)
             kind = str(state.get("generator_kind") or "")
@@ -469,7 +476,7 @@ def list_play_generator_sessions(
     sessions = [
         _session_payload(row)
         for row in rows
-        if _is_generator_row(row, clean_kind)
+        if _is_generator_row(row, clean_kind, include_standalone_public=True)
     ]
     return {
         "ok": True,
@@ -479,7 +486,9 @@ def list_play_generator_sessions(
     }
 
 
-def _live_row(supabase: Any, *, club_id: str, session_key: str) -> dict[str, Any]:
+def _live_row(
+    supabase: Any, *, club_id: str, session_key: str, include_standalone_public: bool = False,
+) -> dict[str, Any]:
     row = _safe_first(
         supabase.table("live_sessions")
         .select("*")
@@ -488,7 +497,7 @@ def _live_row(supabase: Any, *, club_id: str, session_key: str) -> dict[str, Any
         .limit(1)
         .execute()
     )
-    if row is None or not _is_generator_row(row):
+    if row is None or not _is_generator_row(row, include_standalone_public=include_standalone_public):
         raise ValueError("Generator session not found.")
     return row
 
@@ -503,7 +512,7 @@ def get_play_generator_session(
         "ok": True,
         "mode": "play_generator_session_detail",
         "session": _session_payload(
-            _live_row(supabase, club_id=str(club_id), session_key=str(session_key))
+            _live_row(supabase, club_id=str(club_id), session_key=str(session_key), include_standalone_public=True)
         ),
     }
 

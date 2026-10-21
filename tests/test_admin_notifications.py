@@ -347,6 +347,13 @@ def test_all_saved_flags_are_read_across_multiple_storage_pages(fixture):
 
 
 def route_client(fixture, monkeypatch, *, main=False, role="administrator"):
+    # HTTP requests do not pass the explicit clock used by direct service tests.
+    # Keep their activity fixtures inside the same 30-day window on every run.
+    class FixtureDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW.astimezone(tz) if tz is not None else NOW.replace(tzinfo=None)
+    monkeypatch.setattr(service, "datetime", FixtureDatetime)
     db, _ = fixture
     db.rows["admin_role_assignments"] = [{"club_id": "club-a", "role": role, "user_id": USER, "email": "admin@example.invalid"}]
     def authenticate(header):
