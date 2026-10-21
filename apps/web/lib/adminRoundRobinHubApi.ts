@@ -4,6 +4,7 @@ export type HubMatch = {
   session_key: string; match_id: string; round_number: number; side_a: HubPlayer[]; side_b: HubPlayer[];
   label: string; wait_seconds: number; allowed_court_ids: string[]; blockers: string[]; status: string;
   court_id?: string | null; reserved_court_id?: string | null; score_a?: number | null; score_b?: number | null;
+  can_edit_players?: boolean; edit_players_unavailable_reason?: string | null;
 };
 export type HubCourt = HubCourtConfig & { current: HubMatch | null; next: HubMatch | null };
 export type HubGroupPlayer = {
@@ -53,7 +54,7 @@ export type HubDetailResponse = { ok: boolean; hub: HubSummary; workspace: HubWo
 export type HubCommandAction = "add_group" | "remove_group" | "configure_courts" | "assign_next_court" |
   "assign_game" | "reserve_game_for_court" | "cancel_reservation" | "move_game" | "release_game" |
   "score_and_release" | "mark_played" | "pause_player" | "resume_player" | "advance_round" | "finish_hub" | "finish_group" | "auto_fill_courts" |
-  "resolve_identities" | "add_player" | "remove_player" | "set_registration" | "review_checkin" | "process_checkins";
+  "resolve_identities" | "add_player" | "remove_player" | "set_registration" | "review_checkin" | "process_checkins" | "edit_match_players";
 export type HubCommand = {
   action: HubCommandAction; payload: Record<string, unknown>; expected_version: string | number; idempotency_key: string;
 };

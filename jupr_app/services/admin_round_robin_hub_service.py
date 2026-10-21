@@ -296,12 +296,12 @@ def command_round_robin_hub(db: Any, *, club_id: str, hub_id: str, action: str,
         # Court planning must not rewrite submitted siblings, even when the
         # command targets another group or only changes hub availability.
         command_payload = {**payload, "excluded_session_keys": [key for key, session in sessions.items() if _is_locked(session)]}
-        if action in {"add_player", "remove_player"}:
+        if action in {"add_player", "remove_player", "edit_match_players"}:
             if target_key not in sessions:
                 raise ValueError("Choose a round robin attached to this hub.")
             if sessions[target_key].get("status") != "active":
                 raise ValueError("Roster changes require an active round robin.")
-            player_id = payload.get("player_id") if action == "add_player" else None
+            player_id = payload.get("player_id") if action in {"add_player", "edit_match_players"} else None
             if player_id is not None:
                 if type(player_id) is not int or player_id <= 0:
                     raise ValueError("Choose a valid club player profile.")

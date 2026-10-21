@@ -297,6 +297,40 @@ def test_resume_keeps_existing_replacement_and_preserves_only_pre_pause_wait():
     assert not state["players"][person]["paused"]
 
 
+@pytest.mark.parametrize("advance_first", [False, True])
+def test_resume_forms_game_with_three_byes_in_the_current_round(advance_first):
+    value = planned(8)
+    first, healthy = deepcopy(round_row(value)["matches"])
+    # Keep the same explicit lineups in round two to exercise a break that
+    # continues past automatic advancement, with another court already live.
+    round_row(value, 2)["matches"] = [dict(m, id=f"r2-{m['id']}", round=2) for m in (first, healthy)]
+    state, events = setup({"a": value}, courts=2)
+    pid = people(first)[0]
+    state, events = pause(state, events, pid)
+    state, events = command(state, events, "assign_game", session_key="a", match_id=healthy["id"], court_id="c0")
+    if advance_first:
+        state, events = score(state, events, "c0")
+        assert events["a"]["currentRoundNumber"] == 2
+        state, events = command(state, events, "assign_game", session_key="a", match_id=f"r2-{healthy['id']}", court_id="c0")
+    number = events["a"]["currentRoundNumber"]
+    live = deepcopy(round_row(events["a"], number)["matches"])
+    assert len(round_row(events["a"], number)["byeParticipantIds"]) == 3
+
+    state, events = command(state, events, "resume_player", identity=identity(state, events, pid))
+
+    row = round_row(events["a"], number)
+    assert all(match in row["matches"] for match in live)
+    formed = [m for m in ready(state, events) if m["round_number"] == number]
+    assert len(formed) == 1
+    assert {p["id"] for p in formed[0]["side_a"] + formed[0]["side_b"]} == set(people(first))
+    assert not row["byeParticipantIds"]
+    before = deepcopy(events)
+    state, events = command(state, events, "resume_player", identity=identity(state, events, pid))
+    assert events == before
+    state, events = command(state, events, "assign_next_court", session_key="a", match_id=formed[0]["match_id"])
+    assert state["courts"][1]["current"]["match_id"] == formed[0]["match_id"]
+
+
 def test_pausing_an_existing_bye_records_absence_without_changing_lineups_and_resume_restores_bye():
     state, events = setup({"a": planned()})
     pid = round_row(events["a"])["byeParticipantIds"][0]
