@@ -1,6 +1,7 @@
-"""Public check-in intake; roster changes stay behind the staff hub authority."""
+"""Durable check-in intake and atomic admission to registration-driven groups."""
 from __future__ import annotations
 
+from copy import deepcopy
 import unicodedata
 from typing import Any
 
@@ -69,8 +70,72 @@ def submit_hub_checkin(db: Any, *, hub_id: str, session_key: str, name: str) -> 
         result = next(iter(result), None)
     if not isinstance(result, dict) or result.get("ok") is not True:
         raise RuntimeError("Your check-in could not be confirmed. Please retry; this will not create a duplicate.")
-    # Intentionally do not expose another check-in, its status, or its identifier.
-    return {"ok": True, "name": name, "message": "Your check-in has been sent to the event organizer."}
+    _process_saved_checkins(db, hub_id=hub_id)
+    # Never expose roster membership or another check-in to a public caller.
+    return {"ok": True, "name": name, "message": "Your check-in is saved. Watch the court board for your match. The organizer will help if your name needs review."}
+
+
+def _automatic_group(row: dict[str, Any]) -> bool:
+    event = _event(row)
+    return (_accepting_group(row) and event.get("hubRegistrationDriven") is True
+            and event.get("eventFormat", "standard") == "standard" and not event.get("playoff"))
+
+
+def _pending_automatic(db: Any, row: dict[str, Any], sessions: dict[str, Any]) -> list[dict[str, Any]]:
+    decisions = (row.get("state") or {}).get("checkin_decisions") or {}
+    checkins = _rows(db.table(CHECKIN_TABLE).select("id,session_key,name,created_at")
+                    .eq("club_id", row["club_id"]).eq("hub_id", row["id"])
+                    .order("created_at").limit(1000).execute())
+    return [c for c in checkins if str(c["id"]) not in decisions
+            and c["session_key"] in sessions and _automatic_group(sessions[c["session_key"]])]
+
+
+def process_automatic_checkins(db: Any, *, row: dict[str, Any], state: dict[str, Any],
+                              sessions: dict[str, Any], events: dict[str, Any], now: str
+                              ) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The admission decision, roster, and generated games commit in one hub CAS."""
+    from jupr_app.domain.round_robin_hub import apply_hub_command
+    excluded = [key for key, session in sessions.items() if _is_locked(session)]
+    for checkin in _pending_automatic(db, row, sessions):
+        candidate = deepcopy(state)
+        key, checkin_id = str(checkin["session_key"]), str(checkin["id"])
+        try:
+            action, payload = prepare_checkin_review(db, club_id=row["club_id"], hub_id=row["id"],
+                state=candidate, events=events, sessions=sessions,
+                payload={"checkin_id": checkin_id, "disposition": "add"},
+                actor_email="front-desk-check-in", now=now)
+            prior_ids = {p["id"] for p in events[key].get("participants") or []}
+            candidate, changed = apply_hub_command(candidate, events, action=action,
+                payload={**payload, "excluded_session_keys": excluded}, now=now)
+            candidate["checkin_decisions"][checkin_id]["participant_id"] = next(
+                p["id"] for p in changed[key]["participants"] if p["id"] not in prior_ids)
+            state, events = candidate, changed
+        except ValueError as exc:
+            # Name conflicts, capacity and roster restrictions need staff review.
+            # Save that outcome so polling never endlessly retries the same input.
+            state.setdefault("checkin_decisions", {})[checkin_id] = {
+                "status": "pending", "session_key": key, "review_reason": str(exc), "reviewed_at": now}
+    return state, events
+
+
+def _process_saved_checkins(db: Any, *, hub_id: str) -> None:
+    from jupr_app.services.admin_round_robin_hub_service import command_round_robin_hub
+    from jupr_app.services.public_live_operation_service import PublicLiveConflictError
+    for _ in range(4):
+        row = _first(db.table(HUB_TABLE).select("*").eq("id", hub_id).limit(1).execute())
+        if row is None or row["status"] != "active":
+            return
+        sessions = _session_rows(db, str(row["club_id"]), _group_keys(row.get("state") or {}))
+        if not _pending_automatic(db, row, sessions):
+            return
+        try:
+            command_round_robin_hub(db, club_id=str(row["club_id"]), hub_id=hub_id,
+                action="process_checkins", payload={}, expected_version=row["version"],
+                idempotency_key=f"automatic-checkins-v{row['version']}", actor_email="front-desk-check-in")
+            return
+        except PublicLiveConflictError:
+            continue  # Another check-in or court action won; reread before retrying.
+    # Intake is durable. The signed-in hub also retries unprocessed arrivals.
 
 
 def admin_registration(db: Any, row: dict[str, Any]) -> dict[str, Any]:
@@ -82,8 +147,12 @@ def admin_registration(db: Any, row: dict[str, Any]) -> dict[str, Any]:
         decision = decisions.get(str(checkin["id"])) or {}
         checkin["status"] = decision.get("status", "pending")
         checkin["participant_id"] = decision.get("participant_id")
+        checkin["review_reason"] = decision.get("review_reason")
+    sessions = _session_rows(db, str(row["club_id"]), _group_keys(row.get("state") or {}))
     return {"open": row.get("status") == "active" and (row.get("state") or {}).get("registration_open") is True,
-            "checkins": checkins, "pending_count": sum(c["status"] == "pending" for c in checkins)}
+            "checkins": checkins, "pending_count": sum(c["status"] == "pending" for c in checkins),
+            "automatic_pending_count": sum(str(c["id"]) not in decisions and _automatic_group(sessions[c["session_key"]])
+                for c in checkins if c["session_key"] in sessions) if row.get("status") == "active" else 0}
 
 
 def prepare_checkin_review(db: Any, *, club_id: str, hub_id: str, state: dict[str, Any],

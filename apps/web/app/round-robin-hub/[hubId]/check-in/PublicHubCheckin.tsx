@@ -69,7 +69,7 @@ export default function PublicHubCheckin({ apiBase, hubId }: { apiBase: string |
         <div className={styles.tick} aria-hidden="true">✓</div>
         <h2>You’re checked in, {sent.name}.</h2>
         <p><strong>{sent.group}</strong></p>
-        <p>Your name has been sent to the event organizer. They’ll confirm your place in the playing roster.</p>
+        <p>Your check-in is saved. Watch the court board for your match. The organizer will help if your name needs review.</p>
         <button type="button" onClick={() => { setSent(null); setError(""); void refresh(); requestAnimationFrame(() => input.current?.focus()); }}>Check in another player</button>
       </div> : <>
         <h2>Check in for tonight’s play</h2>
@@ -82,9 +82,9 @@ export default function PublicHubCheckin({ apiBase, hubId }: { apiBase: string |
           <label htmlFor="checkin-name">Full name</label>
           <input ref={input} id="checkin-name" autoComplete="off" autoCapitalize="words" required minLength={2} maxLength={120}
             value={name} disabled={busy} placeholder="First and last name" onChange={event => setName(event.target.value)} />
-          <label htmlFor="checkin-round-robin">Round robin</label>
+          <label htmlFor="checkin-round-robin">Round robin / level</label>
           <select id="checkin-round-robin" required value={sessionKey} disabled={busy} onChange={event => setSessionKey(event.target.value)}>
-            <option value="">Choose your round robin</option>
+            <option value="">Choose your round robin / level</option>
             {sessionKey && !group ? <option value={sessionKey} disabled>This round robin is no longer available</option> : null}
             {data.groups.map(item => <option key={item.session_key} value={item.session_key}>{item.title}</option>)}
           </select>

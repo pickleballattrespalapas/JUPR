@@ -245,6 +245,9 @@ def command_round_robin_hub(db: Any, *, club_id: str, hub_id: str, action: str,
     events = {key: _event(value) for key, value in sessions.items()}
     if action == "add_group":
         candidate = sessions[str(payload["session_key"])]
+        intended_hub = events[str(payload["session_key"])].get("hubRegistrationTargetId")
+        if intended_hub and intended_hub != hub_id:
+            raise ValueError("This round robin was created for another event.")
         other_hub = (candidate.get("state") or {}).get("round_robin_hub_id")
         if other_hub and other_hub != hub_id:
             raise ValueError("This round robin already belongs to another hub.")
@@ -260,7 +263,11 @@ def command_round_robin_hub(db: Any, *, club_id: str, hub_id: str, action: str,
         action, payload = prepare_checkin_review(db, club_id=club_id, hub_id=hub_id, state=state,
             events=events, sessions=sessions, payload=payload, actor_email=actor_email, now=_now())
     status = str(row["status"])
-    if action is None:
+    if action == "process_checkins":
+        from jupr_app.services.round_robin_hub_registration_service import process_automatic_checkins
+        state, events = process_automatic_checkins(db, row=row, state=state, sessions=sessions,
+            events=events, now=_now())
+    elif action is None:
         pass  # Check-in confirmation/dismissal is saved with the same hub CAS.
     elif action == "set_registration":
         if type(payload.get("open")) is not bool:
