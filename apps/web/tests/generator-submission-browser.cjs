@@ -23,6 +23,8 @@ const apiPort = process.env.GENERATOR_BROWSER_API_PORT || '8038';
 const webOrigin = `http://127.0.0.1:${webPort}`;
 const apiOrigin = `http://127.0.0.1:${apiPort}`;
 const output = process.env.GENERATOR_BROWSER_ARTIFACTS || fs.mkdtempSync(path.join(os.tmpdir(), 'generator-browser-'));
+const nextMode = process.env.GENERATOR_BROWSER_NEXT_MODE || 'dev';
+assert(['dev', 'start'].includes(nextMode), 'Use dev or a prebuilt start server');
 fs.mkdirSync(output, {recursive:true});
 const logs = [];
 function start(command, args, options) {
@@ -68,7 +70,7 @@ async function main() {
   const api = start(process.env.GENERATOR_BROWSER_PYTHON || process.env.CODEX_PRIMARY_RUNTIME_PYTHON || 'python3',
     ['-m', 'uvicorn', 'generator_submission_api:app', '--app-dir', path.join(root, 'tests/e2e'), '--host', '127.0.0.1', '--port', apiPort],
     {cwd:root, env});
-  const next = start(process.execPath, [require.resolve('next/dist/bin/next'), 'dev', '--webpack', '--hostname', '127.0.0.1', '--port', webPort], {cwd:webRoot, env});
+  const next = start(process.execPath, [require.resolve('next/dist/bin/next'), nextMode, ...(nextMode === 'dev' ? ['--webpack'] : []), '--hostname', '127.0.0.1', '--port', webPort], {cwd:webRoot, env});
   let browser;
   try {
     await ready(`${apiOrigin}/fixture-result`, [api, next]);
@@ -195,13 +197,22 @@ async function main() {
           idempotency_key:`spectator-denied-${mode}`, organizer_name:'Spectator', match_date:'2026-09-20'})
       });
       assert.equal(denied.status, 403, 'The API also denies a spectator submission');
-      await page.getByLabel('Organizer’s name').fill('Guest organizer');
-      await page.getByLabel('Date played', {exact:true}).fill('2026-09-20');
-      const submitted = await clickRequest(page, submit, '/submit');
+      // Reproduce a club admin submitting a public-origin session without its
+      // organizer token; the other scenario still exercises organizer submission.
+      const submitPage = mode === 'unrated' ? adminPage : page;
+      if (submitPage === adminPage) await adminPage.goto(`${webOrigin}/admin/round-robin-generator/sessions/${session.session_key}/standings`);
+      await submitPage.getByLabel('Organizer’s name').fill('Guest organizer');
+      await submitPage.getByLabel('Date played', {exact:true}).fill('2026-09-20');
+      const submitted = await clickRequest(submitPage, submitPage.getByRole('button', {name:'Submit for approval', exact:true}), '/submit');
+      if (submitPage === adminPage) {
+        assert.equal(submitted.request.edit_token, undefined, 'Admin submission uses club authorization, not an organizer token');
+        await page.reload();
+      }
       assert.equal(submitted.body.session.submission.rating_mode, mode);
       assert.equal(submitted.body.session.submission.status, 'pending');
       await page.getByRole('status').filter({hasText:'Awaiting admin approval'}).waitFor();
       const pending = await fixture();
+      const submittedVersion = Number(pending.sessions.find(item => item.session_key === session.session_key).version);
       assert.deepEqual(pending.matches, before.matches);
       assert.deepEqual(pending.players, before.players);
       await spectator.reload();
@@ -223,9 +234,9 @@ async function main() {
       await adminPage.getByLabel('Session title', {exact:true}).fill(correctedTitle);
       assert.equal(await adminPage.getByRole('button', {name:approveLabel, exact:true}).isDisabled(), true, 'Finish the title edit before reviewing');
       const renamed = await clickRequest(adminPage, adminPage.getByRole('button', {name:'Save session details', exact:true}), '/details', 'PATCH');
-      assert.deepEqual(renamed.request, {expected_version:Number(submitted.body.session.version), title:correctedTitle, rating_mode:mode});
+      assert.deepEqual(renamed.request, {expected_version:submittedVersion, title:correctedTitle, rating_mode:mode});
       assert.equal(renamed.body.title, correctedTitle);
-      assert.equal(renamed.body.version, Number(submitted.body.session.version) + 1);
+      assert.equal(renamed.body.version, submittedVersion + 1);
       await adminPage.getByRole('heading', {name:`${correctedTitle} · ${capitalized}`, exact:true}).waitFor();
       await adminPage.getByRole('button', {name:new RegExp(correctedTitle)}).waitFor();
       assert.equal(await adminPage.getByLabel('Date played', {exact:true}).inputValue(), '2026-09-20', 'Title save preserves the review date');
@@ -305,7 +316,7 @@ async function main() {
       }
       if (mode === 'rated') assert.notDeepEqual(after.players, before.players, 'Rated approval updates player ratings');
       else assert.deepEqual(after.players, before.players, 'Unrated approval leaves player ratings untouched');
-      console.log(`PASS ${mode}: guest submitted from final standings; admin approval created ${records.length} official matches`);
+      console.log(`PASS ${mode}: ${mode === 'unrated' ? 'admin' : 'organizer'} submitted from final standings; admin approval created ${records.length} official matches`);
       await spectator.reload();
       await spectator.getByRole('status').filter({hasText:`Approved · ${capitalized}`}).waitFor();
       await spectator.setViewportSize({width:390, height:844});
