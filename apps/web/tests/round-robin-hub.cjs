@@ -6,8 +6,20 @@ global.IS_REACT_ACT_ENVIRONMENT = true;
 const stored = new Map();
 global.sessionStorage = { getItem: key => stored.get(key) || null, setItem: (key, value) => stored.set(key, value), removeItem: key => stored.delete(key) };
 const replacedUrls = [];
-global.window = { history: { replaceState(_state, _title, url) { replacedUrls.push(url); } }, setInterval: () => 1, clearInterval() {}, addEventListener() {}, removeEventListener() {} };
-global.document = { visibilityState: "visible", addEventListener() {}, removeEventListener() {} };
+function eventTarget() {
+  const listeners = new Map();
+  return {
+    addEventListener(type, listener) { if (!listeners.has(type)) listeners.set(type, new Set()); listeners.get(type).add(listener); },
+    removeEventListener(type, listener) { listeners.get(type)?.delete(listener); },
+    dispatchEvent(event) { for (const listener of [...(listeners.get(event.type) || [])]) listener(event); }
+  };
+}
+let intervalId = 0;
+const intervals = new Map();
+global.window = { ...eventTarget(), history: { replaceState(_state, _title, url) { replacedUrls.push(url); } },
+  setInterval(callback) { const id = ++intervalId; intervals.set(id, callback); return id; }, clearInterval(id) { intervals.delete(id); } };
+global.document = { ...eventTarget(), visibilityState: "visible" };
+const tickIntervals = () => { for (const callback of [...intervals.values()]) callback(); };
 let standingsMounts = 0;
 function Standings(props) {
   const [instance] = React.useState(() => ++standingsMounts);
@@ -55,10 +67,11 @@ const requests = [], requestUrls = [], receipts = new Map();
 let failNext = false, conflictNext = false, loseAddResponse = false, loseFinishResponse = false, listReads = 0;
 let deferDetailAfter = -1, releaseDetail;
 let availableSessions = [{ session_key: "new", title: "New RR", status: "active", rating_mode: "unrated" }];
+let listedHubs = null;
 global.fetch = async (url, options = {}) => {
   assert.equal(options.headers.Authorization, "Bearer test-staff");
   if (!options.body) {
-    if (url.endsWith("/round-robin-hubs")) { listReads += 1; return { ok: true, json: async () => ({ ok: true, hubs: [detail.hub], sessions: clone(availableSessions) }) }; }
+    if (url.endsWith("/round-robin-hubs")) { listReads += 1; return { ok: true, json: async () => ({ ok: true, hubs: listedHubs ?? [detail.hub], sessions: clone(availableSessions) }) }; }
     if (deferDetailAfter === 0) {
       deferDetailAfter = -1;
       const snapshot = clone(detail);
@@ -173,6 +186,7 @@ global.fetch = async (url, options = {}) => {
     } };
     availableSessions = []; stored.clear(); requests.length = 0; requestUrls.length = 0; replacedUrls.length = 0;
     deferDetailAfter = -1; releaseDetail = undefined;
+    listedHubs = null; document.visibilityState = "visible";
   }
   const props = (hub, session = "") => ({ apiBase: "http://test.local", clubId: "club", initialHubId: hub, initialAddSessionKey: session });
   const standingsGroup = (key, status = "active", scoring_mode = "scored") => ({ session_key: key, title: `${key} round robin`, status, scoring_mode,
@@ -373,5 +387,47 @@ global.fetch = async (url, options = {}) => {
   await act(async () => button(tree, "Add to hub").props.onClick());
   assert.deepEqual(requests[0].payload, { session_key: "existing" }, "Existing-session manual attachment remains available");
   await act(async () => tree.unmount());
-  console.log("round-robin hub: court controls, cached creation return, exact event selection, Strict Mode, durable retry, conflicts, and manual attachment passed");
+
+  emptyHub("external-sessions-event");
+  const available = (session_key, title) => ({ session_key, title, status: "active", rating_mode: "unrated" });
+  availableSessions = [available("existing", "Existing RR")];
+  await act(async () => { tree = create(h(Panel, props("external-sessions-event"))); });
+  availableSessions.push(available("opened-elsewhere", "3.0 Round Robin"));
+  await act(async () => button(tree, "Round robins").props.onClick());
+  const existingSelect = () => tree.root.findAllByType("select").find(select => select.findAllByType("option").some(option => text(option) === "Choose a round robin"));
+  const availableKeys = () => existingSelect().findAllByType("option").map(option => option.props.value);
+  assert.ok(availableKeys().includes("opened-elsewhere"), "Opening Round robins discovers sessions started elsewhere after this page loaded");
+  await act(async () => existingSelect().props.onChange({ target: { value: "opened-elsewhere" } }));
+  availableSessions.push(available("returned-elsewhere", "3.5/4.0 Round Robin"));
+  await act(async () => window.dispatchEvent({ type: "focus" }));
+  assert.ok(availableKeys().includes("returned-elsewhere"), "Returning focus refreshes the existing-RR selector without a manual page refresh");
+  assert.equal(existingSelect().props.value, "opened-elsewhere", "Discovering another RR preserves the organizer's current selection");
+  assert.equal(button(tree, "Add to hub").props.disabled, false);
+  availableSessions.push(available("polled-session", "Next RR"));
+  await act(async () => tickIntervals());
+  assert.ok(availableKeys().includes("polled-session"), "Visible polling refreshes available RRs as well as the court board");
+  const beforeHidden = listReads;
+  document.visibilityState = "hidden";
+  availableSessions.push(available("hidden-session", "Later RR"));
+  await act(async () => { window.dispatchEvent({ type: "focus" }); document.dispatchEvent({ type: "visibilitychange" }); tickIntervals(); });
+  assert.equal(listReads, beforeHidden, "Hidden tabs do not request the RR list on focus, visibility changes or polling");
+  assert.ok(!availableKeys().includes("hidden-session"));
+  document.visibilityState = "visible";
+  await act(async () => document.dispatchEvent({ type: "visibilitychange" }));
+  assert.ok(availableKeys().includes("hidden-session"), "Becoming visible discovers RRs created while the hub was hidden");
+  assert.equal(existingSelect().props.value, "opened-elsewhere");
+  assert.equal(requests.length, 0, "Refreshing choices never attaches an RR or changes court operations");
+  await act(async () => tree.unmount());
+  assert.equal(intervals.size, 0, "Unmounting stops the periodic refresh");
+
+  emptyHub("not-created-yet"); listedHubs = [];
+  await act(async () => { tree = create(h(Panel, props(""))); });
+  assert.ok(tree.root.findByProps({ "aria-label": "Create event" }));
+  const beforeInitialFocus = listReads;
+  availableSessions.push(available("first-session", "First RR"));
+  await act(async () => window.dispatchEvent({ type: "focus" }));
+  assert.ok(listReads > beforeInitialFocus, "Available RRs refresh even before a hub event has been created or selected");
+  assert.equal(requests.length, 0, "Discovering RRs before setup does not create an event automatically");
+  await act(async () => tree.unmount());
+  console.log("round-robin hub: court controls, cached creation return, exact event selection, Strict Mode, durable retry, conflicts, manual attachment, and live RR selector refresh passed");
 })().catch(error => { console.error(error); process.exitCode = 1; });
