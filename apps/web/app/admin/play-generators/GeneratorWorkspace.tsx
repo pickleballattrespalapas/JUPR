@@ -257,7 +257,8 @@ export default function GeneratorWorkspace({
     `${generatorTitle(generatorKind)} ${new Date().toISOString().slice(0, 10)}`
   );
   const [eventFormat, setEventFormat] = useState<"standard" | "moneyball_expectations">("standard");
-  const moneyball = generatorKind === "round_robin" && eventFormat === "moneyball_expectations";
+  const registrationSetup = Boolean(returnHubId) && generatorKind === "round_robin";
+  const moneyball = !registrationSetup && generatorKind === "round_robin" && eventFormat === "moneyball_expectations";
   const [playFormat, setPlayFormat] = useState<PlayFormat>("doubles");
   const [standingsSort, setStandingsSort] = useState<StandingsSort>("wins");
   const [scoringMode, setScoringMode] = useState<ScoringMode>("scored");
@@ -413,6 +414,16 @@ export default function GeneratorWorkspace({
   }, []);
 
   function requestBody(): Record<string, unknown> {
+    if (registrationSetup) {
+      if (!title.trim()) throw new Error("Name this round robin for its level.");
+      return {
+        generator_kind: "round_robin", event_format: "standard", registration_hub_id: returnHubId,
+        play_format: playFormat, title: title.trim(), participant_names: [], total_rounds: 1, court_count: 0,
+        doubles_court_count: playFormat === "doubles_singles" ? doublesCourtCount : 0,
+        singles_court_count: playFormat === "doubles_singles" ? singlesCourtCount : 0,
+        standings_sort: standingsSort, scoring_mode: scoringMode, rating_mode: ratingMode
+      };
+    }
     if (!rosterReady) {
       throw new Error(participantNames.length === targetCount && moneyball ? "Link or create a club profile for every Moneyball player before previewing." : `Add exactly ${targetCount} unique players before previewing.`);
     }
@@ -493,7 +504,7 @@ export default function GeneratorWorkspace({
   async function startSession(): Promise<void> {
     if (startLock.current || creationPending || !draftHydrated) return;
     if (startRecoveryRef.current?.status === "created") { runCreatedSession(startRecoveryRef.current); return; }
-    if (!preview && startRecoveryRef.current?.status !== "pending") return;
+    if (!registrationSetup && !preview && startRecoveryRef.current?.status !== "pending") return;
     startLock.current = true;
     setBusy(true);
     setMessage(null);
@@ -504,7 +515,7 @@ export default function GeneratorWorkspace({
     try {
       if (!attempt) {
         const next: PendingGeneratorStart = { status: "pending", hubId: returnHubId || null, body: {
-          ...requestBody(), preview_fingerprint: preview!.previewFingerprint, expected_version: "new", idempotency_key: operationKey()
+          ...requestBody(), preview_fingerprint: registrationSetup ? null : preview!.previewFingerprint, expected_version: "new", idempotency_key: operationKey()
         } };
         if (!writeGeneratorStart(recoveryKey, next)) throw new Error("Your browser could not save this start for recovery. Allow browser storage and try again. Your draft has not been started.");
         attempt = next;
@@ -678,10 +689,11 @@ export default function GeneratorWorkspace({
       </article> : null}
 
       {!createdStart ? <article style={cardStyle}>
-        <h2 style={{ marginTop: 0 }}>1. Set up the session</h2>
+        <h2 style={{ marginTop: 0 }}>{registrationSetup ? "Create a round robin" : "1. Set up the session"}</h2>
         <p style={{ color: "#475569" }}>
-          Enter players in the starting order you want. Reorder them before previewing to change
-          the schedule and bye order.
+          {registrationSetup
+            ? "Name the round robin for its level, then open the event’s check-in page at your front desk. Players join as they arrive, and matches are prepared automatically when enough players have checked in."
+            : "Enter players in the starting order you want. Reorder them before previewing to change the schedule and bye order."}
         </p>
         <fieldset disabled={busy || Boolean(pendingStart)} style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}>
         <div
@@ -693,9 +705,11 @@ export default function GeneratorWorkspace({
           }}
         >
           <label>
-            Session title
+            {registrationSetup ? "Round robin name / level" : "Session title"}
             <br />
             <input
+              aria-label={registrationSetup ? "Round robin name / level" : "Session title"}
+              placeholder={registrationSetup ? "e.g. 3.0–3.5" : undefined}
               value={title}
               onChange={(event) => {
                 setTitle(event.target.value);
@@ -704,7 +718,7 @@ export default function GeneratorWorkspace({
               style={inputStyle}
             />
           </label>
-          {generatorKind === "round_robin" ? <label>
+          {generatorKind === "round_robin" && !registrationSetup ? <label>
             Event format<br />
             <select aria-label="Event format" value={eventFormat} onChange={event => {
               const format = event.target.value as "standard" | "moneyball_expectations";
@@ -810,7 +824,7 @@ export default function GeneratorWorkspace({
           ) : null}
         </div>
 
-        <GeneratorRosterSetup
+        {!registrationSetup ? <GeneratorRosterSetup
           apiBase={apiBase}
           clubKey={clubId}
           creationClubId={creationClubId}
@@ -832,21 +846,27 @@ export default function GeneratorWorkspace({
           onParticipantTextChange={setParticipantText}
           onLinkedPlayerIdsChange={setLinkedPlayerIds}
           onInvalidate={invalidatePreview}
-        />
+        /> : <div>
+          {playFormat === "doubles_singles" ? <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
+            <label>Doubles courts<input type="number" min={1} max={19} value={doublesCourtCount} onChange={event => setDoublesCourtCount(Number(event.target.value))} style={inputStyle} /></label>
+            <label>Singles courts<input type="number" min={1} max={19} value={singlesCourtCount} onChange={event => setSinglesCourtCount(Number(event.target.value))} style={inputStyle} /></label>
+          </div> : null}
+          <p style={{ color: "#475569" }}>Starts with an empty roster. {playFormat === "doubles" ? "The first match is ready at 4 players." : playFormat === "singles" ? "The first match is ready at 2 players." : "Singles can start at 2 players; doubles joins the rotation as more players arrive."} Later arrivals join the ongoing rotation.</p>
+        </div>}
         <div style={{ marginTop: "0.9rem", display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>
           <button
             type="button"
-            onClick={() => void generatePreview()}
-            disabled={busy || creationPending || Boolean(pendingStart) || !rosterReady || !mixedSetupValid}
+            onClick={() => void (registrationSetup ? startSession() : generatePreview())}
+            disabled={busy || creationPending || Boolean(pendingStart) || (registrationSetup ? !title.trim() || (playFormat === "doubles_singles" && (doublesCourtCount < 1 || singlesCourtCount < 1 || doublesCourtCount + singlesCourtCount > 20)) : !rosterReady || !mixedSetupValid)}
             style={primaryButton}
           >
-            {busy ? "Generating…" : "Preview matchups"}
+            {busy ? (registrationSetup ? "Creating…" : "Generating…") : registrationSetup ? "Create round robin" : "Preview matchups"}
           </button>
         </div>
         </fieldset>
       </article> : null}
 
-      {preview && !createdStart ? (
+      {preview && !createdStart && !registrationSetup ? (
         <article style={{ ...cardStyle, minWidth: 0 }}>
           <h2 style={{ marginTop: 0 }}>2. Preview before starting</h2>
           <p style={{ color: "#475569" }}>

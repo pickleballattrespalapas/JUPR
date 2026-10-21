@@ -6,6 +6,7 @@ on:
       - "apps/web/**"
       - "tests/e2e/generator_submission_api.py"
       - "tests/e2e/round_robin_hub_api.py"
+      - "tests/e2e/hub_registration_api.py"
       - "tests/e2e/round_robin_hub_identity_api.py"
       - "tests/e2e/recap_builder_api.py"
       - ".github/workflows/next-web-build.yml"

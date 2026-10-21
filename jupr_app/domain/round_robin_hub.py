@@ -682,6 +682,9 @@ def build_hub_snapshot(hub: dict[str, Any], events: dict[str, dict[str, Any]], *
         remove_unavailable = _roster_change_unavailable_reason(event)
         completed = sum(_complete(m, event) for m in _matches(row))
         groups.append({"session_key": key, "title": event.get("name") or key,
+            "registration_driven": event.get("hubRegistrationDriven") is True,
+            "minimum_players": 4 if event.get("playFormat") == "doubles" else 2,
+            "active_player_count": len(active),
             "current_round_number": int(row["number"]), "round_status": row.get("status"),
             "total_rounds": int(event.get("totalRounds") or len(event.get("rounds") or [])),
             "completed_matches": completed, "total_matches": len(_matches(row)),

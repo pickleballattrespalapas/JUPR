@@ -97,7 +97,7 @@ async function main() {
     const guest = await guestContext.newPage();
     await guest.goto(url);
     await guest.getByLabel('Full name',{exact:true}).fill('New Arrival');
-    await guest.getByLabel('Round robin',{exact:true}).selectOption('rr-a');
+    await guest.getByLabel('Round robin / level',{exact:true}).selectOption('rr-a');
     await clickRequest(guest,guest.getByRole('button',{name:'Check in',exact:true}),'/checkins');
     await guest.getByRole('heading',{name:'You’re checked in, New Arrival.'}).waitFor();
     await snapshot(guest,'mobile-checkin-confirmed.png');
@@ -119,12 +119,12 @@ async function main() {
     await guest.getByRole('button',{name:'Check in another player',exact:true}).click();
     assert.equal(await guest.getByLabel('Full name',{exact:true}).inputValue(),'');
     await guest.getByLabel('Full name',{exact:true}).fill('new arrival');
-    await guest.getByLabel('Round robin',{exact:true}).selectOption('rr-a');
+    await guest.getByLabel('Round robin / level',{exact:true}).selectOption('rr-a');
     await clickRequest(guest,guest.getByRole('button',{name:'Check in',exact:true}),'/checkins');
     assert.equal((await fixture()).hubs[0].registration.checkins.length,1);
     await guest.getByRole('button',{name:'Check in another player',exact:true}).click();
     await guest.getByLabel('Full name',{exact:true}).fill('Player 11');
-    await guest.getByLabel('Round robin',{exact:true}).selectOption('rr-b');
+    await guest.getByLabel('Round robin / level',{exact:true}).selectOption('rr-b');
     await clickRequest(guest,guest.getByRole('button',{name:'Check in',exact:true}),'/checkins');
     await page.bringToFront();
     await page.getByRole('tab',{name:'Registration (1)',exact:true}).waitFor({timeout:25000});

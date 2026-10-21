@@ -114,7 +114,7 @@ jobs:
             tests/test_round_robin_hub_pause_substitution.py \
             tests/test_hub_auto_round_ending.py \
             tests/test_admin_round_robin_hub_service.py \
-            tests/test_round_robin_hub_registration.py \
+            tests/test_round_robin_hub_registration.py tests/test_hub_arrival_registration.py \
             tests/test_round_robin_hub_generator_integration.py \
             tests/test_weekly_recap_delta.py \
             tests/test_weekly_recap_categories.py \

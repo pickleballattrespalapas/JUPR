@@ -65,9 +65,9 @@ function record(label) { evidence.push(label); console.log(`PASS ${label}`); }
 async function snapshot(page, name) { await page.screenshot({path:path.join(output, name), fullPage:true}); }
 async function main() {
   const env = {...process.env, VERCEL_ENV:'development', JUPR_API_BASE_URL:apiOrigin,
-    NEXT_PUBLIC_JUPR_API_BASE_URL:apiOrigin, NEXT_PUBLIC_JUPR_ENV:'staging', GENERATOR_BROWSER_WEB_PORT:webPort};
+    NEXT_PUBLIC_JUPR_API_BASE_URL:apiOrigin, NEXT_PUBLIC_JUPR_ENV:'staging', GENERATOR_BROWSER_WEB_PORT:webPort, HUB_EMPTY_REGISTRATION_FIXTURE:'1'};
   const api = start(process.env.GENERATOR_BROWSER_PYTHON || process.env.CODEX_PRIMARY_RUNTIME_PYTHON || 'python3',
-    ['-m', 'uvicorn', 'round_robin_hub_api:app', '--app-dir', path.join(root, 'tests/e2e'), '--host', '127.0.0.1', '--port', apiPort], env, root);
+    ['-m', 'uvicorn', 'hub_registration_api:app', '--app-dir', path.join(root, 'tests/e2e'), '--host', '127.0.0.1', '--port', apiPort], env, root);
   assert(['dev','start'].includes(nextMode),'GENERATOR_BROWSER_NEXT_MODE must be dev or start');
   const next = start(process.execPath, [require.resolve('next/dist/bin/next'), nextMode, ...(nextMode === 'dev' ? ['--webpack'] : []), '--hostname', '127.0.0.1', '--port', webPort], env, webRoot);
   let browser, page;
@@ -114,14 +114,11 @@ async function main() {
       const draftToken = new URL(builderUrl).searchParams.get('draft');
       assert(draftToken && !creationDrafts.includes(draftToken),'Create round robin must open a fresh draft, separate from previous success receipts');
       creationDrafts.push(draftToken);
-      const rosterText = Array.from({length:4},(_,i)=>`${title} Player ${i+1}`).join('\n');
-      await page.getByLabel('Session title',{exact:true}).fill(title);
-      await page.getByLabel('Event format',{exact:true}).selectOption('standard');
+      await page.getByLabel('Round robin name / level',{exact:true}).fill(title);
       await page.getByRole('combobox',{name:/^Play format/}).selectOption('doubles');
-      await page.getByRole('combobox',{name:/^Number of players/}).selectOption('4');
+      assert.equal(await page.getByRole('combobox',{name:/^Number of players/}).count(),0);
+      assert.equal(await page.getByRole('textbox',{name:/^Players \(/}).count(),0);
       await page.getByLabel('Match rating',{exact:true}).selectOption('unrated');
-      await page.getByRole('textbox',{name:/^Players \(/}).fill(rosterText);
-      await clickRequest(page,page.getByRole('button',{name:'Preview matchups',exact:true}),'/preview');
       let failedPayload;
       if (failFirstAttempt) {
         const before = await fixture();
@@ -134,7 +131,7 @@ async function main() {
         };
         await page.route(sessionCreateUrl,failStart);
         const failure = page.waitForResponse(response=>response.url() === sessionCreateUrl && response.request().method() === 'POST');
-        const [response] = await Promise.all([failure,page.getByRole('button',{name:'Start and add to hub',exact:true}).click()]);
+        const [response] = await Promise.all([failure,page.getByRole('button',{name:'Create round robin',exact:true}).click()]);
         assert.equal(response.status(),503);
         await page.unroute(sessionCreateUrl,failStart);
         const alert = page.getByRole('alert').filter({hasText:/start|persist/i});
@@ -142,21 +139,20 @@ async function main() {
         const color = await alert.evaluate(element=>getComputedStyle(element).color);
         const channels = color.match(/[\d.]+/g)?.map(Number) || [];
         assert(channels[0] > channels[1] && channels[0] > channels[2],`Creation failure must use error styling, received ${color}`);
-        assert.equal(await page.getByLabel('Session title',{exact:true}).inputValue(),title);
-        assert.equal(await page.getByRole('textbox',{name:/^Players \(/}).inputValue(),rosterText);
+        assert.equal(await page.getByLabel('Round robin name / level',{exact:true}).inputValue(),title);
         assert.equal((await fixture()).sessions.length,before.sessions.length,'Rejected local request must not create a session');
         await snapshot(page,'creation-error-draft-retained.png');
         await page.reload();
         await page.getByRole('button',{name:'Retry this start',exact:true}).waitFor();
-        assert.equal(await page.getByLabel('Session title',{exact:true}).inputValue(),title);
-        assert.equal(await page.getByRole('textbox',{name:/^Players \(/}).inputValue(),rosterText);
+        assert.equal(await page.getByLabel('Round robin name / level',{exact:true}).inputValue(),title);
       }
-      const started = await clickRequest(page,page.getByRole('button',{name:failFirstAttempt ? 'Retry this start' : 'Start and add to hub',exact:true}),'/sessions');
+      const started = await clickRequest(page,page.getByRole('button',{name:failFirstAttempt ? 'Retry this start' : 'Create round robin',exact:true}),'/sessions');
       if (failFirstAttempt) {
         assert.deepEqual(creationRequests.at(-1),failedPayload,'Retry after reload must preserve the exact creation payload and idempotency key');
         record('A failed start shows an error, keeps the draft across reload, and retries the identical creation request');
       }
-      assert.equal(started.session.event.rounds[0].matches.length,1);
+      assert.equal(started.session.event.rounds[0].matches.length,0);
+      assert.equal(started.session.event.participants.length,0);
       await page.waitForURL(url=>url.pathname === '/admin/round-robin-hub' && url.searchParams.get('hub') === hub.hub.id);
       let state, result;
       for (let attempt=0; attempt<40; attempt++) {
@@ -173,12 +169,11 @@ async function main() {
       fs.writeFileSync(path.join(output,'last-return-state.json'),JSON.stringify(observed,null,2));
       assert.equal(result.workspace.groups.length,expectedGroups,'Start session must automatically attach to its originating hub');
       assert(result.workspace.groups.some(group=>group.session_key === started.session.session_key),'New session must belong to the chosen event');
-      assert(result.workspace.eligible_queue.some(match=>match.session_key === started.session.session_key && match.round_number === 1),'First match must reach the court queue');
+      assert(!result.workspace.eligible_queue.some(match=>match.session_key === started.session.session_key),'Empty groups wait for check-in');
       await page.getByRole('tabpanel',{name:'Court board',exact:true}).waitFor();
       assert.equal(await page.getByRole('tab',{name:'Court board',exact:true}).getAttribute('aria-selected'),'true','Return flow must open the court board');
-      await page.getByRole('listitem').filter({hasText:title}).getByRole('button',{name:'Next open court',exact:true}).waitFor();
       assert.equal(await page.getByLabel('Select hub',{exact:true}).inputValue(),hub.hub.id);
-      record(`${title}: created from hub, attached exactly once, returned to correct court board with first queued match`);
+      record(`${title}: created from hub, attached exactly once, returned to correct court board ready for arrivals`);
       await snapshot(page,`${title.toLowerCase().replaceAll(' ','-')}-returned.png`);
       return {...started.session,builderUrl};
     }
@@ -194,7 +189,6 @@ async function main() {
       await run.click();
       await page.waitForURL(url=>url.pathname === '/admin/round-robin-hub' && url.searchParams.get('hub') === hub.hub.id);
       await page.getByRole('tabpanel',{name:'Court board',exact:true}).waitFor();
-      await page.getByRole('listitem').filter({hasText:session.title}).getByRole('button',{name:'Next open court',exact:true}).waitFor();
       const after = await fixture();
       assert.equal(creationRequests.length,requestsBefore,'Run an existing round robin must navigate without POSTing another session');
       assert.equal(after.sessions.length,before.sessions.length,'Returning to a created session must not duplicate it');
@@ -209,6 +203,46 @@ async function main() {
     await runExistingAfterBack(first,firstSession);
     const secondSession = await createFromHub(first,'Second group',2,true);
     await runExistingAfterBack(first,secondSession,true);
+    await page.getByRole('tab',{name:/^Registration/}).click();
+    await command(page,page.getByRole('button',{name:'Open check-in',exact:true}),'set_registration');
+    const guestContext = await browser.newContext({viewport:{width:390,height:844}});
+    await guestContext.route('**/*', route => ['127.0.0.1','localhost'].includes(new URL(route.request().url()).hostname) ? route.continue() : route.abort());
+    const frontDesk = await guestContext.newPage();
+    frontDesk.on('pageerror',error=>errors.push({type:'pageerror',message:error.message}));
+    await frontDesk.goto(`${webOrigin}/round-robin-hub/${first.hub.id}/check-in`);
+    async function checkIn(name) {
+      if (await frontDesk.getByRole('button',{name:'Check in another player'}).count())
+        await frontDesk.getByRole('button',{name:'Check in another player'}).click();
+      await frontDesk.getByLabel('Full name',{exact:true}).fill(name);
+      await frontDesk.getByLabel('Round robin / level',{exact:true}).selectOption(firstSession.session_key);
+      await clickRequest(frontDesk,frontDesk.getByRole('button',{name:'Check in',exact:true}),'/checkins');
+      await frontDesk.getByRole('heading',{name:`You’re checked in, ${name}.`,exact:true}).waitFor();
+    }
+    for (let n=1;n<=4;n++) {
+      await checkIn(`Arrival ${n}`);
+      const detail=(await fixture()).hubs.find(h=>h.hub.id===first.hub.id);
+      assert.equal(detail.workspace.groups.find(g=>g.session_key===firstSession.session_key).players.length,n);
+      assert.equal(detail.workspace.eligible_queue.length>0,n>=4);
+      assert.equal(detail.registration.pending_count,0);
+    }
+    await checkIn('Arrival 4');
+    assert.equal((await fixture()).hubs.find(h=>h.hub.id===first.hub.id).registration.checkins.length,4);
+    await snapshot(frontDesk,'front-desk-checkin.png');
+    await page.getByRole('button',{name:'Refresh',exact:true}).click();
+    await page.getByRole('tab',{name:'Court board',exact:true}).click();
+    await page.getByRole('listitem').filter({hasText:firstSession.title}).getByRole('button',{name:'Next open court',exact:true}).waitFor();
+    await command(page,page.getByRole('button',{name:'Fill open courts',exact:true}),'auto_fill_courts');
+    const onCourt=(await fixture()).hubs.find(h=>h.hub.id===first.hub.id).workspace.courts.find(c=>c.current).current;
+    for(let n=5;n<=8;n++) await checkIn(`Arrival ${n}`);
+    const afterArrivals=(await fixture()).hubs.find(h=>h.hub.id===first.hub.id);
+    const retained=afterArrivals.workspace.courts.find(c=>c.current?.match_id===onCourt.match_id).current;
+    assert.deepEqual(retained.side_a,onCourt.side_a);
+    assert.deepEqual(retained.side_b,onCourt.side_b);
+    assert(afterArrivals.workspace.eligible_queue.length>0);
+    await page.getByRole('listitem').filter({hasText:'Arrival 5'}).getByRole('button',{name:'Next open court',exact:true}).waitFor({timeout:25000});
+    await snapshot(page,'live-match-and-new-arrivals.png');
+    record('Front-desk check-ins fill an empty roster, the fourth player creates a match, duplicate retries are safe, and later arrivals preserve the live court');
+    await guestContext.close();
     const second = await createHub('Saturday Hub');
     await page.getByLabel('Select hub',{exact:true}).selectOption(first.hub.id);
     await page.getByRole('heading',{name:'Friday Hub',exact:true}).waitFor();

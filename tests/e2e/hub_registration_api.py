@@ -11,12 +11,13 @@ app = fixture.app
 intake = CheckinDB()
 intake.storage = fixture.database.db
 intake.storage.setdefault("round_robin_hub_checkins", [])
-session(intake, key="rr-a", count=4, club="club")
-session(intake, key="rr-b", count=4, club="club", offset=10)
-hub = create(intake, club="club")
-for key in ("rr-a", "rr-b"):
-    hub = hubs.command_round_robin_hub(intake, club_id="club", hub_id=hub["hub"]["id"], action="add_group",
-        payload={"session_key": key}, expected_version=hub["hub"]["version"], idempotency_key=f"attach-{key}", actor_email="reviewer@example.invalid")
+if os.environ.get("HUB_EMPTY_REGISTRATION_FIXTURE") != "1":
+    session(intake, key="rr-a", count=4, club="club")
+    session(intake, key="rr-b", count=4, club="club", offset=10)
+    hub = create(intake, club="club")
+    for key in ("rr-a", "rr-b"):
+        hub = hubs.command_round_robin_hub(intake, club_id="club", hub_id=hub["hub"]["id"], action="add_group",
+            payload={"session_key": key}, expected_version=hub["hub"]["version"], idempotency_key=f"attach-{key}", actor_email="reviewer@example.invalid")
 fixture.database.db = intake.storage
 original_rpc = fixture.database.rpc
 

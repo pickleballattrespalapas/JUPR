@@ -21,7 +21,7 @@ export default function HubRegistrationPanel({ apiBase, clubId, hubId, groups, r
   const origin = useSyncExternalStore(subscribeOrigin, browserOrigin, serverOrigin);
   const url = origin ? `${origin}/round-robin-hub/${encodeURIComponent(hubId)}/check-in` : "";
   const [copyMessage, setCopyMessage] = useState("");
-  const [filter, setFilter] = useState("pending");
+  const [filter, setFilter] = useState("all");
   const [adding, setAdding] = useState<HubCheckin | null>(null);
   const [matches, setMatches] = useState<Record<string, string>>({});
   if (!registration) return <p>Registration is unavailable. Refresh the hub to try again.</p>;
@@ -31,7 +31,7 @@ export default function HubRegistrationPanel({ apiBase, clubId, hubId, groups, r
 
   return <div className={styles.root}>
     <section className={styles.card}>
-      <div className={styles.heading}><div><h2>Public check-in</h2><p className={styles.muted}>Players enter their name and choose a round robin. Their check-ins appear here automatically.</p></div>
+      <div className={styles.heading}><div><h2>Public check-in</h2><p className={styles.muted}>Players enter their name and choose a round robin. Round robins created in this hub add arrivals to the roster and prepare matches automatically.</p></div>
         <span className={`${styles.badge} ${registration.open ? styles.good : ""}`}>{registration.open ? "Check-in open" : "Check-in closed"}</span></div>
       <div className={styles.actions}>
         <button type="button" className={styles.primary} disabled={disabled || (!registration.open && !groups.length)} onClick={() => void onCommand("set_registration", { open: !registration.open })}>{registration.open ? "Close check-in" : "Open check-in"}</button>
@@ -48,7 +48,7 @@ export default function HubRegistrationPanel({ apiBase, clubId, hubId, groups, r
       <p className={styles.small}>Only active round robins are available. Finished or submitted round robins stop accepting check-ins. Your staff controls and player list stay private.</p>
     </section>
     <section className={styles.card}>
-      <div className={styles.heading}><div><h2>Arrivals · {registration.pending_count} to review</h2><p className={styles.small}>Updates automatically every 15 seconds. Confirm a player already on the roster, or add a new arrival to play.</p></div>
+      <div className={styles.heading}><div><h2>Arrivals · {registration.pending_count} to review</h2><p className={styles.small}>Updates automatically every 15 seconds. Automatic arrivals appear as added. Review matching names, full rosters, and check-ins for existing fixed-lineup sessions here.</p></div>
         <label className={styles.field}>Show check-ins<select value={filter} onChange={event => setFilter(event.target.value)}><option value="pending">To review</option><option value="accepted">Added / matched</option><option value="dismissed">Dismissed</option><option value="all">All check-ins</option></select></label></div>
       {!rows.length ? <p className={styles.empty}>{filter === "pending" ? "No check-ins waiting for review." : "No check-ins in this view."}</p> : null}
       {rows.map(checkin => {
@@ -61,6 +61,7 @@ export default function HubRegistrationPanel({ apiBase, clubId, hubId, groups, r
         return <article key={checkin.id} style={{ borderTop: "1px solid #e2e8f0", padding: "1rem 0" }}>
           <div className={styles.heading}><div><strong>{checkin.name}</strong><div className={styles.small}>{group?.title || "Round robin removed from event"} · {new Date(checkin.created_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</div></div>
             <span className={styles.badge}>{checkin.status === "accepted" ? "Added / matched" : checkin.status === "dismissed" ? "Dismissed" : "To review"}</span></div>
+          {checkin.review_reason ? <p className={styles.small}>{checkin.review_reason}</p> : null}
           {checkin.status === "pending" ? <>
             {available && players.length ? <div className={styles.inlineForm} style={{ marginTop: ".75rem" }}>
               <label className={styles.field}>Already on the roster?<select aria-label={`Match ${checkin.name} to roster`} value={selected} disabled={disabled} onChange={event => setMatches(current => ({ ...current, [checkin.id]: event.target.value }))}>

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from uuid import UUID
 from typing import Any
 
 from fastapi import HTTPException, Query
@@ -79,6 +80,8 @@ class GeneratorDurableRequest(BaseModel):
 
 
 class GeneratorStartRequest(GeneratorPreviewRequest, GeneratorDurableRequest):
+    participant_names: list[str] = Field(default_factory=list, max_length=40)
+    registration_hub_id: UUID | None = None
     preview_fingerprint: str | None = Field(default=None, max_length=128)
     source: str = "next_play_generator_start"
 
@@ -196,6 +199,8 @@ def _model_payload(model: BaseModel) -> dict[str, Any]:
     # profile links were supported. Nonempty maps remain part of the intent.
     if payload.get("participant_player_ids") == {}:
         payload.pop("participant_player_ids")
+    if payload.get("registration_hub_id") is None:
+        payload.pop("registration_hub_id", None)
     return payload
 
 
@@ -492,6 +497,7 @@ def install_admin_play_generator_routes(app, *, get_supabase_client) -> None:
                     doubles_court_count=payload.doubles_court_count,
                     singles_court_count=payload.singles_court_count,
                     preview_fingerprint=payload.preview_fingerprint,
+                    registration_hub_id=str(payload.registration_hub_id) if payload.registration_hub_id else None,
                     standings_sort=payload.standings_sort,
                     scoring_mode=payload.scoring_mode,
                     rating_mode=payload.rating_mode,
