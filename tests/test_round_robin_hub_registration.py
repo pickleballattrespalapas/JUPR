@@ -3,13 +3,14 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from jupr_app.services import round_robin_hub_registration_service as registration
 from jupr_app.services import admin_round_robin_hub_service as hubs
 from jupr_app.services.public_live_operation_service import PublicLiveConflictError
 from services.api import public_round_robin_hub_routes as routes
+from services.api.middleware import StagingWriteWaveMiddleware
 from tests.test_admin_round_robin_hub_service import TransactionalHubDB, create, command, session, raw_session
 
 
@@ -146,15 +147,25 @@ def test_invalid_names(name):
 
 def test_public_routes_no_auth_narrow_input_and_write_gate(event, monkeypatch):
     db, hub = event
-    monkeypatch.setattr(routes, "require_public_intake_or_403", lambda: None)
+    monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "open")
+    monkeypatch.setenv("JUPR_ENABLE_STAGING_PUBLIC_INTAKE_WRITES", "1")
     app = FastAPI(); routes.install_public_round_robin_hub_routes(app, get_supabase_client=lambda: db)
+    app.add_middleware(StagingWriteWaveMiddleware)
     client = TestClient(app); base = f"/public/round-robin-hubs/{hub['hub']['id']}"
     response = client.get(f"{base}/registration")
     assert response.status_code == 200 and response.headers["cache-control"] == "no-store"
     assert client.post(f"{base}/checkins", json={"name": "New Player", "session_key": "rr-a"}).status_code == 200
     assert client.post(f"{base}/checkins", json={"name": "New Player", "session_key": "rr-a", "player_id": 99}).status_code == 422
     assert client.get(f"/public/round-robin-hubs/{uuid4()}/registration").status_code == 404
-    def closed(): raise HTTPException(status_code=403, detail="Writes closed")
-    monkeypatch.setattr(routes, "require_public_intake_or_403", closed)
+    before = deepcopy(db.storage[registration.CHECKIN_TABLE])
+    for wave in ("none", "communications"):
+        monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", wave)
+        assert client.post(f"{base}/checkins", json={"name": "Other Player", "session_key": "rr-a"}).status_code == 403
+        assert client.get(f"{base}/registration").status_code == 200
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "public-intake-auth")
+    monkeypatch.setenv("JUPR_ENABLE_STAGING_PUBLIC_INTAKE_WRITES", "0")
     assert client.post(f"{base}/checkins", json={"name": "Other Player", "session_key": "rr-a"}).status_code == 403
-    assert client.get(f"{base}/registration").status_code == 200
+    assert db.storage[registration.CHECKIN_TABLE] == before
+    monkeypatch.setenv("JUPR_ENABLE_STAGING_PUBLIC_INTAKE_WRITES", "1")
+    assert client.post(f"{base}/checkins", json={"name": "Other Player", "session_key": "rr-a"}).status_code == 200

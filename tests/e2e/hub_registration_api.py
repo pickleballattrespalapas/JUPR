@@ -1,9 +1,11 @@
 """Loopback browser rehearsal. Production services, local auth and RPC doubles."""
+import os
 import round_robin_hub_api as fixture
 from test_round_robin_hub_registration import CheckinDB
 from test_admin_round_robin_hub_service import session, create
 from services.api import public_round_robin_hub_routes as public
 from jupr_app.services import admin_round_robin_hub_service as hubs
+from services.api.middleware import StagingWriteWaveMiddleware
 
 app = fixture.app
 intake = CheckinDB()
@@ -24,5 +26,8 @@ def rpc(name, params):
         return intake.rpc(name, params)
     return original_rpc(name, params)
 fixture.database.rpc = rpc
-fixture.generator.patches.setattr(public, "require_public_intake_or_403", lambda: None)
+os.environ["JUPR_ENV"] = "staging"
+os.environ["JUPR_STAGING_WRITE_WAVE"] = "open"
+os.environ["JUPR_ENABLE_STAGING_PUBLIC_INTAKE_WRITES"] = "1"
+app.add_middleware(StagingWriteWaveMiddleware)
 public.install_public_round_robin_hub_routes(app, get_supabase_client=lambda: fixture.database)
