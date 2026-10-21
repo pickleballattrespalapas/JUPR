@@ -90,7 +90,7 @@ def _save(db, row: dict, state: dict, **patch) -> dict:
         "state": state, "version": int(row.get("version") or 1) + 1,
         "updated_at": _now(), **patch,
     }).eq("club_id", row["club_id"]).eq("session_key", row["session_key"])
-        .eq("version", int(row.get("version") or 1)))
+        .eq("version", int(row.get("version") or 1)).eq("updated_at", row.get("updated_at")))
     if not updated:
         raise PublicLiveConflictError("This session changed. Refresh before continuing.")
     return updated[0]
@@ -120,18 +120,22 @@ def submit_generator_session(
     db, *, club_id: str, session_key: str, expected_version: str | int,
     organizer_name: str, match_date: str, edit_token: str | None = None,
     idempotency_key: str = "", requester_hash: str = "", actor_email: str = "",
+    actor_role: str = "",
 ) -> dict:
     row = _row(db, club_id, session_key)
     public = row["state"]["mode"] == "public_play_generator"
-    if public:
+    staff_submission = bool(actor_email and edit_token is None)
+    if public and staff_submission:
+        require_reviewer(actor_role)
+    elif public:
         if not edit_token_matches(edit_token or "", row.get("edit_token_hash") or ""):
             raise PermissionError("Only the organizer can submit this session.")
     elif not actor_email or edit_token is not None:
         raise PermissionError("Sign in to submit this staff session.")
     state = copy.deepcopy(row["state"])
     if state.get("generator_submission"):
-        return {"ok": True, "session": _session(row), "idempotent_replay": True}
-    version = int(row.get("version") or 1) if public else str(row.get("updated_at") or "")
+        return {"ok": True, "session": _session_payload(row) if staff_submission else _session(row), "idempotent_replay": True}
+    version = int(row.get("version") or 1) if public and not staff_submission else str(row.get("updated_at") or "")
     if str(version) != str(expected_version):
         raise PublicLiveConflictError("This session changed. Refresh before submitting.")
     if row.get("pending_operation_key"):
@@ -150,7 +154,7 @@ def submit_generator_session(
         raise ValueError("Enter the organizer’s name.")
     played_on = _date(match_date)
     operation = None
-    if public:
+    if public and not staff_submission:
         operation, _ = begin_public_live_operation(
             db, club_id=club_id, session_key=session_key, action="generator_submit",
             idempotency_key=idempotency_key, requester_hash=requester_hash,
@@ -168,7 +172,7 @@ def submit_generator_session(
     if operation:
         update_public_live_operation(db, club_id=club_id,
             operation_key_value=operation["operation_key"], status="completed", result={})
-    return {"ok": True, "session": _session(updated), "idempotent_replay": False}
+    return {"ok": True, "session": _session_payload(updated) if staff_submission else _session(updated), "idempotent_replay": False}
 
 
 def require_reviewer(role: str) -> None:

@@ -5,6 +5,7 @@ import GeneratorMoneyballExpectations, { type MoneyballExpectation, type Moneyba
 
 import PublicControls from "@/components/PublicControls";
 
+import GeneratorSessionDetails from "@/components/GeneratorSessionDetails";
 import GeneratorSharing from "@/components/GeneratorSharing";
 import { hubAutoAdvanceBoundary, hubPreparedRoundLimit } from "@/lib/hubAutoAdvanceBoundary";
 
@@ -970,6 +971,7 @@ export default function GeneratorRoundRunner({
           {playFormatLabel(session.play_format)} · Round {roundNumber}{generatorKind === "ladder" ? ` of ${event.totalRounds}` : ""} · {scoredSession ? "Scores on" : "Scores off"} · {roundStatusLabel(round.status)} · {session.submission?.status !== "approved" ? `${session.rating_mode === "rated" ? "Rated" : "Unrated"} · ` : ""}{generatorResultLabel(session.submission)}
         </p>
         {!editToken ? <p style={{ color: "#64748b" }}>Only the organizer can enter scores or change players.</p> : null}
+              <GeneratorSessionDetails key={sessionKey} apiBase={apiBase} clubId={clubId} sessionKey={sessionKey} session={session} ownerToken={shared ? undefined : editToken} locked={resultsLocked} disabled={busy || editingScores || (canEditRound && anyDraftScore)} scored={scoredSession} onSaved={applySession} />
       </article>
 
       <PublicControls navigation resetKey={String(roundNumber)} context={`Round ${roundNumber} · ${roundStatusLabel(round.status)}`}>

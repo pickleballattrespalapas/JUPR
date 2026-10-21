@@ -167,6 +167,16 @@ async function main() {
         console.log(`PASS ${mode}: scored round ${round}, viewed standings, ${last ? 'finished' : 'advanced'}`);
       }
       assert.equal(session.status, 'completed');
+      const originalRounds = structuredClone(session.event.rounds);
+      for (const ratingChoice of [mode === 'rated' ? 'unrated' : 'rated', mode]) {
+        await page.getByRole('button', {name:'Edit session details', exact:true}).click();
+        await page.getByLabel('Session rating', {exact:true}).selectOption(ratingChoice);
+        const edited = await clickRequest(page, page.getByRole('button', {name:'Save session details', exact:true}), '/details', 'PATCH');
+        session = edited.body.session;
+        assert.equal(session.rating_mode, ratingChoice);
+        assert.deepEqual(session.event.rounds, originalRounds, 'Editing rating intent preserves every saved score');
+      }
+
       await page.getByRole('heading', {name:'Final standings', exact:true}).waitFor();
       // User finishes on this page: the submission must be available here.
       const submit = page.getByRole('button', {name:'Submit for approval', exact:true});
@@ -207,13 +217,13 @@ async function main() {
       if (mode === 'rated') await adminPage.getByRole('spinbutton', {name:'Player 1 doubles starting level', exact:true}).fill('4.25');
       const correctedTitle = `${mode} RR corrected title`;
       const beforeTitleEdit = await fixture();
-      await adminPage.getByRole('button', {name:'Edit title', exact:true}).click();
+      await adminPage.getByRole('button', {name:'Edit session details', exact:true}).click();
       await adminPage.getByLabel('Session title', {exact:true}).fill('   ');
-      assert.equal(await adminPage.getByRole('button', {name:'Save title', exact:true}).isDisabled(), true, 'Blank titles cannot be saved');
+      assert.equal(await adminPage.getByRole('button', {name:'Save session details', exact:true}).isDisabled(), true, 'Blank titles cannot be saved');
       await adminPage.getByLabel('Session title', {exact:true}).fill(correctedTitle);
       assert.equal(await adminPage.getByRole('button', {name:approveLabel, exact:true}).isDisabled(), true, 'Finish the title edit before reviewing');
-      const renamed = await clickRequest(adminPage, adminPage.getByRole('button', {name:'Save title', exact:true}), '/submission/title', 'PATCH');
-      assert.deepEqual(renamed.request, {expected_version:Number(submitted.body.session.version), title:correctedTitle});
+      const renamed = await clickRequest(adminPage, adminPage.getByRole('button', {name:'Save session details', exact:true}), '/details', 'PATCH');
+      assert.deepEqual(renamed.request, {expected_version:Number(submitted.body.session.version), title:correctedTitle, rating_mode:mode});
       assert.equal(renamed.body.title, correctedTitle);
       assert.equal(renamed.body.version, Number(submitted.body.session.version) + 1);
       await adminPage.getByRole('heading', {name:`${correctedTitle} · ${capitalized}`, exact:true}).waitFor();
