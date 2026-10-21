@@ -39,3 +39,22 @@ jobs:
 
       - name: Check parity closure program
         run: python scripts/check_parity_closure_program.py
+
+  generator-journal-sql:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: tests/sql/package-lock.json
+      - name: Install PostgreSQL test runtime
+        working-directory: tests/sql
+        run: npm ci --no-audit --no-fund --ignore-scripts
+      - name: Verify generator journal constraint and protections
+        working-directory: tests/sql
+        run: npm run test:generator-journal
+      - name: Verify hub atomic saves and participant identity leases
+        working-directory: tests/sql
+        run: npm run test:round-robin-hub

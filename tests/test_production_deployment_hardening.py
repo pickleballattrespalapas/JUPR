@@ -24,7 +24,7 @@ IMMUTABLE_IMAGE_REF = (
     f"registry.fly.io/{verifier.PRODUCTION_FLY_APP}@{IMAGE_DIGEST}"
 )
 FLY_CONFIG_SHA = "4" * 64
-MIGRATION_PROFILE = "tres-weekly-recap-builder-2026-10-19"
+MIGRATION_PROFILE = "tres-round-robin-hub-2026-10-20"
 MIGRATION_CONTRACT = verifier.load_migration_contract(
     ROOT / "config/production_migration_contract.json",
     ROOT / "supabase/migrations",
@@ -383,7 +383,8 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         ROOT / "supabase/migrations",
     )
 
-    assert len(versions) == 171
+    assert len(versions) == 174
+    assert {"20261020033713", "20261020043027", "20261020161332"}.issubset(versions)
     assert "weekly_recap_builder" in contract["required_ledger_names"]
     assert "20261019053313" in versions
     assert "tournament_team_division_transfer" in contract["required_ledger_names"]
@@ -445,14 +446,15 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         "20261109004103",
         "20261109004104",
     )
-    assert len(names) == 171
+    assert len(names) == 174
     assert all("XX" not in version for version in versions)
-    assert len(contract["required_ledger_names"]) == 158
+    assert len(contract["required_ledger_names"]) == 161
     assert "partner_email_invitations" in contract["required_ledger_names"]
-    assert len(contract["deployment_order"]) == 158
-    assert contract["deployment_order"][-5:] == (
+    assert len(contract["deployment_order"]) == 161
+    assert contract["deployment_order"][-8:] == (
         "event_season_deleted_draft_cleanup", "interclub_player_identity_availability", "weekly_recap_builder",
         "badge_conflicts_are_not_serialization_failures", "unrated_match_activity",
+        "round_robin_hub_atomic_operations", "play_generator_operation_surface", "round_robin_hub_participant_identities",
     )
     assert {"interclub_season_trophies", "event_season_history"}.issubset(contract["required_ledger_names"])
     assert set(contract["deployment_order"]) == set(
@@ -555,6 +557,18 @@ def test_reviewed_migration_order_binds_dependency_inversions() -> None:
         (
             "server_only_view_security_hardening",
             "team_league_trigger_function_security_hardening",
+        ),
+        (
+            "public_live_durability",
+            "round_robin_hub_atomic_operations",
+        ),
+        (
+            "live_ladder_admin_operations",
+            "play_generator_operation_surface",
+        ),
+        (
+            "round_robin_hub_atomic_operations",
+            "round_robin_hub_participant_identities",
         ),
     )
     assert all(
@@ -659,6 +673,29 @@ def test_reviewed_migration_contract_is_bound_to_sql_bytes(tmp_path: Path) -> No
             ROOT / "config/production_migration_contract.json",
             migrations,
         )
+
+
+@pytest.mark.parametrize("missing_name", [
+    "round_robin_hub_atomic_operations",
+    "play_generator_operation_surface",
+    "round_robin_hub_participant_identities",
+])
+def test_hub_release_requires_each_reviewed_migration(missing_name: str) -> None:
+    contract = MIGRATION_CONTRACT
+    remote = [
+        ("20261020170000", name)
+        for name in contract["required_ledger_names"]
+        if name != missing_name
+    ]
+    errors = verifier.migration_ledger_errors(
+        contract["required_ledger_names"], remote,
+        allow_additional_names=contract["allow_additional_ledger_names"],
+        allowed_duplicate_names=contract["allowed_duplicate_ledger_names"],
+    )
+    assert any("missing" in error.lower() and missing_name in error for error in errors)
+    assert verifier.pending_required_migration_names(
+        contract["deployment_order"], remote,
+    ) == (missing_name,)
 
 
 def test_migration_ledger_uses_reviewed_logical_names_not_filename_versions() -> None:

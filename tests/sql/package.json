@@ -1,0 +1,11 @@
+{
+  "name": "jupr-sql-regressions",
+  "private": true,
+  "scripts": {
+    "test:generator-journal": "node play_generator_operation_surface.mjs",
+    "test:round-robin-hub": "node round_robin_hub_atomic.mjs && node round_robin_hub_participant_identities.mjs"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.10"
+  }
+}

@@ -137,6 +137,10 @@ def test_expired_cleanup_is_explicitly_club_scoped():
             self.filters.append((key, value))
             return self
 
+        def is_(self, key, value):
+            self.filters.append((key, value))
+            return self
+
         def execute(self):
             return type("Response", (), {"data": []})()
 
@@ -157,3 +161,56 @@ def test_expired_cleanup_rejects_empty_club_scope():
 
     with pytest.raises(ValueError, match="club_id is required"):
         abandon_expired_live_sessions(supabase, club_id="")
+
+
+def test_expiry_cleanup_preserves_hub_members_without_blocking_standalone_cleanup():
+    from types import SimpleNamespace
+
+    rows = [
+        {"session_key": "expired", "club_id": "club-a", "status": "active", "expires_at": "2026-10-01", "state": {}},
+        {"session_key": "detached", "club_id": "club-a", "status": "active", "expires_at": "2026-10-01", "state": {"round_robin_hub_id": None}},
+        {"session_key": "hub", "club_id": "club-a", "status": "active", "expires_at": "2026-10-01", "state": {"round_robin_hub_id": "hub-a"}},
+        {"session_key": "future", "club_id": "club-a", "status": "active", "expires_at": "2026-11-01", "state": {}},
+        {"session_key": "other-club", "club_id": "club-b", "status": "active", "expires_at": "2026-10-01", "state": {}},
+        {"session_key": "completed", "club_id": "club-a", "status": "completed", "expires_at": "2026-10-01", "state": {}},
+    ]
+
+    class Query:
+        def __init__(self):
+            self.predicates = []
+            self.patch = {}
+
+        def update(self, patch):
+            self.patch = patch
+            return self
+
+        def eq(self, key, value):
+            self.predicates.append(lambda row: row.get(key) == value)
+            return self
+
+        def lt(self, key, value):
+            self.predicates.append(lambda row: row.get(key) is not None and row[key] < value)
+            return self
+
+        def is_(self, key, value):
+            assert key == "state->>round_robin_hub_id" and value == "null"
+            self.predicates.append(lambda row: row["state"].get("round_robin_hub_id") is None)
+            return self
+
+        def execute(self):
+            selected = [row for row in rows if all(predicate(row) for predicate in self.predicates)]
+            # Model the DB guard: including even one hub member aborts the bulk UPDATE.
+            if any(row["state"].get("round_robin_hub_id") for row in selected):
+                raise RuntimeError("Hub lifecycle authority rejected the batch")
+            for row in selected:
+                row.update(self.patch)
+            return SimpleNamespace(data=selected)
+
+    db = SimpleNamespace(table=lambda _name: Query())
+    count = abandon_expired_live_sessions(db, club_id="club-a", now_iso="2026-10-20")
+
+    assert count == 2
+    assert {row["session_key"]: row["status"] for row in rows} == {
+        "expired": "abandoned", "detached": "abandoned", "hub": "active",
+        "future": "active", "other-club": "active", "completed": "completed",
+    }

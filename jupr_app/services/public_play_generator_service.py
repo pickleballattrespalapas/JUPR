@@ -215,6 +215,7 @@ def public_play_generator_session_payload(row: dict[str, Any]) -> dict[str, Any]
     official = state.get("official_publish") or {}
     return {
         "session_key": str(row.get("session_key") or ""),
+        "round_robin_hub_id": state.get("round_robin_hub_id"),
         "title": _clean(row.get("title") or event.get("name")),
         "status": str(row.get("status") or event.get("status") or "active"),
         "version": int(row.get("version") or 1),
@@ -655,6 +656,12 @@ def _update_cas(
         "last_seen_at": _now_iso(),
     }
     try:
+        if _state(row).get("round_robin_hub_id"):
+            from jupr_app.services.admin_round_robin_hub_service import persist_linked_generator_patch
+            return persist_linked_generator_patch(
+                supabase, before=row, patch=payload,
+                expected_version=str(row.get("updated_at") or row.get("created_at") or ""),
+            )
         updated = _first(
             supabase.table("live_sessions")
             .update(payload)
@@ -663,6 +670,8 @@ def _update_cas(
             .eq("version", expected)
             .execute()
         )
+    except (PublicLiveConflictError, ValueError):
+        raise
     except Exception as exc:
         current = _get_row(
             supabase,
@@ -786,13 +795,13 @@ def _run_mutation(
         patch["expires_at"] = _ttl_iso()
     try:
         updated = _update_cas(supabase, row=row, patch=patch, operation=operation)
-    except PublicLiveConflictError:
+    except (PublicLiveConflictError, ValueError) as exc:
         update_public_live_operation(
             supabase,
             club_id=str(club_id),
             operation_key_value=operation_key,
             status="rejected",
-            error_text="stale version",
+            error_text=str(exc),
         )
         raise
     except Exception as exc:

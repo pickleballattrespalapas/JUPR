@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import GeneratorRosterSetup, { normalizeRosterName, recommendedGeneratorSetup, recommendedMixedCourtSetup, rosterNamesFromText } from "@/components/GeneratorRosterSetup";
@@ -14,6 +14,7 @@ import {
   writePlayGeneratorDraft
 } from "@/lib/playGeneratorDraft";
 import { useAdminSession } from "@/lib/useAdminSession";
+import { GeneratorRequestError, generatorStartFailure, isRejectedGeneratorStart, readGeneratorStart, writeGeneratorStart, type CreatedGeneratorStart, type GeneratorStartRecovery, type PendingGeneratorStart } from "@/lib/adminGeneratorStart";
 
 type GeneratorKind = "round_robin" | "ladder";
 type PlayFormat = "singles" | "doubles" | "doubles_singles";
@@ -28,6 +29,7 @@ type Participant = {
 };
 
 type MatchRow = {
+  courtLabel?: string;
   id: string;
   round?: number;
   court?: number;
@@ -91,6 +93,7 @@ type GeneratorSession = {
   doubles_court_count?: number;
   singles_court_count?: number;
   updated_at?: string | null;
+  round_robin_hub_id?: string | null;
 };
 
 type SessionListResponse = {
@@ -117,6 +120,10 @@ type Props = {
   apiBase: string | null;
   clubId: string;
   status: StatusResponse | null;
+  embedded?: boolean;
+  onCreated?: (sessionKey: string) => void;
+  returnHubId?: string;
+  draftToken?: string;
 };
 
 const cardStyle = {
@@ -235,7 +242,11 @@ export default function GeneratorWorkspace({
   generatorKind,
   apiBase,
   clubId,
-  status
+  status,
+  embedded = false,
+  onCreated,
+  returnHubId,
+  draftToken
 }: Props) {
   const router = useRouter();
   const { accessToken, session: adminSession } = useAdminSession();
@@ -260,12 +271,21 @@ export default function GeneratorWorkspace({
   const [preview, setPreview] = useState<PreviewEvent | null>(null);
   const [sessions, setSessions] = useState<GeneratorSession[]>([]);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-  const [draftHydrated, setDraftHydrated] = useState(false);
+  const [message, setMessage] = useState<{ text: string; kind: "info" | "success" | "error" } | null>(null);
+  const [hydratedDraftKey, setHydratedDraftKey] = useState<string | null>(null);
+  const [startRecovery, setStartRecovery] = useState<GeneratorStartRecovery | null>(null);
+  const startRecoveryRef = useRef<GeneratorStartRecovery | null>(null);
+  const startLock = useRef(false);
+  const currentDraftKey = useRef("");
+  const baseDraftKey = `admin-play-generator-draft:${clubId}:${generatorKind}`;
   const draftKey = useMemo(
-    () => `admin-play-generator-draft:${clubId}:${generatorKind}`,
-    [clubId, generatorKind]
+    () => returnHubId || draftToken ? `${baseDraftKey}:hub:${encodeURIComponent(returnHubId || "")}:draft:${encodeURIComponent(draftToken || "legacy")}` : baseDraftKey,
+    [baseDraftKey, returnHubId, draftToken]
   );
+  const startRecoveryKey = `${draftKey}:start`;
+  const draftHydrated = hydratedDraftKey === draftKey;
+  const createdStart = startRecovery?.status === "created" ? startRecovery : null;
+  const pendingStart = startRecovery?.status === "pending" ? startRecovery : null;
   const writesEnabled = status?.writes_enabled === true;
 
   const participantNames = useMemo(
@@ -296,7 +316,7 @@ export default function GeneratorWorkspace({
     });
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
-      throw new Error(String(payload?.detail || `API error (${response.status})`));
+      throw new GeneratorRequestError(String(payload?.detail || `API error (${response.status})`), response.status);
     }
     return payload as T;
   }
@@ -309,13 +329,18 @@ export default function GeneratorWorkspace({
       );
       setSessions(payload.sessions || []);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load sessions.");
+      if (!startRecoveryRef.current) setMessage({ kind: "error", text: error instanceof Error ? error.message : "Unable to load sessions." });
     }
   }
 
   useEffect(() => {
-    setDraftHydrated(false);
-    const stored = readPlayGeneratorDraft<PreviewEvent>(draftKey);
+    currentDraftKey.current = draftKey;
+    setHydratedDraftKey(null);
+    const recovery = readGeneratorStart(startRecoveryKey);
+    startRecoveryRef.current = recovery;
+    setStartRecovery(recovery);
+    const stored = readPlayGeneratorDraft<PreviewEvent>(draftKey) || (!draftToken ? readPlayGeneratorDraft<PreviewEvent>(baseDraftKey) : null);
+    setMessage(recovery?.status === "pending" ? { kind: "error", text: "A previous start needs confirmation. Choose Retry this start to check the saved request." } : null);
     if (stored) {
       setTitle(stored.title);
       setEventFormat(generatorKind === "round_robin" ? stored.eventFormat || "standard" : "standard");
@@ -330,15 +355,21 @@ export default function GeneratorWorkspace({
       setParticipantText(stored.participantText);
       setLinkedPlayerIds(stored.linkedPlayerIds);
       setPreview(stored.preview);
-      if (stored.preview) {
-        setMessage("Restored your unsaved schedule preview.");
+      if (stored.preview && !recovery) {
+        setMessage({ kind: "info", text: "Restored your unsaved schedule preview." });
       }
+    } else {
+      const mixedSetup = recommendedMixedCourtSetup(8);
+      setTitle(`${generatorTitle(generatorKind)} ${new Date().toISOString().slice(0, 10)}`);
+      setEventFormat("standard"); setPlayFormat("doubles"); setStandingsSort("wins"); setScoringMode("scored"); setRatingMode("unrated");
+      setTargetCount(8); setDoublesCourtCount(mixedSetup.doublesCourtCount); setSinglesCourtCount(mixedSetup.singlesCourtCount);
+      setParticipantText(""); setLinkedPlayerIds({}); setPreview(null);
     }
-    setDraftHydrated(true);
-  }, [draftKey, generatorKind]);
+    setHydratedDraftKey(draftKey);
+  }, [draftKey, baseDraftKey, startRecoveryKey, draftToken, generatorKind]);
 
   useEffect(() => {
-    if (!draftHydrated) return;
+    if (!draftHydrated || createdStart) return;
     writePlayGeneratorDraft(draftKey, {
       title,
       playFormat,
@@ -355,6 +386,7 @@ export default function GeneratorWorkspace({
     });
   }, [
     draftHydrated,
+    createdStart,
     draftKey,
     title,
     playFormat,
@@ -387,10 +419,12 @@ export default function GeneratorWorkspace({
     if (!mixedSetupValid) {
       throw new Error("Choose a doubles and singles court mix that fits the selected player count.");
     }
-    const orderedIds = participantNames.map((name) =>
-      Number(linkedPlayerIds[normalizeRosterName(name)] || 0)
+    const participantPlayerIds = Object.fromEntries(
+      participantNames.flatMap((name) => {
+        const playerId = Number(linkedPlayerIds[normalizeRosterName(name)] || 0);
+        return playerId > 0 ? [[name, playerId]] : [];
+      })
     );
-    const allLinked = orderedIds.every((playerId) => playerId > 0);
     return {
       generator_kind: generatorKind,
       event_format: generatorKind === "round_robin" ? eventFormat : "standard",
@@ -400,7 +434,7 @@ export default function GeneratorWorkspace({
       rating_mode: ratingMode,
       title: title.trim(),
       participant_names: participantNames,
-      player_ids: allLinked ? orderedIds : [],
+      participant_player_ids: participantPlayerIds,
       total_rounds: automaticSetup.totalRounds,
       // Zero lets the engine recalculate courts as late arrivals join later rounds.
       court_count: generatorKind === "round_robin" && playFormat !== "doubles_singles"
@@ -412,7 +446,8 @@ export default function GeneratorWorkspace({
   }
 
   async function generatePreview(): Promise<void> {
-    if (creationPending) return;
+    if (creationPending || startRecoveryRef.current) return;
+    const activeDraftKey = draftKey;
     setBusy(true);
     setMessage(null);
     try {
@@ -421,51 +456,87 @@ export default function GeneratorWorkspace({
         `/admin/clubs/${encodeURIComponent(clubId)}/play-generators/preview`,
         { method: "POST", body: JSON.stringify(body) }
       );
+      if (currentDraftKey.current !== activeDraftKey) return;
       setPreview(payload.preview);
-      setMessage(
-        moneyball
+      setMessage({ kind: "success", text: moneyball
           ? `Fixed Moneyball schedule: ${payload.preview.rounds.length} rounds. Complete every scheduled game to decide the winner.`
           : generatorKind === "round_robin"
           ? `Starting schedule: ${payload.preview.rounds.length} rounds. Add more as needed during play.`
           : "Previewed Round 1. Later ladder rounds are generated from results."
-      );
+      });
     } catch (error) {
-      setPreview(null);
-      setMessage(error instanceof Error ? error.message : "Unable to preview the schedule.");
+      if (currentDraftKey.current === activeDraftKey) {
+        setPreview(null);
+        setMessage({ kind: "error", text: error instanceof Error ? error.message : "Unable to preview the schedule." });
+      }
     } finally {
       setBusy(false);
     }
   }
 
+  function runCreatedSession(created: CreatedGeneratorStart): void {
+    if (onCreated) { onCreated(created.sessionKey); return; }
+    const path = created.hubId
+      ? `/admin/round-robin-hub?hub=${encodeURIComponent(created.hubId)}&add_session=${encodeURIComponent(created.sessionKey)}`
+      : `/admin/${generatorSlug(generatorKind)}/sessions/${encodeURIComponent(created.sessionKey)}/rounds/${created.roundNumber}`;
+    router.push(path);
+    router.refresh();
+  }
+
+  function createAnotherSession(): void {
+    if (startLock.current || startRecoveryRef.current?.status !== "created") return;
+    const hubId = startRecoveryRef.current.hubId;
+    router.push(`/admin/${generatorSlug(generatorKind)}?${hubId ? `hub=${encodeURIComponent(hubId)}&` : ""}draft=${encodeURIComponent(operationKey())}`);
+    router.refresh();
+  }
+
   async function startSession(): Promise<void> {
-    if (creationPending) return;
-    if (!preview) return;
+    if (startLock.current || creationPending || !draftHydrated) return;
+    if (startRecoveryRef.current?.status === "created") { runCreatedSession(startRecoveryRef.current); return; }
+    if (!preview && startRecoveryRef.current?.status !== "pending") return;
+    startLock.current = true;
     setBusy(true);
     setMessage(null);
+    const activeDraftKey = draftKey, recoveryKey = startRecoveryKey;
+    let attempt: PendingGeneratorStart | null = startRecoveryRef.current?.status === "pending" ? startRecoveryRef.current : null;
+    const recovering = Boolean(attempt);
+    let confirmed: CreatedGeneratorStart | null = null;
     try {
-      const body = {
-        ...requestBody(),
-        preview_fingerprint: preview.previewFingerprint,
-        expected_version: "new",
-        idempotency_key: operationKey()
-      };
+      if (!attempt) {
+        const next: PendingGeneratorStart = { status: "pending", hubId: returnHubId || null, body: {
+          ...requestBody(), preview_fingerprint: preview!.previewFingerprint, expected_version: "new", idempotency_key: operationKey()
+        } };
+        if (!writeGeneratorStart(recoveryKey, next)) throw new Error("Your browser could not save this start for recovery. Allow browser storage and try again. Your draft has not been started.");
+        attempt = next;
+        startRecoveryRef.current = next; setStartRecovery(next);
+      }
       const payload = await requestJson<StartResponse>(
         `/admin/clubs/${encodeURIComponent(clubId)}/play-generators/sessions`,
-        { method: "POST", body: JSON.stringify(body) }
+        { method: "POST", body: JSON.stringify(attempt.body) }
       );
       const session = payload.session;
-      if (!session?.session_key) throw new Error("The session was created without a session key.");
-      clearPlayGeneratorDraft(draftKey);
-      const path = `/admin/${generatorSlug(generatorKind)}/sessions/${encodeURIComponent(
-        session.session_key
-      )}/rounds/${session.current_round_number || 1}`;
-      router.push(path);
-      router.refresh();
+      if (!session?.session_key) throw new Error("The start response did not confirm a session key.");
+      confirmed = { status: "created", sessionKey: session.session_key, roundNumber: session.current_round_number || 1, hubId: attempt.hubId };
+      // If receipt storage fails, the previously stored exact request can still
+      // replay the confirmed result after a reload.
+      writeGeneratorStart(recoveryKey, confirmed);
+      clearPlayGeneratorDraft(activeDraftKey);
+      if (currentDraftKey.current === activeDraftKey) {
+        startRecoveryRef.current = confirmed; setStartRecovery(confirmed);
+        setMessage({ kind: "success", text: generatorKind === "round_robin" ? "Your round robin is created and ready to run." : "Your session is created and ready to run." });
+      }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to start the session.");
+      const safelyRejected = !recovering && isRejectedGeneratorStart(error);
+      if (attempt && safelyRejected) writeGeneratorStart(recoveryKey, null);
+      if (currentDraftKey.current === activeDraftKey) {
+        if (attempt && safelyRejected) { startRecoveryRef.current = null; setStartRecovery(null); }
+        setMessage({ kind: "error", text: attempt ? generatorStartFailure(error, recovering) : error instanceof Error ? error.message : "Unable to start. Your draft is saved." });
+      }
     } finally {
+      startLock.current = false;
       setBusy(false);
     }
+    if (confirmed && currentDraftKey.current === activeDraftKey) runCreatedSession(confirmed);
   }
 
   function downloadCsv(): void {
@@ -571,10 +642,10 @@ export default function GeneratorWorkspace({
     const filename = `${generatorSlug(generatorKind)}-schedule.pdf`;
     const blob = doc.output("blob");
     openPdfBlobInNewTab(blob, filename, pdfWindow);
-    setMessage("Opened the PDF in a new tab. Your unsaved schedule remains here.");
+    setMessage({ kind: "success", text: "Opened the PDF in a new tab. Your unsaved schedule remains here." });
     } catch (error) {
       closePreparedPdfWindow(pdfWindow);
-      setMessage(error instanceof Error ? error.message : "Unable to open the schedule PDF.");
+      setMessage({ kind: "error", text: error instanceof Error ? error.message : "Unable to open the schedule PDF." });
     }
   }
 
@@ -589,12 +660,30 @@ export default function GeneratorWorkspace({
         </article>
       ) : null}
 
-      <article style={cardStyle}>
+      {message ? <p role={message.kind === "error" ? "alert" : "status"} aria-live={message.kind === "error" ? "assertive" : "polite"} style={{ color: message.kind === "error" ? "#b91c1c" : message.kind === "success" ? "#166534" : "#334155" }}>{message.text}</p> : null}
+
+      {createdStart ? <article style={cardStyle}>
+        <h2 style={{ marginTop: 0 }}>{generatorKind === "round_robin" ? "Your round robin is ready" : "Your session is ready"}</h2>
+        <p>This session has already been created. Open it to continue playing.</p>
+        <div style={{ display: "flex", gap: ".6rem", flexWrap: "wrap" }}>
+          <button type="button" style={primaryButton} onClick={() => runCreatedSession(createdStart)}>{createdStart.hubId ? "Run this round robin in the hub" : "Run this session"}</button>
+          <button type="button" style={secondaryButton} onClick={createAnotherSession}>{generatorKind === "round_robin" ? "Create another round robin" : "Create another session"}</button>
+        </div>
+      </article> : null}
+
+      {pendingStart ? <article style={cardStyle}>
+        <h2 style={{ marginTop: 0 }}>{busy ? "Starting your session…" : "Confirm this start"}</h2>
+        <p>The saved request keeps the same lineup and settings. Confirm it before starting another session.</p>
+        <button type="button" style={primaryButton} disabled={busy || !writesEnabled || !draftHydrated} onClick={() => void startSession()}>{busy ? "Checking…" : "Retry this start"}</button>
+      </article> : null}
+
+      {!createdStart ? <article style={cardStyle}>
         <h2 style={{ marginTop: 0 }}>1. Set up the session</h2>
         <p style={{ color: "#475569" }}>
           Enter players in the starting order you want. Reorder them before previewing to change
           the schedule and bye order.
         </p>
+        <fieldset disabled={busy || Boolean(pendingStart)} style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}>
         <div
           style={{
             display: "grid",
@@ -728,7 +817,7 @@ export default function GeneratorWorkspace({
           creationAccessToken={canCreatePlayer ? accessToken : undefined}
           creationDraftKey={draftKey}
           onCreationPendingChange={setCreationPending}
-          disabled={busy}
+          disabled={busy || Boolean(pendingStart)}
           generatorKind={generatorKind}
           playFormat={playFormat}
           moneyballOnly={moneyball}
@@ -748,24 +837,16 @@ export default function GeneratorWorkspace({
           <button
             type="button"
             onClick={() => void generatePreview()}
-            disabled={busy || creationPending || !rosterReady || !mixedSetupValid}
+            disabled={busy || creationPending || Boolean(pendingStart) || !rosterReady || !mixedSetupValid}
             style={primaryButton}
           >
             {busy ? "Generating…" : "Preview matchups"}
           </button>
         </div>
-        {message ? (
-          <p
-            role="status"
-            aria-live="polite"
-            style={{ color: /unable|error|must|requires|changed/i.test(message) ? "#b91c1c" : "#166534" }}
-          >
-            {message}
-          </p>
-        ) : null}
-      </article>
+        </fieldset>
+      </article> : null}
 
-      {preview ? (
+      {preview && !createdStart ? (
         <article style={{ ...cardStyle, minWidth: 0 }}>
           <h2 style={{ marginTop: 0 }}>2. Preview before starting</h2>
           <p style={{ color: "#475569" }}>
@@ -784,14 +865,14 @@ export default function GeneratorWorkspace({
             <button type="button" onClick={() => void downloadPdf()} style={secondaryButton}>
               Download one-sheet PDF (opens new tab)
             </button>
-            <button
+            {!pendingStart ? <button
               type="button"
               onClick={() => void startSession()}
-              disabled={busy || creationPending || !writesEnabled}
+              disabled={busy || creationPending || !writesEnabled || !draftHydrated}
               style={primaryButton}
             >
-              {busy ? "Starting…" : `Start ${ratingMode} session`}
-            </button>
+              {busy ? "Starting…" : returnHubId ? "Start and add to hub" : `Start ${ratingMode} session`}
+            </button> : null}
           </div>
 
           {moneyball ? <GeneratorMoneyballExpectations rows={preview.moneyballExpectations} /> : null}
@@ -834,7 +915,7 @@ export default function GeneratorWorkspace({
                         }}
                       >
                         <span style={{ color: "#64748b" }}>
-                          {matchFormatLabel(match, preview.playFormat)} · Court {match.court || "—"}
+                          {matchFormatLabel(match, preview.playFormat)} · {match.courtLabel || `Court ${match.court || "—"}`}
                           {match.miniRound ? `.${match.miniRound}` : ""}
                         </span>
                         <strong>{sideLabel(match.sideA || match.teamA, previewParticipants)}</strong>
@@ -858,7 +939,7 @@ export default function GeneratorWorkspace({
         </article>
       ) : null}
 
-      <article style={cardStyle}>
+      {!embedded ? <article style={cardStyle}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
           <div>
             <h2 style={{ marginTop: 0 }}>Existing {generatorTitle(generatorKind)} sessions</h2>
@@ -883,6 +964,8 @@ export default function GeneratorWorkspace({
                       {" · "}{session.status}
                     </p>
                   </div>
+                  <div style={{ display: "flex", gap: ".75rem", flexWrap: "wrap", alignItems: "center" }}>
+                  {session.round_robin_hub_id ? <Link href={`/admin/round-robin-hub?hub=${encodeURIComponent(session.round_robin_hub_id)}`} style={{ fontWeight: 800 }}>Run this round robin in the hub</Link> : null}
                   <Link
                     href={`/admin/${generatorSlug(generatorKind)}/sessions/${encodeURIComponent(
                       session.session_key
@@ -891,6 +974,7 @@ export default function GeneratorWorkspace({
                   >
                     Open session
                   </Link>
+                  </div>
                 </div>
                 <p style={{ marginBottom: 0, color: "#64748b", fontSize: "0.85rem" }}>
                   Updated {formatTimestamp(session.updated_at)}
@@ -901,7 +985,7 @@ export default function GeneratorWorkspace({
         ) : (
           <p style={{ color: "#64748b" }}>No generator sessions yet.</p>
         )}
-      </article>
+      </article> : null}
     </div>
   );
 }

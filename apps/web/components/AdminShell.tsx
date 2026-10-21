@@ -84,6 +84,11 @@ const adminGroups: AdminGroup[] = [
           pathname.startsWith("/admin/round-robin-generator")
       },
       {
+        label: "Round Robin Hub",
+        href: "/admin/round-robin-hub",
+        active: (pathname) => pathname.startsWith("/admin/round-robin-hub")
+      },
+      {
         label: "Ladder Generator",
         href: "/admin/ladder-generator",
         active: (pathname) => pathname.startsWith("/admin/ladder-generator")
