@@ -10,6 +10,7 @@ import { matchesPlayerSearch } from "@/lib/playerSearch";
 import HubAddPlayerDialog from "./HubAddPlayerDialog";
 import HubRemovePlayerDialog from "./HubRemovePlayerDialog";
 import HubFinishDialog from "./HubFinishDialog";
+import HubRegistrationPanel from "./HubRegistrationPanel";
 import {
   hubMatchLabel, hubPlayerLabel, hubOperationKey, hubWaitLabel, isUncertainHubError, requestRoundRobinHub, RoundRobinHubApiError,
   type CreateHubInput, type HubCommand, type HubCommandAction, type HubCourtConfig, type HubDetailResponse,
@@ -17,8 +18,8 @@ import {
 } from "@/lib/adminRoundRobinHubApi";
 import styles from "./RoundRobinHubPanel.module.css";
 
-type Props = { apiBase: string | null; clubId: string; initialHubId?: string; initialAddSessionKey?: string };
-type Tab = "board" | "queue" | "groups" | "standings" | "players" | "courts";
+type Props = { apiBase: string | null; clubId: string; initialHubId?: string; initialAddSessionKey?: string; initialView?: string };
+type Tab = "board" | "queue" | "groups" | "standings" | "players" | "courts" | "registration";
 type Pending = { hubId: string; body: HubCommand | CreateHubInput };
 type CreatedSession = { hubId: string; sessionKey: string };
 type ReturnIntent = CreatedSession & { attempted: boolean };
@@ -36,6 +37,7 @@ const commandMessages: Partial<Record<HubCommandAction, string>> = {
   mark_played: "Match marked played and court released.", pause_player: "Player paused. Waiting games checked for available replacements. Their waiting time is held.",
   resume_player: "Player is ready again.", advance_round: "Next round is ready for the court queue.", finish_hub: "Event finished.",
   finish_group: "Round robin finish request saved.",
+  set_registration: "Public check-in updated.", review_checkin: "Check-in saved.",
   auto_fill_courts: "Available courts filled with eligible matches.",
   add_player: "Player added to the round robin. Games already assigned keep their players.",
   remove_player: "Player departure saved. Games already assigned keep their players.",
@@ -73,12 +75,12 @@ function readPending(clubId: string): Pending | null {
   } catch { return null; }
 }
 
-export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "", initialAddSessionKey = "" }: Props) {
+export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "", initialAddSessionKey = "", initialView = "" }: Props) {
   const { accessToken } = useAdminSession();
   const [list, setList] = useState<HubListResponse>(emptyList);
   const [hubId, setHubId] = useState(initialHubId);
   const [detail, setDetail] = useState<HubDetailResponse | null>(null);
-  const [tab, setTab] = useState<Tab>(initialAddSessionKey ? "groups" : "board");
+  const [tab, setTab] = useState<Tab>(initialAddSessionKey ? "groups" : initialView === "registration" ? "registration" : "board");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -508,7 +510,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
     {loading && !detail ? <p role="status">Loading court board…</p> : null}
     {detail && workspace && !creating ? <>
       <div className={styles.heading}><div><h2 style={{ marginBottom: ".4rem" }}>{detail.hub.title}</h2><div className={styles.summary}><span><strong>{workspace.groups.length}</strong> round robins</span><span><strong>{workspace.courts.filter(court => court.open && !court.current).length}</strong> open courts</span><span><strong>{workspace.eligible_queue.length}</strong> ready matches</span><span><strong>{workspace.players.filter(player => player.paused).length}</strong> paused players</span></div></div><div className={styles.actions}><button type="button" className={styles.button} disabled={disabled || !activeGroups.length} onClick={openFinishGroup}>Finish round robin</button><span className={`${styles.badge} ${detail.hub.status === "completed" ? "" : styles.good}`}>{detail.hub.status === "completed" ? "Finished" : "Live event"}</span></div></div>
-      <nav className={styles.nav} role="tablist" aria-label="Hub views">{([['board', 'Court board'], ['queue', 'Match queue'], ['groups', 'Round robins'], ['standings', 'Standings'], ['players', 'Players'], ['courts', 'Court setup']] as const).map(([value, label]) => <button type="button" key={value} role="tab" id={`hub-tab-${value}`} aria-selected={tab === value} aria-controls={`hub-panel-${value}`} onClick={() => { if (value === "courts") openCourtSetup(); else { if (value === "standings") setSessionView(null); if (value === "groups") void loadList().catch(cause => setError(cause instanceof Error ? cause.message : "Unable to refresh round robins.")); setTab(value); } }}>{label}</button>)}</nav>
+      <nav className={styles.nav} role="tablist" aria-label="Hub views">{([['board', 'Court board'], ['queue', 'Match queue'], ['groups', 'Round robins'], ['standings', 'Standings'], ['players', 'Players'], ['registration', 'Registration'], ['courts', 'Court setup']] as const).map(([value, label]) => <button type="button" key={value} role="tab" id={`hub-tab-${value}`} aria-selected={tab === value} aria-controls={`hub-panel-${value}`} onClick={() => { window.history.replaceState(null, "", `/admin/round-robin-hub?hub=${encodeURIComponent(hubId)}${value === "registration" ? "&view=registration" : ""}`); if (value === "courts") openCourtSetup(); else { if (value === "standings") setSessionView(null); if (value === "groups") void loadList().catch(cause => setError(cause instanceof Error ? cause.message : "Unable to refresh round robins.")); setTab(value); } }}>{label}{value === "registration" && detail.registration?.pending_count ? ` (${detail.registration.pending_count})` : ""}</button>)}</nav>
 
       {identityPendingCount > 0 ? <section className={styles.notice} role="status" aria-label="Player identity review needed"><div className={styles.heading}><div><strong>Review matching player names</strong><p className={styles.small}>Confirm who is playing across groups. Only their queued matches wait for review; other ready matches can keep playing.</p></div><button type="button" className={styles.button} onClick={openIdentityReview}>Review matching names</button></div></section> : null}
 
@@ -564,6 +566,11 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
         </section>)}</div>
         {!playerGroups.length ? <p className={styles.small}>{playerSearch.trim() ? "No players match this search." : "Add a round robin to manage its players here."}</p> : null}
         <p className={styles.small}>Use Remove player for early departures. Open Manage round robin for substitutions and other roster changes.</p>
+      </section> : null}
+
+      {tab === "registration" ? <section id="hub-panel-registration" role="tabpanel" aria-labelledby="hub-tab-registration">
+        <HubRegistrationPanel key={hubId} apiBase={apiBase} clubId={clubId} hubId={hubId} groups={workspace.groups} registration={detail.registration}
+          disabled={disabled} busy={busy} pending={Boolean(pending)} error={error} onCommand={command} onRetry={() => { if (pending) void execute(pending); }} />
       </section> : null}
 
       {tab === "courts" ? <section id="hub-panel-courts" role="tabpanel" aria-labelledby="hub-tab-courts" className={styles.card}><h2>Court setup</h2><p className={styles.muted}>A group with dedicated courts uses only those courts. Other groups use the shared courts.</p>{courtEditorRows(editCourts, setEditCourts, true)}{String(courtDraftVersion) !== String(detail.hub.version) ? <p className={styles.small}>The court board has changed since this editor opened. Review current courts before saving.</p> : null}<div className={styles.actions}><button type="button" className={styles.primary} disabled={disabled || !editCourts.length || editCourts.some(court => !court.label.trim())} onClick={() => void command("configure_courts", { courts: editCourts.map(courtConfig) }, courtDraftVersion).then(ok => { if (ok) setTab("board"); })}>Save court setup</button><button type="button" className={styles.button} disabled={busy} onClick={openCourtSetup}>Reload current courts</button><button type="button" className={styles.button} disabled={disabled} onClick={() => setFinishReview(true)}>Finish event</button></div></section> : null}

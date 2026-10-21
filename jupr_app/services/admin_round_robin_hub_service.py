@@ -127,7 +127,8 @@ def get_round_robin_hub(db: Any, *, club_id: str, hub_id: str) -> dict[str, Any]
             for participant in group["players"]:
                 participant["can_remove"] = False
                 participant["remove_unavailable_reason"] = group["remove_player_unavailable_reason"]
-    return {"ok": True, "hub": _summary(row), "workspace": workspace}
+    from jupr_app.services.round_robin_hub_registration_service import admin_registration
+    return {"ok": True, "hub": _summary(row), "workspace": workspace, "registration": admin_registration(db, row)}
 
 
 def _replayed(db: Any, club_id: str, hub_id: str, key: str, fingerprint: str) -> bool:
@@ -254,8 +255,20 @@ def command_round_robin_hub(db: Any, *, club_id: str, hub_id: str, action: str,
         if (candidate.get("state") or {}).get("mode") == "public_play_generator" and candidate.get("expires_at"):
             if datetime.fromisoformat(str(candidate["expires_at"]).replace("Z", "+00:00")) < datetime.now(timezone.utc):
                 raise ValueError("This organizer session has expired.")
+    if action == "review_checkin":
+        from jupr_app.services.round_robin_hub_registration_service import prepare_checkin_review
+        action, payload = prepare_checkin_review(db, club_id=club_id, hub_id=hub_id, state=state,
+            events=events, sessions=sessions, payload=payload, actor_email=actor_email, now=_now())
     status = str(row["status"])
-    if action == "finish_hub":
+    if action is None:
+        pass  # Check-in confirmation/dismissal is saved with the same hub CAS.
+    elif action == "set_registration":
+        if type(payload.get("open")) is not bool:
+            raise ValueError("Choose whether public check-in is open or closed.")
+        if payload["open"] and not keys:
+            raise ValueError("Add a round robin before opening check-in.")
+        state["registration_open"] = payload["open"]
+    elif action == "finish_hub":
         if any(court.get("current") or court.get("next") for court in state.get("courts", [])):
             raise ValueError("Resolve the playing and reserved matches before finishing this hub.")
         if any(event.get("status") != "completed" for event in events.values()):

@@ -46,11 +46,13 @@ export type HubSessionSummary = {
   round_robin_hub_id?: string | null; current_round_number?: number; scoring_mode?: string;
 };
 export type HubListResponse = { ok: boolean; hubs: HubSummary[]; sessions: HubSessionSummary[] };
-export type HubDetailResponse = { ok: boolean; hub: HubSummary; workspace: HubWorkspace };
+export type HubCheckin = { id: string; session_key: string; name: string; created_at: string; status: "pending" | "accepted" | "dismissed"; participant_id?: string | null };
+export type HubRegistration = { open: boolean; checkins: HubCheckin[]; pending_count: number };
+export type HubDetailResponse = { ok: boolean; hub: HubSummary; workspace: HubWorkspace; registration?: HubRegistration };
 export type HubCommandAction = "add_group" | "remove_group" | "configure_courts" | "assign_next_court" |
   "assign_game" | "reserve_game_for_court" | "cancel_reservation" | "move_game" | "release_game" |
   "score_and_release" | "mark_played" | "pause_player" | "resume_player" | "advance_round" | "finish_hub" | "finish_group" | "auto_fill_courts" |
-  "resolve_identities" | "add_player" | "remove_player";
+  "resolve_identities" | "add_player" | "remove_player" | "set_registration" | "review_checkin";
 export type HubCommand = {
   action: HubCommandAction; payload: Record<string, unknown>; expected_version: string | number; idempotency_key: string;
 };

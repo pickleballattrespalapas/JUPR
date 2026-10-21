@@ -13,7 +13,8 @@
     "test:e2e:staging": "playwright test",
     "test:round-robin-hub-browser": "node tests/round-robin-hub-browser.cjs",
     "test:round-robin-hub-start-browser": "node tests/round-robin-hub-start-browser.cjs",
-    "test:round-robin-hub-identities-browser": "node tests/round-robin-hub-identities-browser.cjs"
+    "test:round-robin-hub-identities-browser": "node tests/round-robin-hub-identities-browser.cjs",
+    "test:hub-registration-browser": "node tests/hub-registration-browser.cjs"
   },
   "dependencies": {
     "@hello-pangea/dnd": "18.0.1",

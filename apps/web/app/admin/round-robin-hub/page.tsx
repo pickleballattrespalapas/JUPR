@@ -12,6 +12,6 @@ export default async function RoundRobinHubPage({ searchParams }: { searchParams
     <h1 style={{ marginTop: 0 }}>Round Robin Hub</h1>
     <p style={{ color: "#475569", maxWidth: "58rem" }}>Run several round robins from one court board. Each group keeps its own format, players, scores, and standings.</p>
     <RoundRobinHubPanel apiBase={process.env.JUPR_API_BASE_URL || process.env.NEXT_PUBLIC_JUPR_API_BASE_URL || null}
-      clubId={clubId} initialHubId={first(query.hub)} initialAddSessionKey={first(query.add_session)} />
+      clubId={clubId} initialHubId={first(query.hub)} initialAddSessionKey={first(query.add_session)} initialView={first(query.view)} />
   </section>;
 }
