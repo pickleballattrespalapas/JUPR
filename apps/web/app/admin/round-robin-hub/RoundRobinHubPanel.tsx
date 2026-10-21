@@ -107,6 +107,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
   const [identitySelections, setIdentitySelections] = useState<Record<string, string[]>>({});
   const selectedRef = useRef(hubId);
   const loadSequence = useRef(0);
+  const listLoadSequence = useRef(0);
   const mutationLock = useRef(false);
   const returnIntent = useRef<ReturnIntent | null>(null);
   const attachmentInFlight = useRef<ReturnIntent | null>(null);
@@ -149,8 +150,9 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
 
   const loadList = useCallback(async () => {
     if (!ready) return;
+    const sequence = ++listLoadSequence.current;
     const value = await request<HubListResponse>();
-    setList(value);
+    if (sequence === listLoadSequence.current) setList(value);
     return value;
   }, [ready, request]);
 
@@ -249,12 +251,20 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
 
   useEffect(() => { selectedRef.current = hubId; if (hubId && ready) void loadHub(hubId); }, [hubId, ready, loadHub]);
   useEffect(() => {
-    if (!hubId || !ready) return;
-    const refresh = () => { if (document.visibilityState === "visible" && !mutationLock.current) void loadHub(hubId, true); };
+    if (!ready) return;
+    let refreshing = false;
+    const refresh = async () => {
+      if (document.visibilityState !== "visible" || mutationLock.current || refreshing) return;
+      refreshing = true;
+      try {
+        await Promise.all([loadList(), hubId ? loadHub(hubId, true) : Promise.resolve()]);
+      } catch { /* Keep the current choices; manual refresh can report a connection failure. */ }
+      finally { refreshing = false; }
+    };
     const timer = window.setInterval(refresh, 15_000);
     window.addEventListener("focus", refresh); document.addEventListener("visibilitychange", refresh);
     return () => { window.clearInterval(timer); window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); };
-  }, [hubId, ready, loadHub]);
+  }, [hubId, ready, loadHub, loadList]);
 
   const completeCreatedSession = useCallback((value: HubDetailResponse): boolean => {
     const intent = returnIntent.current;
@@ -477,7 +487,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
 
   return <div className={styles.root}>
     <section className={styles.scope} aria-label="Choose event">
-      <label className={styles.field}>Event<select aria-label="Select hub" value={hubId} disabled={busy || attaching || Boolean(pending)} onChange={event => selectHub(event.target.value)}><option value="">Choose an event</option>{list.hubs.map(hub => <option key={hub.id} value={hub.id}>{hub.title}{hub.status === "completed" ? " · Finished" : ""}</option>)}</select></label>
+      <label className={styles.field}>Hub event<select aria-label="Select hub" value={hubId} disabled={busy || attaching || Boolean(pending)} onChange={event => selectHub(event.target.value)}><option value="">Choose an event</option>{list.hubs.map(hub => <option key={hub.id} value={hub.id}>{hub.title}{hub.status === "completed" ? " · Finished" : ""}</option>)}</select></label>
       <button type="button" className={styles.button} disabled={busy || attaching || Boolean(pending)} onClick={() => { setCreating(true); setSessionView(null); setError(""); }}>New event</button>
       <button type="button" className={styles.button} disabled={busy || attaching || loading} onClick={() => { void loadList().catch(cause => setError(cause.message)); if (hubId) void loadHub(hubId); }}>Refresh</button>
     </section>
@@ -487,7 +497,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
     {pending ? <section className={`${styles.notice} ${styles.error}`} aria-label="Confirm pending action"><strong>Confirm the previous action</strong><p>Its exact request is saved. Retrying checks the same action without creating a second one.</p><button type="button" className={styles.button} disabled={busy} onClick={() => void execute(pending)}>{busy ? "Checking…" : "Retry saved action"}</button></section> : null}
     {createdSession ? <section className={styles.notice} aria-label="Add created round robin"><strong>Round robin created</strong><p>{attaching ? "Adding your round robin to this event…" : "Your round robin is saved. Complete its addition to the hub to make its matches available for courts."}</p><div className={styles.actions}><Link className={styles.button} href={`/admin/round-robin-generator/sessions/${encodeURIComponent(createdSession.sessionKey)}/rounds/1`}>Open created round robin</Link>{!pending && !attaching ? <button type="button" className={styles.primary} disabled={busy} onClick={() => { if (returnIntent.current) void attachCreatedSession(returnIntent.current); }}>Retry adding to hub</button> : null}</div></section> : null}
 
-    {creating ? <section className={styles.card} aria-label="Create event"><div className={styles.heading}><div><h2>Create an event</h2><p className={styles.muted}>Name this gathering and choose the courts available to its round robins.</p></div>{detail ? <button type="button" className={styles.button} onClick={() => setCreating(false)}>Cancel</button> : null}</div>
+    {creating ? <section className={styles.card} aria-label="Create event"><div className={styles.heading}><div><h2>Create an event</h2><p className={styles.muted}>Name this gathering and choose its courts. Then add your existing round robins from the Round robins tab.</p></div>{detail ? <button type="button" className={styles.button} onClick={() => setCreating(false)}>Cancel</button> : null}</div>
       <div className={styles.inlineForm}><label className={styles.field}>Event name<input value={title} maxLength={160} placeholder="Friday Pickleball Night" onChange={event => setTitle(event.target.value)} /></label><label className={styles.field} style={{ flex: "0 1 10rem" }}>Number of courts<input type="number" min={1} max={40} value={createCourts.length} onChange={event => { const count = Math.max(1, Math.min(40, Number(event.target.value) || 1)); setCreateCourts(current => count <= current.length ? current.slice(0, count) : [...current, ...newCourts(count).slice(current.length).map(court => ({ ...court, id: hubOperationKey() }))]); }} /></label></div>
       {courtEditorRows(createCourts, setCreateCourts, false)}
       <button type="button" className={styles.primary} disabled={busy || Boolean(pending) || !title.trim() || createCourts.some(court => !court.label.trim())} onClick={() => void execute({ hubId: "", body: { title: title.trim(), courts: createCourts.map(courtConfig), idempotency_key: hubOperationKey() } })}>{busy ? "Creating…" : "Create event"}</button>
@@ -496,7 +506,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
     {loading && !detail ? <p role="status">Loading court board…</p> : null}
     {detail && workspace && !creating ? <>
       <div className={styles.heading}><div><h2 style={{ marginBottom: ".4rem" }}>{detail.hub.title}</h2><div className={styles.summary}><span><strong>{workspace.groups.length}</strong> round robins</span><span><strong>{workspace.courts.filter(court => court.open && !court.current).length}</strong> open courts</span><span><strong>{workspace.eligible_queue.length}</strong> ready matches</span><span><strong>{workspace.players.filter(player => player.paused).length}</strong> paused players</span></div></div><div className={styles.actions}><button type="button" className={styles.button} disabled={disabled || !activeGroups.length} onClick={openFinishGroup}>Finish round robin</button><span className={`${styles.badge} ${detail.hub.status === "completed" ? "" : styles.good}`}>{detail.hub.status === "completed" ? "Finished" : "Live event"}</span></div></div>
-      <nav className={styles.nav} role="tablist" aria-label="Hub views">{([['board', 'Court board'], ['queue', 'Match queue'], ['groups', 'Round robins'], ['standings', 'Standings'], ['players', 'Players'], ['courts', 'Court setup']] as const).map(([value, label]) => <button type="button" key={value} role="tab" id={`hub-tab-${value}`} aria-selected={tab === value} aria-controls={`hub-panel-${value}`} onClick={() => { if (value === "courts") openCourtSetup(); else { if (value === "standings") setSessionView(null); setTab(value); } }}>{label}</button>)}</nav>
+      <nav className={styles.nav} role="tablist" aria-label="Hub views">{([['board', 'Court board'], ['queue', 'Match queue'], ['groups', 'Round robins'], ['standings', 'Standings'], ['players', 'Players'], ['courts', 'Court setup']] as const).map(([value, label]) => <button type="button" key={value} role="tab" id={`hub-tab-${value}`} aria-selected={tab === value} aria-controls={`hub-panel-${value}`} onClick={() => { if (value === "courts") openCourtSetup(); else { if (value === "standings") setSessionView(null); if (value === "groups") void loadList().catch(cause => setError(cause instanceof Error ? cause.message : "Unable to refresh round robins.")); setTab(value); } }}>{label}</button>)}</nav>
 
       {identityPendingCount > 0 ? <section className={styles.notice} role="status" aria-label="Player identity review needed"><div className={styles.heading}><div><strong>Review matching player names</strong><p className={styles.small}>Confirm who is playing across groups. Only their queued matches wait for review; other ready matches can keep playing.</p></div><button type="button" className={styles.button} onClick={openIdentityReview}>Review matching names</button></div></section> : null}
 
