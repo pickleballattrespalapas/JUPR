@@ -22,11 +22,8 @@ def _details(event: dict, *, title: str, rating_mode: str) -> dict:
         raise ValueError("An unscored session cannot be rated.")
     event = copy.deepcopy(event)
     event.update(name=title, ratingMode=rating_mode)
-    # Keep Moneyball's display label consistent; its frozen model, ratings,
-    # expectations, matchups, and settlement inputs remain untouched.
-    config = (event.get("moneyballPrivate") or {}).get("config")
-    if isinstance(config, dict):
-        config["name"] = title
+    # Moneyball's original setup label is part of its integrity digest. Only
+    # rename the display label; preserve the complete frozen setup unchanged.
     return event
 
 
