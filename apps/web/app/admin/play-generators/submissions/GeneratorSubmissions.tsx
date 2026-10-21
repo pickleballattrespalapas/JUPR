@@ -190,7 +190,7 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
   }
   async function decide(action: ReviewRequest["action"]) {
     if (!selected) throw new InteractionActionError("Choose a submission first.", { kind: "validation" });
-    if (editingTitle) throw new InteractionActionError("Save or cancel the title edit before reviewing results.", { kind: "validation" });
+    if (editingTitle) throw new InteractionActionError("Save or cancel the session details edit before reviewing results.", { kind: "validation" });
     setBusy(true); setMessage("");
     try {
       const body = selected.status === "processing" && selected.review ? selected.review.request : { expected_version: selected.version, action, player_ids: mapping, match_date: matchDate, reason };
@@ -298,11 +298,11 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
         {selected.matches.map(m => <tr key={m.id}><td>{m.round_number}</td><td>{(m.sideA || m.teamA || []).map(id => names.get(id) || "Unknown player").join(" & ")}</td><td style={{ whiteSpace: "nowrap" }}>{m.scoreA} – {m.scoreB}</td><td>{(m.sideB || m.teamB || []).map(id => names.get(id) || "Unknown player").join(" & ")}</td></tr>)}
       </tbody></table></div>
       {editable ? <>
-        <p>The organizer chose {selected.rating_mode} before starting. {selected.rating_mode === "rated" ? "Approval updates the appropriate singles or doubles ratings." : "Approval leaves ratings unchanged."} Approved games count toward stats and recaps.</p>
+        <p>This session is marked {selected.rating_mode}. {selected.rating_mode === "rated" ? "Approval updates the appropriate singles or doubles ratings." : "Approval leaves ratings unchanged."} Approved games count toward stats and recaps.</p>
         {!allMapped ? <p>Choose a club profile for every player before approving.</p> : null}
         {!ratingsReady ? <p role="status">Save the missing or edited doubles starting levels before approving.</p> : null}
         {!creationsReady ? <p role="status">Check unfinished player creation before approving.</p> : null}
-        {editingTitle ? <p role="status">Save or cancel the title edit before reviewing results.</p> : null}
+        {editingTitle ? <p role="status">Save or cancel the session details edit before reviewing results.</p> : null}
         <label style={{ display: "grid", gap: 4 }}>Reason if rejecting (optional)<textarea value={reason} disabled={busy} maxLength={500} onChange={e => setReason(e.target.value)} style={field} /></label>
         <div style={{ display: "flex", gap: "0.7rem", flexWrap: "wrap", marginTop: "1rem" }}>
           {(["approve", "reject"] as const).map(action => <ConfirmAction key={action}
