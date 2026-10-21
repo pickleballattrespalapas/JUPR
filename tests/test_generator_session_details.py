@@ -25,6 +25,67 @@ def admin_args(row):
         actor_email="admin@example.invalid", actor_role="administrator")
 
 
+@pytest.fixture(scope="module")
+def completed_moneyball():
+    from jupr_app.domain.adaptive_play_engine import (
+        create_generator_preview, start_generator_event, save_generator_round,
+        complete_generator_event,
+    )
+    from jupr_app.domain.moneyball_expectations import freeze_moneyball
+
+    event = create_generator_preview(generator_kind="round_robin", play_format="doubles",
+        title="MOneyball October 20", participant_names=[f"Player {i}" for i in range(1, 9)],
+        player_ids=list(range(1, 9)), total_rounds=7, event_format="moneyball_expectations",
+        rating_mode="unrated")
+    event = start_generator_event(freeze_moneyball(event,
+        {p["id"]: 3 + i * .15 for i, p in enumerate(event["participants"])}))
+    for round_row in event["rounds"]:
+        event = save_generator_round(event, round_number=round_row["number"], scores=[
+            {"match_id": match["id"], "score_a": 11, "score_b": 7}
+            for match in round_row["matches"]])
+    return complete_generator_event(event)
+
+
+@pytest.mark.parametrize("editor", ["organizer", "administrator"])
+def test_real_moneyball_title_edit_preserves_lock_listing_and_approval(db, completed_moneyball, editor):
+    from jupr_app.domain.adaptive_play_engine import generator_event_standings
+    from jupr_app.domain.moneyball_expectations import public_event, settlement
+    from jupr_app.services.admin_play_generator_service import list_play_generator_sessions
+
+    session, token = completed_session(db)
+    row = db.db["live_sessions"][0]
+    before = copy.deepcopy(completed_moneyball)
+    row["state"] = details.public._put_event(row["state"], before)
+    row["title"] = before["name"]
+    expected_standings = generator_event_standings(before)
+    expected_settlement = settlement(before, expected_standings)
+    expected_public = public_event(before)
+    if editor == "organizer":
+        details.update_public_generator_details(db, **public_args(session, token))
+    else:
+        details.update_admin_generator_details(db, **admin_args(row))
+
+    after = db.db["live_sessions"][0]["state"]["page_state"]["event"]
+    assert after["name"] == "Moneyball October 20"
+    assert after["ratingMode"] == "rated"
+    assert after["moneyballPrivate"] == before["moneyballPrivate"]
+    assert after["rounds"] == before["rounds"]
+    assert after["participants"] == before["participants"]
+    assert generator_event_standings(after) == expected_standings
+    assert settlement(after, expected_standings) == expected_settlement
+    assert public_event(after)["moneyballExpectations"] == expected_public["moneyballExpectations"]
+
+    listed = list_play_generator_sessions(db, club_id="club", generator_kind="round_robin")["sessions"]
+    assert len(listed) == 1 and listed[0]["title"] == after["name"]
+    saved = details.public.public_play_generator_session_payload(db.db["live_sessions"][0])
+    pending = submit(db, saved, token)
+    approved = submissions.review_generator_submission(db, **review_args(pending))
+    assert approved["session"]["submission"]["approved_mode"] == "rated"
+    assert len(db.db["matches"]) == 14
+    assert all(match["rating_scope"] == "overall_only" for match in db.db["matches"])
+    assert db.db["live_sessions"][0]["state"]["page_state"]["event"]["moneyballPrivate"] == before["moneyballPrivate"]
+
+
 def test_organizer_can_edit_completed_session_without_rebuilding_scores(db):
     session, token = completed_session(db)
     event = db.db["live_sessions"][0]["state"]["page_state"]["event"]
@@ -38,8 +99,7 @@ def test_organizer_can_edit_completed_session_without_rebuilding_scores(db):
     assert saved["rating_mode"] == "rated"
     assert after["rounds"] == before["rounds"]
     assert after["participants"] == before["participants"]
-    assert after["moneyballPrivate"]["frozen"] == before["moneyballPrivate"]["frozen"]
-    assert after["moneyballPrivate"]["config"]["name"] == saved["title"]
+    assert after["moneyballPrivate"] == before["moneyballPrivate"]
     assert details.update_public_generator_details(db, **args)["idempotent_replay"]
     submitted = submit(db, saved, token)
     assert submitted["submission"]["rating_mode"] == "rated"
