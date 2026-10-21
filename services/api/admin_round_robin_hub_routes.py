@@ -53,6 +53,7 @@ class HubCommandRequest(BaseModel):
         "score_and_release", "mark_played", "pause_player", "resume_player", "advance_round",
         "finish_hub", "finish_group", "rename_hub",
         "auto_fill_courts", "resolve_identities", "add_player", "remove_player",
+        "set_registration", "review_checkin",
     ]
     payload: dict[str, Any] = Field(default_factory=dict, max_length=20)
     expected_version: int = Field(ge=1)

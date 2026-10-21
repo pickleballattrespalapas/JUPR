@@ -58,6 +58,7 @@ from services.api.middleware import StagingWriteWaveMiddleware, StructuredReques
 from services.api.admin_team_league_routes import install_admin_team_league_routes
 from services.api.admin_play_generator_routes import install_admin_play_generator_routes, _require_write_gate as require_admin_generator_writes
 from services.api.admin_round_robin_hub_routes import install_admin_round_robin_hub_routes
+from services.api.public_round_robin_hub_routes import install_public_round_robin_hub_routes
 from services.api.shared_play_generator_routes import install_shared_play_generator_routes
 from services.api.admin_tournament_team_competition_routes import (
     install_admin_tournament_team_competition_routes,
@@ -1075,6 +1076,7 @@ install_public_play_generator_routes(
 install_admin_team_league_routes(app, get_supabase_client=get_supabase_client)
 install_admin_play_generator_routes(app, get_supabase_client=get_supabase_client)
 install_admin_round_robin_hub_routes(app, get_supabase_client=get_supabase_client)
+install_public_round_robin_hub_routes(app, get_supabase_client=get_supabase_client)
 install_shared_play_generator_routes(app, get_club=get_club, get_supabase_client=get_supabase_client,
     require_public_writes=_require_public_live_writes, require_service_role=_require_live_sessions_service_role,
     require_admin_writes=require_admin_generator_writes, requester_hash=_public_live_requester_hash,
