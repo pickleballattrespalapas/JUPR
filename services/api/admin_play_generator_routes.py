@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from jupr_app.services.generator_session_details_service import update_admin_generator_details
 from jupr_app.domain.admin.roles import (
     PERMISSION_ENTER_SCORES,
     has_permission,
@@ -168,6 +169,13 @@ class GeneratorStartingRatingRequest(BaseModel):
     expected_state_fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
+class GeneratorDetailsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_version: str | int
+    title: str = Field(min_length=1, max_length=160)
+    rating_mode: str = Field(pattern=r"^(rated|unrated)$")
+
+
 class GeneratorSubmissionTitleRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -312,11 +320,24 @@ def install_admin_play_generator_routes(app, *, get_supabase_client) -> None:
         authorization: str | None = auth_header()) -> dict[str, Any]:
         _require_write_gate(club_id)
         supabase = get_supabase_client()
-        email, _ = _resolve_role_or_403(supabase=supabase, club_id=club_id,
+        email, role = _resolve_role_or_403(supabase=supabase, club_id=club_id,
             authorization=authorization, source="generator_submission")
         try:
             return submit_generator_session(supabase, club_id=club_id, session_key=session_key,
-                actor_email=email, **_model_payload(payload))
+                actor_email=email, actor_role=role, **_model_payload(payload))
+        except Exception as exc:
+            _handle(exc)
+
+    @app.patch("/admin/clubs/{club_id}/play-generators/sessions/{session_key}/details")
+    def patch_generator_details(club_id: str, session_key: str,
+        payload: GeneratorDetailsRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
+        _require_write_gate(club_id)
+        supabase = get_supabase_client()
+        email, role = _resolve_role_or_403(supabase=supabase, club_id=club_id,
+            authorization=authorization, source="generator_session_details")
+        try:
+            return update_admin_generator_details(supabase, club_id=club_id, session_key=session_key,
+                actor_email=email, actor_role=role, **_model_payload(payload))
         except Exception as exc:
             _handle(exc)
 

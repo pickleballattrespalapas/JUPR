@@ -379,6 +379,7 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         # staging gate while using their own product-facing API.
         ("POST", "/admin/clubs/{club_id}/play-generators/preview"),
         ("POST", "/admin/clubs/{club_id}/play-generators/sessions"),
+        ("PATCH", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/details"),
         ("PATCH", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/rounds/{round_number}/scores"),
         ("POST", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/rounds/{round_number}/played"),
         ("POST", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/rounds/{round_number}/skip"),
@@ -405,6 +406,7 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("POST", "/clubs/{club_slug}/live-sessions/{session_key}/complete"),
         ("POST", "/clubs/{club_slug}/play-generators/preview"),
         ("POST", "/clubs/{club_slug}/play-generators/sessions"),
+        ("PATCH", "/clubs/{club_slug}/play-generators/sessions/{session_key}/details"),
         ("PATCH", "/clubs/{club_slug}/play-generators/sessions/{session_key}/rounds/{round_number}/scores"),
         ("POST", "/clubs/{club_slug}/play-generators/sessions/{session_key}/rounds/{round_number}/played"),
         ("POST", "/clubs/{club_slug}/play-generators/sessions/{session_key}/rounds/{round_number}/skip"),

@@ -2,6 +2,7 @@ const fs = require('node:fs'), path = require('node:path'), ts = require('typesc
 const loaded = new Map();
 module.exports = function publicControls(name) {
   const relative = {
+    '@/components/GeneratorSessionDetails': '../../components/GeneratorSessionDetails.tsx',
     '@/components/PublicControls': '../../components/PublicControls.tsx',
     '@/lib/hubAutoAdvanceBoundary': '../../lib/hubAutoAdvanceBoundary.ts',
   }[name];
