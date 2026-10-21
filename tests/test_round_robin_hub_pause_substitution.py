@@ -297,6 +297,72 @@ def test_resume_keeps_existing_replacement_and_preserves_only_pre_pause_wait():
     assert not state["players"][person]["paused"]
 
 
+@pytest.mark.parametrize("advance_first", [False, True])
+def test_resume_forms_game_with_three_byes_in_the_current_round(advance_first):
+    value = planned(8)
+    first, healthy = deepcopy(round_row(value)["matches"])
+    # Keep the same explicit lineups in round two to exercise a break that
+    # continues past automatic advancement, with another court already live.
+    round_row(value, 2)["matches"] = [dict(m, id=f"r2-{m['id']}", round=2) for m in (first, healthy)]
+    state, events = setup({"a": value}, courts=2)
+    pid = people(first)[0]
+    state, events = pause(state, events, pid)
+    state, events = command(state, events, "assign_game", session_key="a", match_id=healthy["id"], court_id="c0")
+    if advance_first:
+        state, events = score(state, events, "c0")
+        assert events["a"]["currentRoundNumber"] == 2
+        state, events = command(state, events, "assign_game", session_key="a", match_id=f"r2-{healthy['id']}", court_id="c0")
+    number = events["a"]["currentRoundNumber"]
+    live = deepcopy(round_row(events["a"], number)["matches"])
+    assert len(round_row(events["a"], number)["byeParticipantIds"]) == 3
+
+    state, events = command(state, events, "resume_player", identity=identity(state, events, pid))
+
+    row = round_row(events["a"], number)
+    assert all(match in row["matches"] for match in live)
+    formed = [m for m in ready(state, events) if m["round_number"] == number]
+    assert len(formed) == 1
+    assert {p["id"] for p in formed[0]["side_a"] + formed[0]["side_b"]} == set(people(first))
+    assert not row["byeParticipantIds"]
+    before = deepcopy(events)
+    state, events = command(state, events, "resume_player", identity=identity(state, events, pid))
+    assert events == before
+    state, events = command(state, events, "assign_next_court", session_key="a", match_id=formed[0]["match_id"])
+    assert state["courts"][1]["current"]["match_id"] == formed[0]["match_id"]
+
+
+@pytest.mark.parametrize("already_on_bye", [False, True])
+def test_fill_recovers_four_byes_left_by_a_pre_fix_resume_without_toggling_player(already_on_bye):
+    value = planned(8)
+    affected, healthy = deepcopy(round_row(value)["matches"])
+    if already_on_bye:
+        round_row(value)["matches"] = [healthy]
+        round_row(value)["byeParticipantIds"] = people(affected)
+    state, events = setup({"a": value}, courts=2)
+    pid = people(affected)[0]
+    state, events = pause(state, events, pid)
+    state, events = command(state, events, "assign_game", session_key="a", match_id=healthy["id"], court_id="c0")
+    healthy = deepcopy(round_row(events["a"])["matches"][0])
+    # This is the persisted state produced by the former resume behavior.
+    state["players"][identity(state, events, pid)].update(paused=False, pause_started_at=None)
+    row = round_row(events["a"])
+    row["byeParticipantIds"].append(pid)
+    row["hubPausedParticipantIds"] = []
+    assert len(row["byeParticipantIds"]) == 4
+
+    state, events = command(state, events, "auto_fill_courts")
+
+    assert healthy in round_row(events["a"])["matches"]
+    assigned = state["courts"][1]["current"]
+    assert assigned and assigned["round_number"] == 1
+    formed = next(m for m in round_row(events["a"])["matches"] if m["id"] == assigned["match_id"])
+    assert set(people(formed)) == set(people(affected))
+    assert not round_row(events["a"])["byeParticipantIds"]
+    before = deepcopy(events)
+    state, events = command(state, events, "auto_fill_courts")
+    assert events == before
+
+
 def test_pausing_an_existing_bye_records_absence_without_changing_lineups_and_resume_restores_bye():
     state, events = setup({"a": planned()})
     pid = round_row(events["a"])["byeParticipantIds"][0]

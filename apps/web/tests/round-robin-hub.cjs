@@ -191,6 +191,27 @@ global.fetch = async (url, options = {}) => {
   const props = (hub, session = "") => ({ apiBase: "http://test.local", clubId: "club", initialHubId: hub, initialAddSessionKey: session });
   const standingsGroup = (key, status = "active", scoring_mode = "scored") => ({ session_key: key, title: `${key} round robin`, status, scoring_mode,
     current_round_number: 1, round_status: "active", completed_matches: 0, total_matches: 2, can_advance: false, event_format: "standard" });
+  for (const change of ["substitution", "team_swap", "identity_change"]) {
+    emptyHub(`score-lineup-${change}`);
+    detail.workspace.groups = [standingsGroup("a")];
+    detail.workspace.courts[0].current = clone(a1);
+    await act(async () => { tree = create(h(Panel, props(detail.hub.id))); });
+    await act(async () => button(tree, "Enter score").props.onClick());
+    for (const [side, value] of [["A", "11"], ["B", "7"]])
+      await act(async () => tree.root.findByProps({ "aria-label": `Side ${side} score` }).props.onChange({ target: { value } }));
+    const current = detail.workspace.courts[0].current;
+    if (change === "substitution") current.side_a[0] = { id: "new", identity: "guest:a:new", name: "New arrival" };
+    else if (change === "team_swap") [current.side_a[0], current.side_b[0]] = [current.side_b[0], current.side_a[0]];
+    else current.side_a[0].identity = "player:resolved-profile";
+    detail.hub.version += 1;
+    await act(async () => window.dispatchEvent({ type: "focus" }));
+    assert.equal(button(tree, "Save score & release court").props.disabled, true, `${change} invalidates an open score draft`);
+    assert.equal(button(tree, "Reviewed — keep these scores"), undefined, "Old scores cannot be carried onto changed players");
+    await act(async () => tree.root.findByProps({ id: "hub-score-form" }).props.onSubmit({ preventDefault() {} }));
+    assert.equal(requests.length, 0);
+    assert.match(text(tree.toJSON()), /match or players changed/);
+    await act(async () => tree.unmount());
+  }
   emptyHub("paused-queue-event");
   detail.workspace.groups = [standingsGroup("a")];
   detail.workspace.blocked_queue = [{ ...a2, status: "blocked", blockers: ["A player is paused."] }];
