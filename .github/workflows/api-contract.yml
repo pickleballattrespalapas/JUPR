@@ -97,6 +97,7 @@ jobs:
           python -m pytest -q \
             tests/test_moneyball_expectations.py \
             tests/test_generator_submissions.py \
+            tests/test_generator_session_details.py \
             tests/test_unrated_match_activity.py \
             tests/test_generator_sharing.py \
             tests/test_generator_late_arrivals.py \

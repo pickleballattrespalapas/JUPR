@@ -3,6 +3,7 @@
 import GeneratorMoneyballExpectations, { type MoneyballExpectation, type MoneyballExpectationFormat } from "@/components/GeneratorMoneyballExpectations";
 
 
+import GeneratorSessionDetails from "@/components/GeneratorSessionDetails";
 import GeneratorSharing from "@/components/GeneratorSharing";
 import { hubAutoAdvanceBoundary, hubPreparedRoundLimit } from "@/lib/hubAutoAdvanceBoundary";
 
@@ -945,10 +946,11 @@ export default function GeneratorRoundRunner({
           </Link>
         </p> : null}
         <h1 style={{ margin: "0 0 0.4rem" }}>{session.title}</h1>
-        <p>{session.rating_mode === "rated" ? "Rated" : "Unrated"} session · Chosen before play</p>
+        <p>{session.rating_mode === "rated" ? "Rated" : "Unrated"} session</p>
         <p style={{ margin: 0, color: "#475569" }}>
           {playFormatLabel(session.play_format)} · Round {roundNumber}{generatorKind === "ladder" ? ` of ${event.totalRounds}` : ""} · {scoredSession ? "Scored" : "Unscored"} · {round.status}
         </p>
+              <GeneratorSessionDetails key={sessionKey} apiBase={apiBase} clubId={clubId} sessionKey={sessionKey} session={session} adminToken={accessToken || undefined} locked={resultsLocked} disabled={busy || editingScores || (canEditRound && anyDraftScore)} scored={scoredSession} onSaved={applySession} />
       </article>
 
       {session.round_robin_hub_id ? <aside style={{ ...cardStyle, background: "#eff6ff" }} aria-label="Round Robin Hub status">

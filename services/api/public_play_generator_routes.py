@@ -6,6 +6,7 @@ from fastapi import Query, Request, Response
 from pydantic import BaseModel, Field
 
 from jupr_app.services.generator_submission_service import submit_generator_session
+from jupr_app.services.generator_session_details_service import update_public_generator_details
 
 from jupr_app.services.public_play_generator_service import (
     advance_public_play_generator_session,
@@ -51,6 +52,11 @@ class PublicGeneratorMutationRequest(BaseModel):
     edit_token: str = Field(min_length=1, max_length=128)
     expected_version: int = Field(ge=1)
     idempotency_key: str = Field(min_length=8, max_length=160)
+
+
+class PublicGeneratorDetailsRequest(PublicGeneratorMutationRequest):
+    title: str = Field(min_length=1, max_length=160)
+    rating_mode: str = Field(pattern=r"^(rated|unrated)$")
 
 
 class PublicGeneratorSubmitRequest(PublicGeneratorMutationRequest):
@@ -110,6 +116,20 @@ def install_public_play_generator_routes(
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
         return club, club_id, get_supabase_client()
+
+    @app.patch("/clubs/{club_slug}/play-generators/sessions/{session_key}/details")
+    def patch_public_generator_details(club_slug: str, session_key: str,
+        payload: PublicGeneratorDetailsRequest, request: Request) -> dict[str, Any]:
+        require_public_writes()
+        require_service_role()
+        club, club_id, supabase = context(club_slug)
+        try:
+            result = update_public_generator_details(supabase, club_id=club_id,
+                session_key=session_key, **_model_payload(payload), requester_hash=requester_hash(request))
+        except Exception as exc:
+            raise_public_error(exc)
+            raise
+        return {"club": public_club_payload(club, club_slug), **result}
 
     @app.post("/clubs/{club_slug}/play-generators/sessions/{session_key}/submit")
     def post_public_generator_submission(club_slug: str, session_key: str,

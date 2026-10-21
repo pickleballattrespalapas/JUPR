@@ -42,7 +42,7 @@ export default function GeneratorSubmission({ submission, canSubmit, defaultDate
       {ratingMode === "rated" && submission.status === "pending" ? <p>The administrator can set new players’ doubles starting levels during approval.</p> : null}
       {submission.rejection_reason ? <p>{submission.rejection_reason}</p> : null}
     </div> : <>
-      <p>Send the saved scores to the club administrator for approval. This session was set to {ratingMode} before play. Approved games count toward player stats and weekly recaps.{ratingMode === "rated" ? " The administrator can set new players’ doubles starting levels before approving and updating ratings." : " Ratings stay unchanged."}</p>
+      <p>Send the saved scores to the club administrator for approval. This session is marked {ratingMode}. Approved games count toward player stats and weekly recaps.{ratingMode === "rated" ? " The administrator can set new players’ doubles starting levels before approving and updating ratings." : " Ratings stay unchanged."}</p>
       {canSubmit ? <form onSubmit={async event => {
         event.preventDefault();
         if (busy) return;

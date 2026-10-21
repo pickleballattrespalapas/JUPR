@@ -2,6 +2,7 @@
 
 import PublicControls from "@/components/PublicControls";
 
+import GeneratorSessionDetails from "@/components/GeneratorSessionDetails";
 import GeneratorSharing from "@/components/GeneratorSharing";
 import { hubAutoAdvanceBoundary, type HubAutoAdvanceEvent } from "@/lib/hubAutoAdvanceBoundary";
 
@@ -256,6 +257,7 @@ export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey, 
         <p style={{ margin: "0 0 0.4rem" }}><Link href={`/clubs/${clubId}/round-robin-generator`}>← Round-Robin Generator</Link></p>
         <h1 style={{ margin: "0 0 0.35rem" }}>{session.title} standings</h1>
         <p style={{ margin: 0, color: "#475569" }}>{playFormatLabel(session.play_format)} · {standingsSortLabel(sortMode)} · {sessionStatusLabel(session.status)} · {session.submission?.status !== "approved" ? `${session.rating_mode === "rated" ? "Rated" : "Unrated"} · ` : ""}{generatorResultLabel(session.submission)}</p>
+              <GeneratorSessionDetails key={sessionKey} apiBase={apiBase} clubId={clubId} sessionKey={sessionKey} session={session} ownerToken={shared ? undefined : editToken} locked={resultsLocked} disabled={busy} scored={scoringMode === "scored"} onSaved={setSession} />
       </article>
       <PublicControls navigation resetKey={String(currentRound)} context={`${sessionStatusLabel(session.status)} · ${standingsSortLabel(sortMode)}`}>
 {shared || editToken ? <GeneratorSharing apiBase={apiBase} clubId={clubId} sessionKey={sessionKey} version={session.version} ownerToken={shared ? undefined : editToken} shared={shared} locked={resultsLocked} disabled={busy} onChanged={loadSession} /> : null}
