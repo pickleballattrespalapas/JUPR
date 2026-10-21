@@ -68,7 +68,7 @@ async function main() {
     NEXT_PUBLIC_JUPR_API_BASE_URL:apiOrigin, NEXT_PUBLIC_JUPR_ENV:'staging',
     GENERATOR_BROWSER_WEB_PORT:webPort};
   const api = start(process.env.GENERATOR_BROWSER_PYTHON || process.env.CODEX_PRIMARY_RUNTIME_PYTHON || 'python3',
-    ['-m', 'uvicorn', 'generator_submission_api:app', '--app-dir', path.join(root, 'tests/e2e'), '--host', '127.0.0.1', '--port', apiPort],
+    ['-m', 'uvicorn', 'round_robin_hub_api:app', '--app-dir', path.join(root, 'tests/e2e'), '--host', '127.0.0.1', '--port', apiPort],
     {cwd:root, env});
   const next = start(process.execPath, [require.resolve('next/dist/bin/next'), nextMode, ...(nextMode === 'dev' ? ['--webpack'] : []), '--hostname', '127.0.0.1', '--port', webPort], {cwd:webRoot, env});
   let browser;
@@ -136,7 +136,8 @@ async function main() {
       const rounds = session.event.rounds.length;
       assert(rounds > 1, 'Rehearsal must exercise intermediate standings and every round');
       await page.waitForURL(/\/rounds\/1(?:#.*)?$/);
-      await page.getByRole('heading', {name:`Club results · ${mode === 'rated' ? 'Rated' : 'Unrated'}`, exact:true}).waitFor();
+      await page.getByRole('heading', {name:title, exact:true}).waitFor();
+      await page.getByText(new RegExp(`Scores on.*${mode === 'rated' ? 'Rated' : 'Unrated'}.*Not added to club records`)).waitFor();
       assert.equal(await page.getByRole('button', {name:'Submit for approval', exact:true}).count(), 0, 'Cannot submit unfinished games');
       await screenshot(page, `${mode}-started.png`);
       console.log(`PASS ${mode}: preview/start preserves rating choice; ${rounds} rounds scheduled`);
@@ -161,6 +162,21 @@ async function main() {
         await page.waitForURL(/\/standings$/);
         await page.getByRole('heading', {name:`${title} standings`, exact:true}).waitFor();
         assert.equal(await page.getByRole('button', {name:'Submit for approval', exact:true}).count(), 0);
+        if (mode === 'unrated') {
+          // Staff session views expose public-origin sessions once attached to
+          // an RR Hub. Use the actual hub routes to reproduce that boundary.
+          const headers = {Authorization:'Bearer local-reviewer'};
+          const hubResponse = await adminContext.request.post(`${apiOrigin}/admin/clubs/club/round-robin-hubs`, {
+            headers, data:{title:'Submission rehearsal hub', courts:[{id:'court-1',label:'Court 1'}], idempotency_key:'submission-hub-create'}
+          });
+          assert(hubResponse.ok(), await hubResponse.text());
+          const hub = (await hubResponse.json()).hub;
+          const linked = await adminContext.request.post(`${apiOrigin}/admin/clubs/club/round-robin-hubs/${hub.id}/commands`, {
+            headers, data:{action:'add_group', payload:{session_key:session.session_key}, expected_version:hub.version, idempotency_key:'submission-hub-link'}
+          });
+          assert(linked.ok(), await linked.text());
+          await page.reload();
+        }
         }
         const advanced = await clickRequest(page, page.getByRole('button', {name:last ? 'Finish session' : 'Next scheduled round', exact:true}), last ? '/complete' : '/advance');
         session = advanced.body.session;
@@ -302,7 +318,9 @@ async function main() {
       await adminPage.getByRole('heading', {name:'Review saved', exact:true}).waitFor();
       const after = await fixture();
       const records = after.matches.slice(before.matches.length);
-      const expectedGames = session.event.rounds.reduce((sum, r) => sum+(r.matches || []).length, 0);
+      // The hub may prepare another unplayed round. Only the original rounds
+      // actually scored in this rehearsal should become official matches.
+      const expectedGames = started.body.session.event.rounds.reduce((sum, r) => sum+(r.matches || []).length, 0);
       assert.equal(records.length, expectedGames);
       assert(records.every(match => match.rating_scope === (mode === 'rated' ? 'overall_only' : 'unrated')));
       assert(records.every(match => match.week_tag.startsWith(`${correctedTitle} Round `)), 'Approved games use the corrected title');
@@ -314,8 +332,10 @@ async function main() {
         const newPlayerPosition = ['t1_p1','t1_p2','t2_p1','t2_p2'].find(k => newPlayerGame[k] === createdPlayerId);
         assert.equal(newPlayerGame[newPlayerPosition + '_r'], 1500, 'New player starts their first approved match at the entered level');
       }
-      if (mode === 'rated') assert.notDeepEqual(after.players, before.players, 'Rated approval updates player ratings');
-      else assert.deepEqual(after.players, before.players, 'Unrated approval leaves player ratings untouched');
+      const ratings = players => players.map(({id, rating, starting_rating, singles_rating, singles_starting_rating}) =>
+        ({id, rating, starting_rating, singles_rating, singles_starting_rating}));
+      if (mode === 'rated') assert.notDeepEqual(ratings(after.players), ratings(before.players), 'Rated approval updates player ratings');
+      else assert.deepEqual(ratings(after.players), ratings(before.players), 'Unrated approval leaves player ratings untouched while recording activity');
       console.log(`PASS ${mode}: ${mode === 'unrated' ? 'admin' : 'organizer'} submitted from final standings; admin approval created ${records.length} official matches`);
       await spectator.reload();
       await spectator.getByRole('status').filter({hasText:`Approved · ${capitalized}`}).waitFor();
@@ -324,7 +344,7 @@ async function main() {
       const dimensions = await spectator.evaluate(() => ({width:document.documentElement.clientWidth, scroll:document.documentElement.scrollWidth}));
       assert(dimensions.scroll <= dimensions.width+1, `Mobile overflow: ${JSON.stringify(dimensions)}`);
       evidence.push({mode, format, rounds, matches:records.length, status:'approved'});
-      console.log(`PASS ${mode} ${format}: setup -> preview -> start -> ${rounds} scored rounds -> standings -> finish -> guest submit -> admin approve; ${records.length} official matches`);
+      console.log(`PASS ${mode} ${format}: setup -> preview -> start -> ${rounds} scored rounds -> standings -> finish -> ${mode === 'unrated' ? 'admin' : 'organizer'} submit -> admin approve; ${records.length} official matches`);
     }
     assert.deepEqual(errors, [], 'No browser runtime errors');
     fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify({passed:true, evidence, browserErrors:errors}, null, 2));
