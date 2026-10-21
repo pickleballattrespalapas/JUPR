@@ -115,7 +115,7 @@ global.fetch = async (url, options = {}) => {
     detail.workspace.groups.push({ session_key: key, title: "Created round robin", current_round_number: 1, round_status: "active", completed_matches: 0, total_matches: 1, can_advance: false, event_format: "standard", scoring_mode: "scored" });
     detail.workspace.eligible_queue.push(match(key, `${key}-1`, 1, ["c2"], 0));
   }
-  else if (body.action !== "assign_next_court") throw new Error(`Unexpected action ${body.action}`);
+  else if (!["assign_next_court", "auto_fill_courts"].includes(body.action)) throw new Error(`Unexpected action ${body.action}`);
   detail.hub.version += 1;
   receipts.set(body.idempotency_key, clone(body));
   if (body.action === "add_group" && loseAddResponse) { loseAddResponse = false; throw new Error("Response lost after attachment"); }
@@ -191,6 +191,17 @@ global.fetch = async (url, options = {}) => {
   const props = (hub, session = "") => ({ apiBase: "http://test.local", clubId: "club", initialHubId: hub, initialAddSessionKey: session });
   const standingsGroup = (key, status = "active", scoring_mode = "scored") => ({ session_key: key, title: `${key} round robin`, status, scoring_mode,
     current_round_number: 1, round_status: "active", completed_matches: 0, total_matches: 2, can_advance: false, event_format: "standard" });
+  emptyHub("paused-queue-event");
+  detail.workspace.groups = [standingsGroup("a")];
+  detail.workspace.blocked_queue = [{ ...a2, status: "blocked", blockers: ["A player is paused."] }];
+  await act(async () => { tree = create(h(Panel, props("paused-queue-event"))); });
+  assert.equal(button(tree, "Fill open courts").props.disabled, false, "An existing paused queue can request replacement planning even before any match is ready");
+  await act(async () => button(tree, "Fill open courts").props.onClick());
+  assert.equal(requests.at(-1).action, "auto_fill_courts");
+  detail.workspace.courts[0].open = false;
+  await act(async () => window.dispatchEvent({ type: "focus" }));
+  assert.equal(button(tree, "Fill open courts").props.disabled, true, "Closed courts cannot be filled");
+  await act(async () => tree.unmount());
   emptyHub("finish-event");
   detail.workspace.groups = [
     { ...standingsGroup("already-finished", "completed"), can_finish: false },

@@ -303,15 +303,26 @@ async function main() {
     }
     await snapshot(page,'grouped-numbered-rosters.png');
     record('Players are grouped by round robin with plain numbered names beneath each group heading');
+    // Keep this identity experiment on a started game. Pausing an unstarted
+    // eight-player game now correctly removes its unavailable slot and leaves
+    // three byes, which would change the two-game standings fixture below.
+    const guestAMatch = detail.workspace.eligible_queue.find(match=>match.session_key === numberedA.session_key
+      && match.round_number === 1 && people(match).some(player=>player.identity === guestA.identity));
+    assert(guestAMatch,'Guest 1 must have a first-round game for the started-lineup safety check');
+    await assignMatch(guestAMatch);
+    detail = await assignFromGroup('Numbers B');
+    const startedPlans = (await fixture()).sessions.filter(session=>[numberedA.session_key,numberedB.session_key].includes(session.session_key))
+      .map(session=>({session_key:session.session_key,rounds:session.event.rounds}));
+    await page.getByRole('tab',{name:'Players',exact:true}).click();
     const playerRow = page.locator(`[data-player-identity="${guestA.identity}"]`);
     detail = await command(page,playerRow.getByRole('button',{name:'Pause player',exact:true}),'pause_player');
     assert(detail.workspace.players.find(player=>player.identity === guestA.identity).paused);
     assert(!detail.workspace.players.find(player=>player.identity === guestB.identity).paused,'Pausing guest 1 in A must not pause guest 1 in B');
-    assert(detail.workspace.blocked_queue.filter(match=>match.round_number === 1).every(match=>match.session_key === numberedA.session_key));
-    assert.equal(detail.workspace.eligible_queue.filter(match=>match.session_key === numberedB.session_key).length,2);
-    await command(page,playerRow.getByRole('button',{name:'Ready again',exact:true}),'resume_player');
-    await assignFromGroup('Numbers A');
-    detail = await assignFromGroup('Numbers B');
+    assert.equal(detail.workspace.eligible_queue.filter(match=>match.session_key === numberedB.session_key && match.round_number === 1).length,1);
+    detail = await command(page,playerRow.getByRole('button',{name:'Ready again',exact:true}),'resume_player');
+    const resumedPlans = (await fixture()).sessions.filter(session=>[numberedA.session_key,numberedB.session_key].includes(session.session_key))
+      .map(session=>({session_key:session.session_key,rounds:session.event.rounds}));
+    assert.deepEqual(resumedPlans,startedPlans,'Pausing and resuming an on-court guest must preserve started games and future plans in both groups');
     assert.equal(occupied(detail).length,2);
     assert.deepEqual(new Set(occupied(detail).map(court=>court.current.session_key)),new Set([numberedA.session_key,numberedB.session_key]));
     const occupants = occupied(detail).flatMap(court=>people(court.current).map(player=>player.identity));
@@ -750,6 +761,35 @@ async function main() {
     await page.getByRole('img',{name:'Standings QR code',exact:true}).waitFor();
     await snapshot(page,'completed-hub-standings-still-shareable.png');
     record('Finish targets one round robin, drains all started rounds, keeps the other group live, and closes the last group while preserving shareable standings');
+
+    // Exercise the new waiting-game behavior separately from the fixed
+    // eight-player standings fixture: a free bye replaces only the paused slot.
+    const pauseSession = await createSession('Pause substitution',Array.from({length:9},(_,index)=>`Pause guest ${index+1}`));
+    detail = await createHub('Pause substitution safety',[pauseSession]);
+    const pauseBefore = (await fixture()).sessions.find(session=>session.session_key === pauseSession.session_key).event;
+    const pauseGame = detail.workspace.eligible_queue.find(match=>match.session_key === pauseSession.session_key && match.round_number === 1);
+    assert(pauseGame);
+    const pausedGuest = people(pauseGame)[0];
+    const byeId = pauseBefore.rounds[0].byeParticipantIds[0];
+    assert(byeId,'The substitution fixture requires one free bye');
+    await page.getByRole('tab',{name:'Players',exact:true}).click();
+    const pausedRow = page.locator(`[data-player-identity="${pausedGuest.identity}"]`);
+    detail = await command(page,pausedRow.getByRole('button',{name:'Pause player',exact:true}),'pause_player');
+    const pauseAfter = (await fixture()).sessions.find(session=>session.session_key === pauseSession.session_key).event;
+    const repairedGame = pauseAfter.rounds[0].matches.find(match=>match.id === pauseGame.match_id);
+    const beforeGame = pauseBefore.rounds[0].matches.find(match=>match.id === pauseGame.match_id);
+    assert.deepEqual(repairedGame.sideA,beforeGame.sideA.map(id=>id === pausedGuest.id ? byeId : id));
+    assert.deepEqual(repairedGame.sideB,beforeGame.sideB.map(id=>id === pausedGuest.id ? byeId : id));
+    assert.deepEqual(pauseAfter.rounds[0].matches.filter(match=>match.id !== pauseGame.match_id),
+      pauseBefore.rounds[0].matches.filter(match=>match.id !== pauseGame.match_id),'The other waiting matchup must stay unchanged');
+    assert(detail.workspace.eligible_queue.some(match=>match.match_id === pauseGame.match_id),'The replacement game must be ready');
+    assert(!detail.workspace.eligible_queue.some(match=>people(match).some(player=>player.identity === pausedGuest.identity)));
+    assert.equal(occupied(detail).length,0,'Pausing repairs the queue without silently assigning courts');
+    await command(page,pausedRow.getByRole('button',{name:'Ready again',exact:true}),'resume_player');
+    const pauseResumed = (await fixture()).sessions.find(session=>session.session_key === pauseSession.session_key).event;
+    assert.deepEqual(pauseResumed.rounds[0].matches,pauseAfter.rounds[0].matches,'Resume must preserve the replacement already announced');
+    await snapshot(page,'paused-guest-replaced-by-free-bye.png');
+    record('Pausing an unstarted guest substitutes the free bye, preserves the other lineup, and resume retains that replacement');
 
     expectedConsoleErrors.push(...errors.filter(error=>error.type === 'console' && error.url === commandUrl && /503/.test(error.message)));
     const unexpectedErrors = errors.filter(error=>!expectedConsoleErrors.includes(error));

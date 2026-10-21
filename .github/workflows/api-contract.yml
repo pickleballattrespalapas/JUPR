@@ -110,6 +110,7 @@ jobs:
             tests/test_public_play_generator_service.py \
             tests/test_admin_play_generator_service.py \
             tests/test_round_robin_hub.py \
+            tests/test_round_robin_hub_pause_substitution.py \
             tests/test_hub_auto_round_ending.py \
             tests/test_admin_round_robin_hub_service.py \
             tests/test_round_robin_hub_generator_integration.py \
