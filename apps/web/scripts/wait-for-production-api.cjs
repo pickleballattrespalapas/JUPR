@@ -46,6 +46,20 @@ function leagueLiveReady(openapi) {
   ].every(([method, path]) => Boolean(openapi?.paths?.[path]?.[method]));
 }
 
+function roundRobinHubReady(openapi) {
+  const actions = openapi?.components?.schemas?.HubCommandRequest?.properties?.action?.enum;
+  const setup = openapi?.components?.schemas?.GeneratorStartRequest?.properties;
+  return Array.isArray(actions)
+    && ["set_registration", "review_checkin", "process_checkins", "edit_match_players"].every((action) => actions.includes(action))
+    && Boolean(setup?.registration_hub_id)
+    && setup?.participant_names?.type === "array"
+    && !setup.participant_names.minItems
+    && [
+      ["get", "/public/round-robin-hubs/{hub_id}/registration"],
+      ["post", "/public/round-robin-hubs/{hub_id}/checkins"],
+    ].every(([method, path]) => Boolean(openapi?.paths?.[path]?.[method]));
+}
+
 async function waitForProductionApi({
   environment = process.env.VERCEL_ENV,
   request = fetch,
@@ -55,7 +69,7 @@ async function waitForProductionApi({
 } = {}) {
   if (environment !== "production") return;
   const deadline = now() + timeoutMs;
-  console.log("Waiting for the production operations, weekly report, and League Live APIs before building the website.");
+  console.log("Waiting for the production operations, weekly report, League Live, and RR Hub APIs before building the website.");
   while (now() < deadline) {
     try {
       const response = await request("https://api.juprleagues.com/health", {
@@ -67,8 +81,8 @@ async function waitForProductionApi({
         });
         if (contract.ok) {
           const openapi = await contract.json();
-          if (weeklyReportReady(openapi) && leagueLiveReady(openapi)) {
-            console.log("Production operations, weekly report, and League Live APIs are ready.");
+          if (weeklyReportReady(openapi) && leagueLiveReady(openapi) && roundRobinHubReady(openapi)) {
+            console.log("Production operations, weekly report, League Live, and RR Hub APIs are ready.");
             return;
           }
         }
@@ -81,7 +95,7 @@ async function waitForProductionApi({
   throw new Error("Production operations API is not ready. The current website remains active; retry after API verification.");
 }
 
-module.exports = { operationsReady, weeklyReportReady, leagueLiveReady, waitForProductionApi, REQUIRED_FLAGS };
+module.exports = { operationsReady, weeklyReportReady, leagueLiveReady, roundRobinHubReady, waitForProductionApi, REQUIRED_FLAGS };
 if (require.main === module) {
   waitForProductionApi().catch((error) => { console.error(error.message); process.exitCode = 1; });
 }

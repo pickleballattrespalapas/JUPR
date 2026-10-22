@@ -10,6 +10,7 @@ import styles from "./RoundRobinHubPanel.module.css";
 type DirectoryPlayer = { id: number | string; name: string };
 type Props = {
   apiBase: string; clubId: string; groups: HubGroup[]; busy: boolean; disabled: boolean; pending: boolean; error: string;
+  initialName?: string; initialSessionKey?: string;
   onClose: () => void; onRetry: () => void;
   onSubmit: (sessionKey: string, name: string, playerId: number | null) => void;
 };
@@ -22,10 +23,10 @@ function destinationUnavailableReason(group: HubGroup, playerId: number | null):
   return "";
 }
 
-export default function HubAddPlayerDialog({ apiBase, clubId, groups, busy, disabled, pending, error, onClose, onRetry, onSubmit }: Props) {
-  const [name, setName] = useState("");
+export default function HubAddPlayerDialog({ apiBase, clubId, groups, busy, disabled, pending, error, onClose, onRetry, onSubmit, initialName = "", initialSessionKey = "" }: Props) {
+  const [name, setName] = useState(initialName);
   const [playerId, setPlayerId] = useState<number | null>(null);
-  const [sessionKey, setSessionKey] = useState("");
+  const [sessionKey, setSessionKey] = useState(initialSessionKey);
   const [directory, setDirectory] = useState<DirectoryPlayer[]>([]);
   const [directoryLoading, setDirectoryLoading] = useState(true);
   const [directoryError, setDirectoryError] = useState("");
@@ -66,7 +67,7 @@ export default function HubAddPlayerDialog({ apiBase, clubId, groups, busy, disa
       </label>
       <p className={styles.small}>{playerId ? "Selected club profile. This player shares their identity and pause status across the event." : "Choose a club profile from the suggestions, or enter a guest name."}</p>
       <label className={styles.field}>Round robin
-        <select aria-label="Round robin" required value={sessionKey} disabled={frozen || !name.trim()} aria-invalid={Boolean(destinationError)} aria-describedby={destinationError ? "hub-add-player-destination-error" : undefined} onChange={event => setSessionKey(event.target.value)}>
+        <select aria-label="Round robin" required value={sessionKey} disabled={frozen || !name.trim() || Boolean(initialSessionKey)} aria-invalid={Boolean(destinationError)} aria-describedby={destinationError ? "hub-add-player-destination-error" : undefined} onChange={event => setSessionKey(event.target.value)}>
           <option value="">Choose a round robin</option>
           {sessionKey && !selectedGroup ? <option value={sessionKey} disabled>Selected round robin is no longer available</option> : null}
           {destinations.map(group => {

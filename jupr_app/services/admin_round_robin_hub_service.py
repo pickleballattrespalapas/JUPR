@@ -127,7 +127,8 @@ def get_round_robin_hub(db: Any, *, club_id: str, hub_id: str) -> dict[str, Any]
             for participant in group["players"]:
                 participant["can_remove"] = False
                 participant["remove_unavailable_reason"] = group["remove_player_unavailable_reason"]
-    return {"ok": True, "hub": _summary(row), "workspace": workspace}
+    from jupr_app.services.round_robin_hub_registration_service import admin_registration
+    return {"ok": True, "hub": _summary(row), "workspace": workspace, "registration": admin_registration(db, row)}
 
 
 def _replayed(db: Any, club_id: str, hub_id: str, key: str, fingerprint: str) -> bool:
@@ -244,6 +245,9 @@ def command_round_robin_hub(db: Any, *, club_id: str, hub_id: str, action: str,
     events = {key: _event(value) for key, value in sessions.items()}
     if action == "add_group":
         candidate = sessions[str(payload["session_key"])]
+        intended_hub = events[str(payload["session_key"])].get("hubRegistrationTargetId")
+        if intended_hub and intended_hub != hub_id:
+            raise ValueError("This round robin was created for another event.")
         other_hub = (candidate.get("state") or {}).get("round_robin_hub_id")
         if other_hub and other_hub != hub_id:
             raise ValueError("This round robin already belongs to another hub.")
@@ -254,8 +258,24 @@ def command_round_robin_hub(db: Any, *, club_id: str, hub_id: str, action: str,
         if (candidate.get("state") or {}).get("mode") == "public_play_generator" and candidate.get("expires_at"):
             if datetime.fromisoformat(str(candidate["expires_at"]).replace("Z", "+00:00")) < datetime.now(timezone.utc):
                 raise ValueError("This organizer session has expired.")
+    if action == "review_checkin":
+        from jupr_app.services.round_robin_hub_registration_service import prepare_checkin_review
+        action, payload = prepare_checkin_review(db, club_id=club_id, hub_id=hub_id, state=state,
+            events=events, sessions=sessions, payload=payload, actor_email=actor_email, now=_now())
     status = str(row["status"])
-    if action == "finish_hub":
+    if action == "process_checkins":
+        from jupr_app.services.round_robin_hub_registration_service import process_automatic_checkins
+        state, events = process_automatic_checkins(db, row=row, state=state, sessions=sessions,
+            events=events, now=_now())
+    elif action is None:
+        pass  # Check-in confirmation/dismissal is saved with the same hub CAS.
+    elif action == "set_registration":
+        if type(payload.get("open")) is not bool:
+            raise ValueError("Choose whether public check-in is open or closed.")
+        if payload["open"] and not keys:
+            raise ValueError("Add a round robin before opening check-in.")
+        state["registration_open"] = payload["open"]
+    elif action == "finish_hub":
         if any(court.get("current") or court.get("next") for court in state.get("courts", [])):
             raise ValueError("Resolve the playing and reserved matches before finishing this hub.")
         if any(event.get("status") != "completed" for event in events.values()):
@@ -276,12 +296,12 @@ def command_round_robin_hub(db: Any, *, club_id: str, hub_id: str, action: str,
         # Court planning must not rewrite submitted siblings, even when the
         # command targets another group or only changes hub availability.
         command_payload = {**payload, "excluded_session_keys": [key for key, session in sessions.items() if _is_locked(session)]}
-        if action in {"add_player", "remove_player"}:
+        if action in {"add_player", "remove_player", "edit_match_players"}:
             if target_key not in sessions:
                 raise ValueError("Choose a round robin attached to this hub.")
             if sessions[target_key].get("status") != "active":
                 raise ValueError("Roster changes require an active round robin.")
-            player_id = payload.get("player_id") if action == "add_player" else None
+            player_id = payload.get("player_id") if action in {"add_player", "edit_match_players"} else None
             if player_id is not None:
                 if type(player_id) is not int or player_id <= 0:
                     raise ValueError("Choose a valid club player profile.")

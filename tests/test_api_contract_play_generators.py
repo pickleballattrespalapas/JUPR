@@ -179,6 +179,7 @@ def test_new_optional_profile_map_keeps_legacy_start_intent_fingerprint():
     model = GeneratorStartRequest(**body)
     legacy_payload = model.model_dump()
     legacy_payload.pop("participant_player_ids")
+    legacy_payload.pop("registration_hub_id")
     assert _model_payload(model) == legacy_payload
     assert _model_payload(GeneratorStartRequest(**body, participant_player_ids={})) == legacy_payload
     linked = GeneratorStartRequest(**{**body, "player_ids": [], "participant_player_ids": {"A": 1}})

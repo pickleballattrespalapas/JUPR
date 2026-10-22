@@ -65,9 +65,9 @@ function record(label) { evidence.push(label); console.log(`PASS ${label}`); }
 async function snapshot(page, name) { await page.screenshot({path:path.join(output, name), fullPage:true}); }
 async function main() {
   const env = {...process.env, VERCEL_ENV:'development', JUPR_API_BASE_URL:apiOrigin,
-    NEXT_PUBLIC_JUPR_API_BASE_URL:apiOrigin, NEXT_PUBLIC_JUPR_ENV:'staging', GENERATOR_BROWSER_WEB_PORT:webPort};
+    NEXT_PUBLIC_JUPR_API_BASE_URL:apiOrigin, NEXT_PUBLIC_JUPR_ENV:'staging', GENERATOR_BROWSER_WEB_PORT:webPort, HUB_EMPTY_REGISTRATION_FIXTURE:'1'};
   const api = start(process.env.GENERATOR_BROWSER_PYTHON || process.env.CODEX_PRIMARY_RUNTIME_PYTHON || 'python3',
-    ['-m', 'uvicorn', 'round_robin_hub_api:app', '--app-dir', path.join(root, 'tests/e2e'), '--host', '127.0.0.1', '--port', apiPort], env, root);
+    ['-m', 'uvicorn', 'hub_registration_api:app', '--app-dir', path.join(root, 'tests/e2e'), '--host', '127.0.0.1', '--port', apiPort], env, root);
   assert(['dev','start'].includes(nextMode),'GENERATOR_BROWSER_NEXT_MODE must be dev or start');
   const next = start(process.execPath, [require.resolve('next/dist/bin/next'), nextMode, ...(nextMode === 'dev' ? ['--webpack'] : []), '--hostname', '127.0.0.1', '--port', webPort], env, webRoot);
   let browser, page;
@@ -114,14 +114,11 @@ async function main() {
       const draftToken = new URL(builderUrl).searchParams.get('draft');
       assert(draftToken && !creationDrafts.includes(draftToken),'Create round robin must open a fresh draft, separate from previous success receipts');
       creationDrafts.push(draftToken);
-      const rosterText = Array.from({length:4},(_,i)=>`${title} Player ${i+1}`).join('\n');
-      await page.getByLabel('Session title',{exact:true}).fill(title);
-      await page.getByLabel('Event format',{exact:true}).selectOption('standard');
+      await page.getByLabel('Round robin name / level',{exact:true}).fill(title);
       await page.getByRole('combobox',{name:/^Play format/}).selectOption('doubles');
-      await page.getByRole('combobox',{name:/^Number of players/}).selectOption('4');
+      assert.equal(await page.getByRole('combobox',{name:/^Number of players/}).count(),0);
+      assert.equal(await page.getByRole('textbox',{name:/^Players \(/}).count(),0);
       await page.getByLabel('Match rating',{exact:true}).selectOption('unrated');
-      await page.getByRole('textbox',{name:/^Players \(/}).fill(rosterText);
-      await clickRequest(page,page.getByRole('button',{name:'Preview matchups',exact:true}),'/preview');
       let failedPayload;
       if (failFirstAttempt) {
         const before = await fixture();
@@ -134,7 +131,7 @@ async function main() {
         };
         await page.route(sessionCreateUrl,failStart);
         const failure = page.waitForResponse(response=>response.url() === sessionCreateUrl && response.request().method() === 'POST');
-        const [response] = await Promise.all([failure,page.getByRole('button',{name:'Start and add to hub',exact:true}).click()]);
+        const [response] = await Promise.all([failure,page.getByRole('button',{name:'Create round robin',exact:true}).click()]);
         assert.equal(response.status(),503);
         await page.unroute(sessionCreateUrl,failStart);
         const alert = page.getByRole('alert').filter({hasText:/start|persist/i});
@@ -142,21 +139,20 @@ async function main() {
         const color = await alert.evaluate(element=>getComputedStyle(element).color);
         const channels = color.match(/[\d.]+/g)?.map(Number) || [];
         assert(channels[0] > channels[1] && channels[0] > channels[2],`Creation failure must use error styling, received ${color}`);
-        assert.equal(await page.getByLabel('Session title',{exact:true}).inputValue(),title);
-        assert.equal(await page.getByRole('textbox',{name:/^Players \(/}).inputValue(),rosterText);
+        assert.equal(await page.getByLabel('Round robin name / level',{exact:true}).inputValue(),title);
         assert.equal((await fixture()).sessions.length,before.sessions.length,'Rejected local request must not create a session');
         await snapshot(page,'creation-error-draft-retained.png');
         await page.reload();
         await page.getByRole('button',{name:'Retry this start',exact:true}).waitFor();
-        assert.equal(await page.getByLabel('Session title',{exact:true}).inputValue(),title);
-        assert.equal(await page.getByRole('textbox',{name:/^Players \(/}).inputValue(),rosterText);
+        assert.equal(await page.getByLabel('Round robin name / level',{exact:true}).inputValue(),title);
       }
-      const started = await clickRequest(page,page.getByRole('button',{name:failFirstAttempt ? 'Retry this start' : 'Start and add to hub',exact:true}),'/sessions');
+      const started = await clickRequest(page,page.getByRole('button',{name:failFirstAttempt ? 'Retry this start' : 'Create round robin',exact:true}),'/sessions');
       if (failFirstAttempt) {
         assert.deepEqual(creationRequests.at(-1),failedPayload,'Retry after reload must preserve the exact creation payload and idempotency key');
         record('A failed start shows an error, keeps the draft across reload, and retries the identical creation request');
       }
-      assert.equal(started.session.event.rounds[0].matches.length,1);
+      assert.equal(started.session.event.rounds[0].matches.length,0);
+      assert.equal(started.session.event.participants.length,0);
       await page.waitForURL(url=>url.pathname === '/admin/round-robin-hub' && url.searchParams.get('hub') === hub.hub.id);
       let state, result;
       for (let attempt=0; attempt<40; attempt++) {
@@ -173,12 +169,11 @@ async function main() {
       fs.writeFileSync(path.join(output,'last-return-state.json'),JSON.stringify(observed,null,2));
       assert.equal(result.workspace.groups.length,expectedGroups,'Start session must automatically attach to its originating hub');
       assert(result.workspace.groups.some(group=>group.session_key === started.session.session_key),'New session must belong to the chosen event');
-      assert(result.workspace.eligible_queue.some(match=>match.session_key === started.session.session_key && match.round_number === 1),'First match must reach the court queue');
+      assert(!result.workspace.eligible_queue.some(match=>match.session_key === started.session.session_key),'Empty groups wait for check-in');
       await page.getByRole('tabpanel',{name:'Court board',exact:true}).waitFor();
       assert.equal(await page.getByRole('tab',{name:'Court board',exact:true}).getAttribute('aria-selected'),'true','Return flow must open the court board');
-      await page.getByRole('listitem').filter({hasText:title}).getByRole('button',{name:'Next open court',exact:true}).waitFor();
       assert.equal(await page.getByLabel('Select hub',{exact:true}).inputValue(),hub.hub.id);
-      record(`${title}: created from hub, attached exactly once, returned to correct court board with first queued match`);
+      record(`${title}: created from hub, attached exactly once, returned to correct court board ready for arrivals`);
       await snapshot(page,`${title.toLowerCase().replaceAll(' ','-')}-returned.png`);
       return {...started.session,builderUrl};
     }
@@ -194,7 +189,6 @@ async function main() {
       await run.click();
       await page.waitForURL(url=>url.pathname === '/admin/round-robin-hub' && url.searchParams.get('hub') === hub.hub.id);
       await page.getByRole('tabpanel',{name:'Court board',exact:true}).waitFor();
-      await page.getByRole('listitem').filter({hasText:session.title}).getByRole('button',{name:'Next open court',exact:true}).waitFor();
       const after = await fixture();
       assert.equal(creationRequests.length,requestsBefore,'Run an existing round robin must navigate without POSTing another session');
       assert.equal(after.sessions.length,before.sessions.length,'Returning to a created session must not duplicate it');
@@ -209,6 +203,126 @@ async function main() {
     await runExistingAfterBack(first,firstSession);
     const secondSession = await createFromHub(first,'Second group',2,true);
     await runExistingAfterBack(first,secondSession,true);
+    await page.getByRole('tab',{name:/^Registration/}).click();
+    await command(page,page.getByRole('button',{name:'Open check-in',exact:true}),'set_registration');
+    const guestContext = await browser.newContext({viewport:{width:390,height:844}});
+    await guestContext.route('**/*', route => ['127.0.0.1','localhost'].includes(new URL(route.request().url()).hostname) ? route.continue() : route.abort());
+    const frontDesk = await guestContext.newPage();
+    frontDesk.on('pageerror',error=>errors.push({type:'pageerror',message:error.message}));
+    await frontDesk.goto(`${webOrigin}/round-robin-hub/${first.hub.id}/check-in`);
+    async function checkIn(name) {
+      if (await frontDesk.getByRole('button',{name:'Check in another player'}).count())
+        await frontDesk.getByRole('button',{name:'Check in another player'}).click();
+      await frontDesk.getByLabel('Full name',{exact:true}).fill(name);
+      await frontDesk.getByLabel('Round robin / level',{exact:true}).selectOption(firstSession.session_key);
+      await clickRequest(frontDesk,frontDesk.getByRole('button',{name:'Check in',exact:true}),'/checkins');
+      await frontDesk.getByRole('heading',{name:`You’re checked in, ${name}.`,exact:true}).waitFor();
+    }
+    for (let n=1;n<=4;n++) {
+      await checkIn(`Arrival ${n}`);
+      const detail=(await fixture()).hubs.find(h=>h.hub.id===first.hub.id);
+      assert.equal(detail.workspace.groups.find(g=>g.session_key===firstSession.session_key).players.length,n);
+      assert.equal(detail.workspace.eligible_queue.length>0,n>=4);
+      assert.equal(detail.registration.pending_count,0);
+    }
+    await checkIn('Arrival 4');
+    assert.equal((await fixture()).hubs.find(h=>h.hub.id===first.hub.id).registration.checkins.length,4);
+    await snapshot(frontDesk,'front-desk-checkin.png');
+    await page.getByRole('button',{name:'Refresh',exact:true}).click();
+    await page.getByRole('tab',{name:'Court board',exact:true}).click();
+    await page.getByRole('listitem').filter({hasText:firstSession.title}).getByRole('button',{name:'Next open court',exact:true}).waitFor();
+    await command(page,page.getByRole('button',{name:'Fill open courts',exact:true}),'auto_fill_courts');
+    const onCourt=(await fixture()).hubs.find(h=>h.hub.id===first.hub.id).workspace.courts.find(c=>c.current).current;
+    for(let n=5;n<=8;n++) await checkIn(`Arrival ${n}`);
+    const afterArrivals=(await fixture()).hubs.find(h=>h.hub.id===first.hub.id);
+    const retained=afterArrivals.workspace.courts.find(c=>c.current?.match_id===onCourt.match_id).current;
+    assert.deepEqual(retained.side_a,onCourt.side_a);
+    assert.deepEqual(retained.side_b,onCourt.side_b);
+    assert(afterArrivals.workspace.eligible_queue.length>0);
+    await page.getByRole('listitem').filter({hasText:'Arrival 5'}).getByRole('button',{name:'Next open court',exact:true}).waitFor({timeout:25000});
+    await snapshot(page,'live-match-and-new-arrivals.png');
+    record('Front-desk check-ins fill an empty roster, the fourth player creates a match, duplicate retries are safe, and later arrivals preserve the live court');
+    const waitingPlayer = afterArrivals.workspace.eligible_queue.find(m=>m.round_number===1).side_a[0];
+    await page.getByRole('tab',{name:'Players',exact:true}).click();
+    await page.getByLabel('Find player',{exact:true}).fill(waitingPlayer.name);
+    let edited = await command(page,page.getByRole('button',{name:'Pause player',exact:true}),'pause_player');
+    assert.equal(edited.workspace.groups.find(g=>g.session_key===firstSession.session_key).players.filter(p=>p.on_bye).length,3);
+    await page.getByRole('tab',{name:'Court board',exact:true}).click();
+    const pausedPlayers = page.getByRole('region',{name:'Paused players',exact:true});
+    await pausedPlayers.getByText(waitingPlayer.name,{exact:true}).waitFor();
+    assert(!(await page.getByRole('region',{name:'Byes this round',exact:true}).textContent()).includes(waitingPlayer.name));
+    await snapshot(page,'paused-players-on-board.png');
+    await page.getByRole('article').filter({has:page.getByRole('button',{name:'Enter score',exact:true})}).getByRole('button',{name:'Enter score',exact:true}).click();
+    await page.getByLabel('Side A score',{exact:true}).fill('11');
+    await page.getByLabel('Side B score',{exact:true}).fill('7');
+    edited = await command(page,page.getByRole('button',{name:'Save score & release court',exact:true}),'score_and_release');
+    assert.equal(edited.workspace.groups.find(g=>g.session_key===firstSession.session_key).current_round_number,2);
+    edited = await command(page,page.getByRole('button',{name:'Fill open courts',exact:true}),'auto_fill_courts');
+    const liveBeforeResume = structuredClone(edited.workspace.courts.filter(c=>c.current));
+    edited = await command(page,pausedPlayers.getByRole('button',{name:'Ready again',exact:true}),'resume_player');
+    await pausedPlayers.waitFor({state:'hidden'});
+    assert(edited.workspace.eligible_queue.some(m=>m.round_number===2 && [...m.side_a,...m.side_b].some(p=>p.id===waitingPlayer.id)));
+    const assignments = courts => courts.filter(c=>c.current).map(c=>({id:c.id,match_id:c.current.match_id,
+      side_a:c.current.side_a,side_b:c.current.side_b,assigned_at:c.current.assigned_at}));
+    assert.deepEqual(assignments(edited.workspace.courts),assignments(liveBeforeResume));
+    assert.equal(edited.workspace.groups.find(g=>g.session_key===firstSession.session_key).players.filter(p=>p.on_bye).length,0);
+    record('Paused players appear beside byes on the court board; Ready again after round advancement forms a ready game and preserves the occupied court');
+    await page.getByRole('tab',{name:'Court board',exact:true}).click();
+    const liveCourt = edited.workspace.courts.find(c=>c.current);
+    const courtCard = page.getByRole('article',{name:liveCourt.label,exact:true});
+    const donor = edited.workspace.eligible_queue.find(m=>m.round_number===2).side_a[0];
+    async function openPlayers(target) {
+      await courtCard.getByRole('button',{name:'Edit players',exact:true}).click();
+      const dialog = page.getByRole('dialog',{name:'Edit players',exact:true});
+      await dialog.getByLabel('Player to replace or swap',{exact:true}).selectOption(target);
+      return dialog;
+    }
+    let editor = await openPlayers(liveCourt.current.side_a[0].id);
+    await editor.getByLabel('Replacement',{exact:true}).selectOption(donor.id);
+    edited = await command(page,editor.getByRole('button',{name:'Save players',exact:true}),'edit_match_players');
+    assert.equal(edited.workspace.courts.find(c=>c.id===liveCourt.id).current.side_a[0].id,donor.id);
+    assert(edited.workspace.eligible_queue.some(m=>[...m.side_a,...m.side_b].some(p=>p.id===liveCourt.current.side_a[0].id)));
+    record('Edit players swaps a waiting player into the live court and puts the outgoing player in their waiting game');
+    editor = await openPlayers(donor.id);
+    await editor.getByLabel('Replacement',{exact:true}).selectOption('new');
+    await editor.getByRole('combobox',{name:'New player name or club profile',exact:true}).fill('Walk-in Guest');
+    await page.setViewportSize({width:390,height:844});
+    await snapshot(page,'mobile-edit-players.png');
+    assert(await page.evaluate(()=>document.documentElement.scrollWidth <= window.innerWidth),'Player editor fits mobile');
+    // Lose the response AFTER the real service commits, then retry the exact operation.
+    const commandUrl = `${apiOrigin}/admin/clubs/club/round-robin-hubs/${first.hub.id}/commands`;
+    let failedEditPayload;
+    const loseEditResponse = async route => {
+      if (route.request().postDataJSON()?.action !== 'edit_match_players') return route.continue();
+      failedEditPayload = route.request().postDataJSON();
+      const response = await route.fetch();
+      assert.equal(response.status(),200);
+      await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({detail:'Local lost response after commit'})});
+    };
+    await page.route(commandUrl,loseEditResponse);
+    const lost = page.waitForResponse(r=>r.url()===commandUrl && r.status()===503);
+    await editor.getByRole('button',{name:'Save players',exact:true}).click();
+    await lost;
+    await page.unroute(commandUrl,loseEditResponse);
+    await editor.getByRole('button',{name:'Retry saved action',exact:true}).waitFor();
+    assert(await editor.getByRole('button',{name:'Cancel',exact:true}).isDisabled());
+    const retry = page.waitForRequest(r=>r.url()===commandUrl && r.method()==='POST');
+    edited = await command(page,editor.getByRole('button',{name:'Retry saved action',exact:true}),'edit_match_players');
+    assert.deepEqual((await retry).postDataJSON(),failedEditPayload);
+    const roster = edited.workspace.groups.find(g=>g.session_key===firstSession.session_key).players;
+    assert.equal(roster.filter(p=>p.name==='Walk-in Guest').length,1);
+    const guest = roster.find(p=>p.name==='Walk-in Guest');
+    assert(edited.workspace.courts.find(c=>c.id===liveCourt.id).current.side_a.some(p=>p.id===guest.participant_id));
+    assert(roster.find(p=>p.participant_id===donor.id).on_bye);
+    editor = await openPlayers(guest.participant_id);
+    await editor.getByLabel('Replacement',{exact:true}).selectOption(donor.id);
+    edited = await command(page,editor.getByRole('button',{name:'Save players',exact:true}),'edit_match_players');
+    assert(edited.workspace.groups.find(g=>g.session_key===firstSession.session_key).players.find(p=>p.participant_id===guest.participant_id).on_bye);
+    await page.reload();
+    await courtCard.getByText(donor.name,{exact:false}).waitFor();
+    await page.setViewportSize({width:1440,height:1000});
+    record('A new guest joins the live lineup, a lost-response retry adds them once, and a bye substitution survives reload');
+    await guestContext.close();
     const second = await createHub('Saturday Hub');
     await page.getByLabel('Select hub',{exact:true}).selectOption(first.hub.id);
     await page.getByRole('heading',{name:'Friday Hub',exact:true}).waitFor();
@@ -226,10 +340,10 @@ async function main() {
     await snapshot(page,'mobile-created-group-return.png');
     assert(await page.evaluate(()=>document.documentElement.scrollWidth <= window.innerWidth),'Mobile page must not overflow horizontally');
     record('Repeated creation and switching cached event pages preserves correct membership after refresh');
-    const expectedNetworkErrors = errors.filter(error=>error.type === 'console' && error.url === sessionCreateUrl && /503/.test(error.message));
+    const expectedNetworkErrors = errors.filter(error=>error.type === 'console' && [sessionCreateUrl,commandUrl].includes(error.url) && /503/.test(error.message));
     const unexpectedErrors = errors.filter(error=>!expectedNetworkErrors.includes(error));
     assert.equal(injectedFailures,1,'Exactly one local creation failure should be injected');
-    assert(expectedNetworkErrors.length <= 1,'Only the injected 503 may produce a console network error');
+    assert(expectedNetworkErrors.length <= 2,'Only the two injected 503s may produce console network errors');
     assert.deepEqual(unexpectedErrors,[],'No unexpected browser console errors or uncaught exceptions');
     assert.equal(creationRequests.length,4,'Three sessions plus one failed attempt must be the only creation requests');
     fs.writeFileSync(path.join(output,'evidence.json'),JSON.stringify({passed:true,evidence,errors:unexpectedErrors,expectedNetworkErrors,
