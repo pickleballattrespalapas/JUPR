@@ -131,6 +131,7 @@ DORMANT_STAGING_WRITE_FLAGS = (
 STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
     NO_WRITE_WAVE: (),
     "public-intake-auth": (
+        ("POST", "/public/round-robin-hubs/{hub_id}/checkins"),
         ('POST', '/public/interclub-meet-signups/review'),
         ('POST', '/public/interclub-meet-signups/withdraw'),
         ('POST', '/public/interclub-meet-signups/{share_id}'),

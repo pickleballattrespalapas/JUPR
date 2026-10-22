@@ -1,5 +1,5 @@
 const assert = require("node:assert/strict");
-const { operationsReady, weeklyReportReady, leagueLiveReady, waitForProductionApi, REQUIRED_FLAGS } = require("../scripts/wait-for-production-api.cjs");
+const { operationsReady, weeklyReportReady, leagueLiveReady, roundRobinHubReady, waitForProductionApi, REQUIRED_FLAGS } = require("../scripts/wait-for-production-api.cjs");
 const ready = { ok: true, club_website_settings_available: true, interclub_seasons_available: true, environment: "production", fly_app_name: "juprleagues-api",
   supabase_project_ref: "dnoockbwfenunhcibwfn", production_business_write_policy: "enabled",
   staging_write_wave: "none", feature_flags: Object.fromEntries(REQUIRED_FLAGS.map((flag) => [flag, true])) };
@@ -17,6 +17,16 @@ contract.paths = Object.fromEntries([
 const preferencesPath = "/admin/clubs/{club_id}/weekly-recap/preferences";
 contract.paths[preferencesPath] = { get: {}, put: {} };
 contract.components.schemas.AdminWeeklyRecapPublishRequest = { properties: { edits_json: { type: "object" } } };
+const hubRoutes = [
+  ["get", "/public/round-robin-hubs/{hub_id}/registration"],
+  ["post", "/public/round-robin-hubs/{hub_id}/checkins"],
+];
+for (const [method, path] of hubRoutes) contract.paths[path] = { [method]: {} };
+contract.components.schemas.HubCommandRequest = { properties: { action: { enum: ["set_registration", "review_checkin", "process_checkins", "edit_match_players"] } } };
+contract.components.schemas.GeneratorStartRequest = { properties: {
+  registration_hub_id: { anyOf: [{ type: "string", format: "uuid" }, { type: "null" }] },
+  participant_names: { type: "array" },
+} };
 
 (async () => {
   assert.equal(operationsReady(ready), true);
@@ -37,7 +47,7 @@ contract.components.schemas.AdminWeeklyRecapPublishRequest = { properties: { edi
     missingGameEdits.components.schemas[name].properties.unplayed_games = { type: "boolean" };
     assert.equal(leagueLiveReady(missingGameEdits), false);
   }
-  for (const path of Object.keys(contract.paths).filter((path) => path !== preferencesPath)) {
+  for (const path of Object.keys(contract.paths).filter((path) => path.includes("/league-manager/live/"))) {
     const missingRoute = structuredClone(contract);
     delete missingRoute.paths[path];
     assert.equal(leagueLiveReady(missingRoute), false);
@@ -57,6 +67,24 @@ contract.components.schemas.AdminWeeklyRecapPublishRequest = { properties: { edi
   const missingDraftPublication = structuredClone(contract);
   delete missingDraftPublication.components.schemas.AdminWeeklyRecapPublishRequest.properties.edits_json;
   assert.equal(weeklyReportReady(missingDraftPublication), false);
+  assert.equal(roundRobinHubReady(contract), true);
+  assert.equal(roundRobinHubReady({}), false);
+  for (const [method, path] of hubRoutes) {
+    const missingRoute = structuredClone(contract);
+    delete missingRoute.paths[path][method];
+    assert.equal(roundRobinHubReady(missingRoute), false);
+  }
+  for (const action of contract.components.schemas.HubCommandRequest.properties.action.enum) {
+    const missingAction = structuredClone(contract);
+    missingAction.components.schemas.HubCommandRequest.properties.action.enum = missingAction.components.schemas.HubCommandRequest.properties.action.enum.filter((value) => value !== action);
+    assert.equal(roundRobinHubReady(missingAction), false);
+  }
+  const oldHubSetup = structuredClone(contract);
+  delete oldHubSetup.components.schemas.GeneratorStartRequest.properties.registration_hub_id;
+  assert.equal(roundRobinHubReady(oldHubSetup), false);
+  const mandatoryRoster = structuredClone(contract);
+  mandatoryRoster.components.schemas.GeneratorStartRequest.properties.participant_names.minItems = 2;
+  assert.equal(roundRobinHubReady(mandatoryRoster), false);
   let calls = 0, clock = 0;
   await waitForProductionApi({ environment: "preview", request: async () => { throw new Error("Preview must not contact production"); } });
   await waitForProductionApi({ environment: "production", now: () => clock,
@@ -89,6 +117,12 @@ contract.components.schemas.AdminWeeklyRecapPublishRequest = { properties: { edi
     pause: async () => { clock += 10000; }, request: async (url) => ({ ok: true,
       json: async () => url.endsWith('/openapi.json') ? (++contracts === 1 ? oldLiveContract : contract) : ready }) });
   assert.equal(contracts, 2, "The website waits for Live Rounds game edits before publishing the new controls");
+  clock = 0;
+  contracts = 0;
+  await waitForProductionApi({ environment: "production", now: () => clock,
+    pause: async () => { clock += 10000; }, request: async (url) => ({ ok: true,
+      json: async () => url.endsWith('/openapi.json') ? (++contracts === 1 ? oldHubSetup : contract) : ready }) });
+  assert.equal(contracts, 2, "The website waits for arrivals-driven RR Hub setup before publishing check-in and court player editing");
   clock = 0;
   await assert.rejects(waitForProductionApi({ environment: "production", timeoutMs: 10000,
     now: () => clock, pause: async () => { clock += 10000; }, request: async () => { throw new Error("Unavailable"); } }), /current website remains active/);

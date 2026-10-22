@@ -115,7 +115,7 @@ global.fetch = async (url, options = {}) => {
     detail.workspace.groups.push({ session_key: key, title: "Created round robin", current_round_number: 1, round_status: "active", completed_matches: 0, total_matches: 1, can_advance: false, event_format: "standard", scoring_mode: "scored" });
     detail.workspace.eligible_queue.push(match(key, `${key}-1`, 1, ["c2"], 0));
   }
-  else if (body.action !== "assign_next_court") throw new Error(`Unexpected action ${body.action}`);
+  else if (!["assign_next_court", "auto_fill_courts"].includes(body.action)) throw new Error(`Unexpected action ${body.action}`);
   detail.hub.version += 1;
   receipts.set(body.idempotency_key, clone(body));
   if (body.action === "add_group" && loseAddResponse) { loseAddResponse = false; throw new Error("Response lost after attachment"); }
@@ -169,7 +169,14 @@ global.fetch = async (url, options = {}) => {
   assert.deepEqual(requests[requests.length - 1], failed, "Retry uses the exact idempotency key and expected version");
   assert.equal(stored.has("rr-hub-pending:club"), false);
   assert.ok(button(tree, "Ready again"));
-  await act(async () => button(tree, "Ready again").props.onClick());
+  await act(async () => button(tree, "Court board").props.onClick());
+  const paused = tree.root.findByProps({ "aria-label": "Paused players" });
+  assert.match(text(paused), /Moneyball.*B Player 1/);
+  await act(async () => paused.findByType("button").props.onClick());
+  assert.equal(requests.at(-1).action, "resume_player");
+  assert.deepEqual(requests.at(-1).payload, { identity: "player:b1" });
+  assert.equal(tree.root.findAllByProps({ "aria-label": "Paused players" }).length, 0, "Resuming the last paused player clears the board section");
+  await act(async () => button(tree, "Players").props.onClick());
   assert.ok(button(tree, "Pause player"));
 
   await act(async () => button(tree, "Court board").props.onClick());
@@ -191,6 +198,38 @@ global.fetch = async (url, options = {}) => {
   const props = (hub, session = "") => ({ apiBase: "http://test.local", clubId: "club", initialHubId: hub, initialAddSessionKey: session });
   const standingsGroup = (key, status = "active", scoring_mode = "scored") => ({ session_key: key, title: `${key} round robin`, status, scoring_mode,
     current_round_number: 1, round_status: "active", completed_matches: 0, total_matches: 2, can_advance: false, event_format: "standard" });
+  for (const change of ["substitution", "team_swap", "identity_change"]) {
+    emptyHub(`score-lineup-${change}`);
+    detail.workspace.groups = [standingsGroup("a")];
+    detail.workspace.courts[0].current = clone(a1);
+    await act(async () => { tree = create(h(Panel, props(detail.hub.id))); });
+    await act(async () => button(tree, "Enter score").props.onClick());
+    for (const [side, value] of [["A", "11"], ["B", "7"]])
+      await act(async () => tree.root.findByProps({ "aria-label": `Side ${side} score` }).props.onChange({ target: { value } }));
+    const current = detail.workspace.courts[0].current;
+    if (change === "substitution") current.side_a[0] = { id: "new", identity: "guest:a:new", name: "New arrival" };
+    else if (change === "team_swap") [current.side_a[0], current.side_b[0]] = [current.side_b[0], current.side_a[0]];
+    else current.side_a[0].identity = "player:resolved-profile";
+    detail.hub.version += 1;
+    await act(async () => window.dispatchEvent({ type: "focus" }));
+    assert.equal(button(tree, "Save score & release court").props.disabled, true, `${change} invalidates an open score draft`);
+    assert.equal(button(tree, "Reviewed — keep these scores"), undefined, "Old scores cannot be carried onto changed players");
+    await act(async () => tree.root.findByProps({ id: "hub-score-form" }).props.onSubmit({ preventDefault() {} }));
+    assert.equal(requests.length, 0);
+    assert.match(text(tree.toJSON()), /match or players changed/);
+    await act(async () => tree.unmount());
+  }
+  emptyHub("paused-queue-event");
+  detail.workspace.groups = [standingsGroup("a")];
+  detail.workspace.blocked_queue = [{ ...a2, status: "blocked", blockers: ["A player is paused."] }];
+  await act(async () => { tree = create(h(Panel, props("paused-queue-event"))); });
+  assert.equal(button(tree, "Fill open courts").props.disabled, false, "An existing paused queue can request replacement planning even before any match is ready");
+  await act(async () => button(tree, "Fill open courts").props.onClick());
+  assert.equal(requests.at(-1).action, "auto_fill_courts");
+  detail.workspace.courts[0].open = false;
+  await act(async () => window.dispatchEvent({ type: "focus" }));
+  assert.equal(button(tree, "Fill open courts").props.disabled, true, "Closed courts cannot be filled");
+  await act(async () => tree.unmount());
   emptyHub("finish-event");
   detail.workspace.groups = [
     { ...standingsGroup("already-finished", "completed"), can_finish: false },

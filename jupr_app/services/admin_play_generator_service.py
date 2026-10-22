@@ -392,26 +392,46 @@ def create_play_generator_session(
     rating_mode: str = "unrated",
     event_format: str = "standard",
     participant_player_ids: dict[str, int] | None = None,
+    registration_hub_id: str | None = None,
 ) -> dict[str, Any]:
-    preview = preview_play_generator(
-        supabase,
-        club_id=str(club_id),
-        generator_kind=generator_kind,
-        play_format=play_format,
-        title=title,
-        participant_names=participant_names,
-        player_ids=player_ids,
-        participant_player_ids=participant_player_ids,
-        total_rounds=total_rounds,
-        court_count=court_count,
-        doubles_court_count=doubles_court_count,
-        singles_court_count=singles_court_count,
-        standings_sort=standings_sort,
-        scoring_mode=scoring_mode,
-        rating_mode=rating_mode,
-        event_format=event_format,
-        _include_private=True,
-    )["preview"]
+    if registration_hub_id:
+        from jupr_app.services.admin_round_robin_hub_service import _hub
+        try:
+            hub = _hub(supabase, str(club_id), registration_hub_id)
+        except LookupError as exc:
+            raise ValueError("Choose an active event in this club.") from exc
+        if hub["status"] != "active":
+            raise ValueError("Create round robins in an active event.")
+        if participant_player_ids:
+            raise ValueError("Players join this round robin through check-in.")
+        preview = create_generator_preview(
+            generator_kind=generator_kind, play_format=play_format, title=title,
+            participant_names=participant_names, player_ids=player_ids, total_rounds=1, court_count=0,
+            doubles_court_count=doubles_court_count, singles_court_count=singles_court_count,
+            standings_sort=standings_sort, scoring_mode=scoring_mode, rating_mode=rating_mode,
+            event_format=event_format, _hub_registration=True,
+        )
+        preview["hubRegistrationTargetId"] = registration_hub_id
+    else:
+        preview = preview_play_generator(
+            supabase,
+            club_id=str(club_id),
+            generator_kind=generator_kind,
+            play_format=play_format,
+            title=title,
+            participant_names=participant_names,
+            player_ids=player_ids,
+            participant_player_ids=participant_player_ids,
+            total_rounds=total_rounds,
+            court_count=court_count,
+            doubles_court_count=doubles_court_count,
+            singles_court_count=singles_court_count,
+            standings_sort=standings_sort,
+            scoring_mode=scoring_mode,
+            rating_mode=rating_mode,
+            event_format=event_format,
+            _include_private=True,
+        )["preview"]
     supplied = _clean_text(preview_fingerprint, limit=128)
     if supplied and supplied != str(preview.get("previewFingerprint") or ""):
         raise ValueError("The roster or settings changed after preview. Preview the schedule again before starting.")

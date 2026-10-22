@@ -256,11 +256,12 @@ function embeddedClick(href) {
     const props=workspaceProps(hub);
     await act(async()=>{tree=create(h(Workspace,props));});
     assert.ok(tree.root.findAllByType('a').some(link=>link.props.href==='/admin/round-robin-hub?hub=known-hub'),'Previously created linked sessions have a direct hub link');
-    await act(async()=>button(tree,hub?'Start and add to hub':'Start unrated session').props.onClick());
+    await act(async()=>button(tree,hub?'Create round robin':'Start unrated session').props.onClick());
     assert.equal(creates.length,1,'Starting creates exactly one round robin');
     assert.equal(creates[0].body.rating_mode,'unrated');
-    assert.equal(creates[0].body.preview_fingerprint,'preview');
-    assert.deepEqual(creates[0].body.participant_player_ids,{Two:22,Four:44},'Guest entries preserve the selected profiles in mixed rosters');
+    assert.equal(creates[0].body.preview_fingerprint,hub?null:'preview');
+    if(hub) { assert.deepEqual(creates[0].body.participant_names,[]); assert.equal(creates[0].body.registration_hub_id,hub); }
+    assert.deepEqual(creates[0].body.participant_player_ids,hub?undefined:{Two:22,Four:44},'Guest entries preserve the selected profiles in mixed rosters');
     assert.equal(Object.hasOwn(creates[0].body,'player_ids'),false,'New starts send explicit sparse links rather than an all-or-nothing ID list');
     assert.deepEqual(navigation,[hub?'/admin/round-robin-hub?hub=hub%2F2&add_session=new%2Frr':'/admin/round-robin-generator/sessions/new%2Frr/rounds/1']);
     const runLabel=hub?'Run this round robin in the hub':'Run this session';
@@ -294,7 +295,7 @@ function embeddedClick(href) {
     };
     const props=workspaceProps(hub,token),key=scopedKey(hub,token);
     await act(async()=>{tree=create(h(Workspace,props));});
-    await act(async()=>button(tree,'Start and add to hub').props.onClick());
+    await act(async()=>button(tree,'Create round robin').props.onClick());
     const alert=tree.root.findByProps({role:'alert'});
     assert.equal(alert.props.style.color,'#b91c1c','Failed starts show an explicit error regardless of wording');
     assert.ok(text(alert).includes('draft'));
@@ -302,7 +303,7 @@ function embeddedClick(href) {
     assert.ok(drafts.get(key).preview,'Failed starts preserve the preview');
     if(failure==='rejected422') {
       assert.equal(recoveryStorage.has(`${key}:start`),false,'An initially rejected request can be corrected');
-      assert.ok(button(tree,'Start and add to hub'));
+      assert.ok(button(tree,'Create round robin'));
     } else {
       assert.equal(button(tree,'Create another round robin'),undefined);
       assert.equal(tree.root.findByType('fieldset').props.disabled,true);
@@ -324,31 +325,31 @@ function embeddedClick(href) {
     return response({session:{session_key:'original-created',current_round_number:1}});
   };
   await act(async()=>{tree=create(h(Workspace,workspaceProps('auth-hub','auth-retry')));});
-  await act(async()=>button(tree,'Start and add to hub').props.onClick());
+  await act(async()=>button(tree,'Create round robin').props.onClick());
   await act(async()=>button(tree,'Retry this start').props.onClick());
   assert.ok(button(tree,'Retry this start'),'Rejected retry cannot discard earlier uncertainty');
-  assert.equal(button(tree,'Start and add to hub'),undefined);
+  assert.equal(button(tree,'Create round robin').props.disabled,true);
   await act(async()=>button(tree,'Retry this start').props.onClick());
   assert.deepEqual(authRequests[1],authRequests[0]);assert.deepEqual(authRequests[2],authRequests[0]);
   assert.equal(navigation.at(-1),'/admin/round-robin-hub?hub=auth-hub&add_session=original-created');
   await act(async()=>tree.unmount());
 
-  resetDraft('old-hub','old-preview');let resolvePreview;
+  resetDraft(undefined,'old-preview');let resolvePreview;
   global.fetch=async(url)=>url.endsWith('/preview')?new Promise(resolve=>{resolvePreview=()=>resolve(response({preview:savedDraft().preview}));}):response({sessions:[]});
-  await act(async()=>{tree=create(h(Workspace,workspaceProps('old-hub','old-preview')));});
+  await act(async()=>{tree=create(h(Workspace,workspaceProps(undefined,'old-preview')));});
   await act(async()=>button(tree,'Preview matchups').props.onClick());
-  await act(async()=>tree.update(h(Workspace,workspaceProps('new-hub','new-preview'))));
+  await act(async()=>tree.update(h(Workspace,workspaceProps(undefined,'new-preview'))));
   await act(async()=>resolvePreview());
-  assert.equal(button(tree,'Start and add to hub'),undefined,'Old preview response cannot populate a new draft');
-  assert.equal(drafts.get(scopedKey('new-hub','new-preview')).preview,null);
+  assert.equal(button(tree,'Start unrated session'),undefined,'Old preview response cannot populate a new draft');
+  assert.equal(drafts.get(scopedKey(undefined,'new-preview')).preview,null);
   await act(async()=>tree.unmount());
 
-  resetDraft('mixed-hub','mixed-preview');const previewBodies=[];
+  resetDraft(undefined,'mixed-preview');const previewBodies=[];
   global.fetch=async(url,options={})=>{
     if(url.endsWith('/preview')) {previewBodies.push(JSON.parse(options.body));return response({preview:savedDraft().preview});}
     return response({sessions:[]});
   };
-  await act(async()=>{tree=create(h(Workspace,workspaceProps('mixed-hub','mixed-preview')));});
+  await act(async()=>{tree=create(h(Workspace,workspaceProps(undefined,'mixed-preview')));});
   await act(async()=>button(tree,'Preview matchups').props.onClick());
   assert.deepEqual(previewBodies[0].participant_names,['One','Two','Three','Four']);
   assert.deepEqual(previewBodies[0].participant_player_ids,{Two:22,Four:44},'Preview preserves the same sparse profiles as Start');

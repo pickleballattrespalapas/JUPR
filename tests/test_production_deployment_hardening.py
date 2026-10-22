@@ -383,7 +383,9 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         ROOT / "supabase/migrations",
     )
 
-    assert len(versions) == 174
+    assert len(versions) == 175
+    assert "20261021144253" in versions
+    assert "round_robin_hub_public_checkin" in contract["required_ledger_names"]
     assert {"20261020033713", "20261020043027", "20261020161332"}.issubset(versions)
     assert "weekly_recap_builder" in contract["required_ledger_names"]
     assert "20261019053313" in versions
@@ -446,15 +448,16 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         "20261109004103",
         "20261109004104",
     )
-    assert len(names) == 174
+    assert len(names) == 175
     assert all("XX" not in version for version in versions)
-    assert len(contract["required_ledger_names"]) == 161
+    assert len(contract["required_ledger_names"]) == 162
     assert "partner_email_invitations" in contract["required_ledger_names"]
-    assert len(contract["deployment_order"]) == 161
-    assert contract["deployment_order"][-8:] == (
+    assert len(contract["deployment_order"]) == 162
+    assert contract["deployment_order"][-9:] == (
         "event_season_deleted_draft_cleanup", "interclub_player_identity_availability", "weekly_recap_builder",
         "badge_conflicts_are_not_serialization_failures", "unrated_match_activity",
         "round_robin_hub_atomic_operations", "play_generator_operation_surface", "round_robin_hub_participant_identities",
+        "round_robin_hub_public_checkin",
     )
     assert {"interclub_season_trophies", "event_season_history"}.issubset(contract["required_ledger_names"])
     assert set(contract["deployment_order"]) == set(
@@ -679,6 +682,7 @@ def test_reviewed_migration_contract_is_bound_to_sql_bytes(tmp_path: Path) -> No
     "round_robin_hub_atomic_operations",
     "play_generator_operation_surface",
     "round_robin_hub_participant_identities",
+    "round_robin_hub_public_checkin",
 ])
 def test_hub_release_requires_each_reviewed_migration(missing_name: str) -> None:
     contract = MIGRATION_CONTRACT
@@ -1644,7 +1648,7 @@ def test_production_workflow_is_exact_candidate_and_never_creates_or_retargets_a
     assert (
         "EXPECTED_MIGRATION_HEAD: "
         "${{ vars.PRODUCTION_MIGRATION_LEDGER_HEAD || "
-        "'20261022000000' }}"
+        "'20261022043400' }}"
     ) in workflow
     assert 'if [ "$GITHUB_REF" != "refs/heads/$PRODUCTION_SOURCE_BRANCH" ]; then' in workflow
     assert '"$HEAD_SHA" != "$GITHUB_SHA"' in workflow

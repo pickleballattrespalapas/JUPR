@@ -97,8 +97,11 @@ jobs:
             tests/test_public_play_generator_service.py \
             tests/test_admin_play_generator_service.py \
             tests/test_round_robin_hub.py \
+            tests/test_round_robin_hub_pause_substitution.py \
+            tests/test_hub_match_players.py \
             tests/test_hub_auto_round_ending.py \
             tests/test_admin_round_robin_hub_service.py \
+            tests/test_round_robin_hub_registration.py tests/test_hub_arrival_registration.py \
             tests/test_round_robin_hub_generator_integration.py
       - name: Verify interclub season lifecycle
         run: python -m pytest -q tests/test_interclub*.py tests/test_event_season*.py tests/test_rating_integrity_clashes.py

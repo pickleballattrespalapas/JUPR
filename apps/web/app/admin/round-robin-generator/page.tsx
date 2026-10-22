@@ -40,11 +40,11 @@ export default async function RoundRobinGeneratorPage({ searchParams }: {
       <p style={{ margin: "0 0 0.5rem", color: "#2563eb", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.08em", fontSize: "0.78rem" }}>
         Competition tools
       </p>
-      <h1 style={{ marginTop: 0 }}>Round-Robin Generator</h1>
+      <h1 style={{ marginTop: 0 }}>{returnHubId ? "Create round robin" : "Round-Robin Generator"}</h1>
       <p style={{ color: "#334155", maxWidth: "900px" }}>
-        Build singles, doubles, or mixed doubles-and-singles schedules; preview every planned matchup and bye, print the schedule, then run one round at a time.
+        {returnHubId ? "Set up a level for tonight’s event. Players check in at the front desk, and the hub prepares matches as they arrive." : "Build singles, doubles, or mixed doubles-and-singles schedules; preview every planned matchup and bye, print the schedule, then run one round at a time."}
       </p>
-      <p><Link href={returnHubId ? `/admin/round-robin-hub?hub=${encodeURIComponent(returnHubId)}` : "/admin/round-robin-hub"}>← Round Robin Hub</Link>{returnHubId ? " · Preview your schedule, then choose Start and add to hub. Your first-round matches will be ready to assign on the court board." : " · Run several round robins on one court board."}</p>
+      <p><Link href={returnHubId ? `/admin/round-robin-hub?hub=${encodeURIComponent(returnHubId)}` : "/admin/round-robin-hub"}>← Round Robin Hub</Link>{returnHubId ? " · Create the round robin, then open Registration in the hub to share your front-desk check-in page." : " · Run several round robins on one court board."}</p>
       <GeneratorWorkspace
         generatorKind="round_robin"
         apiBase={apiBase()}

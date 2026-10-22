@@ -7,8 +7,8 @@ playoffs, exports, sharing, and submission/approval workflow.
 ## Accepted operating rules
 
 - An event can contain multiple independent groups and named courts.
-- Only matches in a group's current round enter the queue. A group must complete
-  that round before generating or releasing the next. Different groups advance independently.
+- Prepared later-round matches may enter the queue once their players have
+  resolved earlier games. Results settle in round order; groups advance independently.
 - More matches than courts are supported. Queued matches wait for a court; this
   waiting is distinct from a scheduled bye.
 - Queue order starts with the longest-waiting player in each eligible matchup,
@@ -17,6 +17,19 @@ playoffs, exports, sharing, and submission/approval workflow.
 - Pausing needs no reason. It removes a player from eligibility and cancels their
   next-court reservation. It preserves already-accrued waiting time, freezes the
   clock while away, and allows an already-playing match to finish.
+- In standard round robins, a paused player's unstarted game uses an eligible
+  player on bye when possible, choosing the longest waiting player first. Future
+  preview games alone do not make a substitute busy. Current court assignments,
+  reservations, earlier unfinished games, and unresolved identities do.
+- When a direct replacement is unavailable, only the games affected by pauses
+  are regrouped. Available players left over receive byes and retain their wait;
+  paused absences do not earn bye credit. Unaffected games, started games, and
+  scores stay intact. A group with too few available players waits for a return
+  instead of generating empty rounds. Moneyball and playoff lineups remain fixed.
+- Availability repairs run with hub writes, including Pause, score/release,
+  Ready again, and Fill open courts. Reading the board never changes a lineup.
+  Ready again restores eligibility without undoing substitutions. Original
+  affected games are retained in the round's pause-adjustment audit metadata.
 - A group with dedicated courts uses only those courts, even if shared courts are
   free. Other groups cannot use those dedicated courts. Groups without dedicated
   courts use the shared pool.

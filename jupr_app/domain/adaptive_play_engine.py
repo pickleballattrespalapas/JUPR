@@ -1206,6 +1206,7 @@ def create_generator_preview(
     scoring_mode: str = "scored",
     rating_mode: str = "unrated",
     event_format: str = "standard",
+    _hub_registration: bool = False,
 ) -> dict[str, Any]:
     kind = str(generator_kind or "").strip().lower().replace("-", "_")
     if kind not in {"round_robin", "ladder"}:
@@ -1242,7 +1243,9 @@ def create_generator_preview(
         if fmt == "doubles_singles"
         else fmt.title()
     )
-    if len(unique_names) < minimum:
+    if _hub_registration and (kind != "round_robin" or event_format != "standard" or names or player_ids):
+        raise ValueError("Registration setup requires an empty standard round robin.")
+    if len(unique_names) < minimum and not _hub_registration:
         raise ValueError(f"{format_label} requires at least {minimum} players.")
     if len(unique_names) > 40:
         raise ValueError("Generators support at most 40 players.")
@@ -1271,7 +1274,7 @@ def create_generator_preview(
         if mixed_doubles + mixed_singles > 20:
             raise ValueError("The combined doubles and singles court count cannot exceed 20.")
         required_players = mixed_doubles * 4 + mixed_singles * 2
-        if required_players > len(unique_names):
+        if required_players > len(unique_names) and not _hub_registration:
             raise ValueError(
                 f"This court mix requires {required_players} players, but the roster has {len(unique_names)}."
             )
@@ -1319,6 +1322,9 @@ def create_generator_preview(
         "publishedMatchIds": [],
         "createdAt": _now_iso(),
     }
+    if _hub_registration:
+        event["hubRegistrationDriven"] = True
+        event["totalRounds"] = 1
     if kind == "round_robin":
         perfect = perfect_doubles_schedule(active_participant_ids(event, 1)) if fmt == "doubles" else None
         available = perfect is not None and (not resolved_court_count or resolved_court_count >= len(participants) // 4)
