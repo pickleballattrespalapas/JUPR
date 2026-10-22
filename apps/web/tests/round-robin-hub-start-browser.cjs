@@ -248,6 +248,10 @@ async function main() {
     let edited = await command(page,page.getByRole('button',{name:'Pause player',exact:true}),'pause_player');
     assert.equal(edited.workspace.groups.find(g=>g.session_key===firstSession.session_key).players.filter(p=>p.on_bye).length,3);
     await page.getByRole('tab',{name:'Court board',exact:true}).click();
+    const pausedPlayers = page.getByRole('region',{name:'Paused players',exact:true});
+    await pausedPlayers.getByText(waitingPlayer.name,{exact:true}).waitFor();
+    assert(!(await page.getByRole('region',{name:'Byes this round',exact:true}).textContent()).includes(waitingPlayer.name));
+    await snapshot(page,'paused-players-on-board.png');
     await page.getByRole('article').filter({has:page.getByRole('button',{name:'Enter score',exact:true})}).getByRole('button',{name:'Enter score',exact:true}).click();
     await page.getByLabel('Side A score',{exact:true}).fill('11');
     await page.getByLabel('Side B score',{exact:true}).fill('7');
@@ -255,14 +259,14 @@ async function main() {
     assert.equal(edited.workspace.groups.find(g=>g.session_key===firstSession.session_key).current_round_number,2);
     edited = await command(page,page.getByRole('button',{name:'Fill open courts',exact:true}),'auto_fill_courts');
     const liveBeforeResume = structuredClone(edited.workspace.courts.filter(c=>c.current));
-    await page.getByRole('tab',{name:'Players',exact:true}).click();
-    edited = await command(page,page.getByRole('button',{name:'Ready again',exact:true}),'resume_player');
+    edited = await command(page,pausedPlayers.getByRole('button',{name:'Ready again',exact:true}),'resume_player');
+    await pausedPlayers.waitFor({state:'hidden'});
     assert(edited.workspace.eligible_queue.some(m=>m.round_number===2 && [...m.side_a,...m.side_b].some(p=>p.id===waitingPlayer.id)));
     const assignments = courts => courts.filter(c=>c.current).map(c=>({id:c.id,match_id:c.current.match_id,
       side_a:c.current.side_a,side_b:c.current.side_b,assigned_at:c.current.assigned_at}));
     assert.deepEqual(assignments(edited.workspace.courts),assignments(liveBeforeResume));
     assert.equal(edited.workspace.groups.find(g=>g.session_key===firstSession.session_key).players.filter(p=>p.on_bye).length,0);
-    record('Resume after round advancement forms a ready game from four free players and preserves the occupied court');
+    record('Paused players appear beside byes on the court board; Ready again after round advancement forms a ready game and preserves the occupied court');
     await page.getByRole('tab',{name:'Court board',exact:true}).click();
     const liveCourt = edited.workspace.courts.find(c=>c.current);
     const courtCard = page.getByRole('article',{name:liveCourt.label,exact:true});

@@ -169,7 +169,14 @@ global.fetch = async (url, options = {}) => {
   assert.deepEqual(requests[requests.length - 1], failed, "Retry uses the exact idempotency key and expected version");
   assert.equal(stored.has("rr-hub-pending:club"), false);
   assert.ok(button(tree, "Ready again"));
-  await act(async () => button(tree, "Ready again").props.onClick());
+  await act(async () => button(tree, "Court board").props.onClick());
+  const paused = tree.root.findByProps({ "aria-label": "Paused players" });
+  assert.match(text(paused), /Moneyball.*B Player 1/);
+  await act(async () => paused.findByType("button").props.onClick());
+  assert.equal(requests.at(-1).action, "resume_player");
+  assert.deepEqual(requests.at(-1).payload, { identity: "player:b1" });
+  assert.equal(tree.root.findAllByProps({ "aria-label": "Paused players" }).length, 0, "Resuming the last paused player clears the board section");
+  await act(async () => button(tree, "Players").props.onClick());
   assert.ok(button(tree, "Pause player"));
 
   await act(async () => button(tree, "Court board").props.onClick());
