@@ -17,6 +17,7 @@ export type HubGroup = {
   session_key: string; title: string; current_round_number: number; round_status: string;
   completed_matches: number; total_matches: number; can_advance: boolean; event_format: string; scoring_mode: string;
   total_rounds?: number; advance_label?: string; rating_mode?: string; status?: string; dedicated_court_ids?: string[];
+  results_locked?: boolean;
   players?: HubGroupPlayer[]; can_add_player?: boolean; add_player_unavailable_reason?: string | null;
   can_remove_player?: boolean; remove_player_unavailable_reason?: string | null;
   can_finish?: boolean; finish_unavailable_reason?: string | null; finish_requested?: boolean;
