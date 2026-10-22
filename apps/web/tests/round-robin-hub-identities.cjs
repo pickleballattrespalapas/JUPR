@@ -219,7 +219,9 @@ global.fetch = async (url, options = {}) => {
   detail.workspace.groups.forEach(group => group.players.forEach(player => { player.can_remove = player.active; }));
   detail.workspace.groups[2].add_player_unavailable_reason = "Moneyball uses its fixed roster. Open Manage round robin to substitute a player.";
   detail.workspace.groups.reverse();
-  await mount(); await click("Players");
+  await mount();
+  assert.ok(text(tree.root.findByProps({ "aria-label": "Byes this round" })).includes("Numbers A · Alex local"), "The court board keeps available byes visible under their round robin");
+  await click("Players");
   const groupSection = key => tree.root.findByProps({ "data-player-group": key });
   assert.deepEqual(tree.root.findAll(node => node.props["data-player-group"]).map(node => node.props["data-player-group"]), ["a", "b", "c"]);
   assert.equal(text(groupSection("a").findAllByType("strong")[0]), "Alex local");
@@ -304,7 +306,9 @@ global.fetch = async (url, options = {}) => {
   assert.equal(tree.root.findAllByType("input").find(node => node.props["aria-label"] === "Player name or club profile").props.value, "", "Cancel resets the name and destination");
   await click("Cancel");
   await click("Court board");
-  assert.ok(text(tree.root.findByProps({ "aria-label": "Byes this round" })).includes("Numbers A · Alex local"), "The court board keeps current byes visible under their round robin");
+  assert.equal(tree.root.findAllByProps({ "aria-label": "Byes this round" }).length, 0, "Paused players are listed separately from available byes");
+  assert.ok(text(tree.root.findByProps({ "aria-label": "Paused players in Numbers A" })).includes("Alex local"));
+  assert.ok(text(tree.root.findByProps({ "aria-label": "Paused players in Numbers B" })).includes("Zander alias"), "Shared paused players keep each round robin's display name");
   await openAdd(); await typePlayer("Board Guest"); await chooseGroup("a"); await submitPlayer();
   assert.equal(button(tree, "Court board").props["aria-selected"], true, "Adding from court operations keeps the court board open");
   const addedOnBoard = detail.workspace.groups.find(group => group.session_key === "a").players.find(player => player.name === "Board Guest");
