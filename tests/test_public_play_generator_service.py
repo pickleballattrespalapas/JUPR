@@ -64,6 +64,9 @@ class FakeSupabase:
     def __init__(self):
         self.db = {"live_sessions": [], "public_live_operations": [], "players": []}
     def table(self, name): return Query(self.db, name)
+    def rpc(self, name, params):
+        from generator_receipt_fake import commit_generator_rpc
+        return SimpleNamespace(execute=lambda: commit_generator_rpc(self.db, name, params))
 
 
 def requester(): return "a" * 64
