@@ -34,6 +34,10 @@ October 22 incident and adversarial audit. Production records are unchanged.
   malformed scores and invalid court payloads are rejected before mutation.
 - Admin controls reflect actual session capabilities. Legacy public mutation
   routes reject Generator sessions so they cannot bypass Hub/publication locks.
+- Authorized staff can submit completed public sessions for approval even when
+  their play controls are read-only. Pending, approved and published results
+  remain locked. Mobile score inputs remain visible before the explanatory
+  blank-game guidance.
 
 ## Audit coverage
 
@@ -79,6 +83,14 @@ individual review; this change does not guess or rewrite them.
   court assignment and reservation, pause/resume, saved standings, retained
   drafts after credential renewal, one real score plus a blank game, exact retry
   after a lost response, atomic transfer, rejoin and explicit not-played outcome.
+- Production-build browser acceptance also passes for organizer/staff submission,
+  schedule navigation with mobile scores visible, recap editing, Hub creation,
+  and 18 identity/group-isolation checkpoints. The latter retains exact
+  match/bye membership and protected-lineup assertions while recognizing optional
+  per-round roster overrides and current group-qualified status text.
+- The deployment migration manifest requires the reviewed recovery migration;
+  its missing-migration check and the remaining API safety, tournament/league,
+  and parity suites pass (293 + 245 + 43 tests, plus 8 subtests).
 
 These are synthetic/local checks. They do not attest a deployed staging build,
 production load, real-account authentication or PostgREST retry timing.

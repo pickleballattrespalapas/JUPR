@@ -1190,9 +1190,6 @@ export default function GeneratorRoundRunner({
           </div>
         ) : null}
 
-        {scoredSession && (canEditRound || editingScores) ? <p>
-          {event.eventFormat === "moneyball_expectations" ? "Enter every score before submitting the Moneyball rotation." : "When you submit, leave both scores blank for a game that was not played. Enter both scores for every played game. Blank draft fields are not saved until you submit."}
-        </p> : null}
         {pendingScoreSave ? <aside role="status">
           <p>A score save needs confirmation. Retry the same save before making another change.</p>
           {!canEditRound && !editingScores ? <button type="button" disabled={busy} onClick={() => void saveRound()} style={primaryButton}>{busy ? "Saving…" : "Retry score save"}</button> : null}
@@ -1281,6 +1278,10 @@ export default function GeneratorRoundRunner({
             );
           })}
         </div>
+
+        {scoredSession && (canEditRound || editingScores) ? <p>
+          {event.eventFormat === "moneyball_expectations" ? "Enter every score before submitting the Moneyball rotation." : "Leave both scores blank for an unplayed game. Enter both scores for a played game. Blank games are marked not played only when you submit."}
+        </p> : null}
 
         {canEditRound ? (
           <div style={{ marginTop: "1rem", display: "grid", gap: "0.75rem" }}>

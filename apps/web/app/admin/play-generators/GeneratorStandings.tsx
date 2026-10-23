@@ -206,6 +206,7 @@ export default function AdminGeneratorStandings({ apiBase, clubId, sessionKey, e
   const sortMode = session.standings_sort || session.event.standingsSort || "wins";
   const visibleRounds = (session.event.rounds || []).filter((row) => row.number <= currentRound);
   const resultsLocked = Boolean(session.submission || session.official_publish?.published_at || session.official_publish?.published_match_ids?.length);
+  // Play-management capabilities do not govern the separate staff submission route.
   const canManage = Boolean(accessToken) && scoringMode === "scored" && !resultsLocked && session.capabilities?.can_manage !== false;
   const canContinue = canManage && !((moneyball || session.round_robin_hub_id) && session.status === "completed") && (session.status === "active" || (!session.event.playoff && session.status === "completed")) && ["saved", "skipped"].includes(currentStatus);
   const untouchedHubBoundary = hubAutoAdvanceBoundary(session.event) !== null;
@@ -241,7 +242,7 @@ export default function AdminGeneratorStandings({ apiBase, clubId, sessionKey, e
       </nav>
       {session.status === "completed" || session.submission ? (
         <div style={{ display: "grid", gap: "0.5rem" }}>
-          <GeneratorSubmission ratingMode={session.rating_mode || "unrated"} submission={session.submission} canSubmit={canManage && !resultsLocked && session.status === "completed" && Boolean(accessToken)} defaultDate={session.created_at} onSubmit={submitResults} />
+          <GeneratorSubmission ratingMode={session.rating_mode || "unrated"} submission={session.submission} canSubmit={!resultsLocked && session.status === "completed" && Boolean(accessToken)} defaultDate={session.created_at} onSubmit={submitResults} />
           {session.submission ? <button type="button" onClick={() => void loadSession()} style={{ ...linkButton, cursor: "pointer", justifySelf: "start", background: "white" }}>Refresh approval status</button> : null}
           <p style={{ margin: 0 }}><Link href="/admin/play-generators/submissions">Review generator submissions</Link> (club administrators)</p>
         </div>

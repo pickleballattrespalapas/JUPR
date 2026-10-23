@@ -4,6 +4,7 @@ const path = require("node:path");
 const React = require("react");
 const ts = require("typescript");
 const { create, act } = require("react-test-renderer");
+global.IS_REACT_ACT_ENVIRONMENT = true;
 
 function load(relative, mocks = {}) {
   const source = fs.readFileSync(path.join(__dirname, "..", relative), "utf8");
@@ -179,6 +180,51 @@ async function adminFinishesAndSubmitsUnratedResults() {
   await act(async () => tree.unmount());
 }
 
+async function adminSubmitsStandalonePublicWithoutPlayAuthority() {
+  const readonlyPlay = { can_manage: false, can_score: false, unavailable_reason: "Use this session's organizer link to manage play." };
+  let current = { ...baseline, capabilities: readonlyPlay };
+  const calls = [];
+  global.fetch = async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url.endsWith("/submit")) current = { ...current, version: "5", submission: { status: "pending", rating_mode: "rated" } };
+    return reply({ session: current });
+  };
+  let tree;
+  const mount = async () => { await act(async () => { tree = create(React.createElement(AdminStandings, props)); }); };
+  const unmount = async () => { await act(async () => tree.unmount()); };
+  await mount();
+  assert.equal(button(tree, "Submit for approval"), undefined, "Active sessions cannot be submitted");
+  assert.equal(button(tree, "Finish session"), undefined, "Staff cannot manage standalone public play");
+  assert.equal(button(tree, "Next scheduled round"), undefined);
+  await unmount();
+  current = { ...current, status: "completed" };
+  await mount();
+  assert.ok(button(tree, "Submit for approval"), "Club staff can submit completed public-origin results without the organizer token");
+  assert.equal(button(tree, "Keep playing · Round 2"), undefined, "Separate submit authority does not grant play authority");
+  assert.equal(button(tree, "Playoff"), undefined);
+  await fillAndSubmit(tree);
+  const sent = calls.find(call => call.url.endsWith("/submit"));
+  assert.equal(sent.url, "https://api.test/admin/clubs/club/play-generators/sessions/session-1/submit");
+  assert.equal(sent.options.method, "POST");
+  assert.equal(sent.options.headers.Authorization, "Bearer admin-token");
+  assert.deepEqual(JSON.parse(sent.options.body), { expected_version: "4", organizer_name: "Joe Organizer", match_date: "2026-09-21" });
+  assert.equal(button(tree, "Submit for approval"), undefined, "Submitted results cannot be submitted twice");
+  assert.ok(content(tree).includes("Awaiting admin approval"));
+  await unmount();
+  for (const lock of [
+    { scoring_mode: "unscored" },
+    { submission: { status: "pending" } },
+    { submission: { status: "approved", approved_mode: "rated" } },
+    { official_publish: { published_at: "2026-10-23T19:00:00Z", published_match_ids: [42] } },
+  ]) {
+    current = { ...baseline, status: "completed", capabilities: readonlyPlay, ...lock };
+    await mount();
+    assert.equal(button(tree, "Submit for approval"), undefined, "Unscored, reviewed, or published results cannot be submitted");
+    assert.equal(button(tree, "Keep playing · Round 2"), undefined);
+    await unmount();
+  }
+}
+
 async function standingsCanContinueBeyondSchedule(Component, isPublic) {
   publicEnvironment({ storedToken: "organizer-secret" });
   routerCalls.length = 0;
@@ -304,6 +350,7 @@ async function localDatePlayed() {
   await organizerFragmentAndFailedSubmission();
   await viewerCannotSubmitAndUnscoredHasNoApproval();
   await adminFinishesAndSubmitsUnratedResults();
+  await adminSubmitsStandalonePublicWithoutPlayAuthority();
   await standingsCanContinueBeyondSchedule(PublicStandings, true);
   await standingsCanContinueBeyondSchedule(AdminStandings, false);
   for (const Component of [PublicStandings, AdminStandings]) {
