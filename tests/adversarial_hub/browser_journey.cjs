@@ -248,10 +248,10 @@ async function main() {
     await runner.getByRole('button',{name:'Close round robin controls',exact:true}).click();
     await page.getByRole('tab',{name:'Players',exact:true}).click();await page.getByLabel('Find player',{exact:true}).fill('');
     const beforeTransfer=await fixture();const sourceBefore=beforeTransfer.sessions.find(session=>session.session_key===beta.session_key);const movedPlayer=sourceBefore.event.participants[0];
-    await page.getByRole('button',{name:'Move player between groups',exact:true}).click();
-    const moveDialog=page.getByRole('dialog',{name:'Move player to another round robin',exact:true});
+    await page.getByRole('button',{name:'Move player',exact:true}).click();
+    const moveDialog=page.getByRole('dialog',{name:'Move player',exact:true});
     await moveDialog.getByLabel('From round robin',{exact:true}).selectOption(beta.session_key);await moveDialog.getByLabel('Player to move',{exact:true}).selectOption(movedPlayer.id);await moveDialog.getByLabel('To round robin',{exact:true}).selectOption(alpha.session_key);
-    detail=await command(page,moveDialog.getByRole('button',{name:'Move player',exact:true}),'transfer_player');
+    detail=await command(page,moveDialog.getByRole('button',{name:'Move player to round robin',exact:true}),'transfer_player');
     assert.equal(detail.workspace.groups.find(group=>group.session_key===beta.session_key).players.find(player=>player.participant_id===movedPlayer.id).membership_status,'departed');
     assert.equal(detail.workspace.groups.find(group=>group.session_key===alpha.session_key).players.filter(player=>player.name===movedPlayer.name&&player.active).length,1);
     assert.deepEqual((await fixture()).sessions.find(session=>session.session_key===beta.session_key).event.rounds[0],sourceBefore.event.rounds[0]);
@@ -264,7 +264,7 @@ async function main() {
     await page.getByRole('tab',{name:'Match queue',exact:true}).click();
     const queued=detail.workspace.eligible_queue.find(match=>match.session_key===alpha.session_key);assert(queued);
     await page.getByRole('listitem').filter({hasText:'Alpha round robin'}).filter({hasText:queued.side_a[0].name}).first().getByRole('button',{name:'Not played',exact:true}).click();
-    detail=await command(page,page.getByRole('dialog',{name:'Mark match not played',exact:true}).getByRole('button',{name:'Confirm not played',exact:true}),'resolve_game');
+    detail=await command(page,page.getByRole('dialog',{name:'Mark match not played?',exact:true}).getByRole('button',{name:'Confirm not played',exact:true}),'resolve_game');
     state=await fixture();const settled=state.sessions.find(session=>session.session_key===alpha.session_key).event.rounds.flatMap(round=>round.matches||[]).find(match=>match.id===queued.match_id);
     assert.equal(settled.status,'not_played');assert.equal(settled.scoreA,null);assert.equal(settled.scoreB,null);
     assert(!detail.workspace.eligible_queue.some(match=>match.session_key===alpha.session_key&&match.match_id===queued.match_id));

@@ -692,6 +692,7 @@ def _confirmed_mutation_replay(supabase: Any, *, row: dict[str, Any], operation:
 
 
 def _update_cas(supabase: Any, *, row: dict[str, Any], patch: dict[str, Any], operation: dict[str, Any]) -> dict[str, Any]:
+    from jupr_app.services.admin_round_robin_hub_service import HubCommitRejectedError
     expected = int(row.get("version") or 1)
     operation_key = str(operation.get("operation_key") or "")
     payload = {**patch, "version": expected + 1, "last_operation_key": operation_key,
@@ -709,7 +710,9 @@ def _update_cas(supabase: Any, *, row: dict[str, Any], patch: dict[str, Any], op
             "p_operation_key": operation_key, "p_request_fingerprint": str(operation["request_fingerprint"]),
         }).execute()
         updated = dict(response.data) if isinstance(response.data, dict) else _first(response)
-    except (PublicLiveConflictError, ValueError):
+    except (PublicLiveConflictError, HubCommitRejectedError):
+        # These types prove either prewrite validation or a rolled-back commit.
+        # A generic ValueError may instead be JSON decoding after a real commit.
         raise
     except Exception as exc:
         code = str(getattr(exc, "code", "") or "")

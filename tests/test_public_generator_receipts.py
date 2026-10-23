@@ -130,3 +130,40 @@ def test_confirmed_retry_returns_current_locked_results_without_permitting_a_new
     assert runner.row==before
     with pytest.raises(ValueError,match='locked'): runner.save(key='receipt-new-locked-0001',version=runner.current_version())
     assert runner.row==before
+
+
+@pytest.mark.parametrize('committed', [False, True])
+def test_rpc_response_decode_valueerror_requires_receipt_proof(runner, monkeypatch, committed):
+    """A decoder ValueError is ambiguous even when it happens before the write."""
+    import json
+    before = deepcopy(runner.row)
+    original_rpc = runner.db.rpc
+    def broken_rpc(name, params):
+        request = original_rpc(name, params)
+        def execute():
+            if committed:
+                request.execute()
+            raise json.JSONDecodeError('simulated response decoding failure', '', 0)
+        return SimpleNamespace(execute=execute)
+    monkeypatch.setattr(runner.db, 'rpc', broken_rpc)
+    if committed:
+        first = runner.save()
+        assert first['confirmed_commit'] is True
+        assert runner.db.db['public_live_operations'][-1]['status'] == 'completed'
+        assert len(runner.db.db['play_generator_mutation_receipts']) == 1
+        assert int(runner.row['version']) == int(before['version']) + 1
+        after = deepcopy(runner.row)
+    else:
+        with pytest.raises(PublicLiveRecoveryRequiredError):
+            runner.save()
+        assert runner.db.db['public_live_operations'][-1]['status'] == 'recovery_required'
+        assert runner.row == before
+        assert not runner.db.db.get('play_generator_mutation_receipts')
+    monkeypatch.setattr(runner.db, 'rpc', original_rpc)
+    recovered = runner.save()
+    assert recovered['confirmed_commit'] is True
+    assert len(runner.db.db['play_generator_mutation_receipts']) == 1
+    assert int(runner.row['version']) == int(before['version']) + 1
+    if committed:
+        assert recovered['idempotent_replay'] is True
+        assert runner.row == after

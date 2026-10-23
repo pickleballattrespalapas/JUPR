@@ -26,6 +26,9 @@ October 22 incident and adversarial audit. Production records are unchanged.
 - Known validation failures release operation leases; unknown outcomes retain
   recovery. Durable receipts are committed atomically with mutations and survive
   later edits. Lease scope includes the session; fingerprints include the round.
+- Response-decoding failures in public/shared saves require receipt proof before
+  being reported as successful or rejected. A saved change is not classified as
+  rejected merely because its response could not be decoded.
 - Hub no-op checks preserve versions. Business conflicts use terminal `PT409`
   instead of retryable serialization errors. Duplicate/unknown match IDs,
   malformed scores and invalid court payloads are rejected before mutation.
@@ -43,7 +46,7 @@ October 22 incident and adversarial audit. Production records are unchanged.
 | B17–B18 | Waiting and released-started lineup stability with availability changes |
 | B19 | Explicit admin capabilities for standalone and Hub-linked public sessions |
 | B20–B24 | Strict score, match and court request validation |
-| Additional review | Legacy-write bypass, public standings, badge consumers, URL-round replay scope and late-response recovery race |
+| Additional review | Legacy-write bypass, public standings, badge consumers, URL-round replay scope, late-response recovery race and response-decoding uncertainty |
 
 ## Release boundary
 
@@ -55,4 +58,40 @@ New receipts are not retroactive proof of old uncertain writes. Historical
 placeholder results, incomplete playoff details and old stuck operations require
 individual review; this change does not guess or rewrite them.
 
-Verification results and release status will be finalized after integration.
+## Verification
+
+- The broad Python regression selection passes: 1,279 tests across 81 files,
+  with no failures or skips.
+- The exact adversarial CI Python selection passes: 332 tests with expected
+  failures disabled, including 48 seeds of 100 scheduling actions (4,800 total).
+- After the final response-decoding and concurrent replay-read review, all 148
+  affected public/shared/Hub operation tests pass, including the new failure
+  injection cases. The broader counts above precede these additional cases.
+- The full web component suite passes, including 18 Hub operations scenarios;
+  21 additional React save-recovery regressions pass.
+- The optimized Next production build, TypeScript, lint (zero errors), migration
+  source/version guards and whitespace checks pass. Existing dependency,
+  framework and lint warnings remain.
+- Actual PostgreSQL-compatible SQL tests pass for Hub transactions, identities,
+  check-ins and the generator journal, plus 11 adversarial receipt, rollback,
+  conflict, lease and permission scenarios.
+- The complete loopback browser/API journey passes: two independent groups,
+  court assignment and reservation, pause/resume, saved standings, retained
+  drafts after credential renewal, one real score plus a blank game, exact retry
+  after a lost response, atomic transfer, rejoin and explicit not-played outcome.
+
+These are synthetic/local checks. They do not attest a deployed staging build,
+production load, real-account authentication or PostgREST retry timing.
+
+## Current delivery status
+
+The implementation is prepared on a feature branch targeting `staging`.
+Applying `20261023052802_round_robin_operation_recovery.sql` through the staging
+Supabase migration connector failed twice with `Invalid or expired requestState`.
+A read-only check after each attempt confirmed the receipt table and migration
+were still absent. Do not merge/deploy the dependent API until this migration is
+successfully applied to the permitted staging project and verified.
+
+No production deployment, historical score repair, player notification or
+production database change is included. Staging is not yet ready for manual
+testing of this change.

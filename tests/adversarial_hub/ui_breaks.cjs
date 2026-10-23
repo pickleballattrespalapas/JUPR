@@ -129,6 +129,9 @@ for (const mode of ['admin', 'public']) {
     const save = button(state.tree, 'Save round scores').props.onClick;
     await act(async () => { void save(); void save(); }); assert.equal(state.writes().length, 1);
     await act(async () => lost.reject(new Error('lost response'))); assert.equal(input(state.tree).props.disabled, true);
+    const nameField = state.tree.root.findAllByType('label').find(node => text(node).startsWith('New player name')).findByType('input');
+    await act(async () => nameField.props.onChange({ target: { value: 'Late Arrival' } }));
+    assert.equal(button(state.tree, 'Add player for next round').props.disabled, true, 'Uncertain score outcome also blocks roster writes');
     const first = state.writes()[0]; state.transport = () => reply(state.session); await click(state, 'Retry score save');
     assert.equal(state.writes()[1].options.body, first.options.body); assert.equal(state.writes()[1].url, first.url);
     assert.ok(![...state.storage.keys()].some(key => key.startsWith('generator-score-save:'))); await unmount(state);
@@ -157,7 +160,10 @@ for (const mode of ['admin', 'public']) {
 test('retry-remount', async () => {
   for (const mode of ['admin', 'public']) {
     let state = await setup(mode); await enter(state); state.transport = () => Promise.reject(new Error('lost response')); await click(state, 'Save round scores');
-    const original = state.writes()[0]; const storage = state.storage; await unmount(state); state = await setup(mode, { storage });
+    const original = state.writes()[0]; const storage = state.storage; await unmount(state);
+    const locked = fixture(); locked.event.rounds[0].status = 'saved'; locked.submission = { status: 'pending' };
+    locked.capabilities = { can_manage: false, can_score: false, unavailable_reason: 'Results submitted.' };
+    state = await setup(mode, { storage, session: locked });
     await click(state, 'Retry score save'); assert.equal(state.writes()[0].options.body, original.options.body); assert.equal(state.writes()[0].url, original.url); await unmount(state);
   }
 });

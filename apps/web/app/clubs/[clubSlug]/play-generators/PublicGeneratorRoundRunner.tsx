@@ -659,7 +659,7 @@ export default function GeneratorRoundRunner({
   }
 
   async function saveRound(): Promise<void> {
-    if (!session || !round || !canScore || scoreSaveInFlightRef.current || writeInFlightRef.current) return;
+    if (!session || !round || (!canScore && !pendingScoreSaveRef.current) || scoreSaveInFlightRef.current || writeInFlightRef.current) return;
     const generation = generationRef.current;
     let request = pendingScoreSaveRef.current;
     if (!request) {
@@ -1158,6 +1158,16 @@ export default function GeneratorRoundRunner({
           </p>
         ) : null}
 
+      {message ? (
+        <p
+          role="status"
+          aria-live="polite"
+          style={{ color: /couldn|unable|error|must|requires|changed|not found/i.test(message) ? "#b91c1c" : "#166534" }}
+        >
+          {message}
+        </p>
+      ) : null}
+
         {canEditSavedScores ? (
           <div style={{ marginBottom: "1rem" }}>
             {editingScores ? (
@@ -1597,7 +1607,7 @@ export default function GeneratorRoundRunner({
             type="button"
             onClick={() => void saveRosterChange()}
             disabled={
-              busy ||
+              busy || Boolean(pendingScoreSave) ||
               (event.eventFormat === "moneyball_expectations" && (editingScores || (canEditRound && anyDraftScore))) ||
               (rosterAction === "remove" && !selectedParticipant) ||
               (rosterAction === "substitute" &&
@@ -1622,7 +1632,7 @@ export default function GeneratorRoundRunner({
             courtCount={event.courtCount}
             usedCourts={matches.map(match => Number(match.court || 0))}
             byeParticipantIds={round.byeParticipantIds}
-            busy={busy}
+            busy={busy || Boolean(pendingScoreSave)}
             queueOnly={Boolean(session.round_robin_hub_id)}
             onStart={startArrivalGame}
           /> : null}
@@ -1639,15 +1649,7 @@ export default function GeneratorRoundRunner({
         </a> : null}
       </article>
 
-      {message ? (
-        <p
-          role="status"
-          aria-live="polite"
-          style={{ color: /couldn|unable|error|must|requires|changed|not found/i.test(message) ? "#b91c1c" : "#166534" }}
-        >
-          {message}
-        </p>
-      ) : null}
+
     </div>
   );
 }

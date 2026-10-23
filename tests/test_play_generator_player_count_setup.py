@@ -44,10 +44,16 @@ def test_generator_setup_has_deterministic_auto_shape_rules() -> None:
     assert "Singles courts" in component
 
 
-def test_admin_preserves_official_links_only_for_complete_linked_roster() -> None:
+def test_admin_preserves_each_selected_profile_in_a_mixed_roster() -> None:
     admin = read("apps/web/app/admin/play-generators/GeneratorWorkspace.tsx")
-    assert "const allLinked = orderedIds.every" in admin
-    assert "player_ids: allLinked ? orderedIds : []" in admin
+    # Mixed-roster component/service tests exercise guests beside linked
+    # profiles. A guest must not discard another participant's selected ID.
+    mapping = admin[admin.index("const participantPlayerIds = Object.fromEntries("):]
+    assert "participantNames.flatMap((name)" in mapping
+    assert "linkedPlayerIds[normalizeRosterName(name)]" in mapping
+    assert "return playerId > 0 ? [[name, playerId]] : []" in mapping
+    assert "participant_names: participantNames" in mapping
+    assert "participant_player_ids: participantPlayerIds" in mapping
 
 
 def test_public_passes_selected_player_links_by_name() -> None:

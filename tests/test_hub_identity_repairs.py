@@ -199,3 +199,45 @@ def test_one_blank_score_keeps_court_wait_and_results_unchanged():
     with pytest.raises(ValueError, match="complete, non-tied"):
         command(hub, events, "score_and_release", session_key="a", match_id=match["id"], court_id="c0", score_a=11, score_b=None)
     assert (hub, events) == before
+
+
+@pytest.mark.parametrize("action", ["add", "substitute"])
+@pytest.mark.parametrize("attached", [False, True])
+def test_direct_generator_roster_cannot_duplicate_active_profile(action, attached):
+    from jupr_app.domain.adaptive_play_engine import mutate_generator_roster
+    value = event(count=5, player_ids=[1, 2, 3, 4, 5])
+    if not attached:
+        value.pop("roundRobinHubId", None)
+    before = deepcopy(value)
+    with pytest.raises(ValueError, match="active or upcoming"):
+        mutate_generator_roster(value, action=action, name="Duplicate profile", player_id=1,
+            participant_id=value["participants"][1]["id"] if action == "substitute" else None)
+    assert value == before
+
+
+def test_departed_member_court_status_identifies_destination_group():
+    hub, events = setup({"a": event(count=4, player_ids=[1, 2, 3, 4]), "b": event("B", count=4, player_ids=[1, 5, 6, 7])})
+    source = deepcopy(person(events))
+    hub, events = command(hub, events, "remove_player", **ref("a", source))
+    match = current(events, "b")["matches"][0]
+    hub, events = command(hub, events, "assign_game", session_key="b", match_id=match["id"], court_id="c0")
+    group = next(g for g in build_hub_snapshot(hub, events, now=START)["groups"] if g["session_key"] == "a")
+    displayed = next(p for p in group["players"] if p["participant_id"] == source["id"])
+    assert displayed["membership_status"] == "departed"
+    assert not displayed["on_court"] and displayed["playing_elsewhere"]
+    assert displayed["current_court"]["session_key"] == "b"
+    assert displayed["current_court"]["group_title"] == "B"
+    assert displayed["current_court"]["court_id"] == "c0"
+    assert group["departed_player_count"] == 1 and group["active_player_count"] == 3
+
+
+def test_arrival_preserves_released_started_game_id_and_lineup():
+    hub, events = setup({"a": event(count=8)})
+    match = deepcopy(current(events)["matches"][0])
+    hub, events = command(hub, events, "assign_game", session_key="a", match_id=match["id"], court_id="c0")
+    started = deepcopy(current(events)["matches"][0])
+    hub, events = command(hub, events, "release_game", court_id="c0")
+    hub, events = command(hub, events, "add_player", session_key="a", name="Arrival")
+    preserved = next(m for m in current(events)["matches"] if m["id"] == match["id"])
+    assert preserved["sideA"] == started["sideA"] and preserved["sideB"] == started["sideB"]
+    assert preserved["hubStartedAt"] == started["hubStartedAt"]
