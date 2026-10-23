@@ -215,7 +215,7 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         ROOT / "supabase/migrations",
     )
 
-    assert len(versions) == 157
+    assert len(versions) == 158
     assert {"20261109004103", "20261109004104", "20261109004105"}.issubset(versions)
     assert {
         "badge_conflicts_are_not_serialization_failures",
@@ -226,6 +226,8 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
     assert "round_robin_hub_atomic_operations" in contract["required_ledger_names"]
     assert "round_robin_hub_participant_identities" in contract["required_ledger_names"]
     assert "round_robin_hub_public_checkin" in contract["required_ledger_names"]
+    assert "round_robin_operation_recovery" in contract["required_ledger_names"]
+    assert "20261023052802" in versions
     assert "20261021144253" in versions
     assert "20261020033713" in versions
     assert "weekly_recap_builder" in contract["required_ledger_names"]
@@ -314,9 +316,9 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         "20261109004105",
     )
     assert {"20260908155131", "20260908164204"}.issubset(versions)
-    assert len(names) == 157
+    assert len(names) == 158
     assert all("XX" not in version for version in versions)
-    assert len(contract["required_ledger_names"]) == 157
+    assert len(contract["required_ledger_names"]) == 158
     assert "interclub_conflicts_are_not_serialization_failures" in contract["required_ledger_names"]
     assert {"interclub_competition_operations", "southern_bcs_eligibility", "interclub_rating_ledger", "interclub_publication_review_guard", "interclub_meet_overlap_guard", "southern_bcs_missing_pairing_rosters", "interclub_lineup_refresh_deadline_guard"}.issubset(contract["required_ledger_names"])
     assert {"public_club_sites", "public_club_directory_sort"}.issubset(contract["required_ledger_names"])
@@ -402,6 +404,7 @@ def test_reviewed_migration_contract_is_bound_to_sql_bytes(tmp_path: Path) -> No
     "round_robin_hub_atomic_operations",
     "round_robin_hub_participant_identities",
     "round_robin_hub_public_checkin",
+    "round_robin_operation_recovery",
     "badge_conflicts_are_not_serialization_failures",
     "unrated_match_activity",
     "restrict_team_match_admin_rpc_execution",
