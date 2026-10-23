@@ -21,6 +21,7 @@ type StandingsSort = "wins" | "points" | "differential" | "moneyball_expectation
 type ScoringMode = "scored" | "unscored";
 
 type Session = {
+  capabilities?: { can_manage: boolean; can_score: boolean; unavailable_reason: string | null };
   round_robin_hub_id?: string | null;
   session_key: string;
   title: string;
@@ -205,7 +206,7 @@ export default function AdminGeneratorStandings({ apiBase, clubId, sessionKey, e
   const sortMode = session.standings_sort || session.event.standingsSort || "wins";
   const visibleRounds = (session.event.rounds || []).filter((row) => row.number <= currentRound);
   const resultsLocked = Boolean(session.submission || session.official_publish?.published_at || session.official_publish?.published_match_ids?.length);
-  const canManage = Boolean(accessToken) && scoringMode === "scored" && !resultsLocked;
+  const canManage = Boolean(accessToken) && scoringMode === "scored" && !resultsLocked && session.capabilities?.can_manage !== false;
   const canContinue = canManage && !((moneyball || session.round_robin_hub_id) && session.status === "completed") && (session.status === "active" || (!session.event.playoff && session.status === "completed")) && ["saved", "skipped"].includes(currentStatus);
   const untouchedHubBoundary = hubAutoAdvanceBoundary(session.event) !== null;
   const canFinish = canManage && (!moneyball || moneyballDone) && !session.event.playoff && session.status === "active" && (untouchedHubBoundary || (canContinue && visibleRounds.every((row) => ["saved", "skipped"].includes(row.status))));
@@ -224,7 +225,7 @@ export default function AdminGeneratorStandings({ apiBase, clubId, sessionKey, e
         {!embedded ? <p style={{ margin: "0 0 0.4rem" }}><Link href="/admin/round-robin-generator">← Round-Robin Generator</Link></p> : null}
         <h1 style={{ margin: "0 0 0.35rem" }}>{session.title} standings</h1>
         <p style={{ margin: 0, color: "#475569" }}>{playFormatLabel(session.play_format)} · {standingsSortLabel(sortMode)} · {session.status === "completed" ? "Complete" : "In progress"} · {session.submission?.status !== "approved" ? `${session.rating_mode === "rated" ? "Rated" : "Unrated"} · ` : ""}{generatorResultLabel(session.submission)}</p>
-              <GeneratorSessionDetails key={sessionKey} apiBase={apiBase} clubId={clubId} sessionKey={sessionKey} session={session} adminToken={accessToken || undefined} locked={resultsLocked} disabled={busy} scored={scoringMode === "scored"} onSaved={next => { setSession(next); onSessionChanged?.(); }} />
+              <GeneratorSessionDetails key={sessionKey} apiBase={apiBase} clubId={clubId} sessionKey={sessionKey} session={session} adminToken={accessToken || undefined} locked={resultsLocked || !canManage} disabled={busy} scored={scoringMode === "scored"} onSaved={next => { setSession(next); onSessionChanged?.(); }} />
       </article>
       {session.round_robin_hub_id ? <aside style={{ ...cardStyle, background: "#eff6ff" }}>
         <strong>Standings include completed rounds only.</strong>
@@ -232,19 +233,20 @@ export default function AdminGeneratorStandings({ apiBase, clubId, sessionKey, e
           {!embedded ? <> <Link href={`/admin/round-robin-hub?hub=${encodeURIComponent(session.round_robin_hub_id)}`}>Open court board</Link></> : null}
         </p>
       </aside> : null}
-      <GeneratorSharing apiBase={apiBase} clubId={clubId} sessionKey={sessionKey} version={session.version} adminToken={accessToken || undefined} locked={resultsLocked} disabled={busy} onChanged={async () => { await Promise.all([loadSession(), onSessionChanged?.()]); }} />
+      {session.capabilities?.unavailable_reason ? <p role="status">{session.capabilities.unavailable_reason}</p> : null}
+      <GeneratorSharing apiBase={apiBase} clubId={clubId} sessionKey={sessionKey} version={session.version} adminToken={accessToken || undefined} locked={resultsLocked || !canManage} disabled={busy} onChanged={async () => { await Promise.all([loadSession(), onSessionChanged?.()]); }} />
       <nav aria-label="Round-Robin session navigation" style={{ ...cardStyle, display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
         <Link href={`/admin/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${currentRound}`} style={linkButton}>Current round</Link>
         {visibleRounds.map((row) => <Link key={row.number} href={`/admin/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${row.number}`} style={linkButton}>{row.label || `Round ${row.number}`}{row.status === "skipped" ? " · Skipped" : ""}</Link>)}
       </nav>
       {session.status === "completed" || session.submission ? (
         <div style={{ display: "grid", gap: "0.5rem" }}>
-          <GeneratorSubmission ratingMode={session.rating_mode || "unrated"} submission={session.submission} canSubmit={!resultsLocked && session.status === "completed" && Boolean(accessToken)} defaultDate={session.created_at} onSubmit={submitResults} />
+          <GeneratorSubmission ratingMode={session.rating_mode || "unrated"} submission={session.submission} canSubmit={canManage && !resultsLocked && session.status === "completed" && Boolean(accessToken)} defaultDate={session.created_at} onSubmit={submitResults} />
           {session.submission ? <button type="button" onClick={() => void loadSession()} style={{ ...linkButton, cursor: "pointer", justifySelf: "start", background: "white" }}>Refresh approval status</button> : null}
           <p style={{ margin: 0 }}><Link href="/admin/play-generators/submissions">Review generator submissions</Link> (club administrators)</p>
         </div>
       ) : null}
-      {!moneyball ? <GeneratorPlayoff event={session.event} options={session.playoff_options} canManage={Boolean(accessToken)} locked={Boolean(session.submission) || Boolean(session.official_publish?.published_at) || Boolean(session.official_publish?.published_match_ids?.length)} busy={busy} onStart={startPlayoff} roundHref={round => `/admin/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${round}`} /> : null}
+      {!moneyball ? <GeneratorPlayoff event={session.event} options={session.playoff_options} canManage={canManage} locked={Boolean(session.submission) || Boolean(session.official_publish?.published_at) || Boolean(session.official_publish?.published_match_ids?.length)} busy={busy} onStart={startPlayoff} roundHref={round => `/admin/round-robin-generator/sessions/${encodeURIComponent(sessionKey)}/rounds/${round}`} /> : null}
       <GeneratorMoneyball value={session.moneyball} />
       {moneyball ? <GeneratorMoneyballExpectations rows={session.event.moneyballExpectations} locked format={session.event.moneyball} /> : null}
       <PlayGeneratorStandingsTable rows={session.standings || []} sortMode={sortMode} title={session.event.playoff ? "Round-robin standings" : undefined} />

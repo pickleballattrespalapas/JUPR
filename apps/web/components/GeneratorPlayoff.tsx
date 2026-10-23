@@ -3,10 +3,10 @@
 import { useId, useState } from "react";
 import Link from "@/components/PublicClubLink";
 
-export type PlayoffFormat = "groups_of_four" | "top_eight";
+export type PlayoffFormat = "groups_of_four" | "top_four" | "top_eight";
 type Seed = { participantId: string; name: string; seed: number };
 type Match = {
-  id?: string; label?: string; sideA?: string[]; sideB?: string[];
+  id?: string; status?: string; label?: string; sideA?: string[]; sideB?: string[];
   scoreA?: number | null; scoreB?: number | null; sourceMatchIds?: string[];
 };
 export type GeneratorPlayoffOptions = {
@@ -46,10 +46,11 @@ export default function GeneratorPlayoff({ event, options, canManage, locked, bu
         {rounds.map(round => <section key={round.number}>
           <h3 style={{ margin: "0 0 0.4rem" }}><Link href={roundHref(round.number)}>{round.label || `Round ${round.number}`}</Link></h3>
           {(round.matches || []).map((match, index) => {
-            const scored = round.status === "saved" && match.scoreA != null && match.scoreB != null;
+            const scored = match.status !== "not_played" && round.status === "saved" && match.scoreA != null && match.scoreB != null;
             const winner = scored ? team(Number(match.scoreA) > Number(match.scoreB) ? match.sideA : match.sideB) : "";
             return <p key={match.id || index} style={{ margin: "0.35rem 0" }}>
               <strong>{match.label}: </strong>{team(match.sideA) || "Winner of semifinal 1"} vs {team(match.sideB) || "Winner of semifinal 2"}
+              {match.status === "not_played" ? <> · Not played</> : null}
               {scored ? <> · {match.scoreA}–{match.scoreB} · <strong>Winner: {winner}</strong></> : null}
             </p>;
           })}
@@ -67,11 +68,13 @@ export default function GeneratorPlayoff({ event, options, canManage, locked, bu
         <label htmlFor={`${panelId}-format`}>Playoff format</label>
         <select id={`${panelId}-format`} value={format} disabled={busy} onChange={event => setFormat(event.target.value as PlayoffFormat)} style={{ minWidth: 0, width: "100%", padding: "0.6rem", borderRadius: "8px", border: "1px solid #cbd5e1", font: "inherit" }}>
           <option value="groups_of_four">Games in groups of four — 1/4 vs 2/3, 5/8 vs 6/7…</option>
+          <option value="top_four">Top four championship — one game, 1/4 vs 2/3</option>
           <option value="top_eight">Top 8 — two semifinals, then a final</option>
         </select>
       </div>
       <p style={{ color: "#475569" }}>{format === "groups_of_four"
         ? "One game for each complete group of four. Players in an incomplete group sit out."
+        : format === "top_four" ? "One championship game: seed 1 with 4 against seed 2 with 3. Other players sit out."
         : "1/8 vs 4/5 and 2/7 vs 3/6. The winning teams play each other in the final. Other players sit out."}</p>
       {(selected?.matches || []).map((match, index) => <p key={index}><strong>{match.label}: </strong>{team(match.sideA)} vs {team(match.sideB)}</p>)}
       {selected?.sitOutParticipantIds.length ? <p>Sitting out: {team(selected.sitOutParticipantIds)}.</p> : null}

@@ -5,6 +5,8 @@ import GeneratorMoneyballExpectations, { type MoneyballExpectation, type Moneyba
 
 import PublicControls from "@/components/PublicControls";
 
+import { GeneratorScoreValidationError, refreshedScoreDraft, submittedScoreRows, rememberScoreSave, storedScoreSave, type PendingScoreSave } from "@/lib/generatorScoreDraft";
+
 import GeneratorSessionDetails from "@/components/GeneratorSessionDetails";
 import GeneratorSharing from "@/components/GeneratorSharing";
 import { hubAutoAdvanceBoundary, hubPreparedRoundLimit } from "@/lib/hubAutoAdvanceBoundary";
@@ -51,6 +53,8 @@ type MatchRow = {
   teamB?: string[];
   scoreA?: number | null;
   scoreB?: number | null;
+  status?: string;
+  sourceMatchIds?: string[];
   playFormat?: "singles" | "doubles";
 };
 
@@ -324,7 +328,7 @@ function roundStandings(
     }
   >();
   for (const match of flattenMatches(round)) {
-    if (match.scoreA == null || match.scoreB == null) continue;
+    if (match.status === "not_played" || match.scoreA == null || match.scoreB == null) continue;
     const scoreA = Number(match.scoreA);
     const scoreB = Number(match.scoreB);
     for (const id of sideIds(match, "A")) {
@@ -403,7 +407,55 @@ export default function GeneratorRoundRunner({
   const [substituteScope, setSubstituteScope] = useState<"round" | "rest">("rest");
   const [rosterOrder, setRosterOrder] = useState<string[]>([]);
   const skipDestinationRef = useRef<number | "completed" | null>(null);
+  const context = JSON.stringify([apiBase, clubId, sessionKey, roundNumber, generatorKind, shared]);
+  const mountedRef = useRef(false);
+  const contextRef = useRef(context);
+  const generationRef = useRef(0);
   const sessionLoadRef = useRef<AbortController | null>(null);
+  const appliedSessionRef = useRef<GeneratorSession | null>(null);
+  const writeInFlightRef = useRef(false);
+  const scoreSaveInFlightRef = useRef(false);
+  const pendingScoreSaveRef = useRef<PendingScoreSave | null>(null);
+  const [pendingScoreSave, setPendingScoreSave] = useState<PendingScoreSave | null>(null);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    contextRef.current = context;
+    appliedSessionRef.current = null;
+    const pending = storedScoreSave(context);
+    pendingScoreSaveRef.current = pending;
+    setPendingScoreSave(pending);
+    setSession(null);
+    setScores({});
+    setEditingSavedScores(false);
+    setSkipReason("");
+    setSelectedParticipant("");
+    setFirstSwapParticipant("");
+    setSecondSwapParticipant("");
+    setNewPlayerName("");
+    setNewPlayerId("");
+    setRosterOrder([]);
+    setMessage(null);
+    writeInFlightRef.current = false;
+    scoreSaveInFlightRef.current = false;
+    return () => {
+      mountedRef.current = false;
+      generationRef.current += 1;
+      sessionLoadRef.current?.abort();
+      sessionLoadRef.current = null;
+    };
+  }, [context]);
+
+  function currentContext(generation = generationRef.current): boolean {
+    return mountedRef.current && contextRef.current === context && generationRef.current === generation;
+  }
+
+  function retainScoreSave(request: PendingScoreSave | null, expected?: PendingScoreSave): void {
+    pendingScoreSaveRef.current = request;
+    setPendingScoreSave(request);
+    rememberScoreSave(context, request, expected);
+  }
+
 
   async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
     if (!apiBase) {
@@ -413,45 +465,53 @@ export default function GeneratorRoundRunner({
         "local_configuration"
       );
     }
-    const headers = new Headers(options?.headers);
-    if (options?.body) headers.set("Content-Type", "application/json");
-    const response = await fetch(apiUrl(apiBase, shared ? path.replace("/play-generators/", "/shared-play-generators/") : path), {
-      ...options,
-      headers,
-      cache: "no-store"
-    });
-    const payload = await response.json().catch(() => null);
-    if (options?.signal?.aborted) throw new DOMException("Request aborted", "AbortError");
-    if (!response.ok) {
-      if (shared && response.status === 403) {
-        sessionStorage.removeItem(`shared-generator-edit:${clubId}:${sessionKey}`);
-        setEditToken("");
-      }
-      const detail = payload?.detail;
-      throw new ApiRequestError(apiErrorMessage(response.status, detail), response.status, detail);
+    const generation = generationRef.current;
+    const writing = Boolean(options?.method && options.method !== "GET");
+    if (writing && writeInFlightRef.current) throw new ApiRequestError("Another action is still being saved.", 409, "local_in_flight");
+    const pending = pendingScoreSaveRef.current;
+    if (writing && pending && (pending.path !== path || pending.body !== options?.body)) {
+      throw new ApiRequestError("Retry the pending score save before starting another action.", 409, "pending_score_save");
     }
-    return payload as T;
+    if (writing) {
+      writeInFlightRef.current = true;
+      sessionLoadRef.current?.abort();
+      sessionLoadRef.current = null;
+    }
+    try {
+      const headers = new Headers(options?.headers);
+      if (options?.body) headers.set("Content-Type", "application/json");
+      const response = await fetch(apiUrl(apiBase, shared ? path.replace("/play-generators/", "/shared-play-generators/") : path), {
+        ...options,
+        headers,
+        cache: "no-store"
+      });
+      const payload = await response.json().catch(() => null);
+      if (!currentContext(generation)) throw new DOMException("Request context changed", "AbortError");
+      if (options?.signal?.aborted) throw new DOMException("Request aborted", "AbortError");
+      if (!response.ok) {
+        if (shared && response.status === 403) {
+          sessionStorage.removeItem(`shared-generator-edit:${clubId}:${sessionKey}`);
+          setEditToken("");
+        }
+        const detail = payload?.detail;
+        throw new ApiRequestError(apiErrorMessage(response.status, detail), response.status, detail);
+      }
+      return payload as T;
+    } finally {
+      if (writing && currentContext(generation)) writeInFlightRef.current = false;
+    }
   }
 
   function applySession(next: GeneratorSession, preserveDraftScores = false): void {
+    if (!currentContext()) return;
+    const previous = appliedSessionRef.current;
+    const previousRound = previous?.event.rounds.find(row => row.number === roundNumber) || null;
+    const requestedRound = next.event.rounds.find(row => row.number === roundNumber) || null;
+    appliedSessionRef.current = next;
     setSession(next);
     if (next.event.eventFormat === "moneyball_expectations") setRosterAction("substitute");
-    setEditingSavedScores(false);
-    const nextScores: Record<string, string> = {};
-    const requestedRound = next.event.rounds.find((row) => row.number === roundNumber);
-    for (const match of flattenMatches(requestedRound || null)) {
-      nextScores[scoreKey(match.id, "a")] = match.scoreA == null ? "" : String(match.scoreA);
-      nextScores[scoreKey(match.id, "b")] = match.scoreB == null ? "" : String(match.scoreB);
-    }
-    setScores(current => {
-      const merged = { ...nextScores };
-      if (preserveDraftScores && requestedRound?.status === "active") {
-        for (const key of Object.keys(merged)) {
-          if (merged[key] === "" && current[key] !== undefined) merged[key] = current[key];
-        }
-      }
-      return merged;
-    });
+    if (!preserveDraftScores) setEditingSavedScores(false);
+    setScores(current => refreshedScoreDraft(flattenMatches(previousRound), flattenMatches(requestedRound), current, preserveDraftScores));
     const ordered = [...next.event.participants]
       .sort(
         (left, right) =>
@@ -462,20 +522,23 @@ export default function GeneratorRoundRunner({
   }
 
   async function submitResults(organizerName: string, matchDate: string): Promise<void> {
+    const generation = generationRef.current;
     if (!session) return;
     const payload = await requestJson<MutationResponse>(
       `/clubs/${encodeURIComponent(clubId)}/play-generators/sessions/${encodeURIComponent(sessionKey)}/submit`,
       { method: "POST", body: JSON.stringify({ edit_token: editToken, idempotency_key: `generator-submit:${sessionKey}`, expected_version: session.version, organizer_name: organizerName, match_date: matchDate }) }
     );
+    if (!currentContext(generation)) throw new DOMException("Request context changed", "AbortError");
     if (!payload.session) throw new Error("Could not confirm submission. Please try again.");
     applySession(payload.session);
   }
 
-  async function loadSession(): Promise<void> {
+  async function loadSession(): Promise<boolean> {
     sessionLoadRef.current?.abort();
     const controller = new AbortController();
     sessionLoadRef.current = controller;
-    const isCurrentLoad = () => sessionLoadRef.current === controller && !controller.signal.aborted;
+    const generation = generationRef.current;
+    const isCurrentLoad = () => currentContext(generation) && sessionLoadRef.current === controller && !controller.signal.aborted;
     setBusy(true);
     setMessage(null);
     try {
@@ -485,11 +548,11 @@ export default function GeneratorRoundRunner({
         )}`,
         { signal: controller.signal }
       );
-      if (!isCurrentLoad()) return;
+      if (!isCurrentLoad()) return false;
       if (payload.session.generator_kind !== generatorKind) {
         throw new UserFacingError("This link opens in the other play generator.");
       }
-      applySession(payload.session);
+      applySession(payload.session, true);
       const hasRequested = payload.session.event.rounds.some((row) => row.number === roundNumber)
         && (!payload.session.round_robin_hub_id || roundNumber <= hubPreparedRoundLimit(payload.session.event));
       if (!hasRequested) {
@@ -502,10 +565,12 @@ export default function GeneratorRoundRunner({
           )
         );
       }
+      return true;
     } catch (error) {
       if (isCurrentLoad()) {
         setMessage(requestFailureMessage(error, "We couldn’t load this session. Please try again."));
       }
+      return false;
     } finally {
       if (isCurrentLoad()) {
         sessionLoadRef.current = null;
@@ -520,8 +585,8 @@ export default function GeneratorRoundRunner({
     const discovered = hash.get("edit") || sessionStorage.getItem(storageKey) || "";
     if (discovered) {
       sessionStorage.setItem(storageKey, discovered);
-      setEditToken(discovered);
     }
+    setEditToken(discovered);
     if (hash.has("edit")) {
       window.history.replaceState({}, "", `${window.location.pathname}${window.location.search}`);
     }
@@ -531,7 +596,7 @@ export default function GeneratorRoundRunner({
       sessionLoadRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clubId, sessionKey, roundNumber, shared]);
+  }, [context]);
 
   const event = session?.event || null;
   const participants = useMemo(
@@ -548,18 +613,20 @@ export default function GeneratorRoundRunner({
   const scoredSession = scoringMode === "scored";
   const resultsLocked = Boolean(session?.submission || session?.results_locked);
   const canManage = Boolean(editToken) && !resultsLocked;
+  const canScore = canManage;
   const canEditRound =
-    canManage &&
+    canScore &&
     session?.status === "active" &&
     (!session?.round_robin_hub_id || isCurrent) &&
     (isCurrent || (generatorKind === "round_robin" && !event?.playoff)) &&
     round?.status === "active";
   const canEditSavedScores =
-    canManage && scoredSession && round?.status === "saved" &&
+    canScore && scoredSession && round?.status === "saved" &&
     (!session?.round_robin_hub_id || roundNumber <= Number(event?.currentRoundNumber || 1)) &&
     (session?.status === "active" || session?.status === "completed") &&
     (isCurrent || (generatorKind === "round_robin" && !event?.playoff));
   const editingScores = canEditSavedScores && editingSavedScores;
+  const canClearSavedRound = canScore && generatorKind === "round_robin" && round?.status === "saved" && !event?.playoff && event?.eventFormat !== "moneyball_expectations";
   const canReopenRound = canManage && !session?.round_robin_hub_id && !event?.playoff && generatorKind === "round_robin" && round?.status === "skipped";
   const hasOtherOpenRound = event?.rounds.some(row => row.status === "active" && row.number !== event.currentRoundNumber) ?? false;
   const canFinishSession = canManage && (event?.eventFormat !== "moneyball_expectations" || event.rounds.every(row => row.status === "saved")) && !event?.playoff && generatorKind === "round_robin" && session?.status === "active" && isCurrent && !hasOtherOpenRound && (!session?.round_robin_hub_id || ((["saved", "played", "skipped"].includes(round?.status || "") || hubAutoAdvanceBoundary(event) !== null) && !event?.hubAssignedMatchIds?.length));
@@ -575,6 +642,7 @@ export default function GeneratorRoundRunner({
     .join(", ");
 
   async function runMutation(path: string, body: Record<string, unknown>, preserveDraftScores = false): Promise<GeneratorSession> {
+    const generation = generationRef.current;
     const payload = await requestJson<MutationResponse>(path, {
       method: "POST",
       body: JSON.stringify({
@@ -584,50 +652,60 @@ export default function GeneratorRoundRunner({
         idempotency_key: operationKey(String(body.action || path.split("/").pop() || "mutation"))
       })
     });
+    if (!currentContext(generation)) throw new DOMException("Request context changed", "AbortError");
     if (!payload.session) throw new UserFacingError("We couldn’t load the latest session. Refresh the page and check whether your change was saved.");
     applySession(payload.session, preserveDraftScores);
     return payload.session;
   }
 
   async function saveRound(): Promise<void> {
-    if (!session || !round) return;
+    if (!session || !round || !canScore || scoreSaveInFlightRef.current || writeInFlightRef.current) return;
+    const generation = generationRef.current;
+    let request = pendingScoreSaveRef.current;
+    if (!request) {
+      try {
+        const requiredWinnerIds = (event?.rounds || []).flatMap(row => flattenMatches(row).flatMap(match => match.sourceMatchIds || []));
+        const scoreRows = submittedScoreRows(matches, scores, event?.eventFormat === "moneyball_expectations", requiredWinnerIds);
+        request = { context, path: `/clubs/${encodeURIComponent(clubId)}/play-generators/sessions/${encodeURIComponent(sessionKey)}/rounds/${roundNumber}/scores`,
+          body: JSON.stringify({ scores: scoreRows, edit_token: editToken, expected_version: sessionVersion(session.version), idempotency_key: operationKey("scores") }) };
+      } catch (error) {
+        setMessage(error instanceof GeneratorScoreValidationError ? error.message : "Check the scores before saving.");
+        return;
+      }
+      retainScoreSave(request);
+    }
+    scoreSaveInFlightRef.current = true;
     setBusy(true);
     setMessage(null);
     try {
-      const scoreRows = matches.map((match) => {
-        const left = scores[scoreKey(match.id, "a")] ?? "";
-        const right = scores[scoreKey(match.id, "b")] ?? "";
-        return {
-          match_id: match.id,
-          score_a: left === "" ? null : Number(left),
-          score_b: right === "" ? null : Number(right)
-        };
-      });
-      const payload = await requestJson<MutationResponse>(
-        `/clubs/${encodeURIComponent(clubId)}/play-generators/sessions/${encodeURIComponent(
-          sessionKey
-        )}/rounds/${roundNumber}/scores`,
-        {
-          method: "PATCH",
-          body: JSON.stringify({
-            scores: scoreRows,
-            edit_token: editToken,
-            expected_version: sessionVersion(session.version),
-            idempotency_key: operationKey("scores")
-          })
-        }
-      );
-      if (!payload.session) throw new UserFacingError("We couldn’t load the latest session. Refresh the page and check whether your change was saved.");
+      const payload = await requestJson<MutationResponse>(request.path, { method: "PATCH", body: request.body });
+      if (!currentContext(generation)) return;
+      if (!payload.session) throw new Error("Scores saved without a refreshed session.");
+      retainScoreSave(null, request);
       applySession(payload.session);
       setMessage(`Round ${roundNumber} scores saved.`);
     } catch (error) {
-      setMessage(requestFailureMessage(error, "We couldn’t save the scores. Please try again."));
+      if (!currentContext(generation)) return;
+      if (isUncertainRequestError(error)) {
+        setMessage("The score save could not be confirmed. Retry score save to verify the exact same request before making another change.");
+      } else {
+        retainScoreSave(null, request);
+        if (error instanceof ApiRequestError && error.status === 409) {
+          const refreshed = await loadSession();
+          if (!currentContext(generation)) return;
+          setMessage(refreshed ? "This session changed. Your score entries are preserved. Review the current games before saving again." : "This session changed. Your score entries are preserved. Refresh and review the current games before saving again.");
+        } else setMessage(requestFailureMessage(error, "We couldn’t save the scores. Please try again."));
+      }
     } finally {
-      setBusy(false);
+      if (currentContext(generation)) {
+        scoreSaveInFlightRef.current = false;
+        setBusy(false);
+      }
     }
   }
 
   async function markRoundPlayed(): Promise<void> {
+    const generation = generationRef.current;
     if (!session || !round || generatorKind !== "round_robin" || scoredSession) return;
     setBusy(true);
     setMessage(null);
@@ -658,14 +736,16 @@ export default function GeneratorRoundRunner({
       router.push(sessionRoundPath(generatorKind, clubId, sessionKey, nextRound));
       router.refresh();
     } catch (error) {
+      if (!currentContext(generation)) return;
       setMessage(requestFailureMessage(error, "We couldn’t update the round. Please try again."));
     } finally {
-      setBusy(false);
+      if (currentContext(generation)) setBusy(false);
     }
   }
 
 
   async function executeSkipRound(request: SkipRoundRequest): Promise<ActionCompletion> {
+    const generation = generationRef.current;
     setBusy(true);
     setMessage(null);
     let skipCommitted = false;
@@ -718,6 +798,7 @@ export default function GeneratorRoundRunner({
       setMessage(successMessage);
       return actionSuccess("Round skipped", successMessage);
     } catch (error) {
+      if (!currentContext(generation)) throw error;
       const errorMessage = requestFailureMessage(error, "We couldn’t skip the round. Please try again.");
       if (skipCommitted || isUncertainRequestError(error)) {
         const recoveryMessage = skipCommitted
@@ -736,11 +817,12 @@ export default function GeneratorRoundRunner({
       setMessage(errorMessage);
       throw error;
     } finally {
-      setBusy(false);
+      if (currentContext(generation)) setBusy(false);
     }
   }
 
   function skipRound(): Promise<ActionCompletion> {
+    if (round?.status === "saved" && !skipReason.trim()) throw new UserFacingError("Enter a reason before clearing saved results.");
     if (!session || !round) throw new UserFacingError("Reload the session before skipping this round.");
     skipDestinationRef.current = null;
     return executeSkipRound({
@@ -764,6 +846,7 @@ export default function GeneratorRoundRunner({
   }
 
   async function openScheduledRound(number: number): Promise<void> {
+    const generation = generationRef.current;
     if (!session || !event || busy || editingScores || (canEditRound && anyDraftScore)) return;
     const target = event.rounds.find(row => row.number === number);
     if (!target || (number === roundNumber && isCurrent)) return;
@@ -780,13 +863,15 @@ export default function GeneratorRoundRunner({
       router.push(sessionRoundPath(generatorKind, clubId, sessionKey, number));
       router.refresh();
     } catch (error) {
+      if (!currentContext(generation)) return;
       setMessage(requestFailureMessage(error, "We couldn’t open that round. Please try again."));
     } finally {
-      setBusy(false);
+      if (currentContext(generation)) setBusy(false);
     }
   }
 
   async function reopenRound(): Promise<void> {
+    const generation = generationRef.current;
     if (!canReopenRound || busy) return;
     setBusy(true);
     setMessage(null);
@@ -797,13 +882,15 @@ export default function GeneratorRoundRunner({
       );
       setMessage(`Round ${roundNumber} is ready to play. ${scoredSession ? "Enter the scores below." : "Mark it played when finished."}`);
     } catch (error) {
+      if (!currentContext(generation)) return;
       setMessage(requestFailureMessage(error, "We couldn’t reopen this round. Please try again."));
     } finally {
-      setBusy(false);
+      if (currentContext(generation)) setBusy(false);
     }
   }
 
   async function finishSession(): Promise<ActionCompletion> {
+    const generation = generationRef.current;
     if (!canFinishSession || busy) throw new Error("Finish the open rounds before completing this session.");
     setBusy(true);
     setMessage(null);
@@ -815,14 +902,16 @@ export default function GeneratorRoundRunner({
       setMessage("Session complete. Your saved results are ready to review.");
       return actionSuccess("Session complete", "Your saved results are ready to review.");
     } catch (error) {
+      if (!currentContext(generation)) throw error;
       setMessage(requestFailureMessage(error, "We couldn’t finish the session. Please try again."));
       throw error;
     } finally {
-      setBusy(false);
+      if (currentContext(generation)) setBusy(false);
     }
   }
 
   async function advanceRound(): Promise<void> {
+    const generation = generationRef.current;
     if (!session) return;
     setBusy(true);
     setMessage(null);
@@ -843,9 +932,10 @@ export default function GeneratorRoundRunner({
       router.push(sessionRoundPath(generatorKind, clubId, sessionKey, nextRound));
       router.refresh();
     } catch (error) {
+      if (!currentContext(generation)) return;
       setMessage(requestFailureMessage(error, "We couldn’t continue to the next round. Please try again."));
     } finally {
-      setBusy(false);
+      if (currentContext(generation)) setBusy(false);
     }
   }
 
@@ -860,6 +950,7 @@ export default function GeneratorRoundRunner({
   }
 
   async function saveRosterChange(): Promise<void> {
+    const generation = generationRef.current;
     if (!session) return;
     setBusy(true);
     setMessage(null);
@@ -912,12 +1003,14 @@ export default function GeneratorRoundRunner({
         router.refresh();
       }
     } catch (error) {
+      if (!currentContext(generation)) return;
       setMessage(requestFailureMessage(error, "We couldn’t update the players. Please try again."));
     } finally {
-      setBusy(false);
+      if (currentContext(generation)) setBusy(false);
     }
   }
   async function startArrivalGame(participantIds: string[], court: number): Promise<void> {
+    const generation = generationRef.current;
     setBusy(true);
     setMessage(null);
     try {
@@ -930,9 +1023,10 @@ export default function GeneratorRoundRunner({
         ? "Late-arrival game added to the hub queue. Assign its court from the court board."
         : `Late arrivals are playing on Court ${court}. All existing games and score entries stay in place.`);
     } catch (error) {
+      if (!currentContext(generation)) return;
       setMessage(requestFailureMessage(error, "We couldn’t add the late-arrival game. Please try again."));
     } finally {
-      setBusy(false);
+      if (currentContext(generation)) setBusy(false);
     }
   }
 
@@ -971,11 +1065,11 @@ export default function GeneratorRoundRunner({
           {playFormatLabel(session.play_format)} · Round {roundNumber}{generatorKind === "ladder" ? ` of ${event.totalRounds}` : ""} · {scoredSession ? "Scores on" : "Scores off"} · {roundStatusLabel(round.status)} · {session.submission?.status !== "approved" ? `${session.rating_mode === "rated" ? "Rated" : "Unrated"} · ` : ""}{generatorResultLabel(session.submission)}
         </p>
         {!editToken ? <p style={{ color: "#64748b" }}>Only the organizer can enter scores or change players.</p> : null}
-              <GeneratorSessionDetails key={sessionKey} apiBase={apiBase} clubId={clubId} sessionKey={sessionKey} session={session} ownerToken={shared ? undefined : editToken} locked={resultsLocked} disabled={busy || editingScores || (canEditRound && anyDraftScore)} scored={scoredSession} onSaved={applySession} />
+              <GeneratorSessionDetails key={sessionKey} apiBase={apiBase} clubId={clubId} sessionKey={sessionKey} session={session} ownerToken={shared ? undefined : editToken} locked={resultsLocked} disabled={busy || Boolean(pendingScoreSave) || editingScores || (canEditRound && anyDraftScore)} scored={scoredSession} onSaved={applySession} />
       </article>
 
       <PublicControls navigation resetKey={String(roundNumber)} context={`Round ${roundNumber} · ${roundStatusLabel(round.status)}`}>
-{generatorKind === "round_robin" && (shared || editToken) ? <GeneratorSharing apiBase={apiBase} clubId={clubId} sessionKey={sessionKey} version={session.version} ownerToken={shared ? undefined : editToken} shared={shared} locked={resultsLocked} disabled={busy || editingScores || (canEditRound && anyDraftScore)} onChanged={loadSession} /> : null}
+{generatorKind === "round_robin" && (shared || editToken) ? <GeneratorSharing apiBase={apiBase} clubId={clubId} sessionKey={sessionKey} version={session.version} ownerToken={shared ? undefined : editToken} shared={shared} locked={resultsLocked} disabled={busy || Boolean(pendingScoreSave) || editingScores || (canEditRound && anyDraftScore)} onChanged={async () => { await loadSession(); }} /> : null}
 
       {session.round_robin_hub_id ? <aside style={{ ...cardStyle, background: "#eff6ff" }}>
         <strong>Courts are managed in the Round Robin Hub.</strong>
@@ -986,10 +1080,12 @@ export default function GeneratorRoundRunner({
         </p> : null}
       </aside> : null}
 
+      {generatorKind === "round_robin" && !event.playoff && event.eventFormat !== "moneyball_expectations" ? <p>The rounds shown are a preview, not a limit. Continue to create additional rounds when you need them.</p> : null}
+
       {generatorKind === "round_robin" && !event.playoff ? (
         <GeneratorRoundSchedule rounds={session.round_robin_hub_id ? event.rounds.filter(row => row.number <= visibleRoundLimit) : event.rounds} participants={event.participants}
           selectedRound={roundNumber} currentRound={event.currentRoundNumber}
-          disabled={busy || editingScores || (canEditRound && anyDraftScore)}
+          disabled={busy || Boolean(pendingScoreSave) || editingScores || (canEditRound && anyDraftScore)}
           unsaved={editingScores || (canEditRound && anyDraftScore)}
           perfect={Boolean(event.perfectRotation)} adaptive={Boolean(event.adaptiveFromRound)} moneyball={event.eventFormat === "moneyball_expectations"}
           hubManaged={Boolean(session.round_robin_hub_id)}
@@ -998,7 +1094,7 @@ export default function GeneratorRoundRunner({
 
       </PublicControls>
 
-      {scoredSession && !shared && (session.status === "completed" || session.submission) ? <GeneratorSubmission ratingMode={session.rating_mode || "unrated"} submission={session.submission} canSubmit={session.status === "completed" && Boolean(editToken) && !editingScores} defaultDate={session.created_at} onSubmit={submitResults} /> : null}
+      {scoredSession && !shared && (session.status === "completed" || session.submission) ? <GeneratorSubmission ratingMode={session.rating_mode || "unrated"} submission={session.submission} canSubmit={!pendingScoreSave && session.status === "completed" && Boolean(editToken) && !editingScores} defaultDate={session.created_at} onSubmit={submitResults} /> : null}
 
       {event.eventFormat === "moneyball_expectations" ? <details style={{ ...cardStyle, minWidth: 0 }}>
         <summary style={{ cursor: "pointer", fontWeight: 800 }}>View full-event Moneyball expectations</summary>
@@ -1010,7 +1106,7 @@ export default function GeneratorRoundRunner({
           <h2 style={{ marginTop: 0 }}>Session complete</h2>
           <p style={{ marginBottom: 0, color: "#166534" }}>Review the saved session history below.</p>
           {generatorKind === "round_robin" && canManage && !session.round_robin_hub_id && !editingScores && !event.playoff && event.eventFormat !== "moneyball_expectations" ? (
-            <button type="button" onClick={() => void advanceRound()} disabled={busy} style={{ ...primaryButton, marginTop: "1rem" }}>
+            <button type="button" onClick={() => void advanceRound()} disabled={busy || Boolean(pendingScoreSave)} style={{ ...primaryButton, marginTop: "1rem" }}>
               {busy ? "Continuing…" : "Keep playing"}
             </button>
           ) : null}
@@ -1069,20 +1165,32 @@ export default function GeneratorRoundRunner({
                 <p>Update the scores below, then save your changes.</p>
                 <div style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>
                   <button type="button" onClick={() => void saveRound()} disabled={busy} style={primaryButton}>
-                    {busy ? "Saving…" : "Save score changes"}
+                    {busy ? "Saving…" : pendingScoreSave ? "Retry score save" : "Save score changes"}
                   </button>
-                  <button type="button" onClick={() => applySession(session)} disabled={busy} style={secondaryButton}>
+                  <button type="button" onClick={() => applySession(session)} disabled={busy || Boolean(pendingScoreSave)} style={secondaryButton}>
                     Cancel
                   </button>
                 </div>
               </>
             ) : (
-              <button type="button" onClick={() => { applySession(session); setMessage(null); setEditingSavedScores(true); }} disabled={busy} style={secondaryButton}>
+              <button type="button" onClick={() => { applySession(session); setMessage(null); setEditingSavedScores(true); }} disabled={busy || Boolean(pendingScoreSave)} style={secondaryButton}>
                 Edit scores
               </button>
             )}
           </div>
         ) : null}
+
+        {scoredSession && (canEditRound || editingScores) ? <p>
+          {event.eventFormat === "moneyball_expectations" ? "Enter every score before submitting the Moneyball rotation." : "When you submit, leave both scores blank for a game that was not played. Enter both scores for every played game. Blank draft fields are not saved until you submit."}
+        </p> : null}
+        {pendingScoreSave ? <aside role="status">
+          <p>A score save needs confirmation. Retry the same save before making another change.</p>
+          {!canEditRound && !editingScores ? <button type="button" disabled={busy} onClick={() => void saveRound()} style={primaryButton}>{busy ? "Saving…" : "Retry score save"}</button> : null}
+        </aside> : null}
+        {canClearSavedRound && !editingScores ? <div style={{ marginBottom: "1rem" }}>
+          <input aria-label="Reason for clearing saved round" value={skipReason} onChange={event_ => setSkipReason(event_.target.value)} placeholder="Reason for clearing saved results" disabled={busy || Boolean(pendingScoreSave)} style={inputStyle} />
+          <ConfirmAction triggerLabel="Clear results and skip round" title={`Clear Round ${roundNumber} results?`} description="This removes the results from this round and marks it skipped. Later rounds and their results remain in place. The reason is recorded in the audit history." confirmLabel="Clear results and skip round" confirmationText="SKIP ROUND" tone="danger" disabled={busy || Boolean(pendingScoreSave) || !skipReason.trim()} busy={busy} onConfirm={skipRound} onAcknowledge={acknowledgeSkip} />
+        </div> : null}
 
         <div style={{ display: "grid", gap: "0.75rem" }}>
           {matches.map((match) => {
@@ -1127,7 +1235,7 @@ export default function GeneratorRoundRunner({
                         min={0}
                         max={99}
                         inputMode="numeric"
-                        disabled={busy}
+                        disabled={busy || Boolean(pendingScoreSave)}
                         aria-label={`${match.id} side A score`}
                         style={inputStyle}
                       />
@@ -1143,7 +1251,7 @@ export default function GeneratorRoundRunner({
                         min={0}
                         max={99}
                         inputMode="numeric"
-                        disabled={busy}
+                        disabled={busy || Boolean(pendingScoreSave)}
                         aria-label={`${match.id} side B score`}
                         style={inputStyle}
                       />
@@ -1152,7 +1260,7 @@ export default function GeneratorRoundRunner({
                     <strong>
                       {!scoredSession
                         ? "vs."
-                        : match.scoreA == null || match.scoreB == null
+                        : match.status === "not_played" ? "Not played" : match.scoreA == null || match.scoreB == null
                           ? "—"
                           : `${match.scoreA}–${match.scoreB}`}
                     </strong>
@@ -1169,10 +1277,10 @@ export default function GeneratorRoundRunner({
             <div style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>
               {scoredSession ? (
                 <button type="button" onClick={() => void saveRound()} disabled={busy} style={primaryButton}>
-                  {busy ? "Saving…" : "Save round scores"}
+                  {busy ? "Saving…" : pendingScoreSave ? "Retry score save" : "Save round scores"}
                 </button>
               ) : (
-                <button type="button" onClick={() => void markRoundPlayed()} disabled={busy} style={primaryButton}>
+                <button type="button" onClick={() => void markRoundPlayed()} disabled={busy || Boolean(pendingScoreSave)} style={primaryButton}>
                   {busy ? "Saving…" : "Mark round played"}
                 </button>
               )}
@@ -1204,7 +1312,7 @@ export default function GeneratorRoundRunner({
                 confirmLabel="Yes, skip round"
                 confirmationText="SKIP ROUND"
                 tone={anyDraftScore ? "danger" : "default"}
-                disabled={busy}
+                disabled={busy || Boolean(pendingScoreSave)}
                 busy={busy}
                 onConfirm={skipRound}
                 onAcknowledge={acknowledgeSkip}
@@ -1257,7 +1365,7 @@ export default function GeneratorRoundRunner({
           <div style={{ marginTop: "1rem", padding: "0.7rem", background: "#fef3c7", borderRadius: "8px" }}>
             <p>This round was skipped{round.skipReason ? `: ${round.skipReason}` : "."}</p>
             {canReopenRound ? (
-              <button type="button" onClick={() => void reopenRound()} disabled={busy} style={primaryButton}>
+              <button type="button" onClick={() => void reopenRound()} disabled={busy || Boolean(pendingScoreSave)} style={primaryButton}>
                 {busy ? "Opening…" : "Play this round"}
               </button>
             ) : null}
@@ -1268,7 +1376,7 @@ export default function GeneratorRoundRunner({
             <button
               type="button"
               onClick={() => void advanceRound()}
-              disabled={busy}
+              disabled={busy || Boolean(pendingScoreSave)}
               style={{ ...primaryButton, marginTop: "1rem" }}
             >
               {event.eventFormat === "moneyball_expectations" && event.rounds.every(row => row.status === "saved")
@@ -1292,7 +1400,7 @@ export default function GeneratorRoundRunner({
                   : "Finish with the saved scores and played rounds. You can keep playing again until results are submitted."}
               confirmLabel="Finish session"
               confirmationText="FINISH SESSION"
-              disabled={busy || (round.status === "active" && anyDraftScore)}
+              disabled={busy || Boolean(pendingScoreSave) || (round.status === "active" && anyDraftScore)}
               busy={busy}
               onConfirm={finishSession}
             />

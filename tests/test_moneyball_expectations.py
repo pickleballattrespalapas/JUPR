@@ -68,6 +68,16 @@ def test_fixed_setup_and_interim_expectations(frozen):
         with pytest.raises(ValueError): fn()
 
 
+def test_moneyball_cannot_submit_blank_games_as_not_played(frozen):
+    event = start_generator_event(frozen)
+    before = deepcopy(event)
+    scores = [{"match_id": m["id"], "score_a": 11, "score_b": 7} for m in event["rounds"][0]["matches"]]
+    scores[-1].update(score_a=None, score_b=None)
+    with pytest.raises(ValueError, match="complete fixed rotation"):
+        save_generator_round(event, round_number=1, scores=scores)
+    assert event == before
+
+
 @pytest.mark.parametrize("fixture_name,games", [("frozen", 7), ("six_frozen", 4)])
 def test_preview_expectations_cover_full_schedule_and_match_final_standings(fixture_name, games, request):
     frozen = request.getfixturevalue(fixture_name)
