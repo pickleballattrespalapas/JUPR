@@ -14,7 +14,7 @@ import json
 from typing import Any
 
 from jupr_app.domain.gamification.program_badge_catalog import PROGRAM_BADGES, RULE_VERSION
-from jupr_app.domain.live_beta_engine import round_robin_matches, round_robin_standings, round_robin_result_fingerprint, round_robin_players_of_record
+from jupr_app.domain.live_beta_engine import round_robin_result_matches, round_robin_standings, round_robin_result_fingerprint, round_robin_players_of_record
 
 
 def timestamp(value: Any) -> str | None:
@@ -243,7 +243,16 @@ def evaluate_program_badges(snapshot: dict) -> dict:
         if not earned:
             hold(identity, "Missing recorded round-robin completion date.")
             continue
-        matches = [m for m in round_robin_matches({**event, "rounds": [r for r in event.get("rounds", []) if str(r.get("status", "")).lower() not in {"skipped", "cancelled", "canceled"}]}) if str(m.get("status", "")).lower() not in {"cancelled", "canceled", "bye"}]
+        # A generator can finish before its reusable future schedule is played.
+        # Only resolved scored rounds are evidence; explicit unplayed games
+        # cannot block real results or contribute stale points to awards.
+        result_event = event
+        if event.get("generatorKind"):
+            result_event = {**event, "rounds": [r for r in event.get("rounds", []) if r.get("status") == "saved"]}
+        matches = round_robin_result_matches(result_event)
+        if event.get("generatorKind"):
+            matches = [{**m, "teamA": list(m.get("sideA") or m.get("teamA") or []),
+                        "teamB": list(m.get("sideB") or m.get("teamB") or [])} for m in matches]
         if not matches or len({m.get("id") for m in matches}) != len(matches) or any(not m.get("id") or not played(m.get("scoreA"), m.get("scoreB")) for m in matches):
             hold(identity, "Round robin has missing, invalid, or unfinished assigned results.")
             continue

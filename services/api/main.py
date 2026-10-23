@@ -397,7 +397,7 @@ def _raise_public_live_write_error(exc: Exception) -> None:
     if isinstance(exc, ValueError):
         raise HTTPException(status_code=400, detail="Check the information and try again.") from exc
     if isinstance(exc, PublicLiveRecoveryRequiredError):
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail={"message": str(exc), "code": "RECOVERY_REQUIRED", "recovery_required": True}) from exc
     _raise_live_sessions_backend_error(exc)
 
 

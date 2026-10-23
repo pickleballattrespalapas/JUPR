@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from services.api.generator_request_models import GeneratorScoreInput, require_unique_match_ids
+
 import os
 from uuid import UUID
 from typing import Any
@@ -86,14 +88,16 @@ class GeneratorStartRequest(GeneratorPreviewRequest, GeneratorDurableRequest):
     source: str = "next_play_generator_start"
 
 
-class GeneratorScorePayload(BaseModel):
-    match_id: str = Field(min_length=1, max_length=160)
-    score_a: int | None = Field(default=None, ge=0, le=99)
-    score_b: int | None = Field(default=None, ge=0, le=99)
-
+class GeneratorScorePayload(GeneratorScoreInput):
+    pass
 
 class GeneratorScoresRequest(GeneratorDurableRequest):
     scores: list[GeneratorScorePayload] = Field(min_length=1, max_length=1000)
+
+    @field_validator("scores")
+    @classmethod
+    def unique_games(cls, value: list[GeneratorScorePayload]) -> list[GeneratorScorePayload]:
+        return require_unique_match_ids(value)
     source: str = "next_play_generator_scores"
 
 
@@ -119,7 +123,7 @@ class GeneratorAdvanceRequest(GeneratorDurableRequest):
 
 
 class GeneratorPlayoffRequest(GeneratorDurableRequest):
-    playoff_format: str = Field(pattern=r"^(groups_of_four|top_eight)$")
+    playoff_format: str = Field(pattern=r"^(groups_of_four|top_eight|top_four)$")
     source: str = "next_play_generator_playoff"
 
 
@@ -229,7 +233,7 @@ def _handle(exc: Exception) -> None:
     if isinstance(exc, LiveLadderConflictError):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if isinstance(exc, LiveLadderUncertainError):
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise HTTPException(status_code=409, detail={"message": str(exc), "code": "RECOVERY_REQUIRED", "recovery_required": True}) from exc
     if isinstance(exc, LiveLadderPersistenceError):
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     if isinstance(exc, PermissionError):
@@ -568,7 +572,7 @@ def install_admin_play_generator_routes(app, *, get_supabase_client) -> None:
                 idempotency_key=payload.idempotency_key,
                 expected_version=payload.expected_version,
                 current_version=str(current.get("version") or ""),
-                request_payload=_model_payload(payload),
+                request_payload={**_model_payload(payload), "round_number": int(round_number)},
                 recovery=operation_recovery_handoff(
                     surface="play_generator",
                     entity_id=str(session_key),
@@ -633,7 +637,7 @@ def install_admin_play_generator_routes(app, *, get_supabase_client) -> None:
                 idempotency_key=payload.idempotency_key,
                 expected_version=payload.expected_version,
                 current_version=str(current.get("version") or ""),
-                request_payload=_model_payload(payload),
+                request_payload={**_model_payload(payload), "round_number": int(round_number)},
                 recovery=operation_recovery_handoff(
                     surface="play_generator",
                     entity_id=str(session_key),
@@ -697,7 +701,7 @@ def install_admin_play_generator_routes(app, *, get_supabase_client) -> None:
                 idempotency_key=payload.idempotency_key,
                 expected_version=payload.expected_version,
                 current_version=str(current.get("version") or ""),
-                request_payload=_model_payload(payload),
+                request_payload={**_model_payload(payload), "round_number": int(round_number)},
                 recovery=operation_recovery_handoff(
                     surface="play_generator",
                     entity_id=str(session_key),

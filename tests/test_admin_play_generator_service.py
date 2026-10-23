@@ -377,3 +377,45 @@ def test_ladder_session_lists_only_round_one_until_advance():
         club_id="club",
         session_key=session["session_key"],
     )["session"]["generator_kind"] == "ladder"
+
+
+@pytest.mark.parametrize("mode,linked,expected", [
+    ("admin_play_generator", False, True),
+    ("public_play_generator", False, False),
+    ("public_play_generator", True, True),
+])
+def test_admin_session_capabilities_match_existing_mutation_authority(mode, linked, expected):
+    from jupr_app.services import admin_play_generator_service as service
+    row = {"club_id": "club", "session_key": "session", "state": {"mode": mode,
+        "page_state": {"event": {"generatorKind": "round_robin"}}}}
+    if linked:
+        row["state"]["round_robin_hub_id"] = "hub"
+    payload = service._session_payload(row)
+    assert payload["capabilities"]["can_manage"] is expected
+    assert payload["capabilities"]["can_score"] is expected
+    assert bool(payload["capabilities"]["unavailable_reason"]) is not expected
+    row["state"]["generator_submission"] = {"status": "pending"}
+    assert service._session_payload(row)["capabilities"]["can_score"] is False
+
+
+def test_saved_match_publication_excludes_not_played_even_with_legacy_scores():
+    from jupr_app.services import admin_play_generator_service as service
+    matches = [{"id": status or "legacy", "status": status, "scoreA": 11, "scoreB": 5}
+               for status in (None, "scored", "not_played", "skipped", "cancelled", "canceled")]
+    event = {"rounds": [{"number": 1, "status": "saved", "matches": matches}]}
+    assert [match["id"] for _, match in service._saved_matches(event)] == ["legacy", "scored"]
+
+
+def test_skip_published_results_rejects_before_domain_mutation():
+    db = FakeSupabase()
+    actor = dict(actor_email="admin@example.test", actor_role="administrator", source="test")
+    created = create_play_generator_session(db, club_id="club", generator_kind="round_robin", play_format="doubles",
+        title="Published", participant_names=["A", "B", "C", "D"], player_ids=[], total_rounds=1,
+        court_count=1, preview_fingerprint=None, **actor)["session"]
+    row = db.storage["live_sessions"][0]
+    row["state"]["official_publish"]["published_match_ids"] = ["official-match"]
+    snapshot = deepcopy(row)
+    with pytest.raises(ValueError, match="Published results"):
+        skip_play_generator_round(db, club_id="club", session_key=created["session_key"], round_number=1,
+            reason="Not actually played", expected_version=created["version"], **actor)
+    assert row == snapshot

@@ -503,3 +503,4 @@ comment on function public.commit_round_robin_hub(text,uuid,bigint,text,text,tex
   'Service-only atomic hub/session CAS, idempotency, court and player leases. The API authenticates club staff and validates domain commands before calling.';
 
 notify pgrst, 'reload schema';
+

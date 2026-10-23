@@ -12,6 +12,10 @@ from jupr_app.services.public_live_operation_service import PublicLiveConflictEr
 
 HUB_TABLE = "round_robin_hubs"
 OPERATION_TABLE = "round_robin_hub_operations"
+class HubCommitRejectedError(ValueError):
+    """The database rejected and rolled back the complete hub transaction."""
+
+
 GENERATOR_MODES = {"admin_play_generator", "public_play_generator"}
 
 
@@ -143,6 +147,8 @@ def _replayed(db: Any, club_id: str, hub_id: str, key: str, fingerprint: str) ->
 def _rpc_commit(db: Any, *, club_id: str, hub_id: str, expected_version: int,
                 operation_key: str, fingerprint: str, title: str, status: str,
                 state: dict[str, Any], sessions: list[dict[str, Any]], actor_email: str) -> dict[str, Any]:
+    from jupr_app.services.admin_play_generator_service import mark_generator_write_attempt
+    mark_generator_write_attempt()
     try:
         result = db.rpc("commit_round_robin_hub", {
             "p_club_id": club_id, "p_hub_id": hub_id, "p_expected_version": expected_version,
@@ -152,13 +158,12 @@ def _rpc_commit(db: Any, *, club_id: str, hub_id: str, expected_version: int,
         }).execute().data
     except Exception as exc:
         code = str(getattr(exc, "code", ""))
-        message = str(exc)
         if code == "23505":
             raise PublicLiveConflictError("A court name or player is already in use by another active hub. Review the court setup and assignments.") from exc
-        if code in {"40001", "P0001"} or any(term in message.lower() for term in ("changed", "conflict", "already assigned", "leased")):
+        if code in {"PT409", "40001", "P0001"}:
             raise PublicLiveConflictError("The hub or one of its round robins changed. Refresh before continuing.") from exc
         if code in {"22023", "55000", "23514"}:
-            raise ValueError("This change cannot be applied to the current hub. Refresh and resolve any pending round-robin operation first.") from exc
+            raise HubCommitRejectedError("This change cannot be applied to the current hub. Refresh and resolve any pending round-robin operation first.") from exc
         raise
     if isinstance(result, list):
         result = next(iter(result), None)

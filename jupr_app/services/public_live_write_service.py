@@ -516,6 +516,11 @@ def _validate_edit_token(row: dict[str, Any] | None, *, edit_token: str) -> dict
         raise PublicLiveSessionError("We couldn’t find this session.")
     if not is_public_live_session_row(row):
         raise PublicLiveSessionError("This session can’t be edited from this page.")
+    state = _state(row)
+    if (state.get("mode") in {"admin_play_generator", "public_play_generator"}
+            or state.get("generator_kind") or _event_from_state(state).get("generatorKind")
+            or state.get("round_robin_hub_id")):
+        raise PublicLiveSessionError("Use the Round-Robin or Ladder Generator to edit this session.")
     if not edit_token_matches(edit_token, str(row.get("edit_token_hash") or "")):
         raise PermissionError("This organizer link is no longer valid.")
     return row

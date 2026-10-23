@@ -6,6 +6,8 @@ from jupr_app.services.generator_moneyball_service import prepare_moneyball
 import copy
 import hashlib
 import os
+from contextvars import ContextVar
+from functools import wraps
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
@@ -34,6 +36,9 @@ from jupr_app.services.admin_jupr_live_service import (
     is_admin_jupr_live_enabled,
 )
 from jupr_app.services.admin_live_ladder_operation_service import (
+    LiveLadderPrewriteConflictError,
+    LiveLadderPrewriteRejectedError,
+    current_admin_operation,
     deterministic_match_context_id,
     is_staging_write_gate_enabled,
 )
@@ -42,6 +47,80 @@ from jupr_app.services.direct_match_entry_service import submit_atomic_direct_ma
 
 GENERATOR_KINDS = {"round_robin", "ladder"}
 PLAY_FORMATS = {"singles", "doubles", "doubles_singles"}
+
+
+MUTATION_RECEIPT_TABLE = "play_generator_mutation_receipts"
+_generator_write_attempted: ContextVar[bool] = ContextVar("generator_write_attempted", default=False)
+
+
+def mark_generator_write_attempt() -> None:
+    _generator_write_attempted.set(True)
+
+
+def _verified_generator_mutation(function):
+    """Classify only validation proven to precede the first database mutation."""
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        token = _generator_write_attempted.set(False)
+        try:
+            return function(*args, **kwargs)
+        except ValueError as exc:
+            if not _generator_write_attempted.get():
+                raise _verified_rejection(LiveLadderPrewriteRejectedError, str(exc)) from exc
+            raise
+        finally:
+            _generator_write_attempted.reset(token)
+    return wrapped
+
+
+def recover_play_generator_operation(supabase: Any, operation: dict[str, Any]) -> dict[str, Any] | None:
+    """Recover only an exact atomic receipt; never infer success from current scores."""
+    if operation.get("surface") != "play_generator":
+        return None
+    receipt = _safe_first(supabase.table(MUTATION_RECEIPT_TABLE).select("*")
+        .eq("club_id", str(operation["club_id"]))
+        .eq("operation_key", str(operation["operation_key"])).limit(1).execute())
+    if receipt is None:
+        return None
+    if (receipt.get("request_fingerprint") != operation.get("request_fingerprint")
+            or (operation.get("entity_id") != "new" and receipt.get("session_key") != operation.get("entity_id"))):
+        raise LiveLadderPrewriteConflictError("The saved generator receipt does not match this request.")
+    row = _live_row(supabase, club_id=str(operation["club_id"]), session_key=str(receipt["session_key"]))
+    return {"ok": True, "mode": "play_generator_recovered", "session": _session_payload(row)}
+
+
+def _verified_rejection(error_type, message):
+    error = error_type(message)
+    error.domain_mutation_attempted = _generator_write_attempted.get()
+    return error
+
+
+def _commit_generator_receipt(supabase: Any, *, before: dict[str, Any] | None,
+                              session_key: str, patch: dict[str, Any], expected_version: str | None) -> dict[str, Any]:
+    operation = current_admin_operation()
+    if not operation:
+        raise RuntimeError("An atomic generator write requires its durable operation.")
+    mark_generator_write_attempt()
+    try:
+        result = supabase.rpc("commit_admin_play_generator_session", {
+            "p_club_id": str(operation["club_id"]), "p_session_key": session_key,
+            "p_expected_version": expected_version,
+            "p_expected_numeric_version": int(before.get("version") or 1) if before else None,
+            "p_patch": patch, "p_operation_key": operation["operation_key"],
+            "p_request_fingerprint": operation["request_fingerprint"],
+        }).execute().data
+    except Exception as exc:
+        code = str(getattr(exc, "code", ""))
+        if code == "PT409":
+            raise _verified_rejection(LiveLadderPrewriteConflictError, str(exc)) from exc
+        if code in {"22023", "55000", "23514"}:
+            raise _verified_rejection(LiveLadderPrewriteRejectedError, str(exc)) from exc
+        raise
+    if isinstance(result, list):
+        result = next(iter(result), None)
+    if not isinstance(result, dict) or not result.get("session_key"):
+        raise RuntimeError("The saved generator result could not be confirmed. Retry the same request.")
+    return result
 
 
 def _now_iso() -> str:
@@ -125,6 +204,11 @@ def _base_state(*, club_id: str, event: dict[str, Any], source: str) -> dict[str
 def _session_payload(row: dict[str, Any]) -> dict[str, Any]:
     state = _state(row)
     event = _event_from_state(state)
+    manageable = _is_generator_row(row)
+    locked = bool(state.get("generator_submission") or (state.get("official_publish") or {}).get("published_at")
+                  or (state.get("official_publish") or {}).get("published_match_ids"))
+    reason = ("Use this session's organizer link to manage play." if not manageable else
+              "Submitted or published results are locked for administrator review." if locked else None)
     return {
         "id": str(row.get("id") or ""),
         "club_id": str(row.get("club_id") or ""),
@@ -137,6 +221,8 @@ def _session_payload(row: dict[str, Any]) -> dict[str, Any]:
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
         "version": str(row.get("updated_at") or row.get("created_at") or ""),
+        "capabilities": {"can_manage": manageable and not locked, "can_score": manageable and not locked,
+                         "unavailable_reason": reason},
         "last_seen_at": row.get("last_seen_at"),
         "expires_at": row.get("expires_at"),
         "generator_kind": str(event.get("generatorKind") or state.get("generator_kind") or ""),
@@ -369,6 +455,7 @@ def _audit(
     write_admin_activity_log(supabase, payload)
 
 
+@_verified_generator_mutation
 def create_play_generator_session(
     supabase: Any,
     *,
@@ -451,7 +538,12 @@ def create_play_generator_session(
         "last_seen_at": now,
         "expires_at": (datetime.now(timezone.utc) + timedelta(days=30)).isoformat(),
     }
-    inserted = _safe_first(supabase.table("live_sessions").insert(payload).execute()) or payload
+    if current_admin_operation():
+        inserted = _commit_generator_receipt(supabase, before=None, session_key=session_key,
+                                              patch=payload, expected_version=None)
+    else:
+        mark_generator_write_attempt()
+        inserted = _safe_first(supabase.table("live_sessions").insert(payload).execute()) or payload
     session = _session_payload(inserted)
     _audit(
         supabase,
@@ -585,12 +677,26 @@ def _persist_event(
         patch["completed_at"] = now
     elif status == "active":
         patch["completed_at"] = None
+    operation = current_admin_operation()
+    if operation:
+        if str(operation["club_id"]) != str(before["club_id"]) or str(operation["entity_id"]) != str(before["session_key"]):
+            raise ValueError("This operation belongs to a different generator session.")
+        patch["last_operation_key"] = operation["operation_key"]
+        patch["last_request_fingerprint"] = operation["request_fingerprint"]
     if _state(before).get("round_robin_hub_id"):
         # Court release and generator results share one durable transaction.
-        from jupr_app.services.admin_round_robin_hub_service import persist_linked_generator_patch
-        return persist_linked_generator_patch(
-            supabase, before=before, patch=patch, expected_version=expected_version,
-        )
+        from jupr_app.services.admin_round_robin_hub_service import HubCommitRejectedError, persist_linked_generator_patch
+        from jupr_app.services.public_live_operation_service import PublicLiveConflictError
+        try:
+            return persist_linked_generator_patch(supabase, before=before, patch=patch, expected_version=expected_version)
+        except PublicLiveConflictError as exc:
+            raise _verified_rejection(LiveLadderPrewriteConflictError, str(exc)) from exc
+        except HubCommitRejectedError as exc:
+            raise _verified_rejection(LiveLadderPrewriteRejectedError, str(exc)) from exc
+    if operation:
+        return _commit_generator_receipt(supabase, before=before, session_key=str(before["session_key"]),
+                                         patch=patch, expected_version=expected_version)
+    mark_generator_write_attempt()
     return _update_live_row(
         supabase,
         club_id=str(before.get("club_id") or ""),
@@ -600,6 +706,7 @@ def _persist_event(
     )
 
 
+@_verified_generator_mutation
 def save_play_generator_round(
     supabase: Any,
     *,
@@ -643,6 +750,7 @@ def save_play_generator_round(
 
 
 
+@_verified_generator_mutation
 def mark_play_generator_round_played(
     supabase: Any,
     *,
@@ -684,6 +792,7 @@ def mark_play_generator_round_played(
     return {"ok": True, "mode": "play_generator_round_played", "session": session}
 
 
+@_verified_generator_mutation
 def skip_play_generator_round(
     supabase: Any,
     *,
@@ -697,6 +806,9 @@ def skip_play_generator_round(
     source: str,
 ) -> dict[str, Any]:
     before = _live_row(supabase, club_id=str(club_id), session_key=str(session_key))
+    official = _state(before).get("official_publish") or {}
+    if official.get("published_at") or official.get("published_match_ids"):
+        raise ValueError("Published results must be corrected through club match administration.")
     event = skip_generator_round(
         _event_from_state(_state(before)),
         round_number=int(round_number),
@@ -723,6 +835,7 @@ def skip_play_generator_round(
     return {"ok": True, "mode": "play_generator_round_skip", "session": session}
 
 
+@_verified_generator_mutation
 def reopen_play_generator_round(
     supabase: Any,
     *,
@@ -761,6 +874,7 @@ def reopen_play_generator_round(
     return {"ok": True, "mode": "play_generator_round_reopen", "session": session}
 
 
+@_verified_generator_mutation
 def select_play_generator_round(
     supabase: Any,
     *,
@@ -799,6 +913,7 @@ def select_play_generator_round(
     return {"ok": True, "mode": "play_generator_round_select", "session": session}
 
 
+@_verified_generator_mutation
 def advance_play_generator_session(
     supabase: Any,
     *,
@@ -834,6 +949,7 @@ def advance_play_generator_session(
     return {"ok": True, "mode": "play_generator_advance", "session": session}
 
 
+@_verified_generator_mutation
 def start_play_generator_playoff(
     supabase: Any, *, club_id: str, session_key: str, playoff_format: str,
     expected_version: str, actor_email: str, actor_role: str, source: str,
@@ -852,6 +968,7 @@ def start_play_generator_playoff(
     return {"ok": True, "mode": "play_generator_playoff", "session": session}
 
 
+@_verified_generator_mutation
 def mutate_play_generator_roster(
     supabase: Any,
     *,
@@ -910,6 +1027,7 @@ def mutate_play_generator_roster(
     return {"ok": True, "mode": "play_generator_roster", "session": session}
 
 
+@_verified_generator_mutation
 def complete_play_generator_session(
     supabase: Any,
     *,
@@ -959,7 +1077,8 @@ def _saved_matches(event: dict[str, Any]) -> list[tuple[int, dict[str, Any]]]:
                 for match in court.get("matches") or []
             ]
         for match in matches:
-            if match.get("scoreA") is None or match.get("scoreB") is None:
+            if (match.get("status") not in (None, "scored")
+                    or match.get("scoreA") is None or match.get("scoreB") is None):
                 continue
             rows.append((number, dict(match)))
     return rows

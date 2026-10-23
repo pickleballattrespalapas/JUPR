@@ -126,10 +126,11 @@ def _public_match(
     mini_round_number: int | None = None,
 ) -> dict[str, Any]:
     match_id = str(match.get("id") or f"r{round_number}-m{match.get('slot', '')}")
-    team_a = _participant_names(event, match_id, [str(x) for x in (match.get("teamA") or [])])
-    team_b = _participant_names(event, match_id, [str(x) for x in (match.get("teamB") or [])])
-    score_a = _score(match.get("scoreA"))
-    score_b = _score(match.get("scoreB"))
+    team_a = _participant_names(event, match_id, [str(x) for x in (match.get("sideA") or match.get("teamA") or [])])
+    team_b = _participant_names(event, match_id, [str(x) for x in (match.get("sideB") or match.get("teamB") or [])])
+    not_played = match.get("status") in {"not_played", "skipped", "cancelled", "canceled"}
+    score_a = None if not_played else _score(match.get("scoreA"))
+    score_b = None if not_played else _score(match.get("scoreB"))
     fallback_label = (
         f"Court {court_number}, game {mini_round_number}"
         if court_number is not None and mini_round_number is not None
@@ -145,9 +146,11 @@ def _public_match(
         "team_b": team_b,
         "score_a": score_a,
         "score_b": score_b,
-        "is_scored": match_is_scored(match),
+        "is_scored": score_a is not None and score_b is not None,
         "winner": _winner_label(team_a, team_b, score_a, score_b),
     }
+    if event.get("generatorKind"):
+        payload["status"] = str(match.get("status") or "scheduled")
     if court_number is not None:
         payload["court_number"] = int(court_number)
     if mini_round_number is not None:
@@ -169,6 +172,33 @@ def _round_robin_rounds(event: dict[str, Any]) -> list[dict[str, Any]]:
             }
         )
     return rounds
+
+
+def _generator_rounds(event: dict[str, Any]) -> list[dict[str, Any]]:
+    """Expose generator outcomes without importing its private recovery state."""
+    result = []
+    for row in event.get("rounds") or []:
+        number = int(row.get("number") or 0)
+        courts = []
+        matches = [_public_match(event, match, round_number=number,
+                                 court_number=match.get("court"))
+                   for match in row.get("matches") or []]
+        for court in row.get("courts") or []:
+            projected = [_public_match(event, match, round_number=number,
+                                       court_number=court.get("courtNumber"))
+                         for match in court.get("matches") or []]
+            courts.append({"court_number": int(court.get("courtNumber") or 0),
+                           "size": len(court.get("participantIds") or []), "matches": projected})
+            if not row.get("matches"):
+                matches.extend(projected)
+        item = {"number": number, "status": str(row.get("status") or "preview"), "matches": matches}
+        if courts:
+            item["courts"] = courts
+        for key in ("stage", "label"):
+            if row.get(key):
+                item[key] = str(row[key])
+        result.append(item)
+    return result
 
 
 def _league_rounds(event: dict[str, Any]) -> list[dict[str, Any]]:
@@ -239,6 +269,9 @@ def _tournament_rounds(event: dict[str, Any]) -> list[dict[str, Any]]:
 def _standings(event: dict[str, Any]) -> list[dict[str, Any]]:
     event_type = str(event.get("type") or "")
     try:
+        if event.get("generatorKind"):
+            from jupr_app.domain.adaptive_play_engine import generator_event_standings
+            return generator_event_standings(event)
         if event_type == "round_robin":
             return round_robin_standings(event)
         if event_type == "league":
@@ -264,6 +297,8 @@ def _bracket(event: dict[str, Any]) -> dict[str, Any] | None:
 def _current_round(event: dict[str, Any]) -> int | None:
     event_type = str(event.get("type") or "")
     try:
+        if event.get("generatorKind"):
+            return int(event.get("currentRoundNumber") or 1)
         if event_type == "round_robin":
             return int(round_robin_current_round_number(event))
         if event_type == "league":
@@ -280,6 +315,8 @@ def _current_round(event: dict[str, Any]) -> int | None:
 
 
 def _rounds(event: dict[str, Any]) -> list[dict[str, Any]]:
+    if event.get("generatorKind"):
+        return _generator_rounds(event)
     event_type = str(event.get("type") or "")
     if event_type == "round_robin":
         return _round_robin_rounds(event)
@@ -309,6 +346,9 @@ def public_live_session_summary(row: dict[str, Any]) -> dict[str, Any]:
         "last_seen_at": row.get("last_seen_at"),
         "expires_at": row.get("expires_at"),
         "completed_at": row.get("completed_at"),
+        **({"generator_kind": str(event["generatorKind"]),
+            "standings_sort": str(event.get("standingsSort") or "wins")}
+           if event.get("generatorKind") else {}),
     }
 
 
