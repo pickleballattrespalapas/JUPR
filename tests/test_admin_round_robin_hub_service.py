@@ -17,7 +17,7 @@ from jupr_app.services.public_live_operation_service import PublicLiveConflictEr
 
 
 class FakeConflict(Exception):
-    code = "40001"
+    code = "PT409"
 
 
 class ReadQuery:
@@ -91,6 +91,8 @@ class TransactionalHubDB:
             if not session or session["updated_at"] != entry["expected_version"] or session.get("version", 1) != entry.get("expected_numeric_version", 1):
                 raise FakeConflict("session changed")
             read_rows.append((entry, session))
+        no_op = bool(hub and hub["state"] == p["p_state"] and hub["title"] == p["p_title"]
+                      and hub["status"] == p["p_status"] and all(not entry["patch"] for entry, _ in read_rows))
         self.clock += timedelta(microseconds=1)
         now = self.clock.isoformat()
         for entry, session in read_rows:
@@ -99,10 +101,21 @@ class TransactionalHubDB:
                 session.update(deepcopy(entry["patch"]))
                 session["updated_at"] = now
                 session["version"] = entry["patch"].get("version", numeric + 1)
+                if entry["patch"].get("last_operation_key"):
+                    receipts = snapshot.setdefault("play_generator_mutation_receipts", [])
+                    key = entry["patch"]["last_operation_key"]
+                    receipt = {"club_id": club, "session_key": session["session_key"], "operation_key": key,
+                               "request_fingerprint": entry["patch"]["last_request_fingerprint"], "committed_version": now}
+                    prior = next((r for r in receipts if r["operation_key"] == key), None)
+                    if prior and any(prior[k] != receipt[k] for k in ("club_id", "session_key", "request_fingerprint")):
+                        raise FakeConflict("operation fingerprint changed")
+                    if not prior:
+                        receipts.append(receipt)
         if hub is None:
             hub = {"id": hub_id, "club_id": club, "version": 0, "created_at": now}
             snapshot[service.HUB_TABLE].append(hub)
-        hub.update(title=p["p_title"], status=p["p_status"], state=deepcopy(p["p_state"]), updated_at=now, version=hub["version"] + 1)
+        if not no_op:
+            hub.update(title=p["p_title"], status=p["p_status"], state=deepcopy(p["p_state"]), updated_at=now, version=hub["version"] + 1)
         result = {"hub": deepcopy(hub), "sessions": [deepcopy(row) for _, row in read_rows], "replayed": False}
         snapshot[service.OPERATION_TABLE].append({"club_id": club, "hub_id": hub_id, "operation_key": p["p_operation_key"],
                                                 "fingerprint": p["p_fingerprint"], "result": deepcopy(result)})
@@ -504,7 +517,15 @@ def test_original_generator_cannot_skip_round_with_assigned_or_reserved_game(slo
         hub = command(db, hub, "assign_next_court", matches["rr-a"])
     before = deepcopy(raw_session(db))
     state = deepcopy(before["state"])
-    state["page_state"]["event"] = skip_generator_round(service._event(before), round_number=1)
+    # Domain rejects the real request; independently verify the service also
+    # rejects a caller-supplied skipped candidate that bypasses that guard.
+    with pytest.raises(ValueError, match="[Rr]elease|[Aa]ssigned"):
+        skip_generator_round(service._event(before), round_number=1)
+    candidate = service._event(before)
+    candidate["rounds"][0]["status"] = "skipped"
+    for match in candidate["rounds"][0]["matches"]:
+        match.update(scoreA=None, scoreB=None, status="not_played")
+    state["page_state"]["event"] = candidate
     snapshot = deepcopy(db.storage)
     with pytest.raises(ValueError, match="[Rr]elease|[Aa]ssigned"):
         service.persist_linked_generator_patch(db, before=before, patch={"state": state}, expected_version=before["updated_at"])

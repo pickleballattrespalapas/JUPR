@@ -164,11 +164,11 @@ global.fetch = async (url, options = {}) => {
   assert.equal(requests.some(request => /score|round/.test(request.action)), false, "Identity correction never sends round or score mutations");
   await act(async () => tree.unmount());
 
-  setup([review([guestA, guestB], { assigned: true })]); await mount(); await click("Review matching names");
+  setup([review([guestA, guestB], { assigned: true, can_merge: false })]); await mount(); await click("Review matching names");
   assert.equal(choice("Same person").props.disabled, true, "Do not merge while affected players are assigned");
   assert.equal(choice("Different people").props.disabled, false, "Splitting remains available during play");
   assert.equal(button(tree, "These are all different people").props.disabled, false);
-  assert.ok(text(tree.toJSON()).includes("Finish or release affected assignments before marking these as the same person."));
+  assert.ok(text(tree.toJSON()).includes("One committed identity can keep its lineup while idle duplicate entries are linked."));
   await act(async () => tree.unmount());
 
   const linkedA = participant("a", 101, "Mike"), linkedB = participant("b", 102, "Mike"), guestC = participant("c", null, "Mike");

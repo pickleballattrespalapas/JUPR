@@ -597,7 +597,7 @@ def round_robin_players_of_record(event: dict[str, Any]) -> dict[str, Any]:
 def round_robin_result_matches(event: dict[str, Any]) -> list[dict[str, Any]]:
     rounds = [r for r in event.get("rounds", []) if str(r.get("status", "")).lower() not in {"skipped", "cancelled", "canceled"}]
     return [m for m in round_robin_matches({**event, "rounds": rounds})
-            if str(m.get("status", "")).lower() not in {"cancelled", "canceled", "bye"}]
+            if str(m.get("status", "")).lower() not in {"not_played", "skipped", "cancelled", "canceled", "bye"}]
 
 
 def round_robin_result_fingerprint(event: dict[str, Any]) -> str:

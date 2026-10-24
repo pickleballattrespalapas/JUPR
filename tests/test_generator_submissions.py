@@ -69,6 +69,9 @@ class Database:
         return Query(self.db, name)
 
     def rpc(self, name, params):
+        if name in {"commit_admin_play_generator_session", "commit_public_play_generator_session"}:
+            from generator_receipt_fake import commit_generator_rpc
+            return SimpleNamespace(execute=lambda: commit_generator_rpc(self.db, name, params))
         assert name == direct.DIRECT_MATCH_RPC
         def execute():
             self.rpc_calls += 1

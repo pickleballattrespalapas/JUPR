@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Any, Callable
 from urllib.parse import urlencode
@@ -27,6 +28,29 @@ class LiveLadderPersistenceError(RuntimeError):
 
 class LiveLadderUncertainError(RuntimeError):
     """Raised when a write may have happened and blind retry is unsafe."""
+
+
+class LiveLadderPrewriteRejectedError(ValueError):
+    """A surface verified that validation committed no domain write."""
+
+
+class LiveLadderPrewriteConflictError(LiveLadderConflictError):
+    """A surface verified that a conflicting transaction committed no changes."""
+
+
+_current_admin_operation: ContextVar[dict[str, Any] | None] = ContextVar("current_admin_operation", default=None)
+
+
+def current_admin_operation() -> dict[str, Any] | None:
+    """Server-only operation identity for atomic surface receipts."""
+    return _current_admin_operation.get()
+
+
+def _surface_recovery(supabase: Any, surface: str, callback):
+    if callback is None and surface == "play_generator":
+        from jupr_app.services.admin_play_generator_service import recover_play_generator_operation
+        return lambda operation: recover_play_generator_operation(supabase, operation)
+    return callback
 
 
 def _now_iso() -> str:
@@ -247,19 +271,20 @@ def _get_active_version_lease(
     club_id: str,
     surface: str,
     expected_version: str,
+    entity_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Return the operation currently owning one authoritative surface snapshot."""
     try:
-        return _first(
-            supabase.table(OPERATION_TABLE)
+        query = (supabase.table(OPERATION_TABLE)
             .select("*")
             .eq("club_id", str(club_id))
             .eq("surface", str(surface))
             .eq("expected_version", str(expected_version))
             .in_("status", ["intent", "running", "mutated", "recovery_required"])
-            .limit(1)
-            .execute()
         )
+        if surface == "play_generator":
+            query = query.eq("entity_id", str(entity_id or ""))
+        return _first(query.limit(1).execute())
     except Exception as exc:
         raise LiveLadderPersistenceError("Unable to inspect the durable version lease.") from exc
 
@@ -344,6 +369,7 @@ def replay_durable_admin_operation_if_present(
     recover_incomplete: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
 ) -> dict[str, Any] | None:
     """Recover an exact prior operation before rerunning mutable previews."""
+    recover_incomplete = _surface_recovery(supabase, surface, recover_incomplete)
     ensure_live_ladder_operation_schema_ready(supabase)
     operation_key = deterministic_operation_key(
         club_id=str(club_id),
@@ -397,8 +423,8 @@ def replay_durable_admin_operation_if_present(
         return _operation_response(completed, idempotent_replay=True)
     if status == "failed":
         raise LiveLadderConflictError(
-            "This operation was rejected before domain mutation because its authoritative version became stale. "
-            "Reload the Python state and use a new idempotency key."
+            f"This operation was rejected without committing a domain change: {existing.get('error_text') or 'validation failed'}. "
+            "Review the current state and use a new idempotency key."
         )
     raise LiveLadderUncertainError(
         "A durable operation with this key is incomplete and its outcome is uncertain. Do not retry the "
@@ -507,6 +533,7 @@ def run_durable_admin_operation(
 ) -> dict[str, Any]:
     """Run one FastAPI-authoritative write behind a durable, replayable intent."""
 
+    recover_incomplete = _surface_recovery(supabase, surface, recover_incomplete)
     ensure_live_ladder_operation_schema_ready(supabase)
     clean_expected = str(expected_version or "").strip()
     clean_current = str(current_version or "").strip()
@@ -532,8 +559,8 @@ def run_durable_admin_operation(
             return _operation_response(existing, idempotent_replay=True)
         if status == "failed":
             raise LiveLadderConflictError(
-                "This operation was rejected before domain mutation because its authoritative version became stale. "
-                "Reload the Python state and use a new idempotency key."
+                f"This operation was rejected without committing a domain change: {existing.get('error_text') or 'validation failed'}. "
+                "Review the current state and use a new idempotency key."
             )
         if recover_incomplete is not None:
             recovered_result = recover_incomplete(existing)
@@ -656,6 +683,7 @@ def run_durable_admin_operation(
             club_id=str(club_id),
             surface=str(surface),
             expected_version=clean_expected,
+            entity_id=str(entity_id),
         )
         if lease is not None:
             raise LiveLadderConflictError(
@@ -740,9 +768,32 @@ def run_durable_admin_operation(
                 "The authoritative state changed while acquiring the write lease. No domain mutation was "
                 "attempted; reload the Python state and use a new idempotency key."
             )
+    operation_token = _current_admin_operation.set(operation if surface == "play_generator" else None)
     try:
         result = _json_safe(mutate())
+    except (LiveLadderPrewriteRejectedError, LiveLadderPrewriteConflictError) as exc:
+        _update_operation(supabase, club_id=str(club_id), operation_key=operation_key,
+                          patch={"status": "failed", "error_text": str(exc)[:1000], "updated_by": str(actor_email or "")})
+        _required_audit(supabase, club_id=str(club_id), actor_email=actor_email, actor_role=actor_role,
+                        action_type="fail_live_ladder_operation_admin", entity_type="live_ladder_admin_operation",
+                        entity_id=operation_key, source=source, before_json={"status": "running"},
+                        after_json={"status": "failed", "domain_mutation_attempted": bool(getattr(exc, "domain_mutation_attempted", False)),
+                                    "domain_mutation_committed": False,
+                                    "reason": "verified_domain_rejection", "error": str(exc)[:500]})
+        raise
     except Exception as exc:
+        # Only durable, operation-bound evidence may resolve an ambiguous write.
+        # A failed lookup must leave it uncertain; current scores alone are not a receipt.
+        if recover_incomplete is not None:
+            try:
+                recovered_result = recover_incomplete(operation)
+            except Exception:
+                recovered_result = None
+            if recovered_result is not None:
+                completed = _complete_recovered_domain_result(
+                    supabase, operation=operation, result=recovered_result,
+                    actor_email=actor_email, actor_role=actor_role, source=source)
+                return _operation_response(completed, idempotent_replay=True)
         try:
             operation = _update_operation(
                 supabase,
@@ -783,6 +834,8 @@ def run_durable_admin_operation(
             "The operation did not return a verified completion and may have changed domain state. Do not "
             "retry blindly; reconcile the durable operation and inspect Match Log/Replay History."
         ) from exc
+    finally:
+        _current_admin_operation.reset(operation_token)
 
     operation = _update_operation(
         supabase,
@@ -858,6 +911,7 @@ def reconcile_durable_admin_operation(
     source: str,
     recover_incomplete: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
+    recover_incomplete = _surface_recovery(supabase, surface, recover_incomplete)
     if str(confirmation_text or "").strip().upper() != str(expected_confirmation).upper():
         raise ValueError(f"Type {expected_confirmation} to reconcile this interrupted operation.")
     ensure_live_ladder_operation_schema_ready(supabase)

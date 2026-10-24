@@ -24,6 +24,7 @@ const options = {
   sourceRound: 3, seeds,
   formats: [
     { format: "groups_of_four", reason: null, matches: [match("Places 1–4", [1, 4], [2, 3]), match("Places 5–8", [5, 8], [6, 7]), match("Places 9–12", [9, 12], [10, 11])], sitOutParticipantIds: ["p-13"] },
+    { format: "top_four", reason: null, matches: [match("Championship", [1, 4], [2, 3])], sitOutParticipantIds: seeds.slice(4).map(s => s.participantId) },
     { format: "top_eight", reason: null, matches: [match("Semifinal 1", [1, 8], [4, 5]), match("Semifinal 2", [2, 7], [3, 6])], sitOutParticipantIds: seeds.slice(8).map(s => s.participantId) }
   ]
 };
@@ -47,12 +48,22 @@ async function choiceAndVisibility() {
   assert.match(text(tree), /#4 Player 4 \/ #5 Player 5/);
   await act(async () => button(tree, "Start playoff").props.onClick());
   assert.deepEqual(calls, ["groups_of_four", "top_eight"]);
+  await act(async () => tree.root.findByType("select").props.onChange({ target: { value: "top_four" } }));
+  assert.match(text(tree), /One championship game/);
+  await act(async () => button(tree, "Start playoff").props.onClick());
+  assert.deepEqual(calls, ["groups_of_four", "top_eight", "top_four"]);
   for (const changed of [{ canManage: false }, { locked: true }]) {
     await act(async () => tree.update(h(playoffModule.default, { ...props, ...changed })));
     assert.equal(button(tree, "Playoff"), undefined);
   }
   await act(async () => tree.update(h(playoffModule.default, { ...props, options: { ...options, formats: options.formats.map(o => ({ ...o, reason: "Save or skip the current round." })) } })));
   assert.equal(button(tree, "Start playoff").props.disabled, true);
+  await act(async () => tree.update(h(playoffModule.default, { ...props, event: {
+    playoff: { format: "groups_of_four", seeds, sitOutParticipantIds: [] },
+    rounds: [{ number: 4, stage: "playoff", status: "saved", matches: [{ ...match("Unused placement", [5, 8], [6, 7]), status: "not_played", scoreA: null, scoreB: null }] }]
+  } })));
+  assert.match(text(tree), /Not played/);
+  assert.doesNotMatch(text(tree), /Winner:/);
   await act(async () => tree.unmount());
 }
 

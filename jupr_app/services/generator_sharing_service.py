@@ -16,10 +16,10 @@ from jupr_app.domain.adaptive_play_engine import (
 from jupr_app.domain.generator_playoffs import start_generator_playoff
 from jupr_app.services.public_live_operation_service import (
     PublicLiveConflictError, PublicLiveRecoveryRequiredError, begin_public_live_operation,
-    completed_operation_result, edit_token_matches, update_public_live_operation,
+    edit_token_matches, update_public_live_operation,
 )
 from jupr_app.services.public_play_generator_service import (
-    _event_from_state, _first, _not_expired, _now_iso, _player_ids_for_names,
+    _confirmed_mutation_replay, _update_cas, _event_from_state, _first, _not_expired, _now_iso, _player_ids_for_names,
     _put_event, _state, _token_secret, _ttl_iso, public_play_generator_session_payload,
 )
 
@@ -62,7 +62,10 @@ def _payload(row: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _cas(supabase: Any, row: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+def _cas(supabase: Any, row: dict[str, Any], patch: dict[str, Any], *,
+         operation: dict[str, Any] | None = None) -> dict[str, Any]:
+    if operation is not None:
+        return _update_cas(supabase, row=row, patch=patch, operation=operation)
     # A revoke/owner edit racing a handed-off write wins via the same row lease.
     if _state(row).get("round_robin_hub_id"):
         from jupr_app.services.admin_round_robin_hub_service import persist_linked_generator_patch
@@ -189,11 +192,6 @@ def mutate_shared_generator(supabase: Any, *, club_id: str, session_key: str,
                             action: str, body: dict[str, Any]) -> dict[str, Any]:
     row = sharing_row(supabase, club_id=club_id, session_key=session_key)
     _authorized_operator(row, edit_token)
-    # Link holders never submit, approve, publish, manage access or change club profiles.
-    if _payload(row)["results_locked"]:
-        raise ValueError("Submitted results are locked for administrator review.")
-    if row.get("pending_operation_key"):
-        raise PublicLiveRecoveryRequiredError("A previous change is still pending. Ask the organizer to recover it.")
     operation, existed = begin_public_live_operation(
         supabase, club_id=club_id, session_key=session_key, action=f"shared_generator_{action}",
         idempotency_key=idempotency_key, requester_hash=requester_hash,
@@ -203,30 +201,34 @@ def mutate_shared_generator(supabase: Any, *, club_id: str, session_key: str,
         request_payload={"session_key": session_key, "expected_version": expected_version, **body},
     )
     operation_key = str(operation["operation_key"])
-    if completed_operation_result(operation) is not None or (
-        existed and row.get("last_operation_key") == operation_key
-    ):
-        update_public_live_operation(supabase, club_id=club_id, operation_key_value=operation_key,
-                                     status="completed", result={})
-        return {"ok": True, "session": _payload(row), "idempotent_replay": True}
+    if existed and _confirmed_mutation_replay(supabase, row=row, operation=operation):
+        row = sharing_row(supabase, club_id=club_id, session_key=session_key)
+        _authorized_operator(row, edit_token)
+        return {"ok": True, "session": _payload(row), "idempotent_replay": True, "confirmed_commit": True}
     try:
+        # Link holders never submit, approve, publish, manage access or change club profiles.
+        if _payload(row)["results_locked"]:
+            raise ValueError("Submitted results are locked for administrator review.")
+        if row.get("pending_operation_key"):
+            raise PublicLiveRecoveryRequiredError("A previous change is still pending. Ask the organizer to recover it.")
         if str(expected_version) != _version(row):
             raise PublicLiveConflictError("This session changed. Refresh before continuing.")
         event, patch = _mutate_event(supabase, row, action, body)
+        update_public_live_operation(supabase, club_id=club_id, operation_key_value=operation_key, status="running")
         updated = _cas(supabase, row, {
             **patch, "state": _put_event(_state(row), event), "last_seen_at": _now_iso(),
             "last_operation_key": operation_key,
             "last_request_fingerprint": operation["request_fingerprint"],
-        })
+        }, operation=operation)
     except (ValueError, PublicLiveConflictError) as exc:
         update_public_live_operation(supabase, club_id=club_id, operation_key_value=operation_key,
                                      status="rejected", error_text=str(exc))
         raise
-    except Exception:
-        # An ambiguous response is recovered by the row's durable operation receipt.
+    except Exception as exc:
+        # Only an immutable receipt proves an ambiguous request committed.
         update_public_live_operation(supabase, club_id=club_id, operation_key_value=operation_key,
                                      status="recovery_required", error_text="Shared RR change needs recovery.")
-        raise
+        raise PublicLiveRecoveryRequiredError("We couldn’t confirm the last change. Retry the same action.") from exc
     update_public_live_operation(supabase, club_id=club_id, operation_key_value=operation_key,
                                  status="completed", result={})
-    return {"ok": True, "session": _payload(updated), "idempotent_replay": False}
+    return {"ok": True, "session": _payload(updated), "idempotent_replay": False, "confirmed_commit": True}

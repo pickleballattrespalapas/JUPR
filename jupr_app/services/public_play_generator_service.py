@@ -638,62 +638,100 @@ def _validate_editable(row: dict[str, Any], *, edit_token: str, allow_completed:
         )
 
 
-def _update_cas(
-    supabase: Any,
-    *,
-    row: dict[str, Any],
-    patch: dict[str, Any],
-    operation: dict[str, Any],
-) -> dict[str, Any]:
+def _mutation_operation_identity(row: dict[str, Any], operation: dict[str, Any]) -> dict[str, str]:
+    fields = ("club_id", "session_key", "operation_key", "request_fingerprint")
+    expected = {key: str(operation.get(key) or "") for key in fields}
+    if not all(expected.values()) or any(expected[key] != str(row.get(key) or "") for key in ("club_id", "session_key")):
+        raise PublicLiveConflictError("This operation belongs to a different session or request.")
+    return expected
+
+
+def _committed_mutation_receipt(supabase: Any, *, row: dict[str, Any], operation: dict[str, Any]) -> dict[str, Any] | None:
+    """Check immutable commit evidence, scoped to the authorized session/request."""
+    expected = _mutation_operation_identity(row, operation)
+    try:
+        receipt = _first(supabase.table("play_generator_mutation_receipts").select("*")
+                         .eq("operation_key", expected["operation_key"]).limit(1).execute())
+    except Exception as exc:
+        raise PublicLiveRecoveryRequiredError(
+            "We couldn’t confirm the last change. Retry the same action before making another change."
+        ) from exc
+    if receipt is not None and any(str(receipt.get(key) or "") != value for key, value in expected.items()):
+        raise PublicLiveConflictError("This operation belongs to a different session or request.")
+    return receipt
+
+
+def _recovered_mutation_row(supabase: Any, *, row: dict[str, Any], operation: dict[str, Any]) -> dict[str, Any] | None:
+    if _committed_mutation_receipt(supabase, row=row, operation=operation) is None:
+        return None
+    try:
+        current = _first(supabase.table("live_sessions").select("*")
+                         .eq("club_id", row["club_id"]).eq("session_key", row["session_key"])
+                         .limit(1).execute())
+    except Exception as exc:
+        raise PublicLiveRecoveryRequiredError("This change was saved, but the session could not be reloaded.") from exc
+    if current is None or _state(current).get("mode") != _state(row).get("mode"):
+        raise PublicLiveRecoveryRequiredError("This change was saved, but the session could not be reloaded.")
+    return current
+
+
+def _confirmed_mutation_replay(supabase: Any, *, row: dict[str, Any], operation: dict[str, Any]) -> bool:
+    _mutation_operation_identity(row, operation)
+    # Completed legacy ledger entries remain valid even if they predate receipts.
+    if completed_operation_result(operation) is not None:
+        return True
+    if _committed_mutation_receipt(supabase, row=row, operation=operation) is None:
+        return False
+    try:
+        update_public_live_operation(supabase, club_id=str(row["club_id"]),
+                                     operation_key_value=str(operation["operation_key"]), status="completed", result={})
+    except PublicLiveRecoveryRequiredError:
+        # Immutable receipt proof survives a failed ledger acknowledgement.
+        pass
+    return True
+
+
+def _update_cas(supabase: Any, *, row: dict[str, Any], patch: dict[str, Any], operation: dict[str, Any]) -> dict[str, Any]:
+    from jupr_app.services.admin_round_robin_hub_service import HubCommitRejectedError
     expected = int(row.get("version") or 1)
     operation_key = str(operation.get("operation_key") or "")
-    payload = {
-        **patch,
-        "version": expected + 1,
-        "last_operation_key": operation_key,
-        "last_request_fingerprint": str(operation.get("request_fingerprint") or ""),
-        "updated_at": _now_iso(),
-        "last_seen_at": _now_iso(),
-    }
+    payload = {**patch, "version": expected + 1, "last_operation_key": operation_key,
+               "last_request_fingerprint": str(operation.get("request_fingerprint") or ""),
+               "updated_at": _now_iso(), "last_seen_at": _now_iso()}
     try:
         if _state(row).get("round_robin_hub_id"):
             from jupr_app.services.admin_round_robin_hub_service import persist_linked_generator_patch
-            return persist_linked_generator_patch(
-                supabase, before=row, patch=payload,
-                expected_version=str(row.get("updated_at") or row.get("created_at") or ""),
-            )
-        updated = _first(
-            supabase.table("live_sessions")
-            .update(payload)
-            .eq("club_id", str(row.get("club_id") or ""))
-            .eq("session_key", str(row.get("session_key") or ""))
-            .eq("version", expected)
-            .execute()
-        )
-    except (PublicLiveConflictError, ValueError):
+            return persist_linked_generator_patch(supabase, before=row, patch=payload,
+                expected_version=str(row.get("updated_at") or row.get("created_at") or ""))
+        response = supabase.rpc("commit_public_play_generator_session", {
+            "p_club_id": str(row["club_id"]), "p_session_key": str(row["session_key"]),
+            "p_expected_version": str(row.get("updated_at") or row.get("created_at") or ""),
+            "p_expected_numeric_version": expected, "p_patch": payload,
+            "p_operation_key": operation_key, "p_request_fingerprint": str(operation["request_fingerprint"]),
+        }).execute()
+        updated = dict(response.data) if isinstance(response.data, dict) else _first(response)
+    except (PublicLiveConflictError, HubCommitRejectedError):
+        # These types prove either prewrite validation or a rolled-back commit.
+        # A generic ValueError may instead be JSON decoding after a real commit.
         raise
     except Exception as exc:
-        current = _get_row(
-            supabase,
-            club_id=str(row.get("club_id") or ""),
-            session_key=str(row.get("session_key") or ""),
-        )
-        if str(current.get("last_operation_key") or "") == operation_key:
+        code = str(getattr(exc, "code", "") or "")
+        if code in {"PT409", "40001"}:
+            raise PublicLiveConflictError("This session changed. Refresh before continuing.") from exc
+        if code in {"22023", "55000"}:
+            raise PublicPlayGeneratorError(str(getattr(exc, "message", "") or str(exc))) from exc
+        current = _recovered_mutation_row(supabase, row=row, operation=operation)
+        if current is not None:
             return current
         raise PublicLiveRecoveryRequiredError(
-            "We couldn’t confirm the last change. "
-            "Retry the same action before making another change."
+            "We couldn’t confirm the last change. Retry the same action before making another change."
         ) from exc
     if updated is not None:
         return updated
-    current = _get_row(
-        supabase,
-        club_id=str(row.get("club_id") or ""),
-        session_key=str(row.get("session_key") or ""),
-    )
-    if str(current.get("last_operation_key") or "") == operation_key:
+    current = _recovered_mutation_row(supabase, row=row, operation=operation)
+    if current is not None:
         return current
-    raise PublicLiveConflictError("This session changed. Refresh before continuing.")
+    raise PublicLiveRecoveryRequiredError("We couldn’t confirm the last change. Retry the same action.")
 
 
 def _run_mutation(
@@ -710,6 +748,9 @@ def _run_mutation(
     mutate: Callable[[dict[str, Any]], tuple[dict[str, Any], dict[str, Any]]],
     allow_completed: bool = False,
 ) -> dict[str, Any]:
+    row = _get_row(supabase, club_id=str(club_id), session_key=str(session_key))
+    if not edit_token_matches(edit_token, str(row.get("edit_token_hash") or "")):
+        raise PermissionError("This organizer link is no longer valid.")
     operation, existed = begin_public_live_operation(
         supabase,
         club_id=str(club_id),
@@ -721,16 +762,18 @@ def _run_mutation(
         request_payload=request_payload,
     )
     operation_key = str(operation.get("operation_key") or "")
-    row = _get_row(supabase, club_id=str(club_id), session_key=str(session_key))
+    if existed and _confirmed_mutation_replay(supabase, row=row, operation=operation):
+        row = _get_row(supabase, club_id=str(club_id), session_key=str(session_key))
+        if not edit_token_matches(edit_token, str(row.get("edit_token_hash") or "")):
+            raise PermissionError("This organizer link is no longer valid.")
+        return {"ok": True, "session": public_play_generator_session_payload(row),
+                "idempotent_replay": True, "confirmed_commit": True}
     try:
         _validate_editable(
             row, edit_token=edit_token,
             allow_completed=allow_completed or (
                 action in {"reopen", "advance"}
                 and _event_from_state(_state(row)).get("generatorKind") == "round_robin"
-            ) or (
-                action == "complete"
-                and str(row.get("last_operation_key") or "") == operation_key
             ),
         )
     except Exception as exc:
@@ -739,29 +782,10 @@ def _run_mutation(
                 supabase,
                 club_id=str(club_id),
                 operation_key_value=operation_key,
-                status="rejected",
+                status="recovery_required" if isinstance(exc, PublicLiveRecoveryRequiredError) else "rejected",
                 error_text=str(exc),
             )
         raise
-    if completed_operation_result(operation) is not None:
-        return {
-            "ok": True,
-            "session": public_play_generator_session_payload(row),
-            "idempotent_replay": True,
-        }
-    if existed and str(row.get("last_operation_key") or "") == operation_key:
-        update_public_live_operation(
-            supabase,
-            club_id=str(club_id),
-            operation_key_value=operation_key,
-            status="completed",
-            result={},
-        )
-        return {
-            "ok": True,
-            "session": public_play_generator_session_payload(row),
-            "idempotent_replay": True,
-        }
     if int(row.get("version") or 1) != int(expected_version):
         update_public_live_operation(
             supabase,
@@ -824,6 +848,7 @@ def _run_mutation(
         "ok": True,
         "session": public_play_generator_session_payload(updated),
         "idempotent_replay": False,
+        "confirmed_commit": True,
     }
 
 
@@ -916,6 +941,7 @@ def skip_public_play_generator_round(
         idempotency_key=idempotency_key,
         requester_hash=requester_hash,
         action="skip",
+        allow_completed=True,
         request_payload={"round_number": int(round_number), "reason": _clean(reason, limit=300)},
         mutate=lambda event: (
             skip_generator_round(event, round_number=int(round_number), reason=reason),

@@ -72,7 +72,7 @@ def test_shared_operator_changes_use_same_commit_and_keep_receipt(monkeypatch, l
     assert calls[0]["version"] == linked_row["updated_at"]
 
 
-@pytest.mark.parametrize("failure", [PublicLiveConflictError("stale hub"), ValueError("players are on court")])
+@pytest.mark.parametrize("failure", [PublicLiveConflictError("stale hub"), hub.HubCommitRejectedError("players are on court")])
 def test_hub_conflicts_remain_rejections_without_unsafe_fallback_reads(monkeypatch, linked_row, failure):
     def reject(*args, **kwargs):
         raise failure
@@ -118,3 +118,43 @@ def test_staff_can_manage_only_hub_attached_public_round_robins(linked_row):
     linked_row["state"]["round_robin_hub_id"] = "hub"
     linked_row["state"]["page_state"]["event"]["generatorKind"] = "ladder"
     assert not admin._is_generator_row(linked_row)
+
+
+def test_real_hub_preflight_valueerror_has_verified_rejection_type(linked_row):
+    before = deepcopy(linked_row)
+    del before['state']['round_robin_hub_id']
+    with pytest.raises(hub.HubCommitRejectedError, match='not connected'):
+        hub.persist_linked_generator_patch(NoDirectWrites(), before=before,
+            patch={'state': before['state']}, expected_version=before['updated_at'])
+
+
+def test_hub_decoder_valueerror_uses_receipt_proof(monkeypatch, linked_row):
+    calls = []
+    def lost_response(*args, **kwargs):
+        raise ValueError('simulated response decoding failure')
+    def recovered(*args, **kwargs):
+        calls.append(True)
+        return {**deepcopy(linked_row), 'receipt_confirmed': True}
+    monkeypatch.setattr(hub, 'persist_linked_generator_patch', lost_response)
+    monkeypatch.setattr(public, '_recovered_mutation_row', recovered)
+    result = public._update_cas(NoDirectWrites(), row=linked_row,
+        patch={'state': linked_row['state']}, operation={'operation_key': 'retry', 'request_fingerprint': 'fingerprint'})
+    assert calls == [True]
+    assert result['receipt_confirmed'] is True
+
+
+def test_committed_hub_replay_read_decode_failure_stays_uncertain(monkeypatch, linked_row):
+    import json
+    def unavailable_replay(*args, **kwargs):
+        raise json.JSONDecodeError('simulated committed replay decoding failure', '', 0)
+    monkeypatch.setattr(hub, '_replayed', lambda *args, **kwargs: True)
+    monkeypatch.setattr(hub, '_session_rows', unavailable_replay)
+    with pytest.raises(json.JSONDecodeError):
+        hub.persist_linked_generator_patch(NoDirectWrites(), before=linked_row,
+            patch={'state': linked_row['state']}, expected_version=linked_row['updated_at'])
+    # The public caller must consult its immutable proof instead of labeling the
+    # already-committed replay a terminal validation rejection.
+    monkeypatch.setattr(public, '_recovered_mutation_row', lambda *args, **kwargs: deepcopy(linked_row))
+    recovered = public._update_cas(NoDirectWrites(), row=linked_row,
+        patch={'state': linked_row['state']}, operation={'operation_key': 'retry', 'request_fingerprint': 'fingerprint'})
+    assert recovered == linked_row

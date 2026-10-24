@@ -54,6 +54,17 @@ class CreationQuery(FixtureQuery):
 
 
 database.table = lambda name: CreationQuery(database.db, name)
+_original_generator_rpc = database.rpc
+
+
+def receipt_rpc(name, params):
+    if name in {"commit_admin_play_generator_session", "commit_public_play_generator_session"}:
+        from generator_receipt_fake import commit_generator_rpc
+        return SimpleNamespace(execute=lambda: commit_generator_rpc(database.db, name, params))
+    return _original_generator_rpc(name, params)
+
+
+database.rpc = receipt_rpc
 app = FastAPI()
 web_port = int(os.environ.get("GENERATOR_BROWSER_WEB_PORT", "3038"))
 app.add_middleware(
