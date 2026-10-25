@@ -253,6 +253,57 @@ def test_scores_publish_before_operator_previews_and_applies_movement(monkeypatc
     assert len(tables["matches"]) == 1
 
 
+def test_corrected_official_score_invalidates_old_movement_without_republishing(monkeypatch) -> None:
+    tables = _tables()
+    supabase = FakeSupabase(tables)
+    _install_submit_env(monkeypatch, supabase)
+    calls = []
+    monkeypatch.setattr(
+        "jupr_app.services.admin_league_live_submit_service.submit_admin_match_uploader_batch",
+        _publisher(tables, calls=calls),
+    )
+    client = TestClient(app)
+    auth = {"Authorization": "Bearer local"}
+    session = _create(client).json()["session"]
+    path = f"/admin/clubs/club/league-manager/live-sessions/{session['id']}"
+    request = _request(session, "b" * 64)
+    request.pop("expected_operation_key")
+    published = client.post(f"{path}/rounds/1/submit", headers=auth, json=request)
+    assert published.status_code == 200, published.text
+    state = published.json()
+    old_matches = state["round"]["matches_json"]
+    plan_request = {"expected_updated_at": state["session"]["updated_at"], "matches": old_matches, "courts": COURTS}
+    old_plan = client.post(f"{path}/rounds/1/plan", headers=auth, json=plan_request)
+    assert old_plan.status_code == 200, old_plan.text
+
+    # Stand in for a completed Match Log correction. The publish record remains
+    # immutable, while the canonical official match contains the corrected score.
+    tables["matches"][0].update(score_t1=8, score_t2=11, row_version=2)
+    detail = client.get(path, headers=auth)
+    assert detail.status_code == 200, detail.text
+    corrected_round = detail.json()["rounds"][0]
+    assert corrected_round["matches_json"][0]["score_t1"] == 8
+    assert corrected_round["score_readback_status"] == "current"
+    assert corrected_round["score_correction_count"] == 1
+    assert tables["league_live_rounds"][0]["matches_json"][0]["score_t1"] == 11
+
+    # A stale browser cannot reinstate the old winner by sending old scores.
+    new_plan = client.post(f"{path}/rounds/1/plan", headers=auth, json=plan_request)
+    assert new_plan.status_code == 200, new_plan.text
+    assert new_plan.json()["operation_key"] != old_plan.json()["operation_key"]
+    rows = {row["player_id"]: row for row in new_plan.json()["movement"]["rows"]}
+    assert rows[1]["wins"] == 0
+    assert rows[3]["wins"] == 1
+    movement_request = {"expected_updated_at": state["session"]["updated_at"], "expected_operation_key": old_plan.json()["operation_key"], "courts": COURTS, "confirmation_text": "APPLY LEAGUE MOVEMENT"}
+    stale_apply = client.post(f"{path}/rounds/1/movement", headers=auth, json=movement_request)
+    assert stale_apply.status_code == 409
+    movement_request["expected_operation_key"] = new_plan.json()["operation_key"]
+    applied = client.post(f"{path}/rounds/1/movement", headers=auth, json=movement_request)
+    assert applied.status_code == 200, applied.text
+    assert calls == [1]
+    assert len(tables["matches"]) == 1
+
+
 def test_unusual_score_publish_requires_explicit_review_acknowledgement(monkeypatch) -> None:
     tables = _tables()
     supabase = FakeSupabase(tables)
