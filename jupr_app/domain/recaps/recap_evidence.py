@@ -1,11 +1,24 @@
 """Date-scoped, verifiable choices for the recap editor. No source writes."""
 from collections import Counter
+from decimal import Decimal, InvalidOperation
 from math import isfinite
 
 import pandas as pd
 
 from jupr_app.data.paged_reads import read_all_rows
 from jupr_app.domain.leaderboard_metrics import compute_overall_metrics, overall_highlights
+
+
+def identity_key(value):
+    """Unify integral database IDs after dataframe coercion; retain opaque IDs."""
+    text = str(value)
+    try:
+        number = Decimal(text)
+        if number.is_finite() and number == number.to_integral_value():
+            return str(int(number))
+    except InvalidOperation:
+        pass
+    return text
 
 
 METRIC_LABELS = {
@@ -82,6 +95,7 @@ def metric_candidates(frame, names, tz_name):
 def court_result(*, identity, title, day, round_number, court_number, games, names, complete, href=""):
     from jupr_app.domain.live_beta_engine import compute_standings
 
+    names = {identity_key(pid): name for pid, name in names.items()}
     valid = []
     for game in games:
         try:
@@ -91,12 +105,12 @@ def court_result(*, identity, title, day, round_number, court_number, games, nam
             a, b = map(int, values)
         except (TypeError, ValueError):
             continue
-        seats = [str(pid) for side in ("teamA", "teamB") for pid in game.get(side, [])]
+        seats = [identity_key(pid) for side in ("teamA", "teamB") for pid in game.get(side, [])]
         if a == b or min(a, b) < 0 or len(set(seats)) != len(seats) or any(pid in {"", "None", "nan"} for pid in seats):
             continue
         if len(seats) not in {2, 4} or len(game.get("teamA", [])) != len(game.get("teamB", [])):
             continue
-        valid.append({**game, "scoreA": a, "scoreB": b, "teamA": [str(pid) for pid in game["teamA"]], "teamB": [str(pid) for pid in game["teamB"]]})
+        valid.append({**game, "scoreA": a, "scoreB": b, "teamA": [identity_key(pid) for pid in game["teamA"]], "teamB": [identity_key(pid) for pid in game["teamB"]]})
     if not valid:
         return None
     pids = sorted({pid for game in valid for side in ("teamA", "teamB") for pid in game[side]})
@@ -171,9 +185,9 @@ def league_courts(ctx, matches, start, end):
         batch = session_ids[offset:offset + 100]
         sessions.update({str(row["id"]): row for row in read_all_rows(lambda: db.table("league_live_sessions")
                          .select("id,league_name,week_tag").eq("club_id", club).in_("id", batch))})
-    canonical = {str(row["id"]): row for row in matches if row.get("id") is not None and
+    canonical = {identity_key(row["id"]): row for row in matches if row.get("id") is not None and
                  (not row.get("deleted_at") or (isinstance(row.get("deleted_at"), float) and not isfinite(row["deleted_at"])))}
-    names = {str(pid): name for pid, name in (getattr(ctx, "id_to_name", {}) or {}).items()}
+    names = {identity_key(pid): name for pid, name in (getattr(ctx, "id_to_name", {}) or {}).items()}
     scope = getattr(ctx, "recap_leagues", []) or []
     output, warnings = [], []
     slots = ("t1_p1", "t1_p2", "t2_p1", "t2_p2")
@@ -182,13 +196,13 @@ def league_courts(ctx, matches, start, end):
         if not session or (scope and session["league_name"] not in scope):
             continue
         ids, saved = row.get("submitted_match_ids") or [], row.get("matches_json") or []
-        if not ids or len(ids) != len(saved) or len(set(str(v) for v in ids)) != len(ids):
+        if not ids or len(ids) != len(saved) or len(set(identity_key(v) for v in ids)) != len(ids):
             warnings.append(f"Court results for {session['league_name']} could not be verified. Refresh after checking recorded scores.")
             continue
         by_court = {}
         verified = True
         for mid, source in zip(ids, saved):
-            game = canonical.get(str(mid))
+            game = canonical.get(identity_key(mid))
             try:
                 same_seats = game is not None and all(int(game.get(slot)) == int(source.get(slot)) for slot in slots)
             except (ValueError, TypeError):
@@ -207,7 +221,7 @@ def league_courts(ctx, matches, start, end):
             warnings.append(f"Court results for {session['league_name']} changed or are incomplete. Check recorded scores before highlighting a winner.")
             continue
         for number, games in sorted(by_court.items()):
-            counts = Counter(str(pid) for game in games for side in ("teamA", "teamB") for pid in game[side])
+            counts = Counter(identity_key(pid) for game in games for side in ("teamA", "teamB") for pid in game[side])
             complete = (len(counts) == 4 and len(games) == 3 and set(counts.values()) == {3}) or (len(counts) == 5 and len(games) == 5 and set(counts.values()) == {4})
             item = court_result(identity=f"league:{row['session_id']}:{row['round_number']}:{number}", title=session["league_name"],
                                 day=str(row["match_date"]), round_number=row["round_number"], court_number=number, games=games, names=names,

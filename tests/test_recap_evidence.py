@@ -160,3 +160,44 @@ def test_social_ladder_courts_use_actual_saved_seats_and_disclose_partial_scores
     assert social_courts(source, verified)[0]['summary'].startswith('Leader from recorded games:')
     source['event_type'] = 'round_robin'
     assert social_courts(source, verified) == []
+
+
+def test_league_float_ids_keep_names_complete_courts_and_combined_identity():
+    ctx, games = league_fixture()
+    for index, game in enumerate(games):
+        game["id"] = float(game["id"])
+        for slot in ("t1_p1", "t1_p2", "t2_p1", "t2_p2"):
+            game[slot] = float(game[slot]) if index % 2 else game[slot]
+    rows, warnings = league_courts(ctx, games, '2026-10-12', '2026-10-18')
+    assert not warnings
+    assert rows[0]['summary'] == 'Winner: Alex'
+    assert rows[0]['court_players'] == [{'id': 'league:1', 'name': 'Alex'}]
+    assert rows[0]['details'][0] == 'Alex — 3–0 · point difference +18'
+    assert rows[0]['details'][-1] == '3 recorded games'
+
+
+def test_mixed_numeric_ids_cannot_hide_duplicate_seats():
+    assert result([{'teamA': [1, 1.0], 'teamB': [2, 3], 'scoreA': 11, 'scoreB': 5}]) is None
+
+
+def test_opaque_generator_ids_remain_distinct():
+    from jupr_app.domain.recaps.recap_evidence import identity_key
+    assert identity_key('player-101') == 'player-101'
+    assert identity_key('101.5') == '101.5'
+    assert identity_key('101.0') == '101'
+
+
+def test_match_loader_keeps_nullable_ids_as_integers_without_bigint_rounding(monkeypatch):
+    from jupr_app.data import load
+    large_id = 9007199254740993
+    raw = [{'id': 1, 't1_p1': 101, 't1_p2': large_id, 't2_p1': 601, 't2_p2': 2},
+           {'id': 2, 't1_p1': None, 't1_p2': None, 't2_p1': 601, 't2_p2': None}]
+    monkeypatch.setattr(load, '_read_rows', lambda *args, **kwargs: raw)
+    frame, degraded, _ = load._fetch_matches(None, 'club', None)
+    assert not degraded
+    assert all(str(frame[col].dtype) == 'Int64' for col in raw[0])
+    records = frame.to_dict('records')
+    assert records[0]['t1_p1'] == 101 and isinstance(records[0]['t1_p1'], int)
+    assert records[0]['t1_p2'] == large_id
+    assert records[1]['t1_p2'] is None
+    assert raw[0]['t1_p2'] == large_id

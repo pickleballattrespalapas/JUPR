@@ -115,7 +115,13 @@ def _fetch_matches(
             rows = _read_rows(supabase, "matches", club_id, limit=match_limit)
         else:
             raise
-    return pd.DataFrame(rows), schema_degraded, schema_degraded_reason
+    frame = pd.DataFrame(rows)
+    # Construct from raw DB values, before float coercion can lose bigint precision.
+    # Singles and incomplete legacy records legitimately have empty player slots.
+    for column in ("id", "t1_p1", "t1_p2", "t2_p1", "t2_p2"):
+        if column in frame.columns:
+            frame[column] = pd.array([row.get(column) for row in rows], dtype="Int64")
+    return frame, schema_degraded, schema_degraded_reason
 
 
 def _drop_merged_players(df: pd.DataFrame) -> pd.DataFrame:
