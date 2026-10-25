@@ -809,7 +809,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
   }, [knownPlayers, sessionRoster, guestPlayers]);
   const playerNamesById = new Map(gamePlayerOptions.map(player => [player.id, player.name]));
   const allPreviewMatches = (preview?.courts || []).flatMap((court) => court.matches || []);
-  const activeScoreEntryCourt = preview?.courts.some(court => String(court.court) === scoreEntryCourt) ? scoreEntryCourt : "";
+  const activeScoreEntryCourt = (preview?.courts || []).some(court => String(court.court) === scoreEntryCourt) ? scoreEntryCourt : "";
   const assignedCourtByPlayer = new Map<number, number>();
   for (const match of allPreviewMatches) for (const id of scheduledGamePlayers(match)) assignedCourtByPlayer.set(id, match.court);
   const seriesStates = allPreviewMatches.map((match) => seriesScoreState(match.row_id, scores, matchStructure, gameEdits));
