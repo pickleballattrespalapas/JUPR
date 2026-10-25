@@ -25,6 +25,7 @@ from jupr_app.services.admin_guarded_write_service import (
     update_guarded_operation,
 )
 from jupr_app.services.admin_league_manager_service import is_admin_league_manager_enabled
+from jupr_app.services.league_live_score_readback import read_league_round_scores
 
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
 CONFIRM_CREATE_SESSION = "CREATE LIVE SESSION"
@@ -778,6 +779,7 @@ def get_admin_league_live_session(supabase: Any, *, club_id: str, session_id: st
         raise ValueError("league live session not found")
     session = _session_payload(row)
     rounds = _fetch_rounds(supabase, club_id=str(club_id), session_id=str(session_id))
+    rounds = [read_league_round_scores(supabase, club_id=str(club_id), round_row=round_row) for round_row in rounds]
     courts = _fetch_courts(supabase, club_id=str(club_id), session_id=str(session_id))
     return {"ok": True, "mode": "league_live_session_detail", "session": session, "rounds": rounds, "courts": courts}
 
@@ -870,13 +872,19 @@ def build_admin_league_live_round_plan(
             else verified.get("rating_jupr", 1200.0),
         }
 
+    existing_round = _first_row(
+        supabase.table("league_live_rounds").select("*")
+        .eq("club_id", str(club_id)).eq("session_id", str(session_id))
+        .eq("round_number", safe_round).limit(1).execute()
+    )
+    if existing_round and existing_round.get("status") == "submitted":
+        readback = read_league_round_scores(supabase, club_id=str(club_id), round_row=existing_round)
+        if readback.get("score_readback_status") in {"blocked", "unavailable"}:
+            raise LeagueLiveConflictError(str(readback.get("score_readback_message")))
+        # Published rounds use official results, never a stale client copy.
+        matches = _as_list(readback.get("matches_json"))
     effective_unplayed = list(unplayed_games or [])
     if not effective_unplayed:
-        existing_round = _first_row(
-            supabase.table("league_live_rounds").select("preview_json")
-            .eq("club_id", str(club_id)).eq("session_id", str(session_id))
-            .eq("round_number", safe_round).limit(1).execute()
-        )
         effective_unplayed = _as_list(_as_dict((existing_round or {}).get("preview_json")).get("unplayed_games"))
     explicit_games = unplayed_games is not None or bool(effective_unplayed) or any("scheduled_player_ids" in row for row in matches)
     effective_courts = list(

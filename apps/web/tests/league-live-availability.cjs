@@ -32,7 +32,12 @@ const gameEditsModule = load("app/admin/league-manager/live/leagueLiveGameEdits.
 const playerSelectMock = { __esModule: true, default: props => React.createElement("select", props) };
 const gameEditorModule = load("app/admin/league-manager/live/LeagueLiveGameEditor.tsx", { "./leagueLiveGameEdits": gameEditsModule, "@/components/SearchablePlayerSelect": playerSelectMock });
 const attendanceEditorModule = load("app/admin/league-manager/live/LeagueLiveAttendanceEditor.tsx", { "@/components/SearchablePlayerSelect": playerSelectMock });
+const scoreHelpers = load("app/admin/league-manager/live/leagueRoundScores.ts");
+const scoreReviewModule = load("app/admin/league-manager/live/LeagueRoundScoreReview.tsx", { "./leagueRoundScores": scoreHelpers });
+const savedScoresModule = load("app/admin/league-manager/live/LeagueSavedRoundScores.tsx", { "./leagueRoundScores": scoreHelpers, "./LeagueRoundScoreReview": scoreReviewModule });
 const Panel = load("app/admin/league-manager/live/LeagueLiveRoundPanel.tsx", {
+  "./LeagueRoundScoreReview": scoreReviewModule,
+  "./LeagueSavedRoundScores": savedScoresModule,
   "./LeagueLiveGameEditor": gameEditorModule,
   "./LeagueLiveAttendanceEditor": attendanceEditorModule,
   "./leagueLiveGameEdits": gameEditsModule,
