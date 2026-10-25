@@ -11,9 +11,18 @@ export type RoundScoreGame = {
   note?: string | null;
   unusualReason?: string | null;
   correctionUrl?: string;
+  officialMatchId?: number;
   corrected?: boolean;
 };
 export type RoundScoreStanding = RoundScorePlayer & { wins: number; losses: number; differential: number };
+
+export function courtScoreCorrectionUrl(games: RoundScoreGame[]): string | undefined {
+  const recorded = games.filter(game => !game.notPlayed || game.officialMatchId != null);
+  if (recorded.length < 2 || recorded.some(game => !Number.isSafeInteger(game.officialMatchId) || Number(game.officialMatchId) <= 0)) return undefined;
+  const ids = [...new Set(recorded.map(game => game.officialMatchId))].join(",");
+  const query = new URLSearchParams({ match_ids: ids, selected_ids: ids });
+  return `/admin/match-log/bulk?${query.toString()}`;
+}
 
 export function roundCourtStandings(games: RoundScoreGame[]): RoundScoreStanding[] {
   const players = new Map<number, RoundScoreStanding>();
@@ -61,6 +70,7 @@ export function savedRoundScoreGames(
       notPlayed: Boolean(row.score_excluded),
       note: row.score_excluded ? "Excluded from official results" : String(row.substitution_reason || ""),
       corrected: Boolean(row.score_corrected),
+      officialMatchId: canCorrect && row.official_match_id != null ? Number(row.official_match_id) : undefined,
       correctionUrl: canCorrect ? `/admin/match-log/edit?${query.toString()}` : undefined,
     };
   });

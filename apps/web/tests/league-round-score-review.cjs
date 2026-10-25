@@ -29,7 +29,12 @@ const savedRound = { round_number: 1, status: "submitted", score_readback_status
 const mapped = helpers.savedRoundScoreGames(savedRound, new Map(players.map(player => [player.id, player.name])));
 assert.equal(mapped[0].correctionUrl, "/admin/match-log/edit?match_id=103");
 assert.equal(mapped[0].corrected, true);
+assert.equal(mapped[0].officialMatchId, 103);
 assert.equal(helpers.savedRoundScoreGames({ ...savedRound, score_readback_status: "unavailable" }, new Map())[0].correctionUrl, undefined);
+assert.equal(helpers.savedRoundScoreGames({ ...savedRound, score_readback_status: "unavailable" }, new Map())[0].officialMatchId, undefined);
+const courtGames = games.map((row, index) => ({ ...row, officialMatchId: 101 + index }));
+assert.equal(helpers.courtScoreCorrectionUrl([...courtGames, { ...games[0], notPlayed: true }]), "/admin/match-log/bulk?match_ids=101%2C102%2C103&selected_ids=101%2C102%2C103");
+assert.equal(helpers.courtScoreCorrectionUrl([...courtGames, games[0]]), undefined, "Do not silently omit a game whose official match cannot be verified");
 const text = node => node.children.map(child => typeof child === "string" ? child : text(child)).join("");
 
 (async () => {
@@ -42,6 +47,13 @@ const text = node => node.children.map(child => typeof child === "string" ? chil
   const edit = tree.root.findAllByType("button").find(node => text(node) === "Edit this game");
   await act(async () => edit.props.onClick());
   assert.equal(edited.key, "G1");
+  await act(async () => tree.unmount());
+
+  await act(async () => { tree = create(React.createElement(review.LeagueRoundScoreReview, { games: [...courtGames, game("other", [5, 2, 3, 4], [11, 3], { court: 8, officialMatchId: 104 })] })); });
+  await act(async () => tree.root.findByProps({ type: "search" }).props.onChange({ target: { value: "Shannon" } }));
+  const courtLink = tree.root.findByType("a");
+  assert.equal(courtLink.props.href, "/admin/match-log/bulk?match_ids=101%2C102%2C103&selected_ids=101%2C102%2C103", "Court correction includes all three games and excludes the other court");
+  assert.equal(courtLink.props.target, "_blank");
   await act(async () => tree.unmount());
 
   let refreshed = 0;

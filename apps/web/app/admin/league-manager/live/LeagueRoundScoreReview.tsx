@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { roundCourtStandings, type RoundScoreGame } from "./leagueRoundScores";
+import { courtScoreCorrectionUrl, roundCourtStandings, type RoundScoreGame } from "./leagueRoundScores";
 
 export function LeagueRoundScoreReview({ games, disabled = false, onEdit }: {
   games: RoundScoreGame[];
@@ -26,6 +26,7 @@ export function LeagueRoundScoreReview({ games, disabled = false, onEdit }: {
         const courtGames = games.filter(game => game.court === court);
         const standings = roundCourtStandings(courtGames);
         const filteredGames = courtGames.filter(includesPlayer);
+        const courtCorrectionUrl = onEdit ? undefined : courtScoreCorrectionUrl(courtGames);
         return <section key={court} style={{ border: "1px solid #cbd5e1", borderRadius: 12, padding: ".75rem", background: "white" }}>
           <h4 style={{ margin: "0 0 .5rem" }}>Court {court}</h4>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -35,6 +36,7 @@ export function LeagueRoundScoreReview({ games, disabled = false, onEdit }: {
               <td>{row.name}</td><td align="center"><strong>{row.wins}–{row.losses}</strong></td><td align="right">{row.differential > 0 ? "+" : ""}{row.differential}</td>
             </tr>)}</tbody>
           </table>
+          {courtCorrectionUrl ? <p style={{ margin: ".6rem 0" }}><a href={courtCorrectionUrl} target="_blank" rel="noopener noreferrer">Correct this court’s scores ↗</a></p> : null}
           <details open={Boolean(query || courtFilter || courtGames.some(game => game.unusualReason))}>
             <summary style={{ cursor: "pointer", padding: ".6rem 0", fontWeight: 700 }}>View {filteredGames.length} game{filteredGames.length === 1 ? "" : "s"}{query ? " for this player" : ""}</summary>
             {filteredGames.map(game => <div key={game.key} style={{ borderTop: "1px solid #e2e8f0", padding: ".6rem 0" }}>
