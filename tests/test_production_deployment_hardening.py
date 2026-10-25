@@ -106,8 +106,8 @@ def _health_payload(*, feature_profile: str = "release") -> dict:
             "worker_run_log_required": True,
             "email_mode": verifier.expected_production_email_mode(profile=feature_profile),
             "live_player_update_email_enabled": features["JUPR_ENABLE_NEXT_PLAYER_UPDATES_LIVE_EMAIL"],
-            "smtp_configured": feature_profile in {"pre_awards", "pre_operations", "pre_team_leagues", "pre_player_editor", "release"},
-            "player_update_worker_running": feature_profile in {"pre_awards", "pre_operations", "pre_team_leagues", "pre_player_editor", "release"},
+            "smtp_configured": feature_profile in {"pre_awards", "pre_operations", "pre_team_leagues", "pre_player_editor", "pre_match_correction", "release"},
+            "player_update_worker_running": feature_profile in {"pre_awards", "pre_operations", "pre_team_leagues", "pre_player_editor", "pre_match_correction", "release"},
         },
     }
 
@@ -270,6 +270,10 @@ def test_reviewed_projection_preserves_live_and_adds_email_and_awards() -> None:
     }
     assert verifier.PRODUCTION_ENABLED_FEATURE_FLAGS == {
         *email_flags,
+        "JUPR_ENABLE_NEXT_ADMIN_WRITE_PILOT",
+        "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG",
+        "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY",
+        "JUPR_ENABLE_NEXT_ADMIN_REPLAY",
         "JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS",
         "JUPR_ENABLE_NEXT_ADMIN_JUPR_LIVE",
         "JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP",
@@ -302,6 +306,10 @@ def test_reviewed_projection_preserves_live_and_adds_email_and_awards() -> None:
         - verifier.PRODUCTION_LIVE_BASELINE_ENABLED_FEATURE_FLAGS
     ) == {
         *email_flags,
+        "JUPR_ENABLE_NEXT_ADMIN_WRITE_PILOT",
+        "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG",
+        "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY",
+        "JUPR_ENABLE_NEXT_ADMIN_REPLAY",
         "JUPR_ENABLE_NEXT_ADMIN_BADGE_DIAGNOSTICS",
         "JUPR_ENABLE_NEXT_ADMIN_JUPR_LIVE",
         "JUPR_ENABLE_NEXT_ADMIN_WEEKLY_RECAP",
@@ -1856,7 +1864,7 @@ def test_email_release_cannot_attest_missing_sender_or_worker():
 def test_smtp_authentication_probe_runs_before_any_production_mutation():
     workflow = (ROOT / ".github/workflows/fly_api_deploy.yml").read_text()
     assert workflow.index("production_email_probe.py") < workflow.index("flyctl secrets set")
-    assert "baseline|pre_email|pre_awards|pre_operations|pre_team_leagues|pre_player_editor|release" in workflow
+    assert "baseline|pre_email|pre_awards|pre_operations|pre_team_leagues|pre_player_editor|pre_match_correction|release" in workflow
     assert "JUPR_EMAIL_MODE=dry_run" not in workflow
     assert "expected_production_email_mode(profile=" in workflow
 
@@ -1873,3 +1881,14 @@ def test_awards_release_preserves_live_email_and_exact_previous_profile():
     ]
     previous["write_prerequisites"]["smtp_configured"] = False
     assert verifier.production_feature_profile_from_health(previous) is None
+
+
+def test_match_correction_release_preserves_previous_profile_and_no_destructive_writes():
+    baseline = verifier.expected_production_feature_flags(profile="pre_match_correction")
+    release = verifier.expected_production_feature_flags()
+    assert {k for k in release if release[k] != baseline[k]} == {
+        "JUPR_ENABLE_NEXT_ADMIN_WRITE_PILOT", "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG",
+        "JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_APPLY", "JUPR_ENABLE_NEXT_ADMIN_REPLAY",
+    }
+    assert not release["JUPR_ENABLE_NEXT_ADMIN_MATCH_LOG_DESTRUCTIVE"]
+    assert verifier.production_feature_profile_from_health(_health_payload(feature_profile="pre_match_correction")) == "pre_match_correction"
