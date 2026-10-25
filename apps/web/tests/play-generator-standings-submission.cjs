@@ -164,6 +164,7 @@ async function adminFinishesAndSubmitsUnratedResults() {
   const finish = calls.find(call => call.url.endsWith("/complete"));
   assert.equal(finish.options.headers.Authorization, "Bearer admin-token");
   assert.equal(JSON.parse(finish.options.body).expected_version, "4");
+  assert.equal(JSON.parse(finish.options.body).confirmation_text, "COMPLETE SESSION", "Staff standings must satisfy the completion endpoint confirmation contract");
   assert.equal(calls.some(call => call.url.endsWith("/advance")), false);
   assert.ok(button(tree, "Submit for approval"));
   assert.ok(tree.root.findByProps({ href: "/admin/play-generators/submissions" }));

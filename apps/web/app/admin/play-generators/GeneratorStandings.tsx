@@ -130,7 +130,11 @@ export default function AdminGeneratorStandings({ apiBase, clubId, sessionKey, e
         {
           method: "POST",
           headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ expected_version: session.version, idempotency_key: operationKey(`standings-${action}`) })
+          body: JSON.stringify({
+            expected_version: session.version,
+            idempotency_key: operationKey(`standings-${action}`),
+            ...(action === "complete" ? { confirmation_text: "COMPLETE SESSION" } : {})
+          })
         }
       );
       const payload = await response.json().catch(() => null);
