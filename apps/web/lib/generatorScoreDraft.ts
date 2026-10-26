@@ -1,3 +1,5 @@
+import { readGeneratorBrowserValue, writeGeneratorBrowserValue, removeGeneratorBrowserValue } from "./generatorBrowserStorage";
+
 export type ScoreMatch = {
   id: string;
   sideA?: string[];
@@ -18,23 +20,29 @@ export class GeneratorScoreValidationError extends Error {
   }
 }
 
-export function storedScoreSave(context: string): PendingScoreSave | null {
+export function storedScoreSave(context: string, persistent = true): PendingScoreSave | null {
   try {
-    const value = JSON.parse(sessionStorage.getItem(`generator-score-save:${context}`) || "null");
+    const key = `generator-score-save:${context}`;
+    const value = JSON.parse((persistent ? readGeneratorBrowserValue(key) : sessionStorage.getItem(key)) || "null");
     if (value?.context !== context || typeof value.path !== "string" || typeof value.body !== "string") return null;
     const body = JSON.parse(value.body);
     return typeof body.idempotency_key === "string" && Array.isArray(body.scores) ? value : null;
   } catch { return null; }
 }
 
-export function rememberScoreSave(context: string, request: PendingScoreSave | null, expected?: PendingScoreSave): void {
+export function rememberScoreSave(context: string, request: PendingScoreSave | null, expected?: PendingScoreSave, persistent = true): void {
   try {
-    if (request) sessionStorage.setItem(`generator-score-save:${context}`, JSON.stringify(request));
+    const key = `generator-score-save:${context}`;
+    if (request) {
+      if (persistent) writeGeneratorBrowserValue(key, JSON.stringify(request));
+      else sessionStorage.setItem(key, JSON.stringify(request));
+    }
     else {
-      const current = storedScoreSave(context);
+      const current = storedScoreSave(context, persistent);
       // An older component must never erase a newer component's recovery record.
       if (!expected || (current?.path === expected.path && current?.body === expected.body)) {
-        sessionStorage.removeItem(`generator-score-save:${context}`);
+        if (persistent) removeGeneratorBrowserValue(key);
+        else sessionStorage.removeItem(key);
       }
     }
   } catch { /* Browsers may disable storage; the mounted runner still retains its request. */ }

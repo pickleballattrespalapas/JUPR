@@ -9,14 +9,14 @@ def read(path: str) -> str:
     return (WEB / path).read_text(encoding="utf-8")
 
 
-def test_shared_pdf_helper_opens_a_new_tab_and_uses_session_storage() -> None:
+def test_shared_pdf_helper_opens_a_new_tab_and_uses_durable_storage() -> None:
     helper = read("lib/playGeneratorDraft.ts")
     assert 'window.open("", "_blank")' in helper
     assert "preparedWindow.location.replace(href)" in helper
     assert 'anchor.target = "_blank"' in helper
-    assert "window.sessionStorage.getItem" in helper
-    assert "window.sessionStorage.setItem" in helper
-    assert "window.sessionStorage.removeItem" in helper
+    assert "readGeneratorBrowserValue(storageKey)" in helper
+    assert "writeGeneratorBrowserValue(storageKey, JSON.stringify(payload))" in helper
+    assert "removeGeneratorBrowserValue(storageKey)" in helper
 
 
 def test_public_and_admin_generators_preserve_unsaved_previews() -> None:

@@ -1,5 +1,7 @@
 "use client";
 
+import { readGeneratorEditToken, rememberGeneratorEditToken, forgetGeneratorEditToken } from "@/lib/generatorBrowserStorage";
+
 import PublicControls from "@/components/PublicControls";
 
 import GeneratorSessionDetails from "@/components/GeneratorSessionDetails";
@@ -114,7 +116,7 @@ export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey, 
       const payload = await response.json().catch(() => null);
       if (!response.ok) {
         if (shared && response.status === 403) {
-          sessionStorage.removeItem(`shared-generator-edit:${clubId}:${sessionKey}`);
+          forgetGeneratorEditToken(clubId, sessionKey, true);
           setEditToken("");
         }
         throw new UserFacingError(requestErrorMessage(response.status, payload?.detail));
@@ -128,11 +130,11 @@ export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey, 
   }
 
   useEffect(() => {
-    const storageKey = `${shared ? "shared-generator-edit" : "public-generator-edit"}:${clubId}:${sessionKey}`;
     const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
-    const discovered = hash.get("edit") || sessionStorage.getItem(storageKey) || "";
-    if (discovered) { sessionStorage.setItem(storageKey, discovered); setEditToken(discovered); }
-    if (hash.has("edit")) window.history.replaceState({}, "", `${window.location.pathname}${window.location.search}`);
+    const discovered = hash.get("edit") || readGeneratorEditToken(clubId, sessionKey, shared);
+    const remembered = Boolean(discovered) && rememberGeneratorEditToken(clubId, sessionKey, discovered, shared);
+    setEditToken(discovered);
+    if (hash.has("edit") && remembered) window.history.replaceState({}, "", `${window.location.pathname}${window.location.search}`);
     void loadSession();
   }, [apiBase, clubId, sessionKey, shared]);
 
@@ -159,7 +161,7 @@ export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey, 
       const payload = await response.json().catch(() => null);
       if (!response.ok) {
         if (shared && response.status === 403) {
-          sessionStorage.removeItem(`shared-generator-edit:${clubId}:${sessionKey}`);
+          forgetGeneratorEditToken(clubId, sessionKey, true);
           setEditToken("");
         }
         throw new UserFacingError(requestErrorMessage(response.status, payload?.detail));
@@ -196,7 +198,7 @@ export default function PublicGeneratorStandings({ apiBase, clubId, sessionKey, 
       const payload = await response.json().catch(() => null);
       if (!response.ok) {
         if (shared && response.status === 403) {
-          sessionStorage.removeItem(`shared-generator-edit:${clubId}:${sessionKey}`);
+          forgetGeneratorEditToken(clubId, sessionKey, true);
           setEditToken("");
         }
         throw new UserFacingError(requestErrorMessage(response.status, payload?.detail));
