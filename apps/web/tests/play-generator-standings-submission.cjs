@@ -12,7 +12,7 @@ function load(relative, mocks = {}) {
     compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true }
   }).outputText;
   const module = { exports: {} };
-  new Function("require", "module", "exports", code)(name => name === "@/components/GeneratorSharing" ? (() => null) : Object.hasOwn(mocks, name) ? mocks[name] : (require('./helpers/public-controls-module.cjs')(name) || require(name)), module, module.exports);
+  new Function("require", "module", "exports", code)(name => name === "@/lib/generatorBrowserStorage" ? load("lib/generatorBrowserStorage.ts") : name === "@/components/GeneratorSharing" ? (() => null) : Object.hasOwn(mocks, name) ? mocks[name] : (require('./helpers/public-controls-module.cjs')(name) || require(name)), module, module.exports);
   return module.exports;
 }
 
@@ -51,13 +51,15 @@ const baseline = {
 
 function publicEnvironment({ hashToken = "", storedToken = "" } = {}) {
   const values = new Map(storedToken ? [[storageKey, storedToken]] : []);
-  global.sessionStorage = { getItem: key => values.get(key) || null, setItem: (key, value) => values.set(key, value) };
+  global.sessionStorage = { getItem: key => values.get(key) || null, setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key) };
+  const durable = new Map();
+  global.localStorage = { getItem: key => durable.get(key) || null, setItem: (key, value) => durable.set(key, value), removeItem: key => durable.delete(key) };
   const replaced = [];
   global.window = {
     location: { hash: hashToken ? `#edit=${hashToken}` : "", pathname: "/clubs/club/round-robin-generator/sessions/session-1/standings", search: "" },
     history: { replaceState(state, title, url) { replaced.push(url); window.location.hash = ""; } }
   };
-  return { values, replaced };
+  return { values: durable, replaced };
 }
 
 async function fillAndSubmit(tree) {

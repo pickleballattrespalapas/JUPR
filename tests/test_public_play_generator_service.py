@@ -450,3 +450,28 @@ def test_pending_generator_change_retries_that_same_action():
     message = str(caught.value)
     assert "Retry that same action" in message
     assert "contact club staff" not in message
+
+
+@pytest.mark.parametrize("retained", [True, False])
+def test_reopening_respects_explicitly_retained_session(retained):
+    supabase = FakeSupabase()
+    created = create_public_play_generator_session(
+        supabase, club_id="club", generator_kind="round_robin", play_format="doubles",
+        title="Retained session", participant_names=["A", "B", "C", "D"],
+        participant_player_ids={}, total_rounds=3, court_count=1, preview_fingerprint=None,
+        idempotency_key=key("retained-create"), requester_hash=requester(), token_secret=token_secret(),
+    )
+    row = supabase.db["live_sessions"][0]
+    if retained:
+        row["expires_at"] = None
+    row["status"] = "completed"
+    row["state"]["page_state"]["event"]["status"] = "completed"
+    row["state"]["page_state"]["event"]["rounds"][0]["status"] = "skipped"
+    reopened = public_play_generator_service.reopen_public_play_generator_round(
+        supabase, club_id="club", session_key=row["session_key"], round_number=1,
+        edit_token=created["edit_token"], expected_version=row["version"],
+        idempotency_key=key("retained-reopen"), requester_hash=requester(),
+    )["session"]
+    assert reopened["status"] == "active"
+    assert (reopened["expires_at"] is None) is retained
+    assert len(reopened["event"]["participants"]) == 4

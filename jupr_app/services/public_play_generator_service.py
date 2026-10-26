@@ -817,6 +817,10 @@ def _run_mutation(
     patch = {"state": _put_event(state, next_event), **dict(extra_patch or {})}
     if str(row.get("status")) == "completed" and str(next_event.get("status")) == "active":
         patch["expires_at"] = _ttl_iso()
+    # A deliberately retained session must stay retained when reopened or when
+    # a playoff starts; those actions otherwise restore the temporary TTL.
+    if "expires_at" in row and row["expires_at"] is None and "expires_at" in patch:
+        patch["expires_at"] = None
     try:
         updated = _update_cas(supabase, row=row, patch=patch, operation=operation)
     except (PublicLiveConflictError, ValueError) as exc:

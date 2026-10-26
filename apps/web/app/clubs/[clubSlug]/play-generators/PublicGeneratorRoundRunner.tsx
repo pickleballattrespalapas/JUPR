@@ -1,5 +1,7 @@
 "use client";
 
+import { readGeneratorEditToken, rememberGeneratorEditToken, forgetGeneratorEditToken } from "@/lib/generatorBrowserStorage";
+
 import GeneratorMoneyballExpectations, { type MoneyballExpectation, type MoneyballExpectationFormat } from "@/components/GeneratorMoneyballExpectations";
 
 
@@ -422,7 +424,7 @@ export default function GeneratorRoundRunner({
     mountedRef.current = true;
     contextRef.current = context;
     appliedSessionRef.current = null;
-    const pending = storedScoreSave(context);
+    const pending = storedScoreSave(context, !shared);
     pendingScoreSaveRef.current = pending;
     setPendingScoreSave(pending);
     setSession(null);
@@ -453,7 +455,7 @@ export default function GeneratorRoundRunner({
   function retainScoreSave(request: PendingScoreSave | null, expected?: PendingScoreSave): void {
     pendingScoreSaveRef.current = request;
     setPendingScoreSave(request);
-    rememberScoreSave(context, request, expected);
+    rememberScoreSave(context, request, expected, !shared);
   }
 
 
@@ -490,7 +492,7 @@ export default function GeneratorRoundRunner({
       if (options?.signal?.aborted) throw new DOMException("Request aborted", "AbortError");
       if (!response.ok) {
         if (shared && response.status === 403) {
-          sessionStorage.removeItem(`shared-generator-edit:${clubId}:${sessionKey}`);
+          forgetGeneratorEditToken(clubId, sessionKey, true);
           setEditToken("");
         }
         const detail = payload?.detail;
@@ -580,14 +582,11 @@ export default function GeneratorRoundRunner({
   }
 
   useEffect(() => {
-    const storageKey = `${shared ? "shared-generator-edit" : "public-generator-edit"}:${clubId}:${sessionKey}`;
     const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
-    const discovered = hash.get("edit") || sessionStorage.getItem(storageKey) || "";
-    if (discovered) {
-      sessionStorage.setItem(storageKey, discovered);
-    }
+    const discovered = hash.get("edit") || readGeneratorEditToken(clubId, sessionKey, shared);
+    const remembered = Boolean(discovered) && rememberGeneratorEditToken(clubId, sessionKey, discovered, shared);
     setEditToken(discovered);
-    if (hash.has("edit")) {
+    if (hash.has("edit") && remembered) {
       window.history.replaceState({}, "", `${window.location.pathname}${window.location.search}`);
     }
     void loadSession();
