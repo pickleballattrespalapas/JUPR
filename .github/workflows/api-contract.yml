@@ -196,3 +196,6 @@ jobs:
       - name: Verify Tres team league release
         run: |
           python -m pytest -q tests/test_production_team_league_release.py tests/test_team_league_service.py tests/test_team_league_composition.py tests/test_team_league_normalized_rosters.py tests/test_team_league_static_contract.py tests/test_team_league_composition_static.py tests/test_team_league_partner_invitation_email.py tests/test_team_league_hardening_migration_postgres_compatibility.py
+
+      - name: Verify weekly league highlights
+        run: python -m pytest -q tests/test_api_weekly_highlights.py tests/test_league_weekly_highlights.py

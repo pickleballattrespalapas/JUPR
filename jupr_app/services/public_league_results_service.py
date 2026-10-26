@@ -781,6 +781,7 @@ def _build_resolved_league_results(
     include_inactive_players: bool = False,
     include_inactive_ratings: bool = False,
     league_metadata: Mapping[str, Any] | None = None,
+    include_highlight_candidates: bool = False,
 ) -> dict[str, Any]:
     """Build sanitized results after the caller has resolved league visibility."""
 
@@ -940,6 +941,13 @@ def _build_resolved_league_results(
         row for row in weekly if int(row.get("player_id") or 0) == int(selected_player_id or 0)
     ]
 
+    from jupr_app.services.league_weekly_highlights_service import build_weekly_highlights
+
+    highlight_selection = build_weekly_highlights(
+        supabase, club_id=cid, league_name=selected, week_num=selected_week,
+        matches=matches, players=scoped_players, include_candidates=include_highlight_candidates,
+    )
+
     return {
         **overview,
         "selected_league": selected,
@@ -959,6 +967,7 @@ def _build_resolved_league_results(
             players_by_id=players_by_id,
         ),
         "weekly_highlights": weekly_highlights,
+        "weekly_highlight_selection": highlight_selection,
         "season_highlights": season_highlights,
         # Compatibility alias for the former latest-week highlight object.
         "highlights": weekly_highlights,
