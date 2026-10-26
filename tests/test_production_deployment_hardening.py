@@ -391,7 +391,9 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         ROOT / "supabase/migrations",
     )
 
-    assert len(versions) == 175
+    assert len(versions) == 176
+    assert "league_weekly_highlights" in contract["required_ledger_names"]
+    assert "20261026043617" in versions
     assert "20261021144253" in versions
     assert "round_robin_hub_public_checkin" in contract["required_ledger_names"]
     assert {"20261020033713", "20261020043027", "20261020161332"}.issubset(versions)
@@ -456,16 +458,17 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         "20261109004103",
         "20261109004104",
     )
-    assert len(names) == 175
+    assert len(names) == 176
     assert all("XX" not in version for version in versions)
-    assert len(contract["required_ledger_names"]) == 162
+    assert len(contract["required_ledger_names"]) == 163
     assert "partner_email_invitations" in contract["required_ledger_names"]
-    assert len(contract["deployment_order"]) == 162
-    assert contract["deployment_order"][-9:] == (
+    assert len(contract["deployment_order"]) == 163
+    assert contract["deployment_order"][-10:] == (
         "event_season_deleted_draft_cleanup", "interclub_player_identity_availability", "weekly_recap_builder",
         "badge_conflicts_are_not_serialization_failures", "unrated_match_activity",
         "round_robin_hub_atomic_operations", "play_generator_operation_surface", "round_robin_hub_participant_identities",
         "round_robin_hub_public_checkin",
+        "league_weekly_highlights",
     )
     assert {"interclub_season_trophies", "event_season_history"}.issubset(contract["required_ledger_names"])
     assert set(contract["deployment_order"]) == set(

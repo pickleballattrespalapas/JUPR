@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile": "tres-round-robin-hub-2026-10-20",
-  "repository_migration_content_sha256": "6de8b09b483b3999df209c3a3a7cddf282791669a984193f084ac69e3e32cfad",
+  "repository_migration_content_sha256": "a890fec0c5ec61b8970113b72d22af94a0ec03ce3006322667e3bf3f00eb6c2f",
   "allow_additional_ledger_names": true,
   "allowed_duplicate_ledger_names": [
     "tournament_admin_operations"
@@ -168,7 +168,8 @@
     "round_robin_hub_atomic_operations",
     "play_generator_operation_surface",
     "round_robin_hub_participant_identities",
-    "round_robin_hub_public_checkin"
+    "round_robin_hub_public_checkin",
+    "league_weekly_highlights"
   ],
   "required_ledger_names": [
     "add_admin_activity_log",
@@ -251,6 +252,7 @@
     "league_match_format",
     "league_ratings_start_from_overall",
     "league_roster_rating_integrity",
+    "league_weekly_highlights",
     "live_ladder_admin_operations",
     "manual_partner_canonical_teams",
     "manual_tournament_day_court_assignment",

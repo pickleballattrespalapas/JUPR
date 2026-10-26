@@ -2,6 +2,7 @@
 import { useAdminWorkspace } from "@/lib/useAdminWorkspace";
 
 import Link from "next/link";
+import WeeklyHighlightsEditor from "./WeeklyHighlightsEditor";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import type {
@@ -25,6 +26,7 @@ type AdminLeagueResultsResponse = Omit<LeagueResultsResponse, "club"> & {
   league_type: string;
   league_status: string;
   publicly_visible: boolean;
+  can_manage_weekly_highlights?: boolean;
 };
 
 type Props = {
@@ -144,7 +146,7 @@ export default function LeagueResultsPanel({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const resultsRequest = useLatestRequestGuard(
-    `${accessToken}\u0000${initialLeague}`,
+    `${accessToken}\u0000${clubId}\u0000${initialLeague}`,
     clearProtectedState
   );
 
@@ -201,7 +203,7 @@ export default function LeagueResultsPanel({
   }
 
   useAuthenticatedAutoLoad(
-    status.enabled ? `${accessToken}\u0000${initialLeague}` : "",
+    status.enabled ? `${accessToken}\u0000${clubId}\u0000${initialLeague}` : "",
     loadResults
   );
 
@@ -252,12 +254,7 @@ export default function LeagueResultsPanel({
           </article>
 
           <article style={cardStyle}>
-            <h2 style={{ marginTop: 0 }}>Standings</h2>
-            <StandingsTable rows={results.standings} />
-          </article>
-
-          <article style={cardStyle}>
-            <h2 style={{ marginTop: 0 }}>{selectedWeek ? `Week ${selectedWeek} results` : "Weekly results"}</h2>
+            <h2 style={{ marginTop: 0 }}>Select a week</h2>
             {results.weeks.length ? (
               <div style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap", marginBottom: "1rem" }}>
                 {results.weeks.map((week) => {
@@ -281,6 +278,24 @@ export default function LeagueResultsPanel({
                 })}
               </div>
             ) : null}
+            {selectedWeek && results.publicly_visible ? <p><Link href={`/clubs/${encodeURIComponent(clubSlug)}/leagues/${encodeURIComponent(leagueName)}/weekly-history?week=${selectedWeek}`}>View Week {selectedWeek} public results</Link></p> : null}
+            {selectedWeek && apiBase && results.can_manage_weekly_highlights ? (
+              <WeeklyHighlightsEditor
+                key={`${accessToken}\u0000${clubId}\u0000${initialLeague}`}
+                apiBase={apiBase} clubId={clubId} leagueName={initialLeague} week={selectedWeek}
+                accessToken={accessToken} writesEnabled={status.league_manager_writes_enabled !== false}
+              />
+            ) : null}
+          </article>
+
+          <article style={cardStyle}>
+            <h2 style={{ marginTop: 0 }}>Standings</h2>
+            <StandingsTable rows={results.standings} />
+          </article>
+
+          <article style={cardStyle}>
+            <h2 style={{ marginTop: 0 }}>{selectedWeek ? `Week ${selectedWeek} results` : "Weekly results"}</h2>
+
             <WeeklyTable rows={weeklyRows} />
           </article>
         </>

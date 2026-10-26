@@ -60,6 +60,7 @@ def build_admin_league_results(
     week_num: int | None = None,
     player_id: int | None = None,
     weekly_min_games: int = DEFAULT_WEEKLY_HIGHLIGHT_MIN_GAMES,
+    include_highlight_candidates: bool = False,
 ) -> dict[str, Any]:
     """Build exact league results after the admin route has authorized the caller."""
 
@@ -89,6 +90,7 @@ def build_admin_league_results(
         include_inactive_players=historical,
         include_inactive_ratings=historical,
         league_metadata=metadata,
+        include_highlight_candidates=include_highlight_candidates,
     )
     league_id = metadata.get("id") or metadata.get("league_id") or exact_name
     return {
