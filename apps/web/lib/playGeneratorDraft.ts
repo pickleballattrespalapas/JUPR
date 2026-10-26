@@ -1,3 +1,5 @@
+import { readGeneratorBrowserValue, writeGeneratorBrowserValue, removeGeneratorBrowserValue } from "./generatorBrowserStorage";
+
 export type StoredPlayGeneratorDraft<TPreview> = {
   version: 2;
   title: string;
@@ -22,7 +24,7 @@ export function readPlayGeneratorDraft<TPreview>(
 ): StoredPlayGeneratorDraft<TPreview> | null {
   if (typeof window === "undefined") return null;
   try {
-    const raw = window.sessionStorage.getItem(storageKey);
+    const raw = readGeneratorBrowserValue(storageKey);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<StoredPlayGeneratorDraft<TPreview>> & { version?: number };
     if (
@@ -34,7 +36,7 @@ export function readPlayGeneratorDraft<TPreview>(
       !parsed.linkedPlayerIds ||
       typeof parsed.linkedPlayerIds !== "object"
     ) {
-      window.sessionStorage.removeItem(storageKey);
+      removeGeneratorBrowserValue(storageKey);
       return null;
     }
     return {
@@ -63,7 +65,7 @@ export function writePlayGeneratorDraft<TPreview>(
       version: 2,
       savedAt: new Date().toISOString()
     };
-    window.sessionStorage.setItem(storageKey, JSON.stringify(payload));
+    writeGeneratorBrowserValue(storageKey, JSON.stringify(payload));
   } catch {
     // Draft persistence is protective, not required for normal generator operation.
   }
@@ -72,7 +74,7 @@ export function writePlayGeneratorDraft<TPreview>(
 export function clearPlayGeneratorDraft(storageKey: string): void {
   if (typeof window === "undefined") return;
   try {
-    window.sessionStorage.removeItem(storageKey);
+    removeGeneratorBrowserValue(storageKey);
   } catch {
     // Ignore unavailable browser storage.
   }

@@ -1,5 +1,8 @@
 "use client";
 
+import GeneratorResumeSessions from "@/components/GeneratorResumeSessions";
+import { readGeneratorBrowserValue, writeGeneratorBrowserValue, removeGeneratorBrowserValue, rememberGeneratorEditToken } from "@/lib/generatorBrowserStorage";
+
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "@/components/PublicClubLink";
 import { useRouter } from "next/navigation";
@@ -218,7 +221,7 @@ function workspaceErrorMessage(error: unknown, fallback: string): string {
 function readPendingStartPayload(storageKey: string): PendingStartPayload | null {
   let raw: string | null = null;
   try {
-    raw = sessionStorage.getItem(storageKey);
+    raw = readGeneratorBrowserValue(storageKey);
   } catch {
     return null;
   }
@@ -242,8 +245,7 @@ function readPendingStartPayload(storageKey: string): PendingStartPayload | null
 
 function clearPendingStartPayload(storageKey: string): boolean {
   try {
-    sessionStorage.removeItem(storageKey);
-    return sessionStorage.getItem(storageKey) === null;
+    return removeGeneratorBrowserValue(storageKey);
   } catch {
     return false;
   }
@@ -402,7 +404,7 @@ export default function GeneratorWorkspace({
   }, [startOperationStorageKey]);
 
   useEffect(() => {
-    if (!draftHydrated) return;
+    if (!draftHydrated || startSucceeded) return;
     writePlayGeneratorDraft(draftKey, {
       title,
       playFormat,
@@ -419,6 +421,7 @@ export default function GeneratorWorkspace({
     });
   }, [
     draftHydrated,
+    startSucceeded,
     draftKey,
     title,
     playFormat,
@@ -527,7 +530,7 @@ export default function GeneratorWorkspace({
         return;
       }
       try {
-        sessionStorage.setItem(startOperationStorageKey, JSON.stringify(requestPayload));
+        if (!writeGeneratorBrowserValue(startOperationStorageKey, JSON.stringify(requestPayload))) throw new Error("Browser storage unavailable");
       } catch {
         setMessage("Your browser couldn't save this start attempt, so no session was started. Please try again.");
         return;
@@ -549,7 +552,7 @@ export default function GeneratorWorkspace({
       if (!session?.session_key || !editToken) {
         throw new Error("The session start response was incomplete.");
       }
-      sessionStorage.setItem(`public-generator-edit:${clubId}:${session.session_key}`, editToken);
+      rememberGeneratorEditToken(clubId, session.session_key, editToken);
       sessionConfirmed = true;
       setStartSucceeded(true);
       setPendingStart(!clearPendingStartPayload(startOperationStorageKey));
@@ -694,6 +697,7 @@ export default function GeneratorWorkspace({
 
   return (
     <div style={{ display: "grid", gap: "1rem" }}>
+      <GeneratorResumeSessions key={`${clubId}:${generatorKind}`} apiBase={apiBase} clubId={clubId} generatorKind={generatorKind} />
       {!status?.enabled ? (
         <article style={{ ...cardStyle, background: "#fff7ed", color: "#9a3412" }}>
           <strong>This play tool is temporarily unavailable.</strong>

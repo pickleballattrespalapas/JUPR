@@ -51,7 +51,7 @@ def test_public_modules_mirror_generator_functionality_without_official_publish(
     assert "Start ${ratingMode} session" in workspace
     assert "public-play-generator-create:${clubId}:${generatorKind}" in workspace
     assert "readPendingStartPayload(startOperationStorageKey)" in workspace
-    assert "sessionStorage.setItem(startOperationStorageKey, JSON.stringify(requestPayload))" in workspace
+    assert "writeGeneratorBrowserValue(startOperationStorageKey, JSON.stringify(requestPayload))" in workspace
     assert 'body: JSON.stringify(requestPayload)' in workspace
     assert workspace.count("idempotency_key: operationKey()") == 1
     assert "[400, 403, 409, 422].includes(error.status)" in workspace
