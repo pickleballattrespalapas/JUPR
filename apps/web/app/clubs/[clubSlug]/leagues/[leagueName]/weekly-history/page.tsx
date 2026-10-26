@@ -1,4 +1,5 @@
 
+import WeeklyHighlightCards from "@/components/WeeklyHighlightCards";
 import PublicControls from "@/components/PublicControls";
 import Link from "@/components/PublicClubLink";
 import PublicLeagueNav from "@/components/PublicLeagueNav";
@@ -148,6 +149,14 @@ export default async function PublicLeagueWeeklyHistoryPage(props: Props) {
 
       </PublicControls>
 
+      {data.weekly_highlight_selection ? (
+        data.weekly_highlight_selection.cards.length ? (
+          <section style={{ marginBottom: "1.25rem" }} aria-label="Weekly highlights">
+            <h2>Weekly highlights</h2>
+            <WeeklyHighlightCards cards={data.weekly_highlight_selection.cards} />
+          </section>
+        ) : null
+      ) : (
       <section style={{ marginBottom: "1.25rem" }}>
         <h2>Weekly highlights</h2>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
@@ -165,6 +174,7 @@ export default async function PublicLeagueWeeklyHistoryPage(props: Props) {
           </article>
         </div>
       </section>
+      )}
 
       <section>
         <h2>{selectedWeek ? `Week ${selectedWeek} results` : "Weekly results"}</h2>
