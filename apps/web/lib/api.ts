@@ -541,6 +541,7 @@ export type LeagueResultsResponse = {
   player_weekly: LeagueResultsStatRow[];
   recent_matches: LeagueResultsRecentMatch[];
   weekly_highlights: LeagueResultsHighlights;
+  weekly_highlight_selection?: import("@/lib/leagueWeeklyHighlights").WeeklyHighlightSelection;
   season_highlights: LeagueResultsHighlights;
   highlights: LeagueResultsHighlights;
   award_progress: LeagueAwardProgress;

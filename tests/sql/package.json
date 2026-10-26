@@ -2,6 +2,7 @@
   "name": "jupr-sql-regressions",
   "private": true,
   "scripts": {
+    "test:weekly-highlights": "node league_weekly_highlights.mjs",
     "test:generator-journal": "node play_generator_operation_surface.mjs",
     "test:round-robin-hub": "node round_robin_hub_atomic.mjs && node round_robin_hub_participant_identities.mjs && node round_robin_hub_checkins.mjs"
   },

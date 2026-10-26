@@ -39,6 +39,8 @@ jobs:
             tests/test_api_runtime_logging.py \
             tests/test_api_contract_*.py \
             tests/test_api_leaderboard_contract.py \
+            tests/test_api_weekly_highlights.py \
+            tests/test_league_weekly_highlights.py \
             tests/test_leaderboard_service.py \
             tests/test_leaderboard_seasons.py \
             tests/test_overall_leaderboard_metrics.py \

@@ -58,3 +58,6 @@ jobs:
       - name: Verify hub atomic saves and participant identity leases
         working-directory: tests/sql
         run: npm run test:round-robin-hub
+      - name: Verify weekly highlights saves and permissions
+        working-directory: tests/sql
+        run: npm run test:weekly-highlights

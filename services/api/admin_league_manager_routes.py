@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from typing import Any
+from typing import Literal
 from uuid import NAMESPACE_URL, uuid5
 
 from fastapi import HTTPException, Query
@@ -48,6 +49,9 @@ from jupr_app.services.admin_league_live_submit_service import (
     submit_admin_league_live_round_publish,
 )
 from jupr_app.services.admin_league_results_service import build_admin_league_results
+from jupr_app.services.league_weekly_highlights_service import (
+    ADMIN_ROLES, HighlightsConflict, save_weekly_highlights,
+)
 from jupr_app.services.admin_match_uploader_service import (
     build_admin_match_uploader_round_robin_preview,
     create_admin_match_uploader_players,
@@ -92,6 +96,12 @@ from services.api.admin_match_uploader_routes import (
     AdminMatchUploaderRoundRobinPreviewRequest,
 )
 from services.api.staging_write_guard import require_league_manager_write_or_403
+
+
+class WeeklyHighlightsRequest(BaseModel):
+    mode: Literal["automatic", "curated"]
+    selected_ids: list[str] = Field(default_factory=list, max_length=6)
+    expected_revision: int = Field(ge=0)
 
 
 class AdminLeagueManagerSettingsUpdateRequest(BaseModel):
@@ -1203,14 +1213,14 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
         if not is_admin_league_manager_enabled():
             raise HTTPException(status_code=403, detail="Next League Manager is disabled.")
         supabase = get_supabase_client()
-        _resolve_league_manager_role_or_403(
+        _, role = _resolve_league_manager_role_or_403(
             supabase=supabase,
             club_id=str(club_id),
             authorization=authorization,
             source="next_league_manager_results",
         )
         try:
-            return build_admin_league_results(
+            results = build_admin_league_results(
                 supabase,
                 club_id=str(club_id),
                 league_name=str(league_name),
@@ -1218,8 +1228,48 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
                 player_id=player,
                 weekly_min_games=weekly_min_games,
             )
+            return {**results, "can_manage_weekly_highlights": role in ADMIN_ROLES}
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.get("/admin/clubs/{club_id}/league-manager/leagues/{league_name}/weeks/{week}/highlights")
+    def get_weekly_highlights(
+        club_id: str, league_name: str, week: int,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_league_manager_enabled():
+            raise HTTPException(403, "Next League Manager is disabled.")
+        db = get_supabase_client()
+        _, role = _resolve_league_manager_role_or_403(supabase=db, club_id=club_id, authorization=authorization, source="next_weekly_highlights")
+        if role not in ADMIN_ROLES:
+            raise HTTPException(403, "Only club administrators can select weekly highlights.")
+        try:
+            results = build_admin_league_results(db, club_id=club_id, league_name=league_name, week_num=week, include_highlight_candidates=True)
+            if results["selected_week"] != week:
+                raise ValueError("Choose a week from this league's results.")
+            return {"ok": True, **results["weekly_highlight_selection"]}
+        except Exception as exc:
+            _handle_common(exc)
+
+    @app.put("/admin/clubs/{club_id}/league-manager/leagues/{league_name}/weeks/{week}/highlights")
+    def put_weekly_highlights(
+        club_id: str, league_name: str, week: int, payload: WeeklyHighlightsRequest,
+        authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_league_manager_enabled():
+            raise HTTPException(403, "Next League Manager is disabled.")
+        require_league_manager_write_or_403()
+        _require_league_manager_service_role()
+        db = get_supabase_client()
+        email, role = _resolve_league_manager_role_or_403(supabase=db, club_id=club_id, authorization=authorization, source="next_weekly_highlights")
+        try:
+            return save_weekly_highlights(db, club_id=club_id, league_name=league_name, week_num=week,
+                                         mode=payload.mode, selected_ids=payload.selected_ids, expected_revision=payload.expected_revision,
+                                         actor_email=email, actor_role=role)
+        except HighlightsConflict as exc:
+            raise HTTPException(409, str(exc)) from exc
         except Exception as exc:
             _handle_common(exc)
 
