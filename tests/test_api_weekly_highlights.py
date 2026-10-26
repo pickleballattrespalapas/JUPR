@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from services.api import admin_league_manager_routes as routes
 from jupr_app.services.league_weekly_highlights_service import HighlightsConflict
+from scripts.staging_write_waves import wave_allows_request
 
 
 @pytest.fixture
@@ -21,6 +22,14 @@ def client(monkeypatch):
 
 
 PATH = "/admin/clubs/club/league-manager/leagues/Open/weeks/2/highlights"
+
+
+def test_highlights_uses_league_manager_write_boundary():
+    assert wave_allows_request("open", "PUT", PATH)
+    assert wave_allows_request("league-manager", "PUT", PATH)
+    assert not wave_allows_request("none", "PUT", PATH)
+    assert not wave_allows_request("communications", "PUT", PATH)
+    assert not wave_allows_request("league-manager", "PUT", PATH + "/extra")
 
 
 def test_read_returns_exact_week_and_denies_operator(client, monkeypatch):
