@@ -23,7 +23,13 @@ export function writeGeneratorBrowserValue(key: string, value: string): boolean 
     try { sessionStorage.removeItem(key); } catch { /* Durable copy is saved. */ }
     return true;
   } catch {
-    try { sessionStorage.setItem(key, value); return true; } catch { return false; }
+    // A full local store may still allow reads and removals. Do not let its old
+    // value shadow the newer tab fallback on the next recovery attempt.
+    try { localStorage.removeItem(key); } catch { /* Confirm the fallback below. */ }
+    try {
+      sessionStorage.setItem(key, value);
+      return readGeneratorBrowserValue(key) === value;
+    } catch { return false; }
   }
 }
 

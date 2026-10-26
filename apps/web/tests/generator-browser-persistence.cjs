@@ -81,6 +81,10 @@ assert.equal(scores.storedScoreSave("shared-context", false), null, "Shared pend
 store.forgetGeneratorEditToken('club', 'session'); newTab();
 assert.equal(store.readGeneratorEditToken('club', 'session'), '');
 const durable = localStorage;
+const oldValues = new Map([["quota-key", "old-value"]]);
+global.localStorage = {getItem:k=>oldValues.get(k)??null,setItem(){throw Error("quota")},removeItem:k=>oldValues.delete(k)};
+assert.equal(store.writeGeneratorBrowserValue("quota-key", "new-value"), true);
+assert.equal(store.readGeneratorBrowserValue("quota-key"), "new-value", "An older durable value must not shadow the newer tab fallback after quota failure");
 global.localStorage = {getItem(){throw Error('blocked')},setItem(){throw Error('quota')},removeItem(){throw Error('blocked')}};
 assert.equal(store.rememberGeneratorEditToken('club','fallback','token'), false, 'Do not claim persistence when only tab storage works');
 assert.equal(store.readGeneratorEditToken('club','fallback'), 'token');
