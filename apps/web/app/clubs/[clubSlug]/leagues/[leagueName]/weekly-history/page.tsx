@@ -148,6 +148,24 @@ export default async function PublicLeagueWeeklyHistoryPage(props: Props) {
 
       </PublicControls>
 
+      <section style={{ marginBottom: "1.25rem" }}>
+        <h2>Weekly highlights</h2>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
+          <article style={cardStyle}>
+            <h3 style={{ marginTop: 0 }}>Biggest climbers</h3>
+            <p style={{ marginBottom: 0 }}>{highlightRows(data.weekly_highlights.biggest_climbers)}</p>
+          </article>
+          <article style={cardStyle}>
+            <h3 style={{ marginTop: 0 }}>Best win percentage</h3>
+            <p style={{ marginBottom: 0 }}>{highlightRows(data.weekly_highlights.best_win_pct)}</p>
+          </article>
+          <article style={cardStyle}>
+            <h3 style={{ marginTop: 0 }}>Most active</h3>
+            <p style={{ marginBottom: 0 }}>{highlightRows(data.weekly_highlights.most_active)}</p>
+          </article>
+        </div>
+      </section>
+
       <section>
         <h2>{selectedWeek ? `Week ${selectedWeek} results` : "Weekly results"}</h2>
         {weeklyRows.length ? (
@@ -188,23 +206,6 @@ export default async function PublicLeagueWeeklyHistoryPage(props: Props) {
         )}
       </section>
 
-      <section style={{ marginTop: "1.25rem" }}>
-        <h2>Weekly highlights</h2>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0.75rem" }}>
-          <article style={cardStyle}>
-            <h3 style={{ marginTop: 0 }}>Biggest climbers</h3>
-            <p style={{ marginBottom: 0 }}>{highlightRows(data.weekly_highlights.biggest_climbers)}</p>
-          </article>
-          <article style={cardStyle}>
-            <h3 style={{ marginTop: 0 }}>Best win percentage</h3>
-            <p style={{ marginBottom: 0 }}>{highlightRows(data.weekly_highlights.best_win_pct)}</p>
-          </article>
-          <article style={cardStyle}>
-            <h3 style={{ marginTop: 0 }}>Most active</h3>
-            <p style={{ marginBottom: 0 }}>{highlightRows(data.weekly_highlights.most_active)}</p>
-          </article>
-        </div>
-      </section>
     </section>
   );
 }
