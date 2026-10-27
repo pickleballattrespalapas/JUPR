@@ -134,6 +134,9 @@ def _blank_history(event: dict[str, Any]) -> dict[str, Any]:
     return {
         "games": {pid: 0 for pid in ids},
         "byes": {pid: 0 for pid in ids},
+        "rotation_byes": {},
+        "last_active": {},
+        "last_byes": {},
         "singles_games": {pid: 0 for pid in ids},
         "doubles_games": {pid: 0 for pid in ids},
         "partners": defaultdict(int),
@@ -201,14 +204,26 @@ def history_before_round(event: dict[str, Any], round_number: int, *, include_pr
                    if match.get("status") not in {"not_played", "skipped", "cancelled", "canceled"}]
         if not matches:
             continue
-        for pid in round_row.get("byeParticipantIds") or []:
-            history["byes"][str(pid)] = int(history["byes"].get(str(pid), 0)) + 1
-        for match in matches:
-            _apply_match_history(history, match, play_format)
+        _update_history_for_generated_round(history, round_row, play_format)
     return history
+
+def _rotation_bye_counts(active_ids: list[str], history: dict[str, Any]) -> dict[str, int]:
+    """Compare attendance fairly without inventing byes in the saved results.
+
+    Joiners and returners enter the current rotation at its lowest bye count.
+    Absence therefore never becomes a debt of byes that must be caught up.
+    """
+    counts = history.get("rotation_byes") or {}
+    if not counts:
+        return {pid: int(history["byes"].get(pid, 0)) for pid in active_ids}
+    last_active = history.get("last_active") or {}
+    baseline = min((counts[pid] for pid in active_ids if pid in last_active and pid in counts), default=0)
+    return {pid: max(int(counts.get(pid, baseline)), baseline) if pid not in last_active
+            else int(counts.get(pid, baseline)) for pid in active_ids}
 
 def _selection_priority(pid: str, history: dict[str, Any], roster_pos: dict[str, int]) -> tuple[Any, ...]:
     return (
+        -int((history.get("last_byes") or {}).get(pid, 0)),
         -int(history["byes"].get(pid, 0)),
         int(history["games"].get(pid, 0)),
         int(roster_pos.get(pid, 9999)),
@@ -226,18 +241,18 @@ def _candidate_playing_sets(
 ) -> list[tuple[list[str], list[str]]]:
     if slots >= len(active_ids):
         return [(list(active_ids), [])]
+    history = {**history, "byes": _rotation_bye_counts(active_ids, history)}
     ordered = sorted(active_ids, key=lambda pid: _selection_priority(pid, history, roster_pos))
-    # Protect players with more assigned byes first. Game counts only break
-    # equal-bye ties, so a late arrival does not force another player's second
-    # bye before taking their own first. Variety breaks ties in both counts.
-    cutoff = _selection_priority(ordered[slots - 1], history, roster_pos)[:2]
+    # Seat the previous byes first when capacity permits, then balance byes
+    # during attendance. Matchup variety only breaks equal-priority ties.
+    cutoff = _selection_priority(ordered[slots - 1], history, roster_pos)[:3]
     required = [
         pid for pid in ordered
-        if _selection_priority(pid, history, roster_pos)[:2] < cutoff
+        if _selection_priority(pid, history, roster_pos)[:3] < cutoff
     ]
     tied = [
         pid for pid in ordered
-        if _selection_priority(pid, history, roster_pos)[:2] == cutoff
+        if _selection_priority(pid, history, roster_pos)[:3] == cutoff
     ]
     remaining_slots = slots - len(required)
     seen: set[tuple[str, ...]] = set()
@@ -836,6 +851,15 @@ def _update_history_for_generated_round(history: dict[str, Any], round_row: dict
                if match.get("status") not in {"not_played", "skipped", "cancelled", "canceled"}]
     if not matches:
         return
+    playing = {str(pid) for match in matches for pid in
+               (match.get("sideA") or match.get("teamA") or []) +
+               (match.get("sideB") or match.get("teamB") or [])}
+    byes = {str(pid) for pid in round_row.get("byeParticipantIds") or []} - playing
+    active = sorted(playing | byes)
+    counts = _rotation_bye_counts(active, history)
+    history.setdefault("rotation_byes", {}).update({pid: counts[pid] + int(pid in byes) for pid in active})
+    history["last_active"] = {pid: 1 for pid in active}
+    history["last_byes"] = {pid: 1 for pid in byes}
     for pid in round_row.get("byeParticipantIds") or []:
         history["byes"][str(pid)] = int(history["byes"].get(str(pid), 0)) + 1
     for match in matches:
@@ -2220,10 +2244,7 @@ def _regenerate_round_robin_from(event: dict[str, Any], start_round: int) -> Non
         if str(row.get("status")) not in {"saved", "played", "active"}:
             continue
         accounted.add(int(row["number"]))
-        for pid in row.get("byeParticipantIds") or []:
-            history["byes"][str(pid)] = int(history["byes"].get(str(pid), 0)) + 1
-        for match in _round_matches(row):
-            _apply_match_history(history, match, str(event.get("playFormat") or "doubles"))
+        _update_history_for_generated_round(history, row, str(event.get("playFormat") or "doubles"))
     generated = []
     total = int(event.get("totalRounds") or 1)
     if event.get("roundRobinHubId"):
