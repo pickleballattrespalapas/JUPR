@@ -891,7 +891,7 @@ export default function GeneratorRoundRunner({
     try {
       await runMutation(
         `/admin/clubs/${encodeURIComponent(clubId)}/play-generators/sessions/${encodeURIComponent(sessionKey)}/complete`,
-        {}
+        { confirmation_text: "COMPLETE SESSION" }
       );
       setMessage("Session complete. Your saved results are ready to review.");
       return actionSuccess("Session complete", "Your saved results are ready to review.");
