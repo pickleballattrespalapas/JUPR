@@ -15,6 +15,7 @@ import pandas as pd
 from jupr_app.data.load import load_data
 from jupr_app.data.paged_reads import read_all_rows
 from jupr_app.domain.player_visibility import is_merged_player
+from jupr_app.domain.moneyball_expectations import is_moneyball, validate_score
 from jupr_app.domain.matches.side_effects import ensure_notification_badge_job, queue_player_updates
 from jupr_app.services.admin_guarded_write_service import required_audit_event
 from jupr_app.services.leaderboard_service import _leaderboard_settings
@@ -180,6 +181,23 @@ def require_reviewer(role: str) -> None:
         raise PermissionError("Only a club administrator can approve or reject results.")
 
 
+def _submission_payload(row: dict) -> dict:
+    event = _event(row)
+    saved = _saved_matches(event)
+    submission = row["state"]["generator_submission"]
+    played = {str(pid) for _, match in saved for side in ("A", "B")
+              for pid in (match.get(f"side{side}") or match.get(f"team{side}") or [])}
+    return {
+        "session_key": row["session_key"], "title": row.get("title") or event.get("name"),
+        "version": int(row.get("version") or 1), "generator_kind": event.get("generatorKind"),
+        "play_format": event.get("playFormat"),
+        **{k: v for k, v in submission.items() if k not in {"review", "results"}},
+        "review": {"request": submission["review"].get("request")} if submission.get("review") else None,
+        "participants": [p for p in event.get("participants", []) if str(p.get("id")) in played],
+        "matches": [{"round_number": number, **match} for number, match in saved],
+    }
+
+
 def list_generator_submissions(db, *, club_id: str, actor_role: str, status: str = "pending") -> dict:
     require_reviewer(actor_role)
     statuses = ["pending", "processing"] if status == "pending" else [status]
@@ -189,23 +207,88 @@ def list_generator_submissions(db, *, club_id: str, actor_role: str, status: str
     for row in rows:
         if (row.get("state") or {}).get("mode") not in GENERATOR_MODES:
             continue
-        event = _event(row)
-        saved = _saved_matches(event)
-        played = {str(pid) for _, match in saved for side in ("A", "B")
-                  for pid in (match.get(f"side{side}") or match.get(f"team{side}") or [])}
-        submissions.append({
-            "session_key": row["session_key"], "title": row.get("title") or event.get("name"),
-            "version": int(row.get("version") or 1), "generator_kind": event.get("generatorKind"),
-            "play_format": event.get("playFormat"), **{k: v for k, v in row["state"]["generator_submission"].items() if k not in {"review", "results"}},
-            "review": {"request": (row["state"]["generator_submission"].get("review") or {}).get("request")} if row["state"]["generator_submission"].get("review") else None,
-            "participants": [p for p in event.get("participants", []) if str(p.get("id")) in played],
-            "matches": [{"round_number": number, **match} for number, match in saved],
-        })
+        submissions.append(_submission_payload(row))
     players = [_review_player(p) for p in read_all_rows(
         lambda: db.table("players").select(RATING_PLAYER_COLUMNS).eq("club_id", club_id)
     ) if not is_merged_player(p)]
     players.sort(key=lambda p: (str(p.get("name") or "").casefold(), p["id"]))
     return {"ok": True, "submissions": submissions, "players": players}
+
+
+def correct_generator_submission_scores(
+    db, *, club_id: str, session_key: str, expected_version: int,
+    scores: list[dict], actor_email: str, actor_role: str,
+) -> dict:
+    """Correct completed, unpublished games without reopening play or reseeding.
+
+    Compare both review and organizer versions. Approval reserves the same row,
+    so corrections cannot race a review or change a partially published batch.
+    """
+    require_reviewer(actor_role)
+    row = _row(db, club_id, session_key)
+    state = copy.deepcopy(row["state"])
+    event = _event(row)
+    submission = state.get("generator_submission") or {}
+    official = state.get("official_publish") or {}
+    if (row.get("status") != "completed" or submission.get("status") != "pending"
+            or submission.get("review") or submission.get("results")
+            or official.get("published_at") or official.get("published_match_ids")
+            or event.get("publishedMatchIds")):
+        raise ValueError("Scores can only be corrected while results are awaiting approval. Use Match Log for published games.")
+    if row.get("pending_operation_key"):
+        raise PublicLiveConflictError("A previous change is pending. Refresh before correcting scores.")
+    if int(row.get("version") or 1) != expected_version:
+        raise PublicLiveConflictError("This submission changed. Refresh before correcting scores.")
+    if not scores or len(scores) > 2500:
+        raise ValueError("Choose between 1 and 2500 scored games to correct.")
+    saved = {(number, str(match["id"])): match for number, match in _saved_matches(event)}
+    changes = {}
+    seen = set()
+    for score in scores:
+        key = (score.get("round_number"), score.get("match_id"))
+        if key in seen:
+            raise ValueError("Submit each game's correction only once.")
+        seen.add(key)
+        if key not in saved:
+            raise ValueError("Choose a scored game from this submission.")
+        a, b = score.get("score_a"), score.get("score_b")
+        if type(a) is not int or type(b) is not int or not 0 <= a <= 99 or not 0 <= b <= 99:
+            raise ValueError("Enter both scores as whole numbers between 0 and 99.")
+        if a == b:
+            raise ValueError("Matches cannot end in a tie.")
+        if is_moneyball(event):
+            validate_score(a, b, (event.get("moneyball") or {}).get("targetScore", 11))
+        original = saved[key]
+        if (a, b) != (original["scoreA"], original["scoreB"]):
+            changes[key] = {"round_number": key[0], "match_id": key[1],
+                "before": {"scoreA": original["scoreA"], "scoreB": original["scoreB"]},
+                "after": {"scoreA": a, "scoreB": b}}
+    if not changes:
+        return {"ok": True, "submission": _submission_payload(row), "corrected_games": 0}
+    # Patch only scores. Completed ladder/playoff lineups describe games that
+    # were actually played and must not be regenerated after a correction.
+    for round_row in event.get("rounds") or []:
+        originals = list(round_row.get("matches") or [])
+        originals += [match for court in round_row.get("courts") or [] for match in court.get("matches") or []]
+        for match in originals:
+            change = changes.get((int(round_row.get("number") or 0), str(match.get("id"))))
+            if change:
+                match.update(change["after"])
+    state["page_state"]["event"] = event
+    audit = dict(club_id=club_id, actor_email=actor_email, actor_role=actor_role,
+        entity_type="play_generator_session", entity_id=session_key,
+        source="generator_submission_scores", before={"version": expected_version},
+        after={"version": expected_version + 1, "submission_id": submission["id"], "corrections": list(changes.values())})
+    required_audit_event(db, **audit, action_type="correct_generator_submission_scores_intent", intent=True)
+    if state.get("round_robin_hub_id"):
+        from jupr_app.services.admin_round_robin_hub_service import persist_linked_generator_patch
+        updated = persist_linked_generator_patch(db, before=row,
+            patch={"state": state, "version": expected_version + 1, "updated_at": _now()},
+            expected_version=str(row.get("updated_at") or ""))
+    else:
+        updated = _save(db, row, state)
+    required_audit_event(db, **audit, action_type="correct_generator_submission_scores", intent=False)
+    return {"ok": True, "submission": _submission_payload(updated), "corrected_games": len(changes)}
 
 
 def update_generator_submission_title(

@@ -49,7 +49,7 @@ from jupr_app.services.admin_play_generator_service import (
 from services.api.auth import authenticate_bearer, auth_header
 from jupr_app.services.generator_submission_service import (
     list_generator_submissions, require_reviewer, review_generator_submission, submit_generator_session,
-    set_generator_starting_rating, update_generator_submission_title,
+    set_generator_starting_rating, update_generator_submission_title, correct_generator_submission_scores,
 )
 from jupr_app.services.direct_match_entry_service import (
     DirectMatchConflictError, DirectMatchRecoveryRequiredError,
@@ -192,6 +192,22 @@ class GeneratorSubmissionTitleRequest(BaseModel):
     @classmethod
     def normalize_title(cls, value: Any) -> Any:
         return " ".join(value.replace("<", "").replace(">", "").split()) if isinstance(value, str) else value
+
+
+class GeneratorSubmissionScoreCorrection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    round_number: int = Field(strict=True, ge=1)
+    match_id: str = Field(strict=True, min_length=1, max_length=160)
+    score_a: int = Field(strict=True, ge=0, le=99)
+    score_b: int = Field(strict=True, ge=0, le=99)
+
+
+class GeneratorSubmissionScoresRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_version: int = Field(strict=True, ge=1)
+    scores: list[GeneratorSubmissionScoreCorrection] = Field(min_length=1, max_length=2500)
 
 
 def _model_payload(model: BaseModel) -> dict[str, Any]:
@@ -356,6 +372,19 @@ def install_admin_play_generator_routes(app, *, get_supabase_client) -> None:
             authorization=authorization, source="generator_submission_title")
         try:
             return update_generator_submission_title(supabase, club_id=club_id, session_key=session_key,
+                actor_email=email, actor_role=role, **_model_payload(payload))
+        except Exception as exc:
+            _handle(exc)
+
+    @app.patch("/admin/clubs/{club_id}/play-generators/sessions/{session_key}/submission/scores")
+    def patch_generator_submission_scores(club_id: str, session_key: str,
+        payload: GeneratorSubmissionScoresRequest, authorization: str | None = auth_header()) -> dict[str, Any]:
+        _require_write_gate()
+        supabase = get_supabase_client()
+        email, role = _resolve_role_or_403(supabase=supabase, club_id=club_id,
+            authorization=authorization, source="generator_submission_scores")
+        try:
+            return correct_generator_submission_scores(supabase, club_id=club_id, session_key=session_key,
                 actor_email=email, actor_role=role, **_model_payload(payload))
         except Exception as exc:
             _handle(exc)
