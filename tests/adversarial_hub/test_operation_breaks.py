@@ -67,6 +67,24 @@ class LeaseDB(ops.FakeSupabase):
         return LeaseQuery(self, name)
 
 
+def test_completed_hub_start_releases_new_session_lease(monkeypatch):
+    db = LeaseDB()
+    monkeypatch.setattr(hub_service, "_hub", lambda *_args: {"status": "completed"})
+    with pytest.raises(ledger.LiveLadderPrewriteRejectedError, match="active event"):
+        run_admin(db, lambda: generator.create_play_generator_session(
+            db, club_id="club-a", generator_kind="round_robin", play_format="doubles",
+            title="Closed event", participant_names=[], player_ids=None, total_rounds=1,
+            court_count=0, preview_fingerprint=None, actor_email="audit@example.test",
+            actor_role="administrator", source="local_adversarial_audit", registration_hub_id="old-hub",
+        ), key="closed-hub-start", entity="new", version="new", payload={"hub_id": "old-hub"})
+    assert db.storage[ledger.OPERATION_TABLE][0]["status"] == "failed"
+    assert not db.storage.get("live_sessions")
+    result = run_admin(db, lambda: {"ok": True}, key="new-hub-start", entity="new", version="new",
+                       payload={"hub_id": "new-hub"})
+    assert result["ok"] is True
+    assert db.storage[ledger.OPERATION_TABLE][1]["status"] == "completed"
+
+
 def score_fixture(monkeypatch):
     source = hub.TransactionalHubDB()
     stored = hub.session(source, count=4)
