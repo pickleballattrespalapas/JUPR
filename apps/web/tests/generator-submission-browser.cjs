@@ -283,6 +283,42 @@ async function main() {
       await spectator.getByRole('status').filter({hasText:'Awaiting admin approval'}).waitFor();
       await screenshot(adminPage, `${mode}-title-corrected.png`);
       console.log(`PASS ${mode}: admin title edit -> versioned API save -> preserved scores/ratings -> queue and public standings updated`);
+      const beforeCorrection = await fixture();
+      const savedSession = beforeCorrection.sessions.find(item => item.session_key === session.session_key);
+      const firstRound = savedSession.event.rounds.find(round => round.status === 'saved');
+      const firstMatch = firstRound.matches[0];
+      const prefix = `Round ${firstRound.number}, game ${firstMatch.id}, `;
+      await adminPage.getByRole('button', {name:'Edit scores', exact:true}).click();
+      await adminPage.getByLabel('Filter scores by round').selectOption(String(firstRound.number));
+      const firstName = savedSession.event.participants.find(player => player.id === firstMatch.sideA[0]).name;
+      await adminPage.getByLabel('Find a player in saved scores').fill(firstName);
+      const scoreInputs = adminPage.getByRole('spinbutton', {name:new RegExp(`^${prefix}`)});
+      assert.equal(await scoreInputs.count(), 2);
+      await scoreInputs.nth(0).fill('5');
+      await scoreInputs.nth(1).fill('11');
+      assert(await adminPage.getByRole('button', {name:approveLabel, exact:true}).isDisabled());
+      await adminPage.setViewportSize({width:390, height:844});
+      await screenshot(adminPage, `${mode}-score-edit-mobile.png`);
+      const editDimensions = await adminPage.evaluate(() => ({width:document.documentElement.clientWidth, scroll:document.documentElement.scrollWidth}));
+      assert(editDimensions.scroll <= editDimensions.width+1, 'Score editor fits mobile width');
+      const correction = await clickRequest(adminPage, adminPage.getByRole('button', {name:'Save score corrections', exact:true}), '/submission/scores', 'PATCH');
+      assert.deepEqual(correction.request, {expected_version:renamed.body.version, scores:[{
+        round_number:firstRound.number, match_id:firstMatch.id, score_a:5, score_b:11}]});
+      assert.equal(correction.body.submission.status, 'pending');
+      const afterCorrection = await fixture();
+      assert.deepEqual(afterCorrection.players, beforeCorrection.players, 'Correcting pending scores does not change ratings');
+      assert.deepEqual(afterCorrection.matches, beforeCorrection.matches, 'Correcting pending scores does not publish games');
+      const expectedEvent = structuredClone(savedSession.event);
+      Object.assign(expectedEvent.rounds.find(round => round.number === firstRound.number).matches[0], {scoreA:5, scoreB:11});
+      assert.deepEqual(afterCorrection.sessions.find(item => item.session_key === session.session_key).event, expectedEvent, 'Only the chosen game scores change');
+      await adminPage.setViewportSize({width:1280, height:900});
+      // A separate reviewer page must also receive the durable corrected score.
+      const reloaded = await adminContext.newPage();
+      await reloaded.goto(`${webOrigin}/admin/play-generators/submissions`);
+      await reloaded.getByRole('button', {name:new RegExp(correctedTitle)}).click();
+      assert(await reloaded.getByRole('cell', {name:'5 – 11', exact:true}).count());
+      await reloaded.close();
+      console.log(`PASS ${mode}: filtered score edit -> API persistence -> reload -> pending; other games and player ratings preserved`);
       if (mode === 'rated') {
         assert.equal(await adminPage.getByRole('spinbutton', {name:'Player 1 doubles starting level', exact:true}).inputValue(), '4.25', 'Title save preserves an unsaved starting level');
         assert.equal(await adminPage.getByRole('button', {name:approveLabel, exact:true}).isDisabled(), true);
@@ -327,7 +363,7 @@ async function main() {
       }
       await adminPage.getByRole('button', {name:approveLabel, exact:true}).click();
       const approved = await clickRequest(adminPage, adminPage.getByRole('dialog').getByRole('button', {name:approveLabel, exact:true}), '/review');
-      assert.equal(approved.request.expected_version, renamed.body.version, 'Approval uses the version returned by the title edit');
+      assert.equal(approved.request.expected_version, correction.body.submission.version, 'Approval uses the version returned by the score correction');
       assert.equal(approved.body.session.submission.approved_mode, mode);
       await adminPage.getByRole('heading', {name:'Review saved', exact:true}).waitFor();
       const after = await fixture();
@@ -336,6 +372,8 @@ async function main() {
       // actually scored in this rehearsal should become official matches.
       const expectedGames = started.body.session.event.rounds.reduce((sum, r) => sum+(r.matches || []).length, 0);
       assert.equal(records.length, expectedGames);
+      assert.equal(records[0].score_t1, 5, 'Approval publishes the corrected Team 1 score');
+      assert.equal(records[0].score_t2, 11, 'Approval publishes the corrected Team 2 score');
       assert(records.every(match => match.rating_scope === (mode === 'rated' ? 'overall_only' : 'unrated')));
       assert(records.every(match => match.week_tag.startsWith(`${correctedTitle} Round `)), 'Approved games use the corrected title');
       if (mode === 'rated') {
