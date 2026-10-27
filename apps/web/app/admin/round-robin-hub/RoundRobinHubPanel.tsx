@@ -130,6 +130,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
   const [savedIdentityReviewOpen, setSavedIdentityReviewOpen] = useState(false);
   const [identitySelections, setIdentitySelections] = useState<Record<string, string[]>>({});
   const selectedRef = useRef(hubId);
+  const eventChoiceMade = useRef(Boolean(initialHubId));
   const loadSequence = useRef(0);
   const listLoadSequence = useRef(0);
   const mutationLock = useRef(false);
@@ -268,6 +269,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
   }, []);
 
   function selectHub(id: string): void {
+    eventChoiceMade.current = true;
     clearReturnIntent();
     selectedRef.current = id;
     loadSequence.current += 1;
@@ -313,9 +315,9 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
     if (!ready) return;
     let live = true;
     void loadList().then(value => {
-      if (!live) return;
+      if (!live || eventChoiceMade.current) return;
       if (!selectedRef.current && value?.hubs.length) selectHub((value.hubs.find(hub => hub.status !== "completed") || value.hubs[0]).id);
-      else if (!selectedRef.current) { setCreating(true); setLoading(false); }
+      else if (!selectedRef.current) { eventChoiceMade.current = true; setCreating(true); setLoading(false); }
     }).catch(cause => { if (live) { setError(cause instanceof Error ? cause.message : "Unable to load hubs."); setLoading(false); } });
     return () => { live = false; };
   }, [ready, loadList, initialHubId, initialAddSessionKey]);
@@ -606,7 +608,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
   return <div className={styles.root}>
     <section className={styles.scope} aria-label="Choose event">
       <label className={styles.field}>Hub event<select aria-label="Select hub" value={hubId} disabled={busy || attaching || Boolean(pending)} onChange={event => selectHub(event.target.value)}><option value="">Choose an event</option>{list.hubs.map(hub => <option key={hub.id} value={hub.id}>{hub.title}{hub.status === "completed" ? " · Finished" : ""}</option>)}</select></label>
-      <button type="button" className={styles.button} disabled={busy || attaching || Boolean(pending)} onClick={() => { setCreating(true); setSessionView(null); setError(""); }}>New event</button>
+      <button type="button" className={styles.button} disabled={busy || attaching || Boolean(pending)} onClick={() => { eventChoiceMade.current = true; setCreating(true); setLoading(false); setSessionView(null); setError(""); }}>New event</button>
       <button type="button" className={styles.button} disabled={busy || attaching || loading} onClick={() => { void loadList().catch(cause => setError(cause.message)); if (hubId) void loadHub(hubId); }}>Refresh</button>
     </section>
 
