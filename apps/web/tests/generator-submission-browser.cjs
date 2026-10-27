@@ -339,7 +339,11 @@ async function main() {
         await screenshot(adminPage, 'create-player-mobile.png');
         const dimensions = await adminPage.evaluate(() => ({width:document.documentElement.clientWidth, scroll:document.documentElement.scrollWidth}));
         assert(dimensions.scroll <= dimensions.width+1, 'Starting levels fit mobile width');
-        const created = await clickRequest(adminPage, adminPage.getByRole('button', {name:'Create and select player', exact:true}), '/players/editor/players');
+        const createButton = adminPage.getByRole('button', {name:'Create and select player', exact:true});
+        // Settle focus scrolling after changing viewport with a number field focused.
+        // Otherwise Chromium can move the target between mouse-down and mouse-up.
+        await createButton.focus();
+        const created = await clickRequest(adminPage, createButton, '/players/editor/players');
         createdPlayerId = created.body.player.id;
         await adminPage.getByRole('spinbutton', {name:'New Browser Player doubles starting level', exact:true}).waitFor();
         assert.equal(await adminPage.getByRole('spinbutton', {name:'New Browser Player doubles starting level', exact:true}).inputValue(), '3.75');
