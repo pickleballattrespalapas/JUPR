@@ -265,7 +265,7 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
   const scoreRounds = [...new Set(selected?.matches.map(match => match.round_number) || [])].sort((a, b) => a - b);
   const visibleMatches = (selected?.matches || []).filter(match => (!scoreRound || match.round_number === Number(scoreRound))
     && [...(match.sideA || match.teamA || []), ...(match.sideB || match.teamB || [])].some(id => (names.get(id) || "Unknown player").toLocaleLowerCase().includes(scorePlayer.trim().toLocaleLowerCase())));
-  return <div style={{ display: "grid", gap: "1rem" }}>
+  return <div style={{ display: "grid", gap: "1rem", minWidth: 0 }}>
     <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
       <label>Show <select value={status} disabled={busy} onChange={e => setStatus(e.target.value)} style={field}><option value="pending">Awaiting approval</option><option value="approved">Approved</option><option value="rejected">Rejected</option></select></label>
       <button onClick={() => void refresh()} disabled={busy || !accessToken} style={field}>Refresh</button>
@@ -278,7 +278,7 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
         <strong>{item.title}</strong><br />{item.match_date} · {item.match_count} games · {item.rating_mode === "rated" ? "Rated" : "Unrated"}<br />Submitted by {item.organizer_name}<br />{item.status === "processing" ? "Approval interrupted — resume review" : item.approved_mode || item.status}
       </button>)}
     </div>
-    {selected ? <article id="generator-submission-review" ref={reviewPanel} tabIndex={-1} style={{ padding: "1rem", border: "1px solid #2563eb", borderRadius: 14, scrollMarginTop: "1rem" }}>
+    {selected ? <article id="generator-submission-review" ref={reviewPanel} tabIndex={-1} style={{ padding: "1rem", border: "1px solid #2563eb", borderRadius: 14, scrollMarginTop: "1rem", minWidth: 0 }}>
       <h2>{selected.title} · {selected.rating_mode === "rated" ? "Rated" : "Unrated"}</h2>
       {editable ? editingTitle ? <form aria-label="Edit session details" onSubmit={event => { event.preventDefault(); void saveTitle(); }} style={{ display: "grid", gap: "0.6rem", maxWidth: 560 }}>
         <label style={{ display: "grid", gap: 4 }}>Session title
@@ -346,7 +346,7 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
         {editable && !editingScores ? <button type="button" style={field} disabled={busy || editingTitle} onClick={() => { setScoreDrafts({}); setEditingScores(true); setMessage(""); }}>Edit scores</button> : null}
       </div>
       {editingScores ? <p>Correct the scores below, then save before approving. Enter both scores from 0 to 99; games cannot end in a tie.</p> : null}
-      <div style={{ overflowX: "auto" }}><table style={{ width: "100%", textAlign: "left", borderSpacing: "0 0.5rem" }}><thead><tr><th>Round</th><th>Team 1</th><th>Score</th><th>Team 2</th></tr></thead><tbody>
+      <div style={{ overflowX: "auto" }}><table style={{ width: "100%", minWidth: 580, textAlign: "left", borderSpacing: "0 0.5rem" }}><thead><tr><th>Round</th><th>Team 1</th><th>Score</th><th>Team 2</th></tr></thead><tbody>
         {visibleMatches.map(m => {
           const key = scoreKey(m);
           const draft = scoreDrafts[key] || { a: String(m.scoreA), b: String(m.scoreB) };
