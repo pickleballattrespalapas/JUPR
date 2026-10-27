@@ -58,6 +58,7 @@ function roundRobinHubReady(openapi) {
     && [
       ["get", "/public/round-robin-hubs/{hub_id}/registration"],
       ["post", "/public/round-robin-hubs/{hub_id}/checkins"],
+      ["patch", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/submission/scores"],
     ].every(([method, path]) => Boolean(openapi?.paths?.[path]?.[method]));
 }
 
