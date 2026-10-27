@@ -38,7 +38,7 @@ export default function HubEditPlayersDialog({ apiBase, clubId, match, group, st
   function unavailableReason(player: HubGroupPlayer): string {
     if (player.participant_id === target) return "Already selected";
     if (player.paused) return "Paused — resume first";
-    if (!lineup.some(member => member.id === player.participant_id) && (player.on_court || player.reserved)) return "On another court or reserved";
+    if (!lineup.some(member => member.id === player.participant_id) && (player.on_court || player.reserved || player.current_court || player.reserved_court)) return "On another court or reserved";
     const number = match.round_number;
     if ((player.active_from_round || 1) > number || (player.inactive_from_round != null && player.inactive_from_round <= number)
       || player.inactive_rounds?.includes(number) || (!player.active && number === group?.current_round_number)) return "Not active in this round";
@@ -89,7 +89,7 @@ export default function HubEditPlayersDialog({ apiBase, clubId, match, group, st
         {duplicate ? <p role="alert">This player is already on the roster. Choose them from Round robin players.</p> : null}
         {directoryError ? <p className={styles.small}>{directoryError}</p> : null}</> : null}
       <p className={styles.small}>{sameMatch ? "These two players swap positions in this match." : "A player on a bye takes this place, and the original player stays available. If the replacement has another waiting game in this round, the two players swap games."}</p>
-      {!available ? <p role="alert">This match is no longer available for editing. Close this dialog and review the court board.</p> : stale ? <div className={styles.notice}><p>The hub changed. Reload the current lineup before editing.</p><button type="button" className={styles.button} disabled={frozen} onClick={onReview}>Reload current players</button></div> : null}
+      {!available ? <p role="alert">This match is no longer available for editing. Close this dialog and review the court board.</p> : stale ? <div className={styles.notice}><p>The hub changed. Review the current lineup; your replacement selection and name are preserved.</p><button type="button" className={styles.button} disabled={frozen} onClick={onReview}>Reload current players</button></div> : null}
       {error ? <p role="alert">{error}</p> : null}
       {pending ? <button type="button" className={styles.button} disabled={busy} onClick={onRetry}>Retry saved action</button> : null}
     </form>

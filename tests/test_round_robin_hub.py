@@ -145,14 +145,16 @@ def test_new_plan_does_not_depend_on_which_court_finishes_first():
     assert a["a"]["rounds"][1] == b["a"]["rounds"][1]
 
 
-def test_released_unscored_later_game_can_change_roster_without_losing_finish_boundary():
+def test_released_started_game_retains_lineup_and_delays_departure():
     state, events = setup({"a": limited_rolling_event()}, courts=1)
     later = events["a"]["rounds"][1]["matches"][0]
     target = later["sideA"][0]
     state, events = command(state, events, "assign_game", session_key="a", match_id=later["id"], court_id="c0")
     state, events = command(state, events, "release_game", court_id="c0")
     state, events = command(state, events, "remove_player", session_key="a", participant_id=target)
-    assert all(target not in m["sideA"] + m["sideB"] for r in events["a"]["rounds"] for m in r["matches"])
+    preserved = next(m for m in events["a"]["rounds"][1]["matches"] if m["id"] == later["id"])
+    assert preserved["sideA"] == later["sideA"] and preserved["sideB"] == later["sideB"]
+    assert next(p for p in events["a"]["participants"] if p["id"] == target)["inactive_from_round"] == 3
     assert build_hub_snapshot(state, events, now=START)["groups"][0]["finish_boundary_round"] == 2
 
 
@@ -538,8 +540,9 @@ def test_legacy_upgrade_preserves_live_score_pause_and_different_can_resolve_whi
     assert state["courts"][0]["current"] == legacy["courts"][0]["current"]
     assert all(p["wait_since"] == START for p in state["players"].values())
     assert sum(p["paused"] for p in state["players"].values()) == 2
-    with pytest.raises(ValueError, match="Finish or release"):
-        command(state, events, "resolve_identities", resolution="same", participants=[ref("a", events["a"]["participants"][0]), ref("b", events["b"]["participants"][0])])
+    merged, merged_events = command(state, events, "resolve_identities", resolution="same", participants=[ref("a", events["a"]["participants"][0]), ref("b", events["b"]["participants"][0])])
+    assert merged["courts"][0]["current"] == state["courts"][0]["current"]
+    assert merged_events["a"]["rounds"] == events["a"]["rounds"]
     scored, _ = score(legacy, events, "c0")
     assert scored["courts"][0]["current"] is None
     assert scored["identity_version"] == 2
@@ -775,7 +778,7 @@ def test_departed_profile_can_rejoin_while_playing_in_another_group_but_cannot_d
     state, events = reconcile_hub_events(state, before, events, now=START)
     state, events = command(state, events, "assign_game", session_key="a", match_id=current_matches(events)[0]["id"], court_id="c0")
     member = build_hub_snapshot(state, events, now=START)["groups"][1]["players"][0]
-    assert member["can_rejoin"] and member["on_court"]
+    assert member["can_rejoin"] and not member["on_court"] and member["playing_elsewhere"]
     state, events = command(state, events, "add_player", session_key="b", name="B 0", player_id=1)
     snapshot = build_hub_snapshot(state, events, now=START)
     assert not any(m["session_key"] == "b" for m in snapshot["eligible_queue"])
@@ -803,7 +806,8 @@ def test_late_arrival_reaches_next_round_after_prior_edits_trimmed_future_rounds
     assert events["a"]["hubPreparedThroughRound"] >= 2 and not events["a"]["perfectRotation"]
     assert all(arrival in active_participant_ids(events["a"], r["number"]) for r in events["a"]["rounds"] if r["number"] >= 2)
     assert len(current_matches(events)) == 2
-    assert any(arrival in m["sideA"] + m["sideB"] for m in current_matches(events))
+    # Waiting lineups keep their players; the arrival retains membership and a bye.
+    assert arrival in events["a"]["rounds"][1]["byeParticipantIds"]
     assert temporary not in active_participant_ids(events["a"], 2)
     assert len(events["a"]["rounds"][-1]["byeParticipantIds"]) == 1
 

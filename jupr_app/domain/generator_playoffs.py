@@ -6,7 +6,7 @@ import copy
 from typing import Any
 
 
-PLAYOFF_FORMATS = {"groups_of_four", "top_eight"}
+PLAYOFF_FORMATS = {"groups_of_four", "top_four", "top_eight"}
 
 
 def generator_playoff_options(event: dict[str, Any]) -> dict[str, Any]:
@@ -62,6 +62,9 @@ def generator_playoff_options(event: dict[str, Any]) -> dict[str, Any]:
         "seeds": seeds,
         "sourceRound": current,
         "formats": [
+            {"format": "top_four", "matches": [matchup("Championship", [0, 3], [1, 2])] if len(ids) >= 4 else [],
+             "reason": reason or (None if len(ids) >= 4 else "At least four available players need a completed game."),
+             "sitOutParticipantIds": ids[4:]},
             {"format": "groups_of_four", "matches": group_matches,
              "reason": reason or (None if group_matches else "At least four available players need a completed game."),
              "sitOutParticipantIds": ids[len(group_matches) * 4:]},
@@ -76,7 +79,7 @@ def start_generator_playoff(event: dict[str, Any], *, playoff_format: str) -> di
     from jupr_app.domain.adaptive_play_engine import generator_event_standings, _now_iso
 
     if playoff_format not in PLAYOFF_FORMATS:
-        raise ValueError("Choose games in groups of four or a top-eight bracket.")
+        raise ValueError("Choose a top-four championship, games in groups of four, or a top-eight bracket.")
     options = generator_playoff_options(event)
     option = next(row for row in options["formats"] if row["format"] == playoff_format)
     if option["reason"]:
@@ -114,7 +117,7 @@ def start_generator_playoff(event: dict[str, Any], *, playoff_format: str) -> di
                      "scoreA": None, "scoreB": None, "status": "scheduled"}
             batch.append(match)
             semifinal_ids.append(match["id"])
-        label = "Playoff semifinals" if playoff_format == "top_eight" else "Playoff games"
+        label = {"top_eight": "Playoff semifinals", "top_four": "Top four championship"}.get(playoff_format, "Playoff games")
         append_round(batch, label)
     if playoff_format == "top_eight":
         number = int(next_event["rounds"][-1]["number"]) + 1

@@ -89,6 +89,7 @@ async function sharedStandingsPollsWithoutOperationAccess() {
   };
   const Link = ({ children, ...props }) => React.createElement('a', props, children);
   const Component = load('app/clubs/[clubSlug]/play-generators/PublicGeneratorStandings.tsx', {
+    '@/lib/generatorBrowserStorage': load('lib/generatorBrowserStorage.ts'),
     '@/components/PublicClubLink': Link, 'next/navigation': { useRouter: () => ({}) },
     '@/components/GeneratorSharing': Sharing,
     '@/components/GeneratorSubmission': { __esModule: true, default: () => null, generatorResultLabel: () => 'Unrated' },

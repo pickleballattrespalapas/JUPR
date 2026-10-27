@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from services.api.generator_request_models import GeneratorScoreInput, require_unique_match_ids
+
 from typing import Any, Callable
 
 from fastapi import Query, Request, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from jupr_app.services.generator_submission_service import submit_generator_session
 from jupr_app.services.generator_session_details_service import update_public_generator_details
@@ -65,17 +67,19 @@ class PublicGeneratorSubmitRequest(PublicGeneratorMutationRequest):
 
 
 class PublicGeneratorPlayoffRequest(PublicGeneratorMutationRequest):
-    playoff_format: str = Field(pattern=r"^(groups_of_four|top_eight)$")
+    playoff_format: str = Field(pattern=r"^(groups_of_four|top_eight|top_four)$")
 
 
-class PublicGeneratorScorePayload(BaseModel):
-    match_id: str = Field(min_length=1, max_length=160)
-    score_a: int | None = Field(default=None, ge=0, le=99)
-    score_b: int | None = Field(default=None, ge=0, le=99)
-
+class PublicGeneratorScorePayload(GeneratorScoreInput):
+    pass
 
 class PublicGeneratorScoresRequest(PublicGeneratorMutationRequest):
     scores: list[PublicGeneratorScorePayload] = Field(min_length=1, max_length=1000)
+
+    @field_validator("scores")
+    @classmethod
+    def unique_games(cls, value: list[PublicGeneratorScorePayload]) -> list[PublicGeneratorScorePayload]:
+        return require_unique_match_ids(value)
 
 
 class PublicGeneratorSkipRequest(PublicGeneratorMutationRequest):

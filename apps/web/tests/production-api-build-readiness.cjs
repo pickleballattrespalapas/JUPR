@@ -22,7 +22,7 @@ const hubRoutes = [
   ["post", "/public/round-robin-hubs/{hub_id}/checkins"],
 ];
 for (const [method, path] of hubRoutes) contract.paths[path] = { [method]: {} };
-contract.components.schemas.HubCommandRequest = { properties: { action: { enum: ["set_registration", "review_checkin", "process_checkins", "edit_match_players"] } } };
+contract.components.schemas.HubCommandRequest = { properties: { action: { enum: ["set_registration", "review_checkin", "process_checkins", "edit_match_players", "transfer_player", "rejoin_player", "resolve_game"] } } };
 contract.components.schemas.GeneratorStartRequest = { properties: {
   registration_hub_id: { anyOf: [{ type: "string", format: "uuid" }, { type: "null" }] },
   participant_names: { type: "array" },
@@ -123,6 +123,14 @@ contract.components.schemas.GeneratorStartRequest = { properties: {
     pause: async () => { clock += 10000; }, request: async (url) => ({ ok: true,
       json: async () => url.endsWith('/openapi.json') ? (++contracts === 1 ? oldHubSetup : contract) : ready }) });
   assert.equal(contracts, 2, "The website waits for arrivals-driven RR Hub setup before publishing check-in and court player editing");
+  clock = 0;
+  contracts = 0;
+  const oldHubOperations = structuredClone(contract);
+  oldHubOperations.components.schemas.HubCommandRequest.properties.action.enum = ["set_registration", "review_checkin", "process_checkins", "edit_match_players"];
+  await waitForProductionApi({ environment: "production", now: () => clock,
+    pause: async () => { clock += 10000; }, request: async (url) => ({ ok: true,
+      json: async () => url.endsWith('/openapi.json') ? (++contracts === 1 ? oldHubOperations : contract) : ready }) });
+  assert.equal(contracts, 2, "The website waits for transfer, rejoin, and not-played support before exposing the new Hub controls");
   clock = 0;
   await assert.rejects(waitForProductionApi({ environment: "production", timeoutMs: 10000,
     now: () => clock, pause: async () => { clock += 10000; }, request: async () => { throw new Error("Unavailable"); } }), /current website remains active/);

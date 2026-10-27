@@ -134,6 +134,9 @@ def _blank_history(event: dict[str, Any]) -> dict[str, Any]:
     return {
         "games": {pid: 0 for pid in ids},
         "byes": {pid: 0 for pid in ids},
+        "rotation_byes": {},
+        "last_active": {},
+        "last_byes": {},
         "singles_games": {pid: 0 for pid in ids},
         "doubles_games": {pid: 0 for pid in ids},
         "partners": defaultdict(int),
@@ -153,6 +156,8 @@ def _round_matches(round_row: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 def _apply_match_history(history: dict[str, Any], match: dict[str, Any], play_format: str) -> None:
+    if match.get("status") in {"not_played", "skipped", "cancelled", "canceled"}:
+        return
     side_a = [str(x) for x in match.get("sideA") or match.get("teamA") or []]
     side_b = [str(x) for x in match.get("sideB") or match.get("teamB") or []]
     actual_format = generator_match_play_format(match, play_format)
@@ -195,14 +200,30 @@ def history_before_round(event: dict[str, Any], round_number: int, *, include_pr
             continue
         if status in {"active", "preview"} and not include_preview:
             continue
-        for pid in round_row.get("byeParticipantIds") or []:
-            history["byes"][str(pid)] = int(history["byes"].get(str(pid), 0)) + 1
-        for match in _round_matches(round_row):
-            _apply_match_history(history, match, play_format)
+        matches = [match for match in _round_matches(round_row)
+                   if match.get("status") not in {"not_played", "skipped", "cancelled", "canceled"}]
+        if not matches:
+            continue
+        _update_history_for_generated_round(history, round_row, play_format)
     return history
+
+def _rotation_bye_counts(active_ids: list[str], history: dict[str, Any]) -> dict[str, int]:
+    """Compare attendance fairly without inventing byes in the saved results.
+
+    Joiners and returners enter the current rotation at its lowest bye count.
+    Absence therefore never becomes a debt of byes that must be caught up.
+    """
+    counts = history.get("rotation_byes") or {}
+    if not counts:
+        return {pid: int(history["byes"].get(pid, 0)) for pid in active_ids}
+    last_active = history.get("last_active") or {}
+    baseline = min((counts[pid] for pid in active_ids if pid in last_active and pid in counts), default=0)
+    return {pid: max(int(counts.get(pid, baseline)), baseline) if pid not in last_active
+            else int(counts.get(pid, baseline)) for pid in active_ids}
 
 def _selection_priority(pid: str, history: dict[str, Any], roster_pos: dict[str, int]) -> tuple[Any, ...]:
     return (
+        -int((history.get("last_byes") or {}).get(pid, 0)),
         -int(history["byes"].get(pid, 0)),
         int(history["games"].get(pid, 0)),
         int(roster_pos.get(pid, 9999)),
@@ -220,18 +241,18 @@ def _candidate_playing_sets(
 ) -> list[tuple[list[str], list[str]]]:
     if slots >= len(active_ids):
         return [(list(active_ids), [])]
+    history = {**history, "byes": _rotation_bye_counts(active_ids, history)}
     ordered = sorted(active_ids, key=lambda pid: _selection_priority(pid, history, roster_pos))
-    # Protect players with more assigned byes first. Game counts only break
-    # equal-bye ties, so a late arrival does not force another player's second
-    # bye before taking their own first. Variety breaks ties in both counts.
-    cutoff = _selection_priority(ordered[slots - 1], history, roster_pos)[:2]
+    # Seat the previous byes first when capacity permits, then balance byes
+    # during attendance. Matchup variety only breaks equal-priority ties.
+    cutoff = _selection_priority(ordered[slots - 1], history, roster_pos)[:3]
     required = [
         pid for pid in ordered
-        if _selection_priority(pid, history, roster_pos)[:2] < cutoff
+        if _selection_priority(pid, history, roster_pos)[:3] < cutoff
     ]
     tied = [
         pid for pid in ordered
-        if _selection_priority(pid, history, roster_pos)[:2] == cutoff
+        if _selection_priority(pid, history, roster_pos)[:3] == cutoff
     ]
     remaining_slots = slots - len(required)
     seen: set[tuple[str, ...]] = set()
@@ -826,9 +847,22 @@ def _mixed_round(
     }
 
 def _update_history_for_generated_round(history: dict[str, Any], round_row: dict[str, Any], play_format: str) -> None:
+    matches = [match for match in _round_matches(round_row)
+               if match.get("status") not in {"not_played", "skipped", "cancelled", "canceled"}]
+    if not matches:
+        return
+    playing = {str(pid) for match in matches for pid in
+               (match.get("sideA") or match.get("teamA") or []) +
+               (match.get("sideB") or match.get("teamB") or [])}
+    byes = {str(pid) for pid in round_row.get("byeParticipantIds") or []} - playing
+    active = sorted(playing | byes)
+    counts = _rotation_bye_counts(active, history)
+    history.setdefault("rotation_byes", {}).update({pid: counts[pid] + int(pid in byes) for pid in active})
+    history["last_active"] = {pid: 1 for pid in active}
+    history["last_byes"] = {pid: 1 for pid in byes}
     for pid in round_row.get("byeParticipantIds") or []:
         history["byes"][str(pid)] = int(history["byes"].get(str(pid), 0)) + 1
-    for match in _round_matches(round_row):
+    for match in matches:
         _apply_match_history(history, match, play_format)
 
 
@@ -1501,17 +1535,40 @@ def save_generator_round(
     if next_event.get("status") == "completed" and str(row.get("status")) != "saved":
         raise ValueError("Only saved scores can be corrected in a completed session.")
     by_id = {str(match.get("id")): match for match in _round_matches(row)}
-    score_by_id = {str(score.get("match_id")): score for score in scores or []}
+    score_by_id = {}
+    for score in scores or []:
+        match_id = str(score.get("match_id"))
+        if match_id in score_by_id:
+            raise ValueError("Duplicate match IDs are not allowed in a score submission.")
+        if match_id not in by_id:
+            raise ValueError("Unknown match ID in this round's score submission.")
+        score_by_id[match_id] = score
+    required_winners = {
+        str(source)
+        for future in next_event.get("rounds") or []
+        for match in _round_matches(future)
+        for source in match.get("sourceMatchIds") or []
+    }
     for match_id, match in by_id.items():
         score = score_by_id.get(match_id)
         if not score:
-            raise ValueError("Enter every score before saving the round, or skip the round.")
+            raise ValueError("Submit every match in the round. Leave both scores blank for a game not played.")
         a = score.get("score_a")
         b = score.get("score_b")
-        if a in (None, "") or b in (None, ""):
-            raise ValueError("Enter every score before saving the round, or skip the round.")
+        blank_a, blank_b = a in (None, ""), b in (None, "")
+        if blank_a != blank_b:
+            raise ValueError("Enter both scores, or leave both blank for a game not played.")
+        if blank_a:
+            if is_moneyball(next_event):
+                raise ValueError("Moneyball requires scores for the complete fixed rotation; games cannot be marked not played.")
+            if match_id in required_winners:
+                raise ValueError("Save a winning score for every semifinal before starting the final.")
+            match.update(scoreA=None, scoreB=None, status="not_played")
+            continue
         if is_moneyball(next_event):
             validate_score(a, b, (next_event.get("moneyball") or {}).get("targetScore", 11))
+        if type(a) is not int or type(b) is not int:
+            raise ValueError("Scores must be whole numbers between 0 and 99.")
         a = int(a)
         b = int(b)
         if a < 0 or b < 0 or a > 99 or b > 99:
@@ -1533,6 +1590,7 @@ def save_generator_round(
     row["status"] = "saved"
     row["savedAt"] = _now_iso()
     row["skippedAt"] = None
+    row["skipReason"] = ""
     return next_event
 
 
@@ -1557,28 +1615,45 @@ def mark_generator_round_played(event: dict[str, Any], *, round_number: int) -> 
     row["savedAt"] = None
     row["skippedAt"] = None
     for match in row.get("matches") or []:
-        match["status"] = "played"
+        if match.get("status") != "not_played":
+            match["status"] = "played"
     for court in row.get("courts") or []:
         for match in court.get("matches") or []:
-            match["status"] = "played"
+            if match.get("status") != "not_played":
+                match["status"] = "played"
     return next_event
 
 
 def skip_generator_round(event: dict[str, Any], *, round_number: int, reason: str = "") -> dict[str, Any]:
     next_event = copy.deepcopy(event)
-    if event.get("roundRobinHubId") and int(round_number) != int(event.get("currentRoundNumber") or 1):
-        raise ValueError("Only the current unfinished round can be skipped in the hub.")
     if is_moneyball(next_event):
         raise ValueError("Moneyball requires the complete fixed rotation. Choose another scheduled round instead of skipping.")
     row = _get_round(next_event, round_number)
     if row.get("stage") == "playoff":
         raise ValueError("Playoff games need a winning score and cannot be skipped.")
-    if str(row.get("status")) not in {"active", "preview"}:
-        raise ValueError("Only an active round can be skipped.")
-    if _round_has_any_scores(row):
+    if next_event.get("playoff"):
+        raise ValueError("Round-robin results are fixed once the playoff starts.")
+    correcting_saved = row.get("status") == "saved" and next_event.get("generatorKind") == "round_robin"
+    if event.get("roundRobinHubId") and int(round_number) != int(event.get("currentRoundNumber") or 1) and not correcting_saved:
+        raise ValueError("Only the current unfinished round can be skipped in the hub.")
+    if str(row.get("status")) not in {"active", "preview"} and not correcting_saved:
+        raise ValueError("Only an active round or a saved round robin can be skipped.")
+    if correcting_saved and not _clean_name(reason):
+        raise ValueError("Enter a reason before clearing saved round results.")
+    assigned = set(map(str, event.get("hubAssignedMatchIds") or []))
+    if any(str(match.get("id")) in assigned for match in _round_matches(row)):
+        raise ValueError("Release this round's court assignments before skipping it.")
+    if _round_has_any_scores(row) and not correcting_saved:
         raise ValueError("Clear entered scores before skipping this round.")
+    if correcting_saved:
+        for match in row.get("matches") or []:
+            match.update(scoreA=None, scoreB=None, status="not_played")
+        for court in row.get("courts") or []:
+            for match in court.get("matches") or []:
+                match.update(scoreA=None, scoreB=None, status="not_played")
     row["status"] = "skipped"
     row["skippedAt"] = _now_iso()
+    row["savedAt"] = None
     row["skipReason"] = _clean_name(reason)
     return next_event
 
@@ -1600,6 +1675,11 @@ def reopen_generator_round(event: dict[str, Any], *, round_number: int) -> dict[
     row["status"] = "active"
     row["skippedAt"] = None
     row["skipReason"] = ""
+    for match in row.get("matches") or []:
+        if match.get("status") == "not_played":
+            match["status"] = "scheduled"
+            for key in ("hubCompletedAt", "hubStartedAt", "courtLabel", "reservedCourtLabel"):
+                match.pop(key, None)
     next_event["status"] = "active"
     next_event["completedAt"] = None
     # Keep currentRoundNumber and every original match intact. An earlier
@@ -1664,7 +1744,7 @@ def _round_standings(event: dict[str, Any], round_row: dict[str, Any], participa
     if str(round_row.get("status")) == "skipped":
         return list(stats.values())
     for match in _round_matches(round_row):
-        if match.get("scoreA") is None or match.get("scoreB") is None:
+        if match.get("status") in {"not_played", "skipped", "cancelled", "canceled"} or match.get("scoreA") is None or match.get("scoreB") is None:
             continue
         a = int(match["scoreA"]); b = int(match["scoreB"])
         side_a = [str(x) for x in match.get("sideA") or match.get("teamA") or []]
@@ -1698,13 +1778,6 @@ def generator_event_standings(event: dict[str, Any]) -> list[dict[str, Any]]:
         return moneyball_standings(event)
     if event.get("playoff"):
         return copy.deepcopy(event["playoff"]["seedStandings"])
-    if event.get("type") == "round_robin" and event.get("status") == "completed":
-        from jupr_app.domain.live_beta_engine import round_robin_standings
-        final_event = {**event, "rounds": [r for r in event.get("rounds", []) if r.get("status") == "saved"]}
-        rows = round_robin_standings(final_event)
-        for row in rows:
-            row["roundRobinVictoryRanking"] = True
-        return rows
     participants = _participant_map(event)
     stats: dict[str, dict[str, Any]] = {}
     for participant in event.get("participants") or []:
@@ -1727,7 +1800,7 @@ def generator_event_standings(event: dict[str, Any]) -> list[dict[str, Any]]:
         if str(round_row.get("status") or "") != "saved":
             continue
         for match in _round_matches(round_row):
-            if match.get("scoreA") is None or match.get("scoreB") is None:
+            if match.get("status") in {"not_played", "skipped", "cancelled", "canceled"} or match.get("scoreA") is None or match.get("scoreB") is None:
                 continue
             score_a = int(match.get("scoreA") or 0)
             score_b = int(match.get("scoreB") or 0)
@@ -2171,10 +2244,7 @@ def _regenerate_round_robin_from(event: dict[str, Any], start_round: int) -> Non
         if str(row.get("status")) not in {"saved", "played", "active"}:
             continue
         accounted.add(int(row["number"]))
-        for pid in row.get("byeParticipantIds") or []:
-            history["byes"][str(pid)] = int(history["byes"].get(str(pid), 0)) + 1
-        for match in _round_matches(row):
-            _apply_match_history(history, match, str(event.get("playFormat") or "doubles"))
+        _update_history_for_generated_round(history, row, str(event.get("playFormat") or "doubles"))
     generated = []
     total = int(event.get("totalRounds") or 1)
     if event.get("roundRobinHubId"):
@@ -2210,6 +2280,19 @@ def _regenerate_round_robin_from(event: dict[str, Any], start_round: int) -> Non
             _update_history_for_generated_round(history, row, str(event.get("playFormat") or "doubles"))
     event["rounds"] = [*preserved, *generated]
 
+def participant_has_upcoming_membership(event: dict[str, Any], participant: dict[str, Any],
+                                       from_round: int | None = None) -> bool:
+    """Inspect membership boundaries, including overrides, without unbounded scans."""
+    current = int(from_round if from_round is not None else event.get("currentRoundNumber") or 1)
+    boundaries = {current, max(current, int(participant.get("active_from_round") or 1))}
+    if participant.get("inactive_from_round") is not None:
+        boundaries.add(int(participant["inactive_from_round"]))
+    for number in [*(participant.get("inactive_rounds") or []), *(event.get("rosterByRound") or {})]:
+        boundaries.update((int(number), int(number) + 1))
+    pid = str(participant["id"])
+    return any(pid in active_participant_ids(event, number) for number in boundaries if number >= current)
+
+
 def mutate_generator_roster(
     event: dict[str, Any],
     *,
@@ -2243,6 +2326,10 @@ def mutate_generator_roster(
         return next_event
     effective = _effective_roster_round(next_event)
     participants = _participant_map(next_event)
+    if clean_action in {"add", "substitute"} and player_id is not None:
+        if any(p.get("player_id") is not None and int(p["player_id"]) == int(player_id)
+               and participant_has_upcoming_membership(next_event, p) for p in participants.values()):
+            raise ValueError("This club player is already in this round robin's active or upcoming roster. Choose an existing player or a different substitute.")
     original_rosters = {str(row["number"]): active_participant_ids(next_event, int(row["number"]))
                         for row in next_event.get("rounds") or []}
 

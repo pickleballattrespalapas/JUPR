@@ -111,7 +111,7 @@ const reply = (body, status = 200) => ({ ok: status < 400, status, json: async (
       };
       await act(async () => { tree = create(React.createElement(Setup, { apiBase: "https://api.test", clubId: "club", generatorKind: kind, status: { enabled: true, writes_enabled: true } })); });
       const isPublic = file.includes("/clubs/");
-      assert.equal(historyRequests.length, isPublic ? 0 : 1, "Only admin setup fetches previous sessions");
+      assert.equal(historyRequests.length, 1, "Both workspaces fetch saved sessions; public setup shows only this browser’s organizer sessions");
       assert.equal(text(tree.toJSON()).includes("Previous club session"), !isPublic, "Previous sessions remain in admin setup only");
       if (isPublic) assert.doesNotMatch(text(tree.toJSON()), /Recent sessions/);
       const labelSelect = label => tree.root.findAllByType("label").find(node => text(node).startsWith(label)).findByType("select");

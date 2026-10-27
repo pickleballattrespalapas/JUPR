@@ -1,0 +1,70 @@
+name: RR Hub Reliability
+
+on:
+  pull_request:
+    paths: ["jupr_app/**", "services/api/**", "apps/web/**", "supabase/migrations/**", "tests/**", ".github/workflows/rr-hub-reliability.yml"]
+  push:
+    branches: [staging]
+    paths: ["jupr_app/**", "services/api/**", "apps/web/**", "supabase/migrations/**", "tests/**", ".github/workflows/rr-hub-reliability.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  adversarial-regressions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: |
+            apps/web/package-lock.json
+            tests/sql/package-lock.json
+      - name: Install test dependencies
+        run: |
+          python -m pip install -r requirements.txt -r services/api/requirements.txt -r tests/adversarial_hub/requirements.txt
+          npm ci --prefix apps/web --no-audit --no-fund
+          npm ci --prefix tests/sql --no-audit --no-fund
+      - name: Verify failure regressions and action sequences
+        env:
+          JUPR_ENV: test
+          HUB_AUDIT_SEEDS: "48"
+          HUB_AUDIT_STEPS: "100"
+        run: |
+          python -m pytest --runxfail -q tests/adversarial_hub \
+            tests/test_hub_identity_repairs.py tests/test_generator_request_validation.py \
+            tests/test_public_generator_receipts.py tests/test_score_lifecycle_consumer_edges.py \
+            tests/test_legacy_generator_write_boundary.py tests/test_generator_round_operation_scope.py \
+            --junitxml=test-results/rr-hub/python.xml
+      - name: Verify actual React recovery flows
+        run: |
+          NODE_PATH="$GITHUB_WORKSPACE/apps/web/node_modules" node tests/adversarial_hub/ui_breaks.cjs
+          cd apps/web
+          node tests/round-robin-hub-operations.cjs
+      - name: Verify actual transactional SQL
+        run: |
+          npm --prefix tests/sql run test:round-robin-hub
+          npm --prefix tests/sql run test:generator-journal
+          PGLITE_MODULE="$GITHUB_WORKSPACE/tests/sql/node_modules/@electric-sql/pglite/dist/index.js" node tests/adversarial_hub/operation_sql_breaks.mjs
+      - name: Install local browser
+        working-directory: apps/web
+        run: npx playwright install --with-deps chromium
+      - name: Verify complete browser and API journey
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+          GENERATOR_BROWSER_PYTHON: python
+          GENERATOR_BROWSER_ARTIFACTS: test-results/rr-hub/browser
+        run: node tests/adversarial_hub/browser_journey.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rr-hub-reliability-${{ github.sha }}
+          path: test-results/rr-hub/
+          retention-days: 14

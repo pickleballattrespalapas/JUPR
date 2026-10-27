@@ -1,10 +1,12 @@
 export type HubCourtConfig = { id: string; label: string; dedicated_session_key: string | null; open: boolean };
 export type HubPlayer = { id: string; name: string; display_name?: string; identity: string };
+export type HubPlayerCourt = { session_key: string; group_title: string; court_id: string; court_label: string };
 export type HubMatch = {
   session_key: string; match_id: string; round_number: number; side_a: HubPlayer[]; side_b: HubPlayer[];
   label: string; wait_seconds: number; allowed_court_ids: string[]; blockers: string[]; status: string;
   court_id?: string | null; reserved_court_id?: string | null; score_a?: number | null; score_b?: number | null;
   can_edit_players?: boolean; edit_players_unavailable_reason?: string | null;
+  result_status?: "pending" | "played" | "not_played"; not_played_reason?: string | null;
 };
 export type HubCourt = HubCourtConfig & { current: HubMatch | null; next: HubMatch | null };
 export type HubGroupPlayer = {
@@ -12,10 +14,16 @@ export type HubGroupPlayer = {
   paused: boolean; wait_seconds: number; on_court: boolean; reserved: boolean; active: boolean;
   active_from_round?: number; inactive_from_round?: number | null; inactive_rounds?: number[];
   can_rejoin?: boolean;
+  membership_status?: "active" | "upcoming" | "departed" | "absent";
+  current_court?: HubPlayerCourt | null; reserved_court?: HubPlayerCourt | null;
+  playing_elsewhere?: boolean; reserved_elsewhere?: boolean; remove_effective_round?: number;
   on_bye?: boolean; can_remove?: boolean; remove_unavailable_reason?: string | null;
 };
 export type HubGroup = {
   registration_driven?: boolean; minimum_players?: number; active_player_count?: number;
+  upcoming_player_count?: number; departed_player_count?: number; roster_entry_count?: number;
+  add_player_effective_round?: number;
+  played_matches?: number; not_played_matches?: number; pending_matches?: number;
   session_key: string; title: string; current_round_number: number; round_status: string;
   completed_matches: number; total_matches: number; can_advance: boolean; event_format: string; scoring_mode: string;
   total_rounds?: number; advance_label?: string; rating_mode?: string; status?: string; dedicated_court_ids?: string[];
@@ -54,7 +62,7 @@ export type HubDetailResponse = { ok: boolean; hub: HubSummary; workspace: HubWo
 export type HubCommandAction = "add_group" | "remove_group" | "configure_courts" | "assign_next_court" |
   "assign_game" | "reserve_game_for_court" | "cancel_reservation" | "move_game" | "release_game" |
   "score_and_release" | "mark_played" | "pause_player" | "resume_player" | "advance_round" | "finish_hub" | "finish_group" | "auto_fill_courts" |
-  "resolve_identities" | "add_player" | "remove_player" | "set_registration" | "review_checkin" | "process_checkins" | "edit_match_players";
+  "resolve_identities" | "add_player" | "remove_player" | "transfer_player" | "rejoin_player" | "resolve_game" | "set_registration" | "review_checkin" | "process_checkins" | "edit_match_players";
 export type HubCommand = {
   action: HubCommandAction; payload: Record<string, unknown>; expected_version: string | number; idempotency_key: string;
 };

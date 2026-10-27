@@ -69,7 +69,12 @@ async function checkRunner(file, isPublic) {
         row.status = "saved"; row.matches[0].scoreA = 11; row.matches[0].scoreB = 7;
       } else if (url.endsWith("/played")) row.status = "played";
       else if (url.endsWith("/advance")) { session.current_round_number = 9; session.event.currentRoundNumber = 9; session.status = "active"; }
-      else if (url.endsWith("/complete")) session.status = "completed";
+      else if (url.endsWith("/complete")) {
+        if (!isPublic && body.confirmation_text !== "COMPLETE SESSION") {
+          return { ok: false, status: 400, json: async () => ({ detail: "Type COMPLETE SESSION to complete this play session." }) };
+        }
+        session.status = session.event.status = "completed";
+      }
       else throw new Error(`Unexpected mutation ${url}`);
       session.version += 1;
     }
@@ -115,6 +120,21 @@ async function checkRunner(file, isPublic) {
   assert.match(finish.props["data-description"], /unfinished round will not count/);
   await act(async () => tree.root.findByProps({ "aria-label": "r8-c1 side A score" }).props.onChange({ target: { value: "3" } }));
   assert.equal(button(tree, "Finish session").props.disabled, true, "Unsaved score draft must not be discarded on finish");
+  await unmount();
+
+  session = initialSession(); requests = [];
+  for (const row of session.event.rounds) {
+    row.status = "saved";
+    row.matches[0].scoreA = 11; row.matches[0].scoreB = 7;
+  }
+  const savedRounds = clone(session.event.rounds);
+  await mount({ roundNumber: 8 });
+  await act(async () => button(tree, "Finish session").props.onClick());
+  assert.equal(session.status, "completed", "Finish must satisfy the server confirmation contract");
+  assert.deepEqual(session.event.rounds, savedRounds, "Finishing keeps every saved score and matchup");
+  assert.equal(requests.length, 1);
+  assert.ok(requests[0].url.endsWith("/complete"));
+  if (!isPublic) assert.equal(requests[0].body.confirmation_text, "COMPLETE SESSION");
   await unmount();
 
   for (const locked of [{ submission: { status: "pending" } }]) {
