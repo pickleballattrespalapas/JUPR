@@ -255,6 +255,8 @@ async function main() {
     await page.getByRole('article').filter({has:page.getByRole('button',{name:'Enter score',exact:true})}).getByRole('button',{name:'Enter score',exact:true}).click();
     await page.getByLabel('Side A score',{exact:true}).fill('11');
     await page.getByLabel('Side B score',{exact:true}).fill('7');
+    assert.equal(await page.getByLabel('Side A score',{exact:true}).inputValue(),'11','Opening focus must not redirect the second score into the first field');
+    assert.equal(await page.getByLabel('Side B score',{exact:true}).inputValue(),'7');
     edited = await command(page,page.getByRole('button',{name:'Save score & release court',exact:true}),'score_and_release');
     assert.equal(edited.workspace.groups.find(g=>g.session_key===firstSession.session_key).current_round_number,2);
     edited = await command(page,page.getByRole('button',{name:'Fill open courts',exact:true}),'auto_fill_courts');
