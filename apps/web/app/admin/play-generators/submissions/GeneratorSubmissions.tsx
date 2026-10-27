@@ -20,6 +20,8 @@ type Submission = {
 };
 type Queue = { submissions: Submission[]; players: Array<{ id: number; name: string; ratings?: Record<MatchFormat, PlayerRating> }> };
 const field = { padding: "0.6rem", border: "1px solid #cbd5e1", borderRadius: 8, font: "inherit", maxWidth: "100%" };
+const scoreKey = (match: Submission["matches"][number]) => `${match.round_number}:${match.id}`;
+const validScore = (value: string) => /^\d{1,2}$/.test(value);
 
 function playerFormats(item: Submission, participantId: string): MatchFormat[] {
   const formats = new Set<MatchFormat>();
@@ -48,6 +50,10 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
   const [status, setStatus] = useState("pending");
   const [selected, setSelected] = useState<Submission | null>(null);
   const [editingTitle, setEditingTitle] = useState(false);
+  const [editingScores, setEditingScores] = useState(false);
+  const [scoreDrafts, setScoreDrafts] = useState<Record<string, { a: string; b: string }>>({});
+  const [scoreRound, setScoreRound] = useState("");
+  const [scorePlayer, setScorePlayer] = useState("");
   const [sessionRating, setSessionRating] = useState<"rated" | "unrated">("unrated");
   const [titleDraft, setTitleDraft] = useState("");
   const [mapping, setMapping] = useState<Record<string, number>>({});
@@ -106,6 +112,7 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
   }, [accessToken, clubId, request, status]);
   const select = useCallback((item: Submission) => {
     setEditingTitle(false); setTitleDraft(item.title); setSessionRating(item.rating_mode);
+    setEditingScores(false); setScoreDrafts({}); setScoreRound(""); setScorePlayer("");
     setRatingDrafts({}); setPendingCreations({}); setMessage("");
     setSelected(item); setReason(item.review?.request.reason || ""); setMatchDate(item.review?.request.match_date || item.match_date);
     const ids: Record<string, number> = {};
@@ -135,7 +142,7 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
   }, [selected]);
 
   async function saveTitle() {
-    if (!selected || selected.status !== "pending" || busy) return;
+    if (!selected || selected.status !== "pending" || busy || editingScores) return;
     const title = titleDraft.trim().replace(/\s+/g, " ");
     if (!title || title.length > 160 || (title === selected.title && sessionRating === selected.rating_mode)) return;
     const scope = clubId + ":" + accessToken;
@@ -152,6 +159,35 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
       setTitleDraft(payload.title); setEditingTitle(false); setMessage("Session details saved.");
     } catch (error) {
       if (queueScope.current === scope && generation.current === current) setMessage(error instanceof Error ? error.message : "Could not save session details. Try again.");
+    } finally {
+      if (queueScope.current === scope && generation.current === current) setBusy(false);
+    }
+  }
+  const scoreChanges = (selected?.matches || []).flatMap(match => {
+    const draft = scoreDrafts[scoreKey(match)];
+    if (!draft || (validScore(draft.a) && validScore(draft.b) && Number(draft.a) === match.scoreA && Number(draft.b) === match.scoreB)) return [];
+    return [{ match, draft, valid: validScore(draft.a) && validScore(draft.b) && Number(draft.a) !== Number(draft.b) }];
+  });
+  const scoresValid = scoreChanges.every(change => change.valid);
+  async function saveScoreCorrections() {
+    if (!selected || selected.status !== "pending" || busy || editingTitle || !editingScores || !scoreChanges.length || !scoresValid) return;
+    const scope = `${clubId}:${accessToken}`;
+    const current = generation.current;
+    setBusy(true); setMessage("");
+    try {
+      const payload = await request(`sessions/${encodeURIComponent(selected.session_key)}/submission/scores`, {
+        expected_version: selected.version,
+        scores: scoreChanges.map(({ match, draft }) => ({ round_number: match.round_number, match_id: match.id, score_a: Number(draft.a), score_b: Number(draft.b) }))
+      }, undefined, "PATCH");
+      if (queueScope.current !== scope || generation.current !== current) return;
+      const updated: Submission = payload.submission;
+      if (!updated || updated.session_key !== selected.session_key || !Array.isArray(updated.matches)) throw new Error("Could not confirm the saved scores.");
+      setSelected(updated);
+      setQueue(old => ({ ...old, submissions: old.submissions.map(item => item.session_key === updated.session_key ? updated : item) }));
+      setEditingScores(false); setScoreDrafts({});
+      setMessage("Score corrections saved. This session is still awaiting approval.");
+    } catch (error) {
+      if (queueScope.current === scope && generation.current === current) setMessage(`${error instanceof Error ? error.message : "Could not confirm the saved scores."} Your edits are still here. Refresh to check the saved scores before trying again.`);
     } finally {
       if (queueScope.current === scope && generation.current === current) setBusy(false);
     }
@@ -191,6 +227,7 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
   async function decide(action: ReviewRequest["action"]) {
     if (!selected) throw new InteractionActionError("Choose a submission first.", { kind: "validation" });
     if (editingTitle) throw new InteractionActionError("Save or cancel the session details edit before reviewing results.", { kind: "validation" });
+    if (editingScores) throw new InteractionActionError("Save or cancel score corrections before reviewing results.", { kind: "validation" });
     setBusy(true); setMessage("");
     try {
       const body = selected.status === "processing" && selected.review ? selected.review.request : { expected_version: selected.version, action, player_ids: mapping, match_date: matchDate, reason };
@@ -225,7 +262,10 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
   const ratingsReady = ratingChecks.every(check => !check.missing && !check.dirty);
   const creationsReady = !Object.values(pendingCreations).some(Boolean);
   const names = new Map(selected?.participants.map(p => [p.id, p.name]) || []);
-  return <div style={{ display: "grid", gap: "1rem" }}>
+  const scoreRounds = [...new Set(selected?.matches.map(match => match.round_number) || [])].sort((a, b) => a - b);
+  const visibleMatches = (selected?.matches || []).filter(match => (!scoreRound || match.round_number === Number(scoreRound))
+    && [...(match.sideA || match.teamA || []), ...(match.sideB || match.teamB || [])].some(id => (names.get(id) || "Unknown player").toLocaleLowerCase().includes(scorePlayer.trim().toLocaleLowerCase())));
+  return <div style={{ display: "grid", gap: "1rem", minWidth: 0 }}>
     <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
       <label>Show <select value={status} disabled={busy} onChange={e => setStatus(e.target.value)} style={field}><option value="pending">Awaiting approval</option><option value="approved">Approved</option><option value="rejected">Rejected</option></select></label>
       <button onClick={() => void refresh()} disabled={busy || !accessToken} style={field}>Refresh</button>
@@ -238,7 +278,7 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
         <strong>{item.title}</strong><br />{item.match_date} · {item.match_count} games · {item.rating_mode === "rated" ? "Rated" : "Unrated"}<br />Submitted by {item.organizer_name}<br />{item.status === "processing" ? "Approval interrupted — resume review" : item.approved_mode || item.status}
       </button>)}
     </div>
-    {selected ? <article id="generator-submission-review" ref={reviewPanel} tabIndex={-1} style={{ padding: "1rem", border: "1px solid #2563eb", borderRadius: 14, scrollMarginTop: "1rem" }}>
+    {selected ? <article id="generator-submission-review" ref={reviewPanel} tabIndex={-1} style={{ padding: "1rem", border: "1px solid #2563eb", borderRadius: 14, scrollMarginTop: "1rem", minWidth: 0 }}>
       <h2>{selected.title} · {selected.rating_mode === "rated" ? "Rated" : "Unrated"}</h2>
       {editable ? editingTitle ? <form aria-label="Edit session details" onSubmit={event => { event.preventDefault(); void saveTitle(); }} style={{ display: "grid", gap: "0.6rem", maxWidth: 560 }}>
         <label style={{ display: "grid", gap: 4 }}>Session title
@@ -255,7 +295,7 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
           <button type="submit" style={field} disabled={busy || !normalizedTitle || normalizedTitle.length > 160 || (normalizedTitle === selected.title && sessionRating === selected.rating_mode)}>Save session details</button>
           <button type="button" style={field} disabled={busy} onClick={() => { setTitleDraft(selected.title); setEditingTitle(false); }}>Cancel</button>
         </div>
-      </form> : <button type="button" style={field} disabled={busy} onClick={() => { setTitleDraft(selected.title); setSessionRating(selected.rating_mode); setEditingTitle(true); setMessage(""); }}>Edit session details</button> : null}
+      </form> : <button type="button" style={field} disabled={busy || editingScores} onClick={() => { setTitleDraft(selected.title); setSessionRating(selected.rating_mode); setEditingTitle(true); setMessage(""); }}>Edit session details</button> : null}
       <p>{selected.match_count} scored games · Submitted by {selected.organizer_name}</p>
       <label>Date played <input type="date" value={matchDate} disabled={!editable || busy} onChange={e => setMatchDate(e.target.value)} style={field} /></label>
       <h3>Match players{selected.rating_mode === "rated" ? " and review ratings" : " to club profiles"}</h3>
@@ -294,9 +334,47 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
         })}
       </div>
       <h3>Saved scores</h3>
-      <div style={{ overflowX: "auto" }}><table style={{ width: "100%", textAlign: "left", borderSpacing: "0 0.5rem" }}><thead><tr><th>Round</th><th>Team 1</th><th>Score</th><th>Team 2</th></tr></thead><tbody>
-        {selected.matches.map(m => <tr key={m.id}><td>{m.round_number}</td><td>{(m.sideA || m.teamA || []).map(id => names.get(id) || "Unknown player").join(" & ")}</td><td style={{ whiteSpace: "nowrap" }}>{m.scoreA} – {m.scoreB}</td><td>{(m.sideB || m.teamB || []).map(id => names.get(id) || "Unknown player").join(" & ")}</td></tr>)}
+      <div style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap", alignItems: "end", marginBottom: "0.75rem" }}>
+        <label style={{ display: "grid", gap: 4 }}>Round
+          <select aria-label="Filter scores by round" value={scoreRound} style={field} onChange={event => setScoreRound(event.target.value)}>
+            <option value="">All rounds</option>{scoreRounds.map(round => <option key={round} value={round}>Round {round}</option>)}
+          </select>
+        </label>
+        <label style={{ display: "grid", gap: 4 }}>Find a player
+          <input type="search" aria-label="Find a player in saved scores" value={scorePlayer} placeholder="Player name" style={field} onChange={event => setScorePlayer(event.target.value)} />
+        </label>
+        {editable && !editingScores ? <button type="button" style={field} disabled={busy || editingTitle} onClick={() => { setScoreDrafts({}); setEditingScores(true); setMessage(""); }}>Edit scores</button> : null}
+      </div>
+      {editingScores ? <p>Correct the scores below, then save before approving. Enter both scores from 0 to 99; games cannot end in a tie.</p> : null}
+      <div style={{ overflowX: "auto" }}><table style={{ width: "100%", minWidth: 580, textAlign: "left", borderSpacing: "0 0.5rem" }}><thead><tr><th>Round</th><th>Team 1</th><th>Score</th><th>Team 2</th></tr></thead><tbody>
+        {visibleMatches.map(m => {
+          const key = scoreKey(m);
+          const draft = scoreDrafts[key] || { a: String(m.scoreA), b: String(m.scoreB) };
+          const teams = [(m.sideA || m.teamA || []), (m.sideB || m.teamB || [])].map(side => side.map(id => names.get(id) || "Unknown player").join(" & "));
+          const changed = scoreChanges.some(change => scoreKey(change.match) === key);
+          return <tr key={key}><td>{m.round_number}</td><td>{teams[0]}</td><td style={{ whiteSpace: "nowrap" }}>
+            {editingScores ? <>
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                {(["a", "b"] as const).map((side, index) => <label key={side} style={{ display: "grid", gap: 3 }}>
+                  <small>Team {index + 1}</small>
+                  <input type="number" inputMode="numeric" min={0} max={99} step={1} aria-label={`Round ${m.round_number}, game ${m.id}, ${teams[index]} score`} value={draft[side]} disabled={busy}
+                    style={{ ...field, width: 76 }} onChange={event => setScoreDrafts(old => ({ ...old, [key]: { ...(old[key] || { a: String(m.scoreA), b: String(m.scoreB) }), [side]: event.target.value } }))} />
+                </label>)}
+              </div>
+              {changed ? <small>Saved: {m.scoreA} – {m.scoreB}</small> : null}
+            </> : <>{m.scoreA} – {m.scoreB}</>}
+          </td><td>{teams[1]}</td></tr>;
+        })}
       </tbody></table></div>
+      {!visibleMatches.length ? <p>No games match these filters.</p> : null}
+      {editingScores ? <div style={{ display: "grid", gap: "0.6rem", marginTop: "0.75rem" }}>
+        <p role="status" style={{ margin: 0 }}>{scoreChanges.length} game{scoreChanges.length === 1 ? "" : "s"} changed across all rounds. Save or cancel score corrections before reviewing results.</p>
+        {!scoresValid ? <p role="alert" style={{ margin: 0 }}>Enter two different whole-number scores from 0 to 99 for every changed game.</p> : null}
+        <div style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>
+          <button type="button" style={field} disabled={busy || !scoreChanges.length || !scoresValid} onClick={() => void saveScoreCorrections()}>Save score corrections</button>
+          <button type="button" style={field} disabled={busy} onClick={() => { setScoreDrafts({}); setEditingScores(false); }}>Cancel score edits</button>
+        </div>
+      </div> : null}
       {editable ? <>
         <p>This session is marked {selected.rating_mode}. {selected.rating_mode === "rated" ? "Approval updates the appropriate singles or doubles ratings." : "Approval leaves ratings unchanged."} Approved games count toward stats and recaps.</p>
         {!allMapped ? <p>Choose a club profile for every player before approving.</p> : null}
@@ -308,7 +386,7 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
           {(["approve", "reject"] as const).map(action => <ConfirmAction key={action}
             triggerLabel={action === "reject" ? "Reject" : `Approve ${selected.rating_mode} results`} title={action === "reject" ? "Reject these results?" : `Approve ${selected.match_count} ${selected.rating_mode} games?`}
             description={action === "reject" ? "These games will stay out of club records." : selected.rating_mode === "rated" ? "These games will update player ratings and count toward stats and recaps." : "These games will count toward stats and recaps. Ratings stay unchanged."}
-            confirmLabel={action === "reject" ? "Reject results" : `Approve ${selected.rating_mode} results`} confirmationText="" disabled={busy || editingTitle || (action !== "reject" && (!allMapped || !matchDate || !ratingsReady || !creationsReady))} onConfirm={() => decide(action)} />)}
+            confirmLabel={action === "reject" ? "Reject results" : `Approve ${selected.rating_mode} results`} confirmationText="" disabled={busy || editingTitle || editingScores || (action !== "reject" && (!allMapped || !matchDate || !ratingsReady || !creationsReady))} onConfirm={() => decide(action)} />)}
         </div>
       </> : null}
       {selected.status === "processing" && selected.review ? <button disabled={busy} style={field} onClick={() => void decide(selected.review!.request.action).catch(() => {})}>Resume {selected.review.request.action === "reject" ? "rejection" : `${selected.rating_mode} approval`}</button> : null}
