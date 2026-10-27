@@ -119,6 +119,33 @@ async function enterScore(tree, a = "11", b = "10") { await click(tree, "Enter s
 const passed = [];
 async function scenario(name, run) { reset(); await run(); passed.push(name); }
 (async () => {
+  await scenario("late initial event list preserves a new-event draft", async () => {
+    const originalFetch = global.fetch;
+    let releaseList, tree;
+    global.fetch = (url, options = {}) => url.endsWith("/round-robin-hubs") && !options.body
+      ? new Promise(resolve => { releaseList = () => resolve(response({ok: true, hubs: [detail.hub], sessions: []})); })
+      : originalFetch(url, options);
+    try {
+      await act(async () => { tree = create(h(Panel, {apiBase: "http://test.local", clubId: "club"})); });
+      assert.ok(releaseList);
+      await click(tree, "New event");
+      await act(async () => tree.root.findByProps({placeholder: "Friday Pickleball Night"}).props.onChange({target: {value: "Tonight's new event"}}));
+      await act(async () => releaseList());
+      assert.equal(tree.root.findByProps({placeholder: "Friday Pickleball Night"}).props.value, "Tonight's new event");
+      assert.equal(tree.root.findByProps({"aria-label": "Select hub"}).props.value, "");
+      assert.equal(detailReads, 0, "A delayed list must not open an existing event over the user's creation form");
+    } finally {
+      global.fetch = originalFetch;
+      if (tree) await unmount(tree);
+    }
+  });
+  await scenario("initial event list still selects an active event without user input", async () => {
+    let tree;
+    await act(async () => { tree = create(h(Panel, {apiBase: "http://test.local", clubId: "club"})); });
+    assert.equal(tree.root.findByProps({"aria-label": "Select hub"}).props.value, detail.hub.id);
+    assert.equal(tree.root.findAllByProps({placeholder: "Friday Pickleball Night"}).length, 0);
+    await unmount(tree);
+  });
   await scenario("current match explicitly not played", async () => {
     const tree = await mount();
     const court = tree.root.findByProps({"aria-label": "Court 6"});
