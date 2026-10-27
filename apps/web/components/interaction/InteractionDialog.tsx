@@ -91,21 +91,21 @@ export function InteractionDialog({
         wasOpenRef.current = true;
       }
       if (!dialog.open) dialog.showModal();
-      const focusFrame = window.requestAnimationFrame(() => {
-        const phaseTarget = dialog.querySelector<HTMLElement>("[data-dialog-focus]");
-        const initialTarget = initialFocusRef?.current ?? dialog.querySelector<HTMLElement>("[data-autofocus]");
-        const firstControl = Array.from(
-          dialog.querySelectorAll<HTMLElement>("button, input, select, textarea, a[href], [tabindex]")
-        ).find((element) => isEligibleFocusTarget(element) && element.tabIndex >= 0) ?? null;
-        focusEligibleElement(
-          isEligibleFocusTarget(phaseTarget)
-            ? phaseTarget
-            : isEligibleFocusTarget(initialTarget)
-              ? initialTarget
-              : firstControl
-        );
-      });
-      return () => window.cancelAnimationFrame(focusFrame);
+      // Finish opening focus before the user can move to another field.
+      // A deferred frame can otherwise send their next keystroke to the first input.
+      const phaseTarget = dialog.querySelector<HTMLElement>("[data-dialog-focus]");
+      const initialTarget = initialFocusRef?.current ?? dialog.querySelector<HTMLElement>("[data-autofocus]");
+      const firstControl = Array.from(
+        dialog.querySelectorAll<HTMLElement>("button, input, select, textarea, a[href], [tabindex]")
+      ).find((element) => isEligibleFocusTarget(element) && element.tabIndex >= 0) ?? null;
+      focusEligibleElement(
+        isEligibleFocusTarget(phaseTarget)
+          ? phaseTarget
+          : isEligibleFocusTarget(initialTarget)
+            ? initialTarget
+            : firstControl
+      );
+      return;
     }
 
     if (dialog.open) dialog.close();

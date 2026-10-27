@@ -304,7 +304,7 @@ def test_add_player_invalid_payload_is_rejected_without_writes(api, payload):
     response = client.post(f"{BASE}/{hub['hub']['id']}/commands", headers=HEADERS, json={
         "action": "add_player", "payload": payload, "expected_version": hub["hub"]["version"],
         "idempotency_key": "invalid-add-player"})
-    assert response.status_code == 400
+    assert response.status_code == 422
     assert db.storage == snapshot
 
 

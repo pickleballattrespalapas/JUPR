@@ -9,14 +9,14 @@ def read(path: str) -> str:
     return (WEB / path).read_text(encoding="utf-8")
 
 
-def test_shared_pdf_helper_opens_a_new_tab_and_uses_session_storage() -> None:
+def test_shared_pdf_helper_opens_a_new_tab_and_uses_durable_storage() -> None:
     helper = read("lib/playGeneratorDraft.ts")
     assert 'window.open("", "_blank")' in helper
     assert "preparedWindow.location.replace(href)" in helper
     assert 'anchor.target = "_blank"' in helper
-    assert "window.sessionStorage.getItem" in helper
-    assert "window.sessionStorage.setItem" in helper
-    assert "window.sessionStorage.removeItem" in helper
+    assert "readGeneratorBrowserValue(storageKey)" in helper
+    assert "writeGeneratorBrowserValue(storageKey, JSON.stringify(payload))" in helper
+    assert "removeGeneratorBrowserValue(storageKey)" in helper
 
 
 def test_public_and_admin_generators_preserve_unsaved_previews() -> None:
@@ -27,7 +27,20 @@ def test_public_and_admin_generators_preserve_unsaved_previews() -> None:
         source = read(path)
         assert "readPlayGeneratorDraft<PreviewEvent>" in source
         assert "writePlayGeneratorDraft" in source
-        assert "clearPlayGeneratorDraft(draftKey)" in source
+        start = source[source.index("async function startSession()") :]
+        if path.startswith("app/admin/"):
+            # The in-flight start owns the draft it captured. Navigating to a
+            # different draft must not let its eventual response clear that one.
+            captured = start.index("const activeDraftKey = draftKey")
+            request = start.index("await requestJson<StartResponse>")
+            confirmed = start.index("confirmed = { status: \"created\"")
+            cleared = start.index("clearPlayGeneratorDraft(activeDraftKey)")
+            assert captured < request < confirmed < cleared
+            assert "currentDraftKey.current === activeDraftKey" in start[cleared:]
+        else:
+            confirmed = start.index("sessionConfirmed = true")
+            cleared = start.index("clearPlayGeneratorDraft(draftKey)")
+            assert confirmed < cleared
         assert "Restored your unsaved schedule preview." in source
         assert "doc.save(" not in source
         assert "const pdfWindow = preparePdfWindow();" in source

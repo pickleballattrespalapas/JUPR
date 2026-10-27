@@ -80,7 +80,7 @@ export default function HubRemovePlayerDialog({ groups, busy, disabled, pending,
       {playerError ? <p id="hub-remove-player-person-error" role="alert">{playerError}</p> : null}
       {!groups.length ? <p className={styles.small}>Add a round robin to this event before removing a player.</p> : selectedGroup && !players.length ? <p className={styles.small}>There are no players in this round robin.</p> : null}
       {selectedPlayer && !groupError && !playerError ? <p className={styles.small}>
-        {selectedPlayer.on_court ? "They will finish their current match and won’t join the next round." : selectedPlayer.reserved ? "Their reserved match stays in place. They can finish it and won’t join the next round." : "They will leave the waiting matches and byes in this round robin."} Saved results are kept.
+        Departure takes effect from round {selectedPlayer.remove_effective_round ?? selectedGroup?.current_round_number}. Announced, assigned, and reserved lineups keep their players. Saved results are kept.
       </p> : null}
       {error ? <p role="alert">{error}</p> : null}
       {pending ? <button type="button" className={styles.button} disabled={busy} onClick={onRetry}>Retry saved action</button> : null}

@@ -126,7 +126,8 @@ async function canceledForbiddenCannotRevokeButCurrentForbiddenCan() {
   await act(async () => { void button(tree, 'Save round scores').props.onClick(); });
   assert.equal(JSON.parse(pending[2].options.body).edit_token, 'operator-session');
   await act(async () => pending[2].resolve(reply(403, { detail: 'handoff revoked' })));
-  assert.deepEqual(removed, [storageKey('session')], 'A genuine current 403 still removes the revoked token');
+  assert.deepEqual(removed.filter(key => key.startsWith('shared-generator-edit:')), [storageKey('session')], 'A genuine current 403 still removes the revoked token');
+  assert.ok(removed.some(key => key.startsWith('generator-score-save:')), 'A terminal rejection releases the pending save');
   assert.equal(storage.has(storageKey('session')), false);
   assert.ok(text(tree.toJSON()).includes('Only the organizer'));
   await act(async () => tree.unmount());

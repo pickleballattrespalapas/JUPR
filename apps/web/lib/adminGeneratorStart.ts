@@ -1,3 +1,5 @@
+import { readGeneratorBrowserValue, writeGeneratorBrowserValue, removeGeneratorBrowserValue } from "./generatorBrowserStorage";
+
 export type PendingGeneratorStart = {
   status: "pending";
   body: Record<string, unknown> & { idempotency_key: string };
@@ -15,7 +17,7 @@ export type GeneratorStartRecovery = PendingGeneratorStart | CreatedGeneratorSta
 
 export function readGeneratorStart(key: string): GeneratorStartRecovery | null {
   try {
-    const value = JSON.parse(window.sessionStorage.getItem(key) || "null");
+    const value = JSON.parse(readGeneratorBrowserValue(key) || "null");
     if (!value || value.version !== 1 || !(value.hubId === null || typeof value.hubId === "string")) return null;
     if (value.status === "pending" && value.body && typeof value.body.idempotency_key === "string") return value;
     if (value.status === "created" && typeof value.sessionKey === "string" && value.sessionKey && Number.isInteger(value.roundNumber) && value.roundNumber > 0) return value;
@@ -25,9 +27,9 @@ export function readGeneratorStart(key: string): GeneratorStartRecovery | null {
 
 export function writeGeneratorStart(key: string, value: GeneratorStartRecovery | null): boolean {
   try {
-    if (value) window.sessionStorage.setItem(key, JSON.stringify({ version: 1, ...value }));
-    else window.sessionStorage.removeItem(key);
-    return true;
+    return value
+      ? writeGeneratorBrowserValue(key, JSON.stringify({ version: 1, ...value }))
+      : removeGeneratorBrowserValue(key);
   } catch { return false; }
 }
 

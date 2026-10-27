@@ -142,7 +142,7 @@ global.fetch = async (url, options = {}) => {
   await act(async () => tree.root.findByProps({ id: "hub-score-form" }).props.onSubmit({ preventDefault() {} }));
   assert.ok(text(tree.toJSON()).includes("Score saved and court released."));
   await act(async () => button(tree, "Round robins").props.onClick());
-  assert.ok(text(tree.toJSON()).includes("1 of 2 matches complete"));
+  assert.ok(text(tree.toJSON()).includes("1 played · 0 not played · 1 pending"));
   assert.ok(text(tree.toJSON()).includes("Standings update when this round is complete."));
   assert.equal(button(tree, "Next round"), undefined, "The hub manages the rolling queue without a manual next-round gate");
   assert.ok(tree.root.findAllByType("a").some(link => link.props.href.startsWith("/admin/round-robin-generator?hub=event-1&draft=")));

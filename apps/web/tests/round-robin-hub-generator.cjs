@@ -235,6 +235,7 @@ function embeddedClick(href) {
   stubs['@/components/GeneratorRosterSetup'] = {...rosterModule,__esModule:true,default:()=>null};
   const recoveryStorage=new Map(),drafts=new Map();
   global.window={sessionStorage:{getItem:key=>recoveryStorage.get(key)||null,setItem:(key,value)=>recoveryStorage.set(key,value),removeItem:key=>recoveryStorage.delete(key)}};
+  global.sessionStorage = global.window.sessionStorage;
   const baseDraft='admin-play-generator-draft:club:round_robin';
   const savedDraft=()=>({title:'New group',playFormat:'doubles',ratingMode:'unrated',targetCount:4,
     participantText:'One\nTwo\nThree\nFour',linkedPlayerIds:{two:22,four:44},preview:{...clone(fixture.event),previewFingerprint:'preview'}});

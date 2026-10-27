@@ -12,6 +12,10 @@ from jupr_app.services.public_live_operation_service import PublicLiveConflictEr
 
 HUB_TABLE = "round_robin_hubs"
 OPERATION_TABLE = "round_robin_hub_operations"
+class HubCommitRejectedError(ValueError):
+    """Hub validation or an aborted transaction committed no domain change."""
+
+
 GENERATOR_MODES = {"admin_play_generator", "public_play_generator"}
 
 
@@ -59,10 +63,10 @@ def _session_rows(db: Any, club_id: str, keys: list[str]) -> dict[str, dict[str,
     rows = _rows(db.table("live_sessions").select("*").eq("club_id", club_id).in_("session_key", sorted(set(keys))).execute())
     result = {str(row["session_key"]): row for row in rows}
     if set(keys) - set(result):
-        raise ValueError("A round robin is no longer available. Refresh the hub.")
+        raise HubCommitRejectedError("A round robin is no longer available. Refresh the hub.")
     for row in result.values():
         if (row.get("state") or {}).get("mode") not in GENERATOR_MODES or _event(row).get("generatorKind") != "round_robin":
-            raise ValueError("Only Round-Robin Generator sessions can join this hub.")
+            raise HubCommitRejectedError("Only Round-Robin Generator sessions can join this hub.")
     return result
 
 
@@ -143,6 +147,8 @@ def _replayed(db: Any, club_id: str, hub_id: str, key: str, fingerprint: str) ->
 def _rpc_commit(db: Any, *, club_id: str, hub_id: str, expected_version: int,
                 operation_key: str, fingerprint: str, title: str, status: str,
                 state: dict[str, Any], sessions: list[dict[str, Any]], actor_email: str) -> dict[str, Any]:
+    from jupr_app.services.admin_play_generator_service import mark_generator_write_attempt
+    mark_generator_write_attempt()
     try:
         result = db.rpc("commit_round_robin_hub", {
             "p_club_id": club_id, "p_hub_id": hub_id, "p_expected_version": expected_version,
@@ -152,13 +158,12 @@ def _rpc_commit(db: Any, *, club_id: str, hub_id: str, expected_version: int,
         }).execute().data
     except Exception as exc:
         code = str(getattr(exc, "code", ""))
-        message = str(exc)
         if code == "23505":
             raise PublicLiveConflictError("A court name or player is already in use by another active hub. Review the court setup and assignments.") from exc
-        if code in {"40001", "P0001"} or any(term in message.lower() for term in ("changed", "conflict", "already assigned", "leased")):
+        if code in {"PT409", "40001", "P0001"}:
             raise PublicLiveConflictError("The hub or one of its round robins changed. Refresh before continuing.") from exc
         if code in {"22023", "55000", "23514"}:
-            raise ValueError("This change cannot be applied to the current hub. Refresh and resolve any pending round-robin operation first.") from exc
+            raise HubCommitRejectedError("This change cannot be applied to the current hub. Refresh and resolve any pending round-robin operation first.") from exc
         raise
     if isinstance(result, list):
         result = next(iter(result), None)
@@ -325,7 +330,7 @@ def persist_linked_generator_patch(db: Any, *, before: dict[str, Any], patch: di
     hub_id = str((before.get("state") or {}).get("round_robin_hub_id") or "")
     club_id, session_key = str(before["club_id"]), str(before["session_key"])
     if not hub_id:
-        raise ValueError("This session is not connected to a hub.")
+        raise HubCommitRejectedError("This session is not connected to a hub.")
     stable_patch = {key: value for key, value in patch.items() if key not in {"updated_at", "last_seen_at"}}
     fingerprint = _fingerprint({"session_key": session_key, "expected_version": expected_version, "patch": stable_patch})
     operation_key = f"generator:{session_key}:{fingerprint[:48]}"
@@ -334,26 +339,31 @@ def persist_linked_generator_patch(db: Any, *, before: dict[str, Any], patch: di
     row = _hub(db, club_id, hub_id)
     state = copy.deepcopy(row["state"])
     sessions = _session_rows(db, club_id, _group_keys(state))
-    current = sessions.get(session_key)
-    if not current or str(current["updated_at"]) != str(expected_version) or int(current.get("version") or 1) != int(before.get("version") or 1):
-        raise PublicLiveConflictError("The round robin changed. Refresh before continuing.")
-    before_events = {key: _event(value) for key, value in sessions.items()}
-    after_events = copy.deepcopy(before_events)
-    after_events[session_key] = _event({**current, **patch})
-    if row.get("status") == "completed" and after_events[session_key].get("status") != "completed":
-        raise ValueError("This hub is complete. Create a new event before starting more games.")
-    state, after_events = reconcile_hub_events(state, before_events, after_events, now=_now(),
-        excluded_session_keys={key for key, session in sessions.items() if _is_locked(session)})
-    read_set = _read_set(sessions, after_events, state, hub_id)
-    for item in read_set:
-        if item["session_key"] == session_key:
-            normalized = _session_patch(current, after_events[session_key], hub_id)
-            requested_state = copy.deepcopy(patch.get("state", current.get("state") or {}))
-            if normalized.get("state"):
-                requested_state["page_state"] = normalized["state"]["page_state"]
-            requested_state["round_robin_hub_id"] = hub_id
-            item["patch"] = {**patch, **normalized, "state": requested_state,
-                             "expires_at": _retained_expiry(current, patch.get("expires_at"))}
+    try:
+        current = sessions.get(session_key)
+        if not current or str(current["updated_at"]) != str(expected_version) or int(current.get("version") or 1) != int(before.get("version") or 1):
+            raise PublicLiveConflictError("The round robin changed. Refresh before continuing.")
+        before_events = {key: _event(value) for key, value in sessions.items()}
+        after_events = copy.deepcopy(before_events)
+        after_events[session_key] = _event({**current, **patch})
+        if row.get("status") == "completed" and after_events[session_key].get("status") != "completed":
+            raise ValueError("This hub is complete. Create a new event before starting more games.")
+        state, after_events = reconcile_hub_events(state, before_events, after_events, now=_now(),
+            excluded_session_keys={key for key, session in sessions.items() if _is_locked(session)})
+        read_set = _read_set(sessions, after_events, state, hub_id)
+        for item in read_set:
+            if item["session_key"] == session_key:
+                normalized = _session_patch(current, after_events[session_key], hub_id)
+                requested_state = copy.deepcopy(patch.get("state", current.get("state") or {}))
+                if normalized.get("state"):
+                    requested_state["page_state"] = normalized["state"]["page_state"]
+                requested_state["round_robin_hub_id"] = hub_id
+                item["patch"] = {**patch, **normalized, "state": requested_state,
+                                 "expires_at": _retained_expiry(current, patch.get("expires_at"))}
+    except ValueError as exc:
+        # Only pure validation is classified here. Database/replay reads above
+        # and the write RPC below can fail while an earlier commit is durable.
+        raise HubCommitRejectedError(str(exc)) from exc
     # Retry identity is tied to the original row and requested change, not volatile hub data.
     committed = _rpc_commit(db, club_id=club_id, hub_id=hub_id, expected_version=int(row["version"]),
                             operation_key=operation_key, fingerprint=fingerprint, title=str(row["title"]),
