@@ -240,4 +240,4 @@ def test_singles_and_mixed_generator_round_robin_wins():
     assert 'round_robin_wins_1' in ids(r)
     assert not any('together' in a['badge_id'] for a in r['awards'])
     rows = generator_event_standings(event)
-    assert rows[0]['participantId'] == '1' and rows[0]['roundRobinVictoryRanking']
+    assert rows[0]['participantId'] == '1' and rows[0]['standingsSort'] == 'points'

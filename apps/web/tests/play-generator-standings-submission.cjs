@@ -4,6 +4,7 @@ const path = require("node:path");
 const React = require("react");
 const ts = require("typescript");
 const { create, act } = require("react-test-renderer");
+global.IS_REACT_ACT_ENVIRONMENT = true;
 
 function load(relative, mocks = {}) {
   const source = fs.readFileSync(path.join(__dirname, "..", relative), "utf8");
@@ -11,7 +12,7 @@ function load(relative, mocks = {}) {
     compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true }
   }).outputText;
   const module = { exports: {} };
-  new Function("require", "module", "exports", code)(name => name === "@/components/GeneratorSharing" ? (() => null) : Object.hasOwn(mocks, name) ? mocks[name] : (require('./helpers/public-controls-module.cjs')(name) || require(name)), module, module.exports);
+  new Function("require", "module", "exports", code)(name => name === "@/lib/generatorBrowserStorage" ? load("lib/generatorBrowserStorage.ts") : name === "@/components/GeneratorSharing" ? (() => null) : Object.hasOwn(mocks, name) ? mocks[name] : (require('./helpers/public-controls-module.cjs')(name) || require(name)), module, module.exports);
   return module.exports;
 }
 
@@ -50,13 +51,15 @@ const baseline = {
 
 function publicEnvironment({ hashToken = "", storedToken = "" } = {}) {
   const values = new Map(storedToken ? [[storageKey, storedToken]] : []);
-  global.sessionStorage = { getItem: key => values.get(key) || null, setItem: (key, value) => values.set(key, value) };
+  global.sessionStorage = { getItem: key => values.get(key) || null, setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key) };
+  const durable = new Map();
+  global.localStorage = { getItem: key => durable.get(key) || null, setItem: (key, value) => durable.set(key, value), removeItem: key => durable.delete(key) };
   const replaced = [];
   global.window = {
     location: { hash: hashToken ? `#edit=${hashToken}` : "", pathname: "/clubs/club/round-robin-generator/sessions/session-1/standings", search: "" },
     history: { replaceState(state, title, url) { replaced.push(url); window.location.hash = ""; } }
   };
-  return { values, replaced };
+  return { values: durable, replaced };
 }
 
 async function fillAndSubmit(tree) {
@@ -163,6 +166,7 @@ async function adminFinishesAndSubmitsUnratedResults() {
   const finish = calls.find(call => call.url.endsWith("/complete"));
   assert.equal(finish.options.headers.Authorization, "Bearer admin-token");
   assert.equal(JSON.parse(finish.options.body).expected_version, "4");
+  assert.equal(JSON.parse(finish.options.body).confirmation_text, "COMPLETE SESSION", "Staff standings must satisfy the completion endpoint confirmation contract");
   assert.equal(calls.some(call => call.url.endsWith("/advance")), false);
   assert.ok(button(tree, "Submit for approval"));
   assert.ok(tree.root.findByProps({ href: "/admin/play-generators/submissions" }));
@@ -177,6 +181,51 @@ async function adminFinishesAndSubmitsUnratedResults() {
   assert.ok(content(tree).includes("Approved · Unrated"));
   assert.ok(content(tree).includes("Ratings are unchanged"));
   await act(async () => tree.unmount());
+}
+
+async function adminSubmitsStandalonePublicWithoutPlayAuthority() {
+  const readonlyPlay = { can_manage: false, can_score: false, unavailable_reason: "Use this session's organizer link to manage play." };
+  let current = { ...baseline, capabilities: readonlyPlay };
+  const calls = [];
+  global.fetch = async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url.endsWith("/submit")) current = { ...current, version: "5", submission: { status: "pending", rating_mode: "rated" } };
+    return reply({ session: current });
+  };
+  let tree;
+  const mount = async () => { await act(async () => { tree = create(React.createElement(AdminStandings, props)); }); };
+  const unmount = async () => { await act(async () => tree.unmount()); };
+  await mount();
+  assert.equal(button(tree, "Submit for approval"), undefined, "Active sessions cannot be submitted");
+  assert.equal(button(tree, "Finish session"), undefined, "Staff cannot manage standalone public play");
+  assert.equal(button(tree, "Next scheduled round"), undefined);
+  await unmount();
+  current = { ...current, status: "completed" };
+  await mount();
+  assert.ok(button(tree, "Submit for approval"), "Club staff can submit completed public-origin results without the organizer token");
+  assert.equal(button(tree, "Keep playing · Round 2"), undefined, "Separate submit authority does not grant play authority");
+  assert.equal(button(tree, "Playoff"), undefined);
+  await fillAndSubmit(tree);
+  const sent = calls.find(call => call.url.endsWith("/submit"));
+  assert.equal(sent.url, "https://api.test/admin/clubs/club/play-generators/sessions/session-1/submit");
+  assert.equal(sent.options.method, "POST");
+  assert.equal(sent.options.headers.Authorization, "Bearer admin-token");
+  assert.deepEqual(JSON.parse(sent.options.body), { expected_version: "4", organizer_name: "Joe Organizer", match_date: "2026-09-21" });
+  assert.equal(button(tree, "Submit for approval"), undefined, "Submitted results cannot be submitted twice");
+  assert.ok(content(tree).includes("Awaiting admin approval"));
+  await unmount();
+  for (const lock of [
+    { scoring_mode: "unscored" },
+    { submission: { status: "pending" } },
+    { submission: { status: "approved", approved_mode: "rated" } },
+    { official_publish: { published_at: "2026-10-23T19:00:00Z", published_match_ids: [42] } },
+  ]) {
+    current = { ...baseline, status: "completed", capabilities: readonlyPlay, ...lock };
+    await mount();
+    assert.equal(button(tree, "Submit for approval"), undefined, "Unscored, reviewed, or published results cannot be submitted");
+    assert.equal(button(tree, "Keep playing · Round 2"), undefined);
+    await unmount();
+  }
 }
 
 async function standingsCanContinueBeyondSchedule(Component, isPublic) {
@@ -304,6 +353,7 @@ async function localDatePlayed() {
   await organizerFragmentAndFailedSubmission();
   await viewerCannotSubmitAndUnscoredHasNoApproval();
   await adminFinishesAndSubmitsUnratedResults();
+  await adminSubmitsStandalonePublicWithoutPlayAuthority();
   await standingsCanContinueBeyondSchedule(PublicStandings, true);
   await standingsCanContinueBeyondSchedule(AdminStandings, false);
   for (const Component of [PublicStandings, AdminStandings]) {

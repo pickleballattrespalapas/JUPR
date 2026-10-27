@@ -37,11 +37,20 @@ def test_public_generator_client_requests_match_fastapi_routes() -> None:
         "app/clubs/[clubSlug]/play-generators/PublicGeneratorWorkspace.tsx"
     )
     roster = read("components/GeneratorRosterSetup.tsx")
+    player_search = read("lib/playerSearch.ts")
     runner = read(
         "app/clubs/[clubSlug]/play-generators/PublicGeneratorRoundRunner.tsx"
     )
 
     assert "/play-generators/preview" in workspace
     assert "/play-generators/sessions" in workspace
-    assert "/players?status=active&sort=name&limit=1000" in roster
+    assert "fetchAllPublicPlayers<DirectoryPlayer>" in roster
+    assert '/clubs/${encodeURIComponent(publicClubSlug)}/players?status=all&sort=name' in roster
+    # The shared helper preserves that club/status URL while fetching every
+    # page; player-search.cjs exercises a player beyond the first 1,000 rows.
+    assert "const pageUrl = new URL(url)" in player_search
+    assert 'pageUrl.searchParams.set("limit", "1000")' in player_search
+    assert 'pageUrl.searchParams.set("offset", String(rows.length))' in player_search
+    assert "rows.push(...players)" in player_search
+    assert "if (!page.pagination?.has_more || !players.length) return rows" in player_search
     assert "/play-generators/sessions/" in runner

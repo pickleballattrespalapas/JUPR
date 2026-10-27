@@ -80,6 +80,14 @@ async function createSession(title, names, profiles = {}, publicOrigin = false) 
 }
 function people(match) { return [...match.side_a,...match.side_b]; }
 function occupied(detail) { return detail.workspace.courts.filter(court=>court.current); }
+function rosterForRound(event,number) {
+  // An explicit per-round override is optional; later rolling rounds can use
+  // participant membership boundaries instead of duplicating the same roster.
+  return event.rosterByRound?.[String(number)] ?? event.participants.filter(player=>
+    number >= (player.active_from_round || 1)
+      && (player.inactive_from_round == null || number < player.inactive_from_round)
+      && !(player.inactive_rounds || []).includes(number)).map(player=>player.id);
+}
 
 function record(label) { evidence.push(label); console.log(`PASS ${label}`); }
 async function snapshot(page, name) { await page.screenshot({path:path.join(output, name), fullPage:true}); }
@@ -137,7 +145,7 @@ async function main() {
       await page.getByRole('tab',{name:'Match queue',exact:true}).click();
       const label = `${match.side_a.map(player=>player.name).join(' / ')} vs ${match.side_b.map(player=>player.name).join(' / ')}`;
       const row = page.getByRole('listitem').filter({hasText:match.group_title})
-        .filter({has:page.getByText(`${match.group_title} · Round ${match.round_number}`,{exact:true})})
+        .filter({has:page.getByText(`${match.group_title} · Round ${match.round_number} · Pending result`,{exact:true})})
         .filter({has:page.getByText(label,{exact:true})});
       return command(page,row.getByRole('button',{name:'Next open court',exact:true}),'assign_next_court');
     }
@@ -428,7 +436,9 @@ async function main() {
     let bPrepared = (await fixture()).sessions.find(session=>session.session_key === numberedB.session_key);
     const temporaryId = bPrepared.event.participants.find(player=>player.name === 'Roster Preparation').id;
     let removeDialog = await openRemovePlayer('Numbers B',temporaryId);
-    await removeDialog.getByText(/leave the waiting matches and byes/).waitFor();
+    const preparedDepartureRound = detail.workspace.groups.find(group=>group.session_key === numberedB.session_key)
+      .players.find(player=>player.participant_id === temporaryId).remove_effective_round;
+    await removeDialog.getByText(`Departure takes effect from round ${preparedDepartureRound}. Announced, assigned, and reserved lineups keep their players. Saved results are kept.`,{exact:true}).waitFor();
     detail = await command(page,removeDialog.getByRole('button',{name:'Remove from this round robin',exact:true}),'remove_player');
     await removeDialog.waitFor({state:'hidden'});
     assert.equal(await page.getByRole('tab',{name:'Court board',exact:true}).getAttribute('aria-selected'),'true','Board Remove must return to the board');
@@ -499,7 +509,7 @@ async function main() {
     assert.equal(nextScheduledIds.filter(id=>id === arrivingId).length,1);
     const preparedRosterRounds = bSession.event.rounds.filter(round=>round.number >= 2);
     for (const round of preparedRosterRounds) {
-      assert(bSession.event.rosterByRound[String(round.number)].includes(arrivingId),'Prepared rounds must retain the added player instead of restoring an old roster');
+      assert(rosterForRound(bSession.event,round.number).includes(arrivingId),'Prepared rounds must retain the added player instead of restoring an old roster');
       const scheduled = [...round.matches.flatMap(match=>[...match.sideA,...match.sideB]),...round.byeParticipantIds];
       assert.equal(scheduled.filter(id=>id === arrivingId).length,1,'An active arrival has exactly one match or bye in each prepared round');
     }
@@ -512,7 +522,7 @@ async function main() {
     if (nextRosterRound.byeParticipantIds.includes(arrivingId)) assert.match(await arrivingRow.textContent(),/On bye this round/);
     await snapshot(page,'ninth-player-carried-into-next-round.png');
     await page.getByRole('tab',{name:'Court board',exact:true}).click();
-    if (nextRosterRound.byeParticipantIds.includes(arrivingId)) await page.getByRole('region',{name:'Byes this round',exact:true}).getByText('Late Guest',{exact:true}).waitFor();
+    if (nextRosterRound.byeParticipantIds.includes(arrivingId)) await page.getByRole('region',{name:'Byes this round',exact:true}).getByText('Numbers B · Late Guest',{exact:true}).waitFor();
     else await page.getByRole('listitem').filter({hasText:'Numbers B'}).filter({hasText:'Late Guest'}).waitFor();
     await snapshot(page,'ninth-player-court-queue-or-bye.png');
     record('After prior roster edits, the ninth player remains in next-round membership and a matchup or bye before assignment');
@@ -563,9 +573,11 @@ async function main() {
     detail = await command(page,picker.getByRole('button',{name:'Reserve next',exact:true}),'reserve_game_for_court');
     const protectedCourt = detail.workspace.courts.find(court=>court.id === additionsCourt.id);
     const departing = [protectedCourt.current,protectedCourt.next].map(match=>people(match).find(player=>numbers.includes(player.name)).id);
-    for (const [index,participantId] of departing.entries()) {
+    for (const participantId of departing) {
       removeDialog = await openRemovePlayer('Numbers B',participantId);
-      await removeDialog.getByText(index === 0 ? /finish their current match/ : /reserved match stays in place/).waitFor();
+      const departureRound = detail.workspace.groups.find(group=>group.session_key === numberedB.session_key)
+        .players.find(player=>player.participant_id === participantId).remove_effective_round;
+      await removeDialog.getByText(`Departure takes effect from round ${departureRound}. Announced, assigned, and reserved lineups keep their players. Saved results are kept.`,{exact:true}).waitFor();
       detail = await command(page,removeDialog.getByRole('button',{name:'Remove from this round robin',exact:true}),'remove_player');
       await removeDialog.waitFor({state:'hidden'});
       assert.equal(await page.getByRole('tab',{name:'Court board',exact:true}).getAttribute('aria-selected'),'true');
@@ -574,8 +586,8 @@ async function main() {
       assert.equal(preservedCourt.current.match_id,protectedCourt.current.match_id);
       assert.equal(preservedCourt.next.match_id,protectedCourt.next.match_id);
       const afterRemoval = (await fixture()).sessions.find(session=>session.session_key === numberedB.session_key).event;
-      assert(afterRemoval.rosterByRound['2'].includes(participantId),'Assigned players stay in the current round');
-      assert(!afterRemoval.rosterByRound['3'].includes(participantId),'Departing players must not return in a later stored roster');
+      assert(rosterForRound(afterRemoval,2).includes(participantId),'Assigned players stay in the current round');
+      assert(!rosterForRound(afterRemoval,3).includes(participantId),'Departing players must not return in a later stored roster');
     }
     await snapshot(page,'board-playing-reserved-removals.png');
     record('Removing playing and reserved players preserves their assigned matches, excludes them from the next round, and stays on the board');

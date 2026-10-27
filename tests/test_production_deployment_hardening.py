@@ -391,7 +391,9 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         ROOT / "supabase/migrations",
     )
 
-    assert len(versions) == 176
+    assert len(versions) == 177
+    assert "20261023052802" in versions
+    assert "round_robin_operation_recovery" in contract["required_ledger_names"]
     assert "league_weekly_highlights" in contract["required_ledger_names"]
     assert "20261026043617" in versions
     assert "20261021144253" in versions
@@ -458,17 +460,18 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         "20261109004103",
         "20261109004104",
     )
-    assert len(names) == 176
+    assert len(names) == 177
     assert all("XX" not in version for version in versions)
-    assert len(contract["required_ledger_names"]) == 163
+    assert len(contract["required_ledger_names"]) == 164
     assert "partner_email_invitations" in contract["required_ledger_names"]
-    assert len(contract["deployment_order"]) == 163
-    assert contract["deployment_order"][-10:] == (
+    assert len(contract["deployment_order"]) == 164
+    assert contract["deployment_order"][-11:] == (
         "event_season_deleted_draft_cleanup", "interclub_player_identity_availability", "weekly_recap_builder",
         "badge_conflicts_are_not_serialization_failures", "unrated_match_activity",
         "round_robin_hub_atomic_operations", "play_generator_operation_surface", "round_robin_hub_participant_identities",
         "round_robin_hub_public_checkin",
         "league_weekly_highlights",
+        "round_robin_operation_recovery",
     )
     assert {"interclub_season_trophies", "event_season_history"}.issubset(contract["required_ledger_names"])
     assert set(contract["deployment_order"]) == set(
@@ -1659,7 +1662,7 @@ def test_production_workflow_is_exact_candidate_and_never_creates_or_retargets_a
     assert (
         "EXPECTED_MIGRATION_HEAD: "
         "${{ vars.PRODUCTION_MIGRATION_LEDGER_HEAD || "
-        "'20261026191228' }}"
+        "'20261027224804' }}"
     ) in workflow
     assert 'if [ "$GITHUB_REF" != "refs/heads/$PRODUCTION_SOURCE_BRANCH" ]; then' in workflow
     assert '"$HEAD_SHA" != "$GITHUB_SHA"' in workflow

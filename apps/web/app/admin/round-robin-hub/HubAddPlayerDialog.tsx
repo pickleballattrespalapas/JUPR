@@ -78,7 +78,7 @@ export default function HubAddPlayerDialog({ apiBase, clubId, groups, busy, disa
       </label>
       {destinationError ? <p id="hub-add-player-destination-error" role="alert">{destinationError}</p> : null}
       {!groups.length ? <p className={styles.small}>Add a round robin to this event before adding a player.</p> : null}
-      <p className={styles.small}>Players join available matches. Games already assigned keep their players.</p>
+      <p className={styles.small}>Players join from round {selectedGroup?.add_player_effective_round ?? selectedGroup?.current_round_number ?? "shown in the selected round robin"}. Announced and assigned lineups keep their players.</p>
       {directoryError ? <p className={styles.small}>{directoryError}</p> : null}
       {error ? <p role="alert">{error}</p> : null}
       {pending ? <button type="button" className={styles.button} disabled={busy} onClick={onRetry}>Retry saved action</button> : null}

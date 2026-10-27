@@ -45,13 +45,13 @@ const submit = tree => tree.root.findByType('form').props.onSubmit({preventDefau
   await choose('Player', 'future');
   await act(async () => submit(tree));
   assert.deepEqual(calls, [['rr2', 'future']], 'Future arrivals are removable by their exact participant ID');
-  assert.match(text(tree.toJSON()), /waiting matches and byes/);
+  assert.match(text(tree.toJSON()), /Departure takes effect from round 2/);
 
   await choose('Player', 'p2');
   await update({groups: [group('rr2', 'Round robin 2', {players: [player('p2', 'Player 2', {on_court: true})]})]});
-  assert.match(text(tree.toJSON()), /finish their current match and won’t join the next round/);
+  assert.match(text(tree.toJSON()), /Departure takes effect from round/);
   await update({groups: [group('rr2', 'Round robin 2', {players: [player('p2', 'Player 2', {reserved: true})]})]});
-  assert.match(text(tree.toJSON()), /reserved match stays in place/);
+  assert.match(text(tree.toJSON()), /reserved lineups keep their players/);
   await update({pending: true, error: 'Checking the saved removal.'});
   assert.ok(select(tree, 'Round robin').props.disabled && select(tree, 'Player').props.disabled);
   assert.equal(button(tree, 'Cancel').props.disabled, true);
