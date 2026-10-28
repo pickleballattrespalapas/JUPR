@@ -215,7 +215,7 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         ROOT / "supabase/migrations",
     )
 
-    assert len(versions) == 159
+    assert len(versions) == 160
     assert {"20261109004103", "20261109004104", "20261109004105"}.issubset(versions)
     assert {
         "badge_conflicts_are_not_serialization_failures",
@@ -226,6 +226,8 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
     assert "round_robin_hub_atomic_operations" in contract["required_ledger_names"]
     assert "round_robin_hub_participant_identities" in contract["required_ledger_names"]
     assert "round_robin_hub_public_checkin" in contract["required_ledger_names"]
+    assert "round_robin_hub_shared_courts" in contract["required_ledger_names"]
+    assert "20261028230610" in versions
     assert "round_robin_operation_recovery" in contract["required_ledger_names"]
     assert "league_weekly_highlights" in contract["required_ledger_names"]
     assert "20261026043617" in versions
@@ -318,9 +320,9 @@ def test_repository_migration_inventory_and_reviewed_profile_are_deterministic()
         "20261109004105",
     )
     assert {"20260908155131", "20260908164204"}.issubset(versions)
-    assert len(names) == 159
+    assert len(names) == 160
     assert all("XX" not in version for version in versions)
-    assert len(contract["required_ledger_names"]) == 159
+    assert len(contract["required_ledger_names"]) == 160
     assert "interclub_conflicts_are_not_serialization_failures" in contract["required_ledger_names"]
     assert {"interclub_competition_operations", "southern_bcs_eligibility", "interclub_rating_ledger", "interclub_publication_review_guard", "interclub_meet_overlap_guard", "southern_bcs_missing_pairing_rosters", "interclub_lineup_refresh_deadline_guard"}.issubset(contract["required_ledger_names"])
     assert {"public_club_sites", "public_club_directory_sort"}.issubset(contract["required_ledger_names"])

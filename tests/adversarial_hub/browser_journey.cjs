@@ -143,8 +143,8 @@ async function main() {
     await page.getByLabel('Court 1 use',{exact:true}).selectOption(alpha.session_key);
     detail = await command(page,page.getByRole('button',{name:'Save court setup',exact:true}),'configure_courts');
     for (const match of detail.workspace.eligible_queue)
-      assert.deepEqual(match.allowed_court_ids,[match.session_key === alpha.session_key ? 'court-1' : 'court-2']);
-    record('Named two-court hub attaches both groups; exclusive dedicated and shared court eligibility');
+      assert.deepEqual(match.allowed_court_ids,match.session_key === alpha.session_key ? ['court-1','court-2'] : ['court-2']);
+    record('Dedicated court excludes other groups while its owner can also use the shared court');
 
     const pausedMatch = detail.workspace.eligible_queue.find(match => match.session_key === alpha.session_key);
     const pausedPlayer = pausedMatch.side_a[0];
@@ -159,9 +159,28 @@ async function main() {
     assert.equal(detail.workspace.eligible_queue.filter(match=>match.session_key === alpha.session_key).length,2);
     record('Pause excludes the player while available players refill waiting games; resume restores eligibility');
 
+    await page.getByRole('tab',{name:'Match queue',exact:true}).click();
+    await page.getByRole('listitem').filter({hasText:'Alpha round robin'}).first().getByRole('button',{name:'Choose court',exact:true}).click();
+    const sharedPicker = page.getByRole('dialog',{name:'Choose court',exact:true});
+    assert.deepEqual(await sharedPicker.getByRole('combobox',{name:/^Court/}).locator('option').evaluateAll(options=>options.map(option=>option.value)),['','court-1','court-2']);
+    await sharedPicker.getByRole('combobox',{name:/^Court/}).selectOption('court-2');
+    detail = await command(page,sharedPicker.getByRole('button',{name:'Assign to court',exact:true}),'assign_game');
+    const overflowMatch = detail.workspace.courts[1].current.match_id;
     await page.getByRole('tab',{name:'Court board',exact:true}).click();
     detail = await command(page,page.getByRole('button',{name:'Fill open courts',exact:true}),'auto_fill_courts');
     assert.equal(detail.workspace.courts[0].current.session_key,alpha.session_key);
+    assert.equal(detail.workspace.courts[1].current.session_key,alpha.session_key);
+    await page.reload();
+    await page.getByRole('article',{name:'Terrace Court',exact:true}).getByText('Alpha round robin · Round 1',{exact:true}).waitFor();
+    const overflowState = await fixture();
+    assert.equal(overflowState.hubs[0].workspace.courts[1].current.match_id,overflowMatch);
+    await snapshot(page,'desktop-shared-court-overflow.png');
+    record('Dedicated group uses both its dedicated and shared courts; shared assignment survives refresh');
+    await page.getByRole('article',{name:'Terrace Court',exact:true}).getByRole('button',{name:'Move or remove',exact:true}).click();
+    detail = await command(page,page.getByRole('dialog',{name:'Move or remove match',exact:true}).getByRole('button',{name:'Return to queue',exact:true}),'release_game');
+    await page.getByRole('tab',{name:'Match queue',exact:true}).click();
+    detail = await command(page,page.getByRole('listitem').filter({hasText:'Beta round robin'}).first().getByRole('button',{name:'Next open court',exact:true}),'assign_next_court');
+    await page.getByRole('tab',{name:'Court board',exact:true}).click();
     assert.equal(detail.workspace.courts[1].current.session_key,beta.session_key);
     assert.equal(detail.workspace.eligible_queue.length,2);
     const identities = detail.workspace.courts.flatMap(court=>[...court.current.side_a,...court.current.side_b].map(player=>player.identity));

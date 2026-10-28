@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile": "next-fastapi-tournament-acceptance-2026-08-25",
-  "repository_migration_content_sha256": "3d269dfe62befa55ee2d4626e1cb29597b62d90589cb3352ea4c4c5ff31f256d",
+  "repository_migration_content_sha256": "a2ba91f1d5bf2ae80e2083c11440693b80a8e52381428bb85d9c5d8d18e44b9c",
   "allow_additional_ledger_names": false,
   "required_ledger_names": [
     "add_admin_activity_log",
@@ -113,6 +113,7 @@
     "round_robin_hub_atomic_operations",
     "round_robin_hub_participant_identities",
     "round_robin_hub_public_checkin",
+    "round_robin_hub_shared_courts",
     "round_robin_operation_recovery",
     "seed_live_badge_catalog",
     "seed_top_performer_badges",
