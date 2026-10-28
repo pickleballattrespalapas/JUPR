@@ -209,6 +209,10 @@ def _session_payload(row: dict[str, Any]) -> dict[str, Any]:
                   or (state.get("official_publish") or {}).get("published_match_ids"))
     reason = ("Use this session's organizer link to manage play." if not manageable else
               "Submitted or published results are locked for administrator review." if locked else None)
+    hub_standings = {}
+    if event and state.get("round_robin_hub_id"):
+        from jupr_app.domain.hub_standings import hub_standings_view
+        hub_standings = hub_standings_view(event)
     return {
         "id": str(row.get("id") or ""),
         "club_id": str(row.get("club_id") or ""),
@@ -236,10 +240,12 @@ def _session_payload(row: dict[str, Any]) -> dict[str, Any]:
         "scoring_mode": str(event.get("scoringMode") or "scored") if event else "scored",
         "standings_sort": str(event.get("standingsSort") or "wins") if event else "wins",
         "standings": generator_event_standings(event) if event else [],
+        **hub_standings,
         "moneyball": settlement(event, generator_event_standings(event)) if is_moneyball(event) else None,
         "playoff_options": generator_playoff_options(event) if event else None,
         "official_publish": _as_dict(state.get("official_publish")),
         "rating_mode": str(event.get("ratingMode") or "rated"),
+        "exhibition_only": bool(event.get("hubSupplemental")),
         "submission": {
             key: value for key, value in (state.get("generator_submission") or {}).items()
             if key in {"status", "approved_mode", "rating_mode", "submitted_at", "reviewed_at", "match_date", "match_count", "rejection_reason"}
@@ -588,6 +594,7 @@ def list_play_generator_sessions(
         _session_payload(row)
         for row in rows
         if _is_generator_row(row, clean_kind, include_standalone_public=True)
+        and not _event_from_state(_state(row)).get("hubSupplementalDraft")
     ]
     return {
         "ok": True,
@@ -610,6 +617,8 @@ def _live_row(
     )
     if row is None or not _is_generator_row(row, include_standalone_public=include_standalone_public):
         raise ValueError("Generator session not found.")
+    if _event_from_state(_state(row)).get("hubSupplementalDraft"):
+        raise ValueError("Retry the saved extra-game action from its hub to finish preparing this game.")
     return row
 
 
@@ -664,6 +673,9 @@ def _persist_event(
 ) -> dict[str, Any]:
     if _state(before).get("generator_submission"):
         raise ValueError("Submitted results are locked for administrator review.")
+    original = _event_from_state(_state(before))
+    from jupr_app.domain.hub_supplemental_policy import validate_supplemental_update
+    validate_supplemental_update(original, event)
     state = _put_event(_state(before), event)
     now = _now_iso()
     patch = {
@@ -1173,6 +1185,8 @@ def _format_publish_idempotency_key(value: str, match_format: str) -> str:
 
 def _require_hub_ready_for_publication(row: dict[str, Any]) -> None:
     state = _state(row)
+    if _event_from_state(state).get("hubSupplemental"):
+        raise ValueError("Extra games are exhibitions and cannot be submitted or published to player records.")
     if not state.get("round_robin_hub_id"):
         return
     event = _event_from_state(state)

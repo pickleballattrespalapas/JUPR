@@ -24,7 +24,8 @@ def test_later_round_bye_players_can_finish_before_slow_first_round_and_standing
     state, events = setup({"a": limited_rolling_event()}, courts=2)
     original = deepcopy(events["a"]["rounds"])
     ready = build_hub_snapshot(state, events, now=START)["eligible_queue"]
-    assert {m["round_number"] for m in ready} == {1, 2, 3}
+    assert {m["round_number"] for m in ready} == {1, 2}
+    assert len(original) == 2
     first = next(m for m in ready if m["round_number"] == 1)
     later = next(m for m in ready if m["round_number"] == 2)
     state, events = command(state, events, "assign_game", court_id="c0", **{k: first[k] for k in ("session_key", "match_id")})
@@ -33,11 +34,12 @@ def test_later_round_bye_players_can_finish_before_slow_first_round_and_standing
     assert events["a"]["currentRoundNumber"] == 1
     assert events["a"]["rounds"][1]["status"] == "preview"
     assert all(row["matches"] == 0 for row in generator_event_standings(events["a"]))
-    assert events["a"]["rounds"][2]["matches"] == original[2]["matches"]
+    assert [m["sideA"] + m["sideB"] for m in events["a"]["rounds"][1]["matches"]] == [
+        m["sideA"] + m["sideB"] for m in original[1]["matches"]]
     state, events = score(state, events, "c0")
-    assert events["a"]["currentRoundNumber"] == 3
-    assert [r["status"] for r in events["a"]["rounds"][:2]] == ["saved", "saved"]
-    assert sum(row["matches"] for row in generator_event_standings(events["a"])) == 8
+    assert events["a"]["currentRoundNumber"] == 2
+    assert [r["status"] for r in events["a"]["rounds"][:2]] == ["saved", "active"]
+    assert sum(row["matches"] for row in generator_event_standings(events["a"])) == 4
 
 
 def test_later_matches_cannot_leapfrog_an_earlier_queued_game():
@@ -65,7 +67,8 @@ def test_roster_edit_preserves_later_live_match_and_defers_target_departure(acti
     assert state["courts"][1]["current"]["match_id"] == protected["id"]
     participant = next(p for p in events["a"]["participants"] if p["id"] == target)
     assert participant["inactive_from_round"] == 3
-    assert target not in events["a"]["rosterByRound"]["3"]
+    from jupr_app.domain.adaptive_play_engine import active_participant_ids
+    assert target not in active_participant_ids(events["a"], 3)
     assert target in events["a"]["rounds"][0]["byeParticipantIds"]
 
 
@@ -75,16 +78,16 @@ def test_finish_drains_latest_started_round_and_keeps_released_start_history():
     state, events = command(state, events, "assign_game", session_key="a", match_id=later["id"], court_id="c1")
     state, events = command(state, events, "release_game", court_id="c1")
     details = build_hub_snapshot(state, events, now=START)["groups"][0]
-    assert details["finish_boundary_round"] == 2 and details["finish_pending_matches"] == 2
+    assert details["finish_boundary_round"] == 2 and details["finish_pending_matches"] == 4
     state, events = command(state, events, "finish_group", session_key="a")
     assert events["a"]["hubFinishAfterRound"] == 2
-    for _ in range(2):
+    for _ in range(4):
         state, events = command(state, events, "auto_fill_courts")
         occupied = next(c["id"] for c in state["courts"] if c["current"])
         state, events = score(state, events, occupied)
     assert events["a"]["status"] == "completed"
-    assert [r["status"] for r in events["a"]["rounds"][:3]] == ["saved", "saved", "skipped"]
-    assert sum(row["matches"] for row in generator_event_standings(events["a"])) == 8
+    assert [r["status"] for r in events["a"]["rounds"]] == ["saved", "saved"]
+    assert sum(row["matches"] for row in generator_event_standings(events["a"])) == 16
 
 
 def test_finish_untouched_group_and_adopt_unlinked_single_round_with_byes():
@@ -132,6 +135,9 @@ def test_finish_counts_future_reservation_and_promotes_it_before_completion():
     state, events = score(state, events, "c0")
     assert state["courts"][0]["current"]["match_id"] == later["id"]
     state, events = score(state, events, "c0")
+    for _ in range(2):
+        state, events = command(state, events, "auto_fill_courts")
+        state, events = score(state, events, "c0")
     assert events["a"]["status"] == "completed" and state["courts"][0]["current"] is None
 
 
@@ -595,7 +601,8 @@ def test_automatic_rounds_continue_beyond_schedule_without_advancing_other_group
         state, events = score(state, events, "c0")
         assert events["a"]["currentRoundNumber"] == expected
         assert events["a"]["hubAutoAdvancedFromRound"] == expected - 1
-        assert events["a"]["rounds"][-1]["status"] == "active"
+        assert events["a"]["rounds"][-2]["status"] == "active"
+        assert events["a"]["rounds"][-1]["number"] == expected + 1
         assert state["courts"][0]["current"] is None
         assert events["b"] == original_b
     assert all(p["matches"] == 3 for p in generator_event_standings(events["a"]))
@@ -710,12 +717,12 @@ def test_group_rosters_preserve_local_profile_names_and_share_pause_wait():
     assert all(g["can_add_player"] and g["add_player_unavailable_reason"] is None for g in snapshot["groups"])
 
 
-def test_hub_arrival_preserves_previews_without_rebuilding_the_full_schedule(monkeypatch):
+def test_hub_arrival_discards_unlocked_distant_previews_without_full_schedule_rebuild(monkeypatch):
     from jupr_app.domain import adaptive_play_engine as engine
 
     value = event(count=8)
-    # A long event already has announced future games. A single late arrival
-    # must update membership without rebuilding and discarding that schedule.
+    # Legacy distant previews are replaceable, while current games remain
+    # stable. Only the single full-group successor needs to be repaired.
     template = deepcopy(value["rounds"][-1])
     for number in range(4, 21):
         row = deepcopy(template)
@@ -736,10 +743,11 @@ def test_hub_arrival_preserves_previews_without_rebuilding_the_full_schedule(mon
     assert len(result["participants"]) == 9
     newcomer = result["participants"][-1]
     assert newcomer["name"] == "Late arrival" and newcomer["active_from_round"] == 1
-    assert len(result["rounds"]) == 20
-    for before, after in zip(original["rounds"], result["rounds"]):
-        assert after["matches"] == before["matches"]
-        assert newcomer["id"] in after["byeParticipantIds"]
+    assert len(result["rounds"]) == 2
+    assert result["rounds"][0]["matches"] == original["rounds"][0]["matches"]
+    assert newcomer["id"] in result["rounds"][0]["byeParticipantIds"]
+    assert newcomer["id"] not in result["rounds"][1]["byeParticipantIds"]
+    for after in result["rounds"]:
         assert newcomer["id"] in result["rosterByRound"][str(after["number"])]
 
 
@@ -839,8 +847,8 @@ def test_late_arrival_reaches_next_round_after_prior_edits_trimmed_future_rounds
     assert events["a"]["hubPreparedThroughRound"] >= 2 and not events["a"]["perfectRotation"]
     assert all(arrival in active_participant_ids(events["a"], r["number"]) for r in events["a"]["rounds"] if r["number"] >= 2)
     assert len(current_matches(events)) == 2
-    # Waiting lineups keep their players; the arrival retains membership and a bye.
-    assert arrival in events["a"]["rounds"][1]["byeParticipantIds"]
+    # The arrival sat out the current round and must play in the full-group successor.
+    assert arrival not in events["a"]["rounds"][1]["byeParticipantIds"]
     assert temporary not in active_participant_ids(events["a"], 2)
     assert len(events["a"]["rounds"][-1]["byeParticipantIds"]) == 1
 
@@ -905,8 +913,9 @@ def test_repair_untouched_recovered_rotation_keeps_saved_history_and_seats_late_
     assert repaired["rounds"][:3] == original["rounds"][:3]
     assert repaired["participants"] == original["participants"]
     assert generator_event_standings(repaired) == generator_event_standings(original)
-    assert repaired["currentRoundNumber"] == 4 and len(repaired["rounds"]) == 4
-    row = repaired["rounds"][-1]
+    assert repaired["currentRoundNumber"] == 4 and len(repaired["rounds"]) == 5
+    assert repaired["rounds"][-1]["number"] == 5
+    row = repaired["rounds"][-2]
     assert row["status"] == "active" and len(row["matches"]) == 2
     assert any("p-new-1" in m["sideA"] + m["sideB"] for m in row["matches"])
     assert len(row["byeParticipantIds"]) == 1 and "p-new-1" not in row["byeParticipantIds"]

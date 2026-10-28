@@ -113,6 +113,46 @@ class HubParticipantPayload(HubSessionPayload):
     participant_id: HubIdentifier
 
 
+class HubRemovePlayersPayload(HubSessionPayload):
+    participant_ids: list[HubIdentifier] = Field(min_length=1, max_length=40)
+
+    @field_validator("participant_ids")
+    @classmethod
+    def unique_participants(cls, value: list[str]) -> list[str]:
+        if len(value) != len(set(value)):
+            raise ValueError("Choose each departing player only once.")
+        return value
+
+
+class HubSetLineupPayload(HubMatchPayload):
+    court_id: HubIdentifier | None = None
+    side_a: list[HubIdentifier] = Field(min_length=2, max_length=2)
+    side_b: list[HubIdentifier] = Field(min_length=2, max_length=2)
+
+    @model_validator(mode="after")
+    def four_players(self) -> "HubSetLineupPayload":
+        if len(set(self.side_a + self.side_b)) != 4:
+            raise ValueError("Choose four different players for this game.")
+        return self
+
+
+class HubFinishPayload(HubSessionPayload):
+    finish_after_round: Annotated[int, Field(strict=True, ge=0)] | None = None
+
+
+class HubExtraGamePayload(HubCommandPayload):
+    side_a: list[HubParticipantPayload] = Field(min_length=2, max_length=2)
+    side_b: list[HubParticipantPayload] = Field(min_length=2, max_length=2)
+    standings_policy: Literal["exhibition"]
+
+    @model_validator(mode="after")
+    def four_players(self) -> "HubExtraGamePayload":
+        refs = {(p.session_key, p.participant_id) for p in self.side_a + self.side_b}
+        if len(refs) != 4:
+            raise ValueError("Choose four different player entries for this extra game.")
+        return self
+
+
 class HubAddPlayerPayload(HubSessionPayload):
     name: HubIdentifier
     player_id: HubProfile | None = None
@@ -184,13 +224,15 @@ HUB_PAYLOAD_MODELS = {
     "move_game": HubMoveGamePayload, "score_and_release": HubScorePayload,
     "mark_played": HubAssignedMatchPayload, "resolve_game": HubResolveGamePayload,
     "pause_player": HubIdentityPayload, "resume_player": HubIdentityPayload,
-    "advance_round": HubSessionPayload, "finish_group": HubSessionPayload,
+    "advance_round": HubSessionPayload, "finish_group": HubFinishPayload,
     "finish_hub": HubCommandPayload, "auto_fill_courts": HubCommandPayload,
     "rename_hub": HubTitlePayload, "resolve_identities": HubIdentityResolutionPayload,
     "add_player": HubAddPlayerPayload, "remove_player": HubParticipantPayload,
     "rejoin_player": HubParticipantPayload, "transfer_player": HubTransferPlayerPayload,
     "set_registration": HubRegistrationPayload, "review_checkin": HubReviewCheckinPayload,
     "process_checkins": HubCommandPayload, "edit_match_players": HubEditPlayersPayload,
+    "set_match_lineup": HubSetLineupPayload, "remove_players": HubRemovePlayersPayload,
+    "create_extra_game": HubExtraGamePayload,
 }
 
 
@@ -204,6 +246,7 @@ class HubCommandRequest(BaseModel):
         "auto_fill_courts", "resolve_identities", "add_player", "remove_player",
         "set_registration", "review_checkin", "process_checkins", "edit_match_players",
         "transfer_player", "rejoin_player", "resolve_game",
+        "set_match_lineup", "remove_players", "create_extra_game",
     ]
     payload: dict[str, Any] = Field(default_factory=dict, max_length=20)
     expected_version: int = Field(strict=True, ge=1)

@@ -402,6 +402,8 @@ def _doubles_round(
     round_number: int,
     court_offset: int = 0,
     seed_salt: Any = 0,
+    search_attempts: int | None = None,
+    subset_attempts: int = 16,
 ) -> tuple[list[dict[str, Any]], list[str], list[str]]:
     match_count = min(len(active_ids) // 4, max(1, int(court_count or 0)) if court_count else len(active_ids) // 4)
     slots = match_count * 4
@@ -413,13 +415,13 @@ def _doubles_round(
         history,
         roster_pos,
         seed=_stable_seed("doubles-subsets", seed_salt, round_number, *active_ids),
-        attempts=16,
+        attempts=subset_attempts,
     )
     best = None
     best_byes=[]
     best_cost=None
     for set_index,(playing,byes) in enumerate(candidate_sets):
-        attempts=max(48,len(playing)*8)
+        attempts=search_attempts if search_attempts is not None else max(48,len(playing)*8)
         for attempt in range(attempts):
             rng=random.Random(_stable_seed("doubles",seed_salt,round_number,set_index,attempt,*playing))
             remaining=playing[:]; rng.shuffle(remaining)
@@ -458,6 +460,10 @@ def _doubles_round(
                    sum(int(history.get("groups",{}).get(",".join(sorted(a+b)),0)) for a,b in match_pairs))
             if best_cost is None or total<best_cost:
                 best_cost=total;best=match_pairs;best_byes=byes
+            if search_attempts is not None and not any(total):
+                break
+        if search_attempts is not None and best_cost is not None and not any(best_cost):
+            break
     if best is None:
         playing=sorted(active_ids,key=lambda pid:_selection_priority(pid,history,roster_pos))[:slots]
         best_byes=[pid for pid in active_ids if pid not in set(playing)]
@@ -1506,7 +1512,8 @@ def hub_auto_advance_boundary(event: dict[str, Any]) -> int | None:
         if row.get("stage") == "playoff" or row.get("hubStartedAt") or _round_has_any_scores(row):
             return None
         if any(match.get("status") not in {None, "scheduled"}
-               or match.get("hubCompletedAt") or match.get("hubStartedAt") or match.get("courtLabel") or match.get("reservedCourtLabel")
+               or match.get("hubCompletedAt") or match.get("hubStartedAt") or match.get("hubPlanLocked")
+               or match.get("courtLabel") or match.get("reservedCourtLabel")
                for match in _round_matches(row)):
             return None
     return boundary
@@ -2227,6 +2234,14 @@ def _seat_generator_arrivals(
         "participantIds": ids, "court": court, "at": _now_iso(),
     })
     event["adaptiveFromRound"] = min(int(event.get("adaptiveFromRound") or current + 1), current + 1)
+    if event.get("roundRobinHubId"):
+        from jupr_app.domain.round_robin_hub import repair_hub_roster_plan
+        for match in matches:
+            match["hubPlanLocked"] = True
+        repaired = repair_hub_roster_plan(event, from_round=current + 1)
+        event.clear()
+        event.update(repaired)
+        return
     if not _recover_perfect_rotation(event):
         _regenerate_round_robin_from(event, current + 1)
 
@@ -2265,7 +2280,7 @@ def _regenerate_round_robin_from(event: dict[str, Any], start_round: int) -> Non
             str(previous.get("status")) in {"saved", "played", "skipped", "active"}
             or _round_has_any_scores(previous)
             or (event.get("roundRobinHubId") and (previous.get("hubStartedAt") or any(
-                match.get("hubStartedAt") or match.get("hubCompletedAt")
+                match.get("hubStartedAt") or match.get("hubCompletedAt") or match.get("hubPlanLocked")
                 or str(match.get("id")) in set(event.get("hubAssignedMatchIds") or [])
                 for match in _round_matches(previous)
             )))

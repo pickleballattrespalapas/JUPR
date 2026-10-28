@@ -3,7 +3,8 @@
  * -> transactional RPC double. Starts without sessions; all creation and hub
  * changes use the UI. Does not test real authentication, RLS or PostgreSQL locks.
  * Run from apps/web: node tests/round-robin-hub-browser.cjs
- * GENERATOR_BROWSER_{PYTHON,EXECUTABLE,ARGS,ARTIFACTS,WEB_PORT,API_PORT} supported.
+ * GENERATOR_BROWSER_{PYTHON,EXECUTABLE,ARGS,ARTIFACTS,WEB_PORT,API_PORT,NEXT_MODE} supported.
+ * NEXT_MODE=start uses a build with NEXT_PUBLIC_JUPR_API_BASE_URL matching API_PORT.
  */
 const {spawn} = require('node:child_process');
 const fs = require('node:fs');
@@ -17,6 +18,7 @@ const {chromium} = webRequire('playwright');
 const root = path.resolve(webRoot, '../..');
 const webPort = process.env.GENERATOR_BROWSER_WEB_PORT || '3059';
 const apiPort = process.env.GENERATOR_BROWSER_API_PORT || '8059';
+const nextMode = process.env.GENERATOR_BROWSER_NEXT_MODE || 'dev';
 const webOrigin = `http://127.0.0.1:${webPort}`;
 const apiOrigin = `http://127.0.0.1:${apiPort}`;
 const output = process.env.GENERATOR_BROWSER_ARTIFACTS || fs.mkdtempSync(path.join(os.tmpdir(), 'round-robin-hub-browser-'));
@@ -66,7 +68,8 @@ async function main() {
     NEXT_PUBLIC_JUPR_API_BASE_URL:apiOrigin, NEXT_PUBLIC_JUPR_ENV:'staging', GENERATOR_BROWSER_WEB_PORT:webPort};
   const api = start(process.env.GENERATOR_BROWSER_PYTHON || process.env.CODEX_PRIMARY_RUNTIME_PYTHON || 'python3',
     ['-m', 'uvicorn', 'round_robin_hub_api:app', '--app-dir', path.join(root, 'tests/e2e'), '--host', '127.0.0.1', '--port', apiPort], env, root);
-  const next = start(process.execPath, [webRequire.resolve('next/dist/bin/next'), 'dev', '--webpack', '--hostname', '127.0.0.1', '--port', webPort], env, webRoot);
+  assert(['dev','start'].includes(nextMode),'GENERATOR_BROWSER_NEXT_MODE must be dev or start');
+  const next = start(process.execPath, [webRequire.resolve('next/dist/bin/next'), nextMode, ...(nextMode === 'dev' ? ['--webpack'] : []), '--hostname', '127.0.0.1', '--port', webPort], env, webRoot);
   let browser, page;
   try {
     await ready(`${apiOrigin}/hub-fixture-result`, [api,next]);
@@ -116,6 +119,26 @@ async function main() {
       detail = await command(page,page.getByRole('button',{name:'Add to hub',exact:true}),'add_group');
     }
     assert.equal(detail.workspace.eligible_queue.length,4);
+    await page.getByRole('tab',{name:'Next round plan',exact:true}).click();
+    const nextPlan = page.getByRole('region',{name:'Alpha round robin next round plan',exact:true});
+    const beforePlan = detail.workspace.groups.find(group=>group.session_key===alpha.session_key);
+    assert.equal(beforePlan.next_round_number,2);
+    assert.equal(beforePlan.next_round_matches.length,2);
+    assert.equal(await nextPlan.getByRole('listitem').count(),2);
+    await nextPlan.getByText('Byes:',{exact:false}).waitFor();
+    const plannedMatch = beforePlan.next_round_matches[0], plannedDonor = beforePlan.next_round_matches[1];
+    await nextPlan.getByRole('button',{name:'Edit players',exact:true}).first().click();
+    const teamDialog = page.getByRole('dialog',{name:'Edit players',exact:true});
+    await teamDialog.getByLabel('Change players',{exact:true}).selectOption('exact');
+    await teamDialog.getByLabel('Team A player 1',{exact:true}).selectOption(plannedDonor.side_a[0].id);
+    detail = await command(page,teamDialog.getByRole('button',{name:'Save both teams',exact:true}),'set_match_lineup');
+    const afterPlan = detail.workspace.groups.find(group=>group.session_key===alpha.session_key);
+    assert.equal(afterPlan.current_round_number,1);
+    assert(afterPlan.next_round_matches.every(match=>match.plan_locked),'Both future games affected by the staff swap are protected');
+    assert.equal(afterPlan.next_round_matches.find(match=>match.match_id===plannedMatch.match_id).side_a[0].id,plannedDonor.side_a[0].id);
+    assert(afterPlan.next_round_matches.find(match=>match.match_id===plannedDonor.match_id).side_a.some(player=>player.id===plannedMatch.side_a[0].id));
+    await snapshot(page,'desktop-next-round-plan.png');
+    record('Full next-round plan and byes visible before scores; exact team edit swaps a future donor and locks both games');
     await page.getByRole('tab',{name:'Court setup',exact:true}).click();
     await page.getByLabel('Court 1 use',{exact:true}).selectOption(alpha.session_key);
     detail = await command(page,page.getByRole('button',{name:'Save court setup',exact:true}),'configure_courts');
@@ -170,8 +193,10 @@ async function main() {
     const betaQueue = page.getByRole('listitem').filter({hasText:'Beta round robin'});
     await betaQueue.getByRole('button',{name:'Choose court',exact:true}).click();
     const picker = page.getByRole('dialog',{name:'Choose court',exact:true});
-    assert.equal(await picker.getByRole('option').count(),2,'Only placeholder and eligible shared court offered');
-    await picker.getByRole('combobox',{name:/^Court/}).selectOption('court-2');
+    const courtSelect = picker.getByRole('combobox',{name:/^Court/});
+    await courtSelect.waitFor();
+    assert.deepEqual(await courtSelect.locator('option').evaluateAll(options=>options.map(option=>option.value)),['','court-2'],'Only placeholder and eligible shared court offered');
+    await courtSelect.selectOption('court-2');
     detail = await command(page,picker.getByRole('button',{name:'Reserve next',exact:true}),'reserve_game_for_court');
     assert.equal(detail.workspace.courts[1].next.session_key,beta.session_key);
     const reservationId = detail.workspace.courts[1].next.match_id;
