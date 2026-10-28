@@ -222,6 +222,21 @@ async function main() {
     const alphaQueue = page.getByRole('listitem').filter({hasText:'Alpha round robin'});
     detail = await command(page,alphaQueue.getByRole('button',{name:'Next open court',exact:true}),'assign_next_court');
     assert.equal(detail.workspace.courts[0].current.session_key,alpha.session_key);
+    await page.getByRole('tab',{name:'Next round plan',exact:true}).click();
+    const busyAlpha = new Set([...detail.workspace.courts[0].current.side_a,...detail.workspace.courts[0].current.side_b].map(player=>player.identity));
+    const readinessPlan = detail.workspace.groups.find(group=>group.session_key===alpha.session_key);
+    const nextPlayers = readinessPlan.next_round_matches.flatMap(match=>[...match.side_a,...match.side_b]);
+    assert.equal(nextPlayers.filter(player=>player.readiness.ready).length,4);
+    for (const player of nextPlayers) {
+      const expected = busyAlpha.has(player.identity) ? 'Playing on Garden Court' : 'Ready';
+      await nextPlan.getByLabel(`${player.display_name || player.name}: ${expected}`,{exact:true}).waitFor();
+    }
+    await snapshot(page,'desktop-player-readiness.png');
+    await page.setViewportSize({width:390,height:844});
+    await snapshot(page,'mobile-player-readiness.png');
+    assert(await page.evaluate(()=>document.documentElement.scrollWidth <= window.innerWidth),'Player readiness must wrap without mobile overflow');
+    await page.setViewportSize({width:1440,height:1000});
+    record('Next-round plan names four ready players and four still playing, with exact courts on desktop and mobile');
     await page.getByRole('tab',{name:'Court board',exact:true}).click();
     await page.setViewportSize({width:390,height:844});
     await snapshot(page,'mobile-reserved-next.png');

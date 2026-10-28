@@ -582,6 +582,26 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
     </section>;
   }
 
+  function playerReadiness(match: HubMatch) {
+    const players = [...match.side_a, ...match.side_b];
+    if (!players.every(player => player.readiness)) return null;
+    return <div className={styles.playerReadiness} role="group" aria-label="Player readiness">{players.map((player, index) => {
+      const readiness = player.readiness!;
+      const court = readiness.current_court || readiness.reserved_court;
+      const reasons: string[] = [];
+      if (court) reasons.push(`${readiness.current_court ? "Playing" : "Reserved"} on ${court.court_label}${court.session_key !== match.session_key ? ` · ${court.group_title}` : ""}`);
+      if (readiness.paused) reasons.push("Paused");
+      if (!court && readiness.waiting_round_number != null) reasons.push(`Waiting for round ${readiness.waiting_round_number} game`);
+      if (readiness.identity_review) reasons.push("Needs identity review");
+      if (readiness.duplicate_in_match) reasons.push("Duplicate player in match");
+      const status = reasons.join(" · ") || (readiness.ready ? "Ready" : "Waiting");
+      const tone = readiness.current_court ? styles.playerPlaying : readiness.ready ? styles.playerReady : styles.playerWaiting;
+      return <div key={`${player.id}:${index}`} className={`${styles.readinessPlayer} ${tone}`} data-player-identity={player.identity} aria-label={`${hubPlayerLabel(player)}: ${status}`}>
+        <strong>{hubPlayerLabel(player)}</strong><span>{status}</span>
+      </div>;
+    })}</div>;
+  }
+
   function queueRows(matches: HubMatch[], kind: "ready" | "waiting" | "blocked") {
     return <ol className={styles.queue}>{matches.map((match, index) => {
       const openCourt = workspace?.courts.some(court => court.open && !court.current && !court.next && match.allowed_court_ids.includes(court.id));
@@ -590,6 +610,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
         <span className={styles.position}>{kind === "ready" ? index + 1 : "•"}</span>
         <div className={styles.queueCopy}><strong>{hubMatchLabel(match)}</strong><span className={styles.small}>{groupMap.get(match.session_key)?.title || match.label} · Round {match.round_number} · Pending result</span>
           <span className={styles.small}>Longest player wait: {hubWaitLabel(match.wait_seconds)}{kind === "waiting" ? ` · Next on ${workspace?.courts.find(court => court.id === match.reserved_court_id)?.label || "reserved court"}` : ""}</span>
+          {playerReadiness(match)}
           {match.blockers.length > 0 ? <span className={styles.small}>{match.blockers.join(" · ")}</span> : null}
         </div>
         <div className={styles.actions}>{kind === "ready" ? <><button type="button" className={styles.primary} disabled={disabled || !openCourt} onClick={() => void command("assign_next_court", { session_key: match.session_key, match_id: match.match_id })}>Next open court</button><button type="button" className={styles.button} disabled={disabled || !courtChoice} onClick={() => openCourtPicker(match)}>Choose court</button></> : kind === "waiting" ? <button type="button" className={styles.button} disabled={disabled} onClick={() => void command("cancel_reservation", { court_id: match.reserved_court_id, session_key: match.session_key, match_id: match.match_id })}>Cancel wait</button> : <span className={`${styles.badge} ${styles.waiting}`}>Waiting</span>}{kind !== "waiting" ? editPlayersButton(match) : null}{notPlayedButton(match)}</div>
@@ -687,7 +708,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
       {tab === "queue" ? <section id="hub-panel-queue" role="tabpanel" aria-labelledby="hub-tab-queue" className={styles.root}><div className={styles.card}><h2>Ready matches · {workspace.eligible_queue.length}</h2><p className={styles.small}>Priority follows the longest waiting player in each eligible match. Scheduled byes count toward waiting time.</p>{workspace.eligible_queue.length ? queueRows(workspace.eligible_queue, "ready") : <p className={styles.empty}>No matches are ready.</p>}</div>{workspace.reserved_queue.length ? <div className={styles.card}><h2>Reserved next · {workspace.reserved_queue.length}</h2>{queueRows(workspace.reserved_queue, "waiting")}</div> : null}{workspace.blocked_queue.length ? <div className={styles.card}><h2>Waiting for players or courts · {workspace.blocked_queue.length}</h2>{queueRows(workspace.blocked_queue, "blocked")}</div> : null}</section> : null}
 
       {tab === "plan" ? <section id="hub-panel-plan" role="tabpanel" aria-labelledby="hub-tab-plan" className={styles.root}>
-        <div className={styles.card}><h2>Next round plan</h2><p className={styles.muted}>Review the full next round and its byes while the current round plays. A match can start as soon as its four players and a court are free. Saving scores updates readiness; it keeps these teams together.</p></div>
+        <div className={styles.card}><h2>Next round plan</h2><p className={styles.muted}>Review the full next round and its byes while the current round plays. Each player shows whether they’re ready or where they’re still playing. A match can start as soon as its players and a court are free. Saving scores updates readiness; it keeps these teams together.</p></div>
         {workspace.groups.map(group => {
           const round = group.next_round_number;
           const matches = group.next_round_matches || allMatches.filter(match => match.session_key === group.session_key && match.round_number === round);
@@ -701,11 +722,20 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
                 const readyMatch = workspace.eligible_queue.find(sameMatch);
                 const blockers = workspace.blocked_queue.find(sameMatch)?.blockers || match.blockers;
                 const done = match.result_status === "played" || match.result_status === "not_played";
+                const players = [...match.side_a, ...match.side_b];
+                const readinessSummary = players.every(player => player.readiness)
+                  ? `${players.filter(player => player.readiness?.ready).length} of ${players.length} players ready`
+                  : readyMatch ? "All players ready" : "Waiting for players or a court";
                 const openCourt = workspace.courts.some(court => court.open && !court.current && !court.next && match.allowed_court_ids.includes(court.id));
                 const courtChoice = workspace.courts.some(court => court.open && !court.next && match.allowed_court_ids.includes(court.id));
                 return <li key={match.match_id}>
                   <span className={styles.position}>{index + 1}</span>
-                  <div className={styles.queueCopy}><strong>{hubMatchLabel(match)}</strong><span className={styles.small}>{liveCourt ? `Playing on ${liveCourt.label}` : reserved ? `Reserved on ${workspace.courts.find(court => court.id === reserved.reserved_court_id)?.label || "a court"}` : done ? match.result_status === "not_played" ? "Not played" : `Played${match.score_a != null && match.score_b != null ? ` · ${match.score_a}–${match.score_b}` : ""}` : readyMatch ? "All four players ready" : "Waiting for players or a court"}{match.plan_locked ? " · Teams set by staff" : ""}</span>{!done && !liveCourt && blockers.length ? <span className={styles.small}>{blockers.join(" · ")}</span> : null}</div>
+                  <div className={styles.queueCopy}>
+                    <strong>{hubMatchLabel(match)}</strong>
+                    <span className={styles.small}>{liveCourt ? `Playing on ${liveCourt.label}` : reserved ? `Reserved on ${workspace.courts.find(court => court.id === reserved.reserved_court_id)?.label || "a court"}` : done ? match.result_status === "not_played" ? "Not played" : `Played${match.score_a != null && match.score_b != null ? ` · ${match.score_a}–${match.score_b}` : ""}` : readinessSummary}{match.plan_locked ? " · Teams set by staff" : ""}</span>
+                    {!done ? playerReadiness(match) : null}
+                    {!done && !liveCourt && blockers.length ? <span className={styles.small}>{blockers.join(" · ")}</span> : null}
+                  </div>
                   <div className={styles.actions}>{readyMatch ? <><button type="button" className={styles.primary} disabled={disabled || !openCourt} onClick={() => void command("assign_next_court", { session_key: match.session_key, match_id: match.match_id })}>Next open court</button><button type="button" className={styles.button} disabled={disabled || !courtChoice} onClick={() => openCourtPicker(readyMatch)}>Choose court</button></> : null}{!done && !reserved ? editPlayersButton(match) : null}</div>
                 </li>;
               })}</ol>

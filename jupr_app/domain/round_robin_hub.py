@@ -1077,7 +1077,24 @@ def build_hub_snapshot(hub: dict[str, Any], events: dict[str, dict[str, Any]], *
             players = _participants(event, match)
             identities = [player_identity(p, key, state) for p in players]
             waits = sorted((_wait(state["players"][i], now) for i in identities), reverse=True)
-            side = lambda ids: [{"id": str(pid), "name": by_id[str(pid)].get("name"), "display_name": identity_data["nodes"][(key, str(pid))]["display_name"], "identity": player_identity(by_id[str(pid)], key, state)} for pid in ids]
+            def side(ids):
+                result = []
+                for pid in ids:
+                    identity = player_identity(by_id[str(pid)], key, state)
+                    courts = person_courts.get(identity, {})
+                    earlier_round = earlier_pending.get(identity, int(match_row["number"]))
+                    readiness = {
+                        "current_court": courts.get("current"), "reserved_court": courts.get("next"),
+                        "paused": bool(state["players"][identity].get("paused")),
+                        "waiting_round_number": earlier_round if earlier_round < int(match_row["number"]) else None,
+                        "identity_review": identity in identity_data["pending"],
+                        "duplicate_in_match": identities.count(identity) > 1,
+                    }
+                    readiness["ready"] = not any(readiness.values())
+                    result.append({"id": str(pid), "name": by_id[str(pid)].get("name"),
+                        "display_name": identity_data["nodes"][(key, str(pid))]["display_name"],
+                        "identity": identity, "readiness": readiness})
+                return result
             side_a = side(match.get("sideA") or match.get("teamA") or [])
             side_b = side(match.get("sideB") or match.get("teamB") or [])
             entry = {"session_key": key, "match_id": str(match["id"]), "round_number": int(match_row["number"]),

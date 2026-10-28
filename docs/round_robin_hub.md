@@ -23,6 +23,10 @@ playoffs, exports, sharing, and submission/approval workflow.
   locks remain. Reads never migrate or rewrite a plan.
 - Prepared later-round matches may enter the queue once their players have
   resolved earlier games. Results settle in round order; groups advance independently.
+- The next-round plan and match queue show each player's readiness, current or
+  reserved court (including another round robin), pause, earlier-round obligation,
+  or identity review. Readiness updates with the court snapshot after a result;
+  reading these statuses does not change the planned teams.
 - More matches than courts are supported. Queued matches wait for a court; this
   waiting is distinct from a scheduled bye.
 - Queue order starts with the longest-waiting player in each eligible matchup,
