@@ -710,6 +710,39 @@ def test_group_rosters_preserve_local_profile_names_and_share_pause_wait():
     assert all(g["can_add_player"] and g["add_player_unavailable_reason"] is None for g in snapshot["groups"])
 
 
+def test_hub_arrival_preserves_previews_without_rebuilding_the_full_schedule(monkeypatch):
+    from jupr_app.domain import adaptive_play_engine as engine
+
+    value = event(count=8)
+    # A long event already has announced future games. A single late arrival
+    # must update membership without rebuilding and discarding that schedule.
+    template = deepcopy(value["rounds"][-1])
+    for number in range(4, 21):
+        row = deepcopy(template)
+        row["number"] = number
+        for index, match in enumerate(row["matches"], 1):
+            match.update(id=f"r{number}-c{index}", round=number)
+        value["rounds"].append(row)
+    value.update(totalRounds=20, hubRollingEnabled=True)
+    original = deepcopy(value)
+
+    def unexpected_full_replan(*args, **kwargs):
+        pytest.fail("Hub arrivals must not replan every existing preview round")
+
+    monkeypatch.setattr(engine, "_regenerate_round_robin_from", unexpected_full_replan)
+    result = engine.mutate_generator_roster(value, action="add", name="Late arrival")
+
+    assert value == original
+    assert len(result["participants"]) == 9
+    newcomer = result["participants"][-1]
+    assert newcomer["name"] == "Late arrival" and newcomer["active_from_round"] == 1
+    assert len(result["rounds"]) == 20
+    for before, after in zip(original["rounds"], result["rounds"]):
+        assert after["matches"] == before["matches"]
+        assert newcomer["id"] in after["byeParticipantIds"]
+        assert newcomer["id"] in result["rosterByRound"][str(after["number"])]
+
+
 def test_adding_shared_profile_reuses_pause_wait_and_departed_profile_can_rejoin():
     state, events = setup({"a": event("A", 4, player_ids=[1, 2, 3, 4]), "b": event("B", 4, player_ids=[5, 6, 7, 8])})
     state, events = command(state, events, "pause_player", now=LATER, identity="player:1")

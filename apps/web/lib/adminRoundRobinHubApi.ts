@@ -82,15 +82,33 @@ function errorText(detail: unknown): string {
 export async function requestRoundRobinHub<T>(
   apiBase: string, clubId: string, accessToken: string, suffix = "", body?: unknown
 ): Promise<T> {
-  const response = await fetch(`${apiBase.replace(/\/$/, "")}/admin/clubs/${encodeURIComponent(clubId)}/round-robin-hubs${suffix}`, {
-    method: body === undefined ? "GET" : "POST", cache: "no-store",
-    headers: { Authorization: `Bearer ${accessToken}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) })
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      // A timeout cannot tell us whether a write committed. Keep its exact
+      // pending request so the panel can safely retry the same operation.
+      reject(new RoundRobinHubApiError("The hub request timed out. Please check your connection and retry.", 408));
+      controller.abort();
+    }, 30_000);
   });
-  const payload = await response.json().catch(() => null);
-  if (!response.ok) throw new RoundRobinHubApiError(errorText(payload?.detail), response.status);
-  if (!payload?.ok) throw new RoundRobinHubApiError("We could not confirm the action. Retry the same action to check its result.", 502);
-  return payload as T;
+  try {
+    return await Promise.race([timeout, (async () => {
+      const response = await fetch(`${apiBase.replace(/\/$/, "")}/admin/clubs/${encodeURIComponent(clubId)}/round-robin-hubs${suffix}`, {
+        method: body === undefined ? "GET" : "POST", cache: "no-store", signal: controller.signal,
+        headers: { Authorization: `Bearer ${accessToken}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) })
+      });
+      // Bound body reads too: receiving headers does not guarantee the response
+      // finishes. The race also releases the UI if an abort is not honored.
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new RoundRobinHubApiError(errorText(payload?.detail), response.status);
+      if (!payload?.ok) throw new RoundRobinHubApiError("We could not confirm the action. Retry the same action to check its result.", 502);
+      return payload as T;
+    })()]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export function hubOperationKey(): string {

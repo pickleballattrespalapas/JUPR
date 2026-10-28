@@ -2405,6 +2405,13 @@ def mutate_generator_roster(
         "at": _now_iso(),
     })
 
+    if _hub_managed:
+        # mutate_hub_roster owns the schedule repair and restores the existing
+        # rounds/rosters before preserving announced games and seating arrivals.
+        # Replanning every preview here is discarded by that caller and can
+        # make a single player addition exceed the HTTP request deadline.
+        return next_event
+
     kind = str(next_event.get("generatorKind") or "round_robin")
     if kind == "round_robin":
         if next_event.get("status") == "active":

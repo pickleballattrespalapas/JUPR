@@ -118,7 +118,69 @@ async function unmount(tree) { await act(async () => tree.unmount()); }
 async function enterScore(tree, a = "11", b = "10") { await click(tree, "Enter score"); await change(tree, "Side A score", a); await change(tree, "Side B score", b); }
 const passed = [];
 async function scenario(name, run) { reset(); await run(); passed.push(name); }
+async function withRequestClock(run) {
+  const originalSetTimeout = global.setTimeout, originalClearTimeout = global.clearTimeout;
+  const pendingTimers = new Map();
+  global.setTimeout = (callback, delay, ...args) => {
+    if (delay !== 30_000) return originalSetTimeout(callback, delay, ...args);
+    const timer = {}; pendingTimers.set(timer, () => callback(...args)); return timer;
+  };
+  global.clearTimeout = timer => { if (!pendingTimers.delete(timer)) originalClearTimeout(timer); };
+  try { await run(() => { assert.ok(pendingTimers.size, "An outstanding request has a deadline"); for (const callback of [...pendingTimers.values()]) callback(); }); }
+  finally { global.setTimeout = originalSetTimeout; global.clearTimeout = originalClearTimeout; }
+  assert.equal(pendingTimers.size, 0, "Every settled request clears its deadline");
+}
 (async () => {
+  await scenario("stalled board reads end loading and can be refreshed", async () => withRequestClock(async expire => {
+    const originalFetch = global.fetch, signals = [];
+    let tree;
+    global.fetch = (_url, options) => { signals.push(options.signal); return new Promise(() => {}); };
+    try {
+      tree = await mount();
+      assert.match(text(tree.toJSON()), /Loading court board/);
+      await act(async () => expire());
+      assert.ok(signals.every(signal => signal.aborted));
+      assert.doesNotMatch(text(tree.toJSON()), /Loading court board/);
+      assert.match(text(tree.toJSON()), /request timed out/);
+      assert.equal(stored.size, 0, "A timed-out read never creates an uncertain write");
+      global.fetch = originalFetch;
+      await click(tree, "Refresh");
+      assert.ok(tree.root.findByProps({"aria-label": "Court 6"}));
+    } finally { global.fetch = originalFetch; if (tree) await unmount(tree); }
+  }));
+  for (const phase of ["headers", "body"]) await scenario(`stalled command ${phase} retains the exact request and safely replays`, async () => withRequestClock(async expire => {
+    const originalFetch = global.fetch;
+    let tree, releaseLate, signal, stallNext = true;
+    global.fetch = async (url, options = {}) => {
+      const result = await originalFetch(url, options);
+      if (!options.body || !stallNext) return result;
+      stallNext = false; signal = options.signal;
+      const saved = await result.json();
+      if (phase === "headers") return new Promise(resolve => { releaseLate = () => resolve(response(saved)); });
+      return {...result, json: () => new Promise(resolve => { releaseLate = () => resolve(saved); })};
+    };
+    try {
+      tree = await mount(); await enterScore(tree); await submit(tree, "hub-score-form");
+      const saved = JSON.parse(stored.get("rr-hub-pending:club"));
+      assert.equal(button(tree, "Checking…").props.disabled, true);
+      await act(async () => expire());
+      assert.equal(signal.aborted, true);
+      assert.match(text(tree.toJSON()), /result is not yet confirmed/);
+      assert.equal(button(tree, "Retry saved action").props.disabled, false);
+      assert.equal(button(tree, "Refresh").props.disabled, false);
+      assert.deepEqual(JSON.parse(stored.get("rr-hub-pending:club")), saved);
+      await unmount(tree); tree = await mount();
+      await click(tree, "Retry saved action");
+      assert.deepEqual(requests.at(-1), saved.body, "Reload and retry preserve payload, expected version, and idempotency key");
+      assert.equal(receipts.size, 1, "A committed score is never applied twice");
+      assert.equal(stored.size, 0);
+      await click(tree, "Court setup"); loseNext = true; await click(tree, "Save court setup");
+      const newer = stored.get("rr-hub-pending:club");
+      await act(async () => releaseLate());
+      assert.equal(stored.get("rr-hub-pending:club"), newer, "Late timed-out responses cannot clear a newer pending action");
+      await click(tree, "Retry saved action");
+    } finally { global.fetch = originalFetch; if (tree) await unmount(tree); }
+  }));
   await scenario("late initial event list preserves a new-event draft", async () => {
     const originalFetch = global.fetch;
     let releaseList, tree;
