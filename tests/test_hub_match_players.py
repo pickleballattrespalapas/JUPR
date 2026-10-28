@@ -73,8 +73,15 @@ def test_new_guest_joins_current_match_and_future_rotation(format, mode):
     assert added["name"] == "New Guest" and added["active_from_round"] == 1
     assert added["id"] in people(round_row(events["a"])["matches"][0])
     assert people(match)[0] in round_row(events["a"])["byeParticipantIds"]
-    assert any(added["id"] in people(m) for r in events["a"]["rounds"][1:] for m in r["matches"])
     assert len(people(round_row(events["a"])["matches"][0])) == count
+    # A guest who just played may fairly sit out the next round. Planning one
+    # round ahead must still put them back into play within the following round.
+    if mode == "unscored":
+        state, events = command(state, events, "mark_played", court_id="c0", **state["courts"][0]["current"])
+    else:
+        state, events = score(state, events, "c0")
+    assert any(added["id"] in people(m) for r in events["a"]["rounds"]
+        if r["number"] in {2, 3} for m in r["matches"])
 
 
 @pytest.mark.parametrize("status", ["on_court", "reserved", "played", "paused"])

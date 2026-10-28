@@ -5,6 +5,7 @@ module.exports = function publicControls(name) {
     '@/components/GeneratorSessionDetails': '../../components/GeneratorSessionDetails.tsx',
     '@/components/PublicControls': '../../components/PublicControls.tsx',
     '@/lib/hubAutoAdvanceBoundary': '../../lib/hubAutoAdvanceBoundary.ts',
+    '@/lib/generatorStandingsRequest': '../../lib/generatorStandingsRequest.ts',
   }[name];
   if (!relative) return null;
   if (!loaded.has(name)) {

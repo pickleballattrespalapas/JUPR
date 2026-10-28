@@ -7,6 +7,20 @@ playoffs, exports, sharing, and submission/approval workflow.
 ## Accepted operating rules
 
 - An event can contain multiple independent groups and named courts.
+- Standard hub round robins prepare the current round and one complete next
+  round from the whole active group. Results and court availability release
+  those planned matches; they do not choose a new game from the four players
+  who happened to finish first. Scores reuse the next plan until the current
+  round settles. A new successor is then calculated once.
+- Roster changes rebuild replaceable next-round lineups with partner, opponent,
+  and bye history. Started, scored, assigned, reserved, and manually locked
+  games stay protected. A departure may repair a manual future lineup containing
+  that player; it does not erase results or postpone departure merely because
+  an unstarted game was manually chosen. Moneyball and playoff plans retain
+  their existing fixed-format rules.
+- Legacy distant previews are not treated as announced games. On the first
+  write they are removed if replaceable; actual commitments and explicit manual
+  locks remain. Reads never migrate or rewrite a plan.
 - Prepared later-round matches may enter the queue once their players have
   resolved earlier games. Results settle in round order; groups advance independently.
 - More matches than courts are supported. Queued matches wait for a court; this
@@ -40,6 +54,21 @@ playoffs, exports, sharing, and submission/approval workflow.
   not count in standings until every match in that round is resolved. Unscored
   sessions use Match played. A completed round still offers standings, next round,
   finish, and supported playoff controls.
+- The admin standings view also offers explicitly labelled provisional totals
+  from all scored games, including partial rounds. It names missing games and
+  identifies the last completed round. Departed players retain their results.
+- Exact two-team editing exchanges displaced waiting players atomically and
+  updates byes. Intentional lineups are locked against later ordinary planning.
+  Several players can be marked finished together; each departure displays its
+  effective round, and the remaining schedule is repaired once.
+- Finish can name the current or prepared next round. It cannot discard a
+  started, reserved, or scored later game. No further rounds are generated after
+  that boundary, and the group closes when its remaining games are resolved.
+- Extra games can borrow four ready players from attached standard groups without
+  moving their memberships. An extra game is a separate one-round exhibition:
+  its score does not affect home-group standings, ratings, or publication. The
+  same court and person-identity protections apply. An interrupted creation
+  retries the same hidden draft rather than creating another game.
 - Standard RR roster changes preserve completed and assigned matches and adapt
   unstarted matches. Moneyball retains its frozen inputs and substitution rules.
 - Ending a session or starting playoffs must resolve pending play first. Rating
@@ -96,8 +125,9 @@ Moneyball calibration data or organizer tokens.
 
 ## Verification scenarios
 
-1. Attach two RRs with more matches than open courts; ensure only current-round
-   matches enter the queue and neither RR waits for the other's round completion.
+1. Attach two RRs with more matches than open courts; ensure a prepared next-round
+   game can enter the queue when its four players have finished earlier
+   obligations, even while unrelated games or the other RR remain in progress.
 2. Save one match, refresh, confirm its court is available and its score survives,
    while that RR's standings remain unchanged until the last match finishes.
 3. Preserve bye waiting time across advancement; pause and resume without a reason.
@@ -114,6 +144,30 @@ Moneyball calibration data or organizer tokens.
    linked profile, and verify shared availability and no overlapping reservation.
 10. Preserve selected club profiles in a roster that also contains manual guests.
     Refresh identity decisions and retry an uncertain save without applying it twice.
+11. Enroll 15 and 29 active players incrementally. Verify full-group next rounds,
+    rotating byes, stable plans under different score-arrival orders, and no
+    redundant distant schedule generation.
+12. Hold automatic check-in processing after a successful board read. The courts
+    display immediately, processing is visible, and an enabled score submission
+    is never silently dropped. After a timeout, retry the exact saved action.
+13. Edit a next-round team using a bye player, then add/remove another player or
+    seat a late arrival through the original generator. Preserve the explicit
+    lineup unless a player in it leaves.
+14. Create an exhibition with borrowed guests and club profiles. Verify atomic
+    attachment, exact retry, source memberships/results, and overlap rejection
+    using the database's actual person-identity and lease functions.
+
+## Timing and recovery
+
+Hub requests bound both response headers and body reads. A timeout does not prove
+that a command failed; the exact request, expected version, and idempotency key
+remain available for safe replay. Background check-in writes use the same visible
+pending-operation path. The event list polls less often than the selected board.
+
+Successful commands log action, group/roster counts, and separate read, preparation,
+commit, response, and total durations. Names, scores, credentials, and request
+payloads are not included in these timing logs. Local CPU benchmarks must not be
+reported as measured production network/database response times.
 
 Deployment target for this feature is staging. Production release requires Joe's
 separate authorization under the repository's AGENTS.md.

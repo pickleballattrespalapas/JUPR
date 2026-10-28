@@ -18,6 +18,10 @@ def _details(event: dict, *, title: str, rating_mode: str) -> dict:
         raise ValueError("Enter a title between 1 and 160 characters.")
     if rating_mode not in {"rated", "unrated"}:
         raise ValueError("Choose Rated or Unrated.")
+    if event.get("hubSupplementalDraft"):
+        raise ValueError("Retry the saved extra-game action from its hub first.")
+    if event.get("hubSupplemental") and rating_mode != "unrated":
+        raise ValueError("Extra games are exhibitions and cannot be rated.")
     if rating_mode == "rated" and event.get("scoringMode") == "unscored":
         raise ValueError("An unscored session cannot be rated.")
     event = copy.deepcopy(event)
