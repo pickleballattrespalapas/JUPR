@@ -223,6 +223,50 @@ async function withRequestClock(run) {
     assert.equal(requests.length, 3, "Successful recovery restores automatic processing for later arrivals");
     await unmount(tree);
   });
+  await scenario("next-round and queue cards name ready, playing, and waiting players and refresh their status", async () => {
+    const ready = {ready: true, current_court: null, reserved_court: null, paused: false, waiting_round_number: null, identity_review: false, duplicate_in_match: false};
+    const match = game("readiness", "a", {round_number: 4, blockers: ["A player is already assigned to a court."]});
+    const players = [...match.side_a, ...match.side_b];
+    const names = ["Ana", "Ben", "Cara", "Drew"];
+    players.forEach((player, index) => Object.assign(player, {name: names[index], readiness: {...ready}}));
+    players[1].readiness = {...ready, ready: false, current_court: {court_id: "c2", court_label: "Court 7", session_key: "b", group_title: "2.5/3.0"}};
+    players[2].readiness = {...ready, ready: false, paused: true};
+    players[3].readiness = {...ready, ready: false, waiting_round_number: 3};
+    const played = game("finished", "a", {round_number: 4, result_status: "played", score_a: 11, score_b: 8});
+    [...played.side_a, ...played.side_b].forEach(player => player.readiness = {...ready});
+    Object.assign(detail.workspace.groups[0], {next_round_number: 4, next_round_matches: [match, played]});
+    detail.workspace.eligible_queue = []; detail.workspace.blocked_queue = [match];
+    const tree = await mount(); await click(tree, "Next round plan");
+    const plan = () => tree.root.findByProps({"aria-label": "3.5/4.0 next round plan"});
+    assert.match(text(plan()), /1 of 4 players ready/);
+    for (const label of ["Ana: Ready", "Ben: Playing on Court 7 · 2.5/3.0", "Cara: Paused", "Drew: Waiting for round 3 game"])
+      assert.ok(plan().findByProps({"aria-label": label}), label);
+    assert.equal(plan().findAllByProps({"aria-label": "Player readiness"}).length, 1, "Completed games show their result, not current player readiness");
+    await click(tree, "Match queue");
+    assert.ok(tree.root.findByProps({"aria-label": "Ben: Playing on Court 7 · 2.5/3.0"}));
+    await click(tree, "Next round plan");
+    players.forEach(player => player.readiness = {...ready});
+    detail.workspace.eligible_queue = [match]; detail.workspace.blocked_queue = []; match.blockers = [];
+    detail.hub.version++;
+    await click(tree, "Refresh");
+    assert.match(text(plan()), /4 of 4 players ready/);
+    for (const name of names) assert.ok(plan().findByProps({"aria-label": `${name}: Ready`}));
+    assert.doesNotMatch(text(plan()), /Playing on Court 7|Waiting for round 3 game|Paused/);
+    await unmount(tree);
+  });
+  await scenario("readiness labels distinguish reservations and identity blockers for singles", async () => {
+    const match = game("singles", "a", {round_number: 4});
+    match.side_a = match.side_a.slice(0, 1); match.side_b = match.side_b.slice(0, 1);
+    const [a, b] = [match.side_a[0], match.side_b[0]];
+    a.readiness = {ready: false, current_court: null, reserved_court: {court_id: "c1", court_label: "Court 6", session_key: "a", group_title: "3.5/4.0"}, paused: false, waiting_round_number: 3, identity_review: false, duplicate_in_match: false};
+    b.readiness = {ready: false, current_court: null, reserved_court: null, paused: false, waiting_round_number: null, identity_review: true, duplicate_in_match: true};
+    Object.assign(detail.workspace.groups[0], {next_round_number: 4, next_round_matches: [match]});
+    const tree = await mount(); await click(tree, "Next round plan");
+    assert.match(text(tree.toJSON()), /0 of 2 players ready/);
+    assert.ok(tree.root.findByProps({"aria-label": `${a.name}: Reserved on Court 6`}));
+    assert.ok(tree.root.findByProps({"aria-label": `${b.name}: Needs identity review · Duplicate player in match`}));
+    await unmount(tree);
+  });
   await scenario("whole next-round plan includes byes and completed games and dispatches a ready match early", async () => {
     const ready = game("next-ready", "a", {round_number: 4, plan_locked: true});
     const blocked = game("next-waiting", "a", {round_number: 4, blockers: ["Player is still on Court 6"]});

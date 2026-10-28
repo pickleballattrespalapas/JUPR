@@ -1,5 +1,9 @@
 export type HubCourtConfig = { id: string; label: string; dedicated_session_key: string | null; open: boolean };
-export type HubPlayer = { id: string; name: string; display_name?: string; identity: string };
+export type HubPlayerReadiness = {
+  ready: boolean; current_court: HubPlayerCourt | null; reserved_court: HubPlayerCourt | null;
+  paused: boolean; waiting_round_number: number | null; identity_review: boolean; duplicate_in_match: boolean;
+};
+export type HubPlayer = { id: string; name: string; display_name?: string; identity: string; readiness?: HubPlayerReadiness };
 export type HubPlayerCourt = { session_key: string; group_title: string; court_id: string; court_label: string };
 export type HubMatch = {
   session_key: string; match_id: string; round_number: number; side_a: HubPlayer[]; side_b: HubPlayer[];
