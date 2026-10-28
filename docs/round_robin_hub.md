@@ -44,9 +44,10 @@ playoffs, exports, sharing, and submission/approval workflow.
   Ready again, and Fill open courts. Reading the board never changes a lineup.
   Ready again restores eligibility without undoing substitutions. Original
   affected games are retained in the round's pause-adjustment audit metadata.
-- A group with dedicated courts uses only those courts, even if shared courts are
-  free. Other groups cannot use those dedicated courts. Groups without dedicated
-  courts use the shared pool.
+- Dedicated courts are exclusive to their assigned group. That group can also
+  use shared courts, including manual moves and next-game reservations. Automatic
+  assignment uses its available dedicated courts first, then shared courts;
+  shared-court queue priority still follows player waiting time.
 - Tournament-style controls assign to the next open court, choose a court, reserve
   the next match on an occupied court, move a match, return it to the queue, and
   save a score. No player or matchup can claim two courts.
@@ -131,7 +132,9 @@ Moneyball calibration data or organizer tokens.
 2. Save one match, refresh, confirm its court is available and its score survives,
    while that RR's standings remain unchanged until the last match finishes.
 3. Preserve bye waiting time across advancement; pause and resume without a reason.
-4. Dedicate a court and verify exclusivity in both directions, including reservations.
+4. Dedicate courts 1–2 to one RR and verify other RRs cannot use or reserve them.
+   Verify that RR can assign, move, and reserve games on shared courts, and that
+   automatic assignment prefers its available dedicated courts before overflow.
 5. Attempt concurrent assignment/score operations and exact retries; no double
    booking, duplicated result, or partial court release is permitted.
 6. Add/remove/substitute players with queued, assigned, and completed matches;

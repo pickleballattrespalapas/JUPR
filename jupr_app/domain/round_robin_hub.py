@@ -205,8 +205,18 @@ def _court(hub: dict[str, Any], court_id: str) -> dict[str, Any]:
 
 
 def _allowed(hub: dict[str, Any], session_key: str) -> list[str]:
-    dedicated = [c for c in hub.get("courts") or [] if c.get("dedicated_session_key") == session_key]
-    return [str(c["id"]) for c in (dedicated or [c for c in hub.get("courts") or [] if not c.get("dedicated_session_key")]) if c.get("open", True)]
+    # A dedication excludes other groups; its owner can still use shared courts.
+    courts = [c for c in hub.get("courts") or [] if c.get("open", True)]
+    dedicated = [c for c in courts if c.get("dedicated_session_key") == session_key]
+    shared = [c for c in courts if not c.get("dedicated_session_key")]
+    return [str(c["id"]) for c in dedicated + shared]
+
+
+def _next_open_court(hub: dict[str, Any], allowed: list[str]) -> dict[str, Any] | None:
+    # Prefer the group's dedicated courts, preserving shared capacity for others.
+    courts = {str(c["id"]): c for c in hub.get("courts") or []}
+    return next((courts[cid] for cid in allowed
+                 if not courts[cid].get("current") and not courts[cid].get("next")), None)
 
 
 def _wait(player: dict[str, Any], now: str) -> float:
@@ -1822,7 +1832,7 @@ def apply_hub_command(hub: dict[str, Any], events: dict[str, dict[str, Any]], *,
             ready = [entry for entry in build_hub_snapshot(state, updated, now=now)["eligible_queue"] if entry["session_key"] not in excluded]
             chosen = None
             for candidate in ready:
-                court = next((c for c in state["courts"] if c["id"] in candidate["allowed_court_ids"] and not c.get("current") and not c.get("next")), None)
+                court = _next_open_court(state, candidate["allowed_court_ids"])
                 if court is not None:
                     chosen = (candidate, court)
                     break
@@ -1834,7 +1844,7 @@ def apply_hub_command(hub: dict[str, Any], events: dict[str, dict[str, Any]], *,
         assignment = _candidate(state, updated, payload, now)
         allowed = _allowed(state, session_key)
         if action == "assign_next_court":
-            court = next((c for c in state["courts"] if c["id"] in allowed and not c.get("current") and not c.get("next")), None)
+            court = _next_open_court(state, allowed)
             if court is None:
                 raise ValueError("No permitted court is currently open.")
         else:

@@ -21,6 +21,7 @@ await db.exec(`
 `);
 await db.exec(migration);
 await db.exec(migration);
+await db.exec(fs.readFileSync(path.join(root, 'supabase/migrations/20261028230610_round_robin_hub_shared_courts.sql'), 'utf8'));
 const hubId = '10000000-0000-4000-8000-000000000001';
 const otherHubId = '10000000-0000-4000-8000-000000000002';
 const assignment = (session,match='m1') => ({session_key:session,match_id:match,round_number:1,assigned_at:'2026-10-20T04:00:00Z'});
@@ -76,10 +77,23 @@ assert.equal(saved.hub.version,4);
 assert.equal((await row('a')).state.page_state.event.rounds[0].status,'active');
 assert.equal((await db.query('select count(*) n from round_robin_hub_player_leases')).rows[0].n,0);
 assert.equal((await commit({version:3,hubState:freed,sessions:[],key:'save-score-0001'})).replayed,true);
-// Dedicated allocation enforced even if a caller bypasses domain logic.
-let dedicated=clone(freed);dedicated.courts[0].dedicated_session_key='a';dedicated.courts[1].current=assignment('a');
+// Dedicated courts reject other groups for both live assignments and reservations.
+let dedicated=clone(freed);dedicated.courts[0].dedicated_session_key='a';dedicated.courts[0].current=assignment('b');
+await rejects(async()=>commit({version:4,hubState:dedicated,sessions:await readSet(['a','b'])}),/outside its group allocation/);
+dedicated.courts[0].current=null;dedicated.courts[0].next=assignment('b');
 await rejects(async()=>commit({version:4,hubState:dedicated,sessions:await readSet(['a','b'])}),/outside its group allocation/);
 assert.equal((await hub()).version,4);
+// Its owner may occupy or reserve shared courts. Roll back each fixture so the
+// remaining concurrency checks keep exercising the original snapshot/version.
+for (const slot of ['current','next']) {
+  await db.exec('begin');
+  const overflow=clone(freed);overflow.courts[0].dedicated_session_key='a';
+  overflow.courts[1][slot]=assignment('a');
+  if(slot==='next') overflow.courts[1].current=assignment('b');
+  const accepted=await commit({version:4,hubState:overflow,sessions:await readSet(['a','b'])});
+  assert.equal(accepted.hub.state.courts[1][slot].session_key,'a');
+  await db.exec('rollback');
+}
 // Another hub cannot claim the same physical name with case/spacing changes.
 await rejects(async()=>commit({id:otherHubId,hubState:{courts:[court('other',' court   1 ')],groups:[]}}),/duplicate key/);
 assert.equal(await hub(otherHubId),undefined);

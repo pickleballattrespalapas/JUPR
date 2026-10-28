@@ -252,18 +252,112 @@ def test_pause_freezes_wait_cancels_reservation_and_keeps_existing_wait_on_resum
     assert next(p for p in snap["players"] if p["identity"] == identity)["wait_seconds"] == 420
 
 
-def test_dedicated_courts_are_exclusive_in_both_directions_and_autofill_respects_them():
+def test_dedicated_courts_exclude_other_groups_but_allow_owner_to_use_shared_courts():
     state, events = setup({"a": event("A", 4), "b": event("B", 4)}, courts=2)
     config = deepcopy(state["courts"])
     config[0]["dedicated_session_key"] = "a"
     state, events = command(state, events, "configure_courts", courts=config)
     a, b = current_matches(events, "a")[0], current_matches(events, "b")[0]
-    with pytest.raises(ValueError, match="not available"):
-        command(state, events, "assign_game", session_key="a", match_id=a["id"], court_id="c1")
+    assigned, _ = command(state, events, "assign_game", session_key="a", match_id=a["id"], court_id="c1")
+    assert assigned["courts"][1]["current"]["session_key"] == "a"
     with pytest.raises(ValueError, match="not available"):
         command(state, events, "assign_game", session_key="b", match_id=b["id"], court_id="c0")
     state, events = command(state, events, "auto_fill_courts")
     assert [c["current"]["session_key"] for c in state["courts"]] == ["a", "b"]
+
+
+@pytest.mark.parametrize("action", ["assign_next_court", "auto_fill_courts"])
+def test_dedicated_rr_overflows_onto_shared_court_when_its_two_courts_are_busy(action):
+    state, events = setup({"a": event("A", 12), "b": event("B", 4)}, courts=4)
+    config = deepcopy(state["courts"])
+    config[0]["dedicated_session_key"] = config[1]["dedicated_session_key"] = "a"
+    config[3]["dedicated_session_key"] = "b"
+    state, events = command(state, events, "configure_courts", courts=config)
+    first, second, third = current_matches(events)
+    for index, match in enumerate((first, second)):
+        state, events = command(state, events, "assign_game", session_key="a", match_id=match["id"], court_id=f"c{index}")
+    ready = next(m for m in build_hub_snapshot(state, events, now=START)["eligible_queue"]
+                 if m["session_key"] == "a")
+    assert ready["allowed_court_ids"] == ["c0", "c1", "c2"]
+    state, events = command(state, events, action, session_key="a", match_id=third["id"])
+    assert state["courts"][2]["current"]["match_id"] == third["id"]
+    assert state["courts"][2]["current"]["session_key"] == "a"
+    assert all(c["current"]["session_key"] == "a" for c in state["courts"][:3])
+
+
+@pytest.mark.parametrize("action", ["assign_next_court", "auto_fill_courts"])
+def test_automatic_assignment_prefers_dedicated_court_even_when_shared_court_is_listed_first(action):
+    state, events = setup({"a": event("A", 4), "b": event("B", 4)}, courts=2)
+    config = deepcopy(state["courts"])
+    config[1]["dedicated_session_key"] = "a"
+    state, events = command(state, events, "configure_courts", courts=config)
+    state, events = command(state, events, action, session_key="a", match_id=current_matches(events)[0]["id"])
+    assert state["courts"][1]["current"]["session_key"] == "a"
+    if action == "auto_fill_courts":
+        assert state["courts"][0]["current"]["session_key"] == "b"
+    else:
+        assert state["courts"][0]["current"] is None
+
+
+def test_dedicated_rr_can_reserve_shared_court_and_promote_after_other_group_finishes():
+    state, events = setup({"a": event("A", 8), "b": event("B", 8)}, courts=2)
+    config = deepcopy(state["courts"])
+    config[0]["dedicated_session_key"] = "a"
+    state, events = command(state, events, "configure_courts", courts=config)
+    a1, a2 = current_matches(events, "a")
+    b1, b2 = current_matches(events, "b")
+    state, events = command(state, events, "assign_game", session_key="a", match_id=a1["id"], court_id="c0")
+    state, events = command(state, events, "assign_game", session_key="b", match_id=b1["id"], court_id="c1")
+    with pytest.raises(ValueError, match="not available"):
+        command(state, events, "reserve_game_for_court", session_key="b", match_id=b2["id"], court_id="c0")
+    state, events = command(state, events, "reserve_game_for_court", session_key="a", match_id=a2["id"], court_id="c1")
+    assert state["courts"][1]["next"]["session_key"] == "a"
+    state, events = score(state, events, "c1")
+    assert state["courts"][1]["current"]["match_id"] == a2["id"]
+    assert state["courts"][1]["next"] is None
+
+
+def test_move_to_shared_court_preserves_lineup_and_cannot_use_another_groups_dedicated_court():
+    state, events = setup({"a": event("A", 4), "b": event("B", 4)}, courts=3)
+    config = deepcopy(state["courts"])
+    config[0]["dedicated_session_key"] = "a"
+    config[2]["dedicated_session_key"] = "b"
+    state, events = command(state, events, "configure_courts", courts=config)
+    match = current_matches(events)[0]
+    state, events = command(state, events, "assign_game", session_key="a", match_id=match["id"], court_id="c0")
+    original = deepcopy(state["courts"][0]["current"])
+    with pytest.raises(ValueError, match="empty court available"):
+        command(state, events, "move_game", court_id="c0", target_court_id="c2")
+    state, events = command(state, events, "move_game", court_id="c0", target_court_id="c1")
+    assert state["courts"][0]["current"] is None
+    assert state["courts"][1]["current"] == original
+    moved = current_matches(events)[0]
+    assert (moved["sideA"], moved["sideB"]) == (match["sideA"], match["sideB"])
+
+
+def test_closed_dedicated_court_does_not_block_owner_from_shared_courts():
+    state, events = setup({"a": event("A", 4)}, courts=2)
+    config = deepcopy(state["courts"])
+    config[0].update(dedicated_session_key="a", open=False)
+    state, events = command(state, events, "configure_courts", courts=config)
+    assert build_hub_snapshot(state, events, now=START)["eligible_queue"][0]["allowed_court_ids"] == ["c1"]
+    state, events = command(state, events, "auto_fill_courts")
+    assert state["courts"][0]["current"] is None
+    assert state["courts"][1]["current"]["session_key"] == "a"
+
+
+def test_shared_overflow_still_respects_longest_wait_across_groups():
+    state, events = setup({"a": event("A", 12), "b": event("B", 4)}, courts=3)
+    config = deepcopy(state["courts"])
+    config[0]["dedicated_session_key"] = config[1]["dedicated_session_key"] = "a"
+    state, events = command(state, events, "configure_courts", courts=config)
+    for index, match in enumerate(current_matches(events)[:2]):
+        state, events = command(state, events, "assign_game", session_key="a", match_id=match["id"], court_id=f"c{index}")
+    for participant in events["b"]["participants"]:
+        state["players"][player_identity(participant, "b", state)]["wait_since"] = "2026-10-20T02:55:00+00:00"
+    state, events = command(state, events, "auto_fill_courts", now=LATER)
+    assert state["courts"][2]["current"]["session_key"] == "b"
+    assert any(m["session_key"] == "a" for m in build_hub_snapshot(state, events, now=LATER)["eligible_queue"])
 
 
 def test_player_profile_cannot_be_assigned_across_two_groups():
