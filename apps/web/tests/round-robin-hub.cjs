@@ -53,7 +53,7 @@ const buttons = (tree, label) => tree.root.findAllByType("button").filter(node =
 const clone = value => JSON.parse(JSON.stringify(value));
 const people = (prefix, from) => Array.from({ length: 4 }, (_, index) => ({ id: `${prefix}${from + index}`, identity: `player:${prefix}${from + index}`, name: `${prefix.toUpperCase()} Player ${from + index}` }));
 function match(session, id, start, courts, wait) { const players = people(session, start); return { session_key: session, match_id: id, round_number: 1, side_a: players.slice(0, 2), side_b: players.slice(2), label: id, wait_seconds: wait, allowed_court_ids: courts, blockers: [], status: "waiting" }; }
-const a1 = match("a", "a-1", 1, ["c1"], 0), a2 = match("a", "a-2", 5, ["c1"], 720), b1 = match("b", "b-1", 1, ["c2"], 600);
+const a1 = match("a", "a-1", 1, ["c1", "c2"], 0), a2 = match("a", "a-2", 5, ["c1", "c2"], 720), b1 = match("b", "b-1", 1, ["c2"], 600);
 let detail = {
   ok: true, hub: { id: "event-1", title: "Friday Night", status: "active", version: 1 },
   workspace: {
@@ -128,11 +128,12 @@ global.fetch = async (url, options = {}) => {
   let tree;
   await act(async () => { tree = create(h(Panel, { apiBase: "http://test.local", clubId: "club", initialHubId: "event-1" })); });
   assert.ok(text(tree.toJSON()).includes("Friday Night"));
-  assert.equal(buttons(tree, "Next open court")[0].props.disabled, true, "Dedicated group cannot spill into an open shared court");
+  assert.equal(buttons(tree, "Next open court")[0].props.disabled, false, "Dedicated group can overflow into an open shared court");
   assert.equal(buttons(tree, "Next open court")[1].props.disabled, false);
   await act(async () => buttons(tree, "Choose court")[0].props.onClick());
   const chooser = tree.root.findByProps({ "data-dialog": "Choose court" });
-  assert.deepEqual(chooser.findAllByType("option").map(option => option.props.value), ["", "c1"], "Dedicated group only sees its dedicated court");
+  assert.deepEqual(chooser.findAllByType("option").map(option => option.props.value), ["", "c1", "c2"], "Dedicated group sees its dedicated and shared courts");
+  await act(async () => chooser.findByType("select").props.onChange({ target: { value: "c1" } }));
   await act(async () => button(tree, "Reserve next").props.onClick());
   assert.ok(text(tree.toJSON()).includes("Next on this court"));
 
