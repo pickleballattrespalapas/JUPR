@@ -21,7 +21,8 @@ class Query:
     def execute(self):
         rows=[r for r in self.rows if all(f(r) for f in self.filters)];count=len(rows)
         if self.span:rows=rows[slice(*self.span)]
-        if self.fields!='*':rows=[{k:r.get(k) for k in self.fields.split(',')} for r in rows]
+        fields = 'id,slug,is_active,public_site_status,site' if self.fields == routes.PUBLIC_SITE_FIELDS else self.fields
+        if fields!='*':rows=[{k:r.get(k) for k in fields.split(',')} for r in rows]
         return SimpleNamespace(data=rows,count=count)
 
 @pytest.fixture
@@ -41,7 +42,13 @@ def setup(monkeypatch):
                 e=RuntimeError('private internal failure');e.code=state['error'];raise e
             return SimpleNamespace(data={'ok':True})
         return SimpleNamespace(execute=execute)
-    db=SimpleNamespace(table=lambda n:Query(tables.get(n,[])),rpc=rpc)
+    def table(name):
+        rows = tables.get(name, [])
+        if name == 'clubs':
+            rows = [{**row, 'site': next(({k: site.get(k) for k in ('published', 'published_at')}
+                for site in tables.get('pcs_club_sites', []) if site['club_id'] == row['id']), None)} for row in rows]
+        return Query(rows)
+    db=SimpleNamespace(table=table,rpc=rpc)
     app=FastAPI();routes.install_club_site_routes(app,get_supabase_client=lambda:db)
     return TestClient(app),state,db
 
@@ -52,6 +59,29 @@ def test_public_snapshot_never_returns_draft_or_contact(setup):
     assert r.headers['cache-control']=='no-store' and 'noindex' in r.headers['x-robots-tag']
     assert c.get('/public/clubs/beta/site').status_code==404
     assert c.get('/public/clubs/missing/site').status_code==404
+
+def test_public_site_uses_one_fresh_join_and_obeys_immediate_unpublish(setup):
+    client, state, db = setup
+    original_table = db.table
+    reads = []
+    def table(name):
+        reads.append(name)
+        return original_table(name)
+    db.table = table
+    assert client.get('/public/clubs/alpha/site').status_code == 200
+    assert reads == ['clubs']
+    assert 'draft' not in routes.PUBLIC_SITE_FIELDS
+    for field, value in [('is_active', False), ('public_site_status', 'draft')]:
+        club = state['tables']['clubs'][0]
+        before = club[field]
+        club[field] = value
+        assert client.get('/public/clubs/alpha/site').status_code == 404
+        club[field] = before
+    state['tables']['pcs_club_sites'][0]['published'] = None
+    assert client.get('/public/clubs/alpha/site').status_code == 404
+    state['tables']['pcs_club_sites'] = []
+    assert client.get('/public/clubs/alpha/site').status_code == 404
+    assert reads == ['clubs'] * 5
 
 def test_admin_cannot_read_or_publish_another_club(setup):
     c,s,_=setup

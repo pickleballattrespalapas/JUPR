@@ -39,8 +39,8 @@ async function loadStatus(
     const response = await fetch(
       `${base.replace(/\/$/, "")}/admin/clubs/${encodeURIComponent(
         clubId
-      )}/tournaments/setup/status`,
-      { cache: "no-store" }
+      )}/tournaments/setup/status?include_count=false`,
+      { cache: "no-store", signal: AbortSignal.timeout(10_000) }
     );
     if (!response.ok) {
       return { data: null, error: `API error (${response.status}).` };
@@ -64,6 +64,7 @@ export default async function TournamentSetupWizardPage({
 
   const { clubId } = await requireAdminWorkspace();
   const { data: status, error } = await loadStatus(clubId);
+  if (!status) throw new Error("Tournament Setup is temporarily unavailable.");
 
   return (
     <section>
