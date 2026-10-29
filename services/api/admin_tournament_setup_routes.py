@@ -270,8 +270,8 @@ def install_admin_tournament_setup_routes(app, *, get_supabase_client) -> None:
             raise HTTPException(status_code=503, detail="The logo could not be uploaded. Please try again.") from exc
 
     @app.get("/admin/clubs/{club_id}/tournaments/setup/status")
-    def get_setup_status(club_id: str) -> dict[str, Any]:
-        supabase = get_supabase_client() if is_admin_tournament_setup_enabled() else None
+    def get_setup_status(club_id: str, include_count: bool = Query(default=True)) -> dict[str, Any]:
+        supabase = get_supabase_client() if include_count and is_admin_tournament_setup_enabled() else None
         return build_admin_tournament_setup_status(supabase, club_id=str(club_id))
 
     @app.get("/admin/clubs/{club_id}/tournaments/setup/tournaments")

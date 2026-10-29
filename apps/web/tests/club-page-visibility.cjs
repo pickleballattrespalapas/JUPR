@@ -18,7 +18,7 @@ let site = { club_id: "alpha", slug: "alpha", club_active: true, revision: 1,
 let publicTrophies = [], trophyRequests = [], trophiesUnavailable = false;
 let publicGold = [], goldRequests = [], goldUnavailable = false;
 const mocks = {
-  "next/link": ({ children, prefetch, ...props }) => React.createElement("a", props, children),
+  "next/link": Object.assign(({ children, prefetch, ...props }) => React.createElement("a", props, children), { useLinkStatus: () => ({ pending: false }) }),
   "next/navigation": { usePathname: () => pathname, notFound: () => { throw Error("NOT_FOUND"); } },
   "next/headers": { headers: () => new Headers({ "x-pcs-club-path": pathname }) },
   "@/lib/clubSiteServer": {

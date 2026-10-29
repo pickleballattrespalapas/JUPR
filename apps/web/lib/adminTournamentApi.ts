@@ -560,7 +560,7 @@ async function fetchJson<T>(path: string): Promise<ApiResult<T>> {
   if (!apiBase) return { data: null, error: "Missing JUPR API base URL environment variable." };
   const url = `${apiBase.replace(/\/$/, "")}${path}`;
   try {
-    const response = await fetch(url, { cache: "no-store" });
+    const response = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(10_000) });
     if (!response.ok) return { data: null, error: await apiErrorMessage(response) };
     return { data: (await response.json()) as T, error: null };
   } catch (error) {
@@ -572,7 +572,11 @@ export async function getAdminTournamentStatus(clubId: string): Promise<ApiResul
   if (process.env.JUPR_INTERACTION_TEST_HARNESS === "1") {
     return { data: { enabled: true, status: "local_test_harness", warnings: [] }, error: null };
   }
-  return fetchJson<AdminTournamentStatusResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/status`);
+  const result = await fetchJson<AdminTournamentStatusResponse>(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/status?include_count=false`);
+  // All callers are tournament server pages. Let their error boundary offer a
+  // fresh read instead of leaving the destination empty after a failed request.
+  if (!result.data) throw new Error("Tournament Manager is temporarily unavailable.");
+  return result;
 }
 
 export async function getAdminTournamentLiveStatus(clubId: string): Promise<ApiResult<AdminTournamentLiveStatusResponse>> {

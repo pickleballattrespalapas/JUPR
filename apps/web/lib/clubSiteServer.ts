@@ -7,6 +7,7 @@ export async function publicSiteFetch<T>(path: string): Promise<T | null> {
   if (!base) throw new Error("Public websites are temporarily unavailable.");
   const response = await fetch(`${base.replace(/\/$/, "")}${path}`, {
     cache: "no-store",
+    signal: AbortSignal.timeout(10_000),
   });
   if (response.status === 404) return null;
   if (!response.ok)
