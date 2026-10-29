@@ -13,6 +13,17 @@ from tests.test_public_tournament_results_service import _results_storage
 
 
 class Query(FakeQuery):
+    def select(self, columns='*', **kwargs):
+        self.columns = columns
+        return super().select(columns, **kwargs)
+
+    def execute(self):
+        response = super().execute()
+        if self.table_name == 'clubs' and 'site:pcs_club_sites(' in getattr(self, 'columns', ''):
+            response.data = [{**row, 'site': next((site for site in self.storage.get('pcs_club_sites', [])
+                if site['club_id'] == row['id']), None)} for row in response.data]
+        return response
+
     def gte(self, key, value):
         self.filters.append(("gte", key, value))
         return self

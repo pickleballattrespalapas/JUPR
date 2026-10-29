@@ -8,9 +8,11 @@ Run this only on loopback; it intentionally supplies a test administrator.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 import os
 import sys
 from pathlib import Path
+from threading import RLock
 from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -36,11 +38,21 @@ from services.api.shared_play_generator_routes import install_shared_play_genera
 patches = pytest.MonkeyPatch()
 database = fixture_db.__wrapped__(patches)
 database.db["clubs"] = [{"id": "club", "slug": "test"}]
+# FastAPI runs these synchronous routes on multiple worker threads. The local
+# dict-backed RPC doubles must publish atomically to readers, like PostgreSQL.
+database_lock = RLock()
 
 
 class CreationQuery(FixtureQuery):
     """Mirror database-generated IDs for real player-creation service calls."""
     def execute(self):
+        with database_lock:
+            # A hub transaction can replace the whole storage dictionary after
+            # this query was constructed but before its execution starts.
+            self.db = database.db
+            return self._execute()
+
+    def _execute(self):
         if self.name == "live_sessions" and self.payload is not None:
             for row in self.payload if isinstance(self.payload, list) else [self.payload]:
                 row.setdefault("version", 1)
@@ -58,10 +70,13 @@ _original_generator_rpc = database.rpc
 
 
 def receipt_rpc(name, params):
-    if name in {"commit_admin_play_generator_session", "commit_public_play_generator_session"}:
-        from generator_receipt_fake import commit_generator_rpc
-        return SimpleNamespace(execute=lambda: commit_generator_rpc(database.db, name, params))
-    return _original_generator_rpc(name, params)
+    def execute():
+        with database_lock:
+            if name in {"commit_admin_play_generator_session", "commit_public_play_generator_session"}:
+                from generator_receipt_fake import commit_generator_rpc
+                return commit_generator_rpc(database.db, name, params)
+            return _original_generator_rpc(name, params).execute()
+    return SimpleNamespace(execute=execute)
 
 
 database.rpc = receipt_rpc
@@ -131,12 +146,14 @@ def workspaces():
 
 @app.get("/clubs/{slug}/players")
 def players(slug: str):
-    return {"players": database.db["players"], "total": len(database.db["players"])}
+    with database_lock:
+        return {"players": deepcopy(database.db["players"]), "total": len(database.db["players"])}
 
 
 @app.get("/fixture-result")
 def result():
     # Public serializers omit organizer tokens and internal recovery data.
-    sessions = [(admin.get_play_generator_session if row["state"].get("mode") == "admin_play_generator" else get_public_play_generator_session)(database, club_id="club", session_key=row["session_key"])["session"]
-                for row in database.db["live_sessions"]]
-    return {"matches": database.db["matches"], "players": database.db["players"], "sessions": sessions}
+    with database_lock:
+        sessions = [(admin.get_play_generator_session if row["state"].get("mode") == "admin_play_generator" else get_public_play_generator_session)(database, club_id="club", session_key=row["session_key"])["session"]
+                    for row in database.db["live_sessions"]]
+        return {"matches": deepcopy(database.db["matches"]), "players": deepcopy(database.db["players"]), "sessions": sessions}

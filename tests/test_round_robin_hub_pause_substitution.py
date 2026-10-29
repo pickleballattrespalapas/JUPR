@@ -40,6 +40,19 @@ def planned(count=9):
     return value
 
 
+def two_round_limited_plan():
+    """Four play now; all twelve have one stable game in the next round."""
+    from test_round_robin_hub import limited_rolling_event
+    value = limited_rolling_event()
+    first, second, third = value["rounds"]
+    second["matches"].extend([dict(m, round=2) for m in third["matches"]])
+    second["matches"].extend([dict(m, id=f"next-{m['id']}", round=2) for m in first["matches"]])
+    second["byeParticipantIds"] = []
+    value["rounds"] = [first, second]
+    value["hubPlanVersion"] = 1
+    return value
+
+
 def identity(state, events, pid, key="a"):
     player = next(p for p in events[key]["participants"] if p["id"] == pid)
     return player_identity(player, key, state)
@@ -175,8 +188,9 @@ def test_underfilled_future_game_is_not_erased_by_repeated_fill_while_other_play
 def test_current_game_scored_future_game_and_reserved_future_game_are_immutable():
     from test_round_robin_hub import limited_rolling_event
 
-    state, events = setup({"a": limited_rolling_event()}, courts=2)
-    first, second, third = [row["matches"][0] for row in events["a"]["rounds"][:3]]
+    state, events = setup({"a": two_round_limited_plan()}, courts=2)
+    first = round_row(events["a"])["matches"][0]
+    second, third = round_row(events["a"], 2)["matches"][:2]
     state, events = command(state, events, "assign_game", session_key="a", match_id=first["id"], court_id="c0")
     state, events = command(state, events, "assign_game", session_key="a", match_id=second["id"], court_id="c1")
     state, events = score(state, events, "c1")
@@ -192,7 +206,7 @@ def test_current_game_scored_future_game_and_reserved_future_game_are_immutable(
     assert all(player["matches"] == 0 for player in generator_event_standings(events["a"]))
     state, events = score(state, events, "c0")
     assert state["courts"][0]["current"]["match_id"] == third["id"]
-    assert sum(player["matches"] for player in generator_event_standings(events["a"])) == 8
+    assert sum(player["matches"] for player in generator_event_standings(events["a"])) == 4
 
 
 def test_returned_started_game_keeps_its_lineup_when_a_player_pauses():
@@ -214,10 +228,9 @@ def test_returned_started_game_keeps_its_lineup_when_a_player_pauses():
 def test_current_bye_cannot_gain_earlier_obligation_after_committing_to_a_later_round(commitment):
     from test_round_robin_hub import limited_rolling_event
 
-    state, events = setup({"a": limited_rolling_event()}, courts=2)
+    state, events = setup({"a": two_round_limited_plan()}, courts=2)
     current = deepcopy(round_row(events["a"])["matches"][0])
-    later = round_row(events["a"], 2)["matches"][0]
-    last = round_row(events["a"], 3)["matches"][0]
+    later, last = round_row(events["a"], 2)["matches"][:2]
     # Occupy the other later-round players too: the only tempting donors are
     # current byes whose later obligations are already committed.
     state, events = command(state, events, "assign_game", session_key="a", match_id=last["id"], court_id="c0")
@@ -304,6 +317,7 @@ def test_resume_forms_game_with_three_byes_in_the_current_round(advance_first):
     # Keep the same explicit lineups in round two to exercise a break that
     # continues past automatic advancement, with another court already live.
     round_row(value, 2)["matches"] = [dict(m, id=f"r2-{m['id']}", round=2) for m in (first, healthy)]
+    value["hubPlanVersion"] = 1
     state, events = setup({"a": value}, courts=2)
     pid = people(first)[0]
     state, events = pause(state, events, pid)

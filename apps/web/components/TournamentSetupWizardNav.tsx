@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/NavigationLink";
 import { tournamentRouteHref } from "@/lib/tournamentRouteContext";
 
 export type TournamentSetupStep =

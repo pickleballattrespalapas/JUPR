@@ -23,7 +23,7 @@ const hubRoutes = [
   ["patch", "/admin/clubs/{club_id}/play-generators/sessions/{session_key}/submission/scores"],
 ];
 for (const [method, path] of hubRoutes) contract.paths[path] = { [method]: {} };
-contract.components.schemas.HubCommandRequest = { properties: { action: { enum: ["set_registration", "review_checkin", "process_checkins", "edit_match_players", "transfer_player", "rejoin_player", "resolve_game"] } } };
+contract.components.schemas.HubCommandRequest = { properties: { action: { enum: ["set_registration", "review_checkin", "process_checkins", "edit_match_players", "transfer_player", "rejoin_player", "resolve_game", "set_match_lineup", "remove_players", "create_extra_game"] } } };
 contract.components.schemas.GeneratorStartRequest = { properties: {
   registration_hub_id: { anyOf: [{ type: "string", format: "uuid" }, { type: "null" }] },
   participant_names: { type: "array" },
@@ -132,6 +132,14 @@ contract.components.schemas.GeneratorStartRequest = { properties: {
     pause: async () => { clock += 10000; }, request: async (url) => ({ ok: true,
       json: async () => url.endsWith('/openapi.json') ? (++contracts === 1 ? oldHubOperations : contract) : ready }) });
   assert.equal(contracts, 2, "The website waits for transfer, rejoin, and not-played support before exposing the new Hub controls");
+  clock = 0;
+  contracts = 0;
+  const beforePlannedHub = structuredClone(contract);
+  beforePlannedHub.components.schemas.HubCommandRequest.properties.action.enum = beforePlannedHub.components.schemas.HubCommandRequest.properties.action.enum.filter(action => !["set_match_lineup", "remove_players", "create_extra_game"].includes(action));
+  await waitForProductionApi({ environment: "production", now: () => clock,
+    pause: async () => { clock += 10000; }, request: async (url) => ({ ok: true,
+      json: async () => url.endsWith('/openapi.json') ? (++contracts === 1 ? beforePlannedHub : contract) : ready }) });
+  assert.equal(contracts, 2, "The website waits for exact lineups, batch departures, and exhibition games before exposing the planned Hub controls");
   clock = 0;
   contracts = 0;
   const beforeSubmissionCorrections = structuredClone(contract);

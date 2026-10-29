@@ -12,10 +12,13 @@ type Props = {
   stale: boolean; available: boolean; busy: boolean; disabled: boolean; pending: boolean; error: string;
   onClose: () => void; onRetry: () => void; onReview: () => void;
   onSubmit: (payload: Record<string, unknown>) => void;
+  onSubmitExact?: (payload: Record<string, unknown>) => void;
 };
 
 export default function HubEditPlayersDialog({ apiBase, clubId, match, group, stale, available,
-  busy, disabled, pending, error, onClose, onRetry, onReview, onSubmit }: Props) {
+  busy, disabled, pending, error, onClose, onRetry, onReview, onSubmit, onSubmitExact }: Props) {
+  const [mode, setMode] = useState<"replace" | "exact">("replace");
+  const [teams, setTeams] = useState(() => [...match.side_a, ...match.side_b].map(player => player.id));
   const [target, setTarget] = useState("");
   const [replacement, setReplacement] = useState("");
   const [name, setName] = useState("");
@@ -35,10 +38,14 @@ export default function HubEditPlayersDialog({ apiBase, clubId, match, group, st
 
   const lineup = [...match.side_a, ...match.side_b];
   const roster = [...(group?.players || [])].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
-  function unavailableReason(player: HubGroupPlayer): string {
-    if (player.participant_id === target) return "Already selected";
+  const futurePlan = mode === "exact" && match.round_number > (group?.current_round_number ?? match.round_number)
+    && !match.court_id && !match.reserved_court_id;
+  function unavailableReason(player: HubGroupPlayer, replacing = target): string {
+    if (player.participant_id === replacing) return "Already selected";
     if (player.paused) return "Paused — resume first";
-    if (!lineup.some(member => member.id === player.participant_id) && (player.on_court || player.reserved || player.current_court || player.reserved_court)) return "On another court or reserved";
+    if (!lineup.some(member => member.id === player.participant_id)
+      && (player.on_court || player.reserved || player.current_court || player.reserved_court)
+      && !futurePlan) return "On another court or reserved";
     const number = match.round_number;
     if ((player.active_from_round || 1) > number || (player.inactive_from_round != null && player.inactive_from_round <= number)
       || player.inactive_rounds?.includes(number) || (!player.active && number === group?.current_round_number)) return "Not active in this round";
@@ -51,16 +58,62 @@ export default function HubEditPlayersDialog({ apiBase, clubId, match, group, st
   const valid = available && !stale && lineup.some(player => player.id === target)
     && (adding ? Boolean(name.trim()) && !duplicate && Boolean(group?.can_add_player) : Boolean(selected && !unavailableReason(selected)));
   const sameMatch = lineup.some(player => player.id === replacement);
+  const exactPlayers = teams.map(id => roster.find(player => player.participant_id === id));
+  const exactValid = available && !stale && teams.length === 4 && new Set(teams).size === 4
+    && exactPlayers.every(player => player && !unavailableReason(player, ""))
+    && new Set(exactPlayers.map(player => player?.identity || player?.participant_id)).size === 4;
+  const exactChanged = teams.some((id, index) => id !== lineup[index]?.id);
   return <InteractionDialog open title="Edit players" phase={busy ? "working" : "ready"}
     description={<p>{group?.title} · Round {match.round_number}</p>}
-    dirty={Boolean(target || replacement || name)} onRequestClose={() => { if (!busy && !pending) onClose(); }}
+    dirty={Boolean(target || replacement || name || exactChanged)} onRequestClose={() => { if (!busy && !pending) onClose(); }}
     actions={<><button type="button" className={styles.button} disabled={busy || pending} onClick={onClose}>Cancel</button>
-      <button type="submit" form="hub-edit-players-form" className={styles.primary} disabled={frozen || !valid}>Save players</button></>}>
+      <button type="submit" form="hub-edit-players-form" className={styles.primary} disabled={frozen || !(mode === "exact" ? exactValid : valid)}>{mode === "exact" ? "Save both teams" : "Save players"}</button></>}>
     <div className={styles.scoreGrid}><div><strong>Side A</strong><p>{match.side_a.map(hubPlayerLabel).join(" / ")}</p></div><div><strong>Side B</strong><p>{match.side_b.map(hubPlayerLabel).join(" / ")}</p></div></div>
     <form id="hub-edit-players-form" onSubmit={event => {
       event.preventDefault();
-      if (!frozen && valid) onSubmit({ participant_id: target, ...(adding ? { name: name.trim(), player_id: profileId } : { replacement_participant_id: replacement }) });
+      if (frozen) return;
+      if (mode === "exact") {
+        if (exactValid) onSubmitExact?.({ side_a: teams.slice(0, 2), side_b: teams.slice(2, 4) });
+      } else if (valid) onSubmit({ participant_id: target, ...(adding ? { name: name.trim(), player_id: profileId } : { replacement_participant_id: replacement }) });
     }}>
+      {onSubmitExact && lineup.length === 4 ? <label className={styles.field}>Change players
+        <select aria-label="Change players" value={mode} disabled={frozen || stale || !available}
+          onChange={event => { if (!frozen && !stale && available) setMode(event.target.value as "replace" | "exact"); }}>
+          <option value="replace">Replace one player</option><option value="exact">Set both teams</option>
+        </select>
+      </label> : null}
+      {mode === "exact" ? <>
+        <div className={styles.scoreGrid}>{[0, 1].map(side => <fieldset key={side} disabled={frozen || stale || !available}>
+          <legend>Team {side === 0 ? "A" : "B"}</legend>
+          {[0, 1].map(seat => {
+            const index = side * 2 + seat;
+            return <label key={seat} className={styles.field}>Player {seat + 1}
+              <select aria-label={`Team ${side === 0 ? "A" : "B"} player ${seat + 1}`} value={teams[index] || ""}
+                onChange={event => {
+                  if (frozen || stale || !available) return;
+                  const value = event.target.value;
+                  setTeams(previous => {
+                    const next = [...previous];
+                    const other = next.indexOf(value);
+                    if (other >= 0 && other !== index) next[other] = next[index];
+                    next[index] = value;
+                    return next;
+                  });
+                }}>
+                <option value="">Choose a player</option>
+                {roster.map(player => {
+                  const reason = unavailableReason(player, "");
+                  return <option key={player.participant_id} value={player.participant_id} disabled={Boolean(reason)}>{hubPlayerLabel(player)}{reason ? ` · ${reason}` : player.on_bye ? " · On a bye" : ""}</option>;
+                })}
+              </select>
+            </label>;
+          })}
+        </fieldset>)}</div>
+        <p className={styles.small}>Both teams will stay as selected. Choosing a player from another waiting game swaps the displaced player into that game. Choosing a player on a bye gives the displaced player the bye. Started or locked games cannot supply replacements.</p>
+        {futurePlan ? <p className={styles.small}>Players can finish their earlier games while you arrange these teams. This game can start once all four are free.</p> : null}
+        {new Set(teams.filter(Boolean)).size !== teams.filter(Boolean).length || new Set(exactPlayers.filter(Boolean).map(player => player?.identity || player?.participant_id)).size !== exactPlayers.filter(Boolean).length
+          ? <p role="alert">Choose four different people.</p> : null}
+      </> : <>
       <label className={styles.field}>Player to replace or swap
         <select aria-label="Player to replace or swap" data-autofocus value={target} disabled={frozen || stale || !available}
           onChange={event => { setTarget(event.target.value); setReplacement(""); setName(""); setProfileId(null); }}>
@@ -89,6 +142,7 @@ export default function HubEditPlayersDialog({ apiBase, clubId, match, group, st
         {duplicate ? <p role="alert">This player is already on the roster. Choose them from Round robin players.</p> : null}
         {directoryError ? <p className={styles.small}>{directoryError}</p> : null}</> : null}
       <p className={styles.small}>{sameMatch ? "These two players swap positions in this match." : "A player on a bye takes this place, and the original player stays available. If the replacement has another waiting game in this round, the two players swap games."}</p>
+      </>}
       {!available ? <p role="alert">This match is no longer available for editing. Close this dialog and review the court board.</p> : stale ? <div className={styles.notice}><p>The hub changed. Review the current lineup; your replacement selection and name are preserved.</p><button type="button" className={styles.button} disabled={frozen} onClick={onReview}>Reload current players</button></div> : null}
       {error ? <p role="alert">{error}</p> : null}
       {pending ? <button type="button" className={styles.button} disabled={busy} onClick={onRetry}>Retry saved action</button> : null}

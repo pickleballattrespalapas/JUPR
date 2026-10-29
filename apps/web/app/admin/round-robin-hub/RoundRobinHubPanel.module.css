@@ -58,3 +58,10 @@
 @media (max-width: 720px) { .queue li { grid-template-columns: 1.5rem minmax(0, 1fr); } .queue li > .actions { grid-column: 2; } .courtEditorRow { grid-template-columns: 1fr 1fr; } .player { align-items: start; } .scoreGrid { gap: .65rem; } }
 
 .identityOptions { display: grid; gap: .65rem; max-height: 45vh; overflow-y: auto; margin: 1rem 0; }
+.playerReadiness { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .35rem; }
+.readinessPlayer { display: grid; gap: .12rem; padding: .4rem .6rem; border: 1px solid #cbd5e1; border-radius: 9px; background: #f8fafc; min-width: 0; overflow-wrap: anywhere; }
+.readinessPlayer strong { font-size: .85rem; }
+.readinessPlayer span { font-size: .78rem; }
+.playerReady { color: #166534; background: #f0fdf4; border-color: #86efac; }
+.playerPlaying { color: #1e40af; background: #eff6ff; border-color: #93c5fd; }
+.playerWaiting { color: #854d0e; background: #fefce8; border-color: #fde68a; }

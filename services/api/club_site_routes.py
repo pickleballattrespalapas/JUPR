@@ -8,6 +8,7 @@ from services.api.club_site_models import SiteAction, SiteDocument, SiteSave, de
 
 
 SITE_FIELDS = "club_id,revision,draft,published,published_at,updated_at"
+PUBLIC_SITE_FIELDS = "id,slug,is_active,public_site_status,site:pcs_club_sites(published,published_at)"
 
 
 def site_administrator(db_factory, authorization, club_id):
@@ -33,14 +34,16 @@ def site_rpc(db, function, params):
 
 
 def published_site(db, slug):
-    clubs = db.table("clubs").select("id,slug,is_active,public_site_status").eq("slug", slug).limit(1).execute().data or []
+    # The PK/FK is one-to-one. Read publication and visibility in one fresh
+    # database snapshot; never cache a previously public document after unpublish.
+    clubs = db.table("clubs").select(PUBLIC_SITE_FIELDS).eq("slug", slug).limit(1).execute().data or []
     if not clubs or not clubs[0].get("is_active") or clubs[0].get("public_site_status") != "published":
         raise HTTPException(404, "Club website is not published.")
     club = clubs[0]
-    rows = db.table("pcs_club_sites").select("published,published_at").eq("club_id", club["id"]).limit(1).execute().data or []
-    if not rows or not rows[0].get("published"):
+    site = club.get("site")
+    if not isinstance(site, dict) or not site.get("published"):
         raise HTTPException(404, "Club website is not published.")
-    return {"club_id": club["id"], "slug": club["slug"], "document": SiteDocument.model_validate(rows[0]["published"]).model_dump(), "published_at": rows[0]["published_at"]}
+    return {"club_id": club["id"], "slug": club["slug"], "document": SiteDocument.model_validate(site["published"]).model_dump(), "published_at": site.get("published_at")}
 
 
 def install_club_site_routes(app, *, get_supabase_client):

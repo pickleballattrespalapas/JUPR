@@ -51,7 +51,8 @@ function roundRobinHubReady(openapi) {
   const setup = openapi?.components?.schemas?.GeneratorStartRequest?.properties;
   return Array.isArray(actions)
     && ["set_registration", "review_checkin", "process_checkins", "edit_match_players",
-      "transfer_player", "rejoin_player", "resolve_game"].every((action) => actions.includes(action))
+      "transfer_player", "rejoin_player", "resolve_game",
+      "set_match_lineup", "remove_players", "create_extra_game"].every((action) => actions.includes(action))
     && Boolean(setup?.registration_hub_id)
     && setup?.participant_names?.type === "array"
     && !setup.participant_names.minItems

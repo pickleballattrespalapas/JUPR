@@ -42,12 +42,18 @@ jobs:
             tests/test_hub_identity_repairs.py tests/test_generator_request_validation.py \
             tests/test_public_generator_receipts.py tests/test_score_lifecycle_consumer_edges.py \
             tests/test_legacy_generator_write_boundary.py tests/test_generator_round_operation_scope.py \
+            tests/test_round_robin_hub_planned.py tests/test_round_robin_hub_readiness.py tests/test_hub_lineup_controls.py \
+            tests/test_hub_operator_service.py tests/test_hub_extra_game_service.py \
+            tests/test_hub_standings_view.py \
             --junitxml=test-results/rr-hub/python.xml
       - name: Verify actual React recovery flows
         run: |
           NODE_PATH="$GITHUB_WORKSPACE/apps/web/node_modules" node tests/adversarial_hub/ui_breaks.cjs
           cd apps/web
           node tests/round-robin-hub-operations.cjs
+          node tests/round-robin-hub-lineup-controls.cjs
+          node tests/round-robin-hub-extra-game.cjs
+          node tests/generator-standings-live.cjs
       - name: Verify actual transactional SQL
         run: |
           npm --prefix tests/sql run test:round-robin-hub

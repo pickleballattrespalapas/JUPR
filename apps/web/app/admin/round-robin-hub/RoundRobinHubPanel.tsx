@@ -11,6 +11,7 @@ import HubAddPlayerDialog from "./HubAddPlayerDialog";
 import HubEditPlayersDialog from "./HubEditPlayersDialog";
 import HubRemovePlayerDialog from "./HubRemovePlayerDialog";
 import HubMovePlayerDialog from "./HubMovePlayerDialog";
+import HubExtraGameDialog from "./HubExtraGameDialog";
 import HubLinkPlayersDialog, { committedIdentityCount, type PlayerReference } from "./HubLinkPlayersDialog";
 import HubFinishDialog from "./HubFinishDialog";
 import HubRegistrationPanel from "./HubRegistrationPanel";
@@ -22,7 +23,7 @@ import {
 import styles from "./RoundRobinHubPanel.module.css";
 
 type Props = { apiBase: string | null; clubId: string; initialHubId?: string; initialAddSessionKey?: string; initialView?: string };
-type Tab = "board" | "queue" | "groups" | "standings" | "players" | "courts" | "registration";
+type Tab = "board" | "queue" | "plan" | "groups" | "standings" | "players" | "courts" | "registration";
 type Pending = { hubId: string; body: HubCommand | CreateHubInput };
 type CreatedSession = { hubId: string; sessionKey: string };
 type ReturnIntent = CreatedSession & { attempted: boolean };
@@ -42,11 +43,15 @@ const commandMessages: Partial<Record<HubCommandAction, string>> = {
   mark_played: "Match marked played and court released.", pause_player: "Player paused. Waiting games checked for available replacements. Their waiting time is held.",
   resume_player: "Player is ready again. Available byes checked for a new match.", advance_round: "Next round is ready for the court queue.", finish_hub: "Event finished.",
   edit_match_players: "Match players updated. The court queue is up to date.",
+  set_match_lineup: "Both teams saved. This lineup is protected when the next round is updated.",
   finish_group: "Round robin finish request saved.",
   set_registration: "Public check-in updated.", review_checkin: "Check-in saved.",
   auto_fill_courts: "Available courts filled with eligible matches.",
   add_player: "Player added to the round robin. Announced and assigned lineups keep their players.",
   remove_player: "Player departure saved. Announced and assigned lineups keep their players.",
+  remove_players: "Player departures saved. The remaining round plan is updated.",
+  process_checkins: "New arrivals added. The court board is up to date.",
+  create_extra_game: "Exhibition game added to the court queue. Division standings and ratings are unchanged.",
   transfer_player: "Player moved between round robins. Saved results are preserved.",
   rejoin_player: "Player rejoined the round robin. Their history is preserved.",
   resolve_game: "Match marked not played. No score or win was recorded.",
@@ -116,6 +121,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
   const [addPlayerOpen, setAddPlayerOpen] = useState(false);
   const [removePlayerOpen, setRemovePlayerOpen] = useState(false);
   const [movePlayerOpen, setMovePlayerOpen] = useState(false);
+  const [extraGameOpen, setExtraGameOpen] = useState(false);
   const [linkPlayers, setLinkPlayers] = useState<PlayerReference[] | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [notPlayedEditor, setNotPlayedEditor] = useState<NotPlayedEditor | null>(null);
@@ -133,6 +139,10 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
   const eventChoiceMade = useRef(Boolean(initialHubId));
   const loadSequence = useRef(0);
   const listLoadSequence = useRef(0);
+  const lastListLoadedAt = useRef(0);
+  const tabRef = useRef(tab);
+  useEffect(() => { tabRef.current = tab; }, [tab]);
+  const automaticCheckinAttempt = useRef("");
   const mutationLock = useRef(false);
   const pendingOperation = useRef<Pending | null>(null);
   const refreshQueued = useRef(false);
@@ -206,12 +216,16 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
     const sequence = ++listLoadSequence.current;
     const generation = lifecycle.current.generation;
     const value = await request<HubListResponse>();
-    if (lifecycle.current.mounted && lifecycle.current.generation === generation && sequence === listLoadSequence.current) setList(value);
+    if (lifecycle.current.mounted && lifecycle.current.generation === generation && sequence === listLoadSequence.current) {
+      lastListLoadedAt.current = Date.now();
+      setList(value);
+    }
     return value;
   }, [ready, request]);
 
   const applyHubDetail = useCallback((value: HubDetailResponse) => {
     setDetail(value);
+    setList(current => ({ ...current, hubs: current.hubs.map(hub => hub.id === value.hub.id ? value.hub : hub) }));
     const groups = value.workspace.groups;
     setStandingsSelection(current => {
       if (current?.hubId === value.hub.id && groups.some(group => group.session_key === current.sessionKey)) return current;
@@ -228,26 +242,12 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
     const sequence = ++loadSequence.current;
     if (!silent) setLoading(true);
     try {
-      let recoveryWarning = "";
-      let value = await request<HubDetailResponse>(`/${encodeURIComponent(id)}`);
-      if (!isLive()) return;
-      if (value.registration?.automatic_pending_count && !mutationLock.current && !pendingOperation.current) {
-        mutationLock.current = true;
-        try {
-          value = await request<HubDetailResponse>(`/${encodeURIComponent(id)}/commands`, {
-            action: "process_checkins", payload: {}, expected_version: value.hub.version,
-            idempotency_key: `automatic-checkins-v${value.hub.version}`
-          });
-        } catch (cause) {
-          if (!(cause instanceof RoundRobinHubApiError && cause.status === 409)) recoveryWarning = "Check-ins are saved, but automatic roster updates could not finish. The hub will retry; you can still review arrivals in Registration.";
-        } finally { if (isLive()) mutationLock.current = false; }
-      }
+      const value = await request<HubDetailResponse>(`/${encodeURIComponent(id)}`);
       if (!isLive()) return;
       if (String(value.hub.id) !== id) throw new Error("The server returned a different event. Reload the hub before continuing.");
       if (sequence === loadSequence.current && selectedRef.current === id) {
         applyHubDetail(value);
-        if (recoveryWarning) setError(recoveryWarning);
-        else if (!silent) setError("");
+        if (!silent) setError("");
       }
       return value;
     } catch (cause) {
@@ -275,7 +275,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
     loadSequence.current += 1;
     setHubId(id); setDetail(null); setCreating(false); setSessionView(null); setScoreEditor(null); setCourtEditor(null); setPlayerEditor(null); setError(""); setMessage("");
     setStandingsSelection(null);
-    setAddPlayerOpen(false); setRemovePlayerOpen(false); setMovePlayerOpen(false); setLinkPlayers(null); setNotPlayedEditor(null);
+    setAddPlayerOpen(false); setRemovePlayerOpen(false); setMovePlayerOpen(false); setExtraGameOpen(false); setLinkPlayers(null); setNotPlayedEditor(null);
     setFinishGroupOpen(false); setFinishReview(false);
     setIdentityReviewOpen(false); setSavedIdentityReviewOpen(false); setIdentitySelections({});
     if (typeof window !== "undefined") window.history.replaceState(null, "", `/admin/round-robin-hub${id ? `?hub=${encodeURIComponent(id)}` : ""}`);
@@ -299,7 +299,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
       loadSequence.current += 1;
       setHubId(initialHubId); setDetail(null); setCreating(false); setSessionView(null); setScoreEditor(null); setCourtEditor(null); setPlayerEditor(null);
       setStandingsSelection(null);
-      setAddPlayerOpen(false); setRemovePlayerOpen(false); setMovePlayerOpen(false); setLinkPlayers(null); setNotPlayedEditor(null);
+      setAddPlayerOpen(false); setRemovePlayerOpen(false); setMovePlayerOpen(false); setExtraGameOpen(false); setLinkPlayers(null); setNotPlayedEditor(null);
       setFinishGroupOpen(false); setFinishReview(false);
       setIdentityReviewOpen(false); setSavedIdentityReviewOpen(false); setIdentitySelections({});
     }
@@ -326,19 +326,23 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
   useEffect(() => {
     if (!ready) return;
     let refreshing = false;
-    const refresh = async () => {
+    const refresh = async (includeList = false) => {
       if (document.visibilityState !== "visible") return;
-      if (mutationLock.current || refreshing) { refreshQueued.current = true; return; }
+      if (mutationLock.current) { refreshQueued.current = true; return; }
+      if (refreshing) return;
       refreshQueued.current = false;
       refreshing = true;
       try {
-        await Promise.all([loadList(), hubId ? loadHub(hubId, true) : Promise.resolve()]);
+        const refreshList = includeList || !hubId || tabRef.current === "groups" || Date.now() - lastListLoadedAt.current >= 60_000;
+        await Promise.all([refreshList ? loadList() : Promise.resolve(), hubId ? loadHub(hubId, true) : Promise.resolve()]);
       } catch { /* Keep the current choices; manual refresh can report a connection failure. */ }
       finally { refreshing = false; if (refreshQueued.current && !mutationLock.current && lifecycle.current.mounted) void refresh(); }
     };
-    const timer = window.setInterval(refresh, 15_000);
-    window.addEventListener("focus", refresh); document.addEventListener("visibilitychange", refresh);
-    return () => { window.clearInterval(timer); window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); };
+    const poll = () => { void refresh(); };
+    const foreground = () => { void refresh(true); };
+    const timer = window.setInterval(poll, 15_000);
+    window.addEventListener("focus", foreground); document.addEventListener("visibilitychange", foreground);
+    return () => { window.clearInterval(timer); window.removeEventListener("focus", foreground); document.removeEventListener("visibilitychange", foreground); };
   }, [hubId, ready, loadHub, loadList]);
 
   const completeCreatedSession = useCallback((value: HubDetailResponse): boolean => {
@@ -374,10 +378,16 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
       }
       if (selectedRef.current === value.hub.id) applyHubDetail(value);
       setMessage("action" in operation.body ? commandMessages[operation.body.action] || "Hub updated." : "Event created. Add your round robins below.");
-      setScoreEditor(null); setCourtEditor(null); setPlayerEditor(null); setFinishReview(false);
-      setNotPlayedEditor(null);
+      // An automatic roster update must not discard a staff member's draft.
+      // Existing version/lineup review gates remain in place after it finishes.
+      if (!("action" in operation.body) || operation.body.action !== "process_checkins") {
+        setScoreEditor(null); setCourtEditor(null); setPlayerEditor(null); setFinishReview(false);
+        setNotPlayedEditor(null);
+      }
       if ("action" in operation.body && operation.body.action === "score_and_release" && operation.body.payload.score_a === null && operation.body.payload.score_b === null) setMessage("Match marked not played and court released. No score or win was recorded.");
       if ("action" in operation.body && operation.body.action === "transfer_player") setMovePlayerOpen(false);
+      if ("action" in operation.body && operation.body.action === "process_checkins") automaticCheckinAttempt.current = "";
+      if ("action" in operation.body && operation.body.action === "create_extra_game") { setExtraGameOpen(false); setTab("queue"); }
       if ("action" in operation.body && operation.body.action === "add_player") {
         setAddPlayerOpen(false);
         if (Number(value.workspace.identity_pending_count || 0) > 0) {
@@ -385,7 +395,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
           setMessage("Player added. Review the matching player names below; other ready matches can keep playing.");
         }
       }
-      if ("action" in operation.body && operation.body.action === "remove_player") setRemovePlayerOpen(false);
+      if ("action" in operation.body && ["remove_player", "remove_players"].includes(operation.body.action)) setRemovePlayerOpen(false);
       if ("action" in operation.body && operation.body.action === "finish_group") {
         setFinishGroupOpen(false);
         const sessionKey = operation.body.payload.session_key;
@@ -398,7 +408,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
         setMessage("Round robin added. Review the matching player names below; other ready matches can keep playing.");
       }
       if ("action" in operation.body && operation.body.action === "resolve_identities") { setIdentitySelections({}); setLinkPlayers(null); }
-      void loadList().catch(() => undefined);
+      if (!("action" in operation.body) || ["add_group", "remove_group", "finish_group", "finish_hub", "create_extra_game"].includes(operation.body.action)) void loadList().catch(() => undefined);
       return true;
     } catch (cause) {
       if (!isLive()) return false;
@@ -415,11 +425,30 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
         mutationLock.current = false; setBusy(false); setLoading(false);
         if (refreshQueued.current) {
           refreshQueued.current = false;
-          void Promise.all([loadList(), selectedRef.current ? loadHub(selectedRef.current, true) : Promise.resolve()]).catch(() => undefined);
+          if (document.visibilityState === "visible") void Promise.all([
+            tabRef.current === "groups" || Date.now() - lastListLoadedAt.current >= 60_000 ? loadList() : Promise.resolve(),
+            selectedRef.current ? loadHub(selectedRef.current, true) : Promise.resolve()
+          ]).catch(() => undefined);
         }
       }
     }
   }, [request, savePending, loadList, loadHub, completeCreatedSession, applyHubDetail]);
+
+  useEffect(() => {
+    // Publish the read snapshot first. Automatic arrivals use the same visible,
+    // durable command path as staff actions, including exact timeout recovery.
+    if (!ready || !pendingHydrated || !detail?.registration?.automatic_pending_count || detail.hub.status === "completed"
+      || selectedRef.current !== detail.hub.id || mutationLock.current || busy || pending || attaching || createdSession) return;
+    // A rejected update needs an explicit retry, even if a conflict refresh
+    // returns a new version. Do not loop on changing version numbers.
+    const attempt = `${clubId}:${detail.hub.id}`;
+    if (automaticCheckinAttempt.current === attempt) return;
+    automaticCheckinAttempt.current = attempt;
+    void execute({ hubId: detail.hub.id, body: {
+      action: "process_checkins", payload: {}, expected_version: detail.hub.version,
+      idempotency_key: `automatic-checkins-v${detail.hub.version}`
+    } });
+  }, [ready, pendingHydrated, detail, busy, pending, attaching, createdSession, clubId, execute]);
 
   const attachCreatedSession = useCallback(async (intent: ReturnIntent): Promise<void> => {
     if (!lifecycle.current.mounted || mutationLock.current || pending || returnIntent.current !== intent) return;
@@ -553,6 +582,26 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
     </section>;
   }
 
+  function playerReadiness(match: HubMatch) {
+    const players = [...match.side_a, ...match.side_b];
+    if (!players.every(player => player.readiness)) return null;
+    return <div className={styles.playerReadiness} role="group" aria-label="Player readiness">{players.map((player, index) => {
+      const readiness = player.readiness!;
+      const court = readiness.current_court || readiness.reserved_court;
+      const reasons: string[] = [];
+      if (court) reasons.push(`${readiness.current_court ? "Playing" : "Reserved"} on ${court.court_label}${court.session_key !== match.session_key ? ` · ${court.group_title}` : ""}`);
+      if (readiness.paused) reasons.push("Paused");
+      if (!court && readiness.waiting_round_number != null) reasons.push(`Waiting for round ${readiness.waiting_round_number} game`);
+      if (readiness.identity_review) reasons.push("Needs identity review");
+      if (readiness.duplicate_in_match) reasons.push("Duplicate player in match");
+      const status = reasons.join(" · ") || (readiness.ready ? "Ready" : "Waiting");
+      const tone = readiness.current_court ? styles.playerPlaying : readiness.ready ? styles.playerReady : styles.playerWaiting;
+      return <div key={`${player.id}:${index}`} className={`${styles.readinessPlayer} ${tone}`} data-player-identity={player.identity} aria-label={`${hubPlayerLabel(player)}: ${status}`}>
+        <strong>{hubPlayerLabel(player)}</strong><span>{status}</span>
+      </div>;
+    })}</div>;
+  }
+
   function queueRows(matches: HubMatch[], kind: "ready" | "waiting" | "blocked") {
     return <ol className={styles.queue}>{matches.map((match, index) => {
       const openCourt = workspace?.courts.some(court => court.open && !court.current && !court.next && match.allowed_court_ids.includes(court.id));
@@ -561,6 +610,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
         <span className={styles.position}>{kind === "ready" ? index + 1 : "•"}</span>
         <div className={styles.queueCopy}><strong>{hubMatchLabel(match)}</strong><span className={styles.small}>{groupMap.get(match.session_key)?.title || match.label} · Round {match.round_number} · Pending result</span>
           <span className={styles.small}>Longest player wait: {hubWaitLabel(match.wait_seconds)}{kind === "waiting" ? ` · Next on ${workspace?.courts.find(court => court.id === match.reserved_court_id)?.label || "reserved court"}` : ""}</span>
+          {playerReadiness(match)}
           {match.blockers.length > 0 ? <span className={styles.small}>{match.blockers.join(" · ")}</span> : null}
         </div>
         <div className={styles.actions}>{kind === "ready" ? <><button type="button" className={styles.primary} disabled={disabled || !openCourt} onClick={() => void command("assign_next_court", { session_key: match.session_key, match_id: match.match_id })}>Next open court</button><button type="button" className={styles.button} disabled={disabled || !courtChoice} onClick={() => openCourtPicker(match)}>Choose court</button></> : kind === "waiting" ? <button type="button" className={styles.button} disabled={disabled} onClick={() => void command("cancel_reservation", { court_id: match.reserved_court_id, session_key: match.session_key, match_id: match.match_id })}>Cancel wait</button> : <span className={`${styles.badge} ${styles.waiting}`}>Waiting</span>}{kind !== "waiting" ? editPlayersButton(match) : null}{notPlayedButton(match)}</div>
@@ -614,7 +664,8 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
 
     {error ? <div role="alert" className={`${styles.notice} ${styles.error}`}><p>{error}</p></div> : null}
     {message ? <div role="status" className={`${styles.notice} ${styles.success}`}><p>{message}</p></div> : null}
-    {pending ? <section className={`${styles.notice} ${styles.error}`} aria-label="Confirm pending action"><strong>Confirm the previous action</strong><p>Its exact request is saved. Retrying checks the same action without creating a second one.</p><button type="button" className={styles.button} disabled={busy} onClick={() => void execute(pending)}>{busy ? "Checking…" : "Retry saved action"}</button></section> : null}
+    {pending ? <section className={`${styles.notice} ${busy ? "" : styles.error}`} aria-label="Confirm pending action" role="status"><strong>{busy ? "action" in pending.body && pending.body.action === "process_checkins" ? "Updating new arrivals…" : "Saving your action…" : "Confirm the previous action"}</strong><p>{busy ? "The court board is available below. Changes will be ready when this update finishes." : "Its exact request is saved. Retrying checks the same action without creating a second one."}</p><button type="button" className={styles.button} disabled={busy} onClick={() => void execute(pending)}>{busy ? "Checking…" : "Retry saved action"}</button></section> : null}
+    {!pending && detail?.registration?.automatic_pending_count ? <section className={styles.notice} aria-label="Pending arrival updates"><p>New arrivals are checked in and waiting to join the round plan.</p><button type="button" className={styles.button} disabled={disabled} onClick={() => void command("process_checkins")}>Update arrivals</button></section> : null}
     {createdSession ? <section className={styles.notice} aria-label="Add created round robin"><strong>Round robin created</strong><p>{attaching ? "Adding your round robin to this event…" : "Your round robin is saved. Complete its addition to the hub to make its matches available for courts."}</p><div className={styles.actions}><Link className={styles.button} href={`/admin/round-robin-generator/sessions/${encodeURIComponent(createdSession.sessionKey)}/rounds/1`}>Open created round robin</Link>{!pending && !attaching ? <button type="button" className={styles.primary} disabled={busy} onClick={() => { if (returnIntent.current) void attachCreatedSession(returnIntent.current); }}>Retry adding to hub</button> : null}</div></section> : null}
 
     {creating ? <section className={styles.card} aria-label="Create event"><div className={styles.heading}><div><h2>Create an event</h2><p className={styles.muted}>Name this gathering and choose its courts. Then add your existing round robins from the Round robins tab.</p></div>{detail ? <button type="button" className={styles.button} onClick={() => setCreating(false)}>Cancel</button> : null}</div>
@@ -626,7 +677,8 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
     {loading && !detail ? <p role="status">Loading court board…</p> : null}
     {detail && workspace && !creating ? <>
       <div className={styles.heading}><div><h2 style={{ marginBottom: ".4rem" }}>{detail.hub.title}</h2><div className={styles.summary}><span><strong>{workspace.groups.length}</strong> round robins</span><span><strong>{workspace.courts.filter(court => court.open && !court.current).length}</strong> open courts</span><span><strong>{workspace.eligible_queue.length}</strong> ready matches</span><span><strong>{workspace.players.filter(player => player.paused).length}</strong> paused players</span></div></div><div className={styles.actions}><button type="button" className={styles.button} disabled={disabled || !activeGroups.length} onClick={openFinishGroup}>Finish round robin</button><span className={`${styles.badge} ${detail.hub.status === "completed" ? "" : styles.good}`}>{detail.hub.status === "completed" ? "Finished" : "Live event"}</span></div></div>
-      <nav className={styles.nav} role="tablist" aria-label="Hub views">{([['board', 'Court board'], ['queue', 'Match queue'], ['groups', 'Round robins'], ['standings', 'Standings'], ['players', 'Players'], ['registration', 'Registration'], ['courts', 'Court setup']] as const).map(([value, label]) => <button type="button" key={value} role="tab" id={`hub-tab-${value}`} aria-selected={tab === value} aria-controls={`hub-panel-${value}`} onClick={() => { window.history.replaceState(null, "", `/admin/round-robin-hub?hub=${encodeURIComponent(hubId)}${value === "registration" ? "&view=registration" : ""}`); if (value === "courts") openCourtSetup(); else { if (value === "standings") setSessionView(null); if (value === "groups") void loadList().catch(cause => setError(cause instanceof Error ? cause.message : "Unable to refresh round robins.")); setTab(value); } }}>{label}{value === "registration" && detail.registration?.pending_count ? ` (${detail.registration.pending_count})` : ""}</button>)}</nav>
+      <nav className={styles.nav} role="tablist" aria-label="Hub views">{([['board', 'Court board'], ['queue', 'Match queue'], ['plan', 'Next round plan'], ['groups', 'Round robins'], ['standings', 'Standings'], ['players', 'Players'], ['registration', 'Registration'], ['courts', 'Court setup']] as const).map(([value, label]) => <button type="button" key={value} role="tab" id={`hub-tab-${value}`} aria-selected={tab === value} aria-controls={`hub-panel-${value}`} onClick={() => { window.history.replaceState(null, "", `/admin/round-robin-hub?hub=${encodeURIComponent(hubId)}${value === "registration" ? "&view=registration" : ""}`); if (value === "courts") openCourtSetup(); else { if (value === "standings") setSessionView(null); if (value === "groups") void loadList().catch(cause => setError(cause instanceof Error ? cause.message : "Unable to refresh round robins.")); setTab(value); } }}>{label}{value === "registration" && detail.registration?.pending_count ? ` (${detail.registration.pending_count})` : ""}</button>)}</nav>
+      {tab === "board" || tab === "queue" || tab === "players" ? <div className={styles.actions}><button type="button" className={styles.button} disabled={disabled || !activeGroups.some(group => group.event_format === "standard" && !group.results_locked && !group.supplemental)} onClick={() => { setExtraGameOpen(true); setError(""); }}>Add extra game</button><span className={styles.small}>Exhibition game across divisions</span></div> : null}
 
       {identityPendingCount > 0 ? <section className={styles.notice} role="status" aria-label="Player identity review needed"><div className={styles.heading}><div><strong>Review matching player names</strong><p className={styles.small}>Confirm who is playing across groups. Only their queued matches wait for review; other ready matches can keep playing.</p></div><button type="button" className={styles.button} onClick={openIdentityReview}>Review matching names</button></div></section> : null}
 
@@ -654,6 +706,44 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
       </section> : null}
 
       {tab === "queue" ? <section id="hub-panel-queue" role="tabpanel" aria-labelledby="hub-tab-queue" className={styles.root}><div className={styles.card}><h2>Ready matches · {workspace.eligible_queue.length}</h2><p className={styles.small}>Priority follows the longest waiting player in each eligible match. Scheduled byes count toward waiting time.</p>{workspace.eligible_queue.length ? queueRows(workspace.eligible_queue, "ready") : <p className={styles.empty}>No matches are ready.</p>}</div>{workspace.reserved_queue.length ? <div className={styles.card}><h2>Reserved next · {workspace.reserved_queue.length}</h2>{queueRows(workspace.reserved_queue, "waiting")}</div> : null}{workspace.blocked_queue.length ? <div className={styles.card}><h2>Waiting for players or courts · {workspace.blocked_queue.length}</h2>{queueRows(workspace.blocked_queue, "blocked")}</div> : null}</section> : null}
+
+      {tab === "plan" ? <section id="hub-panel-plan" role="tabpanel" aria-labelledby="hub-tab-plan" className={styles.root}>
+        <div className={styles.card}><h2>Next round plan</h2><p className={styles.muted}>Review the full next round and its byes while the current round plays. Each player shows whether they’re ready or where they’re still playing. A match can start as soon as its players and a court are free. Saving scores updates readiness; it keeps these teams together.</p></div>
+        {workspace.groups.map(group => {
+          const round = group.next_round_number;
+          const matches = group.next_round_matches || allMatches.filter(match => match.session_key === group.session_key && match.round_number === round);
+          return <section className={styles.card} key={group.session_key} aria-label={`${group.title} next round plan`}>
+            <div className={styles.heading}><h3>{group.title}{round ? ` · Round ${round}` : ""}</h3>{round ? <span className={styles.badge}>{matches.length} {matches.length === 1 ? "match" : "matches"} planned</span> : null}</div>
+            {!round ? <p className={styles.small}>{group.status === "completed" ? "This round robin is finished." : group.finish_requested ? "This round robin is finishing its final planned round." : "The next round will appear here when a plan is available."}</p> : <>
+              <ol className={styles.queue}>{matches.map((match, index) => {
+                const sameMatch = (candidate: HubMatch) => candidate.session_key === match.session_key && candidate.match_id === match.match_id;
+                const liveCourt = workspace.courts.find(court => court.current && sameMatch(court.current));
+                const reserved = workspace.reserved_queue.find(sameMatch);
+                const readyMatch = workspace.eligible_queue.find(sameMatch);
+                const blockers = workspace.blocked_queue.find(sameMatch)?.blockers || match.blockers;
+                const done = match.result_status === "played" || match.result_status === "not_played";
+                const players = [...match.side_a, ...match.side_b];
+                const readinessSummary = players.every(player => player.readiness)
+                  ? `${players.filter(player => player.readiness?.ready).length} of ${players.length} players ready`
+                  : readyMatch ? "All players ready" : "Waiting for players or a court";
+                const openCourt = workspace.courts.some(court => court.open && !court.current && !court.next && match.allowed_court_ids.includes(court.id));
+                const courtChoice = workspace.courts.some(court => court.open && !court.next && match.allowed_court_ids.includes(court.id));
+                return <li key={match.match_id}>
+                  <span className={styles.position}>{index + 1}</span>
+                  <div className={styles.queueCopy}>
+                    <strong>{hubMatchLabel(match)}</strong>
+                    <span className={styles.small}>{liveCourt ? `Playing on ${liveCourt.label}` : reserved ? `Reserved on ${workspace.courts.find(court => court.id === reserved.reserved_court_id)?.label || "a court"}` : done ? match.result_status === "not_played" ? "Not played" : `Played${match.score_a != null && match.score_b != null ? ` · ${match.score_a}–${match.score_b}` : ""}` : readinessSummary}{match.plan_locked ? " · Teams set by staff" : ""}</span>
+                    {!done ? playerReadiness(match) : null}
+                    {!done && !liveCourt && blockers.length ? <span className={styles.small}>{blockers.join(" · ")}</span> : null}
+                  </div>
+                  <div className={styles.actions}>{readyMatch ? <><button type="button" className={styles.primary} disabled={disabled || !openCourt} onClick={() => void command("assign_next_court", { session_key: match.session_key, match_id: match.match_id })}>Next open court</button><button type="button" className={styles.button} disabled={disabled || !courtChoice} onClick={() => openCourtPicker(readyMatch)}>Choose court</button></> : null}{!done && !reserved ? editPlayersButton(match) : null}</div>
+                </li>;
+              })}</ol>
+              <p className={styles.small}><strong>Byes:</strong> {group.next_round_byes?.length ? group.next_round_byes.map(hubPlayerLabel).join(", ") : "None"}</p>
+            </>}
+          </section>;
+        })}
+      </section> : null}
 
       {tab === "groups" ? <section id="hub-panel-groups" role="tabpanel" aria-labelledby="hub-tab-groups" className={styles.root}>
         <div className={styles.card}><div className={styles.heading}><div><h2>Add a round robin</h2><p className={styles.muted}>Each group keeps its roster, format, rating choice, and results.</p></div><Link className={styles.button} href={`/admin/round-robin-generator?hub=${encodeURIComponent(detail.hub.id)}&draft=${encodeURIComponent(createDraftToken)}`}>Create round robin</Link></div><div className={styles.inlineForm}><label className={styles.field}>Existing active round robin<select value={addSessionKey} onChange={event => setAddSessionKey(event.target.value)}><option value="">Choose a round robin</option>{availableSessions.map(session => <option key={session.session_key} value={session.session_key}>{session.title} · {formatName(session.event_format)} · {session.rating_mode || "unrated"}</option>)}</select></label><button type="button" className={styles.primary} disabled={disabled || !availableSessions.some(session => session.session_key === addSessionKey)} onClick={() => void command("add_group", { session_key: addSessionKey }).then(ok => { if (ok) setAddSessionKey(""); })}>Add to hub</button></div>{!availableSessions.length ? <p className={styles.small}>No other active round robins are available. Create a round robin to add it to this event and queue its matches.</p> : null}</div>
@@ -709,7 +799,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
           disabled={disabled} busy={busy} pending={Boolean(pending)} error={error} onCommand={command} onRetry={() => { if (pending) void execute(pending); }} />
       </section> : null}
 
-      {tab === "courts" ? <section id="hub-panel-courts" role="tabpanel" aria-labelledby="hub-tab-courts" className={styles.card}><h2>Court setup</h2><p className={styles.muted}>A group with dedicated courts uses only those courts. Other groups use the shared courts.</p>{courtEditorRows(editCourts, setEditCourts, true)}{String(courtDraftVersion) !== String(detail.hub.version) ? <p className={styles.small}>The court board has changed since this editor opened. Review current courts before saving. Your draft is preserved.</p> : null}<div className={styles.actions}><button type="button" className={styles.primary} disabled={disabled || String(courtDraftVersion) !== String(detail.hub.version) || !editCourts.length || editCourts.some(court => !court.label.trim())} onClick={() => void command("configure_courts", { courts: editCourts.map(courtConfig) }, courtDraftVersion).then(ok => { if (ok) setTab("board"); })}>Save court setup</button><button type="button" className={styles.button} disabled={busy || Boolean(pending)} onClick={() => { setCourtDraftVersion(detail.hub.version); setError(""); }}>Reviewed — keep court setup</button><button type="button" className={styles.button} disabled={busy} onClick={openCourtSetup}>Reload current courts</button><button type="button" className={styles.button} disabled={disabled} onClick={() => setFinishReview(true)}>Finish event</button></div></section> : null}
+      {tab === "courts" ? <section id="hub-panel-courts" role="tabpanel" aria-labelledby="hub-tab-courts" className={styles.card}><h2>Court setup</h2><p className={styles.muted}>Dedicated courts are reserved for one round robin. That round robin can also use shared courts. Automatic assignment uses its available dedicated courts first.</p>{courtEditorRows(editCourts, setEditCourts, true)}{String(courtDraftVersion) !== String(detail.hub.version) ? <p className={styles.small}>The court board has changed since this editor opened. Review current courts before saving. Your draft is preserved.</p> : null}<div className={styles.actions}><button type="button" className={styles.primary} disabled={disabled || String(courtDraftVersion) !== String(detail.hub.version) || !editCourts.length || editCourts.some(court => !court.label.trim())} onClick={() => void command("configure_courts", { courts: editCourts.map(courtConfig) }, courtDraftVersion).then(ok => { if (ok) setTab("board"); })}>Save court setup</button><button type="button" className={styles.button} disabled={busy || Boolean(pending)} onClick={() => { setCourtDraftVersion(detail.hub.version); setError(""); }}>Reviewed — keep court setup</button><button type="button" className={styles.button} disabled={busy} onClick={openCourtSetup}>Reload current courts</button><button type="button" className={styles.button} disabled={disabled} onClick={() => setFinishReview(true)}>Finish event</button></div></section> : null}
 
       {sessionView && groupMap.has(sessionView.sessionKey) ? <section className={styles.embedded} aria-label="Manage selected round robin"><div className={styles.heading}><div><p className={styles.eyebrow}>Round robin controls</p><h2>{groupMap.get(sessionView.sessionKey)?.title || "Round robin"}</h2></div><button type="button" className={styles.button} onClick={() => setSessionView(null)}>Close round robin controls</button></div><div className={styles.embeddedBody} inert={busy || attaching || Boolean(pending)}><GeneratorRoundRunner key={`${detail.hub.id}:${sessionView.sessionKey}:round:${sessionView.roundNumber}`} apiBase={apiBase} clubId={clubId} generatorKind="round_robin" sessionKey={sessionView.sessionKey} roundNumber={sessionView.roundNumber} embedded refreshKey={detail.hub.version} onNavigate={target => navigateSession(sessionView.sessionKey, target)} onSessionChanged={async () => { await loadHub(hubId, true); }} /></div></section> : null}
     </> : null}
@@ -725,17 +815,23 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
     {finishGroupOpen && workspace ? <HubFinishDialog key={hubId} groups={workspace.groups}
       busy={busy} disabled={disabled} pending={Boolean(pending)} error={error}
       onClose={() => setFinishGroupOpen(false)} onRetry={() => { if (pending) void execute(pending); }}
-      onSubmit={sessionKey => { void command("finish_group", { session_key: sessionKey }); }} /> : null}
+      onSubmit={(sessionKey, finishAfterRound) => { void command("finish_group", { session_key: sessionKey, ...(finishAfterRound === undefined ? {} : { finish_after_round: finishAfterRound }) }); }} /> : null}
 
     {addPlayerOpen && workspace ? <HubAddPlayerDialog key={hubId} apiBase={apiBase} clubId={clubId} groups={workspace.groups}
       busy={busy} disabled={disabled} pending={Boolean(pending)} error={error}
       onClose={() => setAddPlayerOpen(false)} onRetry={() => { if (pending) void execute(pending); }}
       onSubmit={(sessionKey, name, playerId) => { void command("add_player", { session_key: sessionKey, name, ...(playerId == null ? {} : { player_id: playerId }) }); }} /> : null}
 
+    {extraGameOpen && workspace ? <HubExtraGameDialog key={hubId} groups={workspace.groups}
+      busy={busy} disabled={disabled} pending={Boolean(pending)} error={error}
+      onClose={() => setExtraGameOpen(false)} onRetry={() => { if (pending) void execute(pending); }}
+      onSubmit={payload => { void command("create_extra_game", payload); }} /> : null}
+
     {removePlayerOpen && workspace ? <HubRemovePlayerDialog key={hubId} groups={workspace.groups}
       busy={busy} disabled={disabled} pending={Boolean(pending)} error={error}
       onClose={() => setRemovePlayerOpen(false)} onRetry={() => { if (pending) void execute(pending); }}
-      onSubmit={(sessionKey, participantId) => { void command("remove_player", { session_key: sessionKey, participant_id: participantId }); }} /> : null}
+      onSubmit={(sessionKey, participantId) => { void command("remove_player", { session_key: sessionKey, participant_id: participantId }); }}
+      onSubmitMany={(sessionKey, participantIds) => { void command("remove_players", { session_key: sessionKey, participant_ids: participantIds }); }} /> : null}
 
     {playerEditor && detail && apiBase ? <HubEditPlayersDialog key={`${playerEditor.match.session_key}:${playerEditor.match.match_id}`}
       apiBase={apiBase} clubId={clubId} match={playerEditor.match} group={groupMap.get(playerEditor.match.session_key)}
@@ -744,6 +840,8 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
       onClose={() => setPlayerEditor(null)} onRetry={() => { if (pending) void execute(pending); }}
       onReview={() => { if (currentPlayerMatch) { setPlayerEditor({ match: currentPlayerMatch, version: detail.hub.version }); setError(""); } }}
       onSubmit={payload => void command("edit_match_players", { ...payload, session_key: playerEditor.match.session_key,
+        match_id: playerEditor.match.match_id, round_number: playerEditor.match.round_number, court_id: playerEditor.match.court_id || null }, playerEditor.version)}
+      onSubmitExact={payload => void command("set_match_lineup", { ...payload, session_key: playerEditor.match.session_key,
         match_id: playerEditor.match.match_id, round_number: playerEditor.match.round_number, court_id: playerEditor.match.court_id || null }, playerEditor.version)} /> : null}
 
     {scoreEditor ? <InteractionDialog open phase={busy ? "working" : "ready"} title={`Enter score · ${selectedScoreCourt?.label || "Court"}`} description={<p>{groupMap.get(scoreEditor.match.session_key)?.title} · Round {scoreEditor.match.round_number}</p>} initialFocusRef={scoreInput} dirty={Boolean(scoreEditor.scoreA || scoreEditor.scoreB)} onRequestClose={() => { if (!busy) setScoreEditor(null); }} actions={<><button type="button" className={styles.button} disabled={busy} onClick={() => setScoreEditor(null)}>Cancel</button><button type="submit" form="hub-score-form" className={styles.primary} disabled={disabled || !scoreValid || scoreMatchChanged || scoreStale}>{blankScores ? "Mark not played & release court" : "Save score & release court"}</button></>}>
@@ -751,7 +849,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
     </InteractionDialog> : null}
 
     {courtEditor ? <InteractionDialog open phase={busy ? "working" : "ready"} title={courtEditor.sourceCourtId ? "Move or remove match" : "Choose court"} description={<><p>{groupMap.get(courtEditor.match.session_key)?.title} · Round {courtEditor.match.round_number}</p><p>{hubMatchLabel(courtEditor.match)}</p></>} onRequestClose={() => { if (!busy) setCourtEditor(null); }} actions={<><button type="button" className={styles.button} disabled={busy} onClick={() => setCourtEditor(null)}>Cancel</button>{courtEditor.sourceCourtId ? <button type="button" className={styles.button} disabled={disabled || courtStale || courtMatchChanged} onClick={() => void command("release_game", { court_id: courtEditor.sourceCourtId, session_key: courtEditor.match.session_key, match_id: courtEditor.match.match_id }, courtEditor.version)}>Return to queue</button> : null}<button type="button" className={styles.primary} disabled={disabled || courtStale || courtMatchChanged || !targetCourt || !choiceCourts.some(court => court.id === targetCourt.id)} onClick={() => void command(courtEditor.sourceCourtId ? "move_game" : targetCourt?.current ? "reserve_game_for_court" : "assign_game", courtEditor.sourceCourtId ? { court_id: courtEditor.sourceCourtId, target_court_id: courtEditor.targetCourtId, session_key: courtEditor.match.session_key, match_id: courtEditor.match.match_id } : { session_key: courtEditor.match.session_key, match_id: courtEditor.match.match_id, court_id: courtEditor.targetCourtId }, courtEditor.version)}>{courtEditor.sourceCourtId ? "Move match" : targetCourt?.current ? "Reserve next" : "Assign to court"}</button></>}>
-      <label className={styles.field}>Court<select value={courtEditor.targetCourtId} disabled={busy || Boolean(pending)} onChange={event => setCourtEditor({ ...courtEditor, targetCourtId: event.target.value })}><option value="">Choose a court</option>{choiceCourts.map(court => <option key={court.id} value={court.id}>{court.label}{court.current ? " · Reserve next" : " · Available"}</option>)}</select></label><p className={styles.small}>Only courts available to this group are shown. Dedicated courts are exclusive. Returning a match to the queue preserves its announced lineup.</p>{courtMatchChanged ? <p role="alert">This match or lineup changed. Close this dialog and review the board.</p> : courtStale ? <div className={styles.notice}><p>The court board changed. Review the match and your selected court before saving.</p><button type="button" className={styles.button} disabled={busy || Boolean(pending)} onClick={() => { setCourtEditor({ ...courtEditor, version: detail!.hub.version }); setError(""); }}>Reviewed — keep selected court</button></div> : null}{!choiceCourts.length ? <p>No eligible court is currently available for this action.</p> : null}{error ? <p role="alert">{error}</p> : null}{pending ? <button type="button" className={styles.button} disabled={busy} onClick={() => void execute(pending)}>Retry saved action</button> : null}
+      <label className={styles.field}>Court<select value={courtEditor.targetCourtId} disabled={busy || Boolean(pending)} onChange={event => setCourtEditor({ ...courtEditor, targetCourtId: event.target.value })}><option value="">Choose a court</option>{choiceCourts.map(court => <option key={court.id} value={court.id}>{court.label}{court.current ? " · Reserve next" : " · Available"}</option>)}</select></label><p className={styles.small}>This round robin can use its dedicated courts and shared courts. Courts dedicated to other round robins are excluded. Returning a match to the queue preserves its announced lineup.</p>{courtMatchChanged ? <p role="alert">This match or lineup changed. Close this dialog and review the board.</p> : courtStale ? <div className={styles.notice}><p>The court board changed. Review the match and your selected court before saving.</p><button type="button" className={styles.button} disabled={busy || Boolean(pending)} onClick={() => { setCourtEditor({ ...courtEditor, version: detail!.hub.version }); setError(""); }}>Reviewed — keep selected court</button></div> : null}{!choiceCourts.length ? <p>No eligible court is currently available for this action.</p> : null}{error ? <p role="alert">{error}</p> : null}{pending ? <button type="button" className={styles.button} disabled={busy} onClick={() => void execute(pending)}>Retry saved action</button> : null}
     </InteractionDialog> : null}
 
     {finishReview ? <InteractionDialog open phase={busy ? "working" : "ready"} title="Finish this event?" description={<p>{detail?.hub.title}</p>} onRequestClose={() => { if (!busy) setFinishReview(false); }} actions={<><button type="button" className={styles.button} disabled={busy} onClick={() => setFinishReview(false)}>Keep event open</button><button type="button" className={styles.primary} disabled={disabled || unresolved > 0} onClick={() => void command("finish_hub")}>Finish event</button></>}><p>{unresolved ? `${unresolved} matches are playing, waiting, or reserved. Resolve these before finishing.` : "The court queue is clear. Individual round robin results remain available."}</p><p className={styles.small}>Use Finish round robin to end each group without losing its queued matches. The event closes automatically when all groups are finished.</p>{error ? <p role="alert">{error}</p> : null}{pending ? <button type="button" className={styles.button} disabled={busy} onClick={() => void execute(pending)}>Retry saved action</button> : null}</InteractionDialog> : null}
