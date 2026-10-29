@@ -614,8 +614,9 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
     """Register guarded Tournament Admin routes for the Next admin pilot."""
 
     @app.get("/admin/clubs/{club_id}/tournaments/admin/status")
-    def get_admin_tournament_status(club_id: str) -> dict[str, Any]:
-        supabase = get_supabase_client() if is_admin_tournament_admin_enabled() else None
+    def get_admin_tournament_status(club_id: str, include_count: bool = Query(default=True)) -> dict[str, Any]:
+        # Navigation needs runtime capabilities, not a second tournament-list read.
+        supabase = get_supabase_client() if include_count and is_admin_tournament_admin_enabled() else None
         return build_admin_tournament_status(supabase, club_id=str(club_id))
 
     @app.get("/admin/clubs/{club_id}/tournaments/admin/tournaments")

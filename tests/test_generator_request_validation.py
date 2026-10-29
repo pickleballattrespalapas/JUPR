@@ -78,6 +78,12 @@ def test_uncertain_admin_result_is_structured_for_exact_retry_ui():
     ('score_and_release',{'session_key':'a','match_id':'r1-c1','court_id':'c1','score_a':None,'score_b':None}),
     ('release_game',{'court_id':'c1'}),
     ('resolve_identities',{'resolution':'same','participants':[{'session_key':'a','participant_id':'p1'},{'session_key':'b','participant_id':'p4'}]}),
+    ('set_match_lineup',{'session_key':'a','match_id':'r2-m1','side_a':['p1','p2'],'side_b':['p3','p4']}),
+    ('remove_players',{'session_key':'a','participant_ids':['p1','p2']}),
+    ('finish_group',{'session_key':'a','finish_after_round':6}),
+    ('create_extra_game',{'side_a':[{'session_key':'a','participant_id':'p1'},{'session_key':'b','participant_id':'p1'}],
+                         'side_b':[{'session_key':'b','participant_id':'p2'},{'session_key':'b','participant_id':'p3'}],
+                         'standings_policy':'exhibition'}),
 ])
 def test_hub_payload_validation_preserves_exact_retry_fingerprint(action,payload):
     before=deepcopy(payload)
@@ -98,6 +104,19 @@ def test_hub_payload_validation_preserves_exact_retry_fingerprint(action,payload
     ('review_checkin',{'checkin_id':'c1','disposition':'existing'}),
     ('edit_match_players',{'session_key':'a','match_id':'m1','participant_id':'p1','replacement_participant_id':'p2','name':'Another'}),
     ('auto_fill_courts',{'excluded_session_keys':['b']}),
+    ('set_match_lineup',{'session_key':'a','match_id':'m1','side_a':['p1','p2'],'side_b':['p1','p3']}),
+    ('set_match_lineup',{'session_key':'a','match_id':'m1','side_a':['p1'],'side_b':['p2','p3']}),
+    ('remove_players',{'session_key':'a','participant_ids':[]}),
+    ('remove_players',{'session_key':'a','participant_ids':['p1','p1']}),
+    ('remove_players',{'session_key':'a','participant_ids':['p1'],'effective_round':0}),
+    ('finish_group',{'session_key':'a','finish_after_round':True}),
+    ('finish_group',{'session_key':'a','finish_after_round':-1}),
+    ('create_extra_game',{'side_a':[{'session_key':'a','participant_id':'p1'},{'session_key':'a','participant_id':'p1'}],
+                         'side_b':[{'session_key':'b','participant_id':'p2'},{'session_key':'b','participant_id':'p3'}],
+                         'standings_policy':'exhibition'}),
+    ('create_extra_game',{'side_a':[{'session_key':'a','participant_id':'p1'},{'session_key':'b','participant_id':'p1'}],
+                         'side_b':[{'session_key':'b','participant_id':'p2'},{'session_key':'b','participant_id':'p3'}],
+                         'standings_policy':'home_groups'}),
 ])
 def test_hub_action_payloads_reject_malformed_or_internal_fields(action,payload):
     with pytest.raises(ValidationError): HubCommandRequest(action=action,payload=payload,expected_version=1,idempotency_key='hub-invalid-contract-0001')

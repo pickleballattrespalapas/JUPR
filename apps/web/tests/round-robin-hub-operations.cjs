@@ -101,8 +101,14 @@ global.fetch = async (url, options = {}) => {
   } else if (body.action === "rejoin_player") {
     const person = detail.workspace.groups.find(g => g.session_key === p.session_key).players.find(person => person.participant_id === p.participant_id);
     person.active = true; person.membership_status = "active"; person.can_rejoin = false;
+  } else if (body.action === "assign_next_court") {
+    const match = detail.workspace.eligible_queue.find(match => match.session_key === p.session_key && match.match_id === p.match_id);
+    const court = detail.workspace.courts.find(court => !court.current && !court.next && court.open && match?.allowed_court_ids.includes(court.id));
+    assert.ok(match && court, "Only a ready match with an eligible open court can start");
+    court.current = {...match, status: "on_court", court_id: court.id};
+    detail.workspace.eligible_queue = detail.workspace.eligible_queue.filter(item => item !== match);
   } else if (body.action === "process_checkins") detail.registration.automatic_pending_count = 0;
-  else assert.ok(["resolve_identities", "move_game", "edit_match_players", "pause_player", "release_game", "assign_game"].includes(body.action), body.action);
+  else assert.ok(["resolve_identities", "move_game", "edit_match_players", "set_match_lineup", "remove_players", "create_extra_game", "finish_group", "pause_player", "release_game", "assign_game"].includes(body.action), body.action);
   detail.hub.version++;
   const saved = clone(detail); receipts.set(body.idempotency_key, {body: clone(body), value: saved});
   if (loseNext) { loseNext = false; throw new Error("Response lost after commit"); }
@@ -118,7 +124,283 @@ async function unmount(tree) { await act(async () => tree.unmount()); }
 async function enterScore(tree, a = "11", b = "10") { await click(tree, "Enter score"); await change(tree, "Side A score", a); await change(tree, "Side B score", b); }
 const passed = [];
 async function scenario(name, run) { reset(); await run(); passed.push(name); }
+async function withRequestClock(run) {
+  const originalSetTimeout = global.setTimeout, originalClearTimeout = global.clearTimeout;
+  const pendingTimers = new Map();
+  global.setTimeout = (callback, delay, ...args) => {
+    if (delay !== 30_000) return originalSetTimeout(callback, delay, ...args);
+    const timer = {}; pendingTimers.set(timer, () => callback(...args)); return timer;
+  };
+  global.clearTimeout = timer => { if (!pendingTimers.delete(timer)) originalClearTimeout(timer); };
+  try { await run(() => { assert.ok(pendingTimers.size, "An outstanding request has a deadline"); for (const callback of [...pendingTimers.values()]) callback(); }); }
+  finally { global.setTimeout = originalSetTimeout; global.clearTimeout = originalClearTimeout; }
+  assert.equal(pendingTimers.size, 0, "Every settled request clears its deadline");
+}
 (async () => {
+  await scenario("board renders before automatic arrivals and every blocked action is visibly disabled", async () => {
+    detail.registration.automatic_pending_count = 1; holdNext = true;
+    const tree = await mount();
+    assert.ok(tree.root.findByProps({"aria-label": "Court 6"}), "The successful GET paints the court board before roster processing finishes");
+    assert.doesNotMatch(text(tree.toJSON()), /Loading court board/);
+    assert.match(text(tree.toJSON()), /Updating new arrivals/);
+    assert.equal(button(tree, "Enter score").props.disabled, true);
+    assert.equal(button(tree, "Fill open courts").props.disabled, true);
+    assert.equal(requests[0].action, "process_checkins");
+    assert.deepEqual(JSON.parse(stored.get("rr-hub-pending:club")).body, requests[0]);
+    await act(async () => held());
+    assert.equal(button(tree, "Enter score").props.disabled, false);
+    await enterScore(tree); await submit(tree, "hub-score-form");
+    assert.equal(requests[1].action, "score_and_release", "The next enabled staff action is sent, never silently dropped");
+    await unmount(tree);
+  });
+  await scenario("automatic arrival timeout recovers through the exact saved command", async () => withRequestClock(async expire => {
+    detail.registration.automatic_pending_count = 1; holdNext = true;
+    const tree = await mount();
+    const saved = clone(requests[0]);
+    await act(async () => expire());
+    assert.match(text(tree.toJSON()), /result is not yet confirmed/);
+    assert.equal(button(tree, "Refresh").props.disabled, false);
+    await click(tree, "Refresh");
+    assert.equal(requests.length, 1, "Reading the board does not replace the uncertain automatic command");
+    await click(tree, "Retry saved action");
+    assert.deepEqual(requests[1], saved);
+    assert.equal(receipts.size, 1);
+    assert.equal(stored.size, 0);
+    await act(async () => held());
+    await unmount(tree);
+  }));
+  await scenario("automatic arrival updates preserve a score draft and require version review", async () => {
+    const tree = await mount(); await enterScore(tree, "11", "10");
+    detail.registration.automatic_pending_count = 1; holdNext = true;
+    await click(tree, "Refresh");
+    assert.equal(button(tree, "Save score & release court").props.disabled, true);
+    await act(async () => held());
+    assert.equal(tree.root.findByProps({"aria-label": "Side A score"}).props.value, "11");
+    assert.equal(tree.root.findByProps({"aria-label": "Side B score"}).props.value, "10");
+    assert.equal(button(tree, "Save score & release court").props.disabled, true);
+    await click(tree, "Reviewed — keep these scores"); await submit(tree, "hub-score-form");
+    assert.equal(requests[1].expected_version, 2);
+    await unmount(tree);
+  });
+  await scenario("rejected automatic arrival update stops retrying the same snapshot", async () => {
+    detail.registration.automatic_pending_count = 1;
+    const originalFetch = global.fetch; let attempts = 0, tree;
+    global.fetch = (url, options = {}) => options.body && JSON.parse(options.body).action === "process_checkins"
+      ? (attempts++, Promise.resolve({ok: false, status: 422, json: async () => ({detail: "Review the new arrival's group."})}))
+      : originalFetch(url, options);
+    try {
+      tree = await mount();
+      assert.equal(attempts, 1); assert.equal(stored.size, 0);
+      assert.equal(button(tree, "Enter score").props.disabled, false);
+      await act(async () => tickIntervals());
+      assert.equal(attempts, 1, "A repeated GET of the same version never creates an automatic retry loop");
+      await click(tree, "Update arrivals"); assert.equal(attempts, 2);
+    } finally { global.fetch = originalFetch; if (tree) await unmount(tree); }
+  });
+  await scenario("court polling and scoring avoid redundant event-list reads while discovery stays fresh", async () => {
+    const tree = await mount(); const initialListReads = listReads, initialDetailReads = detailReads;
+    await act(async () => tickIntervals());
+    assert.equal(listReads, initialListReads); assert.equal(detailReads, initialDetailReads + 1);
+    await enterScore(tree); await submit(tree, "hub-score-form");
+    assert.equal(listReads, initialListReads, "The command snapshot is sufficient after a score");
+    await act(async () => window.dispatchEvent({type: "focus"})); assert.equal(listReads, initialListReads + 1);
+    await click(tree, "Round robins"); const discoveryReads = listReads;
+    await act(async () => tickIntervals()); assert.equal(listReads, discoveryReads + 1);
+    await unmount(tree);
+  });
+  await scenario("automatic arrival conflict refreshes without blindly resubmitting at a newer version", async () => {
+    detail.registration.automatic_pending_count = 1; conflictNext = true;
+    const tree = await mount();
+    assert.equal(requests.length, 1); assert.equal(stored.size, 0);
+    assert.equal(detail.hub.version, 2);
+    await act(async () => tickIntervals());
+    assert.equal(requests.length, 1, "A newer snapshot does not silently retry a rejected automatic write");
+    await click(tree, "Update arrivals");
+    assert.equal(requests.length, 2); assert.equal(requests[1].expected_version, 2);
+    assert.notEqual(requests[1].idempotency_key, requests[0].idempotency_key);
+    detail.registration.automatic_pending_count = 1;
+    await click(tree, "Refresh");
+    assert.equal(requests.length, 3, "Successful recovery restores automatic processing for later arrivals");
+    await unmount(tree);
+  });
+  await scenario("next-round and queue cards name ready, playing, and waiting players and refresh their status", async () => {
+    const ready = {ready: true, current_court: null, reserved_court: null, paused: false, waiting_round_number: null, identity_review: false, duplicate_in_match: false};
+    const match = game("readiness", "a", {round_number: 4, blockers: ["A player is already assigned to a court."]});
+    const players = [...match.side_a, ...match.side_b];
+    const names = ["Ana", "Ben", "Cara", "Drew"];
+    players.forEach((player, index) => Object.assign(player, {name: names[index], readiness: {...ready}}));
+    players[1].readiness = {...ready, ready: false, current_court: {court_id: "c2", court_label: "Court 7", session_key: "b", group_title: "2.5/3.0"}};
+    players[2].readiness = {...ready, ready: false, paused: true};
+    players[3].readiness = {...ready, ready: false, waiting_round_number: 3};
+    const played = game("finished", "a", {round_number: 4, result_status: "played", score_a: 11, score_b: 8});
+    [...played.side_a, ...played.side_b].forEach(player => player.readiness = {...ready});
+    Object.assign(detail.workspace.groups[0], {next_round_number: 4, next_round_matches: [match, played]});
+    detail.workspace.eligible_queue = []; detail.workspace.blocked_queue = [match];
+    const tree = await mount(); await click(tree, "Next round plan");
+    const plan = () => tree.root.findByProps({"aria-label": "3.5/4.0 next round plan"});
+    assert.match(text(plan()), /1 of 4 players ready/);
+    for (const label of ["Ana: Ready", "Ben: Playing on Court 7 · 2.5/3.0", "Cara: Paused", "Drew: Waiting for round 3 game"])
+      assert.ok(plan().findByProps({"aria-label": label}), label);
+    assert.equal(plan().findAllByProps({"aria-label": "Player readiness"}).length, 1, "Completed games show their result, not current player readiness");
+    await click(tree, "Match queue");
+    assert.ok(tree.root.findByProps({"aria-label": "Ben: Playing on Court 7 · 2.5/3.0"}));
+    await click(tree, "Next round plan");
+    players.forEach(player => player.readiness = {...ready});
+    detail.workspace.eligible_queue = [match]; detail.workspace.blocked_queue = []; match.blockers = [];
+    detail.hub.version++;
+    await click(tree, "Refresh");
+    assert.match(text(plan()), /4 of 4 players ready/);
+    for (const name of names) assert.ok(plan().findByProps({"aria-label": `${name}: Ready`}));
+    assert.doesNotMatch(text(plan()), /Playing on Court 7|Waiting for round 3 game|Paused/);
+    await unmount(tree);
+  });
+  await scenario("readiness labels distinguish reservations and identity blockers for singles", async () => {
+    const match = game("singles", "a", {round_number: 4});
+    match.side_a = match.side_a.slice(0, 1); match.side_b = match.side_b.slice(0, 1);
+    const [a, b] = [match.side_a[0], match.side_b[0]];
+    a.readiness = {ready: false, current_court: null, reserved_court: {court_id: "c1", court_label: "Court 6", session_key: "a", group_title: "3.5/4.0"}, paused: false, waiting_round_number: 3, identity_review: false, duplicate_in_match: false};
+    b.readiness = {ready: false, current_court: null, reserved_court: null, paused: false, waiting_round_number: null, identity_review: true, duplicate_in_match: true};
+    Object.assign(detail.workspace.groups[0], {next_round_number: 4, next_round_matches: [match]});
+    const tree = await mount(); await click(tree, "Next round plan");
+    assert.match(text(tree.toJSON()), /0 of 2 players ready/);
+    assert.ok(tree.root.findByProps({"aria-label": `${a.name}: Reserved on Court 6`}));
+    assert.ok(tree.root.findByProps({"aria-label": `${b.name}: Needs identity review · Duplicate player in match`}));
+    await unmount(tree);
+  });
+  await scenario("whole next-round plan includes byes and completed games and dispatches a ready match early", async () => {
+    const ready = game("next-ready", "a", {round_number: 4, plan_locked: true});
+    const blocked = game("next-waiting", "a", {round_number: 4, blockers: ["Player is still on Court 6"]});
+    const played = game("next-played", "a", {round_number: 4, result_status: "played", score_a: 11, score_b: 8});
+    Object.assign(detail.workspace.groups[0], {next_round_number: 4, planned_through_round: 4, plan_revision: 7,
+      next_round_matches: [ready, blocked, played], next_round_byes: [{id: "bye", name: "Esteban", identity: "guest:bye"}]});
+    detail.workspace.eligible_queue = [ready]; detail.workspace.blocked_queue = [blocked];
+    const tree = await mount(); await click(tree, "Next round plan");
+    const plan = tree.root.findByProps({"aria-label": "3.5/4.0 next round plan"});
+    assert.match(text(plan), /3 matches planned/); assert.match(text(plan), /Byes: Esteban/);
+    assert.match(text(plan), /Played · 11–8/); assert.match(text(plan), /Teams set by staff/);
+    assert.match(text(plan), /Player is still on Court 6/);
+    assert.equal(plan.findAllByType("button").filter(node => text(node) === "Next open court").length, 1);
+    await click(tree, "Next open court");
+    assert.deepEqual(requests[0].payload, {session_key: "a", match_id: "next-ready"});
+    assert.equal(detail.workspace.courts[0].current.round_number, 3, "Earlier round can still be playing");
+    assert.equal(detail.workspace.courts[1].current.round_number, 4);
+    assert.match(text(tree.toJSON()), /Playing on Court 7/);
+    await unmount(tree);
+  });
+  await scenario("exact team editor submits reviewed teams through durable command recovery", async () => {
+    const tree = await mount();
+    const court = tree.root.findByProps({"aria-label": "Court 6"});
+    await act(async () => court.findAllByType("button").find(node => text(node) === "Edit players").props.onClick());
+    await change(tree, "Change players", "exact");
+    await change(tree, "Team A player 1", "move");
+    loseNext = true; await submit(tree, "hub-edit-players-form");
+    assert.equal(requests[0].action, "set_match_lineup");
+    assert.deepEqual(requests[0].payload, {session_key: "a", match_id: "playing", round_number: 3, court_id: "c1",
+      side_a: ["move", "playing-2"], side_b: ["playing-3", "playing-4"]});
+    assert.equal(button(tree, "Save both teams").props.disabled, true);
+    await click(tree, "Retry saved action"); assert.deepEqual(requests[1], requests[0]);
+    assert.equal(tree.root.findAllByProps({id: "hub-edit-players-form"}).length, 0);
+    await unmount(tree);
+  });
+  await scenario("exact team edit on next-round plan targets that future round", async () => {
+    const match = game("next-edit", "a", {round_number: 4});
+    detail.workspace.groups[0].players.push(...[...match.side_a, ...match.side_b].map(player => member(player.id, player.name)));
+    Object.assign(detail.workspace.groups[0], {next_round_number: 4, next_round_matches: [match], next_round_byes: []});
+    detail.workspace.eligible_queue = [match];
+    const tree = await mount(); await click(tree, "Next round plan"); await click(tree, "Edit players");
+    await change(tree, "Change players", "exact"); await change(tree, "Team A player 1", "move");
+    await submit(tree, "hub-edit-players-form");
+    assert.equal(requests[0].action, "set_match_lineup");
+    assert.deepEqual(requests[0].payload, {session_key: "a", match_id: "next-edit", round_number: 4, court_id: null,
+      side_a: ["move", "next-edit-2"], side_b: ["next-edit-3", "next-edit-4"]});
+    await unmount(tree);
+  });
+  await scenario("batch departures submit once and preserve the exact selection after response loss", async () => {
+    const tree = await mount(); await click(tree, "Remove player"); await change(tree, "Round robin", "a");
+    await check(tree, "Remove Darla"); await check(tree, "Remove D. Simmons");
+    loseNext = true; await submit(tree, "hub-remove-player-form");
+    assert.equal(requests[0].action, "remove_players");
+    assert.deepEqual(requests[0].payload, {session_key: "a", participant_ids: ["move", "variant"]});
+    await click(tree, "Retry saved action"); assert.deepEqual(requests[1], requests[0]);
+    assert.equal(tree.root.findAllByProps({id: "hub-remove-player-form"}).length, 0);
+    await unmount(tree);
+  });
+  await scenario("cross-division exhibition creation has an explicit policy and retries the same teams", async () => {
+    detail.workspace.groups[1].players.push(member("extra", "Fourth Player"));
+    const tree = await mount(); await click(tree, "Add extra game");
+    for (const [label, session, participant] of [
+      ["Extra game team A player 1", "a", "move"], ["Extra game team A player 2", "a", "variant"],
+      ["Extra game team B player 1", "b", "other"], ["Extra game team B player 2", "b", "extra"]
+    ]) await change(tree, label, JSON.stringify([session, participant]));
+    assert.match(text(tree.toJSON()), /Exhibition only/);
+    loseNext = true; await submit(tree, "hub-extra-game-form");
+    assert.equal(requests[0].action, "create_extra_game");
+    assert.deepEqual(requests[0].payload, {side_a: [{session_key: "a", participant_id: "move"}, {session_key: "a", participant_id: "variant"}],
+      side_b: [{session_key: "b", participant_id: "other"}, {session_key: "b", participant_id: "extra"}], standings_policy: "exhibition"});
+    await click(tree, "Retry saved action"); assert.deepEqual(requests[1], requests[0]);
+    assert.equal(tree.root.findAllByProps({id: "hub-extra-game-form"}).length, 0);
+    assert.equal(button(tree, "Match queue").props["aria-selected"], true);
+    await unmount(tree);
+  });
+  await scenario("finish-now selection sends an explicit zero boundary", async () => {
+    Object.assign(detail.workspace.groups[0], {can_finish: true, finish_pending_matches: 0,
+      finish_boundary_round: 0, finish_round_options: [{round_number: 0, pending_matches: 0}]});
+    const tree = await mount(); await click(tree, "Finish round robin"); await change(tree, "Round robin to finish", "a");
+    await submit(tree, "hub-finish-group-form");
+    assert.equal(requests[0].action, "finish_group");
+    assert.deepEqual(requests[0].payload, {session_key: "a", finish_after_round: 0});
+    await unmount(tree);
+  });
+  await scenario("stalled board reads end loading and can be refreshed", async () => withRequestClock(async expire => {
+    const originalFetch = global.fetch, signals = [];
+    let tree;
+    global.fetch = (_url, options) => { signals.push(options.signal); return new Promise(() => {}); };
+    try {
+      tree = await mount();
+      assert.match(text(tree.toJSON()), /Loading court board/);
+      await act(async () => expire());
+      assert.ok(signals.every(signal => signal.aborted));
+      assert.doesNotMatch(text(tree.toJSON()), /Loading court board/);
+      assert.match(text(tree.toJSON()), /request timed out/);
+      assert.equal(stored.size, 0, "A timed-out read never creates an uncertain write");
+      global.fetch = originalFetch;
+      await click(tree, "Refresh");
+      assert.ok(tree.root.findByProps({"aria-label": "Court 6"}));
+    } finally { global.fetch = originalFetch; if (tree) await unmount(tree); }
+  }));
+  for (const phase of ["headers", "body"]) await scenario(`stalled command ${phase} retains the exact request and safely replays`, async () => withRequestClock(async expire => {
+    const originalFetch = global.fetch;
+    let tree, releaseLate, signal, stallNext = true;
+    global.fetch = async (url, options = {}) => {
+      const result = await originalFetch(url, options);
+      if (!options.body || !stallNext) return result;
+      stallNext = false; signal = options.signal;
+      const saved = await result.json();
+      if (phase === "headers") return new Promise(resolve => { releaseLate = () => resolve(response(saved)); });
+      return {...result, json: () => new Promise(resolve => { releaseLate = () => resolve(saved); })};
+    };
+    try {
+      tree = await mount(); await enterScore(tree); await submit(tree, "hub-score-form");
+      const saved = JSON.parse(stored.get("rr-hub-pending:club"));
+      assert.equal(button(tree, "Checking…").props.disabled, true);
+      await act(async () => expire());
+      assert.equal(signal.aborted, true);
+      assert.match(text(tree.toJSON()), /result is not yet confirmed/);
+      assert.equal(button(tree, "Retry saved action").props.disabled, false);
+      assert.equal(button(tree, "Refresh").props.disabled, false);
+      assert.deepEqual(JSON.parse(stored.get("rr-hub-pending:club")), saved);
+      await unmount(tree); tree = await mount();
+      await click(tree, "Retry saved action");
+      assert.deepEqual(requests.at(-1), saved.body, "Reload and retry preserve payload, expected version, and idempotency key");
+      assert.equal(receipts.size, 1, "A committed score is never applied twice");
+      assert.equal(stored.size, 0);
+      await click(tree, "Court setup"); loseNext = true; await click(tree, "Save court setup");
+      const newer = stored.get("rr-hub-pending:club");
+      await act(async () => releaseLate());
+      assert.equal(stored.get("rr-hub-pending:club"), newer, "Late timed-out responses cannot clear a newer pending action");
+      await click(tree, "Retry saved action");
+    } finally { global.fetch = originalFetch; if (tree) await unmount(tree); }
+  }));
   await scenario("late initial event list preserves a new-event draft", async () => {
     const originalFetch = global.fetch;
     let releaseList, tree;

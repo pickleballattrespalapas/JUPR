@@ -10,7 +10,7 @@ import random
 
 import pytest
 
-from jupr_app.domain.adaptive_play_engine import create_generator_preview, start_generator_event
+from jupr_app.domain.adaptive_play_engine import active_participant_ids, create_generator_preview, start_generator_event
 from jupr_app.domain.round_robin_hub import apply_hub_command, build_hub_snapshot
 
 SEEDS = min(48, max(1, int(os.environ.get("HUB_AUDIT_SEEDS", "48"))))
@@ -147,6 +147,11 @@ def test_seeded_two_group_scheduling_contracts(seed):
         action, payload = choose_command(rng, step, seed, hub, events, view)
         before = deepcopy((hub, events))
         prior_matches = deepcopy(all_matches(events))
+        prior_rounds = {(key, str(match["id"])): int(row["number"])
+                        for key, event in events.items() for row in event["rounds"]
+                        for match in row.get("matches", [])}
+        prior_assignments = {(court[slot]["session_key"], court[slot]["match_id"])
+                             for court in hub["courts"] for slot in ("current", "next") if court.get(slot)}
         paused_refs = {(g["session_key"], p["participant_id"]) for g in view["groups"] for p in g["players"] if p["paused"]}
         trace.append((action, payload))
         try:
@@ -164,13 +169,56 @@ def test_seeded_two_group_scheduling_contracts(seed):
                     assert match_key in after_matches, "recorded history disappeared"
                     new = after_matches[match_key]
                     assert (lineup(old), old.get("scoreA"), old.get("scoreB"), old.get("status")) == (lineup(new), new.get("scoreA"), new.get("scoreB"), new.get("status")), "recorded history changed"
-                if old.get("hubStartedAt"):
-                    assert match_key in after_matches and lineup(after_matches[match_key]) == lineup(old), "released or live started lineup changed"
-                if action == "add_player" and not any((match_key[0], pid) in paused_refs for pid in people(old)):
-                    assert match_key in after_matches and lineup(after_matches[match_key]) == lineup(old), "arrival changed an unaffected announced lineup"
+                key, match_id = match_key
+                number = prior_rounds[match_key]
+                committed = (old.get("hubStartedAt") or match_key in prior_assignments
+                             or match_id in before[1][key].get("hubAssignedMatchIds", [])
+                             or old.get("scoreA") is not None or old.get("scoreB") is not None)
+                if committed:
+                    assert match_key in after_matches and lineup(after_matches[match_key]) == lineup(old), "started, scored, assigned, or reserved lineup changed"
+                # An explicit staff lineup survives routine repairs. A real
+                # departure may unlock it when its selected players leave.
+                if old.get("hubPlanLocked") and people(old) <= set(active_participant_ids(events[key], number)):
+                    assert match_key in after_matches and lineup(after_matches[match_key]) == lineup(old), "active manual lineup changed"
+                if (action == "add_player" and number <= before[1][key]["currentRoundNumber"]
+                        and not any((key, pid) in paused_refs for pid in people(old))):
+                    assert match_key in after_matches and lineup(after_matches[match_key]) == lineup(old), "arrival changed an unaffected current lineup"
             assert_invariants(hub, events, now)
         except Exception as exc:
             pytest.fail(f"seed={seed} step={step} action={action}: {exc}\nRecent trace: {trace[-20:]!r}", pytrace=True)
     assert successful >= STEPS // 2
     if STEPS == 100:
         assert any(e["currentRoundNumber"] > initial_rounds[key] for key, e in events.items()), f"seed {seed}: no round made progress"
+
+
+@pytest.mark.parametrize("count", [15, 29])
+def test_arrivals_mix_the_whole_next_roster_without_replacing_current_games(count):
+    """Growing arrival cohorts must not become permanent four-player pools."""
+    event = start_generator_event(create_generator_preview(
+        generator_kind="round_robin", play_format="doubles", title="Arrivals",
+        participant_names=[f"Original {n}" for n in range(4)], court_count=0, total_rounds=20))
+    hub = {"id": "arrival-audit", "groups": [], "players": {}, "courts": [
+        {"id": "c1", "label": "Court 1", "open": True, "current": None, "next": None,
+         "dedicated_session_key": None}]}
+    hub, events = apply_hub_command(hub, {"a": event}, action="add_group",
+        payload={"session_key": "a"}, now=START.isoformat())
+    hub, events = apply_hub_command(hub, events, action="auto_fill_courts", payload={}, now=START.isoformat())
+    for index in range(4, count):
+        current_games = deepcopy(events["a"]["rounds"][0]["matches"])
+        hub, events = apply_hub_command(hub, events, action="add_player",
+            payload={"session_key": "a", "name": f"Arrival {index}"}, now=START.isoformat())
+        value = events["a"]
+        assert [row["number"] for row in value["rounds"]] == [1, 2]
+        assert all(match in value["rounds"][0]["matches"] for match in current_games)
+        planned = value["rounds"][1]
+        seats = [pid for match in planned["matches"] for pid in people(match)]
+        byes = planned["byeParticipantIds"]
+        assert len(seats) == len(set(seats)) and not set(seats) & set(byes)
+        assert set(seats + byes) == set(active_participant_ids(value, 2))
+        assert len(planned["matches"]) == (index + 1) // 4
+        assert_invariants(hub, events, START.isoformat())
+    current = events["a"]["rounds"][0]
+    planned = events["a"]["rounds"][1]
+    current_foursomes = {frozenset(people(match)) for match in current["matches"]}
+    assert all(frozenset(people(match)) not in current_foursomes for match in planned["matches"])
+    assert not set(current["byeParticipantIds"]) & set(planned["byeParticipantIds"])

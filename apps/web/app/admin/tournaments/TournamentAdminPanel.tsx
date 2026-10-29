@@ -1,8 +1,8 @@
 "use client";
 
-import Link from "next/link";
+import Link, { NavigationFeedback } from "@/components/NavigationLink";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import type {
   AdminTournament,
   AdminTournamentListResponse,
@@ -54,6 +54,7 @@ function tournamentHomeHref(tournament: AdminTournament): string {
 
 export default function TournamentAdminPanel({ apiBase, clubId, status }: Props) {
   const router = useRouter();
+  const [navigating, startNavigation] = useTransition();
   const { accessToken, loading: sessionLoading } = useAdminSession();
   const [includeArchived, setIncludeArchived] = useState(false);
   const [tournaments, setTournaments] = useState<AdminTournament[]>([]);
@@ -101,7 +102,7 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
 
   function selectTournament(tournamentId: string) {
     const tournament = tournaments.find((row) => row.id === tournamentId);
-    if (tournament) router.push(tournamentHomeHref(tournament));
+    if (tournament) startNavigation(() => router.push(tournamentHomeHref(tournament)));
   }
 
   useAuthenticatedAutoLoad(status.enabled ? `${accessToken}\u0000${includeArchived ? "archived" : "active"}` : "", loadTournaments);
@@ -128,6 +129,7 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "1rem" }}>
+      {navigating ? <NavigationFeedback /> : null}
       <article style={{ ...cardStyle, background: "#eff6ff", borderColor: "#bfdbfe" }}>
         <h2 style={{ marginTop: 0 }}>Create tournament</h2>
         <p style={{ color: "#475569" }}>Create a draft tournament shell, then complete setup from its tournament home.</p>
@@ -138,7 +140,7 @@ export default function TournamentAdminPanel({ apiBase, clubId, status }: Props)
         <h2 style={{ marginTop: 0 }}>Open tournament</h2>
         <label>
           <strong>Select tournament</strong><br />
-          <select defaultValue="" onChange={(event) => selectTournament(event.target.value)} disabled={busy} style={inputStyle}>
+          <select defaultValue="" onChange={(event) => selectTournament(event.target.value)} disabled={busy || navigating} style={inputStyle}>
             <option value="">Choose a tournament</option>
             {tournaments.map((tournament) => (
               <option key={tournament.id} value={tournament.id}>

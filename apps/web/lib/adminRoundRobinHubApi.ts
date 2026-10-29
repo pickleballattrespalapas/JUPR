@@ -1,5 +1,9 @@
 export type HubCourtConfig = { id: string; label: string; dedicated_session_key: string | null; open: boolean };
-export type HubPlayer = { id: string; name: string; display_name?: string; identity: string };
+export type HubPlayerReadiness = {
+  ready: boolean; current_court: HubPlayerCourt | null; reserved_court: HubPlayerCourt | null;
+  paused: boolean; waiting_round_number: number | null; identity_review: boolean; duplicate_in_match: boolean;
+};
+export type HubPlayer = { id: string; name: string; display_name?: string; identity: string; readiness?: HubPlayerReadiness };
 export type HubPlayerCourt = { session_key: string; group_title: string; court_id: string; court_label: string };
 export type HubMatch = {
   session_key: string; match_id: string; round_number: number; side_a: HubPlayer[]; side_b: HubPlayer[];
@@ -7,6 +11,7 @@ export type HubMatch = {
   court_id?: string | null; reserved_court_id?: string | null; score_a?: number | null; score_b?: number | null;
   can_edit_players?: boolean; edit_players_unavailable_reason?: string | null;
   result_status?: "pending" | "played" | "not_played"; not_played_reason?: string | null;
+  plan_locked?: boolean;
 };
 export type HubCourt = HubCourtConfig & { current: HubMatch | null; next: HubMatch | null };
 export type HubGroupPlayer = {
@@ -18,8 +23,10 @@ export type HubGroupPlayer = {
   current_court?: HubPlayerCourt | null; reserved_court?: HubPlayerCourt | null;
   playing_elsewhere?: boolean; reserved_elsewhere?: boolean; remove_effective_round?: number;
   on_bye?: boolean; can_remove?: boolean; remove_unavailable_reason?: string | null;
+  remove_affected_match_ids?: string[];
 };
 export type HubGroup = {
+  supplemental?: boolean; standings_policy?: string;
   registration_driven?: boolean; minimum_players?: number; active_player_count?: number;
   upcoming_player_count?: number; departed_player_count?: number; roster_entry_count?: number;
   add_player_effective_round?: number;
@@ -32,6 +39,10 @@ export type HubGroup = {
   can_remove_player?: boolean; remove_player_unavailable_reason?: string | null;
   can_finish?: boolean; finish_unavailable_reason?: string | null; finish_requested?: boolean;
   finish_after_round?: number | null; finish_boundary_round?: number | null; finish_pending_matches?: number;
+  finish_round_options?: Array<{ round_number: number; pending_matches: number }>;
+  planned_through_round?: number; next_round_number?: number | null; plan_revision?: number;
+  next_round_byes?: HubPlayer[];
+  next_round_matches?: HubMatch[];
 };
 export type HubWaitingPlayer = {
   identity: string; name: string; display_name?: string; paused: boolean; wait_seconds: number; session_keys: string[];
@@ -62,7 +73,7 @@ export type HubDetailResponse = { ok: boolean; hub: HubSummary; workspace: HubWo
 export type HubCommandAction = "add_group" | "remove_group" | "configure_courts" | "assign_next_court" |
   "assign_game" | "reserve_game_for_court" | "cancel_reservation" | "move_game" | "release_game" |
   "score_and_release" | "mark_played" | "pause_player" | "resume_player" | "advance_round" | "finish_hub" | "finish_group" | "auto_fill_courts" |
-  "resolve_identities" | "add_player" | "remove_player" | "transfer_player" | "rejoin_player" | "resolve_game" | "set_registration" | "review_checkin" | "process_checkins" | "edit_match_players";
+  "resolve_identities" | "add_player" | "remove_player" | "remove_players" | "transfer_player" | "rejoin_player" | "resolve_game" | "set_registration" | "review_checkin" | "process_checkins" | "edit_match_players" | "set_match_lineup" | "create_extra_game";
 export type HubCommand = {
   action: HubCommandAction; payload: Record<string, unknown>; expected_version: string | number; idempotency_key: string;
 };
@@ -82,15 +93,33 @@ function errorText(detail: unknown): string {
 export async function requestRoundRobinHub<T>(
   apiBase: string, clubId: string, accessToken: string, suffix = "", body?: unknown
 ): Promise<T> {
-  const response = await fetch(`${apiBase.replace(/\/$/, "")}/admin/clubs/${encodeURIComponent(clubId)}/round-robin-hubs${suffix}`, {
-    method: body === undefined ? "GET" : "POST", cache: "no-store",
-    headers: { Authorization: `Bearer ${accessToken}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) })
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      // A timeout cannot tell us whether a write committed. Keep its exact
+      // pending request so the panel can safely retry the same operation.
+      reject(new RoundRobinHubApiError("The hub request timed out. Please check your connection and retry.", 408));
+      controller.abort();
+    }, 30_000);
   });
-  const payload = await response.json().catch(() => null);
-  if (!response.ok) throw new RoundRobinHubApiError(errorText(payload?.detail), response.status);
-  if (!payload?.ok) throw new RoundRobinHubApiError("We could not confirm the action. Retry the same action to check its result.", 502);
-  return payload as T;
+  try {
+    return await Promise.race([timeout, (async () => {
+      const response = await fetch(`${apiBase.replace(/\/$/, "")}/admin/clubs/${encodeURIComponent(clubId)}/round-robin-hubs${suffix}`, {
+        method: body === undefined ? "GET" : "POST", cache: "no-store", signal: controller.signal,
+        headers: { Authorization: `Bearer ${accessToken}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) })
+      });
+      // Bound body reads too: receiving headers does not guarantee the response
+      // finishes. The race also releases the UI if an abort is not honored.
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new RoundRobinHubApiError(errorText(payload?.detail), response.status);
+      if (!payload?.ok) throw new RoundRobinHubApiError("We could not confirm the action. Retry the same action to check its result.", 502);
+      return payload as T;
+    })()]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export function hubOperationKey(): string {

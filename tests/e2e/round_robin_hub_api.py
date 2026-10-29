@@ -26,10 +26,11 @@ def rpc(name, params):
         return original_rpc(name, params)
 
     def execute():
-        transactional.storage = database.db
-        result = transactional.rpc(name, params).execute()
-        database.db = transactional.storage
-        return result
+        with generator.database_lock:
+            transactional.storage = database.db
+            result = transactional.rpc(name, params).execute()
+            database.db = transactional.storage
+            return result
 
     return SimpleNamespace(execute=execute)
 
@@ -53,9 +54,10 @@ def notifications(club_id: str):
 @app.get("/hub-fixture-result")
 def result():
     # Public serializers omit organizer secrets and submission recovery data.
-    return {
-        **generator.result(),
-        "hubs": [hub_service.get_round_robin_hub(database, club_id="club", hub_id=row["id"])
-                 for row in database.db[hub_service.HUB_TABLE]],
-        "rpc_calls": len(transactional.calls),
-    }
+    with generator.database_lock:
+        return {
+            **generator.result(),
+            "hubs": [hub_service.get_round_robin_hub(database, club_id="club", hub_id=row["id"])
+                     for row in database.db[hub_service.HUB_TABLE]],
+            "rpc_calls": len(transactional.calls),
+        }

@@ -4,6 +4,8 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import logging
+from time import perf_counter
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
@@ -12,6 +14,7 @@ from jupr_app.services.public_live_operation_service import PublicLiveConflictEr
 
 HUB_TABLE = "round_robin_hubs"
 OPERATION_TABLE = "round_robin_hub_operations"
+logger = logging.getLogger(__name__)
 class HubCommitRejectedError(ValueError):
     """Hub validation or an aborted transaction committed no domain change."""
 
@@ -92,6 +95,8 @@ def list_round_robin_hubs(db: Any, *, club_id: str) -> dict[str, Any]:
         state, event = row.get("state") or {}, _event(row)
         if state.get("mode") not in GENERATOR_MODES or event.get("generatorKind") != "round_robin" or _is_locked(row):
             continue
+        if event.get("hubSupplementalDraft"):
+            continue  # Only the exact original extra-game request may attach its draft.
         if state.get("mode") == "public_play_generator" and row.get("expires_at"):
             if datetime.fromisoformat(str(row["expires_at"]).replace("Z", "+00:00")) < datetime.now(timezone.utc):
                 continue
@@ -234,6 +239,8 @@ def command_round_robin_hub(db: Any, *, club_id: str, hub_id: str, action: str,
                            payload: dict[str, Any], expected_version: int,
                            idempotency_key: str, actor_email: str) -> dict[str, Any]:
     from jupr_app.domain.round_robin_hub import apply_hub_command
+    started = perf_counter()
+    requested_action = action
     fingerprint = _fingerprint({"action": action, "payload": payload, "expected_version": expected_version})
     if _replayed(db, club_id, hub_id, idempotency_key, fingerprint):
         return {**get_round_robin_hub(db, club_id=club_id, hub_id=hub_id), "replayed": True}
@@ -248,8 +255,11 @@ def command_round_robin_hub(db: Any, *, club_id: str, hub_id: str, action: str,
         keys = list(dict.fromkeys([*keys, str(payload.get("session_key") or "")]))
     sessions = _session_rows(db, club_id, keys)
     events = {key: _event(value) for key, value in sessions.items()}
+    loaded = perf_counter()
     if action == "add_group":
         candidate = sessions[str(payload["session_key"])]
+        if events[str(payload["session_key"])].get("hubSupplementalDraft"):
+            raise ValueError("Retry the saved extra-game action to finish preparing this game.")
         intended_hub = events[str(payload["session_key"])].get("hubRegistrationTargetId")
         if intended_hub and intended_hub != hub_id:
             raise ValueError("This round robin was created for another event.")
@@ -272,6 +282,18 @@ def command_round_robin_hub(db: Any, *, club_id: str, hub_id: str, action: str,
         from jupr_app.services.round_robin_hub_registration_service import process_automatic_checkins
         state, events = process_automatic_checkins(db, row=row, state=state, sessions=sessions,
             events=events, now=_now())
+    elif action == "create_extra_game":
+        source_keys = {str(ref.get("session_key") or "")
+            for side in ("side_a", "side_b") for ref in payload.get(side) or []}
+        if not source_keys or not source_keys <= set(sessions):
+            raise ValueError("Choose players from round robins attached to this event.")
+        if any(_is_locked(sessions[key]) for key in source_keys):
+            raise ValueError("Submitted results are locked for administrator review.")
+        from jupr_app.services.hub_extra_game_service import prepare_extra_game
+        draft, state, events = prepare_extra_game(db, club_id=club_id, hub_id=hub_id,
+            hub=state, events=events, payload=payload, operation_key=idempotency_key,
+            request_fingerprint=fingerprint, actor_email=actor_email, now=_now())
+        sessions[str(draft["session_key"])] = draft
     elif action is None:
         pass  # Check-in confirmation/dismissal is saved with the same hub CAS.
     elif action == "set_registration":
@@ -301,7 +323,7 @@ def command_round_robin_hub(db: Any, *, club_id: str, hub_id: str, action: str,
         # Court planning must not rewrite submitted siblings, even when the
         # command targets another group or only changes hub availability.
         command_payload = {**payload, "excluded_session_keys": [key for key, session in sessions.items() if _is_locked(session)]}
-        if action in {"add_player", "remove_player", "edit_match_players"}:
+        if action in {"add_player", "remove_player", "remove_players", "edit_match_players", "set_match_lineup"}:
             if target_key not in sessions:
                 raise ValueError("Choose a round robin attached to this hub.")
             if sessions[target_key].get("status") != "active":
@@ -317,10 +339,21 @@ def command_round_robin_hub(db: Any, *, club_id: str, hub_id: str, action: str,
                 command_payload["name"] = str(player.get("name") or "").strip()
         state, events = apply_hub_command(state, events, action=action, payload=command_payload, now=_now())
     status = _status_after_sessions(status, state, events)
+    planned = perf_counter()
     _rpc_commit(db, club_id=club_id, hub_id=hub_id, expected_version=expected_version,
                 operation_key=idempotency_key, fingerprint=fingerprint, title=str(row["title"]),
                 status=status, state=state, sessions=_read_set(sessions, events, state, hub_id), actor_email=actor_email)
-    return get_round_robin_hub(db, club_id=club_id, hub_id=hub_id)
+    committed = perf_counter()
+    result = get_round_robin_hub(db, club_id=club_id, hub_id=hub_id)
+    finished = perf_counter()
+    # Counts and durations identify scheduling versus persistence delays without
+    # logging names, submitted scores, auth tokens, or command payloads.
+    logger.info("round_robin_hub_command action=%s groups=%d roster_entries=%d "
+        "read_ms=%.1f prepare_ms=%.1f commit_ms=%.1f response_ms=%.1f total_ms=%.1f",
+        requested_action, len(events), sum(len(e.get("participants") or []) for e in events.values()),
+        (loaded - started) * 1000, (planned - loaded) * 1000, (committed - planned) * 1000,
+        (finished - committed) * 1000, (finished - started) * 1000)
+    return result
 
 
 def persist_linked_generator_patch(db: Any, *, before: dict[str, Any], patch: dict[str, Any],
@@ -346,6 +379,8 @@ def persist_linked_generator_patch(db: Any, *, before: dict[str, Any], patch: di
         before_events = {key: _event(value) for key, value in sessions.items()}
         after_events = copy.deepcopy(before_events)
         after_events[session_key] = _event({**current, **patch})
+        from jupr_app.domain.hub_supplemental_policy import validate_supplemental_update
+        validate_supplemental_update(before_events[session_key], after_events[session_key])
         if row.get("status") == "completed" and after_events[session_key].get("status") != "completed":
             raise ValueError("This hub is complete. Create a new event before starting more games.")
         state, after_events = reconcile_hub_events(state, before_events, after_events, now=_now(),

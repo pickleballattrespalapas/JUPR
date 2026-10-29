@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import NavigationLink from "./NavigationLink";
 import { usePathname } from "next/navigation";
 import { createContext, useContext, type ComponentProps, type ReactNode } from "react";
 import { canLinkClubPage, type PageNavigationSettings } from "@/lib/clubSite";
@@ -13,8 +14,14 @@ export function ClubPageNavigationProvider({ slug, settings, children }: {
 
 export default function PublicClubLink({ children, ...props }: ComponentProps<typeof Link>) {
   const context = useContext(NavigationContext);
-  if (!context) return <Link {...props}>{children}</Link>;
+  if (!context) return <PublicPageLink {...props}>{children}</PublicPageLink>;
   return <ClubLink context={context} {...props}>{children}</ClubLink>;
+}
+
+function PublicPageLink({ children, ...props }: ComponentProps<typeof Link>) {
+  const href = typeof props.href === "string" ? props.href : props.href.pathname || "";
+  const PageLink = /^\/clubs\/[^/]+\/tournament(?:s|-[^/?#]+)(?:[/?#]|$)/.test(href) ? NavigationLink : Link;
+  return <PageLink {...props}>{children}</PageLink>;
 }
 
 function ClubLink({ context, children, ...props }: ComponentProps<typeof Link> & {
@@ -28,5 +35,5 @@ function ClubLink({ context, children, ...props }: ComponentProps<typeof Link> &
     const recordLink = /\/(players|matches)\/[^/?#]+/.test(href);
     return recordLink ? <span>{children}</span> : null;
   }
-  return <Link {...props}>{children}</Link>;
+  return <PublicPageLink {...props}>{children}</PublicPageLink>;
 }

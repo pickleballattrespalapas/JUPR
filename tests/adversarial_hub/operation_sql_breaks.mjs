@@ -30,6 +30,7 @@ try {
     '20261020033713_round_robin_hub_atomic_operations.sql',
     '20261020161332_round_robin_hub_participant_identities.sql',
     '20261023052802_round_robin_operation_recovery.sql',
+    '20261028230610_round_robin_hub_shared_courts.sql',
   ]) await db.exec(fs.readFileSync(path.join(root, 'supabase/migrations', name), 'utf8'));
   await db.exec('set role service_role');
   const hubId = '71000000-0000-4000-8000-000000000001';

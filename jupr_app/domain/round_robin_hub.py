@@ -147,16 +147,20 @@ def _complete(match: dict[str, Any], event: dict[str, Any]) -> bool:
     return match.get("scoreA") is not None and match.get("scoreB") is not None
 
 
-def _committed_match(event: dict[str, Any], match: dict[str, Any]) -> bool:
+def _actually_committed_match(event: dict[str, Any], match: dict[str, Any]) -> bool:
     """A court release does not undo a dispatch or erase a recorded lineup."""
     return (str(match.get("id")) in (event.get("hubAssignedMatchIds") or [])
             or bool(match.get("hubStartedAt")) or _complete(match, event)
             or match.get("scoreA") is not None or match.get("scoreB") is not None)
 
 
+def _committed_match(event: dict[str, Any], match: dict[str, Any]) -> bool:
+    return _actually_committed_match(event, match) or bool(match.get("hubPlanLocked"))
+
+
 def _departure_round(event: dict[str, Any], participant_id: str) -> int:
     committed_rounds = [int(row["number"]) for row in event.get("rounds") or [] for match in _matches(row)
-        if _committed_match(event, match) and any(str(p["id"]) == participant_id for p in _participants(event, match))]
+        if _actually_committed_match(event, match) and any(str(p["id"]) == participant_id for p in _participants(event, match))]
     current = int(event.get("currentRoundNumber") or 1)
     return max(current, max(committed_rounds, default=current - 1) + 1)
 
@@ -201,8 +205,18 @@ def _court(hub: dict[str, Any], court_id: str) -> dict[str, Any]:
 
 
 def _allowed(hub: dict[str, Any], session_key: str) -> list[str]:
-    dedicated = [c for c in hub.get("courts") or [] if c.get("dedicated_session_key") == session_key]
-    return [str(c["id"]) for c in (dedicated or [c for c in hub.get("courts") or [] if not c.get("dedicated_session_key")]) if c.get("open", True)]
+    # A dedication excludes other groups; its owner can still use shared courts.
+    courts = [c for c in hub.get("courts") or [] if c.get("open", True)]
+    dedicated = [c for c in courts if c.get("dedicated_session_key") == session_key]
+    shared = [c for c in courts if not c.get("dedicated_session_key")]
+    return [str(c["id"]) for c in dedicated + shared]
+
+
+def _next_open_court(hub: dict[str, Any], allowed: list[str]) -> dict[str, Any] | None:
+    # Prefer the group's dedicated courts, preserving shared capacity for others.
+    courts = {str(c["id"]): c for c in hub.get("courts") or []}
+    return next((courts[cid] for cid in allowed
+                 if not courts[cid].get("current") and not courts[cid].get("next")), None)
 
 
 def _wait(player: dict[str, Any], now: str) -> float:
@@ -421,6 +435,8 @@ def _claims(hub: dict[str, Any], events: dict[str, dict[str, Any]]) -> dict[str,
 def _roster_change_unavailable_reason(event: dict[str, Any]) -> str | None:
     if event.get("status") != "active":
         return "Roster changes require an active round robin."
+    if event.get("hubSupplemental"):
+        return "An exhibition keeps its selected four players."
     if is_moneyball(event):
         return "Moneyball’s starting lineup is fixed. Use the generator for substitutions."
     if event.get("playoff"):
@@ -464,7 +480,8 @@ def _finish_details(event: dict[str, Any]) -> dict[str, Any]:
     assigned = set(event.get("hubAssignedMatchIds") or [])
     touched = [int(r["number"]) for r in event.get("rounds") or []
         if r.get("status") in {"saved", "played"} or r.get("hubStartedAt") or any(
-            str(m["id"]) in assigned or m.get("hubStartedAt") or _complete(m, event) for m in _matches(r))]
+            str(m["id"]) in assigned or m.get("hubStartedAt") or _complete(m, event)
+            or m.get("scoreA") is not None or m.get("scoreB") is not None for m in _matches(r))]
     boundary = max(touched, default=0)
     if is_moneyball(event) or event.get("playoff"):
         boundary = max((int(r["number"]) for r in event.get("rounds") or []), default=boundary)
@@ -473,15 +490,144 @@ def _finish_details(event: dict[str, Any]) -> dict[str, Any]:
         boundary = int(requested)
     pending = sum(not _complete(m, event) for r in event.get("rounds") or []
         if int(r["number"]) <= boundary and r.get("status") != "skipped" for m in _matches(r))
+    current = int(event.get("currentRoundNumber") or 1)
+    options = {boundary}
+    if not is_moneyball(event) and not event.get("playoff"):
+        options.update(int(r["number"]) for r in event.get("rounds") or []
+            if int(r["number"]) in {current, current + 1} and int(r["number"]) >= boundary
+            and int(r["number"]) <= int(event.get("hubPreparedThroughRound") or current)
+            and r.get("status") != "skipped")
     return {"can_finish": event.get("status") == "active" and requested is None,
         "finish_unavailable_reason": ("This round robin is already finishing." if requested is not None
             else "This round robin is complete." if event.get("status") != "active" else None),
         "finish_requested": requested is not None, "finish_after_round": requested,
-        "finish_boundary_round": boundary, "finish_pending_matches": pending}
+        "finish_boundary_round": boundary, "finish_pending_matches": pending,
+        "finish_round_options": [{"round_number": number, "pending_matches": sum(not _complete(m, event)
+            for r in event.get("rounds") or [] if int(r["number"]) <= number and r.get("status") != "skipped"
+            for m in _matches(r))} for number in sorted(options)]}
+
+
+def _trim_replaceable_hub_previews(event: dict[str, Any]) -> None:
+    """Retain history and commitments; an unlocked distant preview is not a promise."""
+    horizon = int(event.get("currentRoundNumber") or 1) + 1
+    retained = []
+    for row in event.get("rounds") or []:
+        number = int(row["number"])
+        if number <= horizon or row.get("status") != "preview":
+            retained.append(row)
+            continue
+        active = set(active_participant_ids(event, number))
+        people = lambda match: set(map(str, (match.get("sideA") or match.get("teamA") or [])
+            + (match.get("sideB") or match.get("teamB") or [])))
+        matches = _matches(row)
+        protected = [m for m in matches if _actually_committed_match(event, m)
+            or (m.get("hubPlanLocked") and people(m) <= active)]
+        invalid_locks = [m for m in matches if m.get("hubPlanLocked") and m not in protected]
+        if invalid_locks:
+            event.setdefault("hubPlanAdjustments", []).append({"reason": "player_departure", "round": number,
+                "unlockedMatchIds": [str(m["id"]) for m in invalid_locks]})
+        if not protected:
+            continue
+        if len(protected) != len(matches):
+            # Keep the actual promise, not the unrelated old cohort templates
+            # around it. Fill this round's remainder when it enters the window.
+            row["matches"] = protected
+            row.pop("courts", None)
+            row["hubPlanPartial"] = True
+            playing = {pid for match in protected for pid in people(match)}
+            row["byeParticipantIds"] = sorted(active - playing)
+            from jupr_app.domain.adaptive_play_engine import generator_match_play_format
+            row["formatCounts"] = {kind: sum(generator_match_play_format(m, event.get("playFormat") or "doubles") == kind
+                for m in protected) for kind in ("doubles", "singles")}
+        retained.append(row)
+    event["rounds"] = retained
+
+
+def _plan_hub_round(event: dict[str, Any], number: int, *, preserve_unaffected: bool = False) -> None:
+    """Choose a complete group rotation before results or court speed can affect it."""
+    from jupr_app.domain.adaptive_play_engine import (
+        _apply_match_history, _doubles_round, _singles_round, _mixed_round,
+        generator_match_play_format, history_before_round,
+    )
+
+    row = next((r for r in event.get("rounds") or [] if int(r["number"]) == number), None)
+    if row is not None and row.get("status") in {"saved", "played", "skipped"}:
+        return
+    active = list(active_participant_ids(event, number))
+    active_set = set(active)
+    people = lambda match: {str(pid) for pid in
+        (match.get("sideA") or match.get("teamA") or []) + (match.get("sideB") or match.get("teamB") or [])}
+    unlocked = [m for m in _matches(row or {}) if m.get("hubPlanLocked")
+        and not _actually_committed_match(event, m) and not people(m) <= active_set]
+    if unlocked:
+        event.setdefault("hubPlanAdjustments", []).append({"reason": "player_departure", "round": number,
+            "unlockedMatchIds": [str(m["id"]) for m in unlocked]})
+    kept = [m for m in _matches(row or {}) if _actually_committed_match(event, m)
+        or (m.get("hubPlanLocked") and people(m) <= active_set)
+        or (preserve_unaffected and people(m) <= active_set)]
+    occupied = {pid for match in kept for pid in people(match)}
+    later = {pid for r in event.get("rounds") or [] if int(r["number"]) > number
+        for m in _matches(r) if _actually_committed_match(event, m) for pid in people(m)}
+    waiting = [pid for pid in active if pid not in occupied and pid not in later]
+    deferred = [pid for pid in active if pid not in occupied and pid in later]
+    history = history_before_round(event, number, include_preview=True)
+    play_format = event.get("playFormat") or "doubles"
+    for match in kept:
+        _apply_match_history(history, match, play_format)
+    roster_pos = {str(p["id"]): int(p.get("roster_order") or 0) for p in event.get("participants") or []}
+    if play_format == "doubles_singles":
+        counts = {kind: sum(generator_match_play_format(m, play_format) == kind for m in kept)
+            for kind in ("doubles", "singles")}
+        generated, byes, warnings, _ = _mixed_round(active_ids=waiting,
+            doubles_court_count=max(0, int(event.get("doublesCourtCount") or 0) - counts["doubles"]),
+            singles_court_count=max(0, int(event.get("singlesCourtCount") or 0) - counts["singles"]),
+            history=history, roster_pos=roster_pos, round_number=number)
+    else:
+        generate = _singles_round if play_format == "singles" else _doubles_round
+        options = {} if play_format == "singles" else {"search_attempts": 64, "subset_attempts": 4}
+        generated, byes, warnings = generate(active_ids=waiting, court_count=0,
+            history=history, roster_pos=roster_pos, round_number=number, **options)
+    revision = int(event.get("hubPlanRevision") or 0) + 1
+    event["hubPlanRevision"] = revision
+    offset = max((int(m.get("court") or 0) for m in kept), default=0)
+    for index, match in enumerate(generated, 1):
+        match.update(id=f"hub-plan-v{revision}-r{number}-m{index}", court=offset + index)
+    if row is None:
+        row = {"number": number, "status": "preview", "savedAt": None, "skippedAt": None}
+        event.setdefault("rounds", []).append(row)
+    row.update(matches=[*kept, *generated], byeParticipantIds=list(dict.fromkeys([*byes, *deferred])),
+        warnings=warnings, hubPlanRevision=revision)
+    row.pop("hubPlanPartial", None)
+    row.pop("courts", None)
+    row["formatCounts"] = {kind: sum(generator_match_play_format(m, play_format) == kind for m in row["matches"])
+        for kind in ("doubles", "singles")}
+    event.setdefault("rosterByRound", {})[str(number)] = active
+    event["rounds"].sort(key=lambda item: int(item["number"]))
+    event["totalRounds"] = max(int(event.get("totalRounds") or 0), number)
+
+
+def repair_hub_roster_plan(event: dict[str, Any], *, from_round: int | None = None) -> dict[str, Any]:
+    """Repair one roster transaction without freezing old arrival cohorts."""
+    result = deepcopy(event)
+    if is_moneyball(result) or result.get("playoff") or result.get("generatorKind") != "round_robin":
+        return result
+    _trim_replaceable_hub_previews(result)
+    current = int(result.get("currentRoundNumber") or 1)
+    first = current if from_round is None else max(current, from_round)
+    boundary = result.get("hubFinishAfterRound")
+    numbers = {current, current + 1}
+    for number in sorted(numbers):
+        if number < first or (boundary is not None and number > int(boundary)):
+            continue
+        _plan_hub_round(result, number, preserve_unaffected=number == current)
+    result["hubPlanVersion"] = 1
+    result["hubRollingEnabled"] = True
+    result["hubPreparedThroughRound"] = max(int(r["number"]) for r in result["rounds"])
+    return result
 
 
 def _prepare_rolling_rounds(event: dict[str, Any]) -> dict[str, Any]:
-    """Plan independently of court availability, keeping every existing template."""
+    """Keep the current round and one stable full-group successor ready."""
     from jupr_app.domain.adaptive_play_engine import prepare_hub_round
 
     result = deepcopy(event)
@@ -489,7 +635,9 @@ def _prepare_rolling_rounds(event: dict[str, Any]) -> dict[str, Any]:
     result["hubPreparedThroughRound"] = max((int(r["number"]) for r in result.get("rounds") or []
         if all((m.get("sideA") or m.get("teamA")) and (m.get("sideB") or m.get("teamB")) for m in _matches(r))),
         default=int(result.get("currentRoundNumber") or 1))
-    if result.get("status") != "active" or result.get("hubFinishAfterRound") is not None:
+    boundary = result.get("hubFinishAfterRound")
+    if result.get("status") != "active" or (boundary is not None
+            and (is_moneyball(result) or result.get("playoff"))):
         return result
     if result.get("playoff"):
         for row in result.get("rounds") or []:
@@ -504,21 +652,17 @@ def _prepare_rolling_rounds(event: dict[str, Any]) -> dict[str, Any]:
         return result
     if is_moneyball(result):
         return result
-    # Each participant needs a next game, including anyone with a bye. A
-    # paused player keeps their plan; pausing never rerolls other matchups.
-    for _ in range(40):
-        latest = max((int(r["number"]) for r in result.get("rounds") or []), default=0)
-        upcoming = set(active_participant_ids(result, latest + 1))
-        pending = {str(pid) for r in result.get("rounds") or [] if r.get("status") in {"active", "preview"}
-            for m in _matches(r) if not _complete(m, result)
-            for pid in (m.get("sideA") or m.get("teamA") or []) + (m.get("sideB") or m.get("teamB") or [])}
-        if not upcoming - pending:
-            break
-        candidate = prepare_hub_round(result, latest + 1)
-        if not _matches(_round(candidate, latest + 1)):
-            break
-        result = candidate
-        result["hubPreparedThroughRound"] = latest + 1
+    _trim_replaceable_hub_previews(result)
+    current = int(result.get("currentRoundNumber") or 1)
+    if _round(result, current).get("hubPlanPartial") and (boundary is None or current <= int(boundary)):
+        _plan_hub_round(result, current)
+    upcoming = current + 1
+    next_row = next((r for r in result["rounds"] if int(r["number"]) == upcoming), None)
+    if (boundary is None or upcoming <= int(boundary)) and (
+            result.get("hubPlanVersion") != 1 or next_row is None or next_row.get("hubPlanPartial")):
+        _plan_hub_round(result, upcoming)
+    result["hubPlanVersion"] = 1
+    result["hubPreparedThroughRound"] = max(int(r["number"]) for r in result["rounds"])
     return result
 
 
@@ -578,8 +722,7 @@ def _repair_paused_waiting_games(hub: dict[str, Any], events: dict[str, dict[str
             + (match.get("sideB") or match.get("teamB") or [])]
 
     def protected(key: str, match: dict[str, Any], event: dict[str, Any]) -> bool:
-        return ((key, str(match["id"])) in assigned or _complete(match, event) or bool(match.get("hubStartedAt"))
-            or match.get("scoreA") is not None or match.get("scoreB") is not None)
+        return (key, str(match["id"])) in assigned or _committed_match(event, match)
 
     def distinct(ids: list[str], identities: dict[str, str]) -> list[str]:
         seen: set[str] = set()
@@ -841,6 +984,13 @@ def build_hub_snapshot(hub: dict[str, Any], events: dict[str, dict[str, Any]], *
             "roster_entry_count": len(event.get("participants") or []),
             "add_player_effective_round": int(row["number"]),
             "current_round_number": int(row["number"]), "round_status": row.get("status"),
+            "planned_through_round": int(event.get("hubPreparedThroughRound") or row["number"]),
+            "next_round_number": next((int(r["number"]) for r in event.get("rounds") or []
+                if int(r["number"]) == int(row["number"]) + 1 and r.get("status") != "skipped"), None),
+            "plan_revision": int(event.get("hubPlanRevision") or 0),
+            "next_round_matches": [],
+            "supplemental": bool(event.get("hubSupplemental")),
+            "standings_policy": "exhibition" if event.get("hubSupplemental") else "group",
             "total_rounds": int(event.get("totalRounds") or len(event.get("rounds") or [])),
             "completed_matches": completed, "total_matches": len(_matches(row)),
             "played_matches": sum(_complete(m, event) and m.get("status") != "not_played" for m in _matches(row)),
@@ -858,8 +1008,8 @@ def build_hub_snapshot(hub: dict[str, Any], events: dict[str, dict[str, Any]], *
         by_id = {str(p["id"]): p for p in event.get("participants") or []}
         for participant in event.get("participants") or []:
             identity = player_identity(participant, key, state)
-            can_remove = remove_unavailable is None and _can_remove_participant(event, participant)
             upcoming = _can_remove_participant(event, participant)
+            can_remove = remove_unavailable is None and upcoming
             is_active = str(participant["id"]) in active
             membership_status = "active" if is_active else ("upcoming" if upcoming else "departed")
             if not is_active:
@@ -884,6 +1034,10 @@ def build_hub_snapshot(hub: dict[str, Any], events: dict[str, dict[str, Any]], *
                 "can_rejoin": add_unavailable is None and _can_rejoin_profile(event, key, state, identity, claims),
                 "can_remove": can_remove,
                 "remove_effective_round": _departure_round(event, str(participant["id"])),
+                "remove_affected_match_ids": [str(m["id"]) for r in event.get("rounds") or []
+                    if int(r["number"]) >= _departure_round(event, str(participant["id"]))
+                    for m in _matches(r) if not _actually_committed_match(event, m)
+                    and str(participant["id"]) in (m.get("sideA") or m.get("teamA") or []) + (m.get("sideB") or m.get("teamB") or [])],
                 "membership_status": membership_status,
                 "current_court": current_court, "reserved_court": reserved_court,
                 "on_court": on_court, "reserved": reserved_here,
@@ -897,6 +1051,10 @@ def build_hub_snapshot(hub: dict[str, Any], events: dict[str, dict[str, Any]], *
                 "inactive_rounds": list(participant.get("inactive_rounds") or []),
                 **{field: info[field] for field in ("paused", "wait_seconds")},
             })
+        next_round = next((r for r in event.get("rounds") or []
+            if int(r["number"]) == groups[-1]["next_round_number"]), {})
+        next_byes = set(map(str, next_round.get("byeParticipantIds") or []))
+        groups[-1]["next_round_byes"] = [p for p in groups[-1]["players"] if p["participant_id"] in next_byes]
         planned = sorted((r for r in event.get("rounds") or []
             if int(r["number"]) <= int(event.get("hubPreparedThroughRound") or event.get("currentRoundNumber") or 1)),
             key=lambda r: int(r["number"]))
@@ -919,7 +1077,24 @@ def build_hub_snapshot(hub: dict[str, Any], events: dict[str, dict[str, Any]], *
             players = _participants(event, match)
             identities = [player_identity(p, key, state) for p in players]
             waits = sorted((_wait(state["players"][i], now) for i in identities), reverse=True)
-            side = lambda ids: [{"id": str(pid), "name": by_id[str(pid)].get("name"), "display_name": identity_data["nodes"][(key, str(pid))]["display_name"], "identity": player_identity(by_id[str(pid)], key, state)} for pid in ids]
+            def side(ids):
+                result = []
+                for pid in ids:
+                    identity = player_identity(by_id[str(pid)], key, state)
+                    courts = person_courts.get(identity, {})
+                    earlier_round = earlier_pending.get(identity, int(match_row["number"]))
+                    readiness = {
+                        "current_court": courts.get("current"), "reserved_court": courts.get("next"),
+                        "paused": bool(state["players"][identity].get("paused")),
+                        "waiting_round_number": earlier_round if earlier_round < int(match_row["number"]) else None,
+                        "identity_review": identity in identity_data["pending"],
+                        "duplicate_in_match": identities.count(identity) > 1,
+                    }
+                    readiness["ready"] = not any(readiness.values())
+                    result.append({"id": str(pid), "name": by_id[str(pid)].get("name"),
+                        "display_name": identity_data["nodes"][(key, str(pid))]["display_name"],
+                        "identity": identity, "readiness": readiness})
+                return result
             side_a = side(match.get("sideA") or match.get("teamA") or [])
             side_b = side(match.get("sideB") or match.get("teamB") or [])
             entry = {"session_key": key, "match_id": str(match["id"]), "round_number": int(match_row["number"]),
@@ -928,6 +1103,7 @@ def build_hub_snapshot(hub: dict[str, Any], events: dict[str, dict[str, Any]], *
                 "wait_seconds": int(waits[0]) if waits else 0, "wait_order": waits,
                 "allowed_court_ids": _allowed(state, key), "blockers": [], "status": "waiting",
                 "score_a": match.get("scoreA"), "score_b": match.get("scoreB"),
+                "plan_locked": bool(match.get("hubPlanLocked")),
                 "result_status": "not_played" if match.get("status") == "not_played" else "played" if _complete(match, event) else "pending",
                 "not_played_reason": match.get("notPlayedReason")}
             edit_reason = _roster_change_unavailable_reason(event)
@@ -935,6 +1111,8 @@ def build_hub_snapshot(hub: dict[str, Any], events: dict[str, dict[str, Any]], *
                 edit_reason = "Recorded games keep their players."
             entry.update(can_edit_players=edit_reason is None, edit_players_unavailable_reason=edit_reason)
             all_matches[(key, str(match["id"]))] = entry
+            if int(match_row["number"]) == groups[-1]["next_round_number"]:
+                groups[-1]["next_round_matches"].append(entry)
             if _complete(match, event):
                 entry["status"] = "completed"
                 continue
@@ -1192,7 +1370,7 @@ def repair_unstarted_hub_round(event: dict[str, Any]) -> dict[str, Any]:
     the hub's current court read set, so a concurrent dispatch prevents repair.
     """
     from jupr_app.domain.adaptive_play_engine import (
-        hub_auto_advance_boundary, _participant_active_in_round, _regenerate_round_robin_from,
+        hub_auto_advance_boundary, _participant_active_in_round,
     )
     if hub_auto_advance_boundary(event) is None:
         raise ValueError("Only an untouched automatically generated hub round can be repaired.")
@@ -1202,13 +1380,12 @@ def repair_unstarted_hub_round(event: dict[str, Any]) -> dict[str, Any]:
     result.setdefault("rosterByRound", {})[str(current)] = [str(p["id"]) for p in result.get("participants") or [] if _participant_active_in_round(p, current)]
     _sync_future_roster_membership(result, ids, current)
     result.update(perfectRotation=False, adaptiveFromRound=min(int(result.get("adaptiveFromRound") or current), current))
-    _round(result)["status"] = "preview"
-    _regenerate_round_robin_from(result, current)
-    return result
+    _plan_hub_round(result, current)
+    return repair_hub_roster_plan(result, from_round=current + 1)
 
 
 def mutate_hub_roster(event: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
-    """Repair affected lineups and seat free arrivals; retain every unrelated plan."""
+    """Keep current commitments and rebuild one full-group successor after arrivals."""
     from jupr_app.domain.adaptive_play_engine import (
         mutate_generator_roster, history_before_round, _participant_active_in_round,
         _apply_match_history, _doubles_round, _singles_round, _mixed_round, generator_match_play_format,
@@ -1216,6 +1393,7 @@ def mutate_hub_roster(event: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     result = mutate_generator_roster(event, _hub_managed=True, **kwargs)
     result["rounds"] = deepcopy(event.get("rounds") or [])
     result["rosterByRound"] = deepcopy(event.get("rosterByRound") or {})
+    _trim_replaceable_hub_previews(result)
     current = int(event.get("currentRoundNumber") or 1)
     action = str(kwargs.get("action") or "")
     target = str(kwargs.get("participant_id") or "")
@@ -1224,7 +1402,8 @@ def mutate_hub_roster(event: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         for r in event.get("rounds") or []}
     people = lambda matches: {str(pid) for m in matches for pid in
         (m.get("sideA") or m.get("teamA") or []) + (m.get("sideB") or m.get("teamB") or [])}
-    target_rounds = [number for number, games in protected.items() if target in people(games)]
+    target_rounds = [number for number, games in protected.items()
+        if target in people([m for m in games if _actually_committed_match(event, m)])]
     effective = max(current, max(target_rounds, default=current - 1) + 1)
     old_ids = {str(p["id"]) for p in event.get("participants") or []}
     added = next((p for p in result.get("participants") or [] if str(p["id"]) not in old_ids), None)
@@ -1258,6 +1437,8 @@ def mutate_hub_roster(event: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     play_format = result.get("playFormat") or "doubles"
     for row in sorted(result["rounds"], key=lambda r: int(r["number"])):
         number = int(row["number"])
+        if number > current:
+            continue  # The full future pool is repaired once below.
         if number < current or row.get("status") not in {"active", "preview"}:
             continue
         if action == "reorder" and number == current:
@@ -1270,7 +1451,7 @@ def mutate_hub_roster(event: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         kept, affected = [], []
         for match in _matches(row):
             ids = people([match])
-            if str(match["id"]) in protected_ids:
+            if str(match["id"]) in protected_ids and (_actually_committed_match(result, match) or ids <= set(active)):
                 kept.append(match)
             elif action == "substitute" and target in ids and added and target not in active and str(added["id"]) in active:
                 replacement = deepcopy(match)
@@ -1318,10 +1499,11 @@ def mutate_hub_roster(event: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
 
     result["adaptiveFromRound"] = min(int(result.get("adaptiveFromRound") or current), current)
     result["perfectRotation"] = False
-    return result
+    return repair_hub_roster_plan(result, from_round=current + 1 if action == "reorder" else current)
 
 
-def _edit_match_players(hub: dict[str, Any], events: dict[str, dict[str, Any]], payload: dict[str, Any], now: str) -> None:
+def _edit_match_players(hub: dict[str, Any], events: dict[str, dict[str, Any]], payload: dict[str, Any], now: str,
+                        *, _planning: bool = False) -> None:
     """Explicit lineup correction, committed with the court and roster read set."""
     from jupr_app.domain.adaptive_play_engine import _clean_name, _next_participant_id
 
@@ -1345,6 +1527,7 @@ def _edit_match_players(hub: dict[str, Any], events: dict[str, dict[str, Any]], 
         raise ValueError("Choose a player in this match.")
     incoming = str(payload.get("replacement_participant_id") or "")
     number = int(row["number"])
+    planning = _planning and assignment is None and number > int(event.get("currentRoundNumber") or 1)
     by_id = {str(p["id"]): p for p in event.get("participants") or []}
     added = not incoming
     if incoming and (payload.get("name") is not None or payload.get("player_id") is not None):
@@ -1387,7 +1570,10 @@ def _edit_match_players(hub: dict[str, Any], events: dict[str, dict[str, Any]], 
         raise ValueError("Confirm matching player names in Players before editing this match.")
     claimed = _claims(hub, events).get(identity)
     if claimed and claimed != _key(payload):
-        raise ValueError("This player is already assigned or reserved on another court.")
+        claim_round = next((int(r["number"]) for r in events[claimed[0]].get("rounds") or []
+            if any(str(m["id"]) == claimed[1] for m in _matches(r))), number)
+        if not planning or (claimed[0] == key and claim_round >= number):
+            raise ValueError("This player is already assigned or reserved on another court.")
     others = []
     for planned in event.get("rounds") or []:
         for other in _matches(planned):
@@ -1395,11 +1581,13 @@ def _edit_match_players(hub: dict[str, Any], events: dict[str, dict[str, Any]], 
                 continue
             n = int(planned["number"])
             recorded = _complete(other, event) or other.get("scoreA") is not None or other.get("scoreB") is not None
-            if n < number and planned.get("status") in {"active", "preview"} and not _complete(other, event):
+            if not planning and n < number and planned.get("status") in {"active", "preview"} and not _complete(other, event):
                 raise ValueError("This player has an unfinished game in an earlier round.")
             if n >= number and (recorded or other.get("hubStartedAt") or str(other["id"]) in (event.get("hubAssignedMatchIds") or [])):
                 raise ValueError("This player has already committed to another game. Choose a free player.")
             if n == number:
+                if other.get("hubPlanLocked"):
+                    raise ValueError("This player belongs to another manually locked game. Edit that game first.")
                 others.append(other)
     if len(others) > 1:
         raise ValueError("This player appears in multiple games in this round. Review the round robin.")
@@ -1410,6 +1598,7 @@ def _edit_match_players(hub: dict[str, Any], events: dict[str, dict[str, Any]], 
             ids = [incoming if str(pid) == target else target if str(pid) == incoming else str(pid)
                 for pid in game.get(side) or game.get(alias) or []]
             game[side], game[alias] = ids, list(ids)
+        game["hubPlanLocked"] = True
     people = [player_identity(p, key, hub) for p in _participants(event, match)]
     if len(people) != len(set(people)):
         raise ValueError("The same person cannot appear twice in a game.")
@@ -1440,6 +1629,16 @@ def apply_hub_command(hub: dict[str, Any], events: dict[str, dict[str, Any]], *,
     state.setdefault("groups", [])
     state.setdefault("players", {})
     excluded = set(payload.get("excluded_session_keys") or [])
+    if action in {"assign_next_court", "assign_game", "reserve_game_for_court", "edit_match_players", "set_match_lineup"}:
+        # A user explicitly selecting a legacy preview has announced that game.
+        # Preserve it during the first-write upgrade, so its ID cannot disappear
+        # before this very command can validate and assign/edit it.
+        target_event = updated.get(str(payload.get("session_key") or ""))
+        if target_event is not None and target_event.get("hubPlanVersion") != 1:
+            target = next((m for r in target_event.get("rounds") or [] for m in _matches(r)
+                if str(m["id"]) == str(payload.get("match_id") or "")), None)
+            if target is not None:
+                target["hubPlanLocked"] = True
     for key in _group_keys(state) - excluded:
         updated[key] = _prepare_rolling_rounds(updated[key])
     _ensure_players(state, updated, now)
@@ -1553,12 +1752,25 @@ def apply_hub_command(hub: dict[str, Any], events: dict[str, dict[str, Any]], *,
             "destination_effective_round": int(destination.get("currentRoundNumber") or 1)})
     elif action == "edit_match_players":
         _edit_match_players(state, updated, payload, now)
+    elif action == "set_match_lineup":
+        from jupr_app.domain.hub_lineup_controls import set_hub_match_lineup
+        set_hub_match_lineup(state, updated, payload, now=now)
+    elif action == "remove_players":
+        from jupr_app.domain.hub_lineup_controls import remove_hub_players
+        event = _event(state, updated, session_key)
+        changed = {**updated, session_key: remove_hub_players(event, payload.get("participant_ids"), now=now)}
+        state, updated = reconcile_hub_events(state, updated, changed, now=now, excluded_session_keys=excluded)
     elif action == "finish_group":
         event = _event(state, updated, session_key)
         details = _finish_details(event)
         if not details["can_finish"]:
             raise ValueError(details["finish_unavailable_reason"])
         boundary = int(details["finish_boundary_round"])
+        if "finish_after_round" in payload:
+            requested = payload["finish_after_round"]
+            if type(requested) is not int or requested not in {option["round_number"] for option in details["finish_round_options"]}:
+                raise ValueError("Choose a prepared final round that includes every started or reserved game.")
+            boundary = requested
         event["hubFinishAfterRound"] = boundary
         event.pop("hubAutoAdvancedFromRound", None)
         for row in event.get("rounds") or []:
@@ -1637,7 +1849,7 @@ def apply_hub_command(hub: dict[str, Any], events: dict[str, dict[str, Any]], *,
             ready = [entry for entry in build_hub_snapshot(state, updated, now=now)["eligible_queue"] if entry["session_key"] not in excluded]
             chosen = None
             for candidate in ready:
-                court = next((c for c in state["courts"] if c["id"] in candidate["allowed_court_ids"] and not c.get("current") and not c.get("next")), None)
+                court = _next_open_court(state, candidate["allowed_court_ids"])
                 if court is not None:
                     chosen = (candidate, court)
                     break
@@ -1649,7 +1861,7 @@ def apply_hub_command(hub: dict[str, Any], events: dict[str, dict[str, Any]], *,
         assignment = _candidate(state, updated, payload, now)
         allowed = _allowed(state, session_key)
         if action == "assign_next_court":
-            court = next((c for c in state["courts"] if c["id"] in allowed and not c.get("current") and not c.get("next")), None)
+            court = _next_open_court(state, allowed)
             if court is None:
                 raise ValueError("No permitted court is currently open.")
         else:

@@ -106,10 +106,12 @@ global.fetch = async (url, options = {}) => {
     const existing = detail.workspace.players.find(item => item.identity === identity);
     if (existing) existing.session_keys.push(group.session_key);
     else detail.workspace.players.push({ ...player, session_keys: [group.session_key], participant_ids: [player.participant_id] });
-  } else if (body.action === "remove_player") {
+  } else if (body.action === "remove_players") {
     const group = detail.workspace.groups.find(item => item.session_key === body.payload.session_key);
-    const player = group.players.find(item => item.participant_id === body.payload.participant_id);
-    player.active = false; player.inactive_from_round = group.current_round_number; player.can_remove = false;
+    for (const id of body.payload.participant_ids) {
+      const player = group.players.find(item => item.participant_id === id);
+      player.active = false; player.inactive_from_round = group.current_round_number; player.can_remove = false;
+    }
   } else throw new Error(`Unexpected action ${body.action}`);
   detail.hub.version += 1; receipts.set(body.idempotency_key, clone(body));
   if (failAfterCommit) { failAfterCommit = false; throw new Error("Response lost after identity decision saved"); }
@@ -315,10 +317,10 @@ global.fetch = async (url, options = {}) => {
   addedOnBoard.can_remove = true;
   await click("Refresh"); await click("Remove player");
   await act(async () => tree.root.findByProps({ "aria-label": "Round robin" }).props.onChange({ target: { value: "a" } }));
-  await act(async () => tree.root.findByProps({ "aria-label": "Player" }).props.onChange({ target: { value: addedOnBoard.participant_id } }));
+  await act(async () => tree.root.findByProps({ "aria-label": "Remove Board Guest" }).props.onChange({ target: { checked: true } }));
   await act(async () => tree.root.findByProps({ id: "hub-remove-player-form" }).props.onSubmit({ preventDefault() {} }));
-  assert.deepEqual(requests.at(-1).payload, { session_key: "a", participant_id: addedOnBoard.participant_id });
-  assert.equal(requests.at(-1).action, "remove_player");
+  assert.deepEqual(requests.at(-1).payload, { session_key: "a", participant_ids: [addedOnBoard.participant_id] });
+  assert.equal(requests.at(-1).action, "remove_players");
   assert.equal(button(tree, "Court board").props["aria-selected"], true, "Removing from court operations keeps the court board open");
   await act(async () => tree.unmount());
 

@@ -1,10 +1,10 @@
 "use client";
 
-import Link from "next/link";
+import Link, { NavigationFeedback } from "@/components/NavigationLink";
 import TournamentSponsorEditor from "./TournamentSponsorEditor";
 import { sponsorTiers, type SponsorDraft, type SponsorTier } from "@/lib/tournamentSponsors";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import { actionSuccess, type ActionSuccess } from "@/components/interaction";
 import { InteractionActionError } from "@/components/interaction/types";
@@ -895,6 +895,7 @@ export default function TournamentSetupWizardPanel({
   resolveDivisionId = ""
 }: Props) {
   const router = useRouter();
+  const [navigating, startNavigation] = useTransition();
   const { accessToken, loading: sessionLoading } = useAdminSession();
   const [detail, setDetail] = useState<SetupDetail | null>(null);
   const [detailLoadState, setDetailLoadState] =
@@ -909,7 +910,8 @@ export default function TournamentSetupWizardPanel({
   const [reviewedDraftSignature, setReviewedDraftSignature] = useState("");
   const [setupPublishedThisSession, setSetupPublishedThisSession] =
     useState(false);
-  const [busy, setBusy] = useState(false);
+  const [working, setBusy] = useState(false);
+  const busy = working || navigating;
   const [message, setMessage] = useState<string | null>(null);
   const [eventDialogKey, setEventDialogKey] = useState<string | null | undefined>(undefined);
   const [divisionPresetFamilyKey, setDivisionPresetFamilyKey] = useState<string | undefined>(undefined);
@@ -1143,14 +1145,14 @@ export default function TournamentSetupWizardPanel({
   );
 
   function goTo(nextStep: TournamentSetupStep) {
-    router.push(
+    startNavigation(() => router.push(
       tournamentSetupStepHref(
         nextStep,
         tournamentId,
         basics.name.trim() || tournamentName,
         drawId
       )
-    );
+    ));
   }
 
   function updateTournamentDate(field: "startDate" | "endDate", value: string) {
@@ -2269,13 +2271,13 @@ async function saveResolutionDraft() {
       );
       const completion = actionSuccess("Registration opened", "The published tournament is now available to registrants.");
       if (actionRequest.isCurrent(generation)) {
-        router.push(
+        startNavigation(() => router.push(
           tournamentRouteHref("/admin/tournaments/registration", {
             tournamentId,
             tournamentName: basics.name.trim() || tournamentName,
             drawId
           })
-        );
+        ));
       }
       return completion;
     } catch (error) {
@@ -3831,6 +3833,7 @@ function renderDivisions() {
           borderColor: publicationBanner.borderColor
         }}
       >
+        {navigating ? <NavigationFeedback /> : null}
         <div
           role={publicationStatus === "unavailable" ? "alert" : "status"}
           aria-busy={publicationStatus === "checking"}

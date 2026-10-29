@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 const { PGlite } = await import(process.env.PGLITE_MODULE || '@electric-sql/pglite');
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const migrations = path.join(root, 'supabase/migrations');
@@ -152,6 +153,50 @@ correction.identity_decisions.push(decision('h','i','same'));await commit(correc
 correction.identity_decisions=[decision('g','h','different'),decision('g','i','different'),decision('h','i','different')];correction.participant_identities.h.p1=guest('h');correction.participant_identities.i.p1=guest('i');
 correction.courts[1].next=assignment('h');await commit(correction,{id:correctionHub});
 assert.equal((await db.query('select count(*) n from round_robin_hub_player_leases where hub_id=$1',[correctionHub])).rows[0].n,4);
+// Supplemental exhibitions borrow real Python-normalized identities while the
+// original groups remain in the same authoritative transaction read set.
+const extraFixture=JSON.parse(execFileSync(process.env.HUB_SQL_PYTHON || 'python',
+  [path.join(root,'tests/sql/hub_extra_game_fixture.py')],{cwd:root,encoding:'utf8'}));
+const extraHub=extraFixture.hub_id, extraKey=extraFixture.draft.session_key;
+for(const [key,event] of Object.entries(extraFixture.before_events)) {
+  await db.query('insert into live_sessions(club_id,session_key,state) values($1,$2,$3)',
+    ['club',key,{mode:'admin_play_generator',page_state:{event}}]);
+}
+await commit(extraFixture.before_hub,{id:extraHub});
+const originalExtraSources=await Promise.all(Object.keys(extraFixture.before_events).map(row));
+const extraDraft=extraFixture.draft;
+await db.query('insert into live_sessions(club_id,session_key,state,title,status) values($1,$2,$3,$4,$5)',
+  ['club',extraKey,extraDraft.state,extraDraft.title,extraDraft.status]);
+const extraPatch={state:{...extraDraft.state,round_robin_hub_id:extraHub,
+  page_state:{...extraDraft.state.page_state,event:extraFixture.proposed_events[extraKey]}}};
+const extraRead=await readSet([...Object.keys(extraFixture.before_events),extraKey],extraHub,{[extraKey]:extraPatch});
+const extraVersion=(await hub(extraHub)).version;
+await assert.rejects(()=>commit(extraFixture.proposed_hub,{id:extraHub,version:extraVersion,
+  sessions:extraRead.slice(1)}),/read set|session|round robin/i);
+assert.equal((await row(extraKey)).state.page_state.event.hubSupplementalDraft,true);
+await commit(extraFixture.proposed_hub,{id:extraHub,version:extraVersion,key:'extra-attach-once',sessions:extraRead});
+assert.equal((await commit(extraFixture.proposed_hub,{id:extraHub,version:extraVersion,key:'extra-attach-once',sessions:[]})).replayed,true);
+assert.deepEqual(await Promise.all(Object.keys(extraFixture.before_events).map(row)),originalExtraSources,
+  'Borrowing players never changes their source division rows');
+assert.equal((await row(extraKey)).state.page_state.event.hubSupplemental.standingsPolicy,'exhibition');
+const extraPlaying=clone(extraFixture.proposed_hub), extraMatch=extraFixture.proposed_events[extraKey].rounds[0].matches[0];
+extraPlaying.courts[0].current={session_key:extraKey,match_id:extraMatch.id,round_number:1,assigned_at:'2026-10-28T03:00:00Z'};
+await commit(extraPlaying,{id:extraHub});
+const extraLeases=(await db.query('select player_key,profile_id from round_robin_hub_player_leases where hub_id=$1 order by player_key',[extraHub])).rows;
+assert.equal(extraLeases.length,4);
+assert(extraLeases.some(lease=>lease.player_key==='player:4242' && lease.profile_id==='4242'));
+assert.equal(extraLeases.filter(lease=>lease.player_key.startsWith('guest:')).length,3);
+// A forged parallel source game cannot claim a borrowed guest or profile again.
+for(const borrowed of [extraFixture.source_refs[0],extraFixture.source_refs[1]]) {
+  const busy=clone(extraPlaying), source=await row(borrowed.session_key), sourceState=clone(source.state);
+  const other=sourceState.page_state.event.participants.find(p=>p.id!==borrowed.participant_id);
+  sourceState.page_state.event.rounds[0].matches.push({id:'overlap-extra',sideA:[borrowed.participant_id],sideB:[other.id]});
+  busy.courts[1].current={session_key:borrowed.session_key,match_id:'overlap-extra',round_number:1,assigned_at:'2026-10-28T03:00:00Z'};
+  const beforeExtra=await hub(extraHub);
+  await assert.rejects(()=>commit(busy,{id:extraHub,patches:{[borrowed.session_key]:{state:sourceState}}}),/duplicate key|assigned|reserved/);
+  assert.deepEqual(await hub(extraHub),beforeExtra);
+  assert.deepEqual(await row(borrowed.session_key),source);
+}
 // The helper and transaction remain private invoker functions, with existing RLS.
 await db.exec('reset role');
 const permissions=(await db.query(`select
@@ -161,5 +206,5 @@ const permissions=(await db.query(`select
  (select bool_or(prosecdef) from pg_proc where proname in ('round_robin_hub_identity_snapshot','commit_round_robin_hub')) definer,
  (select bool_and(relrowsecurity) from pg_class where relname like 'round_robin_hub%' and relkind='r') rls`)).rows[0];
 assert.deepEqual(permissions,{anon:false,authenticated:false,anon_name_key:false,definer:false,rls:true});
-console.log('Round Robin Hub identities: scoped guests, authoritative profiles, decisions, partial blocking, current/reserved protection, old-worker compatibility, CAS/replay, rollback, cross-hub leases and private permissions passed.');
+console.log('Round Robin Hub identities: scoped guests, authoritative profiles, decisions, partial blocking, current/reserved protection, old-worker compatibility, CAS/replay, rollback, cross-hub leases, supplemental exhibitions and private permissions passed.');
 await db.close();
