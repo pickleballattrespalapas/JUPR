@@ -68,7 +68,17 @@ def workspaces():
     return {'workspaces':[{'club_id':'club','club_slug':'test','club_name':'Recap test club','roles':['administrator']}]}
 @app.get('/public/clubs/{slug}/site')
 def site(slug:str):
+    if slug != 'test':
+        raise HTTPException(404, 'Unknown fixture club')
     return {'club_id':'club','slug':slug,'document':default_site({'name':'Recap test club'}),'published_at':'2026-10-01'}
+@app.get('/public/clubs/{slug}/site/shell')
+def site_shell(slug:str):
+    public_site = site(slug)
+    doc = public_site['document']
+    return {**public_site, 'document': {
+        **{key: doc[key] for key in ('name', 'description', 'location', 'accent', 'visibility', 'display', 'page_visibility', 'logo_url')},
+        'pages': [{key: page[key] for key in ('slug', 'title', 'in_navigation')} for page in doc['pages']],
+    }}
 @app.get('/clubs/{slug}/weekly-recaps')
 def recaps(slug:str, week_start:str|None=None):
     return {'club':{'id':'club','slug':'test','name':'Recap test club'},**build_public_weekly_recaps(db,club_id='club',week_start=week_start)}
