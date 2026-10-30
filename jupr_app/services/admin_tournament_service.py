@@ -30,6 +30,7 @@ from jupr_app.domain.tournament_partner_service import admin_replace_partner_lin
 from jupr_app.services.public_tournament_registration_service import (
     _canonical_player_skills,
     _get_club_player,
+    _profile_candidates,
     build_tournament_registration_player_profile,
     validate_and_clean_tournament_selection,
 )
@@ -771,6 +772,30 @@ def list_admin_tournaments(supabase: Any, *, club_id: str, include_archived: boo
         selections = _table_rows_for_tournament(supabase, "tournament_registration_selections", "id,tournament_id", tournament_id=tournament_id)
         tournaments.append(_tournament_payload(row, registration_count=len(registrations), selection_count=len(selections), settings=settings))
     return {"ok": True, "mode": "tournament_admin_list", "tournaments": tournaments, "count": len(tournaments), "warnings": warnings}
+
+
+def resolve_admin_tournament_partner_profile(
+    supabase: Any, *, club_id: str, tournament_id: str, name: str, email: str | None = None,
+) -> dict[str, Any]:
+    """Read club profile suggestions even after public registration closes."""
+    if not is_admin_tournament_admin_enabled():
+        raise PermissionError("Next Tournament Admin is disabled.")
+    tournament = _first_row(supabase, "tournaments", TOURNAMENT_MINIMAL_SELECT,
+                            key="id", value=_clean_text(tournament_id, limit=120))
+    if not tournament or str(tournament.get("club_id") or "") != str(club_id):
+        raise ValueError("tournament not found")
+    clean_name = _clean_text(name, limit=160)
+    clean_email = _clean_text(email, limit=320).lower()
+    if len(clean_name) < 2:
+        raise ValueError("Enter at least two characters of your partner's name.")
+    if clean_email and not _EMAIL_RE.match(clean_email):
+        raise ValueError("Enter a valid partner email address.")
+    first_name, _, last_name = clean_name.partition(" ")
+    match_kind, candidates = _profile_candidates(
+        supabase, club_id=str(club_id), first_name=first_name,
+        last_name=last_name, email=clean_email, allow_partial_name=True,
+    )
+    return {"ok": True, "profile_match_kind": match_kind, "profile_candidates": candidates}
 
 
 def get_admin_tournament_detail(supabase: Any, *, club_id: str, tournament_id: str) -> dict[str, Any]:

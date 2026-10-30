@@ -44,8 +44,8 @@ def test_admin_registration_editor_uses_per_event_cards_and_focused_dialogs() ->
     assert "Add another event entry" in source
     assert 'open={eventDialogOpen && Boolean(selectedSelection)}' in source
     assert 'open={partnerDialogOpen && Boolean(selectedSelection)}' in source
-    assert "Manual partner details" in source
-    assert "public roster shows one canonical team" in source
+    assert "Partner details" in source
+    assert "<TournamentPartnerDetails" in source
 
 
 def test_manual_partner_write_is_one_transaction_and_one_canonical_team() -> None:
@@ -94,6 +94,6 @@ def test_manual_partner_ui_requires_identity_and_new_player_baseline() -> None:
     assert "They don’t need" in partner_fields
     assert "to register separately" in partner_fields
     assert "manualPartnerFieldsValid" in admin_editor
-    assert "Partner name *" in admin_editor
-    assert "Partner email *" in admin_editor
-    assert "Partner starting skill *" in admin_editor
+    assert "<TournamentPartnerDetails" in admin_editor
+    assert "Partner full name *" in partner_fields
+    assert "Partner email *" in partner_fields

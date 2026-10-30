@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import TournamentPartnerDetails, { type TournamentPartnerDetailsValue, type TournamentPartnerProfileResolver } from "@/components/tournaments/TournamentPartnerDetails";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import { FormDialog, actionSuccess, InteractionActionError } from "@/components/interaction";
 import { tournamentRegistrationActionError } from "@/lib/tournamentRegistrationActionError";
@@ -71,6 +72,9 @@ type SelectionEdit = {
   showOnPartnerBoard: boolean;
   partnerSelectionId: string;
 };
+
+type PartnerProfileChoice = Pick<TournamentPartnerDetailsValue,
+  "profileId" | "profileHasRating" | "profileChoiceMade" | "profileLookupPending" | "profileChoiceRequired">;
 
 type ExtrasQuoteResponse = {
   ok: boolean;
@@ -296,6 +300,7 @@ export default function TournamentRegistrantEditPanel({
   const [selectionDraft, setSelectionDraft] = useState<SelectionEdit>(() =>
     selectionEdit(null)
   );
+  const [partnerProfile, setPartnerProfile] = useState<PartnerProfileChoice>({});
   const [extraQuantities, setExtraQuantities] = useState<
     Record<string, number>
   >({});
@@ -336,16 +341,17 @@ export default function TournamentRegistrantEditPanel({
     setPartnerDialogOpen(false);
     setNewEventOptionId("");
     setSelectionDraft(selectionEdit(null));
+    setPartnerProfile({});
     setExtraQuantities({});
     setExtrasQuote(null);
     setBusy(false);
     setMessage(null);
   }
 
-  async function requestJson<T>(
+  const requestJson = useCallback(async <T,>(
     path: string,
     options?: RequestInit
-  ): Promise<T> {
+  ): Promise<T> => {
     if (!apiBase) throw new Error("API base URL is not configured.");
     if (!accessToken)
       throw new InteractionActionError("Sign in before editing tournament registrations.", { kind: "forbidden" });
@@ -359,6 +365,27 @@ export default function TournamentRegistrantEditPanel({
     const payload = await response.json().catch(() => null);
     if (!response.ok) throw tournamentRegistrationActionError(response, payload);
     return payload as T;
+  }, [apiBase, accessToken]);
+
+  const resolvePartnerProfile = useCallback<TournamentPartnerProfileResolver>(async (identity) => ({
+    data: await requestJson(`/admin/clubs/${encodeURIComponent(clubId)}/tournaments/admin/tournaments/${encodeURIComponent(tournamentId)}/partner-profile-resolution`, {
+      method: "POST",
+      body: JSON.stringify(identity)
+    })
+  }), [requestJson, clubId, tournamentId]);
+
+  function updatePartnerDetails({ name, email, phone, duprId, skill, age, gender, ...profile }: Partial<TournamentPartnerDetailsValue>) {
+    setSelectionDraft((current) => ({
+      ...current,
+      partnerName: name ?? current.partnerName,
+      partnerEmail: email ?? current.partnerEmail,
+      partnerPhone: phone ?? current.partnerPhone,
+      partnerDuprId: duprId ?? current.partnerDuprId,
+      partnerSkill: skill ?? current.partnerSkill,
+      partnerAge: age ?? current.partnerAge,
+      partnerGender: gender ?? current.partnerGender
+    }));
+    setPartnerProfile((current) => ({ ...current, ...profile }));
   }
 
   function quantitiesFromCommerce(
@@ -428,6 +455,7 @@ export default function TournamentRegistrantEditPanel({
         null;
       setSelectedSelectionId(nextSelection?.id || "");
       setSelectionDraft(selectionEdit(nextSelection));
+      setPartnerProfile({});
       setNewEventOptionId("");
     } catch (error) {
       if (detailRequest.isCurrent(generation))
@@ -449,6 +477,7 @@ export default function TournamentRegistrantEditPanel({
       selections.find((selection) => selection.id === selectionId) || null;
     setSelectedSelectionId(row?.id || "");
     setSelectionDraft(selectionEdit(row));
+    setPartnerProfile({});
     setDivisionOnly(dialog === "division");
     setEventDialogOpen(Boolean(row) && dialog !== "partner");
     setPartnerDialogOpen(Boolean(row) && dialog === "partner");
@@ -907,6 +936,7 @@ export default function TournamentRegistrantEditPanel({
 
   function changeEntryDivision(eventOptionId: string) {
     const event = detail?.event_options.find((row) => String(row.id) === eventOptionId);
+    if (!eventUsesPartner(event)) setPartnerProfile({});
     setSelectionDraft((current) => eventUsesPartner(event)
       ? { ...current, eventOptionId, partnerMode: current.partnerSelectionId ? current.partnerMode : current.partnerMode === "NONE" ? "NEEDS_PARTNER" : current.partnerMode }
       : { ...selectionEdit(null), eventOptionId }
@@ -922,7 +952,9 @@ export default function TournamentRegistrantEditPanel({
     !draftEventUsesPartner ||
     selectionDraft.partnerMode !== "HAS_PARTNER" ||
     Boolean(
-      selectionDraft.partnerName.trim() &&
+      !partnerProfile.profileLookupPending &&
+        !partnerProfile.profileChoiceRequired &&
+        selectionDraft.partnerName.trim() &&
         selectionDraft.partnerEmail.trim() &&
         selectionDraft.partnerSkill.trim() &&
         Number(selectionDraft.partnerSkill) >= 1 &&
@@ -1294,6 +1326,7 @@ export default function TournamentRegistrantEditPanel({
             onCancel={() => {
               setEventDialogOpen(false);
               setSelectionDraft(selectionEdit(selectedSelection));
+              setPartnerProfile({});
             }}
           >
             {selectedSelection ? (
@@ -1312,24 +1345,28 @@ export default function TournamentRegistrantEditPanel({
                   </label>
                   {!divisionOnly && draftEventUsesPartner ? <label>
                     <strong>Partner state</strong><br />
-                    <select value={selectionDraft.partnerMode} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerMode: event.target.value }))} disabled={Boolean(selectionDraft.partnerSelectionId)} style={inputStyle}>
-                      {PARTNER_MODE_OPTIONS.map((value) => <option key={value} value={value}>{value === "NONE" ? "No partner request" : value === "HAS_PARTNER" ? "Manual / unregistered partner" : "Needs partner"}</option>)}
+                    <select value={selectionDraft.partnerMode} onChange={(event) => { setPartnerProfile({}); setSelectionDraft((current) => ({ ...current, partnerMode: event.target.value })); }} disabled={Boolean(selectionDraft.partnerSelectionId)} style={inputStyle}>
+                      {PARTNER_MODE_OPTIONS.map((value) => <option key={value} value={value}>{value === "NONE" ? "No partner request" : value === "HAS_PARTNER" ? "Has a partner" : "Needs partner"}</option>)}
                     </select>
                   </label> : null}
                 </div>
                 {!divisionOnly && draftEventUsesPartner && selectionDraft.partnerMode === "HAS_PARTNER" && !selectionDraft.partnerSelectionId ? (
                   <section style={{ padding: "0.85rem", border: "1px solid #bfdbfe", borderRadius: "12px", background: "#eff6ff" }}>
-                    <h3 style={{ marginTop: 0 }}>Manual partner details</h3>
-                    <p style={{ color: "#475569" }}>Saving resolves an existing club player when possible, or creates a linked player and tournament entry, so the public roster shows one canonical team.</p>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem" }}>
-                      <label><strong>Partner name *</strong><br /><input required value={selectionDraft.partnerName} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerName: event.target.value }))} style={inputStyle} /></label>
-                      <label><strong>Partner email *</strong><br /><input required type="email" value={selectionDraft.partnerEmail} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerEmail: event.target.value }))} style={inputStyle} /></label>
-                      <label><strong>Partner phone</strong><br /><input type="tel" value={selectionDraft.partnerPhone} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerPhone: event.target.value }))} style={inputStyle} /></label>
-                      <label><strong>Partner DUPR ID</strong><br /><input value={selectionDraft.partnerDuprId} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerDuprId: event.target.value }))} style={inputStyle} /></label>
-                      <label><strong>Partner starting skill *</strong><br /><input required type="number" min="1" max="7" step="0.01" value={selectionDraft.partnerSkill} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerSkill: event.target.value }))} style={inputStyle} /></label>
-                      <label><strong>Partner age</strong><br /><input type="number" min="5" max="120" value={selectionDraft.partnerAge} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerAge: event.target.value }))} style={inputStyle} /></label>
-                      <label><strong>Partner gender</strong><br /><select value={selectionDraft.partnerGender} onChange={(event) => setSelectionDraft((current) => ({ ...current, partnerGender: event.target.value }))} style={inputStyle}><option value="">Not specified</option>{registrationGenderOptions(selectionDraft.partnerGender).map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
-                    </div>
+                    <h3 style={{ marginTop: 0 }}>Partner details</h3>
+                    <TournamentPartnerDetails
+                      key={selectedSelection.id}
+                      tournamentId={tournamentId}
+                      resolveProfile={resolvePartnerProfile}
+                      labelPrefix="Event entry"
+                      requireDemographics={false}
+                      value={{
+                        name: selectionDraft.partnerName, email: selectionDraft.partnerEmail,
+                        phone: selectionDraft.partnerPhone, duprId: selectionDraft.partnerDuprId,
+                        skill: selectionDraft.partnerSkill, age: selectionDraft.partnerAge,
+                        gender: selectionDraft.partnerGender, ...partnerProfile
+                      }}
+                      onChange={updatePartnerDetails}
+                    />
                   </section>
                 ) : null}
                 {!divisionOnly && draftEventUsesPartner && selectionDraft.partnerMode === "NEEDS_PARTNER" && !selectionDraft.partnerSelectionId ? (
