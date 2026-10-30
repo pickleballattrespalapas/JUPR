@@ -443,7 +443,10 @@ async function runWeek(
       name: new RegExp(`^${escapeRegExp(String(member?.player_name || ""))}(?: ·|$)`)
     });
     await expect(checkbox, `Original roster member ${playerId} is ambiguous`).toHaveCount(1);
-    await checkbox.check();
+    // The rating review mounts as attendance changes; allow React to commit
+    // the controlled checkbox without issuing another click that could toggle it off.
+    if (!(await checkbox.isChecked())) await checkbox.click();
+    await expect(checkbox, `Original roster member ${playerId} was not selected`).toBeChecked();
   }
   expect(await rosterAttendance.evaluateAll((nodes) => nodes.filter((node) => (node as HTMLInputElement).checked).length)).toBe(plan.rosterAttendance);
 
