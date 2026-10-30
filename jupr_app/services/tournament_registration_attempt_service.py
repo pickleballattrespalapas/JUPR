@@ -104,6 +104,7 @@ def audited_registration_call(supabase: Any, *, club_id: str, payload: dict[str,
         raise
     record_registration_attempt(supabase, club_id=club_id, payload=audit_payload, source="SERVER",
                                 event="SAVED" if result.get("registration_id") else "PROFILE_READY", stage=stage,
+                                message="Registration withdrawn." if result.get("withdrawn") else None,
                                 registration_id=result.get("registration_id"))
     return result
 
@@ -150,6 +151,11 @@ def list_registration_attempts(supabase: Any, *, club_id: str, tournament_id: st
         identity = next((r for r in reversed(timeline) if r.get("email") or r.get("name")), latest)
         last_at = datetime.fromisoformat(latest["created_at"].replace("Z", "+00:00"))
         outcome = "Saved" if saved else "Incomplete — no recent activity" if now - last_at > timedelta(minutes=30) else "In progress / incomplete"
+        if saved:
+            later_errors = any("REJECTED" in row["event"] for row in timeline[timeline.index(saved) + 1:])
+            outcome = "Change not saved — earlier save succeeded" if later_errors else "Withdrawn" if saved.get("message") == "Registration withdrawn." else "Saved"
+        elif all(row["source"] == "SERVER" and row["message"] == "Registration edit page loaded." for row in timeline):
+            outcome = "Editor loaded — no save recorded"
         attempts.append({"attempt_id": attempt_id, "name": identity.get("name"), "email": identity.get("email"),
                          "outcome": outcome, "last_seen_at": latest["created_at"], "stage": latest["stage"],
                          "registration_id": saved.get("registration_id") if saved else None, "events": timeline})

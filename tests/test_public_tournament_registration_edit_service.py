@@ -9,6 +9,7 @@ from jupr_app.domain.tournament_registration_repo import (
     PUBLIC_REGISTRATION_EDIT_RPC,
     TournamentRegistrationEditConflictError,
     TournamentRegistrationImportedDrawError,
+    TournamentRegistrationRelationshipLockedError,
 )
 from jupr_app.services import public_tournament_registration_edit_service as edit_service
 from jupr_app.services.public_tournament_registration_edit_service import (
@@ -61,6 +62,20 @@ def _edit_versions(storage):
             if row["registration_id"] == registration["id"]
         ],
     }
+
+
+def test_reserved_partner_conflict_has_recovery_instructions(monkeypatch):
+    supabase, storage, _registration_id, token = _registered_supabase(monkeypatch)
+    page = build_public_tournament_registration_edit_page(supabase, club_id="club-1", edit_token=token)
+    original_rpc = supabase.rpc
+    def rpc(name, params):
+        if name == PUBLIC_REGISTRATION_EDIT_RPC:
+            raise RuntimeError("JUPR_INVITATION: This player has a reserved partnership.")
+        return original_rpc(name, params)
+    monkeypatch.setattr(supabase, "rpc", rpc)
+    with pytest.raises(TournamentRegistrationRelationshipLockedError, match="Pending partner requests"):
+        submit_public_tournament_registration_edit(supabase, club_id="club-1", edit_token=token,
+            payload={**page["registration"], **_edit_versions(storage), "tournament_id": "t1", "terms_accepted": True, "selections": page["selections"]})
 
 
 @pytest.mark.parametrize("stored_status", ["pending", "confirmed", "waitlist", "cancelled"])
