@@ -27,11 +27,40 @@ const logs = [], errors = [], evidence = [], creationRequests = [], creationDraf
 const sessionCreateUrl = `${apiOrigin}/admin/clubs/club/play-generators/sessions`;
 let injectedFailures = 0;
 function start(command, args, env, cwd) {
-  const child = spawn(command, args, {env, cwd, stdio:['ignore', 'pipe', 'pipe']});
+  // A process group lets the timeout clean up spawned planners as well as the
+  // API parent. Descendants can otherwise keep these log pipes open forever.
+  const child = spawn(command, args, {env, cwd, detached:process.platform !== 'win32', stdio:['ignore', 'pipe', 'pipe']});
   child.stdout.on('data', data => logs.push(data.toString()));
   child.stderr.on('data', data => logs.push(data.toString()));
   child.on('error', error => { child.startupError = error; logs.push(error.message); });
+  child.on('close', () => { child.closed = true; });
   return child;
+}
+async function stop(child) {
+  if (child.closed) return;
+  await new Promise(resolve => {
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      logs.push('Local fixture shutdown exceeded 8 seconds; terminating its process group.\n');
+      try {
+        if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, 'SIGKILL');
+        else child.kill('SIGKILL');
+      } catch (error) {
+        if (error.code !== 'ESRCH') logs.push(`Fixture cleanup: ${error.message}\n`);
+      }
+      child.stdout.destroy();
+      child.stderr.destroy();
+      finish();
+    }, 8000);
+    child.once('close', finish);
+    child.kill('SIGTERM');
+  });
 }
 async function ready(url, children) {
   for (let i=0; i<120; i++) {
@@ -357,7 +386,7 @@ async function main() {
     throw error;
   } finally {
     if (browser) await browser.close();
-    api.kill('SIGTERM'); next.kill('SIGTERM');
+    await Promise.all([stop(api), stop(next)]);
     fs.writeFileSync(path.join(output,'servers.log'),logs.join(''));
   }
 }

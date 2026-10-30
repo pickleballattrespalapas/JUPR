@@ -171,6 +171,10 @@ export type PublicSite = {
   document: SiteDocument;
   published_at: string;
 };
+export type SiteShellDocument = Pick<SiteDocument,
+  "name" | "description" | "location" | "accent" | "visibility" | "display" | "page_visibility" | "logo_url"
+> & { pages: Pick<SitePage, "slug" | "title" | "in_navigation">[] };
+export type PublicSiteShell = Omit<PublicSite, "document"> & { document: SiteShellDocument };
 export type AdminSite = {
   club_id: string;
   slug: string;

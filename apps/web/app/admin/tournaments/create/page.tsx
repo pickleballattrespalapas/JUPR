@@ -1,3 +1,4 @@
+import SectionLoadError from "@/components/SectionLoadError";
 import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import { getAdminTournamentApiBaseUrl, getAdminTournamentStatus } from "@/lib/adminTournamentApi";
 import TournamentCreatePanel from "./TournamentCreatePanel";
@@ -15,7 +16,7 @@ export default async function AdminTournamentCreatePage() {
       <p style={{ color: "#334155", maxWidth: "720px" }}>
         Create a draft shell. Setup, registration, operations, and publishing remain separate reviewed modules.
       </p>
-      {error ? <p role="alert" style={{ color: "#b91c1c" }}>Tournament Manager is unavailable. {error}</p> : null}
+      {error ? <SectionLoadError title="Tournament Manager temporarily unavailable" message="Your tournament data couldn’t load. Try again, or use the navigation to open another section." /> : null}
       {data ? <TournamentCreatePanel apiBase={getAdminTournamentApiBaseUrl()} clubId={clubId} status={data} /> : null}
     </section>
   );

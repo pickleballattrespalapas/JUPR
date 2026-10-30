@@ -9,9 +9,16 @@ from typing import Any
 from uuid import uuid4
 
 from jupr_app.domain.adaptive_play_engine import (
-    advance_generator_event, complete_generator_event, mark_generator_round_played,
-    mutate_generator_roster, reopen_generator_round, save_generator_round,
-    select_generator_round, skip_generator_round,
+    complete_generator_event,
+)
+from jupr_app.services.generator_compute import (
+    advance_generator_event,
+    mark_generator_round_played,
+    mutate_generator_roster,
+    reopen_generator_round,
+    save_generator_round,
+    select_generator_round,
+    skip_generator_round,
 )
 from jupr_app.domain.generator_playoffs import start_generator_playoff
 from jupr_app.services.public_live_operation_service import (

@@ -1,3 +1,4 @@
+import SectionLoadError from "@/components/SectionLoadError";
 import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import { redirect } from "next/navigation";
 import { getAdminTournamentApiBaseUrl, getAdminTournamentStatus } from "@/lib/adminTournamentApi";
@@ -23,7 +24,7 @@ export default async function AdminTournamentBulkRegistrationPage(props: Props) 
       <p style={{ color: "#334155", maxWidth: "820px" }}>
         Apply one reviewed registration, offline-payment, or admin-note update to multiple registrations.
       </p>
-      {error ? <p role="alert" style={{ color: "#b91c1c" }}>Tournament bulk actions are unavailable. {error}</p> : null}
+      {error ? <SectionLoadError title="Tournament Manager temporarily unavailable" message="Your tournament data couldn’t load. Try again, or use the navigation to open another section." /> : null}
       {data ? (
         <BulkRegistrationPanel apiBase={getAdminTournamentApiBaseUrl()} clubId={clubId} status={data} initialTournamentId={context.tournamentId} initialTournamentName={context.tournamentName || context.tournamentId} />
       ) : null}

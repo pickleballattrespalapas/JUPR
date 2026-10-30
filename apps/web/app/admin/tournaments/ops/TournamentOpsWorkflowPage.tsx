@@ -1,3 +1,4 @@
+import SectionLoadError from "@/components/SectionLoadError";
 import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import TournamentPhaseNav from "@/components/TournamentPhaseNav";
 import {
@@ -39,11 +40,7 @@ export default async function TournamentOpsWorkflowPage({
       </h1>
       <TournamentPhaseNav phase={phase} />
       <p style={{ color: "#334155", maxWidth: "860px" }}>{description}</p>
-      {error ? (
-        <p role="alert" style={{ color: "#b91c1c" }}>
-          Tournament Operations are unavailable. {error}
-        </p>
-      ) : null}
+      {error ? <SectionLoadError title="Tournament Manager temporarily unavailable" message="Your tournament data couldn’t load. Try again, or use the navigation to open another section." /> : null}
       {data ? (
         <TournamentOpsPanel
           apiBase={getAdminTournamentApiBaseUrl()}

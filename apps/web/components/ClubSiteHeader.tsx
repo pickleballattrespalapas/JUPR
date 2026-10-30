@@ -4,14 +4,14 @@ import {
   publicClubLinks,
   clubPageHref,
   safeImageUrl,
-  type SiteDocument,
+  type SiteShellDocument,
 } from "@/lib/clubSite";
 import styles from "./ClubWebsite.module.css";
 export default function ClubSiteHeader({
   document: doc,
   slug,
 }: {
-  document: SiteDocument;
+  document: SiteShellDocument;
   slug: string;
 }) {
   const navigation = (
@@ -41,6 +41,7 @@ export default function ClubSiteHeader({
               className={styles.logo}
               src={safeImageUrl(doc.logo_url)}
               alt=""
+              decoding="async"
             />
           )}
           {doc.name}

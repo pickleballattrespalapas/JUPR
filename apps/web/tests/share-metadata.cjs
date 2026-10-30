@@ -85,7 +85,7 @@ const responses = {
     assert.equal((await resolve('/leagues/missing', '', fixture)).share.noindex, true);
   });
   await check('RR rounds and standings promote the individual session', async () => {
-    const fixture = { [`${prefix}/play-generators/sessions/rr1`]: { session: { session_key: 'rr1', title: 'Friday Social Round Robin' } } };
+    const fixture = { [`${prefix}/play-generators/sessions/rr1/share-metadata`]: { session: { session_key: 'rr1', title: 'Friday Social Round Robin' } } };
     assert.equal((await resolve('/round-robin-generator/sessions/rr1/rounds/2', '', fixture)).share.title, 'Friday Social Round Robin — Round 2 | Tres Palapas');
     assert.match((await resolve('/round-robin-generator/sessions/rr1/standings', '', fixture)).share.title, /Standings/);
   });
@@ -94,7 +94,7 @@ const responses = {
     assert.equal((await resolve('/live/live1', '', fixture)).share.title, 'Wednesday Ladder | Tres Palapas');
   });
   await check('profiles use only the public display identity, not contact details', async () => {
-    const fixture = { [`${prefix}/players/5?recent_limit=1&history_limit=12`]: { player: { id: 5, name: 'Internal name', email: 'private@example.com', is_active: false }, identity: { display_name: 'Public Player' } } };
+    const fixture = { [`${prefix}/players/5/share-metadata`]: { player: { id: 5, name: 'Internal name', email: 'private@example.com', is_active: false }, identity: { display_name: 'Public Player' } } };
     for (const [suffix, label] of [['', 'Player Profile'], ['/matches', 'Match History']]) {
       const { share } = await resolve(`/players/5${suffix}`, '', fixture);
       assert.equal(share.title, `Public Player — ${label} | Tres Palapas`);
@@ -104,7 +104,7 @@ const responses = {
   });
   await check('missing, mismatched and other-club players never advertise an unrelated profile', async () => {
     for (const data of [null, { player: { id: 6, name: 'Other Player' } }, { club: { slug: 'other-club' }, player: { id: 5, name: 'Other Player' } }]) {
-      const fixture = { [`${prefix}/players/5?recent_limit=1&history_limit=12`]: data };
+      const fixture = { [`${prefix}/players/5/share-metadata`]: data };
       const { share } = await resolve('/players/5', '', fixture);
       assert.equal(share.title, 'Player unavailable | Tres Palapas');
       assert.equal(share.noindex, true);

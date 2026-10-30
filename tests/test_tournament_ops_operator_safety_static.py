@@ -102,7 +102,7 @@ def test_tournament_ops_workflow_header_preserves_phase_and_tournament_context()
     assert "TournamentPhaseNav" in page
     assert 'const phase = workflow === "results" || workflow === "publish" ? "publish" : "live";' in page
     assert "getAdminTournamentStatus" in page
-    assert "Tournament Operations are unavailable" in page
+    assert '<SectionLoadError title="Tournament Manager temporarily unavailable"' in page
     assert "TournamentOpsPanel" in page
     assert "initialTournamentId={tournamentId}" in page
     assert "operationsWriteReady" not in page

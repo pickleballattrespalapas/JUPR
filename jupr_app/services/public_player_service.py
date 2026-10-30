@@ -192,6 +192,27 @@ def _fetch_players(supabase: Any, club_id: str) -> list[dict[str, Any]]:
     return []
 
 
+def _match_player_names(supabase: Any, club_id: str, matches: list[dict[str, Any]]) -> dict[str, str]:
+    """Resolve only participants in these matches, using bounded IN queries."""
+    ids = sorted({str(row[slot]) for row in matches
+                  for slot in ("t1_p1", "t1_p2", "t2_p1", "t2_p2") if row.get(slot) is not None})
+    names: dict[str, str] = {}
+    for start in range(0, len(ids), 100):
+        batch = ids[start:start + 100]
+        rows = read_all_rows(
+            lambda: supabase.table("players").select("id,name").eq("club_id", club_id).in_("id", batch),
+            order="id",
+        )
+        names.update({str(row["id"]): (_plain_text(row.get("name"), limit=160) or "Player") for row in rows})
+    return names
+
+
+def get_public_player_share_metadata(supabase: Any, *, club_id: str, player_id: int | str) -> dict[str, Any] | None:
+    """One player lookup for link previews; no history, roster or awards reads."""
+    row = _fetch_player(supabase, str(club_id).strip(), player_id)
+    return {"player": _player_base(row)} if row and not is_merged_player(row) else None
+
+
 def _fetch_player(supabase: Any, club_id: str, player_id: int | str) -> dict[str, Any] | None:
     try:
         row = _safe_first(
@@ -959,10 +980,8 @@ def get_public_player_profile(
     ]
     league_ratings.sort(key=lambda r: str(r.get("league_name") or "").casefold())
 
-    players = _fetch_players(supabase, cid)
-    public_players = [_player_base(item) for item in players]
-    name_by_id = {str(item.get("id")): str(item.get("name") or "Player") for item in public_players}
     matches = _fetch_player_matches(supabase, cid, player_id)
+    name_by_id = _match_player_names(supabase, cid, matches)
     rating = _rating_projection(player, matches, player_id=player_id)
     points_by_match = {str(point.get("match_id")): point for point in rating["history"] if point.get("match_id") is not None}
     public_matches: list[dict[str, Any]] = []
@@ -1028,15 +1047,14 @@ def get_public_matches(
     offset: int = 0,
 ) -> list[dict[str, Any]]:
     cid = str(club_id).strip()
-    players = _fetch_players(supabase, cid)
-    name_by_id = {str(p.get("id")): (_plain_text(p.get("name"), limit=160) or "Player") for p in players}
     if player_id is not None:
         rows = _fetch_player_matches(supabase, cid, player_id)
     else:
         rows = _fetch_recent_matches(supabase, cid, limit=int(limit or 100))
-    public_rows = [_public_match(row, name_by_id) for row in rows]
     safe_offset = max(0, int(offset))
-    return public_rows[safe_offset : safe_offset + max(1, min(int(limit or 100), 500))]
+    page = rows[safe_offset : safe_offset + max(1, min(int(limit or 100), 500))]
+    name_by_id = _match_player_names(supabase, cid, page)
+    return [_public_match(row, name_by_id) for row in page]
 
 
 def get_public_match_detail(
@@ -1049,6 +1067,5 @@ def get_public_match_detail(
     row = _fetch_match(supabase, cid, match_id)
     if not row:
         return None
-    players = _fetch_players(supabase, cid)
-    name_by_id = {str(p.get("id")): (_plain_text(p.get("name"), limit=160) or "Player") for p in players}
+    name_by_id = _match_player_names(supabase, cid, [row])
     return _public_match(row, name_by_id, include_rating_snapshot=True)

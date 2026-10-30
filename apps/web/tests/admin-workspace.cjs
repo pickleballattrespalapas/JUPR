@@ -88,7 +88,7 @@ const auth={getAdminApiBaseUrl:()=> 'https://test.invalid',signOutAdminSession:a
  availableClubs=[alpha,beta];session.capabilities.assignments=[{club_id:'alpha',role:'administrator'},{club_id:'beta',role:'operator'}];workspace.selectAdminWorkspace(beta);
  const requests=[],Panel=()=>null;
  const find=(node,type)=>node?.type===type?node:[].concat(node?.props?.children||[]).map(child=>find(child,type)).find(Boolean);
- const Tournaments=load('app/admin/tournaments/page.tsx',{'@/lib/adminWorkspaceServer':server,'next/link':link,'@/lib/adminTournamentApi':{getAdminTournamentApiBaseUrl:()=>'/api',getAdminTournamentStatus:async id=>(requests.push(id),{data:{status:'enabled'}})},'./TournamentAdminPanel':Panel}).default;
+ const Tournaments=load('app/admin/tournaments/page.tsx',{'@/components/SectionLoadError':Panel,'@/lib/adminWorkspaceServer':server,'next/link':link,'@/lib/adminTournamentApi':{getAdminTournamentApiBaseUrl:()=>'/api',getAdminTournamentStatus:async id=>(requests.push(id),{data:{status:'enabled'}})},'./TournamentAdminPanel':Panel}).default;
  assert.equal(find(await Tournaments(),Panel).props.clubId,'beta');assert.deepEqual(requests,['beta']);
  const Uploader=load('app/admin/match-uploader/page.tsx',{'@/lib/adminWorkspaceServer':server,'next/link':link,'@/lib/api':{getClubPlayerOptions:async slug=>(requests.push(slug),{data:{players:[]}})},'@/lib/adminMatchUploaderApi':{getAdminMatchUploaderApiBaseUrl:()=>'/api',getAdminMatchUploaderStatus:async id=>(requests.push(id),{data:{status:'enabled'}})},'./MatchUploaderForm':Panel}).default;
  assert.equal(find(await Uploader(),Panel).props.clubId,'beta');assert.deepEqual(requests.slice(1),['beta-club','beta']);

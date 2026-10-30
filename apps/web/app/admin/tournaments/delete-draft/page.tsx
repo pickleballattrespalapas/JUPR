@@ -1,3 +1,4 @@
+import SectionLoadError from "@/components/SectionLoadError";
 import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import { redirect } from "next/navigation";
 import { getAdminTournamentApiBaseUrl, getAdminTournamentStatus } from "@/lib/adminTournamentApi";
@@ -23,7 +24,7 @@ export default async function AdminTournamentDeleteDraftPage(props: Props) {
       <p style={{ color: "#334155", maxWidth: "820px" }}>
         Delete only this unused draft shell. The API rechecks registrations, setup rows, draws, teams, games, and audit requirements before deletion.
       </p>
-      {error ? <p role="alert" style={{ color: "#b91c1c" }}>Draft deletion is unavailable. {error}</p> : null}
+      {error ? <SectionLoadError title="Tournament Manager temporarily unavailable" message="Your tournament data couldn’t load. Try again, or use the navigation to open another section." /> : null}
       {data ? (
         <DeleteDraftPanel apiBase={getAdminTournamentApiBaseUrl()} clubId={clubId} status={data} initialTournamentId={context.tournamentId} initialTournamentName={context.tournamentName || context.tournamentId} />
       ) : null}
