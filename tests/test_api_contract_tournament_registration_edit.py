@@ -73,6 +73,9 @@ def _edit_versions(storage):
 
 def test_public_withdrawal_route_guards_and_error_contract(client_and_storage, monkeypatch):
     client, storage = client_and_storage
+    monkeypatch.setenv("JUPR_ENV", "staging")
+    monkeypatch.setenv("JUPR_STAGING_WRITE_WAVE", "public-intake-auth")
+    monkeypatch.setenv("JUPR_ENABLE_STAGING_PUBLIC_INTAKE_WRITES", "1")
     registration_id = _submit_registration(client)
     payload = {"edit_token": _edit_token(registration_id), "tournament_id": "t1", "confirmed": True, **_edit_versions(storage)}
     path = "/clubs/tres-palapas/tournament-registration/withdraw"
