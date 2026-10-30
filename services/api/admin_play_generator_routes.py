@@ -240,6 +240,9 @@ def _require_service_role() -> None:
 
 
 def _handle(exc: Exception) -> None:
+    detail = getattr(exc, "detail", None)
+    if isinstance(detail, dict) and str(detail.get("code") or "").startswith("STARTING_RATING_"):
+        raise HTTPException(status_code=400, detail=detail) from exc
     from jupr_app.services.generator_compute import compute_unavailable_cause
     if unavailable := compute_unavailable_cause(exc):
         raise HTTPException(status_code=503, detail=str(unavailable), headers={"Retry-After": "2"}) from exc

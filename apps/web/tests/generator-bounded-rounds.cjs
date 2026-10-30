@@ -8,6 +8,7 @@ let refreshes = 0;
 const router = { push: url => navigation.push(url), replace() {}, refresh() { refreshes++; } };
 const Link = ({ children, ...props }) => h("a", props, children);
 const stubs = {
+  "@/components/StartingRatingReview": require("./helpers/starting-rating-review-module.cjs"),
   "next/link": Link,
   "@/components/PublicClubLink": Link,
   "next/navigation": { useRouter: () => router },

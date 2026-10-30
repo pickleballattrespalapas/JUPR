@@ -7,6 +7,7 @@ import HubAddPlayerDialog from "./HubAddPlayerDialog";
 import styles from "./RoundRobinHubPanel.module.css";
 
 type Props = {
+  accessToken?: string;
   apiBase: string; clubId: string; hubId: string; groups: HubGroup[]; registration?: HubRegistration;
   disabled: boolean; busy: boolean; pending: boolean; error: string;
   onCommand: (action: HubCommandAction, payload: Record<string, unknown>) => Promise<boolean>;
@@ -17,7 +18,7 @@ const subscribeOrigin = () => () => {};
 const browserOrigin = () => window.location.origin;
 const serverOrigin = () => "";
 
-export default function HubRegistrationPanel({ apiBase, clubId, hubId, groups, registration, disabled, busy, pending, error, onCommand, onRetry }: Props) {
+export default function HubRegistrationPanel({ accessToken, apiBase, clubId, hubId, groups, registration, disabled, busy, pending, error, onCommand, onRetry }: Props) {
   const origin = useSyncExternalStore(subscribeOrigin, browserOrigin, serverOrigin);
   const url = origin ? `${origin}/round-robin-hub/${encodeURIComponent(hubId)}/check-in` : "";
   const [copyMessage, setCopyMessage] = useState("");
@@ -75,7 +76,7 @@ export default function HubRegistrationPanel({ apiBase, clubId, hubId, groups, r
         </article>;
       })}
     </section>
-    {adding && registration.checkins.some(item => item.id === adding.id && item.status === "pending") ? <HubAddPlayerDialog key={adding.id} apiBase={apiBase} clubId={clubId} groups={groups.filter(group => group.session_key === adding.session_key)} initialName={adding.name} initialSessionKey={adding.session_key}
+    {adding && registration.checkins.some(item => item.id === adding.id && item.status === "pending") ? <HubAddPlayerDialog key={adding.id} accessToken={accessToken} apiBase={apiBase} clubId={clubId} groups={groups.filter(group => group.session_key === adding.session_key)} initialName={adding.name} initialSessionKey={adding.session_key}
       disabled={disabled} busy={busy} pending={pending} error={error} onClose={() => setAdding(null)} onRetry={onRetry}
       onSubmit={(_sessionKey, name, playerId) => { void review(adding, "add", { name, ...(playerId == null ? {} : { player_id: playerId }) }).then(ok => { if (ok) setAdding(null); }); }} /> : null}
   </div>;

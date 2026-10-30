@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import { ConfirmAction } from "@/components/ConfirmAction";
 import { actionSuccess, type ActionCompletion } from "@/components/interaction";
 import type {
@@ -11,6 +12,8 @@ import type {
 } from "@/lib/adminLeagueManagerApi";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { useAdminSession } from "@/lib/useAdminSession";
+
+const CourtReserveRosterImport = dynamic(() => import("@/components/CourtReserveRosterImport"), { ssr: false });
 
 type Props = {
   apiBase: string | null;
@@ -49,6 +52,8 @@ export default function LeagueRosterPanel({ apiBase, clubId, status, initialLeag
   const [action, setAction] = useState<"activate" | "deactivate">("deactivate");
   const [idempotencyKey, setIdempotencyKey] = useState(operationKey);
   const [busy, setBusy] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const importOperation = useRef<{ ids: string; key: string } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const detailRequest = useLatestRequestGuard(`${accessToken}\u0000${initialLeague}`, clearProtectedState);
   const actionRequest = useLatestRequestGuard(accessToken);
@@ -68,6 +73,8 @@ export default function LeagueRosterPanel({ apiBase, clubId, status, initialLeag
   function clearProtectedState() {
     actionRequest.invalidate();
     setDetail(null);
+    setImportOpen(false);
+    importOperation.current = null;
     setSelectedIds([]);
     setFilter("in_league");
     setAction("deactivate");
@@ -115,8 +122,8 @@ export default function LeagueRosterPanel({ apiBase, clubId, status, initialLeag
     if (nextFilter === "in_league") setAction("deactivate");
   }
 
-  async function saveBatch(confirmationText: string): Promise<ActionCompletion> {
-    if (!selectedIds.length) {
+  async function saveBatch(confirmationText: string, ids = selectedIds, batchAction = action, requestKey = idempotencyKey): Promise<ActionCompletion> {
+    if (!ids.length) {
       const error = new Error("Select at least one player.");
       setMessage(error.message);
       throw error;
@@ -130,10 +137,10 @@ export default function LeagueRosterPanel({ apiBase, clubId, status, initialLeag
         {
           method: "POST",
           body: JSON.stringify({
-            action,
-            player_ids: selectedIds,
+            action: batchAction,
+            player_ids: ids,
             starting_rating: null,
-            idempotency_key: idempotencyKey,
+            idempotency_key: requestKey,
             confirmation_text: confirmationText,
             source: "next_selected_league_roster_page"
           })
@@ -142,11 +149,11 @@ export default function LeagueRosterPanel({ apiBase, clubId, status, initialLeag
       if (!actionRequest.isCurrent(generation)) throw new Error("The admin session changed before the roster batch response was applied.");
       if (payload.detail) setDetail(payload.detail);
       else await loadDetail();
-      const count = payload.updated_count ?? selectedIds.length;
-      setMessage(`${action === "activate" ? "Added" : "Removed"} ${count} player${count === 1 ? "" : "s"}.`);
+      const count = payload.updated_count ?? ids.length;
+      setMessage(`${batchAction === "activate" ? "Added" : "Removed"} ${count} player${count === 1 ? "" : "s"}.`);
       setSelectedIds([]);
       setIdempotencyKey(operationKey());
-      return actionSuccess(action === "activate" ? "Players added" : "Players removed", `${count} player${count === 1 ? "" : "s"} ${count === 1 ? "was" : "were"} ${action === "activate" ? "added to" : "removed from"} the league.`);
+      return actionSuccess(batchAction === "activate" ? "Players added" : "Players removed", `${count} player${count === 1 ? "" : "s"} ${count === 1 ? "was" : "were"} ${batchAction === "activate" ? "added to" : "removed from"} the league.`);
     } catch (error) {
       if (actionRequest.isCurrent(generation)) {
         setMessage(`${error instanceof Error ? error.message : "Unable to update the roster."} The same request key is retained for a safe retry.`);
@@ -155,6 +162,21 @@ export default function LeagueRosterPanel({ apiBase, clubId, status, initialLeag
     } finally {
       if (actionRequest.isCurrent(generation)) setBusy(false);
     }
+  }
+
+  async function importRoster(selection: { playerIds: number[]; requestedRatings: Record<string, string> }) {
+    const currentIds = new Set((detail?.roster || []).filter(row => row.in_league).map(row => row.player_id));
+    const ids = selection.playerIds.filter(id => !currentIds.has(id));
+    if (!ids.length) {
+      setMessage("Every imported player is already in this league. Starting estimates have been reviewed.");
+      setImportOpen(false);
+      return;
+    }
+    const fingerprint = [...ids].sort((a, b) => a - b).join(",");
+    if (importOperation.current?.ids !== fingerprint) importOperation.current = { ids: fingerprint, key: operationKey() };
+    await saveBatch("SAVE LEAGUE ROSTER BATCH", ids, "activate", importOperation.current.key);
+    importOperation.current = null;
+    setImportOpen(false);
   }
 
   useAuthenticatedAutoLoad(status.enabled ? `${accessToken}\u0000${initialLeague}` : "", loadDetail);
@@ -200,6 +222,11 @@ export default function LeagueRosterPanel({ apiBase, clubId, status, initialLeag
       {busy && !detail ? <p role="status">Loading {initialLeague} roster…</p> : null}
       {detail ? (
         <article style={cardStyle}>
+          {rosterMutable ? <section style={{ marginBottom: "1rem" }}>
+            <button type="button" onClick={() => setImportOpen(value => !value)} disabled={busy} style={ghostButtonStyle}>{importOpen ? "Close CourtReserve import" : "Import CourtReserve roster"}</button>
+            <p style={{ color: "#475569" }}>Import names and skill estimates from a CourtReserve CSV or pasted report. Existing rated players keep their PCS JUPR; only players without rated history need a starting estimate reviewed.</p>
+            {importOpen && apiBase ? <CourtReserveRosterImport apiBase={apiBase} clubId={clubId} accessToken={accessToken} players={roster.map(row => ({ id: row.player_id, name: row.player_name }))} matchFormat={detail.league.match_format === "singles" ? "singles" : "doubles"} disabled={busy} onImport={importRoster} onCancel={() => setImportOpen(false)} submitLabel="Add imported players to league" /> : null}
+          </section> : null}
           {!rosterMutable ? <p style={{ color: "#92400e" }}>This roster is available for review only while the league is {detail.league.status}.</p> : null}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.75rem", alignItems: "end" }}>
             <label><strong>Search players</strong><br /><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name or player ID" style={inputStyle} /></label>
@@ -234,7 +261,7 @@ export default function LeagueRosterPanel({ apiBase, clubId, status, initialLeag
               tone={action === "deactivate" ? "danger" : "default"}
               disabled={!rosterMutable || !selectedIds.length}
               busy={busy}
-              onConfirm={saveBatch}
+              onConfirm={(confirmationText) => saveBatch(confirmationText)}
             />
           </p> : null}
         </article>

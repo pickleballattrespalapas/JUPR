@@ -110,11 +110,13 @@ async function main() {
 
     for (const [mode, format] of [['rated', 'doubles'], ['unrated', 'singles']]) {
       let createdPlayerId;
-      console.log(`Checking ${mode} ${format} from an empty organizer browser`);
-      const context = await makeContext();
+      console.log(`Checking ${mode} ${format} from a new organizer page`);
+      // Rated setup requires staff to review a new player's first estimate.
+      // The session itself still uses the public organizer routes and token.
+      const context = mode === 'rated' ? adminContext : await makeContext();
       const page = await context.newPage();
       const title = `${mode} RR browser rehearsal`;
-      const before = await fixture();
+      let before = await fixture();
       await page.goto(`${webOrigin}/clubs/test/round-robin-generator`);
       await page.getByLabel('Session title', {exact:true}).fill(title);
       await page.getByRole('combobox', {name:/^Play format/}).selectOption(format);
@@ -125,6 +127,49 @@ async function main() {
       await page.getByRole('textbox', {name:/^Players \(/}).fill(mode === 'rated'
         ? 'Player 1\nPlayer 2\nPlayer 3\nNew Browser Player'
         : 'Player 1\nPlayer 2\nPlayer 3\nPlayer 4');
+      for (let index = 1; index <= (mode === 'rated' ? 3 : 4); index++) {
+        await page.getByLabel('Search club players', {exact:true}).fill(`Player ${index}`);
+        await page.getByRole('button', {name:'Link player', exact:true}).click();
+      }
+      if (mode === 'rated') {
+        assert(await page.getByRole('button', {name:'Preview matchups', exact:true}).isDisabled(), 'An unlinked player blocks rated setup');
+        await page.getByRole('button', {name:'Create new player for this lineup', exact:true}).click();
+        assert.equal(await page.getByLabel('New player name for this lineup', {exact:true}).inputValue(), 'New Browser Player');
+        assert(await page.getByRole('button', {name:'Create and select player', exact:true}).isDisabled());
+        await page.getByLabel('New player starting level for this lineup', {exact:true}).fill('3.75');
+        await page.setViewportSize({width:390, height:844});
+        await screenshot(page, 'create-player-mobile.png');
+        const dimensions = await page.evaluate(() => ({width:document.documentElement.clientWidth, scroll:document.documentElement.scrollWidth}));
+        assert(dimensions.scroll <= dimensions.width+1, 'Starting levels fit mobile width');
+        const createButton = page.getByRole('button', {name:'Create and select player', exact:true});
+        await createButton.focus();
+        const created = await clickRequest(page, createButton, '/players/editor/players');
+        createdPlayerId = created.body.player.id;
+        const startingInput = page.getByRole('spinbutton', {name:'New Browser Player doubles starting rating', exact:true});
+        await startingInput.waitFor();
+        assert.equal(await startingInput.inputValue(), '3.75');
+        assert(await page.getByRole('button', {name:'Preview matchups', exact:true}).isDisabled(), 'A profile with no games still needs an explicit starting-estimate review');
+        const withNewPlayer = await fixture();
+        assert.equal(withNewPlayer.players.length, before.players.length + 1);
+        const newPlayer = withNewPlayer.players.find(p => p.id === createdPlayerId);
+        assert.equal(newPlayer.rating, 1500);
+        assert.equal(newPlayer.starting_rating, 1500);
+        assert.equal(newPlayer.matches_played, 0);
+        assert.deepEqual(withNewPlayer.matches, before.matches, 'Creating a player does not approve scores');
+        const retry = await fetch(`${apiOrigin}/admin/clubs/club/players/editor/players`, {
+          method:'POST', headers:{Authorization:'Bearer local-reviewer', 'Content-Type':'application/json'}, body:JSON.stringify(created.request)});
+        assert(retry.ok);
+        assert.equal((await retry.json()).player.id, createdPlayerId);
+        assert.equal((await fixture()).players.length, withNewPlayer.players.length, 'Exact retry cannot duplicate the new player');
+        const reviewed = await clickRequest(page, page.getByRole('button', {name:'Confirm starting rating (1)', exact:true}), '/starting-rating-review/confirm');
+        assert.equal(reviewed.request.reviews[0].player_id, createdPlayerId);
+        assert.equal(reviewed.request.reviews[0].rating_jupr, 3.75);
+        await page.getByText('All selected players are ready for rated doubles play.', {exact:true}).waitFor();
+        await page.setViewportSize({width:1280, height:900});
+        await screenshot(page, 'created-player-desktop.png');
+        before = await fixture();
+        console.log('PASS rated setup: linked profiles, inline player creation, explicit first estimate, no games written, and duplicate-safe retry before preview');
+      }
       const preview = await clickRequest(page, page.getByRole('button', {name:'Preview matchups', exact:true}), '/preview');
       assert.equal(preview.request.rating_mode, mode);
       assert.equal(preview.body.preview.ratingMode, mode);
@@ -330,40 +375,11 @@ async function main() {
         assert.equal(player.starting_rating, 1700);
         assert.equal(player.singles_rating, before.players.find(p => p.id === 1).singles_rating);
         assert.deepEqual(seeded.matches, before.matches, 'Saving a starting level does not approve scores');
-        assert.equal(await adminPage.getByRole('button', {name:approveLabel, exact:true}).isDisabled(), true, 'Missing profiles block approval');
-        await adminPage.getByRole('button', {name:'Create new player for New Browser Player', exact:true}).click();
-        assert.equal(await adminPage.getByLabel('New player name for New Browser Player', {exact:true}).inputValue(), 'New Browser Player');
-        assert.equal(await adminPage.getByRole('button', {name:'Create and select player', exact:true}).isDisabled(), true);
-        await adminPage.getByLabel('New player starting level for New Browser Player', {exact:true}).fill('3.75');
-        await adminPage.setViewportSize({width:390, height:844});
-        await screenshot(adminPage, 'create-player-mobile.png');
-        const dimensions = await adminPage.evaluate(() => ({width:document.documentElement.clientWidth, scroll:document.documentElement.scrollWidth}));
-        assert(dimensions.scroll <= dimensions.width+1, 'Starting levels fit mobile width');
-        const createButton = adminPage.getByRole('button', {name:'Create and select player', exact:true});
-        // Settle focus scrolling after changing viewport with a number field focused.
-        // Otherwise Chromium can move the target between mouse-down and mouse-up.
-        await createButton.focus();
-        const created = await clickRequest(adminPage, createButton, '/players/editor/players');
-        createdPlayerId = created.body.player.id;
-        await adminPage.getByRole('spinbutton', {name:'New Browser Player doubles starting level', exact:true}).waitFor();
-        assert.equal(await adminPage.getByRole('spinbutton', {name:'New Browser Player doubles starting level', exact:true}).inputValue(), '3.75');
-        const withNewPlayer = await fixture();
-        assert.equal(withNewPlayer.players.length, seeded.players.length + 1);
-        const newPlayer = withNewPlayer.players.find(p => p.id === createdPlayerId);
-        assert.equal(newPlayer.rating, 1500);
-        assert.equal(newPlayer.starting_rating, 1500);
-        assert.equal(newPlayer.matches_played, 0);
-        assert.deepEqual(withNewPlayer.matches, before.matches, 'Creating a player does not approve scores');
-        const retry = await fetch(`${apiOrigin}/admin/clubs/club/players/editor/players`, {
-          method:'POST', headers:{Authorization:'Bearer local-reviewer', 'Content-Type':'application/json'}, body:JSON.stringify(created.request)});
-        assert(retry.ok);
-        assert.equal((await retry.json()).player.id, createdPlayerId);
-        assert.equal((await fixture()).players.length, withNewPlayer.players.length, 'Exact retry cannot duplicate the new player');
+        assert.equal(await adminPage.getByRole('spinbutton', {name:'New Browser Player doubles starting level', exact:true}).inputValue(), '3.75', 'The pre-start estimate survives the full submission flow');
+        assert.equal(seeded.players.length, before.players.length, 'Approval review reuses the profile created before rated play');
+        assert.equal(seeded.players.find(p => p.id === createdPlayerId).rating, 1500);
         assert.equal(await adminPage.getByRole('button', {name:approveLabel, exact:true}).isDisabled(), false);
-        await adminPage.setViewportSize({width:1280, height:900});
-        await screenshot(adminPage, 'created-player-desktop.png');
         console.log('PASS starting level: browser edit -> API -> current and baseline saved; approval blocked until save; singles preserved');
-        console.log('PASS missing player: inline creation -> existing API -> one profile with explicit starting level -> automatically selected; exact retry creates no duplicate');
       }
       await adminPage.getByRole('button', {name:approveLabel, exact:true}).click();
       const approved = await clickRequest(adminPage, adminPage.getByRole('dialog').getByRole('button', {name:approveLabel, exact:true}), '/review');

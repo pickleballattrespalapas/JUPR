@@ -13,6 +13,7 @@ const stubs = {
   "@/components/interaction": { actionSuccess: (title, message) => ({ status: "success", title, message }) }
 };
 function load(name, parent = root) {
+  if (name.endsWith(".module.css")) return {};
   if (name === "@/components/PublicControls") return require("./helpers/public-controls-module.cjs")(name);
   if (Object.hasOwn(stubs, name)) return stubs[name];
   if (!name.startsWith("@/") && !name.startsWith(".")) return require(name);

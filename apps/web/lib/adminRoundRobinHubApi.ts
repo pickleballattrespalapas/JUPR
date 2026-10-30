@@ -27,6 +27,7 @@ export type HubGroupPlayer = {
 };
 export type HubGroup = {
   supplemental?: boolean; standings_policy?: string;
+  play_format?: "doubles" | "singles" | "doubles_singles";
   registration_driven?: boolean; minimum_players?: number; active_player_count?: number;
   upcoming_player_count?: number; departed_player_count?: number; roster_entry_count?: number;
   add_player_effective_round?: number;

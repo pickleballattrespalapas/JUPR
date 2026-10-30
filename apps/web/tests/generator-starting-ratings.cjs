@@ -4,7 +4,15 @@ const path = require('node:path');
 const React = require('react');
 const ts = require('typescript');
 const {create, act} = require('react-test-renderer');
+let automaticallyReviewed = true;
+const reviewPanels = new Map();
+function RatingReview(props) {
+  reviewPanels.set(props.matchFormat, props);
+  React.useEffect(() => { props.onReady(automaticallyReviewed, []); }, [props.playerIds.join(','), props.matchFormat]);
+  return null;
+}
 const mocks = {
+  "@/components/StartingRatingReview": {__esModule:true, default:RatingReview},
   'next/link': ({children, ...props}) => React.createElement('a', props, children),
   '@/lib/useAdminSession': {useAdminSession: () => ({accessToken:'admin-token'})},
   '@/components/ConfirmAction': {ConfirmAction: props => React.createElement('button', {disabled:props.disabled, onClick:props.onConfirm}, props.triggerLabel)},
@@ -78,6 +86,25 @@ async function mount(queue = structuredClone(seed), options = {}) {
   return {tree, calls, queue};
 }
 async function main() {
+  automaticallyReviewed = false;
+  const needsReview = await mount();
+  assert.equal(button(needsReview.tree, 'Approve rated results').props.disabled, true, 'Rated publication waits for authoritative starting-rating review');
+  assert.deepEqual(reviewPanels.get('doubles').playerIds, [1,2,3,4]);
+  assert.deepEqual(reviewPanels.get('singles').playerIds, [1,2], 'Only actual singles participants need singles review');
+  await act(async () => reviewPanels.get('doubles').onReady(true, []));
+  assert.equal(button(needsReview.tree, 'Approve rated results').props.disabled, true, 'Mixed publication waits for both formats');
+  await act(async () => reviewPanels.get('singles').onReady(true, []));
+  assert.equal(button(needsReview.tree, 'Approve rated results').props.disabled, false);
+  await act(async () => reviewPanels.get('doubles').onReady(false, []));
+  assert.equal(button(needsReview.tree, 'Approve rated results').props.disabled, true, 'An invalidated review closes the gate again');
+  await act(async () => {
+    reviewPanels.get('doubles').onConfirmed([]);
+    input(needsReview.tree, 'Player 1 doubles starting level').props.onChange({target:{value:'4.25'}});
+  });
+  assert.equal(input(needsReview.tree, 'Player 1 doubles starting level').props.value, '4.25', 'A review refresh preserves a starting-level edit made while the save completed');
+  await act(async () => needsReview.tree.unmount());
+  automaticallyReviewed = true;
+
   const {tree, calls} = await mount();
   assert.equal(input(tree, 'Player 1 doubles starting level').props.value, '3.5');
   assert.equal(tree.root.findAllByProps({'aria-label':'Player 1 singles starting level'}).length, 0, 'Singles baselines are not editable here');
