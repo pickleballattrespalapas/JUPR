@@ -1,5 +1,5 @@
 const assert = require("node:assert/strict");
-const { operationsReady, weeklyReportReady, leagueLiveReady, roundRobinHubReady, siteReliabilityReady, startingRatingReviewReady, waitForProductionApi, REQUIRED_FLAGS } = require("../scripts/wait-for-production-api.cjs");
+const { operationsReady, weeklyReportReady, leagueLiveReady, roundRobinHubReady, siteReliabilityReady, startingRatingReviewReady, tournamentPartnerLookupReady, waitForProductionApi, REQUIRED_FLAGS } = require("../scripts/wait-for-production-api.cjs");
 const ready = { ok: true, club_website_settings_available: true, interclub_seasons_available: true, environment: "production", fly_app_name: "juprleagues-api",
   supabase_project_ref: "dnoockbwfenunhcibwfn", production_business_write_policy: "enabled",
   staging_write_wave: "none", feature_flags: Object.fromEntries(REQUIRED_FLAGS.map((flag) => [flag, true])) };
@@ -15,6 +15,8 @@ contract.paths = Object.fromEntries([
   ["player-operations/{operation_key}/reconcile", "post"],
 ].map(([suffix, method]) => [`/admin/clubs/{club_id}/league-manager/live/${suffix}`, { [method]: {} }]));
 const preferencesPath = "/admin/clubs/{club_id}/weekly-recap/preferences";
+const partnerLookupPath = "/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/partner-profile-resolution";
+contract.paths[partnerLookupPath] = { post: {} };
 contract.paths[preferencesPath] = { get: {}, put: {} };
 contract.components.schemas.AdminWeeklyRecapPublishRequest = { properties: { edits_json: { type: "object" } } };
 const hubRoutes = [
@@ -124,6 +126,11 @@ contract.components.schemas.StartingRatingReviewConfirmation = { properties: {
   }
   assert.equal(startingRatingReviewReady(contract), true);
   assert.equal(startingRatingReviewReady({}), false);
+  assert.equal(tournamentPartnerLookupReady(contract), true);
+  assert.equal(tournamentPartnerLookupReady({}), false);
+  const beforePartnerLookup = structuredClone(contract);
+  delete beforePartnerLookup.paths[partnerLookupPath].post;
+  assert.equal(tournamentPartnerLookupReady(beforePartnerLookup), false);
   const incompleteRatingReviews = [];
   for (const path of ratingReviewPaths) {
     const missingRoute = structuredClone(contract);
@@ -226,6 +233,12 @@ contract.components.schemas.StartingRatingReviewConfirmation = { properties: {
         json: async () => url.endsWith('/openapi.json') ? (++contracts === 1 ? previousApi : contract) : ready }) });
     assert.equal(contracts, 2, "The website waits for starting-rating preview, confirmation, and concurrency request fields");
   }
+  clock = 0;
+  contracts = 0;
+  await waitForProductionApi({ environment: "production", now: () => clock,
+    pause: async () => { clock += 10000; }, request: async (url) => ({ ok: true,
+      json: async () => url.endsWith('/openapi.json') ? (++contracts === 1 ? beforePartnerLookup : contract) : ready }) });
+  assert.equal(contracts, 2, "The updated partner editor waits until its lookup endpoint is deployed");
   clock = 0;
   await assert.rejects(waitForProductionApi({ environment: "production", timeoutMs: 10000,
     now: () => clock, pause: async () => { clock += 10000; }, request: async () => { throw new Error("Unavailable"); } }), /current website remains active/);
