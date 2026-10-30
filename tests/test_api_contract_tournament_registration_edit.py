@@ -71,6 +71,30 @@ def _edit_versions(storage):
     }
 
 
+def test_public_withdrawal_route_guards_and_error_contract(client_and_storage, monkeypatch):
+    client, storage = client_and_storage
+    registration_id = _submit_registration(client)
+    payload = {"edit_token": _edit_token(registration_id), "tournament_id": "t1", "confirmed": True, **_edit_versions(storage)}
+    path = "/clubs/tres-palapas/tournament-registration/withdraw"
+    calls = []
+    def withdraw(*args, **kwargs):
+        calls.append(kwargs)
+        return {"ok": True, "withdrawn": True, "registration_id": registration_id}
+    monkeypatch.setattr("services.api.public_tournament_registration_routes.withdraw_public_tournament_registration", withdraw)
+    response = client.post(path, json=payload)
+    assert response.status_code == 200 and response.json()["withdrawn"] is True
+    assert calls[0]["club_id"] == "club-1"
+    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY")
+    assert client.post(path, json=payload).status_code == 503
+    assert len(calls) == 1
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "local-service-role")
+    from fastapi import HTTPException
+    def closed(): raise HTTPException(status_code=403, detail="Staging writes are closed")
+    monkeypatch.setattr("services.api.public_tournament_registration_routes.require_public_intake_or_403", closed)
+    assert client.post(path, json=payload).status_code == 403
+    assert len(calls) == 1
+
+
 def test_public_registration_edit_link_request_contract(client_and_storage):
     client, _storage = client_and_storage
     _submit_registration(client)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import uuid
 from typing import Any
 
 from fastapi import HTTPException, Query, Response
@@ -17,6 +18,7 @@ from jupr_app.services.public_tournament_registration_edit_service import (
     build_public_tournament_registration_edit_page,
     request_public_tournament_registration_edit_link,
     submit_public_tournament_registration_edit,
+    withdraw_public_tournament_registration,
 )
 from jupr_app.services.public_tournament_registration_service import (
     DuplicateTournamentRegistrationError,
@@ -89,6 +91,15 @@ class PublicTournamentRegistrationEditLinkRequest(BaseModel):
         max_length=160,
         pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]+$",
     )
+
+
+class PublicTournamentRegistrationWithdrawalRequest(BaseModel):
+    edit_token: str = Field(max_length=4000)
+    tournament_id: str
+    confirmed: bool = False
+    expected_updated_at: str
+    expected_selection_versions: list[dict[str, Any]] = Field(max_length=100)
+    attempt_id: str | None = Field(default=None, max_length=36)
 
 
 class PublicTournamentRegistrationProfileResolutionRequest(BaseModel):
@@ -281,6 +292,7 @@ def install_public_tournament_registration_routes(
             page = build_public_tournament_registration_edit_page(
                 supabase,
                 club_id=club_id,
+                club_slug=club_slug,
                 edit_token=edit_token,
                 tournament_id=tournament_id,
                 registration_slug=registration_slug,
@@ -291,6 +303,13 @@ def install_public_tournament_registration_routes(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        registration = page.get("registration") or {}
+        record_registration_attempt(supabase, club_id=club_id, source="SERVER", event="PROGRESS", stage="edit",
+            payload={"attempt_id": str(uuid.uuid4()), "tournament_id": (page.get("tournament") or {}).get("id"),
+                     "flow": "edit", "display_name": registration.get("display_name"),
+                     "first_name": registration.get("first_name"), "last_name": registration.get("last_name"),
+                     "email": registration.get("email")},
+            registration_id=registration.get("id"), message="Registration edit page loaded.")
         return {"club": public_club_payload(club, club_slug), **page}
 
     @app.post("/clubs/{club_slug}/tournament-registration/edit")
@@ -332,6 +351,26 @@ def install_public_tournament_registration_routes(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"club": public_club_payload(club, club_slug), **result}
+
+    @app.post("/clubs/{club_slug}/tournament-registration/withdraw")
+    def withdraw_club_tournament_registration(
+        club_slug: str, payload: PublicTournamentRegistrationWithdrawalRequest,
+    ) -> dict[str, Any]:
+        require_public_intake_or_403()
+        _require_registration_edit_service_role()
+        club = get_club(club_slug)
+        club_id = str(club.get("id") or club.get("club_id") or club_slug)
+        supabase = get_supabase_client()
+        try:
+            return audited_registration_call(supabase, club_id=club_id, payload=_dump_model(payload), stage="edit",
+                operation=lambda: withdraw_public_tournament_registration(
+                    supabase, club_id=club_id, edit_token=payload.edit_token, payload=_dump_model(payload)))
+        except PublicRegistrationEditUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except (TournamentRegistrationEditConflictError, TournamentRegistrationRelationshipLockedError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/clubs/{club_slug}/tournament-roster")
     def get_club_tournament_roster(

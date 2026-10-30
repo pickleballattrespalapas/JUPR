@@ -3525,6 +3525,10 @@ def save_registration(
             manual_partner_message = _manual_partner_error_message(exc)
             if manual_partner_message:
                 raise ValueError(manual_partner_message) from exc
+            if _database_error_contains(exc, "JUPR_INVITATION:"):
+                raise TournamentRegistrationRelationshipLockedError(
+                    "This player has a reserved partnership. If it is your request, open Pending partner requests to continue or cancel it. Otherwise choose another partner or ask the player to review their request."
+                ) from exc
             if _database_error_contains(exc, REGISTRATION_EDIT_CONFLICT_MARKER):
                 raise TournamentRegistrationEditConflictError(
                     "Registration changed after it was loaded. Refresh the edit link and try again."

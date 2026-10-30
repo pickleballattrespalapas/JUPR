@@ -14,6 +14,10 @@ from tests.test_public_tournament_registration_service import FakeQuery, FakeSup
 
 
 class AuditQuery(FakeQuery):
+    def order(self, key, desc=False):
+        self.audit_orders = [*getattr(self, "audit_orders", []), (key, desc)]
+        return self
+
     def gte(self, key, value):
         self.filters.append(("gte", key, value))
         return self
@@ -29,6 +33,8 @@ class AuditQuery(FakeQuery):
                 rows = [r for r in rows if str(r.get(key) or "") >= str(value)]
             elif op == "ilike":
                 rows = [r for r in rows if str(value).strip("%").lower() in str(r.get(key) or "").lower()]
+        for key, desc in reversed(getattr(self, "audit_orders", [])):
+            rows.sort(key=lambda row: str(row.get(key) or ""), reverse=desc)
         return rows
 
 
@@ -92,6 +98,19 @@ def test_server_records_rejection_then_success_with_same_attempt():
     audited_registration_call(db, club_id="club-1", payload=data, stage="submit", operation=lambda: {"registration_id": "reg-real"})
     assert storage[TABLE][-1]["event"] == "SAVED"
     assert storage[TABLE][-1]["registration_id"] == "reg-real"
+
+
+def test_history_does_not_hide_later_failures_or_call_link_loads_failed_edits():
+    db = AuditSupabase(fake_storage())
+    data = payload()
+    audited_registration_call(db, club_id="club-1", payload=data, stage="edit", operation=lambda: {"registration_id": "reg-real"})
+    record_registration_attempt(db, club_id="club-1", payload=data)
+    assert list_registration_attempts(db, club_id="club-1", tournament_id="t1")["attempts"][0]["outcome"] == "Change not saved — earlier save succeeded"
+    audited_registration_call(db, club_id="club-1", payload=data, stage="edit", operation=lambda: {"registration_id": "reg-real", "withdrawn": True})
+    assert list_registration_attempts(db, club_id="club-1", tournament_id="t1")["attempts"][0]["outcome"] == "Withdrawn"
+    second = {**payload(), "email": "load@example.invalid"}
+    record_registration_attempt(db, club_id="club-1", payload=second, source="SERVER", event="PROGRESS", stage="edit", message="Registration edit page loaded.")
+    assert list_registration_attempts(db, club_id="club-1", tournament_id="t1", search="load@example.invalid")["attempts"][0]["outcome"] == "Editor loaded — no save recorded"
 
 
 def test_email_search_includes_earlier_anonymous_timeline_and_filters_other_clubs():

@@ -14,6 +14,7 @@ from jupr_app.domain.tournament_registration_edit_tokens import build_registrati
 from jupr_app.services import public_tournament_partner_invitation_service as service
 from services.api import public_tournament_pairing_routes as routes
 from tests.test_tournament_partner_requests import _FakeSupabase
+from tests.test_public_tournament_registration_service import FakeSupabase
 
 
 @pytest.fixture
@@ -56,6 +57,36 @@ def test_review_is_read_only_and_target_never_receives_requester_registration_ca
     assert "private-target@example.com" not in json.dumps(result)
     assert "casey@example.com" not in json.dumps(result)
     assert db.storage == before
+
+
+def test_edit_page_recovers_only_owners_pending_requests(context):
+    old_db, row, ctx = context
+    db = FakeSupabase(old_db.storage)
+    requester = dict(id="requester", email=row["requester_email"], display_name=row["requester_name"], status="CONFIRMED", tournament_id="tournament")
+    db.storage["tournament_registrations"].append(requester)
+    row["status"] = "RESERVED"
+    rows = service.edit_registration_partner_requests(db, club_id="club", club_slug="fixture", tournament_id="tournament", registration=requester, selections=[])
+    assert len(rows) == 1 and rows[0]["partner_name"] == "Alex Player"
+    query = parse_qs(urlsplit(rows[0]["continue_url"]).query)
+    verify_registration_edit_token(query["edit_token"][0], expected_registration_id="requester")
+    token = parse_qs(urlsplit(rows[0]["continue_url"]).fragment)["partner_invitation"][0]
+    assert tokens.verify_partner_invitation_token(token, club_id="club")["role"] == "requester"
+    target_rows = service.edit_registration_partner_requests(db, club_id="club", club_slug="fixture", tournament_id="tournament", registration=ctx["target_registration"], selections=[ctx["target"]])
+    assert len(target_rows) == 1 and target_rows[0]["continue_url"] is None
+    stranger = dict(id="stranger", email="stranger@example.invalid", tournament_id="tournament")
+    assert service.edit_registration_partner_requests(db, club_id="club", club_slug="fixture", tournament_id="tournament", registration=stranger, selections=[]) == []
+    assert "email" not in json.dumps(rows) and "email" not in json.dumps(target_rows)
+    row["expires_at"] = "2000-01-01T00:00:00+00:00"
+    assert service.edit_registration_partner_requests(db, club_id="club", club_slug="fixture", tournament_id="tournament", registration=requester, selections=[]) == []
+
+
+def test_recovery_does_not_grant_another_person_on_shared_email(context):
+    old_db, row, _ctx = context
+    db = FakeSupabase(old_db.storage)
+    first = dict(id="first", email=row["requester_email"], display_name=row["requester_name"], status="CONFIRMED", tournament_id="tournament")
+    other = {**first, "id": "other", "display_name": "Other Person"}
+    db.storage["tournament_registrations"].extend([first, other])
+    assert service.edit_registration_partner_requests(db, club_id="club", club_slug="fixture", tournament_id="tournament", registration=other, selections=[]) == []
 
 
 @pytest.mark.parametrize("role,action", [("requester", "accept"), ("requester", "decline"), ("target", "verify"), ("target", "complete"), ("target", "cancel")])
