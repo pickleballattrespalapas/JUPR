@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jupr_app.services.generator_starting_rating_review import require_generator_starting_ratings
+
 from jupr_app.domain.moneyball_expectations import public_event, is_moneyball, settlement
 from jupr_app.services.generator_moneyball_service import prepare_moneyball
 
@@ -469,6 +471,12 @@ def create_public_play_generator_session(
             "Don’t start another one; contact club staff."
         )
 
+    try:
+        require_generator_starting_ratings(supabase, club_id=club_id, event=preview)
+    except ValueError as exc:
+        update_public_live_operation(supabase, club_id=club_id, operation_key_value=operation_key,
+                                     status="rejected", error_text=str(exc))
+        raise
     event = start_generator_event(preview)
     now = _now_iso()
     payload = {
@@ -807,6 +815,11 @@ def _run_mutation(
     event = _event_from_state(state)
     try:
         next_event, extra_patch = mutate(event)
+        if action == "roster":
+            require_generator_starting_ratings(supabase, club_id=club_id, event=next_event, before=event)
+        elif (action == "details" and row.get("status") == "active"
+              and event.get("ratingMode") != "rated" and next_event.get("ratingMode") == "rated"):
+            require_generator_starting_ratings(supabase, club_id=club_id, event=next_event)
     except (ValueError, PublicPlayGeneratorError) as exc:
         update_public_live_operation(
             supabase,

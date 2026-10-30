@@ -307,6 +307,29 @@ async function createDisposableFixtures(page: Page): Promise<{
   }
   expect(new Set(createdPlayerIds).size).toBe(4);
 
+  // Creating a profile supplies an estimate; first rated play still requires
+  // an explicit staff review of these disposable players before court seeding.
+  const startingReviewPath = `/admin/clubs/${clubId}/starting-rating-review`;
+  const startingReview = await requestJson<{ players: Array<{
+    player_id: number; starting_jupr: number; state_fingerprint: string;
+    has_rated_history: boolean; review_required: boolean;
+  }> }>(page.request, "POST", `${startingReviewPath}/preview`, {
+    player_ids: createdPlayerIds,
+    match_format: "doubles"
+  });
+  expect(startingReview.players.map(row => row.player_id).sort((a, b) => a - b))
+    .toEqual([...createdPlayerIds].sort((a, b) => a - b));
+  expect(startingReview.players.every(row => !row.has_rated_history && row.review_required)).toBe(true);
+  const reviewed = await requestJson<{ review_required: boolean }>(page.request, "POST", `${startingReviewPath}/confirm`, {
+    match_format: "doubles",
+    reviews: startingReview.players.map(row => ({
+      player_id: row.player_id,
+      rating_jupr: row.starting_jupr,
+      expected_state_fingerprint: row.state_fingerprint
+    }))
+  });
+  expect(reviewed.review_required).toBe(false);
+
   const createdLeague = await requestJson<{ league?: LeagueFixture }>(
     page.request,
     "POST",

@@ -62,6 +62,8 @@ class Database:
              "active": True, "inactive_at": None, "last_game_at": None, "singles_last_game_at": None}
             for i in range(1, 9)
         ]}
+        from starting_rating_review_fake import seeded_reviews
+        self.starting_reviews = seeded_reviews(self.db["players"])
         self.rpc_calls = 0
         self.interrupt_after_commit = False
 
@@ -69,6 +71,10 @@ class Database:
         return Query(self.db, name)
 
     def rpc(self, name, params):
+        from starting_rating_review_fake import review_rpc
+        response = review_rpc(self, name, params, Query)
+        if response is not None:
+            return response
         if name in {"commit_admin_play_generator_session", "commit_public_play_generator_session"}:
             from generator_receipt_fake import commit_generator_rpc
             return SimpleNamespace(execute=lambda: commit_generator_rpc(self.db, name, params))
@@ -129,8 +135,12 @@ def completed_session(db, *, rating_mode="unrated", play_format="doubles", kind=
         doubles_court_count=1 if play_format == "doubles_singles" else 0,
         singles_court_count=1 if play_format == "doubles_singles" else 0,
         preview_fingerprint=None, idempotency_key=f"create-{play_format}-{rating_mode}-{kind}",
-        requester_hash="a" * 64, token_secret="t" * 48, rating_mode=rating_mode)
-    session = created["session"]
+        requester_hash="a" * 64, token_secret="t" * 48, rating_mode="unrated")
+    # This fixture includes sessions run before starting-estimate review existed.
+    # New-start admission is exercised separately; preserve legacy approval cases.
+    row = db.db["live_sessions"][-1]
+    row["state"]["page_state"]["event"]["ratingMode"] = rating_mode
+    session = get_public_play_generator_session(db, club_id="club", session_key=created["session"]["session_key"])["session"]
     args = {"club_id": "club", "session_key": session["session_key"], "edit_token": created["edit_token"], "requester_hash": "a" * 64}
     for number in range(1, total_rounds + 1):
         scored = save_public_play_generator_round(db, **args, round_number=number, expected_version=session["version"],
@@ -577,12 +587,16 @@ def test_sealed_nine_player_approval_resumes_exact_eighteen_games_once(
     db, monkeypatch, real_approval_data,
 ):
     db.db["players"].append({**copy.deepcopy(db.db["players"][-1]), "id": 9, "name": "Player 9"})
+    from starting_rating_review_fake import seeded_reviews
+    db.starting_reviews.update(seeded_reviews(db.db["players"][-1:]))
     session, token = completed_session(db, rating_mode="rated", total_rounds=9, player_count=9)
     session = submit(db, session, token)
     args = review_args(session)
     players_before = copy.deepcopy(db.db["players"])
     original_rpc = db.rpc
     def stale_rpc(name, params):
+        if name != direct.DIRECT_MATCH_RPC:
+            return original_rpc(name, params)
         def execute():
             raise RuntimeError("JUPR_DIRECT_MATCH_PLAYER_STALE: doubles player state changed before commit.")
         return SimpleNamespace(execute=execute)
@@ -636,6 +650,8 @@ def test_review_http_reports_resumable_conflict_and_recovery_errors(
             if key in {"expected_version", "action", "player_ids", "match_date", "reason"}}
     original_rpc = db.rpc
     def failed_rpc(name, params):
+        if name != direct.DIRECT_MATCH_RPC:
+            return original_rpc(name, params)
         def execute():
             raise failure
         return SimpleNamespace(execute=execute)
@@ -667,6 +683,8 @@ def test_sealed_review_excludes_later_merged_player_but_can_finalize_existing_re
         db.interrupt_after_commit = True
     else:
         def failed_rpc(name, params):
+            if name != direct.DIRECT_MATCH_RPC:
+                return original_rpc(name, params)
             def execute():
                 raise TimeoutError("response unavailable before commit")
             return SimpleNamespace(execute=execute)
@@ -698,6 +716,8 @@ def test_approval_still_rejects_a_rating_changed_after_its_persisted_snapshot(
     session = submit(db, session, token)
     original_rpc = db.rpc
     def concurrent_rating_change(name, params):
+        if name != direct.DIRECT_MATCH_RPC:
+            return original_rpc(name, params)
         player = db.db["players"][0]
         expected = next(update["expected"] for update in params["p_player_updates"]
                         if update["player_id"] == player["id"])
@@ -759,6 +779,7 @@ def test_public_http_rating_choice_survives_preview_play_and_approval(public_cli
     path = "/clubs/test/play-generators"
     setup = {"generator_kind": kind, "play_format": "doubles", "title": "HTTP organizer session",
              "participant_names": [f"Player {i}" for i in range(1, 9)],
+             "participant_player_ids": {f"Player {i}": i for i in range(1, 9)},
              "total_rounds": 2, "court_count": 2, "rating_mode": rating_mode}
     response = public_client.post(f"{path}/preview", json=setup)
     assert response.status_code == 200, response.text
@@ -895,7 +916,7 @@ def test_starting_level_is_used_by_approval_and_survives_retry(db):
     assert {k: v for k, v in player.items() if k.startswith("singles_")} == {
         k: v for k, v in original.items() if k.startswith("singles_")}
     assert result["player"]["ratings"]["doubles"]["rating_jupr"] == 4.25
-    assert any(row["action_type"] == "set_generator_starting_rating" for row in db.db["admin_activity_log"])
+    assert any(row["action_type"] == "confirm_starting_rating" for row in db.db["admin_activity_log"])
     with pytest.raises(PublicLiveConflictError):
         service.set_generator_starting_rating(db, **args)
     db.interrupt_after_commit = True

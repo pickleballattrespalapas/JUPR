@@ -23,6 +23,7 @@ const mocks = {
   '@/components/ConfirmAction': { ConfirmAction: ({ triggerLabel, onConfirm, disabled }) => h('button', { onClick: onConfirm, disabled }, triggerLabel) },
 };
 function load(name, parent = root) {
+  if (name.endsWith('.module.css')) return {};
   if (Object.hasOwn(mocks, name)) return mocks[name];
   if (name === '@/components/PublicControls') return require(path.join(root, 'tests/helpers/public-controls-module.cjs'))(name);
   if (!name.startsWith('@/') && !name.startsWith('.')) return requireWeb(name);

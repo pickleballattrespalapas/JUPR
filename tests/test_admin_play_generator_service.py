@@ -100,7 +100,9 @@ class FakeSupabase:
 
 @pytest.mark.parametrize("linked_indices", [(), (1, 3), (0, 1, 2, 3, 4)])
 @pytest.mark.parametrize("rating_mode", ["rated", "unrated"])
-def test_sparse_profiles_preserve_guest_positions_through_preview_start_and_reload(linked_indices, rating_mode):
+def test_sparse_profiles_preserve_guest_positions_through_preview_start_and_reload(linked_indices, rating_mode, monkeypatch):
+    from jupr_app.services import generator_starting_rating_review as rating_review
+    monkeypatch.setattr(rating_review, "require_starting_rating_review", lambda *_a, **_k: None)
     db = FakeSupabase()
     names = ["Manuel", "Jose", "Victor", "Chay", "Beto"]
     db.storage["players"] = [{"id": 101 + index, "club_id": "club", "name": name} for index, name in enumerate(names)]
@@ -111,6 +113,12 @@ def test_sparse_profiles_preserve_guest_positions_through_preview_start_and_relo
     preview = preview_play_generator(db, **setup)["preview"]
     expected = [links.get(name) for name in names]
     assert [p.get("player_id") for p in preview["participants"]] == expected
+    if rating_mode == "rated" and len(linked_indices) < len(names):
+        with pytest.raises(ValueError, match="select a club profile"):
+            create_play_generator_session(db, **setup, preview_fingerprint=preview["previewFingerprint"],
+                actor_email="admin@example.invalid", actor_role="administrator", source="test")
+        assert not db.storage["live_sessions"]
+        return
     session = create_play_generator_session(db, **setup, preview_fingerprint=preview["previewFingerprint"],
         actor_email="admin@example.invalid", actor_role="administrator", source="test")["session"]
     restored = get_play_generator_session(db, club_id="club", session_key=session["session_key"])["session"]

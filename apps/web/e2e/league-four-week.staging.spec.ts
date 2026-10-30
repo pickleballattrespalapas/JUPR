@@ -474,6 +474,24 @@ async function runWeek(
     name: `Build courts from ${plan.attendance} attendees`,
     exact: true
   });
+  const startingReview = page.getByRole("region", { name: "Review starting estimates before rated play", exact: true });
+  await expect(startingReview).toBeVisible();
+  await expect(startingReview).toHaveAttribute("aria-busy", "false");
+  const confirmStarting = startingReview.getByRole("button", { name: /^Confirm starting ratings? \(\d+\)$/ });
+  if (await confirmStarting.count()) {
+    await expect(buildCourts).toBeDisabled();
+    const confirmation = page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return url.origin === expectedApiOrigin
+        && url.pathname === `/admin/clubs/${clubId}/starting-rating-review/confirm`
+        && response.request().method() === "POST";
+    });
+    await confirmStarting.click();
+    const response = await confirmation;
+    expect(response.status()).toBe(200);
+    expect((await response.json()).review_required).toBe(false);
+  }
+  await expect(startingReview.getByText("All selected players are ready for rated doubles play.", { exact: true })).toBeVisible();
   await expect(buildCourts).toBeEnabled();
   await buildCourts.click();
 

@@ -6,6 +6,7 @@ const ts = require('typescript');
 const {create, act} = require('react-test-renderer');
 
 const mocks = {
+  "@/components/StartingRatingReview": require("./helpers/starting-rating-review-module.cjs"),
   '@/lib/useAdminSession': {useAdminSession: () => ({accessToken:'admin-token'})},
   '@/components/ConfirmAction': {ConfirmAction: props => React.createElement('button', {disabled:props.disabled, onClick:props.onConfirm}, props.triggerLabel)},
   '@/components/SearchablePlayerSelect': ({children, onValueChange, ...props}) => React.createElement('select', {...props, onChange:e => onValueChange(e.target.value)}, children),

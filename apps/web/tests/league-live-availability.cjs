@@ -4,6 +4,7 @@ const path = require("node:path");
 const ts = require("typescript");
 const React = require("react");
 const { create, act } = require("react-test-renderer");
+global.IS_REACT_ACT_ENVIRONMENT = true;
 
 function load(file, overrides = {}) {
   const code = ts.transpileModule(fs.readFileSync(path.join(__dirname, "..", file), "utf8"), {
@@ -21,6 +22,10 @@ global.sessionStorage = { getItem: key => storage.get(key) || null, setItem: (ke
 global.addEventListener = () => {};
 global.removeEventListener = () => {};
 const ConfirmAction = () => null;
+function ReviewedStartingRatings({ onReady }) {
+  React.useEffect(() => { onReady(true, []); }, []);
+  return null;
+}
 const dndMock = {
   DragDropContext: ({ children, ...props }) => React.createElement("mock-dnd-context", props, children),
   Droppable: ({ children, ...props }) => React.createElement("mock-droppable", props, children({ innerRef() {}, droppableProps: {}, placeholder: null }, { isDraggingOver: false })),
@@ -42,7 +47,7 @@ const Panel = load("app/admin/league-manager/live/LeagueLiveRoundPanel.tsx", {
   "./LeagueLiveAttendanceEditor": attendanceEditorModule,
   "./leagueLiveGameEdits": gameEditsModule,
   "./LeagueCourtRosterEditor": editorModule,
-  "next/dynamic": { __esModule: true, default: factory => String(factory).includes("LeagueCourtRosterEditor") ? CourtRosterEditor : () => null },
+  "next/dynamic": { __esModule: true, default: factory => String(factory).includes("LeagueCourtRosterEditor") ? CourtRosterEditor : String(factory).includes("StartingRatingReview") ? ReviewedStartingRatings : () => null },
   "@/components/SearchablePlayerSelect": { __esModule: true, default: props => React.createElement("select", props) },
   "@/components/ConfirmAction": { ConfirmAction },
   "@/components/interaction": load("components/interaction/types.ts"),

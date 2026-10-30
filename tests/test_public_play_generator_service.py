@@ -81,7 +81,9 @@ def matches(round_row):
 
 @pytest.mark.parametrize("linked_indices", [(), (1, 3), (0, 1, 2, 3, 4)])
 @pytest.mark.parametrize("rating_mode", ["rated", "unrated"])
-def test_five_player_roster_preview_start_and_reload_preserve_profile_links(linked_indices, rating_mode):
+def test_five_player_roster_preview_start_and_reload_preserve_profile_links(linked_indices, rating_mode, monkeypatch):
+    from jupr_app.services import generator_starting_rating_review as rating_review
+    monkeypatch.setattr(rating_review, "require_starting_rating_review", lambda *_a, **_k: None)
     supabase = FakeSupabase()
     names = ["Manuel", "Jose", "Victor", "Chay", "Beto"]
     supabase.db["players"] = [
@@ -104,6 +106,12 @@ def test_five_player_roster_preview_start_and_reload_preserve_profile_links(link
     assert sorted(pid for row in preview["rounds"] for pid in row["byeParticipantIds"]) == [f"p-{i}" for i in range(1, 6)]
     assert not supabase.db["live_sessions"], "Preview must not create a session"
 
+    if rating_mode == "rated" and len(linked_indices) < len(names):
+        with pytest.raises(ValueError, match="select a club profile"):
+            create_public_play_generator_session(supabase, **setup, preview_fingerprint=preview["previewFingerprint"],
+                idempotency_key=key("mixed-roster"), requester_hash=requester(), token_secret=token_secret())
+        assert not supabase.db["live_sessions"]
+        return
     created = create_public_play_generator_session(
         supabase, **setup, preview_fingerprint=preview["previewFingerprint"],
         idempotency_key=key("mixed-roster"), requester_hash=requester(), token_secret=token_secret(),

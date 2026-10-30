@@ -6,6 +6,7 @@ const h = React.createElement;
 const router = { push() {}, replace() {}, refresh() {} };
 const Link = ({ children }) => h("a", null, children);
 const stubs = {
+  "@/components/StartingRatingReview": require("./helpers/starting-rating-review-module.cjs"),
   "next/link": Link,
   "@/components/PublicClubLink": Link,
   "next/navigation": { useRouter: () => router },

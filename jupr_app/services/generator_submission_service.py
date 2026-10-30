@@ -23,6 +23,10 @@ from jupr_app.services.admin_play_generator_service import (
     _audit, _publish_payloads, _saved_matches, _session_payload, _require_hub_ready_for_publication,
 )
 from jupr_app.services.direct_match_entry_service import submit_atomic_direct_matches
+from jupr_app.services.generator_starting_rating_review import require_published_starting_ratings
+from jupr_app.services.starting_rating_review_service import (
+    get_starting_rating_review, confirm_starting_ratings, StartingRatingReviewConflict,
+)
 from jupr_app.services.public_live_operation_service import (
     PublicLiveConflictError, begin_public_live_operation, edit_token_matches,
     update_public_live_operation,
@@ -368,18 +372,26 @@ def set_generator_starting_rating(
         raise ValueError("This player already has rated games. Keep their current rating or use Player Editor for a reviewed correction.")
     if rating["state_fingerprint"] != expected_state_fingerprint:
         raise PublicLiveConflictError("This player's rating changed. Refresh and check their level before saving.")
-    patch = {"rating": round(rating_jupr * 400, 4), "starting_rating": round(rating_jupr * 400, 4)}
-    audit = dict(club_id=club_id, actor_email=actor_email, actor_role=actor_role,
-        entity_type="player", entity_id=str(player_id), source="generator_starting_rating",
-        before=before, after={"session_key": session_key, "match_format": match_format, "patch": patch})
-    required_audit_event(db, **audit, action_type="set_generator_starting_rating_intent", intent=True)
-    query = db.table("players").update(patch).eq("club_id", club_id)
-    for field, value in _rating_snapshot(before, "doubles").items():
-        query = query.is_(field, "null") if value is None else query.eq(field, value)
-    updated = _rows(query)
-    if not updated:
+    preview = get_starting_rating_review(db, club_id=club_id, player_ids=[player_id], match_format="doubles")
+    reviewed = preview["players"][0]
+    if reviewed["has_rated_history"]:
+        raise ValueError("This player already has rated history. Keep their calculated JUPR.")
+    # The existing submission UI fingerprints a smaller snapshot than the shared
+    # review API. Recheck it after loading that API's snapshot; its atomic writer
+    # then guards the remaining interval through commit.
+    current = _rows(db.table("players").select(RATING_PLAYER_COLUMNS).eq("club_id", club_id).eq("id", player_id).limit(1))
+    if not current or _review_player(current[0])["ratings"]["doubles"]["state_fingerprint"] != expected_state_fingerprint:
         raise PublicLiveConflictError("This player's rating changed. Refresh and check their level before saving.")
-    required_audit_event(db, **audit, action_type="set_generator_starting_rating", intent=False)
+    try:
+        confirm_starting_ratings(db, club_id=club_id, match_format="doubles",
+            reviews=[{"player_id": player_id, "rating_jupr": rating_jupr,
+                      "expected_state_fingerprint": reviewed["state_fingerprint"]}],
+            actor_email=actor_email, actor_role=actor_role, source="generator_starting_rating")
+    except StartingRatingReviewConflict as exc:
+        raise PublicLiveConflictError(str(exc)) from exc
+    updated = _rows(db.table("players").select(RATING_PLAYER_COLUMNS).eq("club_id", club_id).eq("id", player_id).limit(1))
+    if not updated:
+        raise RuntimeError("The reviewed starting rating was saved but the player could not be refreshed.")
     return {"ok": True, "player": _review_player(updated[0])}
 
 
@@ -440,6 +452,7 @@ def review_generator_submission(
                         if value is None or not math.isfinite(float(value)) or float(value) <= 0:
                             raise ValueError(f"Set the doubles starting level for {by_id[pid]['name']} before approving.")
                 match["rating_scope"] = "unrated" if rating_mode == "unrated" else "overall_only"
+            require_published_starting_ratings(db, club_id=club_id, matches=payloads)
         review = {"request": request, "fingerprint": fingerprint, "payloads": payloads,
                   "actor_email": actor_email, "actor_role": actor_role, "started_at": _now()}
         submission.update({"status": "processing", "review": review})

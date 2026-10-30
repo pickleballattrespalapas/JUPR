@@ -1,5 +1,6 @@
 "use client";
 
+import StartingRatingReview from "@/components/StartingRatingReview";
 import SearchablePlayerSelect from "@/components/SearchablePlayerSelect";
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -57,6 +58,8 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
   const [sessionRating, setSessionRating] = useState<"rated" | "unrated">("unrated");
   const [titleDraft, setTitleDraft] = useState("");
   const [mapping, setMapping] = useState<Record<string, number>>({});
+  const [ratingReviewChecks, setRatingReviewChecks] = useState<Record<string, boolean>>({});
+  const [ratingReviewRevision, setRatingReviewRevision] = useState(0);
   const [ratingDrafts, setRatingDrafts] = useState<Record<string, string>>({});
   const [pendingCreations, setPendingCreations] = useState<Record<string, boolean>>({});
   const markCreationPending = useCallback((participantId: string, pending: boolean) => {
@@ -209,6 +212,7 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
       if (queueScope.current !== scope) return;
       setQueue(old => ({ ...old, players: old.players.map(p => p.id === player.id ? payload.player : p) }));
       setRatingDrafts(old => { const next = { ...old }; delete next[key]; return next; });
+      setRatingReviewRevision(value => value + 1);
       setMessage(player.name + "’s doubles starting level is saved at " + value.toFixed(2) + ". Approve the results when all levels are ready.");
     } catch (error) {
       if (queueScope.current === scope) setMessage((error instanceof Error ? error.message : "Could not confirm the starting level.") + " Refresh to check the saved level before continuing.");
@@ -260,6 +264,23 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
     });
   }) : [];
   const ratingsReady = ratingChecks.every(check => !check.missing && !check.dirty);
+  const reviewGroups = (["doubles", "singles"] as const).map(format => ({
+    format, ids: [...new Set((selected?.participants || []).filter(participant => playerFormats(selected!, participant.id).includes(format)).map(participant => mapping[participant.id]).filter(id => id > 0))]
+  })).filter(group => group.ids.length > 0);
+  const reviewKey = JSON.stringify([selected?.id, selected?.rating_mode, mapping, ratingReviewRevision]);
+  const startingRatingsConfirmed = !editable || selected?.rating_mode !== "rated" || reviewGroups.every(group => ratingReviewChecks[reviewKey + group.format] === true);
+  async function refreshReviewedPlayers() {
+    const scope = clubId + ":" + accessToken;
+    const payload: Queue = await request(`submissions?status=${status}`);
+    if (queueScope.current === scope) {
+      setQueue(old => ({ ...old, players: payload.players }));
+      setRatingDrafts(drafts => Object.fromEntries(Object.entries(drafts).filter(([key, value]) => {
+        const [playerId, format] = key.split(":");
+        const saved = payload.players.find(player => player.id === Number(playerId))?.ratings?.[format as "doubles" | "singles"]?.rating_jupr;
+        return value.trim() === "" || Number(value) !== saved;
+      })));
+    }
+  }
   const creationsReady = !Object.values(pendingCreations).some(Boolean);
   const names = new Map(selected?.participants.map(p => [p.id, p.name]) || []);
   const scoreRounds = [...new Set(selected?.matches.map(match => match.round_number) || [])].sort((a, b) => a - b);
@@ -333,6 +354,12 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
           </div>;
         })}
       </div>
+      {editable && selected.rating_mode === "rated" && allMapped && accessToken ? <div style={{ display: "grid", gap: ".75rem", marginTop: "1rem" }}>
+        {reviewGroups.map(group => <StartingRatingReview key={reviewKey + group.format} apiBase={apiBase} clubId={clubId} accessToken={accessToken}
+          playerIds={group.ids} matchFormat={group.format} disabled={busy || !ratingsReady} title={`Confirm ${group.format} starting ratings`}
+          onReady={ready => setRatingReviewChecks(checks => checks[reviewKey + group.format] === ready ? checks : { ...checks, [reviewKey + group.format]: ready })}
+          onConfirmed={() => { void refreshReviewedPlayers().catch(error => setMessage(error instanceof Error ? error.message : "Refresh player ratings before approving.")); }} />)}
+      </div> : null}
       <h3>Saved scores</h3>
       <div style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap", alignItems: "end", marginBottom: "0.75rem" }}>
         <label style={{ display: "grid", gap: 4 }}>Round
@@ -386,7 +413,7 @@ export default function GeneratorSubmissions({ clubId, apiBase }: { clubId: stri
           {(["approve", "reject"] as const).map(action => <ConfirmAction key={action}
             triggerLabel={action === "reject" ? "Reject" : `Approve ${selected.rating_mode} results`} title={action === "reject" ? "Reject these results?" : `Approve ${selected.match_count} ${selected.rating_mode} games?`}
             description={action === "reject" ? "These games will stay out of club records." : selected.rating_mode === "rated" ? "These games will update player ratings and count toward stats and recaps." : "These games will count toward stats and recaps. Ratings stay unchanged."}
-            confirmLabel={action === "reject" ? "Reject results" : `Approve ${selected.rating_mode} results`} confirmationText="" disabled={busy || editingTitle || editingScores || (action !== "reject" && (!allMapped || !matchDate || !ratingsReady || !creationsReady))} onConfirm={() => decide(action)} />)}
+            confirmLabel={action === "reject" ? "Reject results" : `Approve ${selected.rating_mode} results`} confirmationText="" disabled={busy || editingTitle || editingScores || (action !== "reject" && (!allMapped || !matchDate || !ratingsReady || !creationsReady || !startingRatingsConfirmed))} onConfirm={() => decide(action)} />)}
         </div>
       </> : null}
       {selected.status === "processing" && selected.review ? <button disabled={busy} style={field} onClick={() => void decide(selected.review!.request.action).catch(() => {})}>Resume {selected.review.request.action === "reject" ? "rejection" : `${selected.rating_mode} approval`}</button> : null}

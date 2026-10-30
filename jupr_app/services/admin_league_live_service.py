@@ -26,6 +26,7 @@ from jupr_app.services.admin_guarded_write_service import (
 )
 from jupr_app.services.admin_league_manager_service import is_admin_league_manager_enabled
 from jupr_app.services.league_live_score_readback import read_league_round_scores
+from jupr_app.services.starting_rating_review_service import require_starting_rating_review
 
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "y", "on"}
 CONFIRM_CREATE_SESSION = "CREATE LIVE SESSION"
@@ -38,6 +39,10 @@ ROUND_STATUSES = {"draft", "generated", "submitted", "voided"}
 
 class LeagueLiveConflictError(RuntimeError):
     """Optimistic-state or idempotency conflict."""
+
+
+class LeagueLiveStartingRatingChangedError(LeagueLiveConflictError):
+    """The first-court plan no longer uses the reviewed current ratings."""
 
 
 class LeagueLivePersistenceError(RuntimeError):
@@ -784,6 +789,20 @@ def get_admin_league_live_session(supabase: Any, *, club_id: str, session_id: st
     return {"ok": True, "mode": "league_live_session_detail", "session": session, "rounds": rounds, "courts": courts}
 
 
+def _require_new_roster_starting_ratings(
+    supabase: Any, *, club_id: str, roster: list[dict[str, Any]], saved_roster: list[dict[str, Any]],
+) -> None:
+    saved_player_ids = {
+        int(row["player_id"]) for row in saved_roster
+        if _safe_int(row.get("player_id")) is not None
+    }
+    review_ids = [int(row["player_id"]) for row in roster if int(row["player_id"]) not in saved_player_ids]
+    if review_ids:
+        require_starting_rating_review(
+            supabase, club_id=str(club_id), player_ids=review_ids, match_format="doubles",
+        )
+
+
 def suggest_admin_league_live_roster(
     supabase: Any,
     *,
@@ -794,9 +813,20 @@ def suggest_admin_league_live_roster(
     bench_player_ids: list[Any] | None = None,
     bench_override_reason: str | None = None,
     round_number: int = 1,
+    session_id: str | None = None,
 ) -> dict[str, Any]:
     _ensure_live_domain_enabled()
     canonical_roster = _verified_club_roster(supabase, club_id=club_id, roster=roster)
+    # Existing sessions keep their saved courts and remain operable. A new
+    # rating-seeded lineup must use reviewed estimates for unplayed profiles.
+    saved_session = (
+        _fetch_session_row(supabase, club_id=str(club_id), session_id=str(session_id))
+        if session_id else None
+    )
+    _require_new_roster_starting_ratings(
+        supabase, club_id=str(club_id), roster=canonical_roster,
+        saved_roster=_as_list((saved_session or {}).get("roster_json")),
+    )
     return build_league_live_roster_suggestion(
         canonical_roster,
         court_sizes=court_sizes,
@@ -871,6 +901,15 @@ def build_admin_league_live_round_plan(
             if verified.get("rating") is not None
             else verified.get("rating_jupr", 1200.0),
         }
+
+    if resolved_roster_change:
+        incoming_roster = (resolved_roster_change.get("players", [])
+            if resolved_roster_change.get("action") == "attendance"
+            else [resolved_roster_change["player"]])
+        _require_new_roster_starting_ratings(
+            supabase, club_id=str(club_id), roster=incoming_roster,
+            saved_roster=_as_list(session_row.get("roster_json")),
+        )
 
     existing_round = _first_row(
         supabase.table("league_live_rounds").select("*")
@@ -956,6 +995,12 @@ def prepare_admin_league_live_session_create(
         supabase,
         club_id=str(club_id),
         roster=list(roster or []),
+    )
+    require_starting_rating_review(
+        supabase,
+        club_id=str(club_id),
+        player_ids=[int(row["player_id"]) for row in canonical_roster],
+        match_format="doubles",
     )
     roster_plan = _normalize_roster_and_courts(
         roster=canonical_roster,
@@ -1189,6 +1234,22 @@ def create_admin_league_live_session(
     session_id = str(payload.get("id") or "")
     if not session_id or str(payload.get("club_id") or "") != str(club_id):
         raise ValueError("Prepared League Live create evidence is invalid.")
+    planned_roster = _as_list(payload.get("roster_json"))
+    require_starting_rating_review(
+        supabase,
+        club_id=str(club_id),
+        player_ids=[int(row["player_id"]) for row in planned_roster],
+        match_format="doubles",
+    )
+    current_roster = _verified_club_roster(supabase, club_id=str(club_id), roster=planned_roster)
+    if any(
+        current.get("rating") != planned.get("rating")
+        or current.get("player_name") != planned.get("player_name")
+        for current, planned in zip(current_roster, planned_roster)
+    ):
+        raise LeagueLiveStartingRatingChangedError(
+            "A player's rating changed after the court plan was prepared. Rebuild the courts before starting this session."
+        )
     inserted = _first_row(supabase.table("league_live_sessions").insert(payload).execute())
     if inserted is None:
         raise LeagueLivePersistenceError("League Live session did not persist.")
@@ -1274,6 +1335,10 @@ def update_admin_league_live_session_snapshot(
         supabase,
         club_id=str(club_id),
         roster=_as_list(requested_roster),
+    )
+    _require_new_roster_starting_ratings(
+        supabase, club_id=str(club_id), roster=canonical_roster,
+        saved_roster=_as_list(before.get("roster_json")),
     )
     roster_plan = _normalize_roster_and_courts(
         roster=canonical_roster,
