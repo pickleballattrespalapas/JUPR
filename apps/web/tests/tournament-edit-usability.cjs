@@ -27,6 +27,8 @@ const eligibility = load("lib/tournamentRegistrationEligibility.ts", {
 });
 const base = "app/clubs/[clubSlug]/tournament-registration/";
 const submissions = [];
+const withdrawals = [];
+let withdrawalResponse;
 const quotes = [];
 let submitResponse;
 let quoteResponse;
@@ -46,9 +48,10 @@ const Form = load(base + "edit/EditTournamentRegistrationForm.tsx", {
   "@/lib/tournamentRegistrationApi": {
     resolveClubTournamentPartnerProfile: async () => ({ data: { profile_candidates: [] } }),
     submitClubTournamentRegistrationEdit: async (_club, payload) => { submissions.push(payload); return submitResponse(); }
+    ,withdrawClubTournamentRegistration: async (_club, payload) => { withdrawals.push(payload); return withdrawalResponse(); }
   }
 }).default;
-const registration = { id: "reg", first_name: "Fixture", last_name: "Player", email: "fixture@example.invalid", age: 70, gender: "Men", updated_at: "version-1" };
+const registration = { id: "reg", first_name: "Fixture", last_name: "Player", email: "fixture@example.invalid", age: 70, gender: "Men", updated_at: "version-1", wants_partner_board_contact: true };
 const events = [
   { id: "doubles", registration_day_id: "day", event_family_label: "Doubles", division_name: "Open", partner_required: true, partner_board_enabled: true, selectable: true, skill_mode: "OPEN", price_usd: 20 },
   { id: "singles", registration_day_id: "day", event_family_label: "Singles", division_name: "Singles", partner_required: false, selectable: true, skill_mode: "OPEN", price_usd: 20 }
@@ -67,6 +70,8 @@ const dialog = () => renderer.root.findAllByProps({ role: "dialog" })[0];
 const mount = async (patch = {}) => {
   if (renderer) await act(async () => renderer.unmount());
   submissions.length = 0;
+  withdrawals.length = 0;
+  withdrawalResponse = () => ({ data: { ok: true, withdrawn: true, registration_id: "reg" } });
   quotes.length = 0;
   submitResponse = success;
   quoteResponse = () => ({ data: { quote: quote() } });
@@ -125,7 +130,35 @@ async function verifySaving() {
   await mount({ selections: [selections[0]] });
   await act(async () => button("Remove event").props.onClick());
   assert.equal(submissions.length, 0);
-  assert.match(text(dialog().findByProps({ role: "alert" })), /Keep at least one event/);
+  assert.match(text(dialog()), /Withdraw from tournament|removes all/);
+  assert.equal(withdrawals.length, 0, "Removing the last event requires explicit withdrawal confirmation");
+  await act(async () => button("Keep my registration").props.onClick());
+  assert.equal(withdrawals.length, 0);
+  await act(async () => button("Withdraw from tournament").props.onClick());
+  withdrawalResponse = () => ({ error: "Registration changed since you opened it. Refresh and try again.", status: 409 });
+  await act(async () => button("Confirm withdrawal").props.onClick());
+  assert.match(text(dialog()), /Registration changed/);
+  assert.equal(renderer.root.findAllByType("form").length, 1, "A failed withdrawal keeps the registration visible");
+  let completeWithdrawal;
+  withdrawalResponse = () => new Promise(resolve => { completeWithdrawal = resolve; });
+  const confirm = button("Confirm withdrawal").props.onClick;
+  let withdrawalPending;
+  await act(async () => { withdrawalPending = confirm(); void confirm(); });
+  assert.equal(withdrawals.length, 2, "Only one retry may be in flight");
+  assert.deepEqual(withdrawals[1].expected_selection_versions, [{ id: selections[0].id, updated_at: selections[0].updated_at }]);
+  await act(async () => { completeWithdrawal({ data: { withdrawn: true } }); await withdrawalPending; });
+  assert.match(text(renderer.root), /Registration withdrawn/);
+  assert.equal(renderer.root.findAllByType("form").length, 0);
+
+  await mount({ registration: { ...registration, wants_partner_board_contact: false } });
+  await act(async () => button("Save changes").props.onClick());
+  assert.equal(submissions.length, 0, "Consent is checked before submitting");
+  assert.match(text(dialog()), /agree to share your contact details/);
+  const consent = dialog().findAllByType("input").find(node => node.props.type === "checkbox" && !node.props["aria-describedby"]);
+  assert.ok(consent, "Required consent appears inside the event dialog");
+  await act(async () => consent.props.onChange({ target: { checked: true } }));
+  await act(async () => button("Save changes").props.onClick());
+  assert.equal(submissions[0].wants_partner_board_contact, true);
 
   await mount();
   submitResponse = () => ({ data: { registration_id: "reg" } });
@@ -156,7 +189,7 @@ async function verifyIndependentEventSaves() {
   const mixed = { ...events[0], id: "mixed", event_family_label: "Mixed Doubles", division_name: "Split Age Open" };
   const mixedSelection = { id: "selection-mixed", event_option_id: "mixed", partner_mode: "NEEDS_PARTNER", updated_at: "selection-3" };
   const editButtons = () => renderer.root.findAllByType("button").filter(node => text(node) === "Edit event");
-  const closeEditor = async () => act(async () => renderer.root.findByType(Dialog).props.onRequestClose());
+  const closeEditor = async () => act(async () => renderer.root.findAllByType(Dialog).find(node => node.props.open).props.onRequestClose());
 
   for (const remove of [false, true]) {
     await mount({ events: [...events, mixed], selections: [...selections, mixedSelection] });
@@ -225,7 +258,7 @@ async function verifyDivisionChanges() {
   const patch = { events: [original, events[1], target, ...additional], selections: [confirmed, selections[1]], days: [...props.days, { id: "day-2", label: "Day 2" }] };
   const division = value => dialog().findByProps({ type: "radio", name: "event_division", value });
   await mount(patch);
-  await act(async () => renderer.root.findByType(Dialog).props.onRequestClose());
+  await act(async () => renderer.root.findAllByType(Dialog).find(node => node.props.open).props.onRequestClose());
   await act(async () => button("Change division").props.onClick());
   assert.match(text(dialog()), /Changing division moves you and Confirmed Partner together/);
   assert.deepEqual(dialog().findAllByProps({ name: "event_division" }).map(node => node.props.value), ["doubles", "doubles-4.5", "closed", "age-restricted"], "Division choices stay in the same event and gender, across days");
@@ -256,7 +289,7 @@ async function verifyDivisionChanges() {
 
   await mount(patch);
   await act(async () => division(target.id).props.onChange());
-  await act(async () => renderer.root.findByType(Dialog).props.onRequestClose());
+  await act(async () => renderer.root.findAllByType(Dialog).find(node => node.props.open).props.onRequestClose());
   const singlesCard = renderer.root.findAllByType("article").find(node => text(node).includes("Singles"));
   await act(async () => singlesCard.findByType("button").props.onClick());
   await act(async () => button("Save changes").props.onClick());

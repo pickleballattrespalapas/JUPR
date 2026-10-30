@@ -371,6 +371,7 @@ class FakeRegistrationEditRpc:
 
 def fake_storage():
     return {
+        "tournament_partner_invitations": [],
         "tournaments": [
             {
                 "id": "t1",

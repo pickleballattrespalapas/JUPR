@@ -15,6 +15,8 @@ from jupr_app.domain.tournament_registration_repo import (
     TournamentRegistrationEditConflictError,
     TournamentRegistrationImportedDrawError,
     TournamentRegistrationRelationshipLockedError,
+    _database_error_contains,
+    REGISTRATION_COMMERCE_FULFILLED_CANCEL_MARKER,
     get_registration_by_email,
     get_registration_confirmation_bundle,
     registration_has_imported_draw_selection,
@@ -597,6 +599,7 @@ def build_public_tournament_registration_edit_page(
     edit_token: str,
     tournament_id: str | None = None,
     registration_slug: str | None = None,
+    club_slug: str | None = None,
 ) -> dict[str, Any]:
     verified, bundle = _verified_bundle(
         supabase,
@@ -685,8 +688,14 @@ def build_public_tournament_registration_edit_page(
     ]
     if missing_days:
         page["days"] = [*(page.get("days") or []), *[_public_day(day) for day in missing_days]]
+    from jupr_app.services.public_tournament_partner_invitation_service import edit_registration_partner_requests
+    pending_requests = edit_registration_partner_requests(
+        supabase, club_id=str(club_id), club_slug=club_slug or str(club_id),
+        tournament_id=tid, registration=registration, selections=list(bundle.get("selections") or []),
+    )
     return {
         **page,
+        "pending_partner_requests": pending_requests,
         "edit_mode": True,
         "edit_token_valid": True,
         "edit_token_expires_at": verified.get("exp"),
@@ -702,6 +711,41 @@ def build_public_tournament_registration_edit_page(
         ],
         "total_price_usd": float(bundle.get("total_price_usd") or 0),
     }
+
+
+def withdraw_public_tournament_registration(
+    supabase: Any, *, club_id: str, edit_token: str, payload: dict[str, Any],
+) -> dict[str, Any]:
+    if payload.get("confirmed") is not True:
+        raise ValueError("Confirm that you want to withdraw from all tournament events.")
+    verified = verify_registration_edit_token(
+        edit_token, secret=_stable_edit_secret(),
+        expected_tournament_id=payload.get("tournament_id") or None,
+    )
+    try:
+        response = supabase.rpc("server_withdraw_public_tournament_registration", {
+            "p_club_id": str(club_id), "p_tournament_id": verified["tournament_id"],
+            "p_registration_id": verified["registration_id"], "p_email_hash": verified["email_hash"],
+            "p_expected_updated_at": payload.get("expected_updated_at"),
+            "p_expected_selection_versions": payload.get("expected_selection_versions"),
+        }).execute()
+    except Exception as exc:
+        if _database_error_contains(exc, "JUPR_WITHDRAW_IDENTITY"):
+            raise ValueError("Invalid registration edit link.") from exc
+        if _database_error_contains(exc, "JUPR_CANCEL_CONFLICT"):
+            raise TournamentRegistrationEditConflictError("Registration changed since you opened it. Refresh and try again.") from exc
+        for marker, message in (
+            ("JUPR_CANCEL_IMPORTED", "This registration is already in the tournament draw. Contact the organizer to withdraw."),
+            ("JUPR_CANCEL_CAPTAIN", "You are a four-player team captain. Contact the organizer to assign a new captain before withdrawing."),
+            (REGISTRATION_COMMERCE_FULFILLED_CANCEL_MARKER, "This registration has fulfilled extras. Contact the organizer to arrange your withdrawal."),
+        ):
+            if _database_error_contains(exc, marker):
+                raise TournamentRegistrationRelationshipLockedError(message) from exc
+        raise PublicRegistrationEditUnavailableError("Registration withdrawal is temporarily unavailable. Please try again.") from exc
+    result = getattr(response, "data", None)
+    if not isinstance(result, dict) or result.get("ok") is not True or result.get("withdrawn") is not True or result.get("registration_id") != verified["registration_id"]:
+        raise PublicRegistrationEditUnavailableError("We couldn’t confirm your registration withdrawal. Please try again.")
+    return result
 
 
 def submit_public_tournament_registration_edit(

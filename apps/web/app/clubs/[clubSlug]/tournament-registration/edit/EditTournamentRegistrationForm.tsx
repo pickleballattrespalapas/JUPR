@@ -6,11 +6,13 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "re
 import {
   PublicRegistrationEditRegistration,
   PublicRegistrationEditSelection,
+  PublicRegistrationPendingPartnerRequest,
   PublicRegistrationEvent,
   PublicRegistrationPlayer,
   PublicRegistrationSelectionPayload,
   PublicRegistrationDay,
   submitClubTournamentRegistrationEdit,
+  withdrawClubTournamentRegistration,
   resolveClubTournamentPartnerProfile
 } from "@/lib/tournamentRegistrationApi";
 import {
@@ -53,6 +55,7 @@ type EditTournamentRegistrationFormProps = {
   players: PublicRegistrationPlayer[];
   commerce?: TournamentCommerceCatalog | null;
   commerceOrder?: TournamentCommerceOrder | null;
+  pendingPartnerRequests?: PublicRegistrationPendingPartnerRequest[];
 };
 
 type EventSelectionDraft = Omit<
@@ -158,7 +161,8 @@ export default function EditTournamentRegistrationForm({
   events,
   players,
   commerce,
-  commerceOrder
+  commerceOrder,
+  pendingPartnerRequests = []
 }: EditTournamentRegistrationFormProps) {
   const formRef = useRef<HTMLFormElement>(null);
   const partnerInvitation = usePartnerInvitationRegistration(clubSlug);
@@ -223,12 +227,15 @@ export default function EditTournamentRegistrationForm({
   const [doublesSkill, setDoublesSkill] = useState(String(registration.doubles_skill ?? ""));
   const [singlesSkill, setSinglesSkill] = useState(String(registration.singles_skill ?? ""));
   const [pending, setPending] = useState(false);
+  const [partnerBoardConsent, setPartnerBoardConsent] = useState(Boolean(registration.wants_partner_board_contact));
+  const [withdrawRequest, setWithdrawRequest] = useState(0);
+  const [withdrawn, setWithdrawn] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<{ confirmationToken: string; deliveryStatus: string } | null>(null);
   const attemptId = useRegistrationAttempt({
     clubSlug, tournamentId, active: true, flow: "edit", stage: "edit",
     name: `${firstName} ${lastName}`.trim(), email: registration.email, error,
-    completed: Boolean(success),
+    completed: Boolean(success) || withdrawn,
     selections: selectedIds.map(id => ({ event_option_id: id, partner_mode: partnerModes[id],
       partner_name: String(selectionDrafts[id]?.partner_name || ""),
       same_email_as_player: Boolean(selectionDrafts[id]?.partner_email && String(selectionDrafts[id].partner_email).trim().toLowerCase() === registration.email.trim().toLowerCase()) }))
@@ -498,6 +505,12 @@ export default function EditTournamentRegistrationForm({
       return replacesPrior ? (remove ? [] : [editingEventId]) : [id];
     });
     if (!remove && !eventIds.includes(editingEventId)) eventIds.push(editingEventId);
+    if (remove && !eventIds.length) {
+      setEditingEventId(null);
+      setError(null);
+      setWithdrawRequest(current => current + 1);
+      return;
+    }
     await saveRegistration(new FormData(formRef.current), eventIds, editingEventId);
   }
 
@@ -526,7 +539,8 @@ export default function EditTournamentRegistrationForm({
       return;
     }
     if (!eventIds.length) {
-      setError("Keep at least one event in your registration. To cancel your entire registration, contact the organizer.");
+      setEditingEventId(null);
+      setWithdrawRequest(current => current + 1);
       return;
     }
     const ineligible = eventIds
@@ -576,6 +590,10 @@ export default function EditTournamentRegistrationForm({
       };
     });
 
+    if (!partnerBoardConsent && payloadSelections.some(selection => selection.show_on_partner_board)) {
+      setError("To join the public Partner Board, agree to share your contact details in Partner Board visibility, or turn off Show my name.");
+      return;
+    }
     savingRef.current = true;
     setPending(true);
     try {
@@ -617,7 +635,7 @@ export default function EditTournamentRegistrationForm({
         age: submittedAge,
         gender: textValue(formData, "gender"),
         notes: textValue(formData, "notes"),
-        wants_partner_board_contact: formData.get("wants_partner_board_contact") === "on",
+        wants_partner_board_contact: partnerBoardConsent,
         terms_accepted: true,
         website: textValue(formData, "website"),
         selections: payloadSelections,
@@ -664,6 +682,7 @@ export default function EditTournamentRegistrationForm({
     }
   }
 
+  if (withdrawn) return <WithdrawalReceipt />;
   if (success) {
     const query = new URLSearchParams({ confirmation_token: success.confirmationToken });
     if (success.deliveryStatus) query.set("email_status", success.deliveryStatus);
@@ -683,6 +702,15 @@ export default function EditTournamentRegistrationForm({
   return (
     <form ref={formRef} onSubmit={onSubmit} aria-busy={pending} style={{ display: "grid", gap: "1rem" }}>
       <PartnerInvitationRegistrationNotice invitation={partnerInvitation.invitation} error={partnerInvitation.error} />
+      {pendingPartnerRequests.length ? <section style={cardStyle} aria-label="Pending partner requests">
+        <h2 style={{ marginTop: 0 }}>Pending partner requests</h2>
+        <p>Continue your partner request to finish joining the event. To choose someone else, review and cancel the request first.</p>
+        <ul>{pendingPartnerRequests.map(request => <li key={request.id}>
+          <strong>{request.event_name}: {request.partner_name}</strong> — {request.status === "RESERVED" ? "Accepted; waiting for registration" : "Waiting for a response"}
+          <p>{request.continue_url ? <><a href={request.continue_url}>Continue partnership</a>{" · "}</> : null}
+            <Link href={request.review_url}>Review or cancel request</Link></p>
+        </li>)}</ul>
+      </section> : null}
       <input type="text" name="website" autoComplete="off" tabIndex={-1} style={{ position: "absolute", left: "-10000px" }} aria-hidden="true" />
 
       <section style={cardStyle}>
@@ -1026,6 +1054,10 @@ export default function EditTournamentRegistrationForm({
                     /> Show my name on the public Partner Board
                   </label>
                   <p id="edit-partner-board-help" style={{ color: "#475569", marginBottom: 0 }}>This only controls whether other players can find you. Found a partner? Choose “I have a partner” above to add them.</p>
+                  {prior?.show_on_partner_board ? <label style={{ display: "flex", gap: "0.5rem", marginTop: "0.75rem" }}>
+                    <input type="checkbox" checked={partnerBoardConsent} onChange={event => setPartnerBoardConsent(event.target.checked)} />
+                    I agree to share my contact details with players looking for partners on the public Partner Board.
+                  </label> : null}
                 </section>
               ) : null}
               </>}
@@ -1035,6 +1067,7 @@ export default function EditTournamentRegistrationForm({
             {commerce?.available && commerceQuote ? <p><strong>Registration total: {formatCommerceMoney(commerceQuote.total_minor)}</strong></p> : null}
             <p style={{ color: "#475569", fontSize: "1rem" }}>{saveAgreement}</p>
             {error ? <p role="alert" data-dialog-focus tabIndex={-1} style={{ color: "#b91c1c", fontSize: "1.125rem" }}>{error}</p> : null}
+            {error && pendingPartnerRequests.length ? <button type="button" onClick={() => setEditingEventId(null)}>View pending partner requests</button> : null}
           </InteractionDialog>
         );
       })() : null}
@@ -1058,7 +1091,7 @@ export default function EditTournamentRegistrationForm({
         <label>Notes for organizers<br /><textarea name="notes" aria-describedby="edit-staff-notes-help" defaultValue={registration.notes || ""} rows={4} style={{ width: "100%" }} /></label>
         <p id="edit-staff-notes-help" style={{ margin: "0.35rem 0 0", color: "#475569", fontSize: "0.9rem" }}>These notes are shared with tournament staff and do not appear on the public Partner Board.</p>
         <label style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginTop: "0.75rem" }}>
-          <input name="wants_partner_board_contact" type="checkbox" defaultChecked={Boolean(registration.wants_partner_board_contact)} /> The organizers may contact me about finding a partner.
+          <input name="wants_partner_board_contact" type="checkbox" checked={partnerBoardConsent} onChange={event => setPartnerBoardConsent(event.target.checked)} /> I agree to share my contact details with players looking for partners on the public Partner Board.
         </label>
         <p style={{ color: "#475569" }}>{saveAgreement}</p>
       </section>
@@ -1067,6 +1100,61 @@ export default function EditTournamentRegistrationForm({
       <button type="submit" disabled={pending || !visibleEvents.length} style={{ ...eventButtonStyle, borderColor: "#0f172a", background: "#0f172a", color: "white" }}>
         {pending ? "Saving…" : "Save registration changes"}
       </button>
+      <RegistrationWithdrawal clubSlug={clubSlug} tournamentId={tournamentId} editToken={editToken}
+        registration={registration} selections={selections} events={events} attemptId={attemptId}
+        requested={withdrawRequest} disabled={pending} onComplete={() => setWithdrawn(true)} />
     </form>
   );
+}
+
+export function RegistrationWithdrawal({ clubSlug, tournamentId, editToken, registration, selections, events,
+  requested = 0, disabled = false, onComplete, attemptId }: Pick<EditTournamentRegistrationFormProps,
+    "clubSlug" | "tournamentId" | "editToken" | "registration" | "selections" | "events"> & {
+      requested?: number; disabled?: boolean; onComplete?: () => void; attemptId?: string;
+    }) {
+  const [open, setOpen] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
+  const saving = useRef(false);
+  useEffect(() => { if (requested) setOpen(true); }, [requested]);
+  async function withdraw() {
+    if (saving.current) return;
+    saving.current = true;
+    setPending(true);
+    setError(null);
+    try {
+      const result = await withdrawClubTournamentRegistration(clubSlug, {
+        edit_token: editToken, tournament_id: tournamentId, confirmed: true, attempt_id: attemptId,
+        expected_updated_at: registration.updated_at,
+        expected_selection_versions: selections.map(({ id, updated_at }) => ({ id, updated_at }))
+      });
+      if (result.error || !result.data?.withdrawn) {
+        setError(result.error || "We couldn’t confirm your withdrawal. Please try again.");
+        return;
+      }
+      setDone(true);
+      setOpen(false);
+      onComplete?.();
+    } catch {
+      setError("We couldn’t confirm your withdrawal. Check your connection and try again.");
+    } finally { saving.current = false; setPending(false); }
+  }
+  if (done) return <WithdrawalReceipt />;
+  return <section style={{ marginTop: "1.5rem" }}>
+    <button type="button" disabled={disabled || pending} onClick={() => setOpen(true)} style={eventButtonStyle}>Withdraw from tournament</button>
+    <InteractionDialog open={open} phase={pending ? "working" : error ? "error" : "ready"} onRequestClose={() => { if (!pending) setOpen(false); }} title="Withdraw from tournament?"
+      actions={<><button type="button" disabled={pending} onClick={() => setOpen(false)} style={eventButtonStyle}>Keep my registration</button>
+        <button type="button" disabled={pending} onClick={withdraw} style={eventButtonStyle}>{pending ? "Withdrawing…" : "Confirm withdrawal"}</button></>}>
+      <p>This removes all of your tournament entries and releases your partnerships. Your partners keep their own registrations.</p>
+      <ul>{selections.map(selection => <li key={selection.id}>{publicTournamentEventLabel(events.find(event => event.id === selection.event_option_id)?.division_name || "Tournament event")}</li>)}</ul>
+      <p>Any refund must be arranged with the organizer. This action does not issue a refund.</p>
+      {error ? <p role="alert" style={{ color: "#b91c1c" }}>{error}</p> : null}
+    </InteractionDialog>
+  </section>;
+}
+
+function WithdrawalReceipt() {
+  return <section role="status" style={cardStyle}><h2>Registration withdrawn</h2>
+    <p>Your tournament entries have been removed. Contact the organizer about any refund.</p></section>;
 }
