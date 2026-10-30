@@ -306,6 +306,7 @@ export default function GeneratorWorkspace({
   const [playFormat, setPlayFormat] = useState<PlayFormat>("doubles");
   const [standingsSort, setStandingsSort] = useState<StandingsSort>("wins");
   const [scoringMode, setScoringMode] = useState<ScoringMode>("scored");
+  const [ratingReviewReady, setRatingReviewReady] = useState(false);
   const [ratingMode, setRatingMode] = useState<"rated" | "unrated">("unrated");
   const [targetCount, setTargetCount] = useState(8);
   const initialMixedSetup = recommendedMixedCourtSetup(8);
@@ -446,6 +447,7 @@ export default function GeneratorWorkspace({
     if (!rosterReady) {
       throw new GeneratorSetupError(participantNames.length === targetCount && moneyball ? "Link or create a club profile for every Moneyball player before previewing." : `Add exactly ${targetCount} unique players before previewing.`);
     }
+    if (ratingMode === "rated" && !ratingReviewReady) throw new Error("Review starting ratings and link every player before rated play.");
     if (!mixedSetupValid) {
       throw new GeneratorSetupError("Choose a doubles and singles court mix that fits the selected player count.");
     }
@@ -782,7 +784,7 @@ export default function GeneratorWorkspace({
             <br />
             <select aria-label="Match rating" value={ratingMode} onChange={event => {
               const mode = event.target.value as "rated" | "unrated";
-              setRatingMode(mode);
+              setRatingMode(mode); setRatingReviewReady(false);
               if (mode === "rated") setScoringMode("scored");
               invalidatePreview();
             }} style={inputStyle}>
@@ -844,6 +846,9 @@ export default function GeneratorWorkspace({
           creationAccessToken={canCreatePlayer ? accessToken : undefined}
           creationDraftKey={draftKey}
           onCreationPendingChange={setCreationPending}
+          ratedSetup={ratingMode === "rated"}
+          ratingReviewAccessToken={canCreatePlayer ? accessToken : undefined}
+          onRatingReviewReadyChange={setRatingReviewReady}
           disabled={busy || pendingStart || startSucceeded}
           generatorKind={generatorKind}
           playFormat={playFormat}
@@ -864,7 +869,7 @@ export default function GeneratorWorkspace({
           <button
             type="button"
             onClick={() => void generatePreview()}
-            disabled={busy || creationPending || pendingStart || startSucceeded || !rosterReady || !mixedSetupValid}
+            disabled={busy || creationPending || pendingStart || startSucceeded || !rosterReady || !mixedSetupValid || (ratingMode === "rated" && !ratingReviewReady)}
             style={primaryButton}
           >
             {busy ? "Generating…" : "Preview matchups"}

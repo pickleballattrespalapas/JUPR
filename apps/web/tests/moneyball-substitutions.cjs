@@ -6,6 +6,7 @@ const navigation = [];
 const router = { push: url => navigation.push(url), replace() {}, refresh() {} };
 const Link = ({ children, ...props }) => h("a", props, children);
 const stubs = {
+  "@/components/StartingRatingReview": require("./helpers/starting-rating-review-module.cjs"),
   "next/link": Link,
   "@/components/PublicClubLink": Link,
   "next/navigation": { useRouter: () => router },

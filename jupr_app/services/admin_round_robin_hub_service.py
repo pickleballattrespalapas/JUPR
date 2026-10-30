@@ -1,6 +1,8 @@
 """One durable court authority for independent Round-Robin Generator sessions."""
 from __future__ import annotations
 
+from jupr_app.services.generator_starting_rating_review import require_generator_starting_ratings
+
 import copy
 import hashlib
 import json
@@ -120,6 +122,7 @@ def get_round_robin_hub(db: Any, *, club_id: str, hub_id: str) -> dict[str, Any]
     for group in workspace.get("groups", []):
         session = sessions[str(group["session_key"])]
         group["rating_mode"] = _event(session).get("ratingMode", "unrated")
+        group["play_format"] = _event(session).get("playFormat", "doubles")
         group["results_locked"] = _is_locked(session)
         group["source_mode"] = (session.get("state") or {}).get("mode")
         if group["results_locked"] or row.get("status") != "active" or session.get("status") != "active":
@@ -338,6 +341,9 @@ def command_round_robin_hub(db: Any, *, club_id: str, hub_id: str, action: str,
                     raise ValueError("This player profile was not found in this club.")
                 command_payload["name"] = str(player.get("name") or "").strip()
         state, events = apply_hub_command(state, events, action=action, payload=command_payload, now=_now())
+    for key, event in events.items():
+        prior = _event(sessions[key]) if key in sessions else None
+        require_generator_starting_ratings(db, club_id=club_id, event=event, before=prior)
     status = _status_after_sessions(status, state, events)
     planned = perf_counter()
     _rpc_commit(db, club_id=club_id, hub_id=hub_id, expected_version=expected_version,

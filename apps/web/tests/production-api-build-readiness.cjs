@@ -1,5 +1,5 @@
 const assert = require("node:assert/strict");
-const { operationsReady, weeklyReportReady, leagueLiveReady, roundRobinHubReady, siteReliabilityReady, waitForProductionApi, REQUIRED_FLAGS } = require("../scripts/wait-for-production-api.cjs");
+const { operationsReady, weeklyReportReady, leagueLiveReady, roundRobinHubReady, siteReliabilityReady, startingRatingReviewReady, waitForProductionApi, REQUIRED_FLAGS } = require("../scripts/wait-for-production-api.cjs");
 const ready = { ok: true, club_website_settings_available: true, interclub_seasons_available: true, environment: "production", fly_app_name: "juprleagues-api",
   supabase_project_ref: "dnoockbwfenunhcibwfn", production_business_write_policy: "enabled",
   staging_write_wave: "none", feature_flags: Object.fromEntries(REQUIRED_FLAGS.map((flag) => [flag, true])) };
@@ -38,6 +38,18 @@ for (const path of reliabilityReads) contract.paths[path] = { get: {} };
 for (const name of ["GeneratorRosterRequest", "PublicGeneratorRosterRequest"]) {
   contract.components.schemas[name] = { properties: { participant_ids: { type: "array", maxItems: 40 } } };
 }
+const ratingReviewPaths = ["preview", "confirm"].map((action) => `/admin/clubs/{club_id}/starting-rating-review/${action}`);
+for (const path of ratingReviewPaths) contract.paths[path] = { post: {} };
+contract.components.schemas.StartingRatingReviewPreviewRequest = { properties: {
+  player_ids: { type: "array" }, requested_ratings: { type: "object" }, match_format: { enum: ["doubles", "singles"] },
+} };
+contract.components.schemas.StartingRatingReviewConfirmRequest = { properties: {
+  match_format: { enum: ["doubles", "singles"] },
+  reviews: { type: "array", items: { $ref: "#/components/schemas/StartingRatingReviewConfirmation" } },
+} };
+contract.components.schemas.StartingRatingReviewConfirmation = { properties: {
+  player_id: { type: "integer" }, rating_jupr: { type: "number" }, expected_state_fingerprint: { type: "string" },
+} };
 
 (async () => {
   assert.equal(operationsReady(ready), true);
@@ -110,6 +122,29 @@ for (const name of ["GeneratorRosterRequest", "PublicGeneratorRosterRequest"]) {
     delete oldRoster.components.schemas[name].properties.participant_ids;
     assert.equal(siteReliabilityReady(oldRoster), false);
   }
+  assert.equal(startingRatingReviewReady(contract), true);
+  assert.equal(startingRatingReviewReady({}), false);
+  const incompleteRatingReviews = [];
+  for (const path of ratingReviewPaths) {
+    const missingRoute = structuredClone(contract);
+    delete missingRoute.paths[path].post;
+    incompleteRatingReviews.push(missingRoute);
+  }
+  for (const [schema, field] of [
+    ["StartingRatingReviewPreviewRequest", "player_ids"],
+    ["StartingRatingReviewPreviewRequest", "requested_ratings"],
+    ["StartingRatingReviewPreviewRequest", "match_format"],
+    ["StartingRatingReviewConfirmRequest", "reviews"],
+    ["StartingRatingReviewConfirmRequest", "match_format"],
+    ["StartingRatingReviewConfirmation", "player_id"],
+    ["StartingRatingReviewConfirmation", "rating_jupr"],
+    ["StartingRatingReviewConfirmation", "expected_state_fingerprint"],
+  ]) {
+    const missingField = structuredClone(contract);
+    delete missingField.components.schemas[schema].properties[field];
+    incompleteRatingReviews.push(missingField);
+  }
+  for (const previousApi of incompleteRatingReviews) assert.equal(startingRatingReviewReady(previousApi), false);
   let calls = 0, clock = 0;
   await waitForProductionApi({ environment: "preview", request: async () => { throw new Error("Preview must not contact production"); } });
   await waitForProductionApi({ environment: "production", now: () => clock,
@@ -182,6 +217,14 @@ for (const name of ["GeneratorRosterRequest", "PublicGeneratorRosterRequest"]) {
       pause: async () => { clock += 10000; }, request: async (url) => ({ ok: true,
         json: async () => url.endsWith('/openapi.json') ? (++contracts === 1 ? previousApi : contract) : ready }) });
     assert.equal(contracts, 2, "The website waits for compact shell reads and full roster departure batches");
+  }
+  for (const previousApi of incompleteRatingReviews) {
+    clock = 0;
+    contracts = 0;
+    await waitForProductionApi({ environment: "production", now: () => clock,
+      pause: async () => { clock += 10000; }, request: async (url) => ({ ok: true,
+        json: async () => url.endsWith('/openapi.json') ? (++contracts === 1 ? previousApi : contract) : ready }) });
+    assert.equal(contracts, 2, "The website waits for starting-rating preview, confirmation, and concurrency request fields");
   }
   clock = 0;
   await assert.rejects(waitForProductionApi({ environment: "production", timeoutMs: 10000,

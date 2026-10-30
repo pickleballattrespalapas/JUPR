@@ -16,6 +16,7 @@ function load(relative, mocks = {}) {
 const auth = load("lib/useAuthenticatedAutoLoad.ts");
 let token = "staff-token";
 const common = {
+  "@/components/StartingRatingReview": require("./helpers/starting-rating-review-module.cjs"),
   "@/lib/useAdminSession": { useAdminSession: () => ({ accessToken: token, session: token ? { user: { id: "staff" } } : null }), adminSessionLabel: () => "Staff" },
   "@/lib/useAuthenticatedAutoLoad": auth,
   "@/components/ConfirmAction": { ConfirmAction: props => React.createElement("button", { disabled: props.disabled, onClick: () => props.onConfirm(props.confirmationText) }, props.triggerLabel) },

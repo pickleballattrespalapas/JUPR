@@ -443,7 +443,10 @@ async function runWeek(
       name: new RegExp(`^${escapeRegExp(String(member?.player_name || ""))}(?: ·|$)`)
     });
     await expect(checkbox, `Original roster member ${playerId} is ambiguous`).toHaveCount(1);
-    await checkbox.check();
+    // The rating review mounts as attendance changes; allow React to commit
+    // the controlled checkbox without issuing another click that could toggle it off.
+    if (!(await checkbox.isChecked())) await checkbox.click();
+    await expect(checkbox, `Original roster member ${playerId} was not selected`).toBeChecked();
   }
   expect(await rosterAttendance.evaluateAll((nodes) => nodes.filter((node) => (node as HTMLInputElement).checked).length)).toBe(plan.rosterAttendance);
 
@@ -474,6 +477,24 @@ async function runWeek(
     name: `Build courts from ${plan.attendance} attendees`,
     exact: true
   });
+  const startingReview = page.getByRole("region", { name: "Review starting estimates before rated play", exact: true });
+  await expect(startingReview).toBeVisible();
+  await expect(startingReview).toHaveAttribute("aria-busy", "false");
+  const confirmStarting = startingReview.getByRole("button", { name: /^Confirm starting ratings? \(\d+\)$/ });
+  if (await confirmStarting.count()) {
+    await expect(buildCourts).toBeDisabled();
+    const confirmation = page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return url.origin === expectedApiOrigin
+        && url.pathname === `/admin/clubs/${clubId}/starting-rating-review/confirm`
+        && response.request().method() === "POST";
+    });
+    await confirmStarting.click();
+    const response = await confirmation;
+    expect(response.status()).toBe(200);
+    expect((await response.json()).review_required).toBe(false);
+  }
+  await expect(startingReview.getByText("All selected players are ready for rated doubles play.", { exact: true })).toBeVisible();
   await expect(buildCourts).toBeEnabled();
   await buildCourts.click();
 

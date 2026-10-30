@@ -5,6 +5,8 @@ from copy import deepcopy
 import unicodedata
 from typing import Any
 
+from jupr_app.services.generator_starting_rating_review import require_generator_starting_ratings
+
 from jupr_app.services.admin_round_robin_hub_service import (
     HUB_TABLE, _event, _first, _group_keys, _is_locked, _rows, _session_rows,
 )
@@ -204,5 +206,13 @@ def prepare_checkin_review(db: Any, *, club_id: str, hub_id: str, state: dict[st
     # must explicitly match an existing participant instead of adding a duplicate.
     if any(name_key(str(p.get("name") or "")) == name_key(command["name"]) for p in events[key].get("participants") or []):
         raise ValueError("A player with this name is already on the roster. Match that player, or use a distinguishing name for a different person.")
+    # Rated check-ins wait for profile selection and review instead of stalling
+    # the other arrivals or already assigned games in this hub.
+    require_generator_starting_ratings(db, club_id=club_id, event={
+        "ratingMode": events[key].get("ratingMode", "unrated"),
+        "playFormat": events[key].get("playFormat", "doubles"),
+        "participants": [{"id": "checkin:" + checkin_id, "name": command["name"],
+                          "player_id": command.get("player_id")}],
+    })
     decisions[checkin_id] = {**decision, "status": "accepted"}
     return "add_player", command

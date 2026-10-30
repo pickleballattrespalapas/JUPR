@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import GeneratorRatingReview from "@/components/GeneratorRatingReview";
 import PlayerSearchInput from "@/components/PlayerSearchInput";
 import { InteractionDialog } from "@/components/interaction";
 import { fetchAllPublicPlayers } from "@/lib/playerSearch";
@@ -10,6 +11,7 @@ import styles from "./RoundRobinHubPanel.module.css";
 type DirectoryPlayer = { id: number | string; name: string };
 type Props = {
   apiBase: string; clubId: string; groups: HubGroup[]; busy: boolean; disabled: boolean; pending: boolean; error: string;
+  accessToken?: string;
   initialName?: string; initialSessionKey?: string;
   onClose: () => void; onRetry: () => void;
   onSubmit: (sessionKey: string, name: string, playerId: number | null) => void;
@@ -23,7 +25,8 @@ function destinationUnavailableReason(group: HubGroup, playerId: number | null):
   return "";
 }
 
-export default function HubAddPlayerDialog({ apiBase, clubId, groups, busy, disabled, pending, error, onClose, onRetry, onSubmit, initialName = "", initialSessionKey = "" }: Props) {
+export default function HubAddPlayerDialog({ apiBase, clubId, accessToken, groups, busy, disabled, pending, error, onClose, onRetry, onSubmit, initialName = "", initialSessionKey = "" }: Props) {
+  const [ratingReady, setRatingReady] = useState(false);
   const [name, setName] = useState(initialName);
   const [playerId, setPlayerId] = useState<number | null>(null);
   const [sessionKey, setSessionKey] = useState(initialSessionKey);
@@ -49,7 +52,8 @@ export default function HubAddPlayerDialog({ apiBase, clubId, groups, busy, disa
   const frozen = disabled || busy || pending;
   const selectedGroup = groups.find(group => group.session_key === sessionKey);
   const destinationError = sessionKey ? selectedGroup ? destinationUnavailableReason(selectedGroup, playerId) : "This round robin is no longer in the event. Choose another round robin." : "";
-  const blocked = frozen || !selectedGroup || Boolean(destinationError);
+  const rated = selectedGroup?.rating_mode === "rated";
+  const blocked = frozen || !selectedGroup || Boolean(destinationError) || (rated && (!playerId || !ratingReady));
   const options = directory.filter(player => Number.isSafeInteger(Number(player.id)) && Number(player.id) > 0).map(player => ({
     value: String(player.id), label: player.name
   }));
@@ -62,12 +66,12 @@ export default function HubAddPlayerDialog({ apiBase, clubId, groups, busy, disa
       <label className={styles.field}>Player name or club profile
         <PlayerSearchInput aria-label="Player name or club profile" data-autofocus maxLength={120} value={name} disabled={frozen}
           options={options} loading={directoryLoading} error={directoryError}
-          onTextChange={value => { setName(value); setPlayerId(null); }}
-          onPick={option => { setName(option.label); setPlayerId(Number(option.value)); }} />
+          onTextChange={value => { setName(value); setPlayerId(null); setRatingReady(false); }}
+          onPick={option => { setName(option.label); setPlayerId(Number(option.value)); setRatingReady(false); }} />
       </label>
       <p className={styles.small}>{playerId ? "Selected club profile. This player shares their identity and pause status across the event." : "Choose a club profile from the suggestions, or enter a guest name."}</p>
       <label className={styles.field}>Round robin
-        <select aria-label="Round robin" required value={sessionKey} disabled={frozen || !name.trim() || Boolean(initialSessionKey)} aria-invalid={Boolean(destinationError)} aria-describedby={destinationError ? "hub-add-player-destination-error" : undefined} onChange={event => setSessionKey(event.target.value)}>
+        <select aria-label="Round robin" required value={sessionKey} disabled={frozen || !name.trim() || Boolean(initialSessionKey)} aria-invalid={Boolean(destinationError)} aria-describedby={destinationError ? "hub-add-player-destination-error" : undefined} onChange={event => { setSessionKey(event.target.value); setRatingReady(false); }}>
           <option value="">Choose a round robin</option>
           {sessionKey && !selectedGroup ? <option value={sessionKey} disabled>Selected round robin is no longer available</option> : null}
           {destinations.map(group => {
@@ -76,6 +80,10 @@ export default function HubAddPlayerDialog({ apiBase, clubId, groups, busy, disa
           })}
         </select>
       </label>
+      {rated && playerId && accessToken ? <GeneratorRatingReview apiBase={apiBase} clubId={clubId} accessToken={accessToken}
+        playerIds={[playerId]} playFormat={selectedGroup?.play_format || "doubles"} disabled={frozen} onReady={setRatingReady} /> : null}
+      {rated && !playerId ? <p role="status">Choose a club profile before adding a player to this rated round robin.</p> : null}
+      {rated && playerId && !accessToken ? <p role="status">Sign in as club staff to review this player&apos;s starting rating.</p> : null}
       {destinationError ? <p id="hub-add-player-destination-error" role="alert">{destinationError}</p> : null}
       {!groups.length ? <p className={styles.small}>Add a round robin to this event before adding a player.</p> : null}
       <p className={styles.small}>Players join from round {selectedGroup?.add_player_effective_round ?? selectedGroup?.current_round_number ?? "shown in the selected round robin"}. Announced and assigned lineups keep their players.</p>

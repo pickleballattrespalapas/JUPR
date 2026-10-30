@@ -25,6 +25,7 @@ const provider = load('components/interaction/InteractionProvider.tsx', {
 });
 const confirm = load('components/ConfirmAction.tsx', {'./interaction/InteractionProvider':provider});
 const Component = load('app/admin/play-generators/submissions/GeneratorSubmissions.tsx', {
+  '@/components/StartingRatingReview':require('./helpers/starting-rating-review-module.cjs'),
   '@/lib/useAdminSession':{useAdminSession: () => ({accessToken:'admin-token'})},
   '@/components/ConfirmAction':confirm,
   '@/components/interaction':interaction,

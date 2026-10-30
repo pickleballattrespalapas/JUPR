@@ -21,6 +21,7 @@ os.environ["JUPR_ENV"] = "test"
 os.environ["JUPR_PUBLIC_LIVE_TOKEN_SECRET"] = "local-browser-fixture-secret-00000000000000000000"
 os.environ["JUPR_PUBLIC_LIVE_CREATE_LIMIT_PER_HOUR"] = "30"  # Many isolated browser scenarios share one fixture visitor.
 os.environ["JUPR_ENABLE_NEXT_ADMIN_PLAYER_EDITOR"] = "1"
+os.environ["JUPR_ENABLE_STAGING_NEXT_ADMIN_LEAGUE_MANAGER_WRITES"] = "1"
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -31,6 +32,7 @@ from jupr_app.services.public_live_operation_service import PublicLiveConflictEr
 from jupr_app.services.public_play_generator_service import get_public_play_generator_session
 from services.api import admin_play_generator_routes as admin
 from services.api import admin_player_editor_routes as editor
+from services.api import admin_starting_rating_review_routes as starting_review
 from services.api.club_site_models import default_site
 from services.api.public_play_generator_routes import install_public_play_generator_routes
 from services.api.shared_play_generator_routes import install_shared_play_generator_routes
@@ -136,6 +138,9 @@ admin.install_admin_play_generator_routes(app, get_supabase_client=lambda: datab
 patches.setattr(editor, "authenticate_bearer", authenticate)
 patches.setattr(editor, "resolve_admin_role", lambda **kw: SimpleNamespace(role="administrator"))
 editor.install_admin_player_editor_routes(app, get_supabase_client=lambda: database)
+patches.setattr(starting_review, "authenticate_bearer", authenticate)
+patches.setattr(starting_review, "resolve_admin_role", lambda **kw: SimpleNamespace(role="administrator"))
+starting_review.install_admin_starting_rating_review_routes(app, get_supabase_client=lambda: database)
 
 
 @app.get("/public/clubs/{slug}/site")
