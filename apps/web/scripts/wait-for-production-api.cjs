@@ -94,6 +94,11 @@ function startingRatingReviewReady(openapi) {
     && review?.expected_state_fingerprint?.type === "string";
 }
 
+function tournamentPartnerLookupReady(openapi) {
+  const route = openapi?.paths?.["/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/partner-profile-resolution"];
+  return Boolean(route?.post);
+}
+
 async function waitForProductionApi({
   environment = process.env.VERCEL_ENV,
   request = fetch,
@@ -103,7 +108,7 @@ async function waitForProductionApi({
 } = {}) {
   if (environment !== "production") return;
   const deadline = now() + timeoutMs;
-  console.log("Waiting for the production operations, weekly report, League Live, RR Hub, site reliability, and starting-rating review APIs before building the website.");
+  console.log("Waiting for the production operations, weekly report, League Live, RR Hub, site reliability, starting-rating review, and tournament partner lookup APIs before building the website.");
   while (now() < deadline) {
     try {
       const response = await request("https://api.juprleagues.com/health", {
@@ -115,8 +120,8 @@ async function waitForProductionApi({
         });
         if (contract.ok) {
           const openapi = await contract.json();
-          if (weeklyReportReady(openapi) && leagueLiveReady(openapi) && roundRobinHubReady(openapi) && siteReliabilityReady(openapi) && startingRatingReviewReady(openapi)) {
-            console.log("Production operations, weekly report, League Live, RR Hub, site reliability, and starting-rating review APIs are ready.");
+          if (weeklyReportReady(openapi) && leagueLiveReady(openapi) && roundRobinHubReady(openapi) && siteReliabilityReady(openapi) && startingRatingReviewReady(openapi) && tournamentPartnerLookupReady(openapi)) {
+            console.log("Production operations, weekly report, League Live, RR Hub, site reliability, starting-rating review, and tournament partner lookup APIs are ready.");
             return;
           }
         }
@@ -129,7 +134,7 @@ async function waitForProductionApi({
   throw new Error("Production operations API is not ready. The current website remains active; retry after API verification.");
 }
 
-module.exports = { operationsReady, weeklyReportReady, leagueLiveReady, roundRobinHubReady, siteReliabilityReady, startingRatingReviewReady, waitForProductionApi, REQUIRED_FLAGS };
+module.exports = { operationsReady, weeklyReportReady, leagueLiveReady, roundRobinHubReady, siteReliabilityReady, startingRatingReviewReady, tournamentPartnerLookupReady, waitForProductionApi, REQUIRED_FLAGS };
 if (require.main === module) {
   waitForProductionApi().catch((error) => { console.error(error.message); process.exitCode = 1; });
 }
