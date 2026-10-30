@@ -171,6 +171,34 @@ def test_public_form_has_no_token_and_review_never_mutates(context, monkeypatch)
         assert client.get("/clubs/fixture/tournament-registration/partner-invitations/respond").status_code == 405
 
 
+def test_stale_listing_returns_refresh_guidance_without_sending_email(context, monkeypatch):
+    from postgrest.exceptions import APIError
+
+    db, row, ctx = context
+    before = deepcopy(db.storage)
+    monkeypatch.setattr(service, "_selection_by_public_entry_key", lambda *a, **k: ctx["target"])
+    monkeypatch.setattr(service, "_notify", lambda *a: pytest.fail("Unavailable listing sent email"))
+
+    def reject_unavailable_listing():
+        raise APIError({"code": "P0001", "details": None, "hint": None,
+            "message": "JUPR_INVITATION: This player is no longer looking for a partner in this division."})
+
+    db.rpc = lambda *a, **k: SimpleNamespace(execute=reject_unavailable_listing)
+    app = FastAPI()
+    routes.install_public_tournament_pairing_routes(app, get_club=lambda _: {"id": "club"},
+        get_supabase_client=lambda: db, public_club_payload=lambda *a: {})
+    monkeypatch.setattr(routes, "require_public_intake_or_403", lambda: None)
+    with TestClient(app) as client:
+        response = client.post("/clubs/fixture/tournament-registration/partner-invitations", json={
+            "tournament_id": "tournament", "board_entry_key": "opaque", "name": row["requester_name"],
+            "email": row["requester_email"], "message": row["message"], "request_key": "12345678901234567890"})
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "This partner listing is no longer available. Refresh the Partner Board to see current listings."
+    )
+    assert db.storage == before
+
+
 def test_anonymous_send_delivers_to_target_immediately_without_verifying_sender(context, monkeypatch):
     db, row, ctx = context
     row["verified_at"] = None

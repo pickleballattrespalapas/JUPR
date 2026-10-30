@@ -51,7 +51,12 @@ def _rpc(db: Any, name: str, args: dict) -> Any:
         if message.startswith("JUPR_INVITATION_RATE: "):
             raise InvitationRateLimitError(message.split(": ", 1)[1]) from exc
         if message.startswith("JUPR_INVITATION: "):
-            raise InvitationConflictError(message.split(": ", 1)[1]) from exc
+            detail = message.split(": ", 1)[1]
+            if detail == "This player is no longer looking for a partner in this division.":
+                # The same database guard also rejects withdrawn display consent.
+                # Do not imply that an unavailable listing means a player paired.
+                detail = "This partner listing is no longer available. Refresh the Partner Board to see current listings."
+            raise InvitationConflictError(detail) from exc
         raise RuntimeError("We couldn’t update this partner request. Please try again.") from exc
 
 

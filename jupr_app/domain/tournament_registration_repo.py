@@ -3902,6 +3902,15 @@ def build_registration_state(supabase, tournament: dict[str, Any], settings: dic
         four_player_teams=four_player_teams,
         four_player_team_members=four_player_team_members,
     )
+    # The compiler includes all unpaired players for organizer workflows, even
+    # when a selection is hidden. Carry the saved display choice into the public
+    # projection without another database read or changing the organizer list.
+    public_selection_ids = {
+        str(row.get("id") or "") for row in selections
+        if _coerce_bool(row.get("show_on_partner_board", False))
+    }
+    for row in state.get("partner_board") or []:
+        row["show_on_partner_board"] = str(row.get("selection_id") or "") in public_selection_ids
     if not partner_schema_ok:
         state["partner_link_schema_available"] = False
         state["partner_link_schema_detail"] = partner_schema_detail
@@ -4036,6 +4045,7 @@ def build_public_tournament_roster_state(
         for row in (state.get("partner_board") or [])
         if public_board_enabled
         and str(row.get("selection_id") or "")
+        and _coerce_bool(row.get("show_on_partner_board", False))
         and str(row.get("event_option_id") or "") in board_event_ids
     }
     contact_registration_ids = {
