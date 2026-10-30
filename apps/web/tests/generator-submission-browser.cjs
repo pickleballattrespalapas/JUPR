@@ -15,6 +15,7 @@ const path = require('node:path');
 const os = require('node:os');
 const assert = require('node:assert/strict');
 const {chromium} = require('playwright');
+const {expect: expectBrowser} = require('@playwright/test');
 
 const webRoot = path.resolve(__dirname, '..');
 const root = path.resolve(webRoot, '../..');
@@ -378,7 +379,11 @@ async function main() {
         assert.equal(await adminPage.getByRole('spinbutton', {name:'New Browser Player doubles starting level', exact:true}).inputValue(), '3.75', 'The pre-start estimate survives the full submission flow');
         assert.equal(seeded.players.length, before.players.length, 'Approval review reuses the profile created before rated play');
         assert.equal(seeded.players.find(p => p.id === createdPlayerId).rating, 1500);
-        assert.equal(await adminPage.getByRole('button', {name:approveLabel, exact:true}).isDisabled(), false);
+        // Saving the estimate remounts the independent history check. The API
+        // response precedes that readback, during which approval stays blocked.
+        await adminPage.getByRole('region', {name:'Confirm doubles starting ratings', exact:true})
+          .getByText('All selected players are ready for rated doubles play.', {exact:true}).waitFor();
+        await expectBrowser(adminPage.getByRole('button', {name:approveLabel, exact:true})).toBeEnabled();
         console.log('PASS starting level: browser edit -> API -> current and baseline saved; approval blocked until save; singles preserved');
       }
       await adminPage.getByRole('button', {name:approveLabel, exact:true}).click();

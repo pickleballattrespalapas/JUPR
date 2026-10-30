@@ -302,6 +302,7 @@ def test_mixed_official_publish_splits_singles_and_doubles(monkeypatch) -> None:
     require_api_dependency("postgrest")
     require_api_dependency("supabase")
     import jupr_app.services.admin_play_generator_service as service
+    from tests.starting_rating_review_fake import review_rpc, seeded_reviews
 
     class FakeQuery:
         def __init__(self, storage, table_name):
@@ -369,14 +370,29 @@ def test_mixed_official_publish_splits_singles_and_doubles(monkeypatch) -> None:
                         "club_id": "club",
                         "id": player_id,
                         "name": f"Player {index}",
+                        "rating": 1400,
+                        "starting_rating": 1400,
+                        "singles_rating": 1300,
+                        "singles_replay_baseline": {"rating": 1300},
                     }
                     for index, player_id in enumerate(range(101, 109), start=1)
                 ],
                 "admin_activity_log": [],
             }
+            # These profiles have had their initial estimates reviewed in both
+            # formats; this contract tests the subsequent mixed publication.
+            self.db = self.storage
+            self.starting_reviews = seeded_reviews(self.storage["players"])
+            self.review_formats = []
 
         def table(self, name):
             return FakeQuery(self.storage, name)
+
+        def rpc(self, name, params):
+            result = review_rpc(self, name, params, FakeQuery)
+            assert result is not None, f"Unexpected RPC: {name}"
+            self.review_formats.append(params["p_match_format"])
+            return result
 
     supabase = FakeSupabase()
     created = service.create_play_generator_session(
@@ -453,6 +469,7 @@ def test_mixed_official_publish_splits_singles_and_doubles(monkeypatch) -> None:
         source="test",
     )
 
+    assert supabase.review_formats == ["doubles", "singles", "doubles", "singles"]
     assert published["published_count"] == 3
     assert published["result"]["mixed_formats"] is True
     assert [call["match_format"] for call in calls] == ["doubles", "singles"]
