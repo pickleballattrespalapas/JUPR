@@ -27,10 +27,15 @@ const eligibility = load("lib/tournamentRegistrationEligibility.ts", {
 const ConfirmAction = () => null;
 const FormDialog = ({ open, children }) => open ? React.createElement("div", { role: "dialog" }, children) : null;
 const redirects = [];
+const PartnerDetails = load("components/tournaments/TournamentPartnerDetails.tsx", {
+  "@/lib/tournamentRegistrationEligibility": eligibility,
+  "@/lib/tournamentRegistrationApi": { resolveClubTournamentPartnerProfile: () => assert.fail("Admin lookup must use its authenticated endpoint") }
+}).default;
 const Panel = load("app/admin/tournaments/registration/registrants/[registrationId]/TournamentRegistrantEditPanel.tsx", {
   "next/link": { __esModule: true, default: ({ children }) => children },
   "next/navigation": { useRouter: () => ({ replace: href => redirects.push(href) }) },
   "@/components/ConfirmAction": { ConfirmAction },
+  "@/components/tournaments/TournamentPartnerDetails": { __esModule: true, default: PartnerDetails },
   "@/components/interaction": { ...interaction, FormDialog },
   "@/lib/tournamentRegistrationActionError": errors,
   "@/lib/tournamentRegistrationEligibility": eligibility,
@@ -128,7 +133,16 @@ async function main() {
   ];
   selections[1].gender_review = { status: "PENDING", fingerprint: "a".repeat(64), review_version: "b".repeat(64), reason: "Mixed doubles requires one men's and one women's registrant.", player_gender: "Women", partner_gender: "Non-binary" };
   let eligibilityRequest;
+  const partnerLookups = [];
+  const partner = { id: "301", display_name: "Kirsten Fixture", doubles_skill: 4.123456789, dupr_id: "fixture-dupr" };
+  let profileResponse = { profile_match_kind: "name_partial", profile_candidates: [partner, { ...partner, id: "302", display_name: "Kirsten Other" }] };
   global.fetch = async (_url, options = {}) => {
+    if (String(_url).endsWith("/partner-profile-resolution")) {
+      assert.equal(new Headers(options.headers).get("Authorization"), "Bearer fixture-session");
+      assert.ok(String(_url).includes("/admin/clubs/fixture/tournaments/admin/tournaments/t-fixture/"));
+      partnerLookups.push(JSON.parse(options.body));
+      return new Response(JSON.stringify(profileResponse));
+    }
     if (String(_url).endsWith("/gender-review")) {
       eligibilityRequest = JSON.parse(options.body);
       selections[1].gender_review.status = eligibilityRequest.decision;
@@ -198,6 +212,45 @@ async function main() {
     assert.equal(field("Partner state").findByType("select").props.value, "NEEDS_PARTNER");
     await act(async () => field("Partner state").findByType("select").props.onChange({ target: { value: "HAS_PARTNER" } }));
     assert.equal(field("Partner gender").findByType("select").props.value, "Men");
+    const eventDialog = () => renderer.root.findAllByType(FormDialog).find(node => node.props.open);
+    const partnerField = name => renderer.root.findByProps({ "aria-label": `Event entry partner ${name}` });
+    const changePartner = (name, value) => act(async () => partnerField(name).props.onChange({ target: { value } }));
+    await changePartner("name", "Kirsten");
+    assert.equal(eventDialog().props.submitDisabled, true, "Saving waits for profile lookup");
+    await act(async () => new Promise(resolve => setTimeout(resolve, 275)));
+    assert.equal(partnerLookups.at(-1).name, "Kirsten");
+    assert.equal(eventDialog().props.submitDisabled, true, "Partial name matches require a choice");
+    await act(async () => renderer.root.findAllByType("input").find(node => node.props.type === "radio" && content(node.parent).includes("Kirsten Fixture")).props.onChange());
+    assert.equal(partnerField("name").props.value, partner.display_name);
+    assert.equal(partnerField("skill").props.value, String(partner.doubles_skill));
+    assert.equal(partnerField("skill").props.readOnly, true);
+    assert.equal(partnerField("skill").props.step, "any");
+    assert.equal(renderer.root.findAllByProps({ "aria-label": "Event entry partner DUPR ID" }).length, 0);
+    await changePartner("skill", "2.5");
+    assert.equal(partnerField("skill").props.value, String(partner.doubles_skill));
+    await changePartner("email", "partner@example.com");
+    assert.equal(partnerField("skill").props.readOnly, true, "Entering email preserves the selection");
+    assert.equal(partnerField("age").props.required, false, "Admin demographic requirements stay unchanged");
+    assert.equal(eventDialog().props.submitDisabled, false);
+    await act(async () => eventDialog().props.onSubmit());
+    assert.equal(requests.at(-1).partner_name, partner.display_name);
+    assert.equal(requests.at(-1).partner_skill, partner.doubles_skill);
+    assert.equal(requests.at(-1).partner_dupr_id, partner.dupr_id);
+    assert.equal(requests.at(-1).expected_updated_at, selections[1].updated_at);
+    assert.equal(requests.at(-1).profileId, undefined, "Only validated selection fields are submitted");
+    await act(async () => entry("Doubles entry").findAllByType("button").find(node => content(node) === "Edit entry").props.onClick());
+    await act(async () => field("Partner state").findByType("select").props.onChange({ target: { value: "HAS_PARTNER" } }));
+    assert.equal(partnerField("skill").props.readOnly, false, "Reopening discards an unsaved profile choice");
+    profileResponse = { profile_match_kind: "name_exact", profile_candidates: [partner] };
+    await changePartner("name", partner.display_name);
+    await act(async () => new Promise(resolve => setTimeout(resolve, 275)));
+    assert.equal(partnerField("skill").props.readOnly, true, "A unique full name selects its profile automatically");
+    profileResponse = { profile_match_kind: "none", profile_candidates: [] };
+    await changePartner("name", "New Partner");
+    assert.equal(partnerField("skill").props.value, "", "Changing identity clears the previous profile rating");
+    await act(async () => new Promise(resolve => setTimeout(resolve, 275)));
+    assert.equal(partnerField("skill").props.readOnly, false);
+    assert.match(content(renderer.root), /No matching profile found/);
     await act(async () => field("Partner state").findByType("select").props.onChange({ target: { value: "NEEDS_PARTNER" } }));
     await act(async () => field("Division").findByType("select").props.onChange({ target: { value: "other-singles" } }));
     assert.equal(renderer.root.findAllByType("label").some(node => content(node).startsWith("Partner state")), false, "Moving an entry to singles removes partner controls");

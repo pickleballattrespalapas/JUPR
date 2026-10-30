@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useId, useRef, useState, type CSSProperties } from "react";
 import {
+  type PublicPartnerProfileResolutionResponse,
   PublicRegistrationPlayer,
   resolveClubTournamentPartnerProfile
 } from "@/lib/tournamentRegistrationApi";
@@ -28,14 +29,19 @@ export type TournamentPartnerDetailsValue = {
   profileChoiceRequired?: boolean;
 };
 
+export type TournamentPartnerProfileResolver = (identity: { name: string; email: string | null }) => Promise<{
+  data?: Pick<PublicPartnerProfileResolutionResponse, "profile_candidates" | "profile_match_kind"> | null;
+  error?: string | null;
+}>;
+
 type Props = {
-  clubSlug: string;
   tournamentId: string;
   registrationSlug?: string | null;
   labelPrefix: string;
   value: TournamentPartnerDetailsValue;
   onChange: (patch: Partial<TournamentPartnerDetailsValue>) => void;
-};
+  requireDemographics?: boolean;
+} & ({ clubSlug: string; resolveProfile?: TournamentPartnerProfileResolver } | { clubSlug?: never; resolveProfile: TournamentPartnerProfileResolver });
 
 const inputStyle: CSSProperties = {
   width: "100%", boxSizing: "border-box", padding: "0.55rem",
@@ -50,7 +56,8 @@ const buttonStyle: CSSProperties = {
 };
 
 export default function TournamentPartnerDetails({
-  clubSlug, tournamentId, registrationSlug, labelPrefix, value, onChange
+  clubSlug, tournamentId, registrationSlug, labelPrefix, value, onChange,
+  resolveProfile, requireDemographics = true
 }: Props) {
   const choiceId = useId();
   const canSearch = value.name.trim().length >= 2;
@@ -86,12 +93,15 @@ export default function TournamentPartnerDetails({
     onChangeRef.current({ profileLookupPending: true });
     setError(null);
     try {
-      const result = await resolveClubTournamentPartnerProfile(clubSlug, {
-        tournament_id: tournamentId,
-        registration_slug: registrationSlug || null,
+      const identity = {
         name: value.name.trim(),
         // An email still being typed must not suppress name suggestions.
         email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.email.trim()) ? value.email.trim() : null
+      };
+      const result = resolveProfile ? await resolveProfile(identity) : await resolveClubTournamentPartnerProfile(clubSlug!, {
+        tournament_id: tournamentId,
+        registration_slug: registrationSlug || null,
+        ...identity
       });
       if (id !== requestId.current) return;
       if (result.error || !result.data) {
@@ -116,7 +126,7 @@ export default function TournamentPartnerDetails({
         onChangeRef.current({ profileLookupPending: false });
       }
     }
-  }, [clubSlug, tournamentId, registrationSlug, canSearch, value.name, value.email, value.profileId, value.profileChoiceMade]);
+  }, [clubSlug, tournamentId, registrationSlug, resolveProfile, canSearch, value.name, value.email, value.profileId, value.profileChoiceMade]);
 
   useEffect(() => {
     if (!canSearch || value.profileId || value.profileChoiceMade) return;
@@ -199,8 +209,8 @@ export default function TournamentPartnerDetails({
       )}
       {error ? <p role="alert" style={{ color: "#b91c1c", margin: 0 }}>{error}</p> : null}
       <div style={gridStyle}>
-        <label>Partner age *<br /><input required aria-label={`${labelPrefix} partner age`} type="number" min="1" max="120" value={value.age} onChange={(event) => onChange({ age: event.target.value })} style={inputStyle} /></label>
-        <label>Partner gender *<br /><select required aria-label={`${labelPrefix} partner gender`} value={value.gender} onChange={(event) => onChange({ gender: event.target.value })} style={inputStyle}><option value="">Select</option>{registrationGenderOptions(value.gender).map((gender) => <option key={gender} value={gender}>{gender}</option>)}</select></label>
+        <label>Partner age{requireDemographics ? " *" : ""}<br /><input required={requireDemographics} aria-label={`${labelPrefix} partner age`} type="number" min={requireDemographics ? "1" : "5"} max="120" value={value.age} onChange={(event) => onChange({ age: event.target.value })} style={inputStyle} /></label>
+        <label>Partner gender{requireDemographics ? " *" : ""}<br /><select required={requireDemographics} aria-label={`${labelPrefix} partner gender`} value={value.gender} onChange={(event) => onChange({ gender: event.target.value })} style={inputStyle}><option value="">{requireDemographics ? "Select" : "Not specified"}</option>{registrationGenderOptions(value.gender).map((gender) => <option key={gender} value={gender}>{gender}</option>)}</select></label>
         {/* Club ratings retain their full precision; a hundredth-step rejects valid profile autofill. */}
         <label>Partner starting skill *<br /><input required aria-label={`${labelPrefix} partner skill`} type="number" min="1" max="7" step="any" inputMode="decimal" value={value.skill} readOnly={skillReadOnly} onChange={(event) => { if (skillReadOnly) return; detailsVersion.current += 1; onChange({ skill: event.target.value }); }} style={{ ...inputStyle, ...(skillReadOnly ? { background: "#f1f5f9" } : {}) }} /></label>
       </div>

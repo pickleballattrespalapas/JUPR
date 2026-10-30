@@ -84,6 +84,7 @@ from jupr_app.services.admin_tournament_service import (
     delete_admin_tournament_selection,
     get_admin_tournament_detail,
     replace_admin_tournament_selection_partner,
+    resolve_admin_tournament_partner_profile,
     review_admin_tournament_gender_eligibility,
     is_admin_tournament_admin_enabled,
     list_admin_tournaments,
@@ -376,6 +377,11 @@ class AdminTournamentGenderReviewRequest(BaseModel):
     decision: str = Field(pattern=r"^(APPROVED|DECLINED)$")
     confirmation_text: str = ""
     source: str = "next_tournament_gender_review"
+
+
+class AdminTournamentPartnerProfileRequest(BaseModel):
+    name: str = Field(min_length=2, max_length=160)
+    email: str | None = Field(default=None, max_length=320)
 
 
 class AdminTournamentSelectionUpdateRequest(BaseModel):
@@ -2036,6 +2042,27 @@ def install_admin_tournament_routes(app, *, get_supabase_client) -> None:
         _resolve_tournament_role_or_403(supabase=supabase, club_id=str(club_id), authorization=authorization, source="registration_attempt_support")
         try:
             return list_registration_attempts(supabase, club_id=club_id, tournament_id=tournament_id, search=search)
+        except Exception as exc:
+            _handle(exc)
+
+    @app.post("/admin/clubs/{club_id}/tournaments/admin/tournaments/{tournament_id}/partner-profile-resolution")
+    def post_admin_tournament_partner_profile(
+        club_id: str, tournament_id: str, payload: AdminTournamentPartnerProfileRequest,
+        response: Response, authorization: str | None = auth_header(),
+    ) -> dict[str, Any]:
+        if not is_admin_tournament_admin_enabled():
+            raise HTTPException(status_code=403, detail="Next Tournament Admin is disabled.")
+        response.headers["Cache-Control"] = "no-store, private"
+        supabase = get_supabase_client()
+        _resolve_tournament_role_or_403(
+            supabase=supabase, club_id=str(club_id), authorization=authorization,
+            source="next_tournament_admin_partner_profile",
+        )
+        try:
+            return resolve_admin_tournament_partner_profile(
+                supabase, club_id=str(club_id), tournament_id=str(tournament_id),
+                name=payload.name, email=payload.email,
+            )
         except Exception as exc:
             _handle(exc)
 
