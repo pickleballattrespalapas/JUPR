@@ -16,6 +16,7 @@ from jupr_app.domain.adaptive_play_engine import (
     mutate_generator_roster,
     save_generator_round,
     schedule_export_rows,
+    select_generator_round,
     start_generator_event,
 )
 
@@ -226,7 +227,20 @@ def test_adaptive_roster_change_preserves_completed_mixed_round_and_rebalances_f
     )
 
     assert event["rounds"][0] == completed_round
-    for round_row in event["rounds"][1:]:
+    assert event["rounds"][1]["matches"]  # The immediate next round is prepared.
+    for distant in event["rounds"][2:]:
+        assert distant["generationPending"] is True
+        assert distant["matches"] == distant["byeParticipantIds"] == []
+        assert distant["formatCounts"] == {"doubles": 0, "singles": 0}
+
+    bye_counts = {f"p-{number}": 0 for number in range(1, 8)}
+    previous_byes = set()
+    for number in range(2, 5):
+        event = select_generator_round(event, round_number=number)
+        round_row = next(row for row in event["rounds"] if row["number"] == number)
+        assert not round_row.get("generationPending")
+        assert round_row["status"] == "active"
+        assert event["rounds"][0] == completed_round
         assert round_row["formatCounts"] == {"doubles": 1, "singles": 1}
         assert len(_matches(round_row)) == 2
         assert len(round_row["byeParticipantIds"]) == 1
@@ -237,6 +251,15 @@ def test_adaptive_roster_change_preserves_completed_mixed_round_and_rebalances_f
             for participant_id in [*(match.get("sideA") or []), *(match.get("sideB") or [])]
         ]
         assert "p-8" not in playing
+        assert len(playing) == len(set(playing)) == 6
+        current_byes = set(round_row["byeParticipantIds"])
+        assert set(playing) | current_byes == set(bye_counts)
+        assert not previous_byes & current_byes
+        for participant_id in current_byes:
+            bye_counts[participant_id] += 1
+        assert max(bye_counts.values()) - min(bye_counts.values()) <= 1
+        previous_byes = current_byes
+        event = _score_round(event, number)
 
 
 def test_public_admin_api_and_browser_draft_include_mixed_configuration() -> None:

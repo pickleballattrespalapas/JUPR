@@ -181,8 +181,7 @@ export async function resolveClubShare(input: {
   }
   if (section === "leagues" && subpage === "past") return { ...base, title: `Past Leagues at ${name}`, description: `Explore completed pickleball leagues and results at ${name}.` };
   if (section === "players" && parts[3]) {
-    // The public profile API requires history_limit >= 12, even for previews.
-    const data = await scopedRead(`${prefix}/players/${encodeURIComponent(parts[3])}?recent_limit=1&history_limit=12`);
+    const data = await scopedRead(`${prefix}/players/${encodeURIComponent(parts[3])}/share-metadata`);
     const player = record(data?.player), identity = record(data?.identity);
     if (String(player.id ?? "") !== parts[3]) return missing("Player");
     const playerName = plainText(identity.display_name || player.display_name || player.name, 110);
@@ -192,7 +191,7 @@ export async function resolveClubShare(input: {
   const sessionKey = sessionIndex >= 0 ? parts[sessionIndex + 1] : ["live", "live-sessions"].includes(section) ? parts[3] : null;
   if (sessionKey) {
     const generator = /generator/.test(section);
-    const data = await scopedRead(`${prefix}/${generator ? 'play-generators/sessions' : 'live-sessions'}/${encodeURIComponent(sessionKey)}`);
+    const data = await scopedRead(`${prefix}/${generator ? 'play-generators/sessions' : 'live-sessions'}/${encodeURIComponent(sessionKey)}${generator ? '/share-metadata' : ''}`);
     const session = record(data?.session);
     if (session.session_key !== sessionKey) return missing("Session");
     const event = record(session.event);

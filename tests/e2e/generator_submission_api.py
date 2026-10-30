@@ -81,6 +81,17 @@ def receipt_rpc(name, params):
 
 database.rpc = receipt_rpc
 app = FastAPI()
+
+
+@app.on_event("shutdown")
+def stop_schedule_worker():
+    # The staging-enabled Hub fixture starts a real planner child. Uvicorn
+    # re-raises SIGTERM after ASGI shutdown, before Python atexit cleanup; close
+    # the pool here so its inherited output pipes cannot keep the runner alive.
+    from jupr_app.services.generator_compute import shutdown_schedule_worker
+    shutdown_schedule_worker()
+
+
 web_port = int(os.environ.get("GENERATOR_BROWSER_WEB_PORT", "3038"))
 app.add_middleware(
     CORSMiddleware,
@@ -129,8 +140,20 @@ editor.install_admin_player_editor_routes(app, get_supabase_client=lambda: datab
 
 @app.get("/public/clubs/{slug}/site")
 def site(slug: str):
+    if slug != "test":
+        raise HTTPException(404, "Unknown fixture club")
     return {"club_id": "club", "slug": slug,
             "document": default_site({"name": "Test Pickleball Club"}), "published_at": "2026-09-20"}
+
+
+@app.get("/public/clubs/{slug}/site/shell")
+def site_shell(slug: str):
+    public_site = site(slug)
+    doc = public_site["document"]
+    return {**public_site, "document": {
+        **{key: doc[key] for key in ("name", "description", "location", "accent", "visibility", "display", "page_visibility", "logo_url")},
+        "pages": [{key: page[key] for key in ("slug", "title", "in_navigation")} for page in doc["pages"]],
+    }}
 
 
 @app.get("/admin/auth/capabilities")

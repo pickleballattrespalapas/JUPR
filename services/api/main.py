@@ -199,6 +199,14 @@ def _log_runtime_guardrails() -> None:
 
 
 app = FastAPI(title="JUPR API", version="0.1.0")
+
+
+@app.on_event("shutdown")
+def stop_schedule_worker() -> None:
+    from jupr_app.services.generator_compute import shutdown_schedule_worker
+    shutdown_schedule_worker()
+
+
 app.add_middleware(StagingWriteWaveMiddleware)
 app.add_middleware(StructuredRequestLoggingMiddleware)
 app.add_middleware(
@@ -386,6 +394,9 @@ def _public_live_requester_hash(request: Request) -> str:
 
 
 def _raise_public_live_write_error(exc: Exception) -> None:
+    from jupr_app.services.generator_compute import compute_unavailable_cause
+    if unavailable := compute_unavailable_cause(exc):
+        raise HTTPException(status_code=503, detail=str(unavailable), headers={"Retry-After": "2"}) from exc
     if isinstance(exc, PublicLiveRateLimitError):
         raise HTTPException(status_code=429, detail="Please wait a moment and try again.") from exc
     if isinstance(exc, PublicLiveConflictError):
@@ -569,6 +580,7 @@ def _normalize_public_leaderboard_projection(payload: dict[str, Any]) -> dict[st
             "filtered_players": max(0, int(summary.get("filtered_players") or 0)),
         },
         "leaderboard": _normalize_public_leaderboard_rows(payload.get("leaderboard") or []),
+        "badges_available": payload.get("badges_available") is not False,
         "snapshot": snapshot_rows[0] if snapshot_rows else None,
         "highlights": {
             key: _normalize_public_leaderboard_rows(highlights.get(key) or [])
@@ -1160,6 +1172,25 @@ def get_club_players(
         offset=offset,
     )
     return {"club": _public_club_payload(club, club_slug), **directory}
+
+
+@app.get("/clubs/{club_slug}/players/{player_id}/share-metadata")
+def get_club_player_share_metadata(club_slug: str, player_id: str, response: Response) -> dict[str, Any]:
+    from services.api.club_site_routes import published_shell
+    from jupr_app.services.public_player_service import get_public_player_share_metadata
+    response.headers["Cache-Control"] = "no-store"
+    db = get_supabase_client()
+    try:
+        site = published_shell(db, club_slug)
+        metadata = get_public_player_share_metadata(db, club_id=site["club_id"], player_id=player_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(503, "Player preview is temporarily unavailable.") from exc
+    if metadata is None:
+        raise HTTPException(404, "player not found")
+    player = metadata["player"]
+    return {"player": {key: player.get(key) for key in ("id", "name", "display_name")}}
 
 
 @app.get("/clubs/{club_slug}/players/{player_id}")

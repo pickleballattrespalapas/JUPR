@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from jupr_app.data.paged_reads import read_all_rows
+from jupr_app.data.public_read_cache import public_read_cache, public_source_key
 from jupr_app.domain.player_search import matches_player_search
 from jupr_app.domain.player_visibility import is_merged_player
 from jupr_app.domain.player_activity import is_player_leaderboard_active
@@ -235,6 +236,8 @@ def _query_rows(
     *,
     club_id: str | None = None,
     required: bool = False,
+    player_ids: tuple[str, ...] | None = None,
+    league_name: str | None = None,
 ) -> list[dict[str, Any]]:
     """Read a server-side table using a narrow projection and schema fallback."""
 
@@ -243,7 +246,13 @@ def _query_rows(
         try:
             def query_factory():
                 query = supabase.table(table_name).select(columns)
-                return query.eq("club_id", str(club_id)) if club_id is not None else query
+                if club_id is not None:
+                    query = query.eq("club_id", str(club_id))
+                if league_name is not None:
+                    query = query.eq("league_name", league_name)
+                if player_ids is not None:
+                    query = query.in_("player_id", list(player_ids))
+                return query
             return read_all_rows(query_factory, order="badge_id" if table_name == "badges" else "id")
         except Exception as exc:
             last_error = exc
@@ -305,12 +314,13 @@ def _fetch_players(supabase: Any, club_id: str) -> list[dict[str, Any]]:
     )
 
 
-def _fetch_league_ratings(supabase: Any, club_id: str) -> list[dict[str, Any]]:
+def _fetch_league_ratings(supabase: Any, club_id: str, league_name: str) -> list[dict[str, Any]]:
     return _query_rows(
         supabase,
         "league_ratings",
         (LEAGUE_RATING_SELECT, LEAGUE_RATING_SELECT_FALLBACK),
         club_id=club_id,
+        league_name=league_name,
         required=True,
     )
 
@@ -347,12 +357,22 @@ def _scope_options(
     return league_scopes
 
 
-def _badge_map(supabase: Any, *, club_id: str) -> dict[str, list[dict[str, Any]]]:
+def _badge_map(supabase: Any, *, club_id: str, player_ids: tuple[str, ...]) -> dict[str, list[dict[str, Any]]]:
+    if not player_ids:
+        return {}
+    return public_read_cache.get(
+        (public_source_key(supabase), "leaderboard-badges", club_id, player_ids),
+        lambda: _load_badge_map(supabase, club_id=club_id, player_ids=player_ids),
+    )
+
+
+def _load_badge_map(supabase: Any, *, club_id: str, player_ids: tuple[str, ...]) -> dict[str, list[dict[str, Any]]]:
     earned_rows = _query_rows(
         supabase,
         "player_badges",
         (PLAYER_BADGE_SELECT,),
         club_id=club_id,
+        player_ids=player_ids,
         required=True,
     )
     if not earned_rows:
@@ -614,7 +634,6 @@ def build_public_leaderboard(
         clean_status = "all"
 
     players = _fetch_players(supabase, cid) if cid else []
-    rating_rows = _fetch_league_ratings(supabase, cid) if cid else []
     scopes = (
         _scope_options(
             supabase,
@@ -675,11 +694,14 @@ def build_public_leaderboard(
                 partnership_minimum=(settings.get("card_options", {}).get("best_partnership") or {}).get("minimum", 0),
             )
     elif selected:
+        rating_rows = _fetch_league_ratings(supabase, cid, selected) if cid else []
         base_rows = _league_rows(rating_rows, players, club_id=cid, league_name=selected)
     else:
         base_rows = []
 
-    badges = _badge_map(supabase, club_id=cid) if cid and base_rows else {}
+    # Rank/filter first. Badge decoration is unrelated to ranking and only
+    # needs the players actually returned in the page, snapshot and cards.
+    badges: dict[str, list[dict[str, Any]]] = {}
     all_ranked = _decorate_rows(
         base_rows,
         min_games=min_games,
@@ -726,6 +748,23 @@ def build_public_leaderboard(
     else:
         highlights = _highlight_rows(filtered, min_games=min_games, league_name=selected)
 
+    visible_rows = [*page_rows, *([snapshot] if snapshot else []),
+                    *(row for entries in highlights.values() for row in entries if "badges" in row)]
+    visible_ids = tuple(sorted({str(row["player_id"]) for row in visible_rows}))
+    badges_available = True
+    try:
+        badges = _badge_map(supabase, club_id=cid, player_ids=visible_ids) if cid else {}
+    except LeaderboardDataUnavailable:
+        # Badge decoration is optional. Keep the ranking/history result usable
+        # while distinguishing unavailable awards from a confirmed empty set.
+        # The failed load is not cached; the next request may recover normally.
+        badges_available = False
+        badges = {}
+    for row in visible_rows:
+        player_badges = badges.get(str(row["player_id"]), [])
+        row["badges"] = player_badges[:MAX_BADGES_PER_PLAYER]
+        row["badge_count"] = len(player_badges)
+
     return {
         "scopes": scopes,
         "selected_scope": selected,
@@ -748,6 +787,7 @@ def build_public_leaderboard(
         "leaderboard": page_rows,
         "snapshot": snapshot,
         "highlights": highlights,
+        "badges_available": badges_available,
         "pagination": {
             "total": total,
             "offset": safe_offset,

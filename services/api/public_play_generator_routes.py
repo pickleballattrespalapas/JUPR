@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from jupr_app.services.generator_submission_service import submit_generator_session
 from jupr_app.services.generator_session_details_service import update_public_generator_details
+from jupr_app.services.generator_share_metadata_service import get_generator_share_metadata
 
 from jupr_app.services.public_play_generator_service import (
     advance_public_play_generator_session,
@@ -93,7 +94,7 @@ class PublicGeneratorRosterRequest(PublicGeneratorMutationRequest):
     player_id: int | None = None
     substitute_scope: str = Field(default="rest", pattern=r"^(round|rest)$")
     roster_order: list[str] = Field(default_factory=list, max_length=40)
-    participant_ids: list[str] = Field(default_factory=list, max_length=4)
+    participant_ids: list[str] = Field(default_factory=list, max_length=40)
     court_number: int | None = Field(default=None, ge=1, le=20)
 
 
@@ -120,6 +121,20 @@ def install_public_play_generator_routes(
         club = get_club(club_slug)
         club_id = str(club.get("id") or club.get("club_id") or club_slug)
         return club, club_id, get_supabase_client()
+
+    @app.get("/clubs/{club_slug}/play-generators/sessions/{session_key}/share-metadata")
+    def get_public_generator_share_metadata(club_slug: str, session_key: str, response: Response) -> dict[str, Any]:
+        from services.api.club_site_routes import published_shell
+        response.headers["Cache-Control"] = "no-store"
+        require_service_role()
+        supabase = get_supabase_client()
+        site = published_shell(supabase, club_slug)
+        try:
+            result = get_generator_share_metadata(supabase, club_id=site["club_id"], session_key=session_key)
+        except Exception as exc:
+            raise_public_error(exc)
+            raise
+        return {"club": {"slug": club_slug}, **result}
 
     @app.patch("/clubs/{club_slug}/play-generators/sessions/{session_key}/details")
     def patch_public_generator_details(club_slug: str, session_key: str,

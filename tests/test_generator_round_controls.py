@@ -99,7 +99,7 @@ def test_round_robins_continue_incrementally_beyond_eight_and_fifty(play_format,
         assert updated["status"] == "active"
         assert updated.get("completedAt") is None
         assert updated["currentRoundNumber"] == number + 1
-        assert updated["totalRounds"] == max(old_total, number + 1)
+        assert updated["totalRounds"] == max(old_total, number + 1 + bool(updated.get("adaptiveFromRound")))
         assert len(updated["rounds"]) == updated["totalRounds"]
         assert updated["rounds"][:number] == previous_rounds
         next_round = updated["rounds"][number]
@@ -137,8 +137,9 @@ def test_legacy_completed_round_robin_can_continue(last_status):
 
     assert updated["status"] == "active"
     assert updated["completedAt"] is None
-    assert updated["currentRoundNumber"] == updated["totalRounds"] == 2
-    assert len(updated["rounds"]) == 2
+    assert updated["currentRoundNumber"] == 2
+    assert updated["totalRounds"] == 3  # Resume with the following round prepared too.
+    assert len(updated["rounds"]) == 3
     assert updated["rounds"][0] == original_round
     assert updated["rounds"][1]["status"] == "active"
 

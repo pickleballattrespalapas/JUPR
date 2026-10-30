@@ -1,3 +1,4 @@
+import SectionLoadError from "@/components/SectionLoadError";
 import { requireAdminWorkspace } from "@/lib/adminWorkspaceServer";
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
@@ -30,7 +31,7 @@ export default async function AdminTournamentRegistrationManagementPage(props: P
       <p style={{ color: "#334155", maxWidth: "850px" }}>
         Filter registrations, download CSV reports, preview recipients, and review the guarded Operations import handoff.
       </p>
-      {error ? <p role="alert" style={{ color: "#b91c1c" }}>Tournament reports are unavailable. {error}</p> : null}
+      {error ? <SectionLoadError title="Tournament Manager temporarily unavailable" message="Your tournament data couldn’t load. Try again, or use the navigation to open another section." /> : null}
       {data ? (
         <Suspense fallback={<p aria-live="polite" style={{ color: "#64748b" }}>Loading registration reports...</p>}>
           <RegistrationManagementPanel apiBase={getAdminTournamentApiBaseUrl()} clubId={clubId} status={data} initialTournamentId={context.tournamentId} initialTournamentName={context.tournamentName || context.tournamentId} initialDrawId={context.drawId} />

@@ -1,7 +1,7 @@
 "use client";
 
 type Match = { courtLabel?: string; court?: number; sideA?: string[]; sideB?: string[]; teamA?: string[]; teamB?: string[]; scoreA?: number | null; scoreB?: number | null };
-type Round = { number: number; status: string; matches?: Match[]; courts?: Array<{ matches?: Match[] }>; byeParticipantIds?: string[] };
+type Round = { number: number; generationPending?: boolean; status: string; matches?: Match[]; courts?: Array<{ matches?: Match[] }>; byeParticipantIds?: string[] };
 
 export default function GeneratorRoundSchedule({ rounds, participants, selectedRound, currentRound, disabled, unsaved, perfect, adaptive, moneyball, hubManaged, onOpen }: {
   rounds: Round[];
@@ -32,13 +32,14 @@ export default function GeneratorRoundSchedule({ rounds, participants, selectedR
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 280px), 1fr))", gap: "0.65rem" }}>
         {rounds.map(round => {
           const matches = round.matches || round.courts?.flatMap(court => court.matches || []) || [];
-          const status = round.status === "saved" || round.status === "played" ? "Played" : round.status === "skipped" ? "Skipped" : round.number === currentRound && round.status === "active" ? "Current" : hubManaged ? "Prepared" : "Scheduled";
+          const status = round.status === "saved" || round.status === "played" ? "Played" : round.status === "skipped" ? "Skipped" : round.number === currentRound && round.status === "active" ? "Current" : round.generationPending ? "Pending" : hubManaged ? "Prepared" : "Scheduled";
           return (
             <article key={round.number} style={{ border: `2px solid ${round.number === selectedRound ? "#2563eb" : "#e2e8f0"}`, borderRadius: 10, padding: "0.7rem" }}>
               <button type="button" onClick={() => onOpen(round.number)} disabled={disabled} aria-current={round.number === selectedRound ? "step" : undefined} aria-label={`Open round ${round.number}`} style={{ font: "inherit", fontWeight: 800, color: "#1d4ed8", background: "none", border: 0, padding: 0, cursor: "pointer" }}>
                 Round {round.number}
               </button>
               <span style={{ float: "right", color: status === "Played" ? "#166534" : status === "Skipped" ? "#92400e" : "#475569", fontSize: "0.85rem" }}>{status}</span>
+              {round.generationPending ? <p style={{ margin: "0.5rem 0 0", fontSize: "0.85rem", color: "#64748b" }}>Matchups generated when selected.</p> : null}
               {matches.map((match, index) => <p key={index} style={{ margin: "0.5rem 0 0", fontSize: "0.85rem" }}>
                 <strong>{match.courtLabel || `Court ${match.court || index + 1}`}:</strong> {label(match.sideA || match.teamA || [])} vs. {label(match.sideB || match.teamB || [])}
                 {match.scoreA != null && match.scoreB != null ? ` · ${match.scoreA}–${match.scoreB}` : ""}

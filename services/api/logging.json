@@ -15,6 +15,7 @@
     "uvicorn": {"handlers": ["default"], "level": "INFO", "propagate": false},
     "uvicorn.error": {"level": "INFO"},
     "uvicorn.access": {"handlers": ["access"], "level": "INFO", "propagate": false},
+    "jupr.api.compute": {"handlers": ["request"], "level": "INFO", "propagate": false},
     "jupr.api.request": {"handlers": ["request"], "level": "INFO", "propagate": false}
   }
 }

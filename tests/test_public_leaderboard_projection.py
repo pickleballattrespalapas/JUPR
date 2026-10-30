@@ -17,12 +17,17 @@ class _Query:
         self.store = store
         self.table_name = table_name
         self.filters = {}
+        self.in_filters = {}
 
     def select(self, _columns):
         return self
 
     def eq(self, key, value):
         self.filters[key] = value
+        return self
+
+    def in_(self, key, values):
+        self.in_filters[key] = {str(value) for value in values}
         return self
 
     def range(self, start, end):
@@ -36,6 +41,8 @@ class _Query:
         rows = [dict(row) for row in self.store.get(self.table_name, [])]
         for key, value in self.filters.items():
             rows = [row for row in rows if str(row.get(key)) == str(value)]
+        for key, values in self.in_filters.items():
+            rows = [row for row in rows if str(row.get(key)) in values]
         if hasattr(self, "page_bounds"):
             rows = rows[self.page_bounds[0]:self.page_bounds[1] + 1]
         return _Response(rows)
