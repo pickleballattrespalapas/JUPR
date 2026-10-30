@@ -181,3 +181,58 @@ def test_durable_checkin_stays_successful_when_planner_is_busy(monkeypatch):
         session_key="rr-a", name="New Player")
     assert response["ok"] is True
     assert len(db.storage[registration.CHECKIN_TABLE]) == 1
+
+
+@pytest.mark.skipif(__import__("sys").platform == "win32", reason="POSIX Uvicorn SIGTERM lifecycle")
+def test_uvicorn_fixture_reaps_worker_and_closes_output_pipes_on_sigterm():
+    """Match the browser runner: ASGI shutdown must reap the real child process.
+
+    Checking only API exit status misses orphan planners keeping Node's piped
+    stdout alive. communicate() additionally proves every output pipe closes.
+    """
+    import json
+    import os
+    from pathlib import Path
+    import signal
+    import socket
+    import subprocess
+    import sys
+    import urllib.error
+    import urllib.request
+    root = Path(__file__).resolve().parents[1]
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    origin = f"http://127.0.0.1:{port}"
+    process = subprocess.Popen([sys.executable, "-m", "uvicorn", "hub_registration_api:app",
+        "--app-dir", "tests/e2e", "--host", "127.0.0.1", "--port", str(port)], cwd=root,
+        env={**os.environ, "HUB_EMPTY_REGISTRATION_FIXTURE": "1", "JUPR_GENERATOR_PROCESS_WORKER": "1"},
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
+    try:
+        deadline = time.monotonic() + 15
+        while True:
+            try:
+                with urllib.request.urlopen(origin + "/hub-fixture-result", timeout=1) as response:
+                    assert response.status == 200
+                break
+            except (OSError, urllib.error.URLError):
+                if process.poll() is not None or time.monotonic() >= deadline:
+                    pytest.fail("Loopback worker lifecycle fixture did not start")
+                time.sleep(.1)
+        request = urllib.request.Request(origin + "/admin/clubs/club/play-generators/preview",
+            data=json.dumps(preview_args()).encode(),
+            headers={"Content-Type": "application/json", "Authorization": "Bearer local-reviewer"})
+        with urllib.request.urlopen(request, timeout=15) as response:
+            assert response.status == 200
+        process.terminate()
+        output, _ = process.communicate(timeout=8)
+        assert "Application shutdown complete" in output
+        assert process.returncode in (0, -signal.SIGTERM)
+    finally:
+        # A regressed orphan can outlive its API parent, so always kill the
+        # test's isolated process group, not just the already-exited parent.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.communicate(timeout=5)

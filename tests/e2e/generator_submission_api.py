@@ -81,6 +81,17 @@ def receipt_rpc(name, params):
 
 database.rpc = receipt_rpc
 app = FastAPI()
+
+
+@app.on_event("shutdown")
+def stop_schedule_worker():
+    # The staging-enabled Hub fixture starts a real planner child. Uvicorn
+    # re-raises SIGTERM after ASGI shutdown, before Python atexit cleanup; close
+    # the pool here so its inherited output pipes cannot keep the runner alive.
+    from jupr_app.services.generator_compute import shutdown_schedule_worker
+    shutdown_schedule_worker()
+
+
 web_port = int(os.environ.get("GENERATOR_BROWSER_WEB_PORT", "3038"))
 app.add_middleware(
     CORSMiddleware,

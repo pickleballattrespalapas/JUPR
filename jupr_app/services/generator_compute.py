@@ -117,7 +117,10 @@ class ScheduleWorker:
             self._closed = True
             pool, self._pool = self._pool, None
         if pool is not None:
-            pool.shutdown(wait=False, cancel_futures=True)
+            # ASGI shutdown must reap the planner before Uvicorn re-raises
+            # SIGTERM. wait=False can orphan a worker holding stdout/stderr
+            # open after the API exits (and strand the browser-test runner).
+            pool.shutdown(wait=True, cancel_futures=True)
 
 
 _worker: ScheduleWorker | None = None

@@ -21,7 +21,9 @@ subsequent session commit. A running calculation may finish later, but has no
 DB handle and cannot save. Its admission slot remains occupied until it ends;
 queued work is cancelled where possible. A crashed worker is replaced lazily,
 without replaying mutations. Domain validation errors retain their normal
-rejection semantics. API shutdown cancels queued pure work.
+rejection semantics. API shutdown cancels queued pure work and waits for the planner process to exit,
+so Uvicorn cannot orphan it while re-raising SIGTERM. Active pure work finishes
+before graceful shutdown completes. Browser fixtures install the same shutdown hook.
 
 `JUPR_GENERATOR_PROCESS_WORKER=0` is an emergency rollback to in-process planning.
 `=1` enables the same worker in local tests. With no override it is enabled for
@@ -38,4 +40,5 @@ page requests. Request elapsed_ms logs still measure full backend requests.
 Validation: `tests/test_generator_compute.py` uses a real process and a
 19-player/21-round calculation while another API endpoint responds. It also
 checks domain-error propagation, timeout admission retention, slot recovery,
-and stale broken-pool waiters not shutting down a replacement.
+stale broken-pool waiters not shutting down a replacement, and a real Uvicorn
+fixture receiving SIGTERM and closing every piped output descriptor.
