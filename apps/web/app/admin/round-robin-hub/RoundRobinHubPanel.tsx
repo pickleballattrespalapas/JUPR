@@ -795,7 +795,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
       </section> : null}
 
       {tab === "registration" ? <section id="hub-panel-registration" role="tabpanel" aria-labelledby="hub-tab-registration">
-        <HubRegistrationPanel key={hubId} apiBase={apiBase} clubId={clubId} hubId={hubId} groups={workspace.groups} registration={detail.registration}
+        <HubRegistrationPanel key={hubId} accessToken={accessToken} apiBase={apiBase} clubId={clubId} hubId={hubId} groups={workspace.groups} registration={detail.registration}
           disabled={disabled} busy={busy} pending={Boolean(pending)} error={error} onCommand={command} onRetry={() => { if (pending) void execute(pending); }} />
       </section> : null}
 
@@ -817,7 +817,7 @@ export default function RoundRobinHubPanel({ apiBase, clubId, initialHubId = "",
       onClose={() => setFinishGroupOpen(false)} onRetry={() => { if (pending) void execute(pending); }}
       onSubmit={(sessionKey, finishAfterRound) => { void command("finish_group", { session_key: sessionKey, ...(finishAfterRound === undefined ? {} : { finish_after_round: finishAfterRound }) }); }} /> : null}
 
-    {addPlayerOpen && workspace ? <HubAddPlayerDialog key={hubId} apiBase={apiBase} clubId={clubId} groups={workspace.groups}
+    {addPlayerOpen && workspace ? <HubAddPlayerDialog key={hubId} accessToken={accessToken} apiBase={apiBase} clubId={clubId} groups={workspace.groups}
       busy={busy} disabled={disabled} pending={Boolean(pending)} error={error}
       onClose={() => setAddPlayerOpen(false)} onRetry={() => { if (pending) void execute(pending); }}
       onSubmit={(sessionKey, name, playerId) => { void command("add_player", { session_key: sessionKey, name, ...(playerId == null ? {} : { player_id: playerId }) }); }} /> : null}

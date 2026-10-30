@@ -5,6 +5,7 @@ import GeneratorMoneyballExpectations, { type MoneyballExpectation, type Moneyba
 
 import { GeneratorScoreValidationError, refreshedScoreDraft, submittedScoreRows, rememberScoreSave, storedScoreSave, type PendingScoreSave } from "@/lib/generatorScoreDraft";
 
+import GeneratorRatingReview from "@/components/GeneratorRatingReview";
 import GeneratorSessionDetails from "@/components/GeneratorSessionDetails";
 import GeneratorSharing from "@/components/GeneratorSharing";
 import { hubAutoAdvanceBoundary, hubPreparedRoundLimit } from "@/lib/hubAutoAdvanceBoundary";
@@ -392,6 +393,7 @@ export default function GeneratorRoundRunner({
   const [firstSwapParticipant, setFirstSwapParticipant] = useState("");
   const [secondSwapParticipant, setSecondSwapParticipant] = useState("");
   const [newPlayerName, setNewPlayerName] = useState("");
+  const [arrivalRatingReady, setArrivalRatingReady] = useState(false);
   const [newPlayerId, setNewPlayerId] = useState("");
   const [substituteScope, setSubstituteScope] = useState<"round" | "rest">("rest");
   const [rosterOrder, setRosterOrder] = useState<string[]>([]);
@@ -1554,17 +1556,22 @@ export default function GeneratorRoundRunner({
                   />
                 </label>
                 <label>
-                  Official player ID optional
+                  {session.rating_mode === "rated" ? "Official player ID" : "Official player ID optional"}
                   <br />
                   <input
                     value={newPlayerId}
-                    onChange={(event_) => setNewPlayerId(event_.target.value)}
+                    onChange={(event_) => { setNewPlayerId(event_.target.value); setArrivalRatingReady(false); }}
                     inputMode="numeric"
                     style={inputStyle}
                   />
                 </label>
               </>
             ) : null}
+
+            {["add", "substitute"].includes(rosterAction) && session.rating_mode === "rated" ? <div>
+              {apiBase && accessToken && Number(newPlayerId) > 0 ? <GeneratorRatingReview apiBase={apiBase} clubId={clubId} accessToken={accessToken}
+                playerIds={[Number(newPlayerId)]} playFormat={event.playFormat} disabled={busy} onReady={setArrivalRatingReady} /> : <p>Choose the player&apos;s club profile before adding them to rated play.</p>}
+            </div> : null}
 
             {rosterAction === "substitute" ? (
               <label>
@@ -1634,7 +1641,8 @@ export default function GeneratorRoundRunner({
                 (!firstSwapParticipant ||
                   !secondSwapParticipant ||
                   firstSwapParticipant === secondSwapParticipant)) ||
-              (rosterAction === "add" && !newPlayerName.trim())
+              (rosterAction === "add" && !newPlayerName.trim()) ||
+              (["add", "substitute"].includes(rosterAction) && session.rating_mode === "rated" && (!Number(newPlayerId) || !arrivalRatingReady))
             }
             style={{ ...primaryButton, marginTop: "0.8rem" }}
           >

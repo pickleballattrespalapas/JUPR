@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "profile": "tres-round-robin-hub-2026-10-20",
-  "repository_migration_content_sha256": "e1f60cf79a3a8a11f3e46a38211ef51430f09d0f66476a541ab51cf33e806c49",
+  "repository_migration_content_sha256": "0329deef23a985780566f877470b3f2c13dc297aa4ade0371cccad54271e295d",
   "allow_additional_ledger_names": true,
   "allowed_duplicate_ledger_names": [
     "tournament_admin_operations"
@@ -171,7 +171,8 @@
     "round_robin_hub_public_checkin",
     "league_weekly_highlights",
     "round_robin_operation_recovery",
-    "round_robin_hub_shared_courts"
+    "round_robin_hub_shared_courts",
+    "starting_rating_review"
   ],
   "required_ledger_names": [
     "add_admin_activity_log",
@@ -299,6 +300,7 @@
     "southern_bcs_eligibility",
     "southern_bcs_missing_pairing_rosters",
     "standard_tournament_substitute_policy",
+    "starting_rating_review",
     "team_league_awards_hardening",
     "team_league_composition_settings",
     "team_league_match_exclusion_compatibility",

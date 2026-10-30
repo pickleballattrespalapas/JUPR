@@ -2,6 +2,9 @@
 
 import { fetchAllPublicPlayers, matchesPlayerSearch, playerSearchKey } from "@/lib/playerSearch";
 
+import CourtReserveRosterImport from "@/components/CourtReserveRosterImport";
+import GeneratorRatingReview from "@/components/GeneratorRatingReview";
+
 import GeneratorPlayerCreate from "@/app/admin/play-generators/submissions/GeneratorPlayerCreate";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -37,6 +40,9 @@ type Props = {
   creationDraftKey?: string;
   disabled?: boolean;
   onCreationPendingChange?: (pending: boolean) => void;
+  ratedSetup?: boolean;
+  ratingReviewAccessToken?: string;
+  onRatingReviewReadyChange?: (ready: boolean) => void;
   generatorKind: GeneratorKind;
   playFormat: PlayFormat;
   targetCount: number;
@@ -277,6 +283,9 @@ export default function GeneratorRosterSetup({
   creationDraftKey,
   disabled = false,
   onCreationPendingChange,
+  ratedSetup = false,
+  ratingReviewAccessToken,
+  onRatingReviewReadyChange,
   generatorKind,
   playFormat,
   targetCount,
@@ -298,6 +307,9 @@ export default function GeneratorRosterSetup({
   const rosterLocked = disabled || creationBusy || creationPending;
   const handleCreationPending = useCallback((_id: string, pending: boolean) => setCreationPending(pending), []);
   useEffect(() => { onCreationPendingChange?.(creationBusy || creationPending); }, [creationBusy, creationPending, onCreationPendingChange]);
+  const [importOpen, setImportOpen] = useState(false);
+  const [requestedRatings, setRequestedRatings] = useState<Record<string, string>>({});
+  const [ratingsReady, setRatingsReady] = useState(false);
   const [playerSearch, setPlayerSearch] = useState("");
   const [directoryPlayers, setDirectoryPlayers] = useState<DirectoryPlayer[]>([]);
   const [directoryError, setDirectoryError] = useState<string | null>(null);
@@ -321,8 +333,13 @@ export default function GeneratorRosterSetup({
   ).length;
   const unlinkedNames = participantNames.filter(name => !(Number(linkedPlayerIds[normalizeRosterName(name)] || 0) > 0));
   const manualCount = unlinkedNames.length;
-  const needsPlayerProfiles = Boolean(moneyballOnly || fixedPlayerCount) && manualCount > 0;
+  const needsPlayerProfiles = Boolean(moneyballOnly || fixedPlayerCount || ratedSetup) && manualCount > 0;
+  const reviewPlayerIds = participantNames.map(name => Number(linkedPlayerIds[normalizeRosterName(name)] || 0)).filter(id => id > 0);
   const exactCount = participantNames.length === targetCount;
+  const canReviewRatings = Boolean(apiBase && creationClubId && ratingReviewAccessToken);
+  useEffect(() => {
+    onRatingReviewReadyChange?.(!ratedSetup || (!manualCount && (!canReviewRatings || ratingsReady)));
+  }, [ratedSetup, manualCount, canReviewRatings, ratingsReady, onRatingReviewReadyChange]);
   const publicClubSlug = clubKey.replace(/_/g, "-");
   const maximumDoublesCourts = Math.max(1, Math.floor((targetCount - 2) / 4));
   const maximumSinglesCourts = Math.max(1, Math.floor((targetCount - 4) / 2));
@@ -625,7 +642,7 @@ export default function GeneratorRosterSetup({
         ) : null}
       </div>
 
-      {moneyballOnly || fixedPlayerCount ? (
+      {moneyballOnly || fixedPlayerCount || ratedSetup ? (
         <div style={{ border: "1px solid #cbd5e1", borderRadius: 10, padding: "0.75rem", minWidth: 0 }}>
           {apiBase && creationClubId && creationAccessToken ? <GeneratorPlayerCreate
             context="setup" clubId={creationClubId} sessionKey={creationDraftKey || `setup:${generatorKind}`} participantId="new-player"
@@ -643,6 +660,33 @@ export default function GeneratorRosterSetup({
           {participantNames.length >= targetCount && !manualCount && !creationPending ? <small style={{ display: "block", marginTop: 6 }}>Remove a player or increase the player count to make room for someone new.</small> : null}
         </div>
       ) : null}
+
+      {apiBase && creationClubId && ratingReviewAccessToken ? <div>
+        <button type="button" style={secondaryButton} disabled={rosterLocked || Boolean(directoryError)} onClick={() => setImportOpen(value => !value)}>Import CourtReserve roster</button>
+        {importOpen ? <CourtReserveRosterImport apiBase={apiBase} clubId={creationClubId} accessToken={ratingReviewAccessToken}
+          players={directoryPlayers.map(player => ({ id: Number(player.id), name: player.name }))}
+          matchFormat={playFormat === "singles" ? "singles" : "doubles"} requireRatingReview={ratedSetup}
+          disabled={rosterLocked} submitLabel="Use imported roster" onCancel={() => setImportOpen(false)}
+          onImport={({ playerIds, requestedRatings: importedRequests }) => {
+            if (playerIds.length > 40) throw new Error("Generators support up to 40 players. Select up to 40 names for this round robin.");
+            if (fixedPlayerCount && playerIds.length !== fixedPlayerCount) throw new Error(`Import exactly ${fixedPlayerCount} players for this lineup.`);
+            const selected = playerIds.map(id => directoryPlayers.find(player => Number(player.id) === id));
+            if (selected.some(player => !player)) throw new Error("The club list changed. Refresh before importing.");
+            const names = selected.map(player => player!.name);
+            if (new Set(names.map(normalizeRosterName)).size !== names.length) throw new Error("These club profiles have the same display name. Resolve the name conflict before adding both to this generator.");
+            onParticipantTextChange(names.join("\n"));
+            onLinkedPlayerIdsChange(Object.fromEntries(selected.map(player => [normalizeRosterName(player!.name), Number(player!.id)])));
+            onTargetCountChange(Math.max(minimumPlayers, playerIds.length));
+            setRequestedRatings(importedRequests); setRatingsReady(false); setImportOpen(false); onInvalidate();
+          }} /> : null}
+      </div> : null}
+      {ratedSetup && participantNames.length > 0 ? <div>
+        {canReviewRatings && reviewPlayerIds.length > 0 ? <GeneratorRatingReview
+          apiBase={apiBase!} clubId={creationClubId!} accessToken={ratingReviewAccessToken!} playerIds={reviewPlayerIds}
+          playFormat={playFormat} requestedRatings={requestedRatings} disabled={rosterLocked}
+          onReady={setRatingsReady} onConfirmed={onInvalidate} /> : <p>Before rated play, a club administrator must confirm starting estimates for players with no rated history. Players with rated history use their calculated JUPR.</p>}
+        {manualCount > 0 ? <p role="status">Choose club profiles for {unlinkedNames.join(", ")} before rated play.</p> : null}
+      </div> : null}
 
       <label style={{ display: "grid", gap: "0.25rem", fontWeight: 700 }}>
         Players ({participantNames.length} of {targetCount})

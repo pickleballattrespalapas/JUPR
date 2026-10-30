@@ -18,6 +18,10 @@ import type { AdminMatchUploaderCreatePlayersResult, AdminMatchUploaderRoundRobi
 import type { PublicPlayer } from "@/lib/api";
 import { useAuthenticatedAutoLoad, useLatestRequestGuard } from "@/lib/useAuthenticatedAutoLoad";
 import { adminSessionLabel, useAdminSession } from "@/lib/useAdminSession";
+import type { StartingRatingReviewRow } from "@/components/StartingRatingReview";
+
+const StartingRatingReview = dynamic(() => import("@/components/StartingRatingReview"), { ssr: false });
+const CourtReserveRosterImport = dynamic(() => import("@/components/CourtReserveRosterImport"), { ssr: false });
 
 const LeagueLiveRatingEditor = dynamic(
   () => import("./LeagueLiveRatingEditor").then(module => module.LeagueLiveRatingEditor),
@@ -567,6 +571,10 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
   const [matchStructure, setMatchStructure] = useState<MatchStructure>(DEFAULT_MATCH_STRUCTURE);
   const [sessionRoster, setSessionRoster] = useState<LeagueLiveRosterRow[]>([]);
   const [attendeePlayerIds, setAttendeePlayerIds] = useState<number[]>([]);
+  const [courtReserveImportOpen, setCourtReserveImportOpen] = useState(false);
+  const [requestedStartingRatings, setRequestedStartingRatings] = useState<Record<string, string>>({});
+  const [startingReviewState, setStartingReviewState] = useState<{ key: string; ready: boolean }>({ key: "", ready: false });
+  const [arrivalReviewState, setArrivalReviewState] = useState<{ key: string; ready: boolean }>({ key: "", ready: false });
   const [editingRatingPlayerId, setEditingRatingPlayerId] = useState<number | null>(null);
   const [knownPlayers, setKnownPlayers] = useState<PublicPlayer[]>(players);
   const [pastedPlayerText, setPastedPlayerText] = useState("");
@@ -799,8 +807,13 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       return player ? [player] : [];
     });
   }, [knownPlayers, attendeePlayerIds]);
+  const startingReviewKey = JSON.stringify([clubId, leagueName, accessToken, [...attendeePlayerIds].sort((a, b) => a - b), requestedStartingRatings]);
+  const startingRatingsReady = startingReviewState.key === startingReviewKey && startingReviewState.ready;
   const rosterPlayerIds = useMemo(() => new Set(sessionRoster.map((row) => Number(row.player_id))), [sessionRoster]);
   const nextRoundPlayerIds = nextActivePlayerIds ?? sessionRoster.filter(row => row.status === "active").map(row => Number(row.player_id));
+  const newArrivalIds = nextRoundPlayerIds.filter(id => !rosterPlayerIds.has(Number(id)));
+  const arrivalReviewKey = JSON.stringify([clubId, loadedSessionId, accessToken, [...newArrivalIds].sort((a, b) => a - b)]);
+  const arrivalRatingsReady = !newArrivalIds.length || (arrivalReviewState.key === arrivalReviewKey && arrivalReviewState.ready);
   const gamePlayerOptions = useMemo(() => {
     const byId = new Map(knownPlayers.map(player => [Number(player.id), { id: Number(player.id), name: player.name, rating: player.rating }]));
     for (const row of sessionRoster) byId.set(Number(row.player_id), { id: Number(row.player_id), name: row.player_name, rating: row.rating });
@@ -947,6 +960,11 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
         typeof detail === "string" ? detail : detailRecord?.message,
         `League Live error (${response.status})`
       );
+      if (detailRecord?.code === "STARTING_RATING_REVIEW_REQUIRED") {
+        setStartingReviewState({ key: "", ready: false });
+        setArrivalReviewState({ key: "", ready: false });
+        setWorkflowStep(sessionIsCurrentLeague ? 5 : 2);
+      }
       const explicitlyFailed = detailRecord?.kind === "failed" && detailRecord?.recovery_required !== true;
       const uncertainStatus = response.status >= 500 || [408, 425, 429].includes(response.status);
       throw new LeagueLiveRequestError(
@@ -1061,6 +1079,10 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
   function clearPersistedSessionBinding(selectedSessionId = "") {
     setSessionId(selectedSessionId);
     setLoadedSessionId("");
+    setRequestedStartingRatings({});
+    setStartingReviewState({ key: "", ready: false });
+    setArrivalReviewState({ key: "", ready: false });
+    setCourtReserveImportOpen(false);
     setSessionLeagueName("");
     setSessionUpdatedAt("");
     setWeekTag("Week 1");
@@ -1193,6 +1215,40 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     setAttendeePlayerIds([...new Set(playerIds)]);
     setPastedSelectedPlayerIds([]);
     invalidateFlexRosterPlan(message);
+  }
+
+  function importCourtReserveAttendees(selection: { playerIds: number[]; requestedRatings: Record<string, string> }) {
+    setRequestedStartingRatings(selection.requestedRatings);
+    setStartingReviewState({ key: "", ready: false });
+    setPastedPlayerText("");
+    setPastedPlayerResolutions([]);
+    setMissingPlayerDrafts([]);
+    setPasteDuplicateNames([]);
+    setPasteResolutionCurrent(true);
+    replaceFlexAttendance(selection.playerIds, `Selected ${selection.playerIds.length} CourtReserve registrants for this session. The season roster is unchanged.`);
+    setCourtReserveImportOpen(false);
+  }
+
+  function applyStartingRatingConfirmations(rows: StartingRatingReviewRow[]) {
+    const ratings = new Map(rows.filter(row => !row.has_rated_history).map(row => [row.player_id, row.rating_jupr]));
+    setKnownPlayers(current => current.map(player => {
+      const rating = ratings.get(Number(player.id));
+      return rating == null ? player : { ...player, rating: rating * 400, rating_jupr: rating };
+    }));
+    setDetail(current => current ? { ...current, roster: (current.roster || []).map(player => {
+      const rating = ratings.get(player.player_id);
+      return rating == null ? player : { ...player, overall_rating: rating * 400, overall_rating_jupr: rating, ...(player.matches_played ? {} : { rating: rating * 400, rating_jupr: rating }) };
+    }) } : current);
+    invalidateFlexRosterPlan("Starting estimates confirmed. Build courts using the reviewed ratings.");
+    setWorkflowStep(2);
+  }
+
+  function applyArrivalRatingConfirmations(rows: StartingRatingReviewRow[]) {
+    const ratings = new Map(rows.flatMap(row => !row.has_rated_history && row.rating_jupr != null ? [[row.player_id, row.rating_jupr * 400] as const] : []));
+    setKnownPlayers(current => current.map(player => ratings.has(Number(player.id)) ? { ...player, rating: ratings.get(Number(player.id))!, rating_jupr: ratings.get(Number(player.id))! / 400 } : player));
+    setGuestPlayers(current => current.map(player => ratings.has(Number(player.id)) ? { ...player, rating: ratings.get(Number(player.id))! } : player));
+    setMovementPlanStale(true);
+    setMessage("New arrivals' starting estimates confirmed. Refresh the court board to place them.");
   }
 
   function changeFlexAttendance(playerId: number, attending: boolean) {
@@ -1450,7 +1506,8 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
         roster: selectedSessionRosterPayload(leagueDetail, knownPlayers, selectedIds),
         bench_player_ids: requestedBenchIds,
         bench_override_reason: requestedBenchReason || null,
-        round_number: currentRound
+        round_number: currentRound,
+        session_id: sessionIsCurrentLeague ? loadedSessionId : null
       })
     });
   }
@@ -1574,11 +1631,10 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
         setMessage("Flex participation: select today's attendees, then build fresh rating-seeded courts for this session.");
         return;
       }
-      const suggestion = await fetchRosterSuggestion(payload, [], "", []);
-      if (!leagueDetailRequest.isCurrent(generation)) return;
       setAttendeePlayerIds((payload.roster || []).filter((row) => row.in_league).map((row) => Number(row.player_id)));
-      applyRosterSuggestion(suggestion);
-      setMessage(`Set participation: loaded the persistent league roster and suggested ${suggestion.courts.length} court(s). Resume an existing session to keep its saved pod positions.`);
+      setRosterSuggestion(null);
+      setSessionRoster([]);
+      setMessage("Set participation: loaded the persistent league roster. Review starting estimates in Players before building courts, or resume a saved session to keep its pod positions.");
     } catch (error) {
       if (leagueDetailRequest.isCurrent(generation)) {
         clearPersistedSessionBinding();
@@ -1618,6 +1674,11 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     }
     if (participationModeFromDetail(detail) === "flex" && !attendeePlayerIds.length) {
       setMessage("Select at least one attendee before building Flex courts.");
+      return;
+    }
+    if (!sessionIsCurrentLeague && !startingRatingsReady) {
+      setWorkflowStep(2);
+      setMessage("Review the selected players' starting estimates before building courts.");
       return;
     }
     const generation = leagueDetailRequest.begin();
@@ -1673,6 +1734,10 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     if (sessionIsCurrentLeague && sessionRoster.length >= 4 && courts.some((court) => splitNames(court.playerNames).length)) {
       setWorkflowStep(3);
       setMessage("Saved session players and courts retained. Validate the assignments and generate this round's exact preview.");
+      return;
+    }
+    if (!startingRatingsReady) {
+      setMessage("Review the selected players' starting estimates before building courts.");
       return;
     }
     const generation = leagueDetailRequest.begin();
@@ -1777,6 +1842,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
     const setupError = setupContextError();
     if (setupError) throw new Error(setupError);
     if (createRecovery) throw new Error(`Resolve exact operation ${createRecovery.operationKey} before creating another League Live session.`);
+    if (!startingRatingsReady) throw new Error("Review starting estimates in Players before creating this session.");
     if (!leagueName || !detail || loadedLeagueName !== leagueName || !rosterSuggestion || !sessionRoster.length) {
       const error = new Error("Load the selected league roster and court suggestion before creating a saved session.");
       setMessage(error.message);
@@ -2398,6 +2464,10 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
       setMessage(setupError);
       return;
     }
+    if (!sessionIsCurrentLeague && !startingRatingsReady) {
+      setMessage("Review the selected players' starting estimates before generating the match preview.");
+      return;
+    }
     const validationErrors = courtValidationErrors();
     if (validationErrors.length) {
       setPreview(null);
@@ -2500,6 +2570,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
 
   function rosterChangePayload(): Record<string, unknown> | null {
     if (nextActivePlayerIds == null && !nextCourtSizes.trim()) return null;
+    if (!arrivalRatingsReady) throw new Error("Review new arrivals' starting estimates before placing them in the next round.");
     const selectedIds = [...new Set(nextRoundPlayerIds.map(Number))];
     if (selectedIds.length < 4) throw new Error("Choose at least four players for the next round.");
     const additions = selectedIds.filter(id => !rosterPlayerIds.has(id)).map(id => {
@@ -3050,6 +3121,12 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
           ) : null}
           {participationMode === "set" ? <p style={{ color: "#475569" }}><strong>Set participation:</strong> the season roster starts selected. Resume a persisted session to retain its saved pods and positions; existing or newly created non-roster players can still be added for this night.</p> : null}
 
+          {!sessionIsCurrentLeague ? <section style={{ marginTop: "1rem" }}>
+            <button type="button" onClick={() => setCourtReserveImportOpen(value => !value)} disabled={busy} style={ghostButtonStyle}>{courtReserveImportOpen ? "Close CourtReserve import" : "Import CourtReserve registrants"}</button>
+            <p style={{ color: "#475569" }}>Use a CSV or paste both report columns to select today&apos;s attendees. Requested levels are reviewed only for players with no rated history.</p>
+            {courtReserveImportOpen && apiBase ? <CourtReserveRosterImport apiBase={apiBase} clubId={clubId} accessToken={accessToken || ""} players={knownPlayers.map(player => ({ id: Number(player.id), name: player.name }))} matchFormat="doubles" disabled={busy} onImport={importCourtReserveAttendees} onCancel={() => setCourtReserveImportOpen(false)} submitLabel="Use registrants for this session" /> : null}
+          </section> : null}
+
           <section style={{ marginTop: "1rem" }}>
             <h3>League roster</h3>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: "0.35rem" }}>
@@ -3112,9 +3189,18 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
             <p style={{ color: "#475569" }}>This is the live-order source. Late arrivals added between rounds append to the order; substitutions replace the selected ordered player.</p>
             {selectedSessionPlayers.length ? <ol>{selectedSessionPlayers.map((player) => <li key={String(player.id)} style={{ marginBottom: "0.35rem" }}>{player.name} · {playerJuprLabel(player)} <button type="button" onClick={() => removeSelectedPlayer(Number(player.id))} disabled={busy} style={{ ...ghostButtonStyle, padding: "0.2rem 0.55rem", marginLeft: "0.5rem" }}>Remove</button></li>)}</ol> : <p>No players selected.</p>}
           </section>
+          {!sessionIsCurrentLeague && apiBase && attendeePlayerIds.length ? <StartingRatingReview
+            key={startingReviewKey}
+            apiBase={apiBase} clubId={clubId} accessToken={accessToken || ""}
+            playerIds={attendeePlayerIds} requestedRatings={requestedStartingRatings} matchFormat="doubles"
+            disabled={busy || creatingMissingPlayers}
+            onReady={(ready) => setStartingReviewState({ key: startingReviewKey, ready })}
+            onConfirmed={applyStartingRatingConfirmations}
+            title="Review starting estimates before rated play"
+          /> : null}
           <p style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", justifyContent: "space-between" }}>
             <button type="button" onClick={() => setWorkflowStep(1)} disabled={busy} style={ghostButtonStyle}>Back to Setup</button>
-            <button type="button" onClick={() => void buildPlayerPlanAndContinue()} disabled={busy || creatingMissingPlayers || Boolean(playerCreateRecovery) || attendeePlayerIds.length < 4 || !pasteResolutionCurrent || Boolean(pasteDuplicateNames.length) || Boolean(unresolvedPastedPlayers)} style={buttonStyle}>{sessionIsCurrentLeague && sessionRoster.length ? "Continue with saved courts" : `Build courts from ${attendeePlayerIds.length} attendee${attendeePlayerIds.length === 1 ? "" : "s"}`}</button>
+            <button type="button" onClick={() => void buildPlayerPlanAndContinue()} disabled={busy || (!sessionIsCurrentLeague && !startingRatingsReady) || creatingMissingPlayers || Boolean(playerCreateRecovery) || attendeePlayerIds.length < 4 || !pasteResolutionCurrent || Boolean(pasteDuplicateNames.length) || Boolean(unresolvedPastedPlayers)} style={buttonStyle}>{sessionIsCurrentLeague && sessionRoster.length ? "Continue with saved courts" : `Build courts from ${attendeePlayerIds.length} attendee${attendeePlayerIds.length === 1 ? "" : "s"}`}</button>
           </p>
         </article>
       ) : null}
@@ -3123,6 +3209,15 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
         <article style={cardStyle} aria-labelledby="league-live-courts-heading">
           <h2 id="league-live-courts-heading" style={{ marginTop: 0 }}>3. Courts and Preview</h2>
           <p style={{ color: "#475569" }}>Review the rating-seeded roster and bench, validate each court, then preview the exact teams and match slots before creating or updating the persisted session.</p>
+          {!sessionIsCurrentLeague && !startingRatingsReady && apiBase ? <StartingRatingReview
+            key={startingReviewKey}
+            apiBase={apiBase} clubId={clubId} accessToken={accessToken || ""}
+            playerIds={attendeePlayerIds} requestedRatings={requestedStartingRatings} matchFormat="doubles"
+            disabled={busy}
+            onReady={(ready) => setStartingReviewState({ key: startingReviewKey, ready })}
+            onConfirmed={applyStartingRatingConfirmations}
+            title="Review replacement players before rated play"
+          /> : null}
           {rosterSuggestion ? (
             <section style={{ padding: "0.75rem", border: "1px solid #dbeafe", borderRadius: "12px", background: "#eff6ff" }}>
               <h3 style={{ marginTop: 0 }}>Roster and bench suggestion</h3>
@@ -3180,7 +3275,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
               onEditRoster={() => navigateWorkflow(2)}
             />
             {editingRatingPlayerId != null ? <LeagueLiveRatingEditor key={`${clubId}:${leagueName}:${editingRatingPlayerId}:${accessToken ? "signed-in" : "signed-out"}`} playerId={editingRatingPlayerId} clubId={clubId} leagueName={leagueName} request={requestJson} onSaved={applyEditedRating} onClose={() => setEditingRatingPlayerId(null)} /> : null}
-            <p><button type="button" onClick={() => void generatePreview()} disabled={courtEditingLocked || (!rosterSuggestion && !sessionIsCurrentLeague)} style={buttonStyle}>Validate courts and generate preview</button></p>
+            <p><button type="button" onClick={() => void generatePreview()} disabled={courtEditingLocked || (!sessionIsCurrentLeague && !startingRatingsReady) || (!rosterSuggestion && !sessionIsCurrentLeague)} style={buttonStyle}>Validate courts and generate preview</button></p>
           </section>
 
           {preview?.courts?.length ? (
@@ -3202,7 +3297,7 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
             {sessionIsCurrentLeague ? (
               <ConfirmAction triggerLabel="Save preview and continue" title="Save this session snapshot?" description="This persists the current player order, bench, courts, round, and notes before score entry." confirmLabel="Yes, save and continue" confirmationText="SAVE SESSION" disabled={busy || !preview?.courts?.length || Boolean(courtValidationErrors().length)} busy={busy} onConfirm={saveSnapshotAndContinue} />
             ) : (
-              <ConfirmAction triggerLabel="Create session and continue" title="Create this persisted League Live session?" description="This saves the reviewed player order, bench, courts, and round so the night can be resumed." confirmLabel="Yes, create and continue" confirmationText="CREATE LIVE SESSION" disabled={busy || Boolean(createRecovery) || !preview?.courts?.length || Boolean(courtValidationErrors().length) || !rosterSuggestion || !sessionRoster.length} busy={busy} onConfirm={createSessionAndContinue} />
+              <ConfirmAction triggerLabel="Create session and continue" title="Create this persisted League Live session?" description="This saves the reviewed player order, bench, courts, and round so the night can be resumed." confirmLabel="Yes, create and continue" confirmationText="CREATE LIVE SESSION" disabled={busy || !startingRatingsReady || Boolean(createRecovery) || !preview?.courts?.length || Boolean(courtValidationErrors().length) || !rosterSuggestion || !sessionRoster.length} busy={busy} onConfirm={createSessionAndContinue} />
             )}
           </div>
         </article>
@@ -3289,6 +3384,14 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
               onActivePlayersChange={ids => changeNextAttendance(ids)}
               onCourtSizesChange={sizes => changeNextAttendance(nextRoundPlayerIds, sizes)}
             />
+            {newArrivalIds.length && apiBase ? <StartingRatingReview
+              key={arrivalReviewKey}
+              apiBase={apiBase} clubId={clubId} accessToken={accessToken || ""}
+              playerIds={newArrivalIds} matchFormat="doubles" disabled={busy}
+              onReady={ready => setArrivalReviewState({ key: arrivalReviewKey, ready })}
+              onConfirmed={applyArrivalRatingConfirmations}
+              title="Review new arrivals before the next round"
+            /> : null}
             {liveDomainStatus.submit_enabled ? (
               <details style={{ marginTop: "0.75rem" }}>
                 <summary>Create a new non-roster player for a late arrival</summary>
@@ -3321,10 +3424,10 @@ export default function LeagueLiveRoundPanel({ apiBase, clubId, selectedLeagueNa
           ) : null}
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", justifyContent: "flex-end", marginTop: "0.75rem" }}>
             <span style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-              <button type="button" onClick={() => void previewPythonMovement()} disabled={busy || !scoresPublished || !sessionIsCurrentLeague || !roundContextValid || !matchDateValid || sessionStatus !== "active"} style={ghostButtonStyle}>{busy ? "Loading court board…" : !movementPlan ? "Load court board" : movementPlanStale ? "Validate board changes" : "Refresh court board"}</button>
-              <button type="button" onClick={() => void previewPythonMovement(true)} disabled={busy || !scoresPublished || roundPublished || !sessionIsCurrentLeague || !roundContextValid || !matchDateValid || sessionStatus !== "active"} style={ghostButtonStyle}>Recalculate movement from scores</button>
+              <button type="button" onClick={() => void previewPythonMovement()} disabled={busy || !arrivalRatingsReady || !scoresPublished || !sessionIsCurrentLeague || !roundContextValid || !matchDateValid || sessionStatus !== "active"} style={ghostButtonStyle}>{busy ? "Loading court board…" : !movementPlan ? "Load court board" : movementPlanStale ? "Validate board changes" : "Refresh court board"}</button>
+              <button type="button" onClick={() => void previewPythonMovement(true)} disabled={busy || !arrivalRatingsReady || !scoresPublished || roundPublished || !sessionIsCurrentLeague || !roundContextValid || !matchDateValid || sessionStatus !== "active"} style={ghostButtonStyle}>Recalculate movement from scores</button>
               {Object.keys(movementOverrides).length ? <small>Recalculating replaces manual court moves with the score-based placements.</small> : null}
-              <ConfirmAction triggerLabel="Apply movement and continue" title={`Apply Round ${currentRound} movement?`} description="This saves the reviewed next-round roster and courts. Official scores are not republished." confirmLabel="Yes, apply movement" confirmationText="APPLY LEAGUE MOVEMENT" disabled={busy || !scoresPublished || !movementPlan || movementPlanStale || !sessionIsCurrentLeague || sessionStatus !== "active"} busy={busy} onConfirm={applyMovement} />
+              <ConfirmAction triggerLabel="Apply movement and continue" title={`Apply Round ${currentRound} movement?`} description="This saves the reviewed next-round roster and courts. Official scores are not republished." confirmLabel="Yes, apply movement" confirmationText="APPLY LEAGUE MOVEMENT" disabled={busy || !arrivalRatingsReady || !scoresPublished || !movementPlan || movementPlanStale || !sessionIsCurrentLeague || sessionStatus !== "active"} busy={busy} onConfirm={applyMovement} />
             </span>
           </div>
         </article>

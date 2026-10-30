@@ -77,6 +77,23 @@ function siteReliabilityReady(openapi) {
   return readsReady && batchDeparturesReady;
 }
 
+function startingRatingReviewReady(openapi) {
+  const prefix = "/admin/clubs/{club_id}/starting-rating-review";
+  const schemas = openapi?.components?.schemas;
+  const preview = schemas?.StartingRatingReviewPreviewRequest?.properties;
+  const confirm = schemas?.StartingRatingReviewConfirmRequest?.properties;
+  const review = schemas?.StartingRatingReviewConfirmation?.properties;
+  return ["preview", "confirm"].every((action) => Boolean(openapi?.paths?.[`${prefix}/${action}`]?.post))
+    && preview?.player_ids?.type === "array"
+    && preview?.requested_ratings?.type === "object"
+    && [preview, confirm].every((fields) => ["doubles", "singles"].every((format) => fields?.match_format?.enum?.includes(format)))
+    && confirm?.reviews?.type === "array"
+    && confirm.reviews.items?.$ref === "#/components/schemas/StartingRatingReviewConfirmation"
+    && review?.player_id?.type === "integer"
+    && review?.rating_jupr?.type === "number"
+    && review?.expected_state_fingerprint?.type === "string";
+}
+
 async function waitForProductionApi({
   environment = process.env.VERCEL_ENV,
   request = fetch,
@@ -86,7 +103,7 @@ async function waitForProductionApi({
 } = {}) {
   if (environment !== "production") return;
   const deadline = now() + timeoutMs;
-  console.log("Waiting for the production operations, weekly report, League Live, RR Hub, and site reliability APIs before building the website.");
+  console.log("Waiting for the production operations, weekly report, League Live, RR Hub, site reliability, and starting-rating review APIs before building the website.");
   while (now() < deadline) {
     try {
       const response = await request("https://api.juprleagues.com/health", {
@@ -98,8 +115,8 @@ async function waitForProductionApi({
         });
         if (contract.ok) {
           const openapi = await contract.json();
-          if (weeklyReportReady(openapi) && leagueLiveReady(openapi) && roundRobinHubReady(openapi) && siteReliabilityReady(openapi)) {
-            console.log("Production operations, weekly report, League Live, RR Hub, and site reliability APIs are ready.");
+          if (weeklyReportReady(openapi) && leagueLiveReady(openapi) && roundRobinHubReady(openapi) && siteReliabilityReady(openapi) && startingRatingReviewReady(openapi)) {
+            console.log("Production operations, weekly report, League Live, RR Hub, site reliability, and starting-rating review APIs are ready.");
             return;
           }
         }
@@ -112,7 +129,7 @@ async function waitForProductionApi({
   throw new Error("Production operations API is not ready. The current website remains active; retry after API verification.");
 }
 
-module.exports = { operationsReady, weeklyReportReady, leagueLiveReady, roundRobinHubReady, siteReliabilityReady, waitForProductionApi, REQUIRED_FLAGS };
+module.exports = { operationsReady, weeklyReportReady, leagueLiveReady, roundRobinHubReady, siteReliabilityReady, startingRatingReviewReady, waitForProductionApi, REQUIRED_FLAGS };
 if (require.main === module) {
   waitForProductionApi().catch((error) => { console.error(error.message); process.exitCode = 1; });
 }

@@ -30,8 +30,11 @@ def test_league_selection_loads_set_rosters_and_resets_flex_attendance() -> None
     assert ">Load roster<" not in panel
     assert 'if (participationModeFromDetail(payload) === "flex") {' in panel
     assert "setAttendeePlayerIds([]);" in panel
-    assert 'const suggestion = await fetchRosterSuggestion(payload, [], "", []);' in panel
-    assert "applyRosterSuggestion(suggestion);" in panel
+    loader = panel.split("async function loadLeagueDetail(", 1)[1].split("async function ", 1)[0]
+    assert "fetchRosterSuggestion(" not in loader
+    assert "setAttendeePlayerIds((payload.roster || [])" in loader
+    assert "setRosterSuggestion(null);" in loader
+    assert "startingRatingsReady" in panel
     assert "clearPersistedSessionBinding();" in panel
     assert "Session writes remain unavailable until the replacement roster is ready." in panel
 

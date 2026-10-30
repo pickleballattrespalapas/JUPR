@@ -10,6 +10,7 @@ from jupr_app.services.generator_submission_service import (
     _event, _now, _row, _rows, require_reviewer,
 )
 from jupr_app.services.public_live_operation_service import PublicLiveConflictError
+from jupr_app.services.generator_starting_rating_review import require_generator_starting_ratings
 
 
 def _details(event: dict, *, title: str, rating_mode: str) -> dict:
@@ -67,6 +68,10 @@ def update_admin_generator_details(
     if str(version) != str(expected_version):
         raise PublicLiveConflictError("This session changed. Refresh before editing its details.")
     updated_event = _details(event, title=title, rating_mode=rating_mode)
+    # Completed sessions express publication intent; their review happens after
+    # profile matching in the submission workflow. Active play needs it now.
+    if row.get("status") == "active" and event.get("ratingMode") != "rated" and rating_mode == "rated":
+        require_generator_starting_ratings(db, club_id=club_id, event=updated_event)
     state = public._put_event(state, updated_event)
     if submission:
         state["generator_submission"]["rating_mode"] = rating_mode

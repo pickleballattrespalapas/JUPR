@@ -3,6 +3,9 @@ from __future__ import annotations
 from jupr_app.services.production_feature_policy import production_feature_enabled
 from jupr_app.domain.moneyball_expectations import public_event, is_moneyball, settlement
 from jupr_app.services.generator_moneyball_service import prepare_moneyball
+from jupr_app.services.generator_starting_rating_review import (
+    require_generator_starting_ratings, require_published_starting_ratings,
+)
 
 import copy
 import hashlib
@@ -45,7 +48,9 @@ from jupr_app.services.admin_live_ladder_operation_service import (
     deterministic_match_context_id,
     is_staging_write_gate_enabled,
 )
-from jupr_app.services.direct_match_entry_service import submit_atomic_direct_matches
+from jupr_app.services.direct_match_entry_service import (
+    submit_atomic_direct_matches, stable_direct_match_request, _existing_receipt,
+)
 
 
 GENERATOR_KINDS = {"round_robin", "ladder"}
@@ -69,7 +74,10 @@ def _verified_generator_mutation(function):
             return function(*args, **kwargs)
         except ValueError as exc:
             if not _generator_write_attempted.get():
-                raise _verified_rejection(LiveLadderPrewriteRejectedError, str(exc)) from exc
+                rejected = _verified_rejection(LiveLadderPrewriteRejectedError, str(exc))
+                if hasattr(exc, "detail"):
+                    rejected.detail = exc.detail
+                raise rejected from exc
             raise
         finally:
             _generator_write_attempted.reset(token)
@@ -117,7 +125,10 @@ def _commit_generator_receipt(supabase: Any, *, before: dict[str, Any] | None,
         if code == "PT409":
             raise _verified_rejection(LiveLadderPrewriteConflictError, str(exc)) from exc
         if code in {"22023", "55000", "23514"}:
-            raise _verified_rejection(LiveLadderPrewriteRejectedError, str(exc)) from exc
+            rejected = _verified_rejection(LiveLadderPrewriteRejectedError, str(exc))
+            if hasattr(exc, "detail"):
+                rejected.detail = exc.detail
+            raise rejected from exc
         raise
     if isinstance(result, list):
         result = next(iter(result), None)
@@ -530,6 +541,7 @@ def create_play_generator_session(
     supplied = _clean_text(preview_fingerprint, limit=128)
     if supplied and supplied != str(preview.get("previewFingerprint") or ""):
         raise ValueError("The roster or settings changed after preview. Preview the schedule again before starting.")
+    require_generator_starting_ratings(supabase, club_id=club_id, event=preview)
     event = start_generator_event(preview)
     session_key = uuid4().hex
     now = _now_iso()
@@ -707,7 +719,10 @@ def _persist_event(
         except PublicLiveConflictError as exc:
             raise _verified_rejection(LiveLadderPrewriteConflictError, str(exc)) from exc
         except HubCommitRejectedError as exc:
-            raise _verified_rejection(LiveLadderPrewriteRejectedError, str(exc)) from exc
+            rejected = _verified_rejection(LiveLadderPrewriteRejectedError, str(exc))
+            if hasattr(exc, "detail"):
+                rejected.detail = exc.detail
+            raise rejected from exc
     if operation:
         return _commit_generator_receipt(supabase, before=before, session_key=str(before["session_key"]),
                                          patch=patch, expected_version=expected_version)
@@ -1021,6 +1036,9 @@ def mutate_play_generator_roster(
         participant_ids=participant_ids,
         court_number=court_number,
     )
+    require_generator_starting_ratings(
+        supabase, club_id=club_id, event=event, before=_event_from_state(_state(before)),
+    )
     updated = _persist_event(
         supabase,
         before=before,
@@ -1242,6 +1260,24 @@ def publish_play_generator_matches(
     )
     if not payloads:
         raise ValueError("No unpublished saved matches are ready to publish.")
+    payloads_by_format = {
+        match_format: [payload for payload in payloads if payload.get("match_format") == match_format]
+        for match_format in ("doubles", "singles")
+    }
+    active_formats = [match_format for match_format, rows in payloads_by_format.items() if rows]
+    format_keys = {match_format: (str(idempotency_key) if len(active_formats) == 1
+                   else _format_publish_idempotency_key(str(idempotency_key), match_format))
+                   for match_format in active_formats}
+    for match_format in active_formats:
+        format_payloads = payloads_by_format[match_format]
+        _, fingerprint = stable_direct_match_request(club_id=str(club_id),
+            match_format=match_format, matches=format_payloads)
+        receipt = _existing_receipt(supabase, club_id=str(club_id), match_format=match_format,
+            idempotency_key=format_keys[match_format], request_fingerprint=fingerprint)
+        # A completed rating transaction must remain recoverable even if a player
+        # was subsequently changed, merged or removed from the review roster.
+        if receipt is None:
+            require_published_starting_ratings(supabase, club_id=club_id, matches=format_payloads)
 
     (
         df_players_all,
@@ -1257,27 +1293,10 @@ def publish_play_generator_matches(
         _schema_degraded_reason,
     ) = load_data(supabase, str(club_id))
 
-    payloads_by_format = {
-        match_format: [
-            payload
-            for payload in payloads
-            if str(payload.get("match_format") or "") == match_format
-        ]
-        for match_format in ("doubles", "singles")
-    }
-    active_formats = [
-        match_format
-        for match_format in ("doubles", "singles")
-        if payloads_by_format[match_format]
-    ]
     results_by_format: dict[str, Any] = {}
     for match_format in active_formats:
         format_payloads = payloads_by_format[match_format]
-        format_key = (
-            str(idempotency_key)
-            if len(active_formats) == 1
-            else _format_publish_idempotency_key(str(idempotency_key), match_format)
-        )
+        format_key = format_keys[match_format]
         results_by_format[match_format] = submit_atomic_direct_matches(
             supabase,
             club_id=str(club_id),

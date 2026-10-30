@@ -219,6 +219,8 @@ STAGING_WRITE_WAVE_ROUTES: dict[str, tuple[tuple[str, str], ...]] = {
         ("PATCH", "/admin/clubs/{club_id}/support-requests/{request_id}"),
     ),
     "league-manager": (
+        ("POST", "/admin/clubs/{club_id}/starting-rating-review/preview"),
+        ("POST", "/admin/clubs/{club_id}/starting-rating-review/confirm"),
         ("PUT", "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/weeks/{week}/highlights"),
         ("POST", "/admin/clubs/{club_id}/league-manager/leagues"),
         ("POST", "/admin/clubs/{club_id}/league-manager/leagues/{league_name}/duplicate"),

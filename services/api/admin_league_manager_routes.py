@@ -25,6 +25,7 @@ from jupr_app.services.admin_league_awards_service import (
 from jupr_app.services.admin_league_live_service import (
     LeagueLiveConflictError,
     LeagueLivePersistenceError,
+    LeagueLiveStartingRatingChangedError,
     apply_admin_league_live_round_movement,
     build_admin_league_live_round_plan,
     build_admin_league_live_status,
@@ -85,10 +86,12 @@ from jupr_app.services.admin_league_manager_update_service import (
 from jupr_app.services.admin_guarded_write_service import (
     GuardedWriteRecoveryRequired,
     begin_guarded_operation,
+    canonical_fingerprint,
     get_guarded_operation,
     operation_result,
     update_guarded_operation,
 )
+from jupr_app.services.starting_rating_review_service import StartingRatingReviewRequired
 from services.api.auth import authenticate_bearer, auth_header
 from services.api.admin_match_uploader_routes import (
     AdminMatchUploaderCreatePlayersRequest,
@@ -261,6 +264,7 @@ class AdminLeagueLiveRoundSaveRequest(BaseModel):
 
 
 class AdminLeagueLiveRosterSuggestionRequest(BaseModel):
+    session_id: str | None = Field(default=None, max_length=120)
     roster: list[dict[str, Any]] = Field(default_factory=list)
     court_sizes: list[int] = Field(default_factory=list)
     prefer_keep_player_ids: list[int] = Field(default_factory=list)
@@ -392,6 +396,8 @@ def _require_league_live_setup(*, write: bool = False) -> None:
 
 
 def _handle_common(exc: Exception) -> None:
+    if isinstance(exc, StartingRatingReviewRequired):
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
     if isinstance(exc, GuardedWriteRecoveryRequired):
         raise HTTPException(
             status_code=409,
@@ -581,6 +587,7 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
                 bench_player_ids=payload.bench_player_ids,
                 bench_override_reason=payload.bench_override_reason,
                 round_number=payload.round_number,
+                session_id=payload.session_id,
             )
         except Exception as exc:
             _handle_common(exc)
@@ -625,6 +632,20 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
             if str(payload.confirmation_text or "").strip().upper() != "CREATE LIVE SESSION":
                 raise ValueError("Type CREATE LIVE SESSION to create a persisted league live session.")
             request_payload = _dump_model(payload)
+            # A saved receipt wins over new roster/rating checks on a retry.
+            existing_operation = get_guarded_operation(
+                supabase, club_id=str(club_id), workflow="league_live_session_create",
+                operation_key=payload.idempotency_key,
+            )
+            if existing_operation is not None:
+                if str(existing_operation.get("request_fingerprint") or "") != canonical_fingerprint(request_payload):
+                    raise ValueError("operation_key was already used for a different request.")
+                if existing_operation.get("status") == "completed":
+                    return operation_result(existing_operation)
+                raise GuardedWriteRecoveryRequired(
+                    payload.idempotency_key,
+                    "This session creation already has a retained operation. Reconcile it before starting another session.",
+                )
             session_id = str(uuid5(NAMESPACE_URL, f"jupr:league-live:{club_id}:{payload.idempotency_key}"))
             prepared_plan = prepare_admin_league_live_session_create(
                 supabase,
@@ -704,6 +725,14 @@ def install_admin_league_manager_routes(app, *, get_supabase_client) -> None:
         except GuardedWriteRecoveryRequired as exc:
             _handle_common(exc)
         except Exception as exc:
+            if isinstance(exc, (StartingRatingReviewRequired, LeagueLiveStartingRatingChangedError)):
+                if operation is not None and not idempotent:
+                    update_guarded_operation(
+                        supabase, operation_id=operation.get("id"),
+                        operation_key=payload.idempotency_key, status="failed",
+                        error_text="Starting estimates need review before creating this session.",
+                    )
+                _handle_common(exc)
             if operation is None and isinstance(exc, RuntimeError):
                 raise HTTPException(
                     status_code=503,

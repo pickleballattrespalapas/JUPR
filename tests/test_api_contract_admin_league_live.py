@@ -63,6 +63,28 @@ def _install_env(monkeypatch, supabase, *, service_role: bool = True):
         monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "server-only")
     else:
         monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+    # Legacy live-session fixtures represent previously reviewed club players.
+    # Exercise the real review service while replacing only its database RPC.
+    existing_rpc = getattr(supabase, "rpc", None)
+    def review_rpc(name, params):
+        if name != "preview_starting_rating_review_v1":
+            if existing_rpc is not None:
+                return existing_rpc(name, params)
+            raise AssertionError(f"Unexpected RPC: {name}")
+        rows = []
+        for player in getattr(supabase, "tables", {}).get("players", []):
+            if player.get("club_id") != params["p_club_id"] or player.get("id") not in params["p_player_ids"]:
+                continue
+            rating = player.get("rating")
+            rows.append({
+                "player": {**player, "starting_rating": player.get("starting_rating", rating)},
+                "rated_matches": player.get("__starting_review_matches__", 0),
+                "state_fingerprint": "a" * 64,
+                "confirmation": {"rating_elo": rating, "confirmed_at": "2026-10-01T00:00:00Z"}
+                if player.get("__starting_review_confirmed__", True) else None,
+            })
+        return SimpleNamespace(execute=lambda: SimpleNamespace(data={"players": rows}))
+    monkeypatch.setattr(supabase, "rpc", review_rpc, raising=False)
     monkeypatch.setattr("services.api.main.create_client", lambda _url, _credential: supabase)
     monkeypatch.setattr(
         "services.api.admin_league_manager_routes.authenticate_bearer",
