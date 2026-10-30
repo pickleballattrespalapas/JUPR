@@ -2,7 +2,7 @@ import PublicTournamentSponsors from "@/components/PublicTournamentSponsors";
 import PublicTournamentNav, { publicTournamentHref } from "@/components/PublicTournamentNav";
 import Link from "@/components/PublicClubLink";
 import { getClubTournamentRegistrationEdit } from "@/lib/tournamentRegistrationApi";
-import EditTournamentRegistrationForm from "./EditTournamentRegistrationForm";
+import EditTournamentRegistrationForm, { RegistrationWithdrawal } from "./EditTournamentRegistrationForm";
 
 type EditTournamentRegistrationPageProps = {
   params: Promise<{ clubSlug: string }>;
@@ -50,10 +50,10 @@ export default async function EditTournamentRegistrationPage(props: EditTourname
             {!editToken
               ? "This edit link is incomplete or no longer valid. Request a new one."
               : status === 409
-                ? "This registration can’t be changed here. Contact the organizer for help."
+                ? error
                 : status != null && status >= 500
                   ? "Registration changes are temporarily unavailable. Please try again later."
-                  : "This edit link is invalid or expired. Request a new one."}
+                  : status == null ? "We couldn’t connect to load your registration. Try opening this link again." : "This edit link is invalid or expired. Request a new one."}
           </p>
           <Link href={publicTournamentHref(clubSlug, "edit-registration", tournament?.id ?? searchParams?.tournament_id, settings?.registration_slug ?? searchParams?.tournament)}>Request a new edit link</Link>
         </article>
@@ -67,6 +67,8 @@ export default async function EditTournamentRegistrationPage(props: EditTourname
           <h2 style={{ marginTop: 0 }}>Registration changes are closed</h2>
           <p style={{ color: "#475569" }}>{data.registration_closed_reason || "Registration is not currently open."}</p>
           <Link href={`/clubs/${clubSlug}/tournament-registration`}>Back to tournament registration</Link>
+          <RegistrationWithdrawal clubSlug={clubSlug} tournamentId={tournament.id} editToken={editToken}
+            registration={data.registration} selections={data.selections ?? []} events={data.events ?? []} />
         </article>
       ) : null}
 
@@ -85,6 +87,7 @@ export default async function EditTournamentRegistrationPage(props: EditTourname
           players={data.players ?? []}
           commerce={data.commerce ?? null}
           commerceOrder={data.commerce_order ?? null}
+          pendingPartnerRequests={data.pending_partner_requests ?? []}
         />
       ) : null}
       <PublicTournamentSponsors clubSlug={clubSlug} tournamentId={tournament?.id} placement="footer" />

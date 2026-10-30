@@ -292,6 +292,16 @@ export type PublicRegistrationEditResponse = TournamentRegistrationResponse & {
   selections: PublicRegistrationEditSelection[];
   total_price_usd: number;
   commerce_order?: TournamentCommerceOrder | null;
+  pending_partner_requests?: PublicRegistrationPendingPartnerRequest[];
+};
+
+export type PublicRegistrationPendingPartnerRequest = {
+  id: string;
+  status: string;
+  partner_name: string;
+  event_name: string;
+  review_url: string;
+  continue_url?: string | null;
 };
 
 export type PublicRegistrationEditSubmitPayload = Omit<PublicRegistrationSubmitPayload, "email" | "selections"> & {
@@ -476,6 +486,12 @@ function publicRegistrationErrorMessage(
   }
   if (/active partner relationship|relationship.*locked/.test(normalized)) {
     return "This event has an active partner connection. Contact the organizer before changing it.";
+  }
+  if (normalized.includes("reserved partnership")) {
+    return "This player has a reserved partnership. If it is your request, open Pending partner requests to continue or cancel it. Otherwise choose another partner or ask the player to review their request.";
+  }
+  if (/fulfilled extras|four-player team captain/.test(normalized)) {
+    return safeRegistrationValidation(detail) || "Contact the organizer to arrange your registration withdrawal.";
   }
   if (/changed after it was loaded|changed since|stale|event entry changed/.test(normalized)) {
     return "This registration changed since you opened it. Refresh the page and try again.";
@@ -684,6 +700,16 @@ export async function getClubTournamentRegistrationConfirmation(
   return fetchJson<PublicRegistrationConfirmationResponse>(
     `/clubs/${clubSlug}/tournament-registration/confirmation?${query.toString()}`
   );
+}
+
+export async function withdrawClubTournamentRegistration(
+  clubSlug: string,
+  payload: { edit_token: string; tournament_id: string; confirmed: boolean; expected_updated_at: string;
+    expected_selection_versions: Array<{ id: string; updated_at: string }>; attempt_id?: string }
+): Promise<ApiResult<{ ok: boolean; withdrawn: boolean; registration_id: string }>> {
+  return fetchJson(`/clubs/${clubSlug}/tournament-registration/withdraw`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
+  });
 }
 import type {
   TournamentCommerceCatalog,

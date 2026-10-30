@@ -161,6 +161,40 @@ def _registration_url(row: dict, ctx: dict, club_slug: str, token: str, registra
     return f"{base}?{urlencode(query)}#partner_invitation={token}"
 
 
+def edit_registration_partner_requests(db: Any, *, club_id: str, club_slug: str,
+                                      tournament_id: str, registration: dict, selections: list[dict]) -> list[dict]:
+    """Recovery links only for the owner of an already verified edit link."""
+    rows = _rows(db.table(TABLE).select("*").eq("club_id", club_id)
+        .eq("tournament_id", tournament_id).eq("requester_email", _clean_email(registration.get("email")))
+        .in_("status", ["PENDING", "RESERVED"]).execute())
+    selection_ids = [str(s["id"]) for s in selections]
+    if selection_ids:
+        rows += _rows(db.table(TABLE).select("*").eq("club_id", club_id)
+            .eq("tournament_id", tournament_id).in_("target_selection_id", selection_ids)
+            .in_("status", ["PENDING", "RESERVED"]).execute())
+    result = []
+    for row in {str(r["id"]): r for r in rows}.values():
+        if _expired(row):
+            continue
+        role = "target" if str(row.get("target_selection_id")) in selection_ids else "requester"
+        try:
+            ctx = _context(db, row)
+            if role == "requester":
+                owner = _requester_registration(db, row)
+                if not owner or owner["id"] != registration["id"]:
+                    continue
+            token = _token(row, ctx, role)
+            result.append({"id": row["id"], "status": row["status"],
+                "partner_name": _display_name(ctx["target_registration"]) if role == "requester" else row["requester_name"],
+                "event_name": ctx["event"].get("division_name") or ctx["event"].get("label") or "Event",
+                "review_url": _action_url(club_slug, token),
+                "continue_url": _registration_url(row, ctx, club_slug, token, registration) if role == "requester" else None})
+        except ValueError:
+            # A deleted/renamed target or expired request must not block editing.
+            continue
+    return result
+
+
 def _deliver(db: Any, row: dict, ctx: dict, club_slug: str, kind: str) -> str:
     requester = _requester_registration(db, row) if row.get("verified_at") else None
     requester_name = _display_name(requester) if requester else row["requester_name"]
